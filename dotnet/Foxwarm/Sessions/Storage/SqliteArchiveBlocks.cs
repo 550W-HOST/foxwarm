@@ -352,7 +352,12 @@ public sealed partial class SqliteArchiveMessageStore
         return blocks;
     }
 
-    internal IReadOnlyList<ArchiveBlockRecord> ReadBlocksNumericRange(double? first, double? last, int? limit = null, bool descending = false)
+    internal IReadOnlyList<ArchiveBlockRecord> ReadBlocksNumericRange(
+        double? first,
+        double? last,
+        int? limit = null,
+        bool descending = false
+    )
     {
         if (!File.Exists(databasePath))
             return [];

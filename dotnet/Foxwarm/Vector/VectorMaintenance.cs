@@ -17,19 +17,31 @@ internal sealed class VectorMaintenance : IAsyncDisposable
     private Task? running;
     private bool stopping;
 
-    internal VectorMaintenance(bool enabled, TimeProvider clock, Func<IReadOnlyList<string>, Task> check, Action? onError = null)
+    internal VectorMaintenance(
+        bool enabled,
+        TimeProvider clock,
+        Func<IReadOnlyList<string>, Task> check,
+        Action? onError = null
+    )
     {
         this.enabled = enabled;
         this.clock = clock;
         this.check = check;
         this.onError = onError;
     }
+
     internal void Start()
     {
         lock (gate)
             if (enabled && !stopping && periodic is null)
-                periodic = clock.CreateTimer(_ => Request("periodic"), null, TimeSpan.FromDays(1), TimeSpan.FromDays(1));
+                periodic = clock.CreateTimer(
+                    _ => Request("periodic"),
+                    null,
+                    TimeSpan.FromDays(1),
+                    TimeSpan.FromDays(1)
+                );
     }
+
     internal void RecordMutation()
     {
         lock (gate)
@@ -43,6 +55,7 @@ internal sealed class VectorMaintenance : IAsyncDisposable
             }
         }
     }
+
     internal void Request(string trigger)
     {
         lock (gate)
@@ -57,6 +70,7 @@ internal sealed class VectorMaintenance : IAsyncDisposable
             }
         }
     }
+
     internal Task StartupAsync()
     {
         lock (gate)
@@ -69,6 +83,7 @@ internal sealed class VectorMaintenance : IAsyncDisposable
             return Launch();
         }
     }
+
     private void Schedule()
     {
         if (running is not null || stopping || firstRequested is null || timer is not null)
@@ -76,16 +91,22 @@ internal sealed class VectorMaintenance : IAsyncDisposable
         var due = firstRequested.Value.AddMinutes(1);
         if (notBefore is { } retry && retry > due)
             due = retry;
-        timer = clock.CreateTimer(_ =>
-        {
-            lock (gate)
+        timer = clock.CreateTimer(
+            _ =>
             {
-                timer?.Dispose();
-                timer = null;
-                _ = Launch();
-            }
-        }, null, due <= clock.GetUtcNow() ? TimeSpan.Zero : due - clock.GetUtcNow(), Timeout.InfiniteTimeSpan);
+                lock (gate)
+                {
+                    timer?.Dispose();
+                    timer = null;
+                    _ = Launch();
+                }
+            },
+            null,
+            due <= clock.GetUtcNow() ? TimeSpan.Zero : due - clock.GetUtcNow(),
+            Timeout.InfiniteTimeSpan
+        );
     }
+
     private Task Launch()
     {
         if (!enabled || stopping)
@@ -103,10 +124,17 @@ internal sealed class VectorMaintenance : IAsyncDisposable
         Task? task = null;
         task = Task.Run(async () =>
         {
-            try { await check(triggers); }
+            try
+            {
+                await check(triggers);
+            }
             catch
             {
-                try { onError?.Invoke(); } catch { }
+                try
+                {
+                    onError?.Invoke();
+                }
+                catch { }
                 lock (gate)
                     if (!stopping)
                     {
@@ -132,6 +160,7 @@ internal sealed class VectorMaintenance : IAsyncDisposable
         running = task;
         return task;
     }
+
     public async ValueTask DisposeAsync()
     {
         Task? active;

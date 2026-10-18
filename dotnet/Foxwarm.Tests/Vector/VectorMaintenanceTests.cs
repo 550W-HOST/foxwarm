@@ -11,13 +11,18 @@ public sealed class VectorMaintenanceTests
         var clock = new ManualWsClock();
         var checks = new List<string[]>();
         var errors = 0;
-        await using var maintenance = new VectorMaintenance(true, clock, triggers =>
-        {
-            checks.Add(triggers.ToArray());
-            if (checks.Count == 1)
-                throw new IOException("synthetic check failure");
-            return Task.CompletedTask;
-        }, () => errors++);
+        await using var maintenance = new VectorMaintenance(
+            true,
+            clock,
+            triggers =>
+            {
+                checks.Add(triggers.ToArray());
+                if (checks.Count == 1)
+                    throw new IOException("synthetic check failure");
+                return Task.CompletedTask;
+            },
+            () => errors++
+        );
         maintenance.Start();
         await maintenance.StartupAsync();
         Assert.Equal("startup", Assert.Single(checks[0]));
@@ -29,7 +34,8 @@ public sealed class VectorMaintenanceTests
         await maintenance.StartupAsync();
         Assert.Equal(2, checks.Count);
         Assert.Equal(new[] { "retry", "mutation-threshold" }, checks[1]);
-        for (var index = 0; index < 127; index++) maintenance.RecordMutation();
+        for (var index = 0; index < 127; index++)
+            maintenance.RecordMutation();
         clock.Advance(TimeSpan.FromMinutes(1));
         Assert.Equal(2, checks.Count);
         maintenance.RecordMutation();
@@ -37,6 +43,7 @@ public sealed class VectorMaintenanceTests
         await maintenance.StartupAsync();
         Assert.Equal("mutation-threshold", Assert.Single(checks[2]));
     }
+
     [Fact]
     public async Task Source_table_gate_runs_queued_exclusive_work_before_waiting_regular_work()
     {

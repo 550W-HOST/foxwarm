@@ -5,31 +5,65 @@ using static Foxwarm.Vector.VectorText;
 
 namespace Foxwarm.Vector;
 
-internal sealed record ArchiveSearchQuery(string NormalizedQuery, string[] Identifiers, string[] ProseTerms, string? IdentifierMatch, string? ProseMatch);
+internal sealed record ArchiveSearchQuery(
+    string NormalizedQuery,
+    string[] Identifiers,
+    string[] ProseTerms,
+    string? IdentifierMatch,
+    string? ProseMatch
+);
 
 internal static class ArchiveSearchText
 {
-    private static readonly HashSet<string> StopWords = new("about after again before current details find from have into latest message please recall search session show that this tool using what when where which with would your".Split(' '), StringComparer.Ordinal);
+    private static readonly HashSet<string> StopWords = new(
+        "about after again before current details find from have into latest message please recall search session show that this tool using what when where which with would your".Split(
+            ' '
+        ),
+        StringComparer.Ordinal
+    );
+
     private static bool LetterNumber(Rune rune) => (Rune.IsLetter(rune) || Rune.IsNumber(rune));
-    private static bool IdentifierCharacter(Rune rune) => LetterNumber(rune) || "_/:.-".Contains(rune.ToString(), StringComparison.Ordinal);
-    private static bool CommandCharacter(Rune rune) => LetterNumber(rune) || "_-".Contains(rune.ToString(), StringComparison.Ordinal);
+
+    private static bool IdentifierCharacter(Rune rune) =>
+        LetterNumber(rune) || "_/:.-".Contains(rune.ToString(), StringComparison.Ordinal);
+
+    private static bool CommandCharacter(Rune rune) =>
+        LetterNumber(rune) || "_-".Contains(rune.ToString(), StringComparison.Ordinal);
+
     private static bool Strong(string value)
     {
         if (value.Length is < 4 or > 160)
             return false;
-        if (Regex.IsMatch(value, "^[0-9a-f]{7,64}$", RegexOptions.IgnoreCase) || Regex.IsMatch(value, "^\\d{4,}$", RegexOptions.ECMAScript))
+        if (
+            Regex.IsMatch(value, "^[0-9a-f]{7,64}$", RegexOptions.IgnoreCase)
+            || Regex.IsMatch(value, "^\\d{4,}$", RegexOptions.ECMAScript)
+        )
             return true;
         var runes = value.EnumerateRunes().ToArray();
         if (runes[0].Value == '/')
         {
-            var words = Regex.Split(value[1..], @"[\u0009-\u000d\u0020\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+");
-            return words.Length is 1 or 2 && words.All(word => word.Length > 0 && word.EnumerateRunes().All(CommandCharacter));
+            var words = Regex.Split(
+                value[1..],
+                @"[\u0009-\u000d\u0020\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+"
+            );
+            return words.Length is 1 or 2
+                && words.All(word =>
+                    word.Length > 0 && word.EnumerateRunes().All(CommandCharacter)
+                );
         }
-        if (LetterNumber(runes[0]) && runes.All(IdentifierCharacter) && runes.Any(rune => "_/:.-".Contains(rune.ToString(), StringComparison.Ordinal)))
+        if (
+            LetterNumber(runes[0])
+            && runes.All(IdentifierCharacter)
+            && runes.Any(rune => "_/:.-".Contains(rune.ToString(), StringComparison.Ordinal))
+        )
             return true;
-        return Rune.GetUnicodeCategory(runes[0]) == UnicodeCategory.UppercaseLetter && runes.All(LetterNumber)
-            && runes.Skip(1).Any(rune => Rune.GetUnicodeCategory(rune) == UnicodeCategory.UppercaseLetter);
+        return Rune.GetUnicodeCategory(runes[0]) == UnicodeCategory.UppercaseLetter
+            && runes.All(LetterNumber)
+            && runes
+                .Skip(1)
+                .Any(rune => Rune.GetUnicodeCategory(rune) == UnicodeCategory.UppercaseLetter);
     }
+
     internal static IReadOnlyList<string> HanRuns(string text)
     {
         var result = new List<string>();
@@ -53,6 +87,7 @@ internal static class ArchiveSearchText
         Flush();
         return result;
     }
+
     internal static IReadOnlyList<string> HanBigrams(string text)
     {
         var grams = new HashSet<string>(StringComparer.Ordinal);
@@ -64,6 +99,7 @@ internal static class ArchiveSearchText
         }
         return grams.Order(StringComparer.Ordinal).ToArray();
     }
+
     internal static string IndexText(string text)
     {
         var normalized = Trim(Normalize(text));
@@ -72,6 +108,7 @@ internal static class ArchiveSearchText
         var grams = HanBigrams(normalized);
         return normalized + (grams.Count == 0 ? "" : "\n" + string.Join(' ', grams));
     }
+
     private static string? MatchExpression(IEnumerable<string> terms, string op)
     {
         var accepted = new List<string>();
@@ -84,7 +121,14 @@ internal static class ArchiveSearchText
         }
         return accepted.Count == 0 ? null : string.Join(" " + op + " ", accepted);
     }
-    internal static IEnumerable<string> Runs(string text, Func<Rune, bool> first, Func<Rune, bool> rest, int min, int max = int.MaxValue)
+
+    internal static IEnumerable<string> Runs(
+        string text,
+        Func<Rune, bool> first,
+        Func<Rune, bool> rest,
+        int min,
+        int max = int.MaxValue
+    )
     {
         var runes = WellFormed(text).EnumerateRunes().ToArray();
         for (var index = 0; index < runes.Length; index++)
@@ -95,9 +139,12 @@ internal static class ArchiveSearchText
             while (index + 1 < runes.Length && index - start + 1 < max && rest(runes[index + 1]))
                 index++;
             if (index - start + 1 >= min)
-                yield return string.Concat(runes[start..(index + 1)].Select(rune => rune.ToString()));
+                yield return string.Concat(
+                    runes[start..(index + 1)].Select(rune => rune.ToString())
+                );
         }
     }
+
     internal static ArchiveSearchQuery Compile(string query)
     {
         var bounded = query.Length > 2000 ? query[..2000] : query;
@@ -111,13 +158,19 @@ internal static class ArchiveSearchText
         }
         foreach (var value in Runs(bounded, LetterNumber, IdentifierCharacter, 3, 160))
             Add(value);
-        foreach (Match match in Regex.Matches(bounded, @"\b[0-9a-fA-F]{7,64}\b", RegexOptions.ECMAScript))
+        foreach (
+            Match match in Regex.Matches(bounded, @"\b[0-9a-fA-F]{7,64}\b", RegexOptions.ECMAScript)
+        )
             Add(match.Value);
         // Commands are a separate lane and can contain one whitespace-separated argument.
         var chars = WellFormed(bounded).EnumerateRunes().ToArray();
         for (var index = 0; index < chars.Length; index++)
         {
-            if (chars[index].Value != '/' || index + 1 >= chars.Length || !CommandCharacter(chars[index + 1]))
+            if (
+                chars[index].Value != '/'
+                || index + 1 >= chars.Length
+                || !CommandCharacter(chars[index + 1])
+            )
                 continue;
             var start = index++;
             while (index + 1 < chars.Length && CommandCharacter(chars[index + 1]))
@@ -151,8 +204,18 @@ internal static class ArchiveSearchText
             for (var index = 0; index + 1 < characters.Length && prose.Count < 12; index++)
                 prose.Add("\u241f" + characters[index] + characters[index + 1] + "\u241f");
         }
-        var ids = identifiers.OrderByDescending(term => term.Length).ThenBy(term => term, StringComparer.InvariantCulture).Take(4).ToArray();
+        var ids = identifiers
+            .OrderByDescending(term => term.Length)
+            .ThenBy(term => term, StringComparer.InvariantCulture)
+            .Take(4)
+            .ToArray();
         var terms = prose.Take(12).ToArray();
-        return new(normalized, ids, terms, MatchExpression(ids, "OR"), MatchExpression(terms, "AND"));
+        return new(
+            normalized,
+            ids,
+            terms,
+            MatchExpression(ids, "OR"),
+            MatchExpression(terms, "AND")
+        );
     }
 }

@@ -9,12 +9,16 @@ internal sealed partial class VectorLexicalRuntime
         foreach (var file in new[] { path, path + "-wal", path + "-shm" })
             File.Delete(file);
     }
+
     private static void RemoveSidecars(string path)
     {
         File.Delete(path + "-wal");
         File.Delete(path + "-shm");
     }
-    private void SyncDirectory() => LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(databasePath)!);
+
+    private void SyncDirectory() =>
+        LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(databasePath)!);
+
     private void Reconcile(ArchiveSearchIndex current)
     {
         foreach (var stored in current.SessionIds())
@@ -32,11 +36,17 @@ internal sealed partial class VectorLexicalRuntime
             }
             catch
             {
-                try { current.Delete(stored); current.Reset(canonical); } catch { }
+                try
+                {
+                    current.Delete(stored);
+                    current.Reset(canonical);
+                }
+                catch { }
                 Error("LEXICAL_RECONCILE_FAILED");
             }
         }
     }
+
     private void ApplyResets(ArchiveSearchIndex current)
     {
         lock (lane)
@@ -54,12 +64,14 @@ internal sealed partial class VectorLexicalRuntime
                 }
         }
     }
+
     private void Prune(ArchiveSearchIndex current)
     {
         foreach (var id in current.SessionIds())
             if (!Archive(id).HasReadOnlyIdentity())
                 current.Delete(id);
     }
+
     private async Task ShadowCatchupAsync(ArchiveSearchIndex current)
     {
         while (!stopping)
@@ -81,15 +93,21 @@ internal sealed partial class VectorLexicalRuntime
             {
                 ApplyResets(current);
                 Prune(current);
-                if (Archive("main").LocalVectorMaxima().All(entry =>
-                {
-                    var checkpoint = current.Checkpoint(entry.SessionId);
-                    return checkpoint.RawLastIndexedSeq >= entry.MessageSeq && checkpoint.LastIndexedBlockId >= entry.BlockId;
-                }))
+                if (
+                    Archive("main")
+                        .LocalVectorMaxima()
+                        .All(entry =>
+                        {
+                            var checkpoint = current.Checkpoint(entry.SessionId);
+                            return checkpoint.RawLastIndexedSeq >= entry.MessageSeq
+                                && checkpoint.LastIndexedBlockId >= entry.BlockId;
+                        })
+                )
                     return;
             }
         }
     }
+
     private async Task ShadowRebuildAsync()
     {
         rebuilding = true;
@@ -99,15 +117,22 @@ internal sealed partial class VectorLexicalRuntime
         var backupPath = databasePath + ".bak";
         try
         {
-            var measuredSize = new[] { databasePath, nextPath, backupPath }.Select(path => File.Exists(path) ? new FileInfo(path).Length : 0).Max();
-            var free = FreeBytes?.Invoke() ?? new DriveInfo(Path.GetDirectoryName(databasePath)!).AvailableFreeSpace;
+            var measuredSize = new[] { databasePath, nextPath, backupPath }
+                .Select(path => File.Exists(path) ? new FileInfo(path).Length : 0)
+                .Max();
+            var free =
+                FreeBytes?.Invoke()
+                ?? new DriveInfo(Path.GetDirectoryName(databasePath)!).AvailableFreeSpace;
             if (free < measuredSize + 64L * 1024 * 1024)
             {
                 Error("LEXICAL_REBUILD_SPACE");
                 return;
             }
             ArchiveSearchIndex next;
-            try { next = ArchiveSearchIndex.Open(nextPath); }
+            try
+            {
+                next = ArchiveSearchIndex.Open(nextPath);
+            }
             catch (Exception error) when (Rebuildable(error))
             {
                 RemoveFamily(nextPath);
@@ -199,11 +224,21 @@ internal sealed partial class VectorLexicalRuntime
                 resets.Clear();
                 established.Clear();
             }
-            try { RemoveFamily(backupPath); RemoveFamily(nextPath); }
-            catch { Error("LEXICAL_REBUILD_CLEANUP_FAILED"); }
+            try
+            {
+                RemoveFamily(backupPath);
+                RemoveFamily(nextPath);
+            }
+            catch
+            {
+                Error("LEXICAL_REBUILD_CLEANUP_FAILED");
+            }
             await StartupBackfillAsync();
         }
-        catch { Error("LEXICAL_REBUILD_FAILED"); }
+        catch
+        {
+            Error("LEXICAL_REBUILD_FAILED");
+        }
         finally
         {
             rebuilding = false;
@@ -214,6 +249,7 @@ internal sealed partial class VectorLexicalRuntime
                         pending.TrySetResult();
         }
     }
+
     private Task OpenOrRecoverAsync()
     {
         var next = databasePath + ".next";
@@ -251,6 +287,7 @@ internal sealed partial class VectorLexicalRuntime
         }
         return Task.CompletedTask;
     }
+
     private void ResetPersisted(params string[] ids)
     {
         if (!config.LexicalIndex)
@@ -269,14 +306,21 @@ internal sealed partial class VectorLexicalRuntime
             {
                 if (Rebuildable(error))
                 {
-                    try { RemoveFamily(path); }
-                    catch { Error("LEXICAL_PREINIT_RESET_REMOVE_FAILED"); }
+                    try
+                    {
+                        RemoveFamily(path);
+                    }
+                    catch
+                    {
+                        Error("LEXICAL_PREINIT_RESET_REMOVE_FAILED");
+                    }
                 }
                 else
                     Error("LEXICAL_PREINIT_RESET_FAILED");
             }
         }
     }
+
     private async Task LifecycleAsync(Action<ArchiveSearchIndex> run)
     {
         if (!ready || index is null || rebuilding || stopping)
@@ -294,8 +338,13 @@ internal sealed partial class VectorLexicalRuntime
                 return Task.CompletedTask;
             });
         }
-        catch { ready = false; Error("LEXICAL_LIFECYCLE_FAILED"); }
+        catch
+        {
+            ready = false;
+            Error("LEXICAL_LIFECYCLE_FAILED");
+        }
     }
+
     internal async Task RenameAsync(string oldId, string newId)
     {
         if (!config.LexicalIndex)
@@ -325,7 +374,12 @@ internal sealed partial class VectorLexicalRuntime
             }
             catch
             {
-                try { current.Delete(oldId); current.Reset(newId); } catch { }
+                try
+                {
+                    current.Delete(oldId);
+                    current.Reset(newId);
+                }
+                catch { }
                 needsBackfill = true;
                 Error("LEXICAL_RENAME_FAILED");
             }
@@ -339,6 +393,7 @@ internal sealed partial class VectorLexicalRuntime
             Force(newId, stats.MaxSeq, stats.MaxBlockId);
         }
     }
+
     internal async Task ResetAsync(string id)
     {
         if (!config.LexicalIndex)
@@ -353,7 +408,9 @@ internal sealed partial class VectorLexicalRuntime
             {
                 resets.Add(id);
                 if (!established.TryGetValue(id, out pending!))
-                    established[id] = pending = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                    established[id] = pending = new(
+                        TaskCreationOptions.RunContinuationsAsynchronously
+                    );
             }
             if (index is not null)
                 try
@@ -369,7 +426,11 @@ internal sealed partial class VectorLexicalRuntime
                         return Task.CompletedTask;
                     });
                 }
-                catch { Error("LEXICAL_RESET_FAILED"); pending.TrySetResult(); }
+                catch
+                {
+                    Error("LEXICAL_RESET_FAILED");
+                    pending.TrySetResult();
+                }
             await pending.Task;
             return;
         }
@@ -380,12 +441,20 @@ internal sealed partial class VectorLexicalRuntime
         }
         await LifecycleAsync(current =>
         {
-            try { current.Delete(id); }
-            catch { ready = false; Error("LEXICAL_RESET_FAILED"); }
+            try
+            {
+                current.Delete(id);
+            }
+            catch
+            {
+                ready = false;
+                Error("LEXICAL_RESET_FAILED");
+            }
         });
         lock (lane)
             states.Remove(id);
     }
+
     internal async Task ForkAsync(string id)
     {
         if (!config.LexicalIndex)
@@ -397,7 +466,9 @@ internal sealed partial class VectorLexicalRuntime
         try
         {
             var branch = Archive(id).ReadBranch();
-            valid = branch?.ParentSessionId is not null && branch.SessionId == Archive(id).CanonicalSessionId;
+            valid =
+                branch?.ParentSessionId is not null
+                && branch.SessionId == Archive(id).CanonicalSessionId;
             await LifecycleAsync(current =>
             {
                 try
@@ -413,7 +484,11 @@ internal sealed partial class VectorLexicalRuntime
                 }
                 catch
                 {
-                    try { current.Delete(id); } catch { }
+                    try
+                    {
+                        current.Delete(id);
+                    }
+                    catch { }
                     valid = false;
                     Error("LEXICAL_FORK_FAILED");
                 }
@@ -421,7 +496,14 @@ internal sealed partial class VectorLexicalRuntime
         }
         catch
         {
-            await LifecycleAsync(current => { try { current.Delete(id); } catch { } });
+            await LifecycleAsync(current =>
+            {
+                try
+                {
+                    current.Delete(id);
+                }
+                catch { }
+            });
             Error("LEXICAL_FORK_FAILED");
         }
         lock (lane)

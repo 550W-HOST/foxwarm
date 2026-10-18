@@ -18,12 +18,15 @@ internal sealed class VectorOperationGate
                 readers++;
                 return Task.FromResult<IDisposable>(new Lease(this, false));
             }
-            var waiter = new TaskCompletionSource<IDisposable>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var waiter = new TaskCompletionSource<IDisposable>(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
             (exclusive ? this.exclusive : regular).Enqueue(waiter);
             Admit();
             return waiter.Task;
         }
     }
+
     private void Admit()
     {
         if (writer || readers > 0)
@@ -40,9 +43,11 @@ internal sealed class VectorOperationGate
                 next.SetResult(new Lease(this, false));
             }
     }
+
     private sealed class Lease(VectorOperationGate owner, bool exclusive) : IDisposable
     {
         private int disposed;
+
         public void Dispose()
         {
             if (Interlocked.Exchange(ref disposed, 1) != 0)

@@ -231,8 +231,12 @@ internal sealed partial class SessionManager : IAsyncDisposable
         waitLiveness = new WaitLiveness(this);
         Journal = new LlmRequestJournalStore(this.root);
         archiveWriter = SqliteArchiveMessageStore.AcquireWriter(ArchiveDatabase);
-        Vector = new(this.root, Foxwarm.Vector.VectorConfiguration.Capture(models.ConfigurationOwner?.AppConfiguration));
-        Vector.Diagnostic = (code, id) => Console.Error.WriteLine("Vector " + code + (id.Length == 0 ? "" : " session=" + id));
+        Vector = new(
+            this.root,
+            Foxwarm.Vector.VectorConfiguration.Capture(models.ConfigurationOwner?.AppConfiguration)
+        );
+        Vector.Diagnostic = (code, id) =>
+            Console.Error.WriteLine("Vector " + code + (id.Length == 0 ? "" : " session=" + id));
     }
 
     internal string? ResolveTaskSessionId(string requested)

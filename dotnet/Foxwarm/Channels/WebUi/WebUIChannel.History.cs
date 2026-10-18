@@ -393,16 +393,30 @@ internal sealed partial class WebUIChannel
                 }
                 try
                 {
-                    return Results.Ok(await sessions.SearchVectorHistoryAsync(search, (int)(limit ?? 5), agentName, sessionId));
+                    return Results.Ok(
+                        await sessions.SearchVectorHistoryAsync(
+                            search,
+                            (int)(limit ?? 5),
+                            agentName,
+                            sessionId
+                        )
+                    );
                 }
                 catch (Foxwarm.Vector.VectorUnavailableException error)
                 {
-                    return Results.Json(new { error = error.Message, code = error.Code },
-                        statusCode: error.Code is "VECTOR_DISABLED" or "VECTOR_UNAVAILABLE" ? 503 : 500);
+                    return Results.Json(
+                        new { error = error.Message, code = error.Code },
+                        statusCode: error.Code is "VECTOR_DISABLED" or "VECTOR_UNAVAILABLE"
+                            ? 503
+                            : 500
+                    );
                 }
                 catch (Exception error)
                 {
-                    return Results.Json(new { error = error.Message, code = "HISTORY_SEARCH_FAILED" }, statusCode: 500);
+                    return Results.Json(
+                        new { error = error.Message, code = "HISTORY_SEARCH_FAILED" },
+                        statusCode: 500
+                    );
                 }
             }
         );

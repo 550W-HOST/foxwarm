@@ -3,7 +3,9 @@ namespace Foxwarm.Vector;
 // Script=Han ranges from the Source runtime Unicode 16.0 property table.
 internal static class SourceHanRanges
 {
-    internal static bool Contains(int value) => Ranges.Any(range => value >= range.Start && value <= range.End);
+    internal static bool Contains(int value) =>
+        Ranges.Any(range => value >= range.Start && value <= range.End);
+
     private static readonly (int Start, int End)[] Ranges =
     [
         (0x2e80, 0x2e99),

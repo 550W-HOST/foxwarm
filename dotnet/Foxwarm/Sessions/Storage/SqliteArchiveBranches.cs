@@ -134,7 +134,8 @@ public sealed partial class SqliteArchiveMessageStore
                 {
                     using var checkpoint = connection.CreateCommand();
                     checkpoint.Transaction = transaction;
-                    checkpoint.CommandText = "INSERT OR IGNORE INTO archive_checkpoints(session_id,raw_last_indexed_seq,raw_tail_start_seq,last_indexed_block_id,updated_at) VALUES($s,$m,$t,$b,$at)";
+                    checkpoint.CommandText =
+                        "INSERT OR IGNORE INTO archive_checkpoints(session_id,raw_last_indexed_seq,raw_tail_start_seq,last_indexed_block_id,updated_at) VALUES($s,$m,$t,$b,$at)";
                     checkpoint.Parameters.AddWithValue("$s", sessionId);
                     checkpoint.Parameters.AddWithValue("$m", messageCap);
                     checkpoint.Parameters.AddWithValue("$t", messageCap > 0 ? messageCap + 1 : 0);

@@ -24,7 +24,11 @@ public sealed class PersistentSessionAuthorityStore
     private readonly Action<SessionSnapshot>? publishProjection;
     private readonly Func<JsonObject?>? mainFields;
     private readonly Action? checkLifetime;
-    private readonly Action<SessionSnapshot, IReadOnlyList<ArchiveMessageRecord>, IReadOnlyList<ArchiveBlockRecord>>? archiveCommitted;
+    private readonly Action<
+        SessionSnapshot,
+        IReadOnlyList<ArchiveMessageRecord>,
+        IReadOnlyList<ArchiveBlockRecord>
+    >? archiveCommitted;
     private volatile bool retired;
     private Exception? identityUnavailable;
 
@@ -51,7 +55,11 @@ public sealed class PersistentSessionAuthorityStore
         Action<SessionSnapshot>? publishProjection = null,
         Func<JsonObject?>? mainFields = null,
         Action? checkLifetime = null,
-        Action<SessionSnapshot, IReadOnlyList<ArchiveMessageRecord>, IReadOnlyList<ArchiveBlockRecord>>? archiveCommitted = null
+        Action<
+            SessionSnapshot,
+            IReadOnlyList<ArchiveMessageRecord>,
+            IReadOnlyList<ArchiveBlockRecord>
+        >? archiveCommitted = null
     )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
@@ -201,9 +209,7 @@ public sealed class PersistentSessionAuthorityStore
         cancellationToken.ThrowIfCancellationRequested();
         ValidateBoundSnapshot(stagedSnapshot);
         var records = messages.Select(ToArchiveRecord).ToArray();
-        var receipt = await archive
-            .EnqueueCompactionAsync(blocks, records)
-            .ConfigureAwait(false);
+        var receipt = await archive.EnqueueCompactionAsync(blocks, records).ConfigureAwait(false);
         IReadOnlyList<ArchiveBlockRecord> newBlocks = [];
         IReadOnlyList<ArchiveMessageRecord> newMessages = [];
         var published = false;
@@ -244,10 +250,17 @@ public sealed class PersistentSessionAuthorityStore
         PublishProjection(stagedSnapshot);
     }
 
-    private void NotifyArchiveCommitted(SessionSnapshot snapshot, IReadOnlyList<ArchiveMessageRecord> messages, IReadOnlyList<ArchiveBlockRecord> blocks)
+    private void NotifyArchiveCommitted(
+        SessionSnapshot snapshot,
+        IReadOnlyList<ArchiveMessageRecord> messages,
+        IReadOnlyList<ArchiveBlockRecord> blocks
+    )
     {
         // Derived indexing cannot change the result of an authority commit, including a post-rename failure.
-        try { archiveCommitted?.Invoke(snapshot, messages, blocks); }
+        try
+        {
+            archiveCommitted?.Invoke(snapshot, messages, blocks);
+        }
         catch { }
     }
 

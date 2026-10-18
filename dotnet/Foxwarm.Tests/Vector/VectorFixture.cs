@@ -23,7 +23,9 @@ internal sealed class VectorEmbeddingPeer : IAsyncDisposable
     internal Func<string, Task>? BeforeResponse { get; set; }
     internal bool Fail { get; set; }
     internal string BaseUrl => app.Urls.Single() + "/v1";
+
     private VectorEmbeddingPeer(WebApplication app) => this.app = app;
+
     internal static async Task<VectorEmbeddingPeer> StartAsync()
     {
         var builder = WebApplication.CreateSlimBuilder();
@@ -31,21 +33,30 @@ internal sealed class VectorEmbeddingPeer : IAsyncDisposable
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         var app = builder.Build();
         var peer = new VectorEmbeddingPeer(app);
-        app.MapPost("/v1/embeddings", async (HttpContext context) =>
-        {
-            var body = (await context.Request.ReadFromJsonAsync<JsonObject>())!;
-            var input = body["input"]!.GetValue<string>();
-            peer.Requests.Enqueue((context.Request.Path, body["model"]!.GetValue<string>(), input));
-            if (peer.BeforeResponse is not null)
-                await peer.BeforeResponse(input);
-            if (peer.Fail)
-                return Results.Json(new { error = new { message = "synthetic embeddings failure" } }, statusCode: 503);
-            var vector = Embedding(input);
-            return Results.Json(new { data = new[] { new { embedding = vector } } });
-        });
+        app.MapPost(
+            "/v1/embeddings",
+            async (HttpContext context) =>
+            {
+                var body = (await context.Request.ReadFromJsonAsync<JsonObject>())!;
+                var input = body["input"]!.GetValue<string>();
+                peer.Requests.Enqueue(
+                    (context.Request.Path, body["model"]!.GetValue<string>(), input)
+                );
+                if (peer.BeforeResponse is not null)
+                    await peer.BeforeResponse(input);
+                if (peer.Fail)
+                    return Results.Json(
+                        new { error = new { message = "synthetic embeddings failure" } },
+                        statusCode: 503
+                    );
+                var vector = Embedding(input);
+                return Results.Json(new { data = new[] { new { embedding = vector } } });
+            }
+        );
         await app.StartAsync();
         return peer;
     }
+
     internal static float[] Embedding(string input)
     {
         var vector = new float[1024];
@@ -54,6 +65,7 @@ internal sealed class VectorEmbeddingPeer : IAsyncDisposable
         vector[2] = input.Contains("orange", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
         return vector;
     }
+
     public async ValueTask DisposeAsync() => await app.DisposeAsync();
 }
 
@@ -65,20 +77,70 @@ internal sealed class VectorFixture : IAsyncDisposable
     internal string Database => Path.Combine(Data, "state", "archive-store.sqlite");
     internal string Dense => Path.Combine(Data, "state", "db");
     internal VectorEmbeddingPeer Peer { get; private set; } = null!;
-    internal VectorConfiguration Configuration(bool child = false, bool lexical = false) => VectorConfiguration.Capture(new()
-    {
-        ["dbWorkers"] = child, ["vector"] = new JsonObject { ["baseUrl"] = Peer.BaseUrl, ["lexicalIndex"] = lexical, ["hybridSearch"] = lexical }, ["vectorMaintenance"] = false,
-    });
+
+    internal VectorConfiguration Configuration(bool child = false, bool lexical = false) =>
+        VectorConfiguration.Capture(
+            new()
+            {
+                ["dbWorkers"] = child,
+                ["vector"] = new JsonObject
+                {
+                    ["baseUrl"] = Peer.BaseUrl,
+                    ["lexicalIndex"] = lexical,
+                    ["hybridSearch"] = lexical,
+                },
+                ["vectorMaintenance"] = false,
+            }
+        );
+
     internal SqliteArchiveMessageStore Archive(string id = "main/fixture") => new(Database, id);
-    internal static JsonObject Message(string text, string role = "user") => new() { ["role"] = role, ["parts"] = new JsonArray(new JsonObject { ["text"] = text }) };
+
+    internal static JsonObject Message(string text, string role = "user") =>
+        new() { ["role"] = role, ["parts"] = new JsonArray(new JsonObject { ["text"] = text }) };
+
     internal void Append(string id, long seq, string text, string role = "user")
     {
         var message = Message(text, role);
         message["__meta"] = new JsonObject { ["seq"] = seq, ["timestamp"] = seq * 1000 };
-        Archive(id).WriteMessages([ArchiveMessageRecord.Create(id, id.Split('/')[0], seq, seq * 1000, message)]);
+        Archive(id)
+            .WriteMessages([
+                ArchiveMessageRecord.Create(id, id.Split('/')[0], seq, seq * 1000, message),
+            ]);
     }
-    internal ArchiveBlockRecord Block(string id, long block = 1, long first = 1, long last = 1, string summary = "violet source block") => new(id, id.Split('/')[0], block, 1, "message", first, last, null, first, last, null, null, summary,
-        new JsonArray(new JsonObject { ["kind"] = "decision", ["text"] = "violet stable fact", ["context"] = "synthetic context", ["attributedTo"] = "user" }), 4000);
+
+    internal ArchiveBlockRecord Block(
+        string id,
+        long block = 1,
+        long first = 1,
+        long last = 1,
+        string summary = "violet source block"
+    ) =>
+        new(
+            id,
+            id.Split('/')[0],
+            block,
+            1,
+            "message",
+            first,
+            last,
+            null,
+            first,
+            last,
+            null,
+            null,
+            summary,
+            new JsonArray(
+                new JsonObject
+                {
+                    ["kind"] = "decision",
+                    ["text"] = "violet stable fact",
+                    ["context"] = "synthetic context",
+                    ["attributedTo"] = "user",
+                }
+            ),
+            4000
+        );
+
     internal static async Task<VectorFixture> CreateAsync()
     {
         var fixture = new VectorFixture();
@@ -88,28 +150,72 @@ internal sealed class VectorFixture : IAsyncDisposable
         fixture.Archive().Initialize();
         return fixture;
     }
-    internal async Task<SessionManager> ManagerAsync(bool child = false, bool lexical = false, Uri? modelPeer = null)
+
+    internal async Task<SessionManager> ManagerAsync(
+        bool child = false,
+        bool lexical = false,
+        Uri? modelPeer = null
+    )
     {
         var config = new JsonObject
         {
-            ["dbWorkers"] = child, ["vector"] = new JsonObject { ["baseUrl"] = Peer.BaseUrl, ["lexicalIndex"] = lexical, ["hybridSearch"] = lexical }, ["vectorMaintenance"] = false,
+            ["dbWorkers"] = child,
+            ["vector"] = new JsonObject
+            {
+                ["baseUrl"] = Peer.BaseUrl,
+                ["lexicalIndex"] = lexical,
+                ["hybridSearch"] = lexical,
+            },
+            ["vectorMaintenance"] = false,
         };
-        await File.WriteAllTextAsync(Path.Combine(Data, "state", "config.yaml"), config.ToJsonString());
-        await File.WriteAllTextAsync(Path.Combine(Data, "state", "models.yaml"), new JsonObject
-        {
-            ["default"] = "fixture", ["providers"] = new JsonObject { ["fixture"] = new JsonObject { ["providerType"] = "openai-responses", ["baseUrl"] = (modelPeer ?? new Uri("http://127.0.0.1:1")).ToString(), ["token"] = "synthetic-local", ["context"] = 200000, ["maxOutput"] = 20000 } },
-        }.ToJsonString());
+        await File.WriteAllTextAsync(
+            Path.Combine(Data, "state", "config.yaml"),
+            config.ToJsonString()
+        );
+        await File.WriteAllTextAsync(
+            Path.Combine(Data, "state", "models.yaml"),
+            new JsonObject
+            {
+                ["default"] = "fixture",
+                ["providers"] = new JsonObject
+                {
+                    ["fixture"] = new JsonObject
+                    {
+                        ["providerType"] = "openai-responses",
+                        ["baseUrl"] = (modelPeer ?? new Uri("http://127.0.0.1:1")).ToString(),
+                        ["token"] = "synthetic-local",
+                        ["context"] = 200000,
+                        ["maxOutput"] = 20000,
+                    },
+                },
+            }.ToJsonString()
+        );
         var configuration = new ModelConfiguration(Data);
-        var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "synthetic", "fixture", "", "", 1000);
-        var manager = new SessionManager(Data, Work, options, configuration.Models, Path.Combine(Temp.Path, "skills"));
+        var options = new ResponsesClientOptions(
+            new Uri("http://127.0.0.1:1"),
+            "synthetic",
+            "fixture",
+            "",
+            "",
+            1000
+        );
+        var manager = new SessionManager(
+            Data,
+            Work,
+            options,
+            configuration.Models,
+            Path.Combine(Temp.Path, "skills")
+        );
         await manager.LoadAsync();
         return manager;
     }
+
     public async ValueTask DisposeAsync()
     {
         await Peer.DisposeAsync();
         Temp.Dispose();
     }
+
     internal static string Repository()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -121,12 +227,37 @@ internal sealed class VectorFixture : IAsyncDisposable
         }
         throw new DirectoryNotFoundException("Repository root is unavailable.");
     }
-    internal static async Task<JsonNode> SourceAsync(string mode, string root, string input, string output)
+
+    internal static async Task<JsonNode> SourceAsync(
+        string mode,
+        string root,
+        string input,
+        string output
+    )
     {
         var repository = Repository();
-        var source = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT") ?? throw new InvalidOperationException("Set FOXWARM_TS_ROOT to the frozen, built Source checkout.");
-        var start = new ProcessStartInfo("node") { WorkingDirectory = source, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-        foreach (var arg in new[] { Path.Combine(repository, "dotnet", "vector-fixture-source.mjs"), mode, root, input, output })
+        var source =
+            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
+            ?? throw new InvalidOperationException(
+                "Set FOXWARM_TS_ROOT to the frozen, built Source checkout."
+            );
+        var start = new ProcessStartInfo("node")
+        {
+            WorkingDirectory = source,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        foreach (
+            var arg in new[]
+            {
+                Path.Combine(repository, "dotnet", "vector-fixture-source.mjs"),
+                mode,
+                root,
+                input,
+                output,
+            }
+        )
             start.ArgumentList.Add(arg);
         start.Environment["FOXWARM_DATA_DIR"] = root;
         start.Environment["FOXWARM_TS_ROOT"] = source;

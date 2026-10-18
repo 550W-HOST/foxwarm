@@ -58,13 +58,25 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
                 try
                 {
                     var latest = await runtime.Manager.ForceVectorIndexAsync(owner);
-                    runtime.ReplyToCommand(owner.Id, $"✅ Archive indexing completed up to seq {latest}.");
+                    runtime.ReplyToCommand(
+                        owner.Id,
+                        $"✅ Archive indexing completed up to seq {latest}."
+                    );
                     return new(200, new { success = true, latestSeq = latest });
                 }
                 catch (Exception error)
                 {
                     runtime.ReplyToCommand(owner.Id, "❌ Indexing failed: " + error.Message);
-                    return new(503, new { error = error.Message, code = error is Foxwarm.Vector.VectorUnavailableException unavailable ? unavailable.Code : "VECTOR_INDEX_FAILED" });
+                    return new(
+                        503,
+                        new
+                        {
+                            error = error.Message,
+                            code = error is Foxwarm.Vector.VectorUnavailableException unavailable
+                                ? unavailable.Code
+                                : "VECTOR_INDEX_FAILED",
+                        }
+                    );
                 }
             }
             if (command == "/session clear")

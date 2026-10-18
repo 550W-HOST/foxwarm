@@ -18,6 +18,7 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
         internal long? Deadline;
         internal Task? Active;
     }
+
     private readonly string databasePath;
     private readonly string archivePath;
     private readonly VectorConfiguration config;
@@ -25,7 +26,9 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
     private readonly object lane = new();
     private readonly Dictionary<string, Batch> states = new(StringComparer.Ordinal);
     private readonly HashSet<string> resets = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, TaskCompletionSource> established = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, TaskCompletionSource> established = new(
+        StringComparer.Ordinal
+    );
     private ArchiveSearchIndex? index;
     private volatile bool ready;
     private volatile bool backfilling;
@@ -44,21 +47,39 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
     internal Func<Task>? AfterFtsQuery { get; set; }
     internal Action? BeforeQuery { get; set; }
 
-    internal VectorLexicalRuntime(string databaseRoot, string archivePath, VectorConfiguration config, TimeProvider clock)
+    internal VectorLexicalRuntime(
+        string databaseRoot,
+        string archivePath,
+        VectorConfiguration config,
+        TimeProvider clock
+    )
     {
         databasePath = Path.Combine(databaseRoot, "archive-search.sqlite");
         this.archivePath = archivePath;
         this.config = config;
         this.clock = clock;
     }
+
     private SqliteArchiveMessageStore Archive(string id) => new(archivePath, id);
+
     private void Error(string code)
     {
         lastError = SafeClip(code, 96);
         lastErrorAt = clock.GetUtcNow().ToUnixTimeMilliseconds();
     }
-    private static bool Rebuildable(Exception error) => error is ArchiveSearchRebuildRequiredException
-        || error is SqliteException sqlite && (sqlite.SqliteErrorCode is 11 or 26 || sqlite.SqliteErrorCode == 1 && System.Text.RegularExpressions.Regex.IsMatch(sqlite.Message.ToLowerInvariant(), "not a database|file is not a database|database disk image is malformed|malformed database schema|database schema is corrupt"));
+
+    private static bool Rebuildable(Exception error) =>
+        error is ArchiveSearchRebuildRequiredException
+        || error is SqliteException sqlite
+            && (
+                sqlite.SqliteErrorCode is 11 or 26
+                || sqlite.SqliteErrorCode == 1
+                    && System.Text.RegularExpressions.Regex.IsMatch(
+                        sqlite.Message.ToLowerInvariant(),
+                        "not a database|file is not a database|database disk image is malformed|malformed database schema|database schema is corrupt"
+                    )
+            );
+
     private async Task YieldAsync()
     {
         if (Yield is not null)
@@ -66,6 +87,7 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
         else
             await Task.Yield();
     }
+
     private Task Enqueue(Func<Task> run)
     {
         lock (lane)
@@ -73,14 +95,27 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
             var previous = writer;
             var next = Task.Run(async () =>
             {
-                try { await previous; } catch { }
+                try
+                {
+                    await previous;
+                }
+                catch { }
                 await run();
             });
             writer = IgnoreAsync(next);
             return next;
         }
     }
-    private static async Task IgnoreAsync(Task task) { try { await task; } catch { } }
+
+    private static async Task IgnoreAsync(Task task)
+    {
+        try
+        {
+            await task;
+        }
+        catch { }
+    }
+
     internal async Task StartAsync()
     {
         if (!config.LexicalIndex || index is not null)
@@ -92,9 +127,15 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
             if (ready)
                 startup = StartupBackfillAsync();
         }
-        catch { ready = false; Error("LEXICAL_OPEN_FAILED"); }
+        catch
+        {
+            ready = false;
+            Error("LEXICAL_OPEN_FAILED");
+        }
     }
+
     internal Task WaitForStartupAsync() => startup;
+
     internal async Task WaitForIdleAsync()
     {
         while (true)
@@ -112,7 +153,14 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
                     return;
         }
     }
-    private async Task IndexAsync(string id, bool allowShutdown = false, long? seqTarget = null, long? blockTarget = null, bool allowUnavailable = false)
+
+    private async Task IndexAsync(
+        string id,
+        bool allowShutdown = false,
+        long? seqTarget = null,
+        long? blockTarget = null,
+        bool allowUnavailable = false
+    )
     {
         ArchiveSearchIndex? current;
         lock (lane)
@@ -124,14 +172,27 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
             checkpoint = current.Checkpoint(id);
         while (!stopping || allowShutdown)
         {
-            var loaded = Archive(id).ReadMessagesNumericRange(checkpoint.RawLastIndexedSeq + 1, null, 500);
+            var loaded = Archive(id)
+                .ReadMessagesNumericRange(checkpoint.RawLastIndexedSeq + 1, null, 500);
             if (loaded.Any(row => row.SessionId != id))
                 break;
             var rows = loaded.Where(row => seqTarget is null || row.Seq <= seqTarget).ToArray();
             if (rows.Length == 0)
                 break;
-            var documents = rows.Select(row => (Row: row, Text: Message(row.Message, rolePrefix: false, substantive: true, toolLimit: 0)))
-                .Where(entry => entry.Text.Length > 0).Select(entry => RawDocument(entry.Row, entry.Text)).ToArray();
+            var documents = rows.Select(row =>
+                    (
+                        Row: row,
+                        Text: Message(
+                            row.Message,
+                            rolePrefix: false,
+                            substantive: true,
+                            toolLimit: 0
+                        )
+                    )
+                )
+                .Where(entry => entry.Text.Length > 0)
+                .Select(entry => RawDocument(entry.Row, entry.Text))
+                .ToArray();
             lock (lane)
             {
                 current.Raw(id, documents, rows[^1].Seq);
@@ -141,7 +202,8 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
         }
         while (!stopping || allowShutdown)
         {
-            var loaded = Archive(id).ReadBlocksNumericRange(checkpoint.LastIndexedBlockId + 1, null, 100);
+            var loaded = Archive(id)
+                .ReadBlocksNumericRange(checkpoint.LastIndexedBlockId + 1, null, 100);
             if (loaded.Any(row => row.SessionId != id))
                 break;
             var rows = loaded.Where(row => blockTarget is null || row.Id <= blockTarget).ToArray();
@@ -156,35 +218,73 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
             await YieldAsync();
         }
     }
-    private static JsonObject RawDocument(ArchiveMessageRecord row, string text) => new()
-    {
-        ["session_id"] = row.SessionId, ["agent"] = row.Agent, ["memory_kind"] = "raw", ["source_key"] = row.Seq.ToString(), ["source_family"] = $"{row.SessionId}:raw:{row.Seq}-{row.Seq}",
-        ["text"] = text, ["seq"] = row.Seq, ["start_seq"] = row.Seq, ["end_seq"] = row.Seq, ["raw_start_seq"] = row.Seq, ["raw_end_seq"] = row.Seq, ["timestamp"] = row.Timestamp,
-    };
-    internal static (JsonObject Block, IReadOnlyList<JsonObject> Facts) BlockDocuments(ArchiveBlockRecord record)
-    {
-        JsonObject Common() => new()
+
+    private static JsonObject RawDocument(ArchiveMessageRecord row, string text) =>
+        new()
         {
-            ["session_id"] = record.SessionId, ["agent"] = record.Agent, ["source_family"] = $"{record.SessionId}:block:{record.Id}",
-            ["start_seq"] = record.SourceStart, ["end_seq"] = record.SourceEnd, ["raw_start_seq"] = record.RawStartSeq, ["raw_end_seq"] = record.RawEndSeq,
-            ["timestamp"] = record.CreatedAt, ["block_id"] = record.Id, ["block_level"] = record.Level,
+            ["session_id"] = row.SessionId,
+            ["agent"] = row.Agent,
+            ["memory_kind"] = "raw",
+            ["source_key"] = row.Seq.ToString(),
+            ["source_family"] = $"{row.SessionId}:raw:{row.Seq}-{row.Seq}",
+            ["text"] = text,
+            ["seq"] = row.Seq,
+            ["start_seq"] = row.Seq,
+            ["end_seq"] = row.Seq,
+            ["raw_start_seq"] = row.Seq,
+            ["raw_end_seq"] = row.Seq,
+            ["timestamp"] = row.Timestamp,
         };
+
+    internal static (JsonObject Block, IReadOnlyList<JsonObject> Facts) BlockDocuments(
+        ArchiveBlockRecord record
+    )
+    {
+        JsonObject Common() =>
+            new()
+            {
+                ["session_id"] = record.SessionId,
+                ["agent"] = record.Agent,
+                ["source_family"] = $"{record.SessionId}:block:{record.Id}",
+                ["start_seq"] = record.SourceStart,
+                ["end_seq"] = record.SourceEnd,
+                ["raw_start_seq"] = record.RawStartSeq,
+                ["raw_end_seq"] = record.RawEndSeq,
+                ["timestamp"] = record.CreatedAt,
+                ["block_id"] = record.Id,
+                ["block_level"] = record.Level,
+            };
         var block = Common();
         block["memory_kind"] = "block";
         block["source_key"] = record.Id.ToString();
         block["text"] = record.Summary;
-        var facts = (record.MemoryFacts?.OfType<JsonObject>() ?? []).Select((fact, index) =>
-        {
-            var factText = string.Join('\n', new[] { Trim(Text(fact["text"])), Trim(Text(fact["context"])), fact["attributedTo"] is null ? "" : "Attribution: " + Text(fact["attributedTo"]) }.Where(text => text.Length > 0));
-            var hash = Hash(Text(fact["kind"]) + "\0" + Lower(factText))[..24];
-            var row = Common();
-            row["memory_kind"] = "fact";
-            row["source_key"] = $"{record.Id}:{hash}:{index}";
-            row["text"] = $"Memory fact ({Text(fact["kind"])})\n{factText}";
-            return row;
-        }).ToArray();
+        var facts = (record.MemoryFacts?.OfType<JsonObject>() ?? [])
+            .Select(
+                (fact, index) =>
+                {
+                    var factText = string.Join(
+                        '\n',
+                        new[]
+                        {
+                            Trim(Text(fact["text"])),
+                            Trim(Text(fact["context"])),
+                            fact["attributedTo"] is null
+                                ? ""
+                                : "Attribution: " + Text(fact["attributedTo"]),
+                        }.Where(text => text.Length > 0)
+                    );
+                    var hash = Hash(Text(fact["kind"]) + "\0" + Lower(factText))[..24];
+                    var row = Common();
+                    row["memory_kind"] = "fact";
+                    row["source_key"] = $"{record.Id}:{hash}:{index}";
+                    row["text"] = $"Memory fact ({Text(fact["kind"])})\n{factText}";
+                    return row;
+                }
+            )
+            .ToArray();
         return (block, facts);
     }
+
     private async Task StartupBackfillAsync()
     {
         backfilling = true;
@@ -199,16 +299,29 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
                     ArchiveVectorCheckpoint checkpoint;
                     lock (lane)
                         checkpoint = index!.Checkpoint(entry.SessionId);
-                    if (entry.MessageSeq > checkpoint.RawLastIndexedSeq || entry.BlockId > checkpoint.LastIndexedBlockId)
+                    if (
+                        entry.MessageSeq > checkpoint.RawLastIndexedSeq
+                        || entry.BlockId > checkpoint.LastIndexedBlockId
+                    )
                         await Enqueue(() => IndexAsync(entry.SessionId));
                 }
-                catch { Error("LEXICAL_BACKFILL_SESSION_FAILED"); }
+                catch
+                {
+                    Error("LEXICAL_BACKFILL_SESSION_FAILED");
+                }
                 await YieldAsync();
             }
         }
-        catch { Error("LEXICAL_BACKFILL_FAILED"); }
-        finally { backfilling = false; }
+        catch
+        {
+            Error("LEXICAL_BACKFILL_FAILED");
+        }
+        finally
+        {
+            backfilling = false;
+        }
     }
+
     private Batch State(string id)
     {
         if (!states.TryGetValue(id, out var state))
@@ -216,38 +329,50 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
             ArchiveVectorCheckpoint checkpoint;
             lock (lane)
                 checkpoint = index?.Checkpoint(id) ?? new();
-            states[id] = state = new() { Seq = checkpoint.RawLastIndexedSeq, Block = checkpoint.LastIndexedBlockId };
+            states[id] = state = new()
+            {
+                Seq = checkpoint.RawLastIndexedSeq,
+                Block = checkpoint.LastIndexedBlockId,
+            };
         }
         return state;
     }
+
     private static void Cancel(Batch state)
     {
         state.Timer?.Dispose();
         state.Timer = null;
         state.Deadline = null;
     }
+
     private void Arm(string id, Batch state)
     {
         if (state.Timer is not null || !ready || stopping)
             return;
         state.Deadline = clock.GetUtcNow().AddMinutes(5).ToUnixTimeMilliseconds();
-        state.Timer = clock.CreateTimer(_ =>
-        {
-            lock (lane)
+        state.Timer = clock.CreateTimer(
+            _ =>
             {
-                if (stopping || state.Deadline is null)
-                    return;
-                Cancel(state);
-                if (state.RetryBlocked)
+                lock (lane)
                 {
-                    state.ForceSeq = Math.Max(state.ForceSeq, state.Seq);
-                    state.ForceBlock = Math.Max(state.ForceBlock, state.Block);
+                    if (stopping || state.Deadline is null)
+                        return;
+                    Cancel(state);
+                    if (state.RetryBlocked)
+                    {
+                        state.ForceSeq = Math.Max(state.ForceSeq, state.Seq);
+                        state.ForceBlock = Math.Max(state.ForceBlock, state.Block);
+                    }
+                    state.RetryBlocked = false;
+                    StartRun(id, state);
                 }
-                state.RetryBlocked = false;
-                StartRun(id, state);
-            }
-        }, null, TimeSpan.FromMinutes(5), Timeout.InfiniteTimeSpan);
+            },
+            null,
+            TimeSpan.FromMinutes(5),
+            Timeout.InfiniteTimeSpan
+        );
     }
+
     private void Plan(string id, Batch state)
     {
         if (!ready || stopping)
@@ -255,7 +380,9 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
         ArchiveVectorCheckpoint checkpoint;
         lock (lane)
             checkpoint = index?.Checkpoint(id) ?? new();
-        var forced = state.ForceSeq > checkpoint.RawLastIndexedSeq || state.ForceBlock > checkpoint.LastIndexedBlockId;
+        var forced =
+            state.ForceSeq > checkpoint.RawLastIndexedSeq
+            || state.ForceBlock > checkpoint.LastIndexedBlockId;
         if (forced)
         {
             if (state.RetryBlocked)
@@ -263,13 +390,17 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
             else
                 StartRun(id, state);
         }
-        else if (state.Block > checkpoint.LastIndexedBlockId || state.Seq - checkpoint.RawLastIndexedSeq >= 50)
+        else if (
+            state.Block > checkpoint.LastIndexedBlockId
+            || state.Seq - checkpoint.RawLastIndexedSeq >= 50
+        )
             StartRun(id, state);
         else if (state.Seq > checkpoint.RawLastIndexedSeq)
             Arm(id, state);
         else
             Cancel(state);
     }
+
     private void StartRun(string id, Batch state)
     {
         if (state.Active is not null || !ready || stopping)
@@ -278,16 +409,25 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
         ArchiveVectorCheckpoint checkpoint;
         lock (lane)
             checkpoint = index!.Checkpoint(id);
-        var forced = !state.RetryBlocked && (state.ForceSeq > checkpoint.RawLastIndexedSeq || state.ForceBlock > checkpoint.LastIndexedBlockId);
+        var forced =
+            !state.RetryBlocked
+            && (
+                state.ForceSeq > checkpoint.RawLastIndexedSeq
+                || state.ForceBlock > checkpoint.LastIndexedBlockId
+            );
         var seq = forced ? state.ForceSeq : state.Seq;
         var block = forced ? state.ForceBlock : state.Block;
         var active = Enqueue(() => IndexAsync(id, seqTarget: seq, blockTarget: block));
         state.Active = active;
         _ = AfterRunAsync(id, state, active, forced);
     }
+
     private async Task AfterRunAsync(string id, Batch state, Task active, bool forced)
     {
-        try { await active; }
+        try
+        {
+            await active;
+        }
         catch
         {
             lock (lane)
@@ -306,6 +446,7 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
             }
         }
     }
+
     internal void Schedule(string id, long seq, long block)
     {
         if (!ready || stopping)
@@ -320,8 +461,12 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
                 Plan(id, state);
             }
         }
-        catch { Error("LEXICAL_SCHEDULE_FAILED"); }
+        catch
+        {
+            Error("LEXICAL_SCHEDULE_FAILED");
+        }
     }
+
     internal void Force(string id, long seq, long block)
     {
         if (!ready || stopping)
@@ -339,8 +484,12 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
                 StartRun(id, state);
             }
         }
-        catch { Error("LEXICAL_FORCE_FAILED"); }
+        catch
+        {
+            Error("LEXICAL_FORCE_FAILED");
+        }
     }
+
     internal JsonObject Status(string id)
     {
         var stats = Archive(id).LocalVectorStats();
@@ -352,37 +501,92 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
             deadline = states.GetValueOrDefault(id)?.Deadline;
         return new()
         {
-            ["configured"] = config.LexicalIndex, ["ready"] = ready, ["backfilling"] = backfilling, ["rebuilding"] = rebuilding, ["generation"] = generation,
-            ["rawLastIndexedSeq"] = checkpoint.RawLastIndexedSeq, ["lastIndexedBlockId"] = checkpoint.LastIndexedBlockId, ["latestLocalMessageSeq"] = stats.MaxSeq, ["latestLocalBlockId"] = stats.MaxBlockId,
-            ["pendingMessageCount"] = Math.Max(0, stats.MaxSeq - checkpoint.RawLastIndexedSeq), ["pendingBlockCount"] = Math.Max(0, stats.MaxBlockId - checkpoint.LastIndexedBlockId),
-            ["maxLatencyDeadline"] = deadline, ["lastErrorCode"] = lastError, ["lastErrorAt"] = lastErrorAt,
+            ["configured"] = config.LexicalIndex,
+            ["ready"] = ready,
+            ["backfilling"] = backfilling,
+            ["rebuilding"] = rebuilding,
+            ["generation"] = generation,
+            ["rawLastIndexedSeq"] = checkpoint.RawLastIndexedSeq,
+            ["lastIndexedBlockId"] = checkpoint.LastIndexedBlockId,
+            ["latestLocalMessageSeq"] = stats.MaxSeq,
+            ["latestLocalBlockId"] = stats.MaxBlockId,
+            ["pendingMessageCount"] = Math.Max(0, stats.MaxSeq - checkpoint.RawLastIndexedSeq),
+            ["pendingBlockCount"] = Math.Max(0, stats.MaxBlockId - checkpoint.LastIndexedBlockId),
+            ["maxLatencyDeadline"] = deadline,
+            ["lastErrorCode"] = lastError,
+            ["lastErrorAt"] = lastErrorAt,
         };
     }
+
     private sealed record Coverage(bool Complete, bool Exact, string Signature);
+
     private Coverage CoverageSnapshot(VectorSearchOptions? options)
     {
-        var exact = options?.LineageSessions is { Count: > 0 } || options?.SessionIds is { Length: > 0 };
-        var entries = exact ? options?.LineageSessions is { Count: > 0 } lineage ? lineage.ToArray() : options!.SessionIds!.Select(id => new ArchiveVectorScope(id)).ToArray()
-            : Archive("main").LocalVectorMaxima().Where(entry => options?.Agent is null || entry.Agent == options.Agent).Select(entry => new ArchiveVectorScope(entry.SessionId)).ToArray();
-        var snapshots = entries.Take(64).Select(entry =>
-        {
-            var stats = Archive(entry.SessionId).LocalVectorStats();
-            var requiredSeq = Math.Min(stats.MaxSeq, entry.MaxMessageSeq ?? stats.MaxSeq);
-            var requiredBlock = Math.Min(stats.MaxBlockId, entry.MaxBlockId ?? stats.MaxBlockId);
-            var checkpoint = index!.Checkpoint(entry.SessionId);
-            var exists = !exact || Archive(entry.SessionId).HasReadOnlyIdentity();
-            return (Complete: exists && checkpoint.RawLastIndexedSeq >= requiredSeq && checkpoint.LastIndexedBlockId >= requiredBlock,
-                Signature: new JsonArray(JsonValue.Create(entry.SessionId), entry.MaxMessageSeq, entry.MaxBlockId, requiredSeq, requiredBlock, exists));
-        }).ToArray();
-        return new(entries.Length <= 64 && snapshots.All(entry => entry.Complete), exact,
-            exact ? EcmaJson.Stringify(new JsonArray(snapshots.Select(entry => (JsonNode?)entry.Signature).ToArray())) : "");
+        var exact =
+            options?.LineageSessions is { Count: > 0 } || options?.SessionIds is { Length: > 0 };
+        var entries = exact
+            ? options?.LineageSessions is { Count: > 0 } lineage
+                ? lineage.ToArray()
+                : options!.SessionIds!.Select(id => new ArchiveVectorScope(id)).ToArray()
+            : Archive("main")
+                .LocalVectorMaxima()
+                .Where(entry => options?.Agent is null || entry.Agent == options.Agent)
+                .Select(entry => new ArchiveVectorScope(entry.SessionId))
+                .ToArray();
+        var snapshots = entries
+            .Take(64)
+            .Select(entry =>
+            {
+                var stats = Archive(entry.SessionId).LocalVectorStats();
+                var requiredSeq = Math.Min(stats.MaxSeq, entry.MaxMessageSeq ?? stats.MaxSeq);
+                var requiredBlock = Math.Min(
+                    stats.MaxBlockId,
+                    entry.MaxBlockId ?? stats.MaxBlockId
+                );
+                var checkpoint = index!.Checkpoint(entry.SessionId);
+                var exists = !exact || Archive(entry.SessionId).HasReadOnlyIdentity();
+                return (
+                    Complete: exists
+                        && checkpoint.RawLastIndexedSeq >= requiredSeq
+                        && checkpoint.LastIndexedBlockId >= requiredBlock,
+                    Signature: new JsonArray(
+                        JsonValue.Create(entry.SessionId),
+                        entry.MaxMessageSeq,
+                        entry.MaxBlockId,
+                        requiredSeq,
+                        requiredBlock,
+                        exists
+                    )
+                );
+            })
+            .ToArray();
+        return new(
+            entries.Length <= 64 && snapshots.All(entry => entry.Complete),
+            exact,
+            exact
+                ? EcmaJson.Stringify(
+                    new JsonArray(snapshots.Select(entry => (JsonNode?)entry.Signature).ToArray())
+                )
+                : ""
+        );
     }
-    internal async Task<VectorSearchResult> QueryAsync(string query, int limit, VectorSearchOptions? options)
+
+    internal async Task<VectorSearchResult> QueryAsync(
+        string query,
+        int limit,
+        VectorSearchOptions? options
+    )
     {
-        JsonObject Metadata(bool used = false, bool complete = false, string? error = null) => new()
-        {
-            ["configured"] = config.HybridSearch, ["ready"] = ready, ["used"] = used, ["coverageComplete"] = complete, ["backfilling"] = backfilling, ["errorCode"] = error,
-        };
+        JsonObject Metadata(bool used = false, bool complete = false, string? error = null) =>
+            new()
+            {
+                ["configured"] = config.HybridSearch,
+                ["ready"] = ready,
+                ["used"] = used,
+                ["coverageComplete"] = complete,
+                ["backfilling"] = backfilling,
+                ["errorCode"] = error,
+            };
         if (!config.HybridSearch || !ready || index is null || rebuilding || stopping)
             return new([], Metadata(error: lastError));
         try
@@ -402,10 +606,23 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
             Coverage post;
             lock (lane)
                 post = pre.Exact ? CoverageSnapshot(options) : pre;
-            return new(hits, Metadata(hits.Count > 0, pre.Complete && post.Complete && !preBackfilling && (!pre.Exact || pre.Signature == post.Signature)));
+            return new(
+                hits,
+                Metadata(
+                    hits.Count > 0,
+                    pre.Complete
+                        && post.Complete
+                        && !preBackfilling
+                        && (!pre.Exact || pre.Signature == post.Signature)
+                )
+            );
         }
-        catch { return new([], Metadata(error: "LEXICAL_QUERY_FAILED")); }
+        catch
+        {
+            return new([], Metadata(error: "LEXICAL_QUERY_FAILED"));
+        }
     }
+
     internal Task MaintenanceAsync()
     {
         if (ready && index is not null && !stopping)
@@ -414,9 +631,13 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
                 lock (lane)
                     index.Maintenance();
             }
-            catch { Error("LEXICAL_MAINTENANCE_FAILED"); }
+            catch
+            {
+                Error("LEXICAL_MAINTENANCE_FAILED");
+            }
         return Task.CompletedTask;
     }
+
     public async ValueTask DisposeAsync()
     {
         stopping = true;
@@ -426,7 +647,16 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
             {
                 Cancel(state);
                 if (state.Active is null && ready)
-                    flushes.Add(Enqueue(() => IndexAsync(id, allowShutdown: true, seqTarget: state.Seq, blockTarget: state.Block)));
+                    flushes.Add(
+                        Enqueue(() =>
+                            IndexAsync(
+                                id,
+                                allowShutdown: true,
+                                seqTarget: state.Seq,
+                                blockTarget: state.Block
+                            )
+                        )
+                    );
             }
         await Task.WhenAll(flushes.Select(IgnoreAsync));
         await WaitForIdleAsync();

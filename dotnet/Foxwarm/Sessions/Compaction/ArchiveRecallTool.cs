@@ -180,18 +180,39 @@ internal static class ArchiveRecallTool
                 null,
                 cancellationToken
             );
-            if (SessionWait.Text(args["vector_query"]) is { } semantic && SessionGoal.Trim(semantic).Length > 0)
+            if (
+                SessionWait.Text(args["vector_query"]) is { } semantic
+                && SessionGoal.Trim(semantic).Length > 0
+            )
             {
                 var query = SessionGoal.Trim(semantic);
                 var limit = Foxwarm.Vector.VectorRecall.Limit(args["limit"]);
                 var scope = manager.ResolveVectorScope(source, args);
                 var semanticRenderer = new ContextPreviewRenderer(args, 1000);
-                var result = await Foxwarm.Vector.VectorRecall.SearchAsync(manager.Vector, manager.ArchiveReader, query, limit,
-                    scope.Options, scope.Scope, scope.SessionId, args, args["preferBlocks"]?.GetValue<bool>() == true,
-                    sourceAllowed: sourceId => manager.VectorCanonicalSourceAllowed(sourceId, scope.Options));
-                return Output(semanticRenderer.RenderItems(result.Items, "",
-                    matched => $"Recall {result.SearchLabel} for `{query}` ({scope.Scope}; source archive ranges loaded before preview) - showing {matched} unique source group(s) from {result.HitCount} ranked source group(s).",
-                    "No archived source messages or blocks found for this vector_query.", result.Notices, maxItems: limit));
+                var result = await Foxwarm.Vector.VectorRecall.SearchAsync(
+                    manager.Vector,
+                    manager.ArchiveReader,
+                    query,
+                    limit,
+                    scope.Options,
+                    scope.Scope,
+                    scope.SessionId,
+                    args,
+                    args["preferBlocks"]?.GetValue<bool>() == true,
+                    sourceAllowed: sourceId =>
+                        manager.VectorCanonicalSourceAllowed(sourceId, scope.Options)
+                );
+                return Output(
+                    semanticRenderer.RenderItems(
+                        result.Items,
+                        "",
+                        matched =>
+                            $"Recall {result.SearchLabel} for `{query}` ({scope.Scope}; source archive ranges loaded before preview) - showing {matched} unique source group(s) from {result.HitCount} ranked source group(s).",
+                        "No archived source messages or blocks found for this vector_query.",
+                        result.Notices,
+                        maxItems: limit
+                    )
+                );
             }
             var owner = await manager.GetExistingAsync(id, cancellationToken);
             if (owner is null)
