@@ -40,18 +40,18 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
             );
         if (string.IsNullOrWhiteSpace(cwd))
             throw new ArgumentException("cwd is required.");
-        var value = cwd.Trim();
+        var nativeCwd = cwd.Trim();
         // Code sends mapped drive URIs; ordinary terminals retain native path
         // resolution, including Windows's current-drive root for "/".
         if (
             OperatingSystem.IsWindows()
-            && value.Length >= 4
-            && value[0] == '/'
-            && char.IsAsciiLetter(value[1])
-            && value[2] == ':'
+            && nativeCwd.Length >= 4
+            && nativeCwd[0] == '/'
+            && char.IsAsciiLetter(nativeCwd[1])
+            && nativeCwd[2] == ':'
         )
-            value = Foxwarm.Code.CodeNativePaths.Native(value);
-        var full = Path.GetFullPath(value);
+            nativeCwd = Foxwarm.Code.CodeNativePaths.Native(nativeCwd);
+        var full = Path.GetFullPath(nativeCwd);
         if (!Directory.Exists(full))
             throw new DirectoryNotFoundException(full);
         cols = Math.Max(20, cols);
