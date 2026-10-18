@@ -17,6 +17,10 @@ interface SessionUiSettingsMenuProps {
   onTimelineViewChange: (mode: TimelineView) => void
   showUsageBadge: boolean
   onShowUsageBadgeChange: (enabled: boolean) => void
+  showInterAgentMessages?: boolean
+  onShowInterAgentMessagesChange?: (enabled: boolean) => void
+  showCommentary?: boolean
+  onShowCommentaryChange?: (enabled: boolean) => void
   fullWidth?: boolean
   onFullWidthChange?: (enabled: boolean) => void
   showUserMessageMetadata: boolean
@@ -35,6 +39,10 @@ export default function SessionUiSettingsMenu({
   onTimelineViewChange,
   showUsageBadge,
   onShowUsageBadgeChange,
+  showInterAgentMessages = true,
+  onShowInterAgentMessagesChange = () => {},
+  showCommentary = true,
+  onShowCommentaryChange = () => {},
   fullWidth = true,
   onFullWidthChange = () => {},
   showUserMessageMetadata,
@@ -187,6 +195,14 @@ export default function SessionUiSettingsMenu({
                   ))}
                 </div>
               </fieldset>
+              {timelineView === 'conversation' && <>
+                <button type="button" role="switch" aria-checked={showInterAgentMessages} onClick={() => onShowInterAgentMessagesChange(!showInterAgentMessages)} className={toggleRowClass}>
+                  <span>Show inter-agent messages</span>{toggle(showInterAgentMessages)}
+                </button>
+                <button type="button" role="switch" aria-checked={showCommentary} onClick={() => onShowCommentaryChange(!showCommentary)} className={toggleRowClass}>
+                  <span>Show commentary</span>{toggle(showCommentary)}
+                </button>
+              </>}
               <button type="button" role="switch" aria-checked={fullWidth} onClick={() => onFullWidthChange(!fullWidth)} className={toggleRowClass}>
                 <span>Full width</span>{toggle(fullWidth)}
               </button>

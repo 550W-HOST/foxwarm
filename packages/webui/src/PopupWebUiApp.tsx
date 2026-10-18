@@ -97,6 +97,10 @@ export default function PopupWebUiApp({ target }: { target: FoxwarmPopupTarget }
         showUsageBadge={preferences.showUsageBadge}
         fullWidth={preferences.fullWidth}
         onFullWidthChange={preferences.setFullWidth}
+        showInterAgentMessages={preferences.showInterAgentMessages}
+        onShowInterAgentMessagesChange={preferences.setShowInterAgentMessages}
+        showCommentary={preferences.showCommentary}
+        onShowCommentaryChange={preferences.setShowCommentary}
         showUserMessageMetadata={preferences.showUserMessageMetadata}
         onSendKeyModeChange={preferences.setSendKeyMode}
         onTimelineViewChange={preferences.setTimelineView}

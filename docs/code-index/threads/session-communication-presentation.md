@@ -2,7 +2,11 @@
 
 ## D-session-communication-presentation
 
-[2026-10-17] Conversation displays successful `send_to_session` messages and structured incoming inter-agent messages as readable standalone communication cards in source order. Each card has an explicit To/From direction and peer Session identity, distinct from the current assistant's replies to the user. Already-loaded names improve readability; the exact identifier remains available. Links use the ordinary authorized Session navigation path. No all-Session lookup is introduced.
+[2026-10-17; updated 2026-10-18] Conversation defaults to displaying successful `send_to_session` messages and structured incoming inter-agent messages as readable standalone communication cards in source order. Each card has an explicit To/From direction and peer Session identity, distinct from the current assistant's replies to the user. Already-loaded names improve readability; the exact identifier remains available. Links use the ordinary authorized Session navigation path. No all-Session lookup is introduced.
+
+The Conversation-only browser-local Show inter-agent messages switch controls both directions together and defaults on. Turning it off folds communication bodies into Activity, including delivery metadata not printed in tool results; it does not delete or rewrite messages. Detailed/Grouped remain unchanged. Only standalone communications enter Conversation Search and cut adjacent Activity timing.
+
+Long To/From cards use the shared three-line tool-result preview, measured bottom overflow fade and thread-card height transition. Short bodies have no fade or unnecessary disclosure. Expansion reveals the full available body, preserving Markdown, selection, links and independent peer navigation; Search can reveal a matching full body transiently. The same cards are used inside expanded Activity when folded.
 
 Tool calls/results remain technical evidence in Activity. A successful outgoing message appears after its owning response, immediately and independently of later assistant prose. Incoming cards strip only their trusted outer transport envelope; authored text and inner quotations are not reclassified as transport. Visible communications close adjacent Activity ranges. Logical-request usage retains one owner; no per-message elapsed time or token estimate is invented. Provider history, source arrays, delivery policy, queues and afterSend behavior remain unchanged.
 

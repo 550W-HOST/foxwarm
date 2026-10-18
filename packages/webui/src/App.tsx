@@ -471,7 +471,7 @@ function App() {
     return Number.isFinite(saved) ? Math.min(420, Math.max(180, saved)) : 256
   })
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true')
-  const { sendKeyMode, setSendKeyMode, timelineView, setTimelineView, showUsageBadge, setShowUsageBadge, showUserMessageMetadata, setShowUserMessageMetadata, fullWidth, setFullWidth } = useChatPreferences()
+  const { sendKeyMode, setSendKeyMode, timelineView, setTimelineView, showUsageBadge, setShowUsageBadge, showUserMessageMetadata, setShowUserMessageMetadata, showInterAgentMessages, setShowInterAgentMessages, showCommentary, setShowCommentary, fullWidth, setFullWidth } = useChatPreferences()
   const [webUiSettings, setWebUiSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
   const [vscodeFrameStarted, setVscodeFrameStarted] = useState(false)
   const vscodeFrameRef = useRef<VscodeWebFrameHostHandle | null>(null)
@@ -1620,6 +1620,10 @@ function App() {
           sendKeyMode={sendKeyMode}
           timelineView={timelineView}
           showUsageBadge={showUsageBadge}
+          showInterAgentMessages={showInterAgentMessages}
+          onShowInterAgentMessagesChange={setShowInterAgentMessages}
+          showCommentary={showCommentary}
+          onShowCommentaryChange={setShowCommentary}
           fullWidth={fullWidth}
           onFullWidthChange={setFullWidth}
           showUserMessageMetadata={showUserMessageMetadata}

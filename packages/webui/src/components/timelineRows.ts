@@ -97,7 +97,7 @@ export interface TimelineRowView {
   readonly conversationPartIndex?: number
   /** Undefined outside Conversation user rows; false retains legacy channel metadata rendering. */
   readonly literalUserText?: boolean
-  /** Technical fragments only, in source order. Ordinary output is never duplicated here. */
+  /** Ordered technical and explicitly folded display fragments, without duplicated standalone output. */
   readonly activity?: ConversationActivityView
   readonly prevMsg: Message | null
   readonly nextMsg: Message | null
@@ -132,6 +132,8 @@ export interface TimelineRowsInput {
   readonly reasoningPresentation?: ReasoningPresentation
   readonly isRunningTool?: boolean
   readonly isMobile: boolean
+  readonly showInterAgentMessages?: boolean
+  readonly showCommentary?: boolean
   readonly timelineView: TimelineView
   readonly showUsageBadge: boolean
   readonly showTimeDividers: boolean
@@ -628,7 +630,7 @@ const applyConversationTimeMarkers = (
       const id = message.role === 'model' ? message.__meta?.llmRequestId : undefined
       if (id) {
         if (previousVisible && (previousVisible.role === 'model' && previousVisible.__meta?.llmRequestId === id
-          || previousVisible.role === 'user' && seenRequests.has(id))) {
+          || previousVisible.role !== 'model' && seenRequests.has(id))) {
           unitStarts.set(message.__meta, previousVisible.__meta?.timestamp ?? null)
         } else if (message.__meta?.llmSegment && (!requestOrigins.has(id) || message.__meta.llmSegment.outputStart > 0 && !seenRequests.has(id))) {
           unitStarts.set(message.__meta, null) // A missing prefix/origin cannot date this display segment.
@@ -683,7 +685,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
     messages: input.messages.filter(message => !preview(message)),
     ...(input.historyMessages ? { historyMessages: input.historyMessages.filter(message => !preview(message)) } : {}),
   }
-  const { messages, isRunningTool = false, isMobile, timelineView, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys, activityDetails, historyMessages } = input
+  const { messages, isRunningTool = false, isMobile, timelineView, showInterAgentMessages = true, showCommentary = true, showUsageBadge, showTimeDividers, nestedDepth, expandedGroupKeys, activityDetails, historyMessages } = input
   const grouped = timelineView === 'grouped'
   const reasoningPresentation = input.reasoningPresentation || deriveReasoningPresentation(messages, message => (
     !!getContextBlockMetaFromMessage(message) || message.role === 'user' && !isGroupableSystemMessage(message)
@@ -780,14 +782,17 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
     const historyTailLlmError = authoritativeHistory ? getHistoryTailLlmError(authoritativeHistory) : undefined
     const requests = conversationRequests(historyMessages || messages, messages)
     const summaryForActivity = buildConversationActivitySummary(messages, historyMessages)
+    const communications = projectSessionCommunications([...new Set([...(historyMessages || messages), ...messages])])
     // Retry cards use the active-history tail rule, not the general event escape hatch.
     const isStandaloneNotice = (msg: Message): boolean => !!getSessionNotice(msg) && !getLlmErrorMessageDetails(msg)
-    // Every ordinary text part is a visible boundary, including commentary and streaming prefixes.
+    const visibleText = (part: Message['parts'][number]) => hasConversationText(part) && (showCommentary || part.phase !== 'commentary')
+    // Only explicitly marked commentary can fold; unknown and live prose stay ordinary output.
     const boundary = (msg: Message, partIndex?: number): 'visible' | 'context' | undefined => {
+      if (communications.has(msg)) return showInterAgentMessages ? 'visible' : undefined
       if (isStandaloneNotice(msg)) return 'visible'
       if (getContextBlockMetaFromMessage(msg)) return 'context'
       if (msg.role === 'user' && getConversationInputKind(msg) !== 'activity') return 'visible'
-      if (msg.role === 'model' && !getLlmErrorMessageDetails(msg) && (partIndex === undefined ? msg.parts.some(hasConversationText) : hasConversationText(msg.parts[partIndex]))) return 'visible'
+      if (msg.role === 'model' && !getLlmErrorMessageDetails(msg) && (partIndex === undefined ? msg.parts.some(visibleText) : visibleText(msg.parts[partIndex]))) return 'visible'
       return undefined
     }
     let activityStart = -1
@@ -810,7 +815,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       let preview: ConversationActivityView['preview']
       if (!hasReply) {
         for (const message of activityMessages) {
-          message.parts.forEach((part, partIndex) => { if (message.role === 'model' && !getLlmErrorMessageDetails(message) && hasConversationText(part)) preview = { message, partIndex } })
+          message.parts.forEach((part, partIndex) => { if (message.role === 'model' && !getLlmErrorMessageDetails(message) && visibleText(part)) preview = { message, partIndex } })
         }
       }
       for (const source of sources) {
@@ -849,7 +854,6 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       } else activityMessages.push(fragment)
       lastActivitySource = index
     }
-    const communications = projectSessionCommunications(messages, input.historyMessages || messages)
     messages.forEach((msg, index) => {
       const contextBlock = msg.role === 'model' && getContextBlockMetaFromMessage(msg)
       if (isStandaloneNotice(msg) || contextBlock || nestedDepth === 0 && (msg === historyTailLlmError || historyTailLlmError?.__meta?.seq !== undefined && msg.__meta?.seq === historyTailLlmError.__meta.seq)) {
@@ -859,6 +863,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       }
       const deliveries = communications.get(msg)
       if (deliveries?.[0]?.direction === 'received') {
+        if (!showInterAgentMessages) { addActivity(index, msg); return }
         flushActivity()
         emitRow(index, null, false, null, { key: messageKeys[index], communication: deliveries[0] })
         return
@@ -874,7 +879,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       }
       if (msg.role === 'tool' || getLlmErrorMessageDetails(msg)) {
         addActivity(index, msg)
-        if (deliveries?.length) {
+        if (showInterAgentMessages && deliveries?.length) {
           flushActivity()
           for (const communication of deliveries) emitRow(index, null, false, null, { key: `${messageKeys[index]}-communication-${communication.key}`, communication })
         }
@@ -887,11 +892,12 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       if (activityStart >= 0) activitySources.add(msg)
       let visiblePartCount = 0
       msg.parts.forEach((part, partIndex) => {
-        const textBody = hasConversationText(part)
+        const textBody = visibleText(part)
+        const foldedText = hasConversationText(part) && !textBody
         const image = hasConversationImage(part)
-        const technical = part.system || part.functionCall || part.functionResponse || part.toolUseId || isReasoningPart(part) || getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem) || !hasConversationText(part) && !image && part.text === undefined && Object.keys(part).length > 0
+        const technical = foldedText || part.system || part.functionCall || part.functionResponse || part.toolUseId || isReasoningPart(part) || getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem) || !hasConversationText(part) && !image && part.text === undefined && Object.keys(part).length > 0
         if (technical) {
-          const fragment = textBody || image ? { ...part, text: undefined, inlineData: undefined, inlineDataRef: undefined, inlineDataUnavailable: undefined } : part
+          const fragment = textBody || image ? { ...part, text: foldedText ? part.text : undefined, inlineData: undefined, inlineDataRef: undefined, inlineDataUnavailable: undefined } : part
           // Mixed-field technical fragments keep the original part's presentation ownership.
           if (fragment !== part && reasoningPresentation.has(part)) {
             const info = reasoningPresentation.get(part)!
@@ -967,10 +973,20 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
     return { rows: applyConversationTiming(markedRows, historyMessages || messages, boundary, input.timing), cache: { rows: rowCache, groups: groupCache, reasoningPresentation } }
   }
 
+  // Activity reuses the native technical timeline while retaining delivery bodies absent from tool stdout.
+  const foldedCommunications = activityDetails && !showInterAgentMessages
+    ? projectSessionCommunications(messages, historyMessages || messages) : null
+  const emitDetailedRow = (index: number, group: TimelineGroupView | null, isGroupStart: boolean, foldedOwner: string | null) => {
+    const deliveries = foldedCommunications?.get(messages[index])
+    if (deliveries?.[0]?.direction !== 'received') emitRow(index, group, isGroupStart, foldedOwner)
+    for (const communication of deliveries || []) emitRow(index, null, false, null, {
+      key: `${messageKeys[index]}-communication-${communication.key}`, communication,
+    })
+  }
   let cursor = 0
   while (cursor < messages.length) {
     if (!isToolGroupableMessage(messages[cursor])) {
-      emitRow(cursor, null, false, null)
+      emitDetailedRow(cursor, null, false, null)
       foldedThinkingOwnerKey = null
       cursor += 1
       continue
@@ -991,7 +1007,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
     groupCache.set(groupKey, group)
 
     for (let index = scan.start; index < scan.end; index++) {
-      emitRow(index, group, index === scan.start, index === scan.start ? foldedThinkingOwnerKey : null)
+      emitDetailedRow(index, group, index === scan.start, index === scan.start ? foldedThinkingOwnerKey : null)
     }
 
     foldedThinkingOwnerKey = derivation.foldedThinkingIdx !== -1 ? groupKey : null

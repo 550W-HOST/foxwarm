@@ -167,6 +167,10 @@ interface ChatProps {
   timelineView?: TimelineView
   showUsageBadge?: boolean
   showUserMessageMetadata?: boolean
+  showInterAgentMessages?: boolean
+  onShowInterAgentMessagesChange?: (enabled: boolean) => void
+  showCommentary?: boolean
+  onShowCommentaryChange?: (enabled: boolean) => void
   fullWidth?: boolean
   onFullWidthChange?: (enabled: boolean) => void
   onSendKeyModeChange?: (mode: 'modEnter' | 'enter') => void
@@ -181,7 +185,7 @@ type StreamingAsrSession = {
   cancel: () => void
 }
 
-const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onNewSession, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', historyMode = historyModeForTimelineView(timelineView), showUsageBadge = true, showUserMessageMetadata = false, fullWidth = true, onFullWidthChange = () => {}, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onNewSession, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', historyMode = historyModeForTimelineView(timelineView), showUsageBadge = true, showUserMessageMetadata = false, showInterAgentMessages = true, onShowInterAgentMessagesChange = () => {}, showCommentary = true, onShowCommentaryChange = () => {}, fullWidth = true, onFullWidthChange = () => {}, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
   const viewportSessionId = canonicalSessionId || sessionId
   const initialContinuousAnchorSeq = useMemo(() => getChatViewportAnchorSeq(getStoredChatViewportState(viewportSessionId, 'continuous')), [viewportSessionId])
   const {
@@ -924,7 +928,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     setContinuousWindowKey(previous => previous ?? (messages.length ? getMessageStableKey(messages[continuousWindowStart], 0) : null))
   }, [archivePage.hasLater, continuousWindowStart, historyMode, messages, setBottomFollow])
 
-  const searchFields = useMemo(() => searchOpen ? projectSessionSearchFields(messages, timelineView, activeMessages) : [], [activeMessages, timelineView, messages, searchOpen])
+  const searchFields = useMemo(() => searchOpen ? projectSessionSearchFields(messages, timelineView, activeMessages, { showInterAgentMessages, showCommentary }) : [], [activeMessages, timelineView, messages, searchOpen, showInterAgentMessages, showCommentary])
   const searchMatches = useMemo(() => findSessionSearchMatches(searchFields, searchQuery), [searchFields, searchQuery])
   const currentSearchIndex = searchMatches.findIndex(match => match.id === searchMatchId)
   const selectedSearchMatch = searchMatches[currentSearchIndex >= 0 ? currentSearchIndex : 0] || null
@@ -1536,6 +1540,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
               onTimelineViewChange={onTimelineViewChange}
               showUsageBadge={showUsageBadge}
               onShowUsageBadgeChange={onShowUsageBadgeChange}
+              showInterAgentMessages={showInterAgentMessages}
+              onShowInterAgentMessagesChange={onShowInterAgentMessagesChange}
+              showCommentary={showCommentary}
+              onShowCommentaryChange={onShowCommentaryChange}
               fullWidth={fullWidth}
               onFullWidthChange={onFullWidthChange}
               showUserMessageMetadata={showUserMessageMetadata}
@@ -1620,7 +1628,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             <div ref={committedTimelineRef} data-chat-timeline="committed" className="min-w-0 max-w-full">
               <ThreadCardHeightContext.Provider value={cardHeightContext}>
                 <ToolScriptProgressContext.Provider value={toolScriptProgress}>
-                  <ChatTimeline sessionId={sessionId} historyMessages={messages} currentHistoryMessages={activeMessages} runtimeState={displayingLatest ? sessionRecord?.runtimeState : undefined} busyStartedAt={displayingLatest ? sessionRecord?.busyStartedAt : undefined} isRunningTool={displayingLatest && sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} renderMessageFooter={displayingLatest && sessionQueueLength > 0 && queuedMessages.length === 0 ? renderQueuedFooter : undefined} />
+                  <ChatTimeline sessionId={sessionId} historyMessages={messages} currentHistoryMessages={activeMessages} runtimeState={displayingLatest ? sessionRecord?.runtimeState : undefined} busyStartedAt={displayingLatest ? sessionRecord?.busyStartedAt : undefined} isRunningTool={displayingLatest && sessionRecord?.runtimeState?.state === 'running-tool'} messages={timelineMessages} isMobile={isMobile} timelineView={timelineView} showInterAgentMessages={showInterAgentMessages} showCommentary={showCommentary} showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} searchTarget={searchOpen && selectedSearchMatch?.id === searchMatchId ? selectedSearchMatch : null} renderMessageFooter={displayingLatest && sessionQueueLength > 0 && queuedMessages.length === 0 ? renderQueuedFooter : undefined} />
                 </ToolScriptProgressContext.Provider>
               </ThreadCardHeightContext.Provider>
             </div>
@@ -1642,7 +1650,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
             />}
             {displayingLatest && queuedMessages.length > 0 && (
               <div className="foxwarm-queued-preview min-w-0 max-w-full" data-queued-preview="true" aria-label="Queued messages">
-                <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} timelineView={timelineView} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} renderMessageFooter={sessionQueueLength > 0 ? renderQueuedFooter : undefined} /></ThreadCardHeightContext.Provider>
+                <ThreadCardHeightContext.Provider value={cardHeightContext}><ChatTimeline sessionId={sessionId} messages={queuedMessages} isMobile={isMobile} timelineView={timelineView} showInterAgentMessages={showInterAgentMessages} showCommentary={showCommentary} showUsageBadge={false} showTimeDividers={false} showUserMessageMetadata={showUserMessageMetadata} onOpenCodeFile={onOpenCodeFile} onOpenCodeCommit={onOpenCodeCommit} renderMessageFooter={sessionQueueLength > 0 ? renderQueuedFooter : undefined} /></ThreadCardHeightContext.Provider>
               </div>
             )}
             <div aria-hidden="true" data-chat-composer-spacer style={{ height: 'calc(var(--chat-composer-offset, 224px) - 2.5rem)' }} />
@@ -1762,6 +1770,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   && prev.timelineView === next.timelineView
   && prev.showUsageBadge === next.showUsageBadge
   && prev.webUiIdentityMode === next.webUiIdentityMode
+  && prev.showInterAgentMessages === next.showInterAgentMessages
+  && prev.showCommentary === next.showCommentary
+  && prev.onShowInterAgentMessagesChange === next.onShowInterAgentMessagesChange
+  && prev.onShowCommentaryChange === next.onShowCommentaryChange
   && prev.fullWidth === next.fullWidth
   && prev.onFullWidthChange === next.onFullWidthChange
   && prev.showUserMessageMetadata === next.showUserMessageMetadata
