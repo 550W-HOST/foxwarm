@@ -68,7 +68,7 @@ before(async () => {
       window.fixture.setRuntime=setRuntime
       window.fixture.runtime=runtime
       window.fixture.original=original
-      window.fixture.matches = term => findSessionSearchMatches(projectSessionSearchFields(messages,prefs.timelineView),term)
+      window.fixture.matches = term => findSessionSearchMatches(projectSessionSearchFields(messages,prefs.timelineView,currentHistory ?? messages),term)
       return <div className="foxwarm-chat-root">
         <SessionUiSettingsMenu {...prefs} onSendKeyModeChange={prefs.setSendKeyMode} onTimelineViewChange={prefs.setTimelineView} onShowUsageBadgeChange={prefs.setShowUsageBadge} onShowUserMessageMetadataChange={prefs.setShowUserMessageMetadata} onOpenDebugInfo={()=>{}} />
         <div id="timeline"><ChatTimeline sessionId="fixture/main" messages={[...messages.slice(...slice),...(draft?[draft]:[])]} historyMessages={messages} currentHistoryMessages={currentHistory} runtimeState={runtime} isRunningTool={runtime.state==='running-tool'} isMobile={false} timelineView={prefs.timelineView} showUsageBadge={prefs.showUsageBadge} showUserMessageMetadata={prefs.showUserMessageMetadata} /></div>
@@ -214,34 +214,98 @@ test('Activity detail rows are compact without changing CTX nested row spacing',
   await page.$eval('#timeline', root => [...root.querySelectorAll('[aria-label="Collapse activity"]')].forEach(button => button.click()))
 })
 
-test('only the full committed history tail LLM error is external; drafts, clipped slices and later CTX/input do not redefine it', async () => {
+test('only the full committed history tail final LLM error is external; drafts, clipped slices and later CTX/input do not redefine it', async () => {
+  await mode('conversation')
   await page.evaluate(() => {
-    const earlier = { role:'model',parts:[{text:'⚠️ LLM Error: EARLIER_RETRY'}],__meta:{seq:200,noticeType:'llm-retry'} }
-    const ordinary = Array.from({length:110},(_,index)=>({role:'model',parts:[{text:'BODY_'+index}],__meta:{seq:201+index}}))
-    const tail = { role:'model',parts:[{text:'⚠️ LLM Error: TAIL_RETRY'}],__meta:{seq:400,noticeType:'llm-retry'} }
-    window.fixture.tailScenario=[earlier,...ordinary,tail]
+    const earlier = { role: 'model', modelVisible: false, parts: [{ text: 'EARLIER_RETRY' }], __meta: { seq: 200, noticeType: 'llm-retry', retry: { final: true } } }
+    const ordinary = Array.from({ length: 110 }, (_, index) => ({ role: 'model', parts: [{ text: 'BODY_' + index }], __meta: { seq: 201 + index } }))
+    const tail = { role: 'model', modelVisible: false, parts: [{ text: 'TAIL_RETRY attempt one\nTAIL_RETRY attempt two' }], __meta: { seq: 400, noticeType: 'llm-retry', retry: { final: true } } }
+    window.fixture.tailScenario = [earlier, ...ordinary, tail]
+    window.fixture.setCurrentHistory(undefined)
+    window.fixture.setRuntime({ state: 'idle', busy: false, queueLength: 0 })
     window.fixture.setMessages(window.fixture.tailScenario)
-    window.fixture.setSlice([12,undefined])
+    window.fixture.setSlice([12, undefined])
+    window.fixture.setDraft(null)
   })
-  await page.waitForSelector('#timeline [data-system-message-kind="llm error"]')
-  assert.deepEqual(await page.$$eval('#timeline [data-system-message-kind="llm error"]', cards => cards.map(card => ({text:card.textContent,inside:!!card.closest('[data-activity-details]')}))), [{text:'LLM error ×1TAIL_RETRY',inside:false}])
-  await page.evaluate(() => window.fixture.setDraft({role:'model',parts:[{text:'UNCOMMITTED_STREAM'}],__meta:{temporary:true,synthetic:'tail-draft'}}))
+  await page.waitForSelector('#timeline [data-system-event]')
+  assert.deepEqual(await page.$$eval('#timeline [data-system-event]', cards => cards.map(card => ({ severity: card.dataset.eventSeverity, inside: !!card.closest('[data-activity-details]') }))), [{ severity: 'error', inside: false }])
+  assert.equal(await countMatches('EARLIER_RETRY'), 0)
+  assert.equal(await countMatches('TAIL_RETRY attempt two'), 1)
+  await page.click('#timeline [data-event-details] summary')
+  assert.equal(await page.$eval('#timeline [data-event-details] pre', node => node.textContent), 'TAIL_RETRY attempt one\nTAIL_RETRY attempt two')
+  await page.evaluate(() => window.fixture.setDraft({ role: 'model', parts: [{ text: 'UNCOMMITTED_STREAM' }], __meta: { temporary: true, synthetic: 'tail-draft' } }))
   await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('UNCOMMITTED_STREAM'))
-  assert.equal(await page.$$('#timeline [data-system-message-kind="llm error"]').then(cards => cards.length), 1)
+  assert.equal(await page.$$eval('#timeline [data-system-event]', cards => cards.length), 1)
   await page.evaluate(() => {
     window.fixture.setDraft(null)
-    window.fixture.setMessages([...window.fixture.tailScenario,{role:'model',parts:[{text:'[CTX-BLOCK L1 B#42 raw#1-#2] CTX_BOUNDARY'}],__meta:{contextBlock:{id:42,level:1,rawStartSeq:1,rawEndSeq:2}}}])
+    window.fixture.setMessages([...window.fixture.tailScenario, { role: 'model', parts: [{ text: '[CTX-BLOCK L1 B#42 raw#1-#2] CTX_BOUNDARY' }], __meta: { contextBlock: { id: 42, level: 1, rawStartSeq: 1, rawEndSeq: 2 } } }])
   })
   await page.waitForSelector('[aria-label="Expand CTX-BLOCK B#42"]')
-  assert.equal(await page.$('#timeline [data-system-message-kind="llm error"]'), null)
-  assert.ok(!(await page.$eval('#timeline', root => root.textContent)).includes('TAIL_RETRY'))
-  await page.evaluate(() => window.fixture.setSlice([0,1]))
+  assert.equal(await page.$('#timeline [data-system-event]'), null)
+  assert.equal(await countMatches('TAIL_RETRY'), 0)
+  await page.evaluate(() => window.fixture.setSlice([0, 1]))
   await page.waitForFunction(() => document.querySelector('#timeline').querySelectorAll('[data-timeline-activity]').length === 1)
-  assert.equal(await page.$('#timeline [data-system-message-kind="llm error"]'), null, 'the viewport slice ends in an old retry, not the full history tail')
-  await page.evaluate(() => { window.fixture.setSlice([0,undefined]); window.fixture.setMessages([...window.fixture.tailScenario,{role:'user',parts:[{text:'REAL_USER_APPEND'}],__meta:{seq:401}}]) })
+  assert.equal(await page.$('#timeline [data-system-event]'), null, 'a clipped old retry is not the active history tail')
+  await page.evaluate(() => { window.fixture.setSlice([0, undefined]); window.fixture.setMessages([...window.fixture.tailScenario, { role: 'user', parts: [{ text: 'REAL_USER_APPEND' }], __meta: { seq: 401 } }]) })
   await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('REAL_USER_APPEND'))
-  assert.equal(await page.$('#timeline [data-system-message-kind="llm error"]'), null)
-  assert.equal(await page.$('#queue [data-system-message-kind="llm error"]'), null)
+  assert.equal(await page.$('#timeline [data-system-event]'), null)
+  assert.equal(await countMatches('TAIL_RETRY'), 0)
+  await page.$eval('#timeline', root => [...root.querySelectorAll('[aria-label="Expand activity"]')].at(-1).click())
+  await page.waitForSelector('#timeline [data-activity-details] [data-system-event]')
+  await page.click('#timeline [data-activity-details] [data-event-details] summary')
+  assert.equal(await page.$eval('#timeline [data-activity-details] [data-event-details] pre', node => node.textContent), 'TAIL_RETRY attempt one\nTAIL_RETRY attempt two')
+  assert.equal(await countMatches('TAIL_RETRY'), 0)
+  assert.equal(await page.$('#queue [data-system-event]'), null)
+})
+
+test('nonfinal tail retries stay in one Activity with full Details and do not reset a clipped Activity clock', async () => {
+  await mode('conversation')
+  await page.evaluate(() => {
+    const base = 1700000000000
+    window.fixture.retryScenario = [
+      { role: 'user', parts: [{ text: 'Retry this request' }], __meta: { seq: 500, timestamp: base } },
+      { role: 'model', parts: [{ thinking: 'Work before retry' }], __meta: { seq: 501, timestamp: base + 1000 } },
+      { role: 'model', modelVisible: false, parts: [{ text: 'RETRY_LOG attempt one\nRETRY_LOG attempt two' }], __meta: { seq: 502, timestamp: base + 2000, noticeType: 'llm-retry', retry: { final: false } } },
+    ]
+    window.fixture.setCurrentHistory(undefined)
+    window.fixture.setMessages(window.fixture.retryScenario)
+    window.fixture.setSlice([0, undefined])
+    window.fixture.setDraft(null)
+    window.fixture.setRuntime({ state: 'idle', busy: false, queueLength: 0 })
+  })
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Retry this request'))
+  assert.equal(await page.$('#timeline [data-system-event]'), null)
+  assert.equal(await page.$$eval('#timeline [data-timeline-activity]', nodes => nodes.length), 1)
+  assert.equal(await countMatches('RETRY_LOG'), 0)
+  for (const selectedMode of ['detailed', 'grouped']) {
+    await mode(selectedMode)
+    await page.waitForSelector('#timeline [data-system-event]')
+    assert.equal(await page.$eval('#timeline [data-system-event]', node => !!node.closest('[data-timeline-activity]')), false)
+    assert.equal(await countMatches('RETRY_LOG'), 2)
+    await page.click('#timeline [data-event-details] summary')
+    assert.equal(await page.$eval('#timeline [data-event-details] pre', node => node.textContent), 'RETRY_LOG attempt one\nRETRY_LOG attempt two')
+  }
+  await mode('conversation')
+  await page.waitForFunction(() => !document.querySelector('#timeline [data-system-event]'))
+  await page.click('#timeline [aria-label="Expand activity"]')
+  await page.waitForSelector('#timeline [data-activity-details] [data-system-event]')
+  assert.equal(await page.$eval('#timeline [data-system-event]', node => node.dataset.eventSeverity), 'warning')
+  await page.click('#timeline [data-event-details] summary')
+  assert.equal(await page.$eval('#timeline [data-event-details] pre', node => node.textContent), 'RETRY_LOG attempt one\nRETRY_LOG attempt two')
+  assert.equal(await countMatches('RETRY_LOG'), 0, 'manually opened Activity remains outside Conversation Search')
+  await page.$eval('#timeline [data-activity-toggle="bottom"]', button => button.click())
+  await page.evaluate(() => {
+    const base = 1700000000000
+    window.fixture.setMessages([...window.fixture.retryScenario,
+      { role: 'model', parts: [{ functionCall: { id: 'retry-tool', name: 'exec', args: { command: 'true' } } }], __meta: { seq: 503, timestamp: base + 3000 } },
+      { role: 'model', parts: [{ text: 'RETRY_FINISHED_BODY' }], __meta: { seq: 504, timestamp: base + 5000 } },
+    ])
+  })
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('RETRY_FINISHED_BODY'))
+  assert.equal(await page.$$eval('#timeline [data-timeline-activity]', nodes => nodes.length), 1, 'retry does not split the process or leave an empty row')
+  await page.evaluate(() => window.fixture.setSlice([3, undefined]))
+  await page.waitForFunction(() => !document.querySelector('#timeline').textContent.includes('Retry this request'))
+  assert.match(await page.$eval('#timeline [data-timeline-activity]', node => node.textContent), /Elapsed 5s/, 'a hidden retry must not replace the preceding user clock boundary')
 })
 
 test('Activity counts use direct recorded outcomes, not script code or asynchronous sends', async () => {
@@ -716,22 +780,31 @@ test('Every progress update separates adjacent technical spans, including early 
 })
 
 
-test('active history owns retry status independently of a loaded Archive source', async () => {
+test('active history owns final retry status independently of the loaded Archive tail', async () => {
   await mode('conversation')
   await page.evaluate(() => {
-    const retry = { role: 'model', parts: [{ text: '⚠️ LLM Error: ARCHIVE_STATUS_RETRY' }], __meta: { seq: 700, noticeType: 'llm-retry' } }
+    const retry = { role: 'model', modelVisible: false, parts: [{ text: 'ARCHIVE_STATUS_RETRY' }], __meta: { seq: 700, noticeType: 'llm-retry', retry: { final: true } } }
     window.fixture.archiveStatusRetry = retry
     window.fixture.setMessages([retry])
     window.fixture.setSlice([0, undefined])
+    window.fixture.setDraft(null)
     window.fixture.setCurrentHistory([{ role: 'user', parts: [{ text: 'Later active input' }], __meta: { seq: 701 } }])
   })
   await page.waitForFunction(() => document.querySelector('#timeline [data-timeline-activity]'))
-  assert.equal(await page.$('#timeline [data-system-message-kind="llm error"]'), null)
+  assert.equal(await page.$('#timeline [data-system-event]'), null)
+  assert.equal(await countMatches('ARCHIVE_STATUS_RETRY'), 0)
   await page.evaluate(() => window.fixture.setCurrentHistory([structuredClone(window.fixture.archiveStatusRetry)]))
-  await page.waitForSelector('#timeline [data-system-message-kind="llm error"]')
-  assert.match(await page.$eval('#timeline [data-system-message-kind="llm error"]', node => node.textContent), /ARCHIVE_STATUS_RETRY/)
+  await page.waitForSelector('#timeline [data-system-event]')
+  assert.equal(await page.$eval('#timeline [data-system-event]', node => !!node.closest('[data-activity-details]')), false)
+  assert.equal(await countMatches('ARCHIVE_STATUS_RETRY'), 1)
+  await page.evaluate(() => window.fixture.setMessages([window.fixture.archiveStatusRetry, { role: 'user', parts: [{ text: 'Archive-only later row' }], __meta: { seq: 701 } }]))
+  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Archive-only later row'))
+  assert.equal(await page.$$eval('#timeline [data-system-event]', nodes => nodes.length), 1, 'active authority, not the displayed Archive tail, owns failure visibility')
+  await page.evaluate(() => window.fixture.setCurrentHistory([{ ...window.fixture.archiveStatusRetry, __meta: { ...window.fixture.archiveStatusRetry.__meta, retry: { final: false } } }]))
+  await page.waitForFunction(() => !document.querySelector('#timeline [data-system-event]'))
+  assert.equal(await countMatches('ARCHIVE_STATUS_RETRY'), 0)
   await page.evaluate(() => window.fixture.setCurrentHistory([]))
-  await page.waitForFunction(() => !document.querySelector('#timeline [data-system-message-kind="llm error"]'))
+  assert.equal(await page.$('#timeline [data-system-event]'), null)
   await page.evaluate(() => window.fixture.setCurrentHistory(undefined))
 })
 

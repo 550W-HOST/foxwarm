@@ -40,7 +40,9 @@ Controls retain their existing permissions. Stop belongs to the composer action;
 
 Typed notices are display-only and cannot enter provider replay. Compaction failures are published at owner-safe application boundaries, not by mutating the foreground history from a planner thread. Exact-Session error deduplication prevents repeated presentation across runner/delivery paths; fenced/archive failures can use a temporary typed event when durable append is unavailable. WebUI consumes those events instead of duplicate plain error finals; other channel deliveries keep their existing behavior. Temporary compact-planner transcripts do not become foreground conversation replies.
 
-Events remain outside Activity and use the same card in every timeline mode. Pane-local Search indexes the card's displayed title, summary and bounded diagnostics, opens diagnostics for a selected match, and never reinterprets diagnostics as HTML.
+Non-LLM system events remain outside Activity and use the same card in every timeline mode. In Conversation, LLM retry notices instead retain the active-history tail rule: only a final failure at the current committed active-context tail is external. Nonfinal retries and older final failures belong to Activity. Nonfinal retries introduce no visible text/clock boundary; older final failures retain their existing terminal timing cut. A later real message or CTX folds the old final failure back into Activity. Loaded Archive rows match the active tail by canonical sequence; viewport, Archive, draft and nested tails do not establish authority. Detailed/Grouped rendering and live retry countdowns are unchanged.
+
+External system-event cards participate in pane-local Search through their displayed title, summary and bounded diagnostics; selecting a match opens diagnostics without reinterpreting them as HTML. Retry cards inside Activity keep the same full Details content but stay outside Conversation Search even when manually expanded.
 
 ## Verification
 

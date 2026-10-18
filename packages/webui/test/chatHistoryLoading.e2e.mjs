@@ -2032,14 +2032,16 @@ test('continuous Chat Search follows active retry visibility instead of the Arch
   const chatPage = await openContinuousChat()
   try {
     await chatPage.evaluate(() => {
-      const retry = { role: 'model', parts: [{ text: '⚠️ LLM Error: Old archived retry' }], __meta: { seq: 601, timestamp: 1700000000601, noticeType: 'llm-retry' } }
+      const retry = { role: 'model', modelVisible: false, parts: [{ text: '⚠️ LLM Error: Old archived retry' }], __meta: { seq: 601, timestamp: 1700000000601, noticeType: 'llm-retry', retry: { final: true } } }
       window.fixtureArchive.push(retry)
       window.emitFixtureMessage(retry)
       window.emitFixtureEvent({ type: 'session-state', session: { id: 'fixture/main', busy: false, runtimeState: { state: 'idle' }, queueLength: 0, messageCount: 1, historyVersion: 2, modelKey: 'fixture/model' } })
     })
+    await chatPage.waitForSelector('[data-chat-timeline="committed"] [data-system-event]')
+    assert.equal(await chatPage.$eval('[data-chat-timeline="committed"] [data-system-event]', node => !!node.closest('[data-activity-details]')), false)
     await chatPage.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
     await chatPage.evaluate(() => window.resolveFixtureHistory(0, [{ role: 'model', parts: [{ text: 'Summary covering the old retry' }], __meta: { contextBlock: { id: 2, level: 1, sourceKind: 'message', rawStartSeq: 1, rawEndSeq: 601 } } }], 2, { latestSeq: 601 }))
-    await chatPage.waitForFunction(() => !document.querySelector('[data-chat-timeline="committed"] [data-system-message-kind="llm error"]'))
+    await chatPage.waitForFunction(() => !document.querySelector('[data-chat-timeline="committed"] [data-system-event]'))
     await chatPage.click('[aria-label="Find in chat"]')
     await chatPage.type('[aria-label="Search messages"]', 'Old archived retry')
     await chatPage.waitForFunction(() => document.querySelector('[role="search"] [aria-live]')?.textContent === '0/0')

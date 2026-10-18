@@ -273,10 +273,10 @@ const getConversationInputKind = (message: Message): 'activity' | 'user' | 'lega
   return /^\[SYSTEM:[\s\S]*\]$/.test(text) && isHeavySystemTextLine(text.split('\n')[0]) ? 'activity' : 'user'
 }
 
-/** Call only with the complete loaded committed history, never a viewport or nested slice. */
+/** Select an explicitly final failure from complete active history, never a viewport or nested slice. */
 export function getHistoryTailLlmError(messages: readonly Message[]): Message | undefined {
   const tail = messages.findLast(message => isCommittedHistoryMessage(message) && !message.__meta?.queuedPreview)
-  return tail && getLlmErrorMessageDetails(tail) ? tail : undefined
+  return tail?.__meta?.retry?.final === true && getLlmErrorMessageDetails(tail) ? tail : undefined
 }
 
 const hasConversationText = (part: Message['parts'][number]): boolean => (
@@ -780,9 +780,11 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
     const historyTailLlmError = authoritativeHistory ? getHistoryTailLlmError(authoritativeHistory) : undefined
     const requests = conversationRequests(historyMessages || messages, messages)
     const summaryForActivity = buildConversationActivitySummary(messages, historyMessages)
+    // Retry cards use the active-history final-tail rule, not the general event escape hatch.
+    const isStandaloneNotice = (msg: Message): boolean => !!getSessionNotice(msg) && !getLlmErrorMessageDetails(msg)
     // Every ordinary text part is a visible boundary, including commentary and streaming prefixes.
     const boundary = (msg: Message, partIndex?: number): 'visible' | 'context' | undefined => {
-      if (getSessionNotice(msg)) return 'visible'
+      if (isStandaloneNotice(msg)) return 'visible'
       if (getContextBlockMetaFromMessage(msg)) return 'context'
       if (msg.role === 'user' && getConversationInputKind(msg) !== 'activity') return 'visible'
       if (msg.role === 'model' && !getLlmErrorMessageDetails(msg) && (partIndex === undefined ? msg.parts.some(hasConversationText) : hasConversationText(msg.parts[partIndex]))) return 'visible'
@@ -850,7 +852,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
     const communications = projectSessionCommunications(messages, input.historyMessages || messages)
     messages.forEach((msg, index) => {
       const contextBlock = msg.role === 'model' && getContextBlockMetaFromMessage(msg)
-      if (getSessionNotice(msg) || contextBlock || nestedDepth === 0 && (msg === historyTailLlmError || historyTailLlmError?.__meta?.seq !== undefined && msg.__meta?.seq === historyTailLlmError.__meta.seq)) {
+      if (isStandaloneNotice(msg) || contextBlock || nestedDepth === 0 && (msg === historyTailLlmError || historyTailLlmError?.__meta?.seq !== undefined && msg.__meta?.seq === historyTailLlmError.__meta.seq)) {
         flushActivity()
         emitRow(index, null, false, null, { key: messageKeys[index] })
         return
