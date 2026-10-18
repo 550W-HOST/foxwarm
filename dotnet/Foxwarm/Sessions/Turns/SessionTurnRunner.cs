@@ -257,7 +257,9 @@ public sealed class SessionTurnRunner
                     entry.RecordBackgroundProcessorFailure(error);
                     // Retry-notice persistence is best-effort; an unrepresented model failure uses temporary presentation.
                     if (registry.OnTurnFailure is not null)
-                        await registry.OnTurnFailure(error, error is not Foxwarm.Models.ModelRequestException).ConfigureAwait(false);
+                        await registry
+                            .OnTurnFailure(error, error is not Foxwarm.Models.ModelRequestException)
+                            .ConfigureAwait(false);
                     break;
                 }
             }

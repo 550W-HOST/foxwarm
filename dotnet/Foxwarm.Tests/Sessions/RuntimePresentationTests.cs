@@ -24,7 +24,9 @@ public sealed class RuntimePresentationTests
         Assert.Null(owner.RuntimeSnapshot()["retry"]);
         Assert.Equal(1, fixture.Attempts);
 
-        var preparing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var preparing = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         owner.Registry.OnTurnStarting = async _ =>
         {
@@ -67,7 +69,9 @@ public sealed class RuntimePresentationTests
             {
                 if (stage != AtomicJsonWriteStage.BeforeRename || !fault)
                     return;
-                var pending = Directory.GetFiles(Path.Combine(temp.Path, "state", "sessions"), "s.json.tmp-*").Single();
+                var pending = Directory
+                    .GetFiles(Path.Combine(temp.Path, "state", "sessions"), "s.json.tmp-*")
+                    .Single();
                 var snapshot = JsonNode.Parse(File.ReadAllText(pending))!;
                 var last = snapshot["history"]!.AsArray().LastOrDefault();
                 failedWrites.Add(last?["__meta"]?["noticeType"]?.GetValue<string>() ?? "ordinary");
@@ -89,16 +93,29 @@ public sealed class RuntimePresentationTests
         Assert.True(owner.Entry.Snapshot().Busy);
         Assert.True((await store.LoadAsync("s"))!.Busy);
         Assert.True(owner.RuntimeSnapshot()["retry"]!["final"]!.GetValue<bool>());
-        var notices = events.Where(item => item.Kind == SessionEventKind.MessageCommitted
-            && item.Data?["__meta"]?["temporary"]?.GetValue<bool>() == true).ToArray();
+        var notices = events
+            .Where(item =>
+                item.Kind == SessionEventKind.MessageCommitted
+                && item.Data?["__meta"]?["temporary"]?.GetValue<bool>() == true
+            )
+            .ToArray();
         Assert.Equal(2, notices.Length);
-        Assert.Contains("terminal provider rejection", notices[0].Data!["__meta"]!["sessionNotice"]!["details"]!.GetValue<string>());
-        Assert.Contains("authority unavailable", notices[1].Data!["__meta"]!["sessionNotice"]!["details"]!.GetValue<string>());
+        Assert.Contains(
+            "terminal provider rejection",
+            notices[0].Data!["__meta"]!["sessionNotice"]!["details"]!.GetValue<string>()
+        );
+        Assert.Contains(
+            "authority unavailable",
+            notices[1].Data!["__meta"]!["sessionNotice"]!["details"]!.GetValue<string>()
+        );
 
         // A failed notice does not poison independent lifecycle or later safe ordinary notice saves.
         fault = false;
         await owner.Registry.HostFor("s").ReleaseBusyAsync();
-        await owner.PresentFailureAsync(new InvalidOperationException("ordinary preparation failure"), true);
+        await owner.PresentFailureAsync(
+            new InvalidOperationException("ordinary preparation failure"),
+            true
+        );
         Assert.False(owner.Entry.Snapshot().Busy);
         Assert.Equal(2, owner.History().Count);
         Assert.Null(owner.History()[1]["__meta"]!["temporary"]);
@@ -295,26 +312,47 @@ public sealed class RuntimePresentationTests
         internal SessionOwner Owner { get; }
         internal int Attempts { get; private set; }
 
-        internal ProviderFixture(string root, PersistentSessionAuthorityStore store, Action? onResponse = null)
+        internal ProviderFixture(
+            string root,
+            PersistentSessionAuthorityStore store,
+            Action? onResponse = null
+        )
         {
             var work = Path.Combine(root, "work");
             Directory.CreateDirectory(work);
-            var options = new ResponsesClientOptions(new Uri("http://localhost"), "wire", "a/wire", "", "", 50);
+            var options = new ResponsesClientOptions(
+                new Uri("http://localhost"),
+                "wire",
+                "a/wire",
+                "",
+                "",
+                50
+            );
             var models = HostModels.ForTest(options);
             Owner = new SessionOwner("s", "main", models) { Archive = store.Archive };
             var agents = new AgentCatalog(root, work);
             var memory = new AgentMemory(agents, new Skills(agents, Path.Combine(root, "skills")));
-            http = new HttpClient(new TerminalPeer(() =>
-            {
-                Attempts++;
-                onResponse?.Invoke();
-            }));
+            http = new HttpClient(
+                new TerminalPeer(() =>
+                {
+                    Attempts++;
+                    onResponse?.Invoke();
+                })
+            );
             var requests = new ModelRequestOwner(http, options, new ModelRouting());
-            var chat = new SessionChatService(requests, options, Owner, models, memory, (_, _) => { });
+            var chat = new SessionChatService(
+                requests,
+                options,
+                Owner,
+                models,
+                memory,
+                (_, _) => { }
+            );
             Owner.Registry = new SessionRegistry(store, chat);
             Owner.Registry.Add("s");
             Owner.EnableCommittedNotifications();
-            Owner.Registry.OnTurnFailure = (error, durable) => Owner.PresentFailureAsync(error, durable);
+            Owner.Registry.OnTurnFailure = (error, durable) =>
+                Owner.PresentFailureAsync(error, durable);
             Owner.Registry.TriggerOverride = _ => Owner.StartProcessing();
         }
 
@@ -323,13 +361,20 @@ public sealed class RuntimePresentationTests
 
     private sealed class TerminalPeer(Action onResponse) : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
         {
             onResponse();
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest)
-            {
-                Content = new StringContent("{\"error\":{\"message\":\"terminal provider rejection\"}}"),
-            });
+            return Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.BadRequest)
+                {
+                    Content = new StringContent(
+                        "{\"error\":{\"message\":\"terminal provider rejection\"}}"
+                    ),
+                }
+            );
         }
     }
 }
