@@ -168,7 +168,9 @@ internal static class WebUiContract
             ["messages"] = new JsonArray(
                 selected.Select(message => (JsonNode?)message.ToJson()).ToArray()
             ),
-            ["persistentMemorySnapshot"] = "",
+            ["persistentMemorySnapshot"] =
+                snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.DeepClone()
+                ?? JsonValue.Create(""),
             ["queuedMessages"] = preview,
             ["queueLength"] = snapshot.Queue.Count(SessionCompactor.Ordinary),
             ["latestSeq"] = snapshot.NextMessageSeq - 1,
