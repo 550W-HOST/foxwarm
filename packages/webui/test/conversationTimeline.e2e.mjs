@@ -214,7 +214,7 @@ test('Activity detail rows are compact without changing CTX nested row spacing',
   await page.$eval('#timeline', root => [...root.querySelectorAll('[aria-label="Collapse activity"]')].forEach(button => button.click()))
 })
 
-test('only the full committed history tail final LLM error is external; drafts, clipped slices and later CTX/input do not redefine it', async () => {
+test('only the full committed history tail LLM error is external; drafts, clipped slices and later CTX/input do not redefine it', async () => {
   await mode('conversation')
   await page.evaluate(() => {
     const earlier = { role: 'model', modelVisible: false, parts: [{ text: 'EARLIER_RETRY' }], __meta: { seq: 200, noticeType: 'llm-retry', retry: { final: true } } }
@@ -258,7 +258,7 @@ test('only the full committed history tail final LLM error is external; drafts, 
   assert.equal(await page.$('#queue [data-system-event]'), null)
 })
 
-test('nonfinal tail retries stay in one Activity with full Details and do not reset a clipped Activity clock', async () => {
+test('nonfinal tail retries are external until a later record folds them into Activity with full Details', async () => {
   await mode('conversation')
   await page.evaluate(() => {
     const base = 1700000000000
@@ -273,10 +273,9 @@ test('nonfinal tail retries stay in one Activity with full Details and do not re
     window.fixture.setDraft(null)
     window.fixture.setRuntime({ state: 'idle', busy: false, queueLength: 0 })
   })
-  await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Retry this request'))
-  assert.equal(await page.$('#timeline [data-system-event]'), null)
-  assert.equal(await page.$$eval('#timeline [data-timeline-activity]', nodes => nodes.length), 1)
-  assert.equal(await countMatches('RETRY_LOG'), 0)
+  await page.waitForSelector('#timeline [data-system-event]')
+  assert.equal(await page.$eval('#timeline [data-system-event]', node => !!node.closest('[data-activity-details]')), false)
+  assert.equal(await countMatches('RETRY_LOG'), 2)
   for (const selectedMode of ['detailed', 'grouped']) {
     await mode(selectedMode)
     await page.waitForSelector('#timeline [data-system-event]')
@@ -286,7 +285,13 @@ test('nonfinal tail retries stay in one Activity with full Details and do not re
     assert.equal(await page.$eval('#timeline [data-event-details] pre', node => node.textContent), 'RETRY_LOG attempt one\nRETRY_LOG attempt two')
   }
   await mode('conversation')
+  await page.waitForSelector('#timeline [data-system-event]')
+  await page.evaluate(() => window.fixture.setMessages([...window.fixture.retryScenario,
+    { role: 'model', parts: [{ functionCall: { id: 'retry-tool', name: 'exec', args: { command: 'true' } } }], __meta: { seq: 503, timestamp: 1700000003000 } },
+  ]))
   await page.waitForFunction(() => !document.querySelector('#timeline [data-system-event]'))
+  assert.equal(await page.$$eval('#timeline [data-timeline-activity]', nodes => nodes.length), 1)
+  assert.equal(await countMatches('RETRY_LOG'), 0)
   await page.click('#timeline [aria-label="Expand activity"]')
   await page.waitForSelector('#timeline [data-activity-details] [data-system-event]')
   assert.equal(await page.$eval('#timeline [data-system-event]', node => node.dataset.eventSeverity), 'warning')
@@ -780,7 +785,7 @@ test('Every progress update separates adjacent technical spans, including early 
 })
 
 
-test('active history owns final retry status independently of the loaded Archive tail', async () => {
+test('active history owns retry status independently of the loaded Archive tail', async () => {
   await mode('conversation')
   await page.evaluate(() => {
     const retry = { role: 'model', modelVisible: false, parts: [{ text: 'ARCHIVE_STATUS_RETRY' }], __meta: { seq: 700, noticeType: 'llm-retry', retry: { final: true } } }
@@ -800,12 +805,71 @@ test('active history owns final retry status independently of the loaded Archive
   await page.evaluate(() => window.fixture.setMessages([window.fixture.archiveStatusRetry, { role: 'user', parts: [{ text: 'Archive-only later row' }], __meta: { seq: 701 } }]))
   await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Archive-only later row'))
   assert.equal(await page.$$eval('#timeline [data-system-event]', nodes => nodes.length), 1, 'active authority, not the displayed Archive tail, owns failure visibility')
-  await page.evaluate(() => window.fixture.setCurrentHistory([{ ...window.fixture.archiveStatusRetry, __meta: { ...window.fixture.archiveStatusRetry.__meta, retry: { final: false } } }]))
+  await page.evaluate(() => {
+    const nonfinal = { ...window.fixture.archiveStatusRetry, __meta: { ...window.fixture.archiveStatusRetry.__meta, retry: { final: false } } }
+    window.fixture.setCurrentHistory([structuredClone(nonfinal)])
+    window.fixture.setMessages([nonfinal, { role: 'user', parts: [{ text: 'Archive-only later row' }], __meta: { seq: 701 } }])
+  })
+  await page.waitForFunction(() => document.querySelector('#timeline [data-system-event]')?.dataset.eventSeverity === 'warning')
+  assert.equal(await countMatches('ARCHIVE_STATUS_RETRY'), 1)
+  await page.evaluate(() => window.fixture.setCurrentHistory([]))
   await page.waitForFunction(() => !document.querySelector('#timeline [data-system-event]'))
   assert.equal(await countMatches('ARCHIVE_STATUS_RETRY'), 0)
-  await page.evaluate(() => window.fixture.setCurrentHistory([]))
-  assert.equal(await page.$('#timeline [data-system-event]'), null)
   await page.evaluate(() => window.fixture.setCurrentHistory(undefined))
+})
+
+test('system-event cards keep title and summary on one wrapping line with Details below', async () => {
+  await mode('conversation')
+  await page.evaluate(() => {
+    window.fixture.setCurrentHistory(undefined)
+    window.fixture.setSlice([0, undefined])
+    window.fixture.setDraft(null)
+    window.fixture.setMessages([{ role: 'model', modelVisible: false, parts: [{ text: 'Complete diagnostic line one\nComplete diagnostic line two' }], __meta: { seq: 750, noticeType: 'llm-retry', retry: { final: false } } }])
+  })
+  await page.waitForSelector('#timeline [data-system-event]')
+  const geometry = () => page.$eval('#timeline [data-system-event]', card => {
+    const heading = card.querySelector('h3')
+    const title = heading.querySelector('span')
+    const summary = document.createRange()
+    summary.selectNodeContents(heading.lastChild)
+    const lines = [...summary.getClientRects()]
+    const rect = heading.getBoundingClientRect()
+    return {
+      text: heading.textContent,
+      label: card.getAttribute('aria-label'),
+      titleWeight: Number(getComputedStyle(title).fontWeight),
+      summaryWeight: Number(getComputedStyle(heading).fontWeight),
+      titleTop: title.getBoundingClientRect().top,
+      summaryTop: lines[0].top,
+      summaryLines: lines.length,
+      headingBottom: rect.bottom,
+      detailsTop: card.querySelector('[data-event-details]').getBoundingClientRect().top,
+      overflow: card.scrollWidth > card.clientWidth,
+      contained: lines.every(line => line.right <= rect.right + 1 && line.bottom <= rect.bottom + 1),
+    }
+  })
+  try {
+    await page.setViewport({ width: 1100, height: 900 })
+    const wide = await geometry()
+    assert.equal(wide.text.trim(), 'Request retry: A model request attempt failed.')
+    assert.equal(wide.label, 'Request retry')
+    assert.ok(wide.titleWeight > wide.summaryWeight)
+    assert.ok(Math.abs(wide.titleTop - wide.summaryTop) < 1, JSON.stringify(wide))
+    assert.equal(wide.summaryLines, 1)
+    assert.ok(wide.detailsTop >= wide.headingBottom)
+    await page.setViewport({ width: 320, height: 900 })
+    const narrow = await geometry()
+    assert.ok(narrow.summaryLines > 1, JSON.stringify(narrow))
+    assert.equal(narrow.overflow, false)
+    assert.equal(narrow.contained, true)
+    assert.ok(narrow.detailsTop >= narrow.headingBottom)
+    assert.equal(await countMatches('A model request attempt failed.'), 1)
+    assert.equal(await countMatches('Complete diagnostic line two'), 1)
+    await page.click('#timeline [data-event-details] summary')
+    assert.equal(await page.$eval('#timeline [data-event-details] pre', node => node.textContent), 'Complete diagnostic line one\nComplete diagnostic line two')
+  } finally {
+    await page.setViewport({ width: 1100, height: 900 })
+  }
 })
 
 test('trusted system events stay identifiable in every timeline mode and never reinterpret ordinary Error prose', async () => {

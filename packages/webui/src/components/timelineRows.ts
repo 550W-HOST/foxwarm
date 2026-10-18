@@ -273,10 +273,10 @@ const getConversationInputKind = (message: Message): 'activity' | 'user' | 'lega
   return /^\[SYSTEM:[\s\S]*\]$/.test(text) && isHeavySystemTextLine(text.split('\n')[0]) ? 'activity' : 'user'
 }
 
-/** Select an explicitly final failure from complete active history, never a viewport or nested slice. */
+/** Select a retry/error from complete active history, never a viewport or nested slice. */
 export function getHistoryTailLlmError(messages: readonly Message[]): Message | undefined {
   const tail = messages.findLast(message => isCommittedHistoryMessage(message) && !message.__meta?.queuedPreview)
-  return tail?.__meta?.retry?.final === true && getLlmErrorMessageDetails(tail) ? tail : undefined
+  return tail && getLlmErrorMessageDetails(tail) ? tail : undefined
 }
 
 const hasConversationText = (part: Message['parts'][number]): boolean => (
@@ -780,7 +780,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
     const historyTailLlmError = authoritativeHistory ? getHistoryTailLlmError(authoritativeHistory) : undefined
     const requests = conversationRequests(historyMessages || messages, messages)
     const summaryForActivity = buildConversationActivitySummary(messages, historyMessages)
-    // Retry cards use the active-history final-tail rule, not the general event escape hatch.
+    // Retry cards use the active-history tail rule, not the general event escape hatch.
     const isStandaloneNotice = (msg: Message): boolean => !!getSessionNotice(msg) && !getLlmErrorMessageDetails(msg)
     // Every ordinary text part is a visible boundary, including commentary and streaming prefixes.
     const boundary = (msg: Message, partIndex?: number): 'visible' | 'context' | undefined => {
