@@ -5,6 +5,7 @@ import {
 } from './helpers';
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
+import { isSessionCatalogStub } from '../sessionRuntimeState';
 import { resolveExecTimeoutSeconds } from '../../packages/shared/dist/persistentExec';
 import {
     buildBackgroundTimeoutResult,
@@ -29,14 +30,27 @@ type ExecToolRuntime = Pick<ExecRuntime,
     | 'finalizeForegroundExec' | 'buildForegroundExecResult' | 'buildBackgroundTimeoutResult'
     | 'readFinishedExecWorkingDirectory' | 'readLiveExecWorkingDirectory' | 'buildProgrammaticExecResult'>;
 
-async function syncSessionCwd(ctx: ToolContext, nextCwd: string | null | undefined, exact = false): Promise<string | null> {
+async function syncSessionCwd(ctx: ToolContext, nextCwd: string | null | undefined, nodeId?: string): Promise<string | null> {
+    const exact = nodeId !== undefined;
     const normalizedNext = typeof nextCwd === 'string' && (exact ? nextCwd.length > 0 : !!nextCwd.trim()) ? (exact ? nextCwd : nextCwd.trim()) : null;
-    const trustedSession = ctx.persistCurrentSession && ctx.session?.id === ctx.sessionId ? ctx.session : undefined;
+    let trustedSession = ctx.persistCurrentSession && ctx.session?.id === ctx.sessionId ? ctx.session : undefined;
+    let persist = ctx.persistCurrentSession;
+    if (exact && !trustedSession && ctx.sessionPlacement !== 'session-worker'
+        && sessionRuntime.getSessionRuntimeStatus().placement === 'local') {
+        // Ordinary Main batches have a loaded owner but no injected persistence hook.
+        // Never treat a Worker catalog/projection or detached context as that owner.
+        const local = sessionManager.getAllSessions().get(ctx.sessionId);
+        if (local && !isSessionCatalogStub(local)) {
+            trustedSession = local;
+            persist = () => sessionManager.saveSession(local);
+        }
+    }
+    if (exact && (!trustedSession || (trustedSession.currentNode || 'master') !== nodeId)) return null;
     if (trustedSession) {
         const previous = typeof trustedSession.cwd === 'string' && trustedSession.cwd ? (exact ? trustedSession.cwd : trustedSession.cwd.trim()) : null;
         if (normalizedNext === null) delete trustedSession.cwd;
         else trustedSession.cwd = normalizedNext;
-        if (previous !== normalizedNext) await ctx.persistCurrentSession!();
+        if (previous !== normalizedNext) await persist!();
         if (previous === normalizedNext || normalizedNext === null) return null;
         const defaultNote = 'This cwd will be used as the default cwd for subsequent exec/read/edit/write/apply_patch tool calls.';
         return previous
@@ -79,7 +93,7 @@ export async function applyDeferredExecCwdSync(
         const current = ctx.session?.id === ctx.sessionId ? ctx.session : ctx.sessionId ? sessionManager.getSessionCatalog(ctx.sessionId) : undefined;
         if ((current?.currentNode || 'master') !== cwdSync.nodeId) return result;
     }
-    const notice = await syncSessionCwd(ctx, cwdSync.nextCwd, cwdSync.nodeId !== undefined);
+    const notice = await syncSessionCwd(ctx, cwdSync.nextCwd, cwdSync.nodeId);
     if (!notice) return result;
     if (typeof result === 'object' && result !== null && typeof result.output === 'string') {
         return { ...result, output: appendCwdNotice(result.output, notice) };

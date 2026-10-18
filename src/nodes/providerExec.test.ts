@@ -4,7 +4,13 @@ import fs from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
 import * as sessionManager from '../sessionManager';
-import { createNodeExecutionServiceHandler } from '../nodeExecutionService';
+import { createNodeExecutionServiceHandler, nodeExecutionServiceDescriptor } from '../nodeExecutionService';
+import * as nodeExecution from '../nodeExecution';
+import * as sessionRuntime from '../sessionRuntime';
+import { LocalRpcTransport, RpcServiceRegistry } from '../rpc';
+import { callTool } from '../tools';
+import { executeTools } from '../toolExecutor';
+import { SESSIONS_DIR } from '../config';
 import { createExecRuntime } from '../execManager';
 import { ExecutableNodeProvider } from './executableProvider';
 import { NodeProviderRegistry, type NodeToolRequest } from './providerRegistry';
@@ -260,4 +266,39 @@ test('registered exec polls its exact backend after provider destroy makes the N
     assert.ok(recorded.slice(destruction + 1).some(call => call.operation === 'exec-poll'), 'poll is dispatched after availability changes, not rejected by a ready-node lookup');
     assert.equal(recorded.filter(call => call.operation === 'exec-start').length, 1);
   } finally { await runtime.shutdown(); }
+}));
+
+
+test('normal Main callTool and batch cwd replay preserve exact provider paths without changing native settings normalization', async () => temporary(async root => {
+  const { registry, runtime } = fixture(root);
+  const sessionId = `provider-main-cwd-${Date.now()}`;
+  const session = await sessionManager.getSession(sessionId);
+  session.currentNode = 'process-fixture';
+  session.cwd = root;
+  await sessionManager.saveSession(sessionId);
+  const exact = path.join(root, 'destination ');
+  await fs.ensureDir(exact);
+  await fs.ensureDir(path.join(root, 'destination'));
+  const services = new RpcServiceRegistry();
+  services.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ providerRegistry: registry }));
+  await nodeExecution.initializeNodeExecution({ transport: new LocalRpcTransport(services) });
+  const ctx: any = { sessionId, session, programmatic: true };
+  try {
+    await callTool('exec', { command: `cd ${JSON.stringify(exact)}` }, ctx);
+    assert.equal(session.cwd, exact);
+    assert.equal((await fs.readJson(path.join(SESSIONS_DIR, `${sessionId}.json`))).cwd, exact);
+    assert.equal((await callTool('exec', { command: 'pwd' }, ctx)).content, `${exact}\n`);
+    await sessionRuntime.updateSettings(sessionId, { cwd: `${root}  ` });
+    assert.equal(session.cwd, root, 'ordinary/native settings still normalize their input');
+    await executeTools([{ id: 'provider-main-cd', name: 'exec', args: { command: `cd ${JSON.stringify(exact)}` } }], { sessionId, programmatic: true }, session);
+    assert.equal(session.cwd, exact, 'normal Main batch replay does not use the native string normalizer');
+    assert.equal((await fs.readJson(path.join(SESSIONS_DIR, `${sessionId}.json`))).cwd, exact);
+    assert.equal((await callTool('exec', { command: 'pwd' }, ctx)).content, `${exact}\n`);
+  } finally {
+    await nodeExecution.shutdownNodeExecution();
+    nodeExecution.resetNodeExecutionForTests();
+    await sessionRuntime.shutdownSessionRuntime();
+    await runtime.shutdown();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+  }
 }));
