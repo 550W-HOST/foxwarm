@@ -907,7 +907,10 @@ export class SessionWorkerHost {
         let result: Awaited<ReturnType<typeof startSessionWaitForSession>>;
         return transactional(async () => { result = await startSessionWaitForSession(owner, options, persist); }).then(() => result!);
       },
-      notifyHistoryUpdate: () => {},
+      notifyHistoryUpdate: (sessionId, message) => {
+        this.assertId(sessionId);
+        this.forwardAppendedMessages([message]);
+      },
       notifySessionEvent: (_sessionId, event) => { this.forwardSessionStreamEvent(event); },
       setRuntimeState: setActiveSessionRuntimeState,
       clearRuntimeState: clearActiveSessionRuntimeState,

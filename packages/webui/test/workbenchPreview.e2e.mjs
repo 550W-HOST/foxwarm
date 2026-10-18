@@ -3533,3 +3533,44 @@ test('a later sidebar choice wins even when an abandoned history response ignore
   assert.equal(await page.$eval('[data-workbench-content-tab="chat:e2e-c"]',el=>el.getAnimations().length),0)
  }finally{await page.close()}
 })
+
+for (const liveDuringCatchup of [false, true]) test(`prepared continuous history catches up between the two prepared snapshots${liveDuringCatchup ? ' while merging live commits without draining newer pages' : ''}`, async () => {
+  const page = await openFixture({ responsiveChat: true, chatMessages: [{ role: 'model', parts: [{ text: 'Source A content' }], __meta: { seq: 1 } }], timelineView: 'conversation' })
+  try {
+    await page.evaluate(liveDuringCatchup => {
+      const original = window.fetch
+      window.probeArchiveReads = []
+      const first = { role: 'model', parts: [{ text: 'Earlier B message' }], __meta: { seq: 1, timestamp: 1700000000000 } }
+      const second = { role: 'model', parts: [{ text: 'Newest B message' }], __meta: { seq: 2, timestamp: 1700000001000 } }
+      window.probeBState = { id: 'e2e-b', messageCount: 2, historyVersion: 2, busy: false, runtimeState: { state: 'idle', busy: false, queueLength: 0 } }
+      const json = data => Promise.resolve(new Response(JSON.stringify(data), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      window.fetch = (input, options = {}) => {
+        const url = String(input)
+        if (url.includes('/sessions/e2e-b/history/continuous')) {
+          window.probeArchiveReads.push(url)
+          if (window.probeArchiveReads.length === 1) return json({ messages: [first], firstSeq: 1, lastSeq: 1, hasMore: false })
+          if (liveDuringCatchup) {
+            window.__emitRealtime({ type: 'message', sessionId: 'e2e-b', message: second })
+            window.__emitRealtime({ type: 'message', sessionId: 'e2e-b', message: { role: 'model', parts: [{ text: 'Live B message' }], __meta: { seq: 3, timestamp: 1700000002000 } } })
+          }
+          return json({ messages: [second], firstSeq: 2, lastSeq: 2, hasMore: liveDuringCatchup })
+        }
+        if (url.includes('/sessions/e2e-b/history')) return json({ session: window.probeBState, messages: [first, second], historyVersion: 2, historyComplete: true, latestSeq: 2, queueLength: 0, queuedMessages: [] })
+        return original(input, options)
+      }
+    }, liveDuringCatchup)
+    await page.click('[data-session-id="e2e-b"]')
+    await page.waitForSelector('[data-workbench-content-tab="chat:e2e-b"]')
+    await page.evaluate(() => window.__emitRealtime({ type: 'session-state', session: window.probeBState }))
+    await page.waitForFunction(() => document.querySelector('[data-workbench-content-tab="chat:e2e-b"]')?.textContent.includes('Newest B message'), { timeout: 3000 })
+    const result = await page.evaluate(() => ({ archiveReads: window.probeArchiveReads, body: document.querySelector('[data-workbench-content-tab="chat:e2e-b"]').textContent }))
+    assert.equal(result.archiveReads.length, 2)
+    assert.match(result.archiveReads[1], /afterSeq=1/)
+    assert.match(result.body, /Earlier B message/)
+    assert.match(result.body, /Newest B message/)
+    assert.equal(result.body.match(/Newest B message/g).length, 1, 'page/live duplicates render once')
+    if (liveDuringCatchup) assert.match(result.body, /Live B message/)
+  } finally {
+    await page.close()
+  }
+})

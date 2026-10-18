@@ -8,7 +8,7 @@ Tool calls/results remain technical evidence in Activity. A successful outgoing 
 
 Current sends record canonical target and body in UI-only function-response metadata; completed ToolScript subcalls use their existing presentation metadata. An in-process delivery callback does not modify tool-visible results. Existing exact-target post-actions support Worker execution. Stored bodies are bounded at 32,768 UTF-16 code units, with an explicit Preview state if full paired call arguments are unavailable. This projection is removed from provider replay with the other function-response display metadata.
 
-Older direct/builtin-dispatched sends require a paired successful response and original call arguments. Failures without actual delivery metadata, unpaired calls, arbitrary stdout, script source and authored success prose do not become sent messages. Historical scripts lacking structured delivery evidence are not reconstructed. Canonical metadata preserves resolved destinations for aliases; unresolved legacy boundary aliases remain non-link labels.
+Older direct/builtin-dispatched sends require a paired successful response and original call arguments. Failures, canceled/not-executed or absent receipts without actual delivery metadata, unpaired calls, arbitrary stdout, script source and authored success prose do not become sent messages. Historical scripts lacking structured delivery evidence are not reconstructed. Canonical metadata preserves resolved destinations for aliases; unresolved legacy boundary aliases remain non-link labels.
 
 ## Owners and checks
 

@@ -22,6 +22,18 @@ build({entryPoints:[new URL('../src/components/sessionCommunications.ts',import.
   assert.equal(projection.size,2);assert.equal(projection.get(messages[1])[0].message,'hello');assert.equal(projection.get(messages[3])[0].peerSessionId,'analysis/main')
   assert.deepEqual(messages[0].parts[0].functionCall.args,{sessionId:'review/main',message:'hello'})
  })
+ test('canceled and absent direct receipts do not become sent cards, while actual delivery metadata remains authoritative', () => {
+  for (const name of ['send_to_session', 'functions.send_to_session', 'call_tool']) {
+   for (const response of [{ canceled: true, message: 'Tool call canceled before execution.' }, { error: 'Tool call was not started because Stop cancelled it; it was not executed.' }, undefined]) {
+    const args = { sessionId: 'peer/main', message: 'Not delivered' }
+    const call = { role: 'model', parts: [{ functionCall: { id: 'cancel', name, args: name === 'call_tool' ? { toolId: 'builtin:send_to_session', args } : args } }] }
+    const result = { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'cancel', response } }] }
+    assert.equal(projectSessionCommunications([call, result]).size, 0)
+    result.parts[0].functionResponse.__meta = { sessionMessages: [{ id: 'delivered', targetSessionId: 'resolved/main', message: 'Already delivered' }] }
+    assert.deepEqual(projectSessionCommunications([call, result]).get(result), [{ key: 'delivered', direction: 'sent', peerSessionId: 'resolved/main', message: 'Already delivered' }])
+   }
+  }
+ })
  test('canonical targets and script deliveries use out-of-band metadata, preserve distinct sends, and work across a viewport cut',()=>{
   const call={role:'model',parts:[{functionCall:{id:'one',name:'send_to_session',args:{sessionId:'<parent>',message:'full body'}}}]}
   const response={role:'tool',parts:[{functionResponse:{tool_use_id:'one',response:{output:'ok'},__meta:{sessionMessages:[{id:'one',targetSessionId:'parent/main',message:'full',truncated:true}]}}}]}

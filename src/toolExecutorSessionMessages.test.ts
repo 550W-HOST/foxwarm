@@ -27,6 +27,19 @@ test('real direct, unified and ToolScript sends persist canonical UI deliveries 
       assert.equal(JSON.stringify(response.response).includes('sessionMessages'),false);
       assert.equal(JSON.stringify(response.response).includes('__toolPostAction'),false);
     }
+    for (const control of ['__cancelTool', '__cancelAllToolsThisTurn']) {
+      for (const unified of [false, true]) {
+        const call = {
+          id: `canceled-${control}-${unified}`, name: unified ? 'call_tool' : 'send_to_session',
+          args: unified ? { source: 'builtin', name: 'send_to_session', args, [control]: true } : { ...args, [control]: true },
+        };
+        const canceled = await executeTools([call], { sessionId: sourceId }, source);
+        const receipt = canceled.message.parts[0].functionResponse!;
+        assert.deepEqual(receipt.response, { canceled: true, message: 'Tool call canceled before execution.' });
+        assert.equal(receipt.__meta?.sessionMessages, undefined);
+        assert.equal(target.queue.filter(item => item.sourceSessionId === sourceId).length, 2);
+      }
+    }
     const batch=await executeTools([{id:'script',name:'run_script',args:{code:`return call_tool("builtin:send_to_session", ${JSON.stringify(args)})`}}],{sessionId:sourceId},source);
     const response=batch.message.parts.find(part=>part.functionResponse)!.functionResponse!;
     assert.ok(!response.response.error,JSON.stringify(response.response));

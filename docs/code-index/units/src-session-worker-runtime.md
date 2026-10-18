@@ -91,4 +91,4 @@ The bound runner reports no completed background compact job (`hasCompletedCompa
 
 The cross-module placement, durability, fencing, idle, and future worker-owned session decisions are canonical in [process topology and RPC](../threads/process-topology-and-rpc.md#design-decisions).
 
-Worker owner history callbacks append display-only operational notices. Final error delivery excludes WebUI because its canonical/temporary typed event is the presentation path; other channels keep ordinary error delivery. See [runtime presentation](../threads/session-runtime-presentation.md).
+Worker owner history callbacks forward presentation-only updates through the existing subscription-gated, ordered message channel, including temporary system events when durable append is unavailable. These forwards do not write history/Archive or advance sequence/queue state; ordinary committed appends retain their single existing forward. Final error delivery excludes WebUI because its canonical/temporary typed event is the presentation path; other channels keep ordinary error delivery. See [runtime presentation](../threads/session-runtime-presentation.md).

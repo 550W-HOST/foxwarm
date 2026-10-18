@@ -55,7 +55,7 @@ export function projectSessionCommunications(messages: readonly Message[], histo
       const args = call && sendArguments(call)
       const bounded = deliveries.find(item => item.key === responseId && item.truncated)
       if (bounded && typeof args?.message === 'string') { bounded.message = args.message; delete bounded.truncated }
-      if (!response.response?.error && args && typeof args.sessionId === 'string' && typeof args.message === 'string' && !deliveries.some(item => item.key === responseId)) add({targetSessionId:args.sessionId,message:args.message}, responseId)
+      if (response.response && !response.response.error && response.response.canceled !== true && args && typeof args.sessionId === 'string' && typeof args.message === 'string' && !deliveries.some(item => item.key === responseId)) add({targetSessionId:args.sessionId,message:args.message}, responseId)
     }
     if (deliveries.length) projection.set(message, deliveries)
   }

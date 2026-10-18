@@ -141,7 +141,9 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
   const archiveRequestRef = useRef<AbortController | null>(null)
   const archiveBoundaryRef = useRef<{ firstSeq?: number; lastSeq?: number }>({firstSeq:preparedArchive?.firstSeq,lastSeq:preparedArchive?.lastSeq})
   const [historySnapshotRevision, setHistorySnapshotRevision] = useState(0)
-  const archiveSnapshotRevisionRef = useRef(preparedArchive ? 0 : -1)
+  // A prepared Archive window is only a seed: its read can precede the
+  // parallel active snapshot even when that snapshot already matches live state.
+  const archiveSnapshotRevisionRef = useRef(-1)
   const loadArchivePage = useCallback(async (direction: ArchivePageDirection = 'initial', beforePublish?: (rows: Message[]) => void): Promise<Message[]> => {
     if (archiveRequestRef.current) {
       if (direction !== 'latest') return []
@@ -265,7 +267,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     archiveRequestRef.current?.abort()
     archiveRequestRef.current = null
     archiveBoundaryRef.current = {firstSeq:preparedArchive?.firstSeq,lastSeq:preparedArchive?.lastSeq}
-    archiveSnapshotRevisionRef.current = preparedArchive ? 0 : -1
+    archiveSnapshotRevisionRef.current = -1
     setArchivePage({ loaded: !!preparedArchive, loading: false, error: false, hasEarlier: !!preparedArchive?.hasEarlier, hasLater: !!preparedArchive?.hasLater, direction: 'initial' })
     setHistoryLoaded(!!prepared)
     setIsFullHistoryLoaded(prepared?.historyComplete === true)
