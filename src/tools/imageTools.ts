@@ -35,8 +35,7 @@ async function writeWorkerRemoteImage(options: {
     let operationDir: string | undefined; let result: string | undefined; let operationError: unknown;
     try {
         operationDir = await fs.mkdtemp(path.join(realRoot, 'operation-'));
-        const extension = path.extname(options.targetPath).slice(0, 32);
-        const tempPath = path.join(operationDir, `image${extension}`);
+        const tempPath = path.join(operationDir, 'image');
         await fs.writeFile(tempPath, options.buffer, { flag: 'wx', mode: 0o600 });
         await writeImageArtifact({ sourceSessionId: options.sessionId, artifactPath: tempPath,
             intent: { id: options.imageId, filePath: options.targetPath, ...(options.overwrite !== undefined ? { overwrite: options.overwrite } : {}) },

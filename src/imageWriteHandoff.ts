@@ -28,7 +28,7 @@ export async function readOwnedImageWriteHandoff(agentName: string, sourceSessio
   const resolved = path.resolve(artifactPath);
   const parts = path.relative(root, resolved).split(path.sep);
   if (parts.length !== 2 || !/^operation-[A-Za-z0-9]+$/.test(parts[0])
-    || !/^image(?:\.[^/\\]{0,31})?$/.test(parts[1])) {
+    || parts[1] !== 'image') {
     throw new Error('Image handoff artifact is outside this Session-owned operation.');
   }
   const operation = await fs.lstat(path.dirname(resolved));

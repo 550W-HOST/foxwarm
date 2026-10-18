@@ -236,10 +236,15 @@ test('Main and Worker write the same owned image under image-target authorizatio
   const otherRoot = getImageWriteHandoffRoot(f.session.agent, `${f.sourceId}-other`);
   try {
     const ctx: any = { sessionId: f.sourceId, session: f.session, persistCurrentSession: async () => sessionManager.saveSession(f.session) };
-    await callTool('image_write_to_file', { id: 'owned-transfer-image', filePath: 'main-image.png', node: f.right }, ctx);
-    await callTool('image_write_to_file', { id: 'owned-transfer-image', filePath: 'worker-image.png', node: f.right }, { ...ctx, sessionPlacement: 'session-worker' });
-    assert.deepEqual(await fs.readFile(path.join(f.roots.right, 'cwd/main-image.png')), image);
-    assert.deepEqual(await fs.readFile(path.join(f.roots.right, 'cwd/worker-image.png')), image);
+    const target = 'photo.version\\backup';
+    const destination = path.join(f.roots.right, 'cwd', target);
+    await callTool('image_write_to_file', { id: 'owned-transfer-image', filePath: target, node: f.right }, ctx);
+    assert.deepEqual(await fs.readFile(destination), image);
+    await fs.remove(destination);
+    await callTool('image_write_to_file', { id: 'owned-transfer-image', filePath: target, node: f.right }, { ...ctx, sessionPlacement: 'session-worker' });
+    assert.deepEqual(await fs.readFile(destination), image);
+    assert.equal(captured.intent.filePath, target, 'opaque target paths reach the Provider unchanged in either placement');
+    assert.equal(path.basename(captured.artifactPath), 'image', 'private staging names do not inherit target path syntax');
     assert.equal(captured.routing.runtimeNodeId, f.right);
     assert.equal(captured.routing.currentNode, f.left);
     assert.equal(captured.intent.id, 'owned-transfer-image');
@@ -254,18 +259,18 @@ test('Main and Worker write the same owned image under image-target authorizatio
     await fs.writeFile(outside, 'not an owned image');
     await assert.rejects(() => client.call('writeImageArtifact', { ...bad, artifactPath: outside }), /outside this Session-owned operation/);
     await fs.ensureDir(path.join(otherRoot, 'operation-other'));
-    const otherFile = path.join(otherRoot, 'operation-other/image.png');
+    const otherFile = path.join(otherRoot, 'operation-other/image');
     await fs.writeFile(otherFile, 'another Session artifact');
     await assert.rejects(() => client.call('writeImageArtifact', { ...bad, artifactPath: otherFile }), /outside this Session-owned operation/);
     const operation = path.join(ownerRoot, 'operation-linked');
     await fs.ensureDir(operation);
-    await fs.symlink(outside, path.join(operation, 'image.png'));
-    await assert.rejects(() => client.call('writeImageArtifact', { ...bad, artifactPath: path.join(operation, 'image.png') }), /real directories\/files/);
+    await fs.symlink(outside, path.join(operation, 'image'));
+    await assert.rejects(() => client.call('writeImageArtifact', { ...bad, artifactPath: path.join(operation, 'image') }), /real directories\/files/);
     await fs.remove(operation);
     const directory = path.join(f.main, 'outside-operation');
-    await fs.ensureDir(directory); await fs.writeFile(path.join(directory, 'image.png'), 'outside');
+    await fs.ensureDir(directory); await fs.writeFile(path.join(directory, 'image'), 'outside');
     await fs.symlink(directory, operation, 'dir');
-    await assert.rejects(() => client.call('writeImageArtifact', { ...bad, artifactPath: path.join(operation, 'image.png') }), /real directories\/files/);
+    await assert.rejects(() => client.call('writeImageArtifact', { ...bad, artifactPath: path.join(operation, 'image') }), /real directories\/files/);
     assert.equal(await fs.pathExists(path.join(f.roots.right, 'cwd/must-not-exist.png')), false);
   } finally {
     (fileDelivery as any).writeImageArtifact = originalWrite;
