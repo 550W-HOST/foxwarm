@@ -522,7 +522,10 @@ public sealed class CodeRoutesTests
             "data-settings=\"([^\"]+)\""
         );
         var folderConfig = JsonNode.Parse(WebUtility.HtmlDecode(folderMatch.Groups[1].Value))!;
-        Assert.Equal("/W%3A/work%20space/%E9%9B%AA", folderConfig["folderUri"]!["path"]!.GetValue<string>());
+        Assert.Equal(
+            "/W%3A/work%20space/%E9%9B%AA",
+            folderConfig["folderUri"]!["path"]!.GetValue<string>()
+        );
         // The official FS reader decodes bootstrap path segments before HTTP dispatch.
         var workspaceTarget = Uri.UnescapeDataString(config["workspaceUri"]!["path"]!.ToString());
         Assert.Equal(
