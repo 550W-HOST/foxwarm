@@ -9,9 +9,7 @@ public sealed partial class CliArchiveMigrationTests
     [InlineData("exact")]
     [InlineData("ambiguous")]
     [InlineData("unique")]
-    public async Task Migration_preserves_settled_catalog_identity_authority(
-        string kind
-    )
+    public async Task Migration_preserves_settled_catalog_identity_authority(string kind)
     {
         using var temp = new TempDirectory();
         var root = Path.Combine(temp.Path, "data");
@@ -155,7 +153,9 @@ public sealed partial class CliArchiveMigrationTests
         foreach (var historical in native)
         {
             Assert.Throws<InvalidDataException>(() => archive.WriteMessages([historical]));
-            Assert.Throws<InvalidDataException>(() => archive.RollbackInsertedMessages([historical]));
+            Assert.Throws<InvalidDataException>(() =>
+                archive.RollbackInsertedMessages([historical])
+            );
         }
         Assert.Equal(2, archive.ReadMessages().Count);
         archive.WriteBlocks([

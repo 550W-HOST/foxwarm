@@ -158,7 +158,9 @@ public sealed class SessionIdentityRecoveryTests
         // journal to finishing and committing the old-to-new alias.
         journal.MoveArtifacts("old", "new");
         SqliteArchiveIdentityMove.Rename(database, "old", "new");
-        var raw = JsonNode.Parse(await File.ReadAllTextAsync(journal.AuthorityPath("new")))!.AsObject();
+        var raw = JsonNode
+            .Parse(await File.ReadAllTextAsync(journal.AuthorityPath("new")))!
+            .AsObject();
         raw["id"] = "new";
         raw["agent"] = "main";
         raw["aliases"] = new JsonArray("old");

@@ -145,7 +145,8 @@ public sealed class PersistencePrimitiveTests
     {
         using var temp = new TempDirectory();
         var store = new SqliteArchiveMessageStore(
-            Path.Combine(temp.Path, "state/archive-store.sqlite"), Fixture.SessionId
+            Path.Combine(temp.Path, "state/archive-store.sqlite"),
+            Fixture.SessionId
         );
         var message = Fixture.Message(1, "Current admission", 1001);
         ArchiveMessageRecord record;
@@ -157,7 +158,15 @@ public sealed class PersistencePrimitiveTests
                 message.Remove("__meta");
             else
                 message["__meta"]!["seq"] = 90;
-            record = new(Fixture.SessionId, "main", 1, 1001, "user", message, message.ToJsonString());
+            record = new(
+                Fixture.SessionId,
+                "main",
+                1,
+                1001,
+                "user",
+                message,
+                message.ToJsonString()
+            );
         }
         Assert.Throws<InvalidDataException>(() => store.WriteMessages([record]));
         await Assert.ThrowsAsync<InvalidDataException>(async () =>
