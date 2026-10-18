@@ -1,6 +1,6 @@
 # Unit: shared-persistent-exec
 
-Files: packages/shared/src/processOperations.ts, packages/shared/src/persistentExec.ts, packages/shared/src/persistentExec.test.ts
+Files: packages/shared/src/nativeExecBackend.ts, packages/shared/src/processOperations.ts, packages/shared/src/persistentExec.ts, packages/shared/src/persistentExec.test.ts
 
 ## Purpose
 
@@ -48,10 +48,11 @@ Foreground wait interruption and receipt precedence follow [Stop and Run queued]
 | `nativeProcessOperations.isRunning(pid)` | processOperations | Checks if a native process is alive via signal 0 |
 | `nativeProcessOperations.readWorkingDirectory(pid)` | processOperations | Reads a live native process cwd through Linux `/proc`; returns unavailable on other platforms |
 | `nativeProcessOperations.launch(request)` | processOperations | Launches and unreferences the managed wrapper process and returns its PID |
-| `buildStatusWriterInvocationPosix()` | ~117 | Generates Node one-liner to write status JSON on POSIX |
-| `buildManagedExecScript(command)` | ~121 | Builds platform-specific wrapper script (bash/PowerShell) for managed execution |
-| `buildResolvedExecPaths(execDir, timeToken, pid, collisionIndex)` | ~195 | Constructs log/status/cwd file paths from components |
-| `PersistentExecManager.start(options)` | ~240 | Spawns a managed child process and registers it |
+| `buildStatusWriterInvocationPosix()` | nativeExecBackend | Generates Node one-liner to write status JSON on POSIX |
+| `buildManagedExecScript(command)` | nativeExecBackend | Builds platform-specific wrapper script (bash/PowerShell) for managed execution |
+| `buildResolvedExecPaths(execDir, timeToken, pid, collisionIndex)` | nativeExecBackend | Constructs log/status/cwd file paths from components |
+| `NativeExecBackend.start(options)` | nativeExecBackend | Prepares native cwd/artifacts and launches a managed child without owning its registry |
+| `PersistentExecManager.startPersistentExec(options)` | manager | Reserves identity, invokes the backend and persists the returned entry |
 | `PersistentExecManager.waitForExecPaths(pathsPath)` | ~310 | Polls for the paths JSON file written by the child |
 | `PersistentExecManager.waitForCompletion(entry, timeoutSeconds)` | ~335 | Polls status file until process finishes or times out |
 | `PersistentExecManager.buildForegroundExecResult(entry, status)` | ~580 | Formats completed foreground output with line-aware excerpting and an exit-code footer |
@@ -85,7 +86,7 @@ Foreground wait interruption and receipt precedence follow [Stop and Run queued]
 
 ## Behavior
 
-- Spawns commands inside a generated wrapper script (bash on POSIX, PowerShell on Windows) that handles log redirection, exit code capture, and cwd recording via atomic file writes. `PersistentExecManager` retains wrapper/artifact/registry/notification semantics while delegating only target-local process launch, observation, liveness, and live-cwd queries to `ProcessOperations`.
+- Spawns commands inside a generated wrapper script (bash on POSIX, PowerShell on Windows) that handles log redirection, exit code capture, and cwd recording via atomic file writes. `NativeExecBackend` owns wrapper scripts, native artifacts, cwd resolution, status/liveness and process observation over `ProcessOperations`. `PersistentExecManager` retains identity allocation, registry mutation, waiting, reconciliation, formatting and notification semantics.
 - Spawn failures report the original launcher error and the already validated working directory without appending shell-vs-cwd diagnostic guidance. Optional `onProcessStarted` runs immediately after the target launch returns a PID, before path discovery or registry persistence, so callers can distinguish definite pre-start failure from an ambiguous post-launch failure without treating that callback as process-state authority.
 - The child process writes a paths JSON file so the parent can discover log/status/cwd paths without race conditions.
 - Tracks running processes in an in-memory map backed by a JSON registry file on disk, enabling recovery after restarts. Start, notification-mark, and removal mutations share one mutation/persistence chain so concurrent exec lifecycle changes cannot overwrite newer registry snapshots; concurrent initialization calls also share one load/reconcile operation.
@@ -115,7 +116,7 @@ Foreground wait interruption and receipt precedence follow [Stop and Run queued]
 
 ### D-persistent-exec-process-operations
 
-[2026-08-10] Keep persistent exec lifecycle semantics in `PersistentExecManager`, but inject the small target-local process boundary it needs: platform/runtime identity, managed wrapper launch, best-effort process snapshot, liveness, live working-directory lookup, and an optional truthful process-view formatter for launcher boundaries. The native implementation is the production default for Main and CLI Node. Do not turn this seam into a public driver/configuration API or move wrapper scripts, log/status/cwd artifacts, registry reconciliation, output formatting, and completion delivery into the low-level backend.
+[2026-08-10] Keep persistent exec lifecycle semantics in `PersistentExecManager`, but inject the small target-local process boundary it needs: platform/runtime identity, managed wrapper launch, best-effort process snapshot, liveness, live working-directory lookup, and an optional truthful process-view formatter for launcher boundaries. The native implementation is the production default for Main and CLI Node. `ProcessOperations` remains a low-level target-local seam, not a public driver/configuration API. The native implementation is extracted into `NativeExecBackend`; registry reconciliation, output formatting and completion delivery remain in the manager.
 
 ### D-persistent-exec-completion-event-retention
 
