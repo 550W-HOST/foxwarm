@@ -46,6 +46,28 @@ let result = {
   workspace: config.WORKSPACE_DIR, main: config.getAgentDir('main'), mainMemory: config.MAIN_AGENT_MEMORY_DIR,
   framework: config.AGENTS_SYSTEM_PROMPT_PATH, port: config.HTTP_PORT, webui: config.ENABLE_WEBUI, trigger: config.ENABLE_TRIGGER,
 }
+if (input.operation === 'authority') {
+  const metadata = source('src/session/metadataStore.ts')
+  const metadataAst = ts.createSourceFile('metadataStore', metadata, ts.ScriptTarget.Latest, true)
+  const fields = metadataAst.statements.find(node => ts.isVariableStatement(node) && node.declarationList.declarations.some(declaration => declaration.name.getText(metadataAst) === 'SESSION_HISTORY_STATE_FIELDS')).getText(metadataAst)
+  const state = source('src/session/stateValidation.ts')
+  const stateAst = ts.createSourceFile('stateValidation', state, ts.ScriptTarget.Latest, true)
+  const version = stateAst.statements.find(node => ts.isVariableStatement(node) && node.declarationList.declarations.some(declaration => declaration.name.getText(stateAst) === 'CURRENT_SESSION_STATE_VERSION')).getText(stateAst)
+  const serializer = evaluate(version + '\nconst SESSION_STATE_FORMAT_VERSION = exports.CURRENT_SESSION_STATE_VERSION;\n' + fields + '\n'
+    + functions('src/session/stateValidation.ts', ['isRecord', 'omitObsoleteContextFrontierItem']) + '\n'
+    + functions('src/session/metadataStore.ts', ['pickDefinedFields', 'serializeGoalState', 'serializeSessionStateFields', 'serializeSessionHistoryPayload']), 'actual Source authority serializer')
+  result.authority = serializer.serializeSessionHistoryPayload(input.session)
+}
+if (input.operation === 'access') {
+  const access = load('src/accessConfig.ts')
+  const normalized = access.normalizeAccessConfig(input.access)
+  try {
+    access.assertAccessTokensDoNotMatch(normalized, input.instanceToken)
+    result.rejected = false
+  } catch {
+    result.rejected = true
+  }
+}
 if (input.operation === 'metadata') {
   const metadata = load('src/session/agentMetadata.ts')
   await metadata.loadAgentMetadata()

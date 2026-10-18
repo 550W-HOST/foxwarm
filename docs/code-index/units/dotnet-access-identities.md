@@ -23,7 +23,7 @@ The empty MCP surface is validated and persisted by the same snapshot owner. Nor
 
 ## Validation and live installation
 
-`Normalize` validates the complete map: at most 64 bounded identity IDs; distinct bounded Bearer tokens; nonempty explicit surfaces; empty `mcp` object only; nonempty distinct WebUI Session bindings with only exact IDs or `<agent>/*` patterns. Unknown nested keys and invalid values yield secret-free errors. Main reserves the instance token before Session startup. Supported saves check reserved-token reuse before touching the active YAML.
+`Normalize` validates the complete map: at most 64 bounded identity IDs; distinct bounded Bearer tokens; nonempty explicit surfaces; empty `mcp` object only; nonempty distinct WebUI Session bindings with only exact IDs or `<agent>/*` patterns. Unknown nested keys and invalid values yield secret-free errors. HTTP-enabled Main reserves the instance token before Session startup. Supported saves check both reserved active-token reuse and the current existing administrator token file before touching the active YAML, including headless hosts and token-file changes since startup. Save-time reads share the startup file reader and its UTF-8/trim semantics, but never create a missing token.
 
 `AccessConfiguration.ApplyAsync` publishes the normalized snapshot, synchronously invokes every listener and then awaits all cleanup. WebUI comparison uses token and WebUI bindings only. An MCP-only edit or another identity's change does not revoke unrelated browser work. Cleanup failure reports `access.identities` applied plus `access.connections` not applied; it does not claim rollback. Unrelated startup settings remain startup-owned and channel results retain their existing unsupported-runtime reporting.
 

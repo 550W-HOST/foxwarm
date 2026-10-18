@@ -114,7 +114,7 @@ internal sealed record HttpServerSettings(
         );
     }
 
-    private static async Task<string> LoadOrCreateTokenAsync(string dataRoot)
+    internal static async Task<string?> ReadExistingTokenAsync(string dataRoot)
     {
         var path = Path.Combine(dataRoot, "state", "token");
         try
@@ -125,20 +125,29 @@ internal sealed record HttpServerSettings(
         }
         catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
         {
-            var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            var options = new FileStreamOptions
-            {
-                Mode = FileMode.CreateNew,
-                Access = FileAccess.Write,
-            };
-            if (!OperatingSystem.IsWindows())
-                options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
-            await using var stream = new FileStream(path, options);
-            await stream.WriteAsync(Encoding.UTF8.GetBytes(token));
-            return token;
+            return null;
         }
     }
+
+    private static async Task<string> LoadOrCreateTokenAsync(string dataRoot)
+    {
+        if (await ReadExistingTokenAsync(dataRoot) is { } existing)
+            return existing;
+        var path = Path.Combine(dataRoot, "state", "token");
+        var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var options = new FileStreamOptions
+        {
+            Mode = FileMode.CreateNew,
+            Access = FileAccess.Write,
+        };
+        if (!OperatingSystem.IsWindows())
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        await using var stream = new FileStream(path, options);
+        await stream.WriteAsync(Encoding.UTF8.GetBytes(token));
+        return token;
+    }
+
 }
 
 internal sealed record PublicWebAddress(

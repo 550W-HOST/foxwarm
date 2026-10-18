@@ -155,7 +155,7 @@ internal sealed class AccessConfiguration
     internal void Validate(ImmutableDictionary<string, AccessIdentity> next) =>
         Validate(next, reservedToken);
 
-    private static void Validate(ImmutableDictionary<string, AccessIdentity> next, string reserved)
+    internal static void Validate(ImmutableDictionary<string, AccessIdentity> next, string reserved)
     {
         if (reserved.Length > 0 && next.Values.Any(identity => Equal(identity.Token, reserved)))
             throw new InvalidDataException(

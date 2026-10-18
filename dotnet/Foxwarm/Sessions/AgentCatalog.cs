@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Foxwarm.Sessions;
@@ -70,15 +69,6 @@ internal sealed partial class AgentCatalog
             else
                 metadata = (JsonObject)index.DeepClone();
         }
-        if (
-            canonicalLayout
-            && !Directory.Exists(Path.Combine(agentRoot, "main"))
-            && !File.Exists(indexPath)
-            && HasRetainedMainOnlyAuthority(Path.GetFullPath(dataRoot))
-        )
-            throw new InvalidDataException(
-                "Retained C# Session data has no canonical main Agent directory. Supply its original FOXWARM_EXPERIMENT_TOOL_ROOT workspace; startup will not initialize a second main memory tree."
-            );
         Directory.CreateDirectory(agentRoot);
         if ((File.GetAttributes(agentRoot) & FileAttributes.ReparsePoint) != 0)
             throw new InvalidDataException("Agent directory root cannot be a symbolic link.");
@@ -110,37 +100,6 @@ internal sealed partial class AgentCatalog
             ) != 0
         )
             throw new InvalidDataException("Owned identity destination cannot be a symbolic link.");
-    }
-
-    // Main-only C# installs never needed to write agents.json. Their declared
-    // authority format is enough to reject an ambiguous new memory location,
-    // not to recover/admit a Session or discover the original workspace.
-    private static bool HasRetainedMainOnlyAuthority(string dataRoot)
-    {
-        var directory = Path.Combine(dataRoot, "state", "sessions");
-        if (!Directory.Exists(directory))
-            return false;
-        foreach (var file in Directory.EnumerateFiles(directory, "*.json"))
-        {
-            try
-            {
-                using var stream = File.OpenRead(file);
-                using var document = JsonDocument.Parse(stream);
-                if (
-                    document.RootElement.ValueKind == JsonValueKind.Object
-                    && document.RootElement.TryGetProperty("sessionStateVersion", out var version)
-                    && version.ValueKind == JsonValueKind.Number
-                    && version.TryGetInt32(out var number)
-                    && number == 1
-                )
-                    return true;
-            }
-            catch (JsonException)
-            {
-                // Unrecognized files prove no retained C# layout or live lifetime.
-            }
-        }
-        return false;
     }
 
     private IEnumerable<string> DirectoryMembers() =>

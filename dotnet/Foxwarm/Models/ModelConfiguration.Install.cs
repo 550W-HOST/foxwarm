@@ -106,6 +106,10 @@ internal sealed partial class ModelConfiguration
                 config.ContainsKey("access")
             );
             Access.Validate(access);
+            AccessConfiguration.Validate(
+                access,
+                await HttpServerSettings.ReadExistingTokenAsync(Paths.DataRoot) ?? ""
+            );
             var restart = app.Select(pair => pair.Key)
                 .Concat(config.Select(pair => pair.Key))
                 .Distinct(StringComparer.Ordinal)

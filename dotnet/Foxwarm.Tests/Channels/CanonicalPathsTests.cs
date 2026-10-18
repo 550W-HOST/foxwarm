@@ -533,7 +533,58 @@ public sealed class CanonicalPathsTests
     }
 
     [Fact]
-    public async Task Main_only_retained_Csharp_authority_without_Agent_envelope_does_not_seed_a_second_main_tree()
+    public async Task Source_authority_without_metadata_bootstraps_an_explicit_new_Agents_root_without_relocating_files()
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        var originalMemory = Path.Combine(data, "agents", "main", "memory", "MEMORY.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(originalMemory)!);
+        await File.WriteAllTextAsync(originalMemory, "existing Source knowledge");
+        var nextAgents = Path.Combine(data, "next-agents");
+        var paths = HostPaths.ForDataRoot(data);
+        Directory.CreateDirectory(Path.GetDirectoryName(paths.ConfigPath)!);
+        await File.WriteAllTextAsync(paths.ConfigPath, "paths: {agentsDir: '" + nextAgents + "'}\n");
+        var expected = await CanonicalSourceFixture.RunAsync(new JsonObject
+        {
+            ["applicationRoot"] = data,
+            ["operation"] = "authority",
+            ["session"] = new JsonObject
+            {
+                ["agent"] = "main",
+                ["history"] = new JsonArray(),
+                ["persistentMemorySnapshot"] = "existing Source snapshot",
+                ["queue"] = new JsonArray(),
+                ["busy"] = false,
+                ["currentNode"] = "master",
+                ["lastAppliedMailboxId"] = 0,
+            },
+        });
+        // Catalog membership has its own established owner; authority JSON is not discovery evidence.
+        using (var catalog = new SessionCatalog(data))
+        {
+            catalog.Initialize();
+            catalog.Upsert([SessionCatalogTests.Row("existing", 0)]);
+        }
+        var authorityFile = Path.Combine(data, "state", "sessions", "existing.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(authorityFile)!);
+        var authority = expected["authority"]!.ToJsonString();
+        await File.WriteAllTextAsync(authorityFile, authority);
+        Assert.False(File.Exists(Path.Combine(data, "state", "agents.json")));
+        Assert.False(Directory.Exists(Path.Combine(nextAgents, "main")));
+        var config = new ModelConfiguration(paths);
+        Assert.Equal(expected["agents"]!.GetValue<string>(), config.Paths.AgentsRoot);
+        var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "local", "", "", 713);
+        await using var manager = new SessionManager(data, config.Paths.WorkspaceRoot, options, HostModels.ForTest(options), hostPaths: config.Paths);
+        await manager.LoadMainHostAsync();
+        Assert.Equal(Path.Combine(nextAgents, "main"), manager.AgentDirectory("main"));
+        Assert.True(File.Exists(Path.Combine(nextAgents, "main", "memory", "MEMORY.md")));
+        Assert.Equal("existing Source knowledge", await File.ReadAllTextAsync(originalMemory));
+        Assert.Equal(authority, await File.ReadAllTextAsync(authorityFile));
+        Assert.False(File.Exists(Path.Combine(data, "state", "agents.json")));
+    }
+
+    [Fact]
+    public async Task Explicit_main_only_retained_caller_reopens_its_original_workspace_without_an_Agent_envelope()
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
@@ -555,10 +606,6 @@ public sealed class CanonicalPathsTests
         }
         Assert.False(File.Exists(Path.Combine(data, "state", "agents.json")));
         await File.WriteAllTextAsync(Path.Combine(original, "keep.txt"), "original main file");
-        Assert.Throws<InvalidDataException>(() =>
-            new AgentCatalog(data, Path.Combine(data, "agents"), canonicalLayout: true)
-        );
-        Assert.False(Directory.Exists(Path.Combine(data, "agents", "main")));
         var paths = HostPaths.ForDataRoot(data) with { LegacyWorkspace = original };
         await using var reopened = new SessionManager(
             data,
@@ -570,6 +617,8 @@ public sealed class CanonicalPathsTests
         await reopened.LoadMainHostAsync();
         Assert.Equal("retained-main-only", (await reopened.RequiredAsync("retained-main-only")).Id);
         Assert.Equal(original, reopened.AgentDirectory("main"));
+        Assert.Equal(original, reopened.ToolWorkspace);
+        Assert.False(Directory.Exists(Path.Combine(data, "agents", "main")));
         Assert.Equal(
             "original main file",
             await File.ReadAllTextAsync(Path.Combine(original, "keep.txt"))
