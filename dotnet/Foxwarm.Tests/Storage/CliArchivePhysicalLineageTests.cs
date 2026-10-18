@@ -24,11 +24,21 @@ public sealed partial class CliArchiveMigrationTests
         if (loadCatalog)
         {
             var options = new ResponsesClientOptions(
-                new Uri("http://127.0.0.1:1"), "wire", "fixture/wire", "", "", 713
+                new Uri("http://127.0.0.1:1"),
+                "wire",
+                "fixture/wire",
+                "",
+                "",
+                713
             );
             var workspace = Path.Combine(temp.Path, "work");
             Directory.CreateDirectory(workspace);
-            await using var manager = new SessionManager(root, workspace, options, HostModels.ForTest(options));
+            await using var manager = new SessionManager(
+                root,
+                workspace,
+                options,
+                HostModels.ForTest(options)
+            );
             await manager.LoadAsync();
             Assert.Empty(manager.Owners());
             Assert.True(File.Exists(Path.Combine(root, "state/catalog.sqlite")));
@@ -37,7 +47,9 @@ public sealed partial class CliArchiveMigrationTests
         }
         Assert.True(File.Exists(Path.Combine(root, "state/logs/sessions", child + ".jsonl")));
         Assert.False(File.Exists(Path.Combine(root, "state/logs/sessions", cold + ".jsonl")));
-        Assert.False(File.Exists(Path.Combine(root, "state/logs/sessions", cold + ".blocks.jsonl")));
+        Assert.False(
+            File.Exists(Path.Combine(root, "state/logs/sessions", cold + ".blocks.jsonl"))
+        );
         var sourceRoot = Path.Combine(temp.Path, "source-reader");
         CopyTree(root, sourceRoot);
         var source = await Source("migrate", sourceRoot);
@@ -47,7 +59,10 @@ public sealed partial class CliArchiveMigrationTests
         Assert.Equal(2, branch.MessageCap);
         Assert.Equal(1, branch.BlockCap);
         Assert.Equal(parent, source["childBranch"]!["parentSessionId"]!.GetValue<string>());
-        Assert.Equal(branch.MessageCap, source["childBranch"]!["forkMessageSeq"]!.GetValue<double>());
+        Assert.Equal(
+            branch.MessageCap,
+            source["childBranch"]!["forkMessageSeq"]!.GetValue<double>()
+        );
         Assert.Equal(branch.BlockCap, source["childBranch"]!["forkBlockId"]!.GetValue<double>());
         var effective = archive.ReadEffectiveMessagesRange(1, 100);
         Assert.Equal(new long[] { 1, 2, 3, 4, 5 }, effective.Select(row => row.Seq));
@@ -56,16 +71,23 @@ public sealed partial class CliArchiveMigrationTests
         Assert.Equal(parent, Assert.Single(archive.ReadEffectiveBlocksRange(1, 100)).SessionId);
         var expanded = new ArchiveContextReader(archive).Expand(child, 1, 1000)!;
         Assert.Equal(2, expanded["totalItems"]!.GetValue<int>());
-        Assert.All(expanded["items"]!.AsArray(), item =>
-        {
-            Assert.True(item!["inherited"]!.GetValue<bool>());
-            Assert.Equal(parent, item["sourceSessionId"]!.GetValue<string>());
-        });
-        Assert.Contains("Original 漢字", expanded["messages"]![0]!["parts"]![0]!["text"]!.GetValue<string>());
+        Assert.All(
+            expanded["items"]!.AsArray(),
+            item =>
+            {
+                Assert.True(item!["inherited"]!.GetValue<bool>());
+                Assert.Equal(parent, item["sourceSessionId"]!.GetValue<string>());
+            }
+        );
+        Assert.Contains(
+            "Original 漢字",
+            expanded["messages"]![0]!["parts"]![0]!["text"]!.GetValue<string>()
+        );
         var export = Path.Combine(temp.Path, "export");
         await SqliteArchiveMessageStore.ExportJsonlAsync(Database(root), export);
         var local = File.ReadAllLines(Path.Combine(export, child + ".jsonl"))
-            .Select(line => JsonNode.Parse(line)!).ToArray();
+            .Select(line => JsonNode.Parse(line)!)
+            .ToArray();
         Assert.Equal(new double[] { 3, 4, 5 }, local.Select(row => row["seq"]!.GetValue<double>()));
         Assert.All(local, row => Assert.Equal(child, row["sessionId"]!.GetValue<string>()));
         Assert.True(File.Exists(Path.Combine(root, "state/migrationVersion.json")));
