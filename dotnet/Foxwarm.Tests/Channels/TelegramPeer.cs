@@ -24,6 +24,7 @@ internal sealed class TelegramPeer : IAsyncDisposable
     internal readonly ConcurrentQueue<TelegramPeerCall> Calls = new();
     internal readonly ConcurrentQueue<TimeSpan> Delays = new();
     internal Func<TelegramPeerCall, (int Code, string Error)?>? Fail;
+    internal Func<TelegramPeerCall, Task<IResult?>>? Respond;
     internal readonly Dictionary<string, byte[]> Files = new(StringComparer.Ordinal);
     internal Uri Address = null!;
     private long update;
@@ -114,6 +115,8 @@ internal sealed class TelegramPeer : IAsyncDisposable
             body = (await request.ReadFromJsonAsync<JsonObject>())!;
         var call = new TelegramPeerCall(bot, method, body, upload);
         Calls.Enqueue(call);
+        if (Respond is { } respond && await respond(call) is { } response)
+            return response;
         if (Fail?.Invoke(call) is { } failure)
             return Results.Json(
                 new

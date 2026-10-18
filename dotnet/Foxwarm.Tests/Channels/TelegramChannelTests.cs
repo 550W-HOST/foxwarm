@@ -156,6 +156,8 @@ public sealed partial class TelegramChannelTests
         Assert.Null(f.Manager.ChannelBinding("alpha:-200"));
         Assert.Equal(2, f.Owner.Entry.Snapshot().Queue.Count);
         await f.Manager.ManagedChannels.ChangeAsync("stop", "alpha");
+        await Until(() => peer.Calls.Any(call =>
+            call.Bot == "a" && call.Method == "getUpdates" && call.Body["limit"] is not null));
         Assert.Contains(
             peer.Calls,
             call =>

@@ -32,7 +32,6 @@ internal sealed class TelegramChannel : IAsyncDisposable
     private readonly Action<Exception> log;
     private readonly CancellationTokenSource stopping = new();
     private Task? polling;
-    private readonly AsyncLocal<bool> insideCommand = new();
     private string username = "";
     private long offset;
 
@@ -87,18 +86,17 @@ internal sealed class TelegramChannel : IAsyncDisposable
         polling = PollAsync();
     }
 
-    internal async Task StopAsync()
+    internal Task StopAsync()
     {
+        // Telegraf stop aborts polling; it does not join handlers or the final offset sync.
         stopping.Cancel();
-        // A bot command may stop its own polling loop; Telegraf stop aborts without joining that handler.
-        if (polling is not null && !insideCommand.Value)
-            await polling;
+        return Task.CompletedTask;
     }
 
     public async ValueTask DisposeAsync()
     {
         await StopAsync();
-        if (polling is { IsCompleted: false } active && insideCommand.Value)
+        if (polling is { IsCompleted: false } active)
             _ = active.ContinueWith(_ => stopping.Dispose(), TaskScheduler.Default);
         else
             stopping.Dispose();
@@ -235,7 +233,7 @@ internal sealed class TelegramChannel : IAsyncDisposable
                 var command = Regex.Match(text, @"^(\S+)(?:\s+([\s\S]*))?$");
                 if (
                     command.Success
-                    && await CommandAsync(
+                    && await router.HandleExternalCommandAsync(
                         context,
                         command.Groups[1].Value,
                         command.Groups[2].Success ? command.Groups[2].Value : null
@@ -287,23 +285,6 @@ internal sealed class TelegramChannel : IAsyncDisposable
             stopping.Token
         );
         _ = ObserveAsync(router.HandleExternalMessageAsync(context, new(parts)));
-    }
-
-    private async Task<bool> CommandAsync(
-        ExternalChannelContext context,
-        string command,
-        string? rawArgs
-    )
-    {
-        insideCommand.Value = true;
-        try
-        {
-            return await router.HandleExternalCommandAsync(context, command, rawArgs);
-        }
-        finally
-        {
-            insideCommand.Value = false;
-        }
     }
 
     private async Task ObserveAsync(Task task)
@@ -436,6 +417,12 @@ internal sealed class TelegramChannel : IAsyncDisposable
     )
     {
         using var response = await http.PostAsync(new Uri(api, method), content, token);
+        // The pinned client classifies gateway/server failures before reading a JSON API payload.
+        if ((int)response.StatusCode >= 500)
+            throw new TelegramApiException(
+                (int)response.StatusCode,
+                response.ReasonPhrase ?? "Telegram API call failed."
+            );
         var body =
             await JsonNode.ParseAsync(
                 await response.Content.ReadAsStreamAsync(token),

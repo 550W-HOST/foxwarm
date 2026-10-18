@@ -150,18 +150,6 @@ internal sealed partial class SessionManager
                 turn.Stopping |= state.Stopping;
                 return;
             }
-            if (
-                value.Kind != SessionEventKind.MessageCommitted
-                || value.Data is not JsonObject message
-                || SessionWait.Text(message["role"]) != "model"
-            )
-                return;
-            var notice = SessionWait.Text(message["__meta"]?["noticeType"]);
-            if (notice != "llm-stop")
-                return;
-            var text = AssistantText(message);
-            var final = true;
-            _ = BroadcastChannelTextAsync(owner, turn, text, final);
         }
         catch (Exception error)
         {
@@ -218,7 +206,7 @@ internal sealed partial class SessionManager
             ChannelTurn? turn;
             lock (channelTurnGate)
                 turn = channelTurns.GetValueOrDefault(owner);
-            if (turn is null)
+            if (turn is null || turn.Finalized)
                 return;
             var text =
                 error is ModelRequestException
@@ -313,30 +301,25 @@ internal sealed partial class SessionManager
     )
     {
         turn.Finalized = final;
-        var tasks = new List<Task>();
         foreach (var (target, conversation, channel) in AutomaticTargets(owner.Id))
         {
             if (!string.IsNullOrWhiteSpace(text))
             {
                 var decorated = ChannelProgress.Decorate(turn.Id, target, text);
-                tasks.Add(
-                    ChannelProgress.BestEffortAsync(
+                _ = ChannelProgress.BestEffortAsync(
                         value =>
                             channel.Send(conversation, value, new(final), CancellationToken.None),
                         decorated
-                    )
                 );
             }
             else if (final && channel.Finalize is { } finish)
-                tasks.Add(
-                    ChannelProgress.BestEffortAsync(
+                _ = ChannelProgress.BestEffortAsync(
                         _ => finish(conversation, new(true), CancellationToken.None),
                         ""
-                    )
                 );
         }
-        // Intermediate broadcasts are fire-and-forget. Terminal attempts settle before owner completion.
-        return final ? Task.WhenAll(tasks) : Task.CompletedTask;
+        // Ordinary Main broadcasts never wait for platform acknowledgement, including terminal lifecycle.
+        return Task.CompletedTask;
     }
 
     private async Task DeliverGeneratedImageAsync(SessionOwner owner, JsonObject reference)
