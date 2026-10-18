@@ -2,14 +2,31 @@ namespace Foxwarm.Channels;
 
 internal sealed record ChannelFile(string Path, string Name, string? MimeType, bool IsImage);
 
-internal sealed record ChannelSendOptions(bool TurnFinal = false, string? ParseMode = null);
+internal sealed record ChannelTurnTool(string Id, string Name, string Status = "running");
+
+internal sealed record ChannelTurnProgress(string Type, IReadOnlyList<ChannelTurnTool>? Tools = null, string? Text = null);
+
+internal sealed record ChannelSendOptions(
+    bool TurnFinal = false,
+    string? ParseMode = null,
+    string? WebhookUrl = null,
+    string? StreamId = null,
+    string? ChatId = null,
+    string? ChatType = null,
+    int? NativeChatType = null,
+    string? MessageType = null,
+    IReadOnlyList<string>? MentionedList = null,
+    IReadOnlyList<string>? MentionedMobileList = null
+);
 
 internal sealed record RegisteredChannel(
     string Type,
     Func<string, string, ChannelSendOptions, CancellationToken, Task> Send,
     Func<string, ChannelFile, string?, CancellationToken, Task>? SendFile = null,
     Func<string, CancellationToken, Task>? Typing = null,
-    Func<string, ChannelSendOptions, CancellationToken, Task>? Finalize = null
+    Func<string, ChannelSendOptions, CancellationToken, Task>? Finalize = null,
+    Func<string, bool>? IsLifecycleActive = null,
+    Func<string, ChannelTurnProgress, CancellationToken, Task>? Progress = null
 );
 
 // One transport registry. Persisted attachments and managed transport lifetimes have their own owners.

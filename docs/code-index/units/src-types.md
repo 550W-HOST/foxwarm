@@ -17,7 +17,7 @@ Defines the core TypeScript interfaces and type aliases used throughout the syst
 - `LlmRequestTiming` — Persisted wall-clock start/completion boundaries plus monotonic logical-request duration
 - `EffectiveRequestSelection` / `SessionMeta.lastEffectiveRequest` — small persisted normal-adoption baseline; see [effective selection](../threads/model-routing.md#d-model-routing-live-session-selection).
 - `Session` — Full session state including authoritative history, queue, stats, raw `model`/`effort`, and future-child defaults
-- `QueueItem` / `QueueSource` — Current inbound content/event work plus the `compact-commit` safe-point item and origin metadata. Source metadata can retain WeWork stream IDs and QQ Bot passive-reply message IDs without persisting callbacks; retry and compact planning are not queue types
+- `QueueItem` / `QueueSource` — Current inbound content/event work plus the `compact-commit` safe-point item and origin metadata. Source metadata retains content/provenance identity, not current WeWork stream IDs, QQ passive-reply IDs or reply-control fields; retry and compact planning are not queue types
 - `CompactionRequest` — Planning request options kept separate from queue-item state
 - `isQueueItem(value)` — Runtime guard that accepts only current non-empty queue records so unrecognized persisted records can be discarded generically
 - `ChatResult` — LLM response envelope with text, provider-prefixed concrete model id, optional resolved virtual model key, usage, and tool calls

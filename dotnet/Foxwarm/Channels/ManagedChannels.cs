@@ -10,7 +10,8 @@ internal sealed record ChannelTransportDependencies(
     Func<string, Uri>? TelegramApi = null,
     Func<string, Uri>? TelegramFiles = null,
     Func<TimeSpan, CancellationToken, Task>? Delay = null,
-    Func<DateTimeOffset>? Now = null
+    Func<DateTimeOffset>? Now = null,
+    System.Net.IPAddress? CallbackAddress = null
 );
 
 internal sealed class ManagedChannels(
@@ -22,7 +23,7 @@ internal sealed class ManagedChannels(
 {
     internal WeixinApi Weixin { get; } = new(dependencies);
 
-    private static bool Implemented(string type) => type is "telegram" or "matrix" or "weixin";
+    private static bool Implemented(string type) => type is "telegram" or "matrix" or "weixin" or "wework";
 
     private readonly Dictionary<string, IManagedChannel> running = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> errors = new(StringComparer.Ordinal);
@@ -65,7 +66,7 @@ internal sealed class ManagedChannels(
                         ["configured"] = configured,
                         ["enabled"] = enabled,
                         ["details"] = new JsonArray(
-                            implemented ? type + " polling"
+                            implemented ? type == "wework" ? "WeWork callback/webhook/WebSocket" : type + " polling"
                             : registered is not null ? "Registered transport"
                             : "Adapter is not implemented on this server."
                         ),
@@ -182,6 +183,9 @@ internal sealed class ManagedChannels(
                 router,
                 dependencies,
                 error => RecordError(id, error)
+            ),
+            "wework" => new WeWorkChannel(
+                id, config, sessions, router, dependencies, error => RecordError(id, error)
             ),
             "weixin" => new WeixinChannel(
                 id,

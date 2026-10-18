@@ -13,7 +13,8 @@ public sealed class ExternalChannelNodeTests
     [Fact]
     public async Task Real_repository_CLI_Node_receives_isolated_inbound_bytes_while_nonisolated_selected_Node_and_named_helper_keep_Source_placement()
     {
-        await using var f = await ExternalChannelFixture.CreateAsync();
+        await using var peer = await WeWorkPeer.StartAsync();
+        await using var f = await ExternalChannelFixture.CreateAsync(dependencies: peer.Dependencies);
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
@@ -95,6 +96,22 @@ public sealed class ExternalChannelNodeTests
                 StringComparison.Ordinal
             );
             Assert.Equal(bytes, await File.ReadAllBytesAsync(path));
+            // The configured WeWork callback actually materializes through that same isolated Node owner.
+            var callbackPort = WeWorkPeer.Port();
+            await f.Configuration.SaveChannelsAsync(new JsonObject { ["work"] = peer.Config(callbackPort) });
+            f.Manager.AttachChannel("wework:node-media", f.Owner);
+            f.Manager.AttachChannel("work:node-media", f.Owner);
+            peer.Media["/node-file"] = Convert.FromBase64String(WeWorkCallbackTests.Encrypt("WeWork Node bytes", framed: false));
+            using var callback = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{callbackPort}/") };
+            var inbound = WeWorkPeer.Text("node-file", chat: "node-media");
+            inbound["msgtype"] = "file";
+            inbound["file"] = new JsonObject { ["url"] = new Uri(peer.Address, "node-file").ToString(), ["filename"] = "node-report.bin" };
+            await WeWorkCallbackTests.Post(callback, inbound);
+            var remoteFiles = Directory.GetFiles(Path.Combine(nodeRoot, "agents", "main", ".temp/channel-files/wework"));
+            Assert.Single(remoteFiles);
+            Assert.Equal("WeWork Node bytes", await File.ReadAllTextAsync(remoteFiles.Single()));
+            await TelegramChannelTests.Until(() => f.Owner.Entry.WithState(state => state.Queue.Count) == 1);
+            Assert.Contains("node=\"owned-channel-node\"", string.Join("", f.Owner.Entry.WithState(state => state.Queue.Single().Parts!).Select(part => SessionWait.Text(part["text"] ?? part["system"]))));
             // The eagerly called helper receives the adapter TYPE, not this named instance's binding.
             var created = await f.Manager.CreateAgentAsync("named-destination");
             var named = await f.Manager.RequiredAsync(created.MainSessionId!);

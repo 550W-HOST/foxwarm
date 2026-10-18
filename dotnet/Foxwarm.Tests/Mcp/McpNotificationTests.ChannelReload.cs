@@ -10,6 +10,7 @@ public sealed partial class McpNotificationTests
     {
         await using var protocol = await ExternalProtocolPeer.StartAsync();
         await using var bot = await TelegramPeer.StartAsync();
+        await using var work = await WeWorkPeer.StartAsync();
         await using var peer = await InboundMcpFixture.CreateAsync();
         var router = new MessageRouter(new SessionRuntime(peer.Manager));
         peer.Manager.InitializeChannels(router, peer.Configuration, bot.Dependencies);
@@ -30,18 +31,20 @@ public sealed partial class McpNotificationTests
             ["alpha"] = ExternalChannelFixture.Channel(),
             ["matrix"] = protocol.Matrix(),
             ["weixin"] = protocol.Weixin(),
+            ["work"] = work.Config(stream: false),
         };
         var first = await peer.Configuration.SaveAppAsync(app.ToJsonString());
-        Assert.Equal(3, first["reload"]!["started"]!.AsArray().Count);
+        Assert.Equal(4, first["reload"]!["started"]!.AsArray().Count);
         var second = await peer.Configuration.SaveAppAsync(app.ToJsonString());
-        Assert.Equal(3, second["reload"]!["stopped"]!.AsArray().Count);
-        Assert.Equal(3, second["reload"]!["started"]!.AsArray().Count);
+        Assert.Equal(4, second["reload"]!["stopped"]!.AsArray().Count);
+        Assert.Equal(4, second["reload"]!["started"]!.AsArray().Count);
         bot.Fail = call => call.Method == "getMe" ? (401, "controlled bootstrap failure") : null;
         var partial = await peer.Configuration.SaveAppAsync(app.ToJsonString());
-        Assert.Equal(2, partial["reload"]!["started"]!.AsArray().Count);
+        Assert.Equal(3, partial["reload"]!["started"]!.AsArray().Count);
         Assert.Contains("channels.alpha", partial["notApplied"]!.ToString());
         Assert.NotNull(peer.Manager.ChannelRegistry.Get("matrix"));
         Assert.NotNull(peer.Manager.ChannelRegistry.Get("weixin"));
+        Assert.NotNull(peer.Manager.ChannelRegistry.Get("work"));
         Assert.Null((await Reply(peer, target, "after managed reload"))!["error"]);
         await Until(() => Queue(sender.First).Length == 1);
         Assert.Equal(

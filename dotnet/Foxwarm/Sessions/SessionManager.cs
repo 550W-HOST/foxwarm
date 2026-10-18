@@ -420,6 +420,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     {
         owner.Entry.MutationAdmission = () => BeginOwnerMutation(owner);
         owner.Entry.ToolProgress = (call, start) => ChannelToolProgress(owner, call, start);
+        owner.Entry.StructuredProgress = progress => ChannelStructuredProgress(owner, progress);
         owner.Entry.TurnStopped = () => ChannelStoppedAsync(owner);
         owner.Entry.AssistantCommitted = message => ChannelAssistantCommittedAsync(owner, message);
         owner.Entry.RetryPresented = (retry, initial, same) =>

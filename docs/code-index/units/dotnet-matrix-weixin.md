@@ -6,7 +6,7 @@ Secondary files: `src/channels/matrixChannel.ts`, `src/channels/weixinChannel.ts
 
 ## Purpose and callers
 
-Implements the used unencrypted Matrix transport and Source Weixin text/login subset through [shared external channels](./dotnet-external-channels.md). `ManagedChannels` creates these adapters under the existing instance registry; both enter the generic Router, not Telegram's separate command hook. The Session, authorization, file/image, Node, attachment and automatic-delivery owners remain shared. WeWork, QQ and Main TUI remain separate unimplemented adapters.
+Implements the used unencrypted Matrix transport and Source Weixin text/login subset through [shared external channels](./dotnet-external-channels.md). `ManagedChannels` creates these adapters under the existing instance registry; both enter the generic Router, not Telegram's separate command hook. The Session, authorization, file/image, Node, attachment and automatic-delivery owners remain shared. [WeWork](./dotnet-wework.md) is a separate implemented adapter; QQ and Main TUI remain unimplemented.
 
 ## Stable symbols and wire contracts
 

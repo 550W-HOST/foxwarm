@@ -38,6 +38,7 @@ public sealed class SessionEntry
 
     internal bool Retired { get; set; }
     internal Action<JsonObject, bool>? ToolProgress { get; set; }
+    internal Action<Foxwarm.Channels.ChannelTurnProgress>? StructuredProgress { get; set; }
     internal Func<Task>? TurnStopped { get; set; }
     internal Func<JsonObject, Task>? AssistantCommitted { get; set; }
     internal Func<Foxwarm.Models.ModelRetryEvent, bool, bool, Task>? RetryPresented { get; set; }

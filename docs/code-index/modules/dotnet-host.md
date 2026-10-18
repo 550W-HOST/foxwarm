@@ -14,6 +14,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Message routing and presentation commands](../units/message-routing.md)
 - [Shared external channels and managed adapters](../units/dotnet-external-channels.md)
 - [Matrix, Weixin and QR login](../units/dotnet-matrix-weixin.md)
+- [WeWork callback, WebSocket, streams and media](../units/dotnet-wework.md)
 - [Speech proxy](../units/asr.md)
 
 ## Tests and callers

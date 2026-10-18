@@ -99,17 +99,34 @@ internal sealed partial class SessionManager
             var interval = configured[instance]?["channelProgress"] is JsonObject progress
                 ? SessionWait.Number(progress["intervalMs"])
                 : null;
-            if (interval is not >= 30000 or > 1800000)
+            if (channel.IsLifecycleActive?.Invoke(conversation) == true || interval is not >= 30000 or > 1800000)
                 continue;
             result.Add(
                 new(
                     target,
                     TimeSpan.FromMilliseconds(interval.Value),
-                    text => channel.Send(conversation, text, new(), CancellationToken.None)
+                    text => channel.IsLifecycleActive?.Invoke(conversation) == true
+                        ? Task.CompletedTask : channel.Send(conversation, text, new(), CancellationToken.None)
                 )
             );
         }
         return result.ToArray();
+    }
+
+    private void ChannelStructuredProgress(SessionOwner owner, ChannelTurnProgress progress)
+    {
+        try
+        {
+            foreach (var (_, conversation, channel) in AutomaticTargets(owner.Id))
+                if (channel.Progress is { } report)
+                    _ = ChannelProgress.BestEffortAsync(
+                        _ => report(conversation, progress, CancellationToken.None), ""
+                    );
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine("Channel native progress failed: " + error.Message);
+        }
     }
 
     private void ChannelToolProgress(SessionOwner owner, JsonObject call, bool start)
@@ -278,7 +295,7 @@ internal sealed partial class SessionManager
             var final =
                 !parts.Any(part => part["functionCall"] is not null)
                 && !owner.Entry.WithState(state => state.Queue.Any(SessionCompactor.Ordinary));
-            await BroadcastChannelTextAsync(owner, turn, AssistantText(message), final);
+            await BroadcastChannelTextAsync(owner, turn, AssistantText(message), final, nativeProgressText: parts.Any(part => part["functionCall"] is not null));
             foreach (
                 var part in parts.Where(part =>
                     SessionWait.Text(part["imageMeta"]?["origin"]) == "generated"
@@ -297,15 +314,19 @@ internal sealed partial class SessionManager
         SessionOwner owner,
         ChannelTurn turn,
         string text,
-        bool final
+        bool final,
+        bool nativeProgressText = false
     )
     {
         turn.Finalized = final;
         foreach (var (target, conversation, channel) in AutomaticTargets(owner.Id))
         {
+            if (nativeProgressText && channel.IsLifecycleActive?.Invoke(conversation) == true)
+                continue;
             if (!string.IsNullOrWhiteSpace(text))
             {
-                var decorated = ChannelProgress.Decorate(turn.Id, target, text);
+                var decorated = channel.IsLifecycleActive?.Invoke(conversation) == true
+                    ? text : ChannelProgress.Decorate(turn.Id, target, text);
                 _ = ChannelProgress.BestEffortAsync(
                     value =>
                         channel.Send(

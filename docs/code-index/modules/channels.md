@@ -1,6 +1,6 @@
 # Module: channels
 
-> Current .NET common channel and Telegram behavior is mapped in [external channels](../units/dotnet-external-channels.md).
+> Current .NET common channel and Telegram behavior is mapped in [external channels](../units/dotnet-external-channels.md); [Matrix/Weixin](../units/dotnet-matrix-weixin.md) and [WeWork](../units/dotnet-wework.md) have transport-specific maps.
 >
 > TypeScript Main compatibility/reference map. The active .NET Main architecture is mapped in the [overview](../overview.md); these contracts do not by themselves establish .NET runtime support.
 

@@ -122,6 +122,7 @@ public sealed partial class LocalSessionTurnHost
                 await SafePointAsync().ConfigureAwait(false);
                 AssertCanContinue();
                 registered.Token.ThrowIfCancellationRequested();
+                entry.StructuredProgress?.Invoke(new("llm-start"));
                 var history = entry.WithState(state => state.History.Snapshot());
                 var result = chat is ISessionChatService ordinary
                     ? await ordinary
@@ -235,6 +236,14 @@ public sealed partial class LocalSessionTurnHost
                         continue;
                     }
 
+                    entry.StructuredProgress?.Invoke(new(
+                        "tool-calls-start",
+                        calls.Select(call => new Foxwarm.Channels.ChannelTurnTool(
+                            SessionWait.Text(call["id"]) ?? "", SessionWait.Text(call["name"]) ?? "tool"
+                        )).ToArray(),
+                        string.Join("", (assistant["parts"] as JsonArray ?? []).OfType<JsonObject>()
+                            .Where(part => part["thinking"] is null).Select(part => SessionWait.Text(part["text"]) ?? ""))
+                    ));
                     var toolParts = await ExecuteToolBatchAsync(
                             ToolCallControls.Plan(
                                 calls,
@@ -275,6 +284,14 @@ public sealed partial class LocalSessionTurnHost
                         };
                     var toolMessage = new JsonObject { ["role"] = "tool", ["parts"] = toolParts };
                     await AppendHistoryMessageStrictAsync(toolMessage).ConfigureAwait(false);
+                    entry.StructuredProgress?.Invoke(new(
+                        "tool-calls-finish",
+                        toolParts.OfType<JsonObject>().Select(part => part["functionResponse"]).OfType<JsonObject>()
+                            .Select(result => new Foxwarm.Channels.ChannelTurnTool(
+                                SessionWait.Text(result["tool_use_id"]) ?? "", SessionWait.Text(result["name"]) ?? "tool",
+                                result["response"] is JsonObject response && response["error"] is not null ? "error" : "success"
+                            )).ToArray()
+                    ));
                     var stopping = entry.WithState(state => state.Stopping);
                     var terminal =
                         tools is ITurnToolControl turnControl
