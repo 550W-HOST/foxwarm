@@ -13,6 +13,7 @@ Owns one persistent-command manager for native and primitive-provider executions
 | `PersistentExecManager` | persistentExec | Registry, waits, reconciliation and formatting for both backends |
 | `RunningExecEntry` | persistentExec | Exact owner, Node, command, cwd, output path and optional provider execution reference; native PID/status/cwd fields remain readable |
 | `ExecStatus` | persistentExec | Actual exit code or unknown, timestamp/estimated hint, optional measured duration and error |
+| `ExecOutputFiles` | persistentExec | Optional per-result read-only stat/read view supplied by Core; never retained in entries or backend resolution |
 | `StartPersistentExecOptions` | persistentExec | Command and exact owner; optional requested public ID, provider ID and final prelaunch fence |
 | `ExecBackend` | execBackend | Core-owned start/poll, target log filesystem and known-cwd bridge; not the external adapter protocol |
 | `ExecStarted`, `ExecSnapshot`, `ProviderExecReference` | execBackend | Start receipt, running/finished/lost observations and private persisted provider/ref identity |
@@ -53,6 +54,7 @@ Owns one persistent-command manager for native and primitive-provider executions
 
 ## Output and cwd
 
+- Result builders accept an optional per-result `ExecOutputFiles` view; without it, native/default observation is unchanged. Core uses this only for bounded/cancellable primitive-provider foreground output. An expired or stopped observation reports unavailable/truncated capture while retaining actual exit state, tracking and the independently recoverable backend.
 - Logs are read through the selected backend's `FileOperations`; provider paths remain target-native and are not copied into a second Main log store. Output loss is distinct from a known finished exit: display reports unavailable output and programmatic results omit full content with `truncated:true` rather than inventing empty capture data.
 - Stat-time snapshots at or below 1 MiB use bounded reads of that snapshot. Larger logs read only 5,000-byte head/tail samples. Byte offsets and sizes are exact; Unicode/binary classification and display conversions use the shared bounded-text implementation. Programmatic content above 1 MiB is omitted rather than sampled as if complete.
 - Boundary whitespace is preserved, including whitespace-only output. Only a zero-byte capture gets a no-output placeholder. Metadata begins after the existing trailing LF or one separator LF; missing captured trailing LF is stated explicitly. Oversized logs report byte size, not an invented original line count.

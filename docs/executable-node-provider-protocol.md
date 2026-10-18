@@ -168,6 +168,8 @@ Core uses the existing `PersistentExecManager`, same registry and existing 24-ho
 
 Stop releases foreground waiting without killing the command. Stop during start waits for the bounded start receipt or hard deadline; it does not abort the launcher as a substitute for cancelling a remote command. An uncertain start is reported as unknown and must never be automatically repeated. There is no process-kill primitive.
 
+Foreground output observation is also bounded and read-only. Completed commands use the remaining requested foreground budget; after normal background timeout, one shared 500 ms snapshot window preserves fast partial capture. Stop or hard cancellation ends these reads promptly, and display/programmatic formatting does not restart them after cancellation. Unavailable output is reported explicitly; the foreground signal is never retained in job state or restart resolution.
+
 Poll requests use at most `min(configured timeout, 5 seconds)`. Foreground and reconciliation share one in-flight status query per execution. Slow queries cannot extend the foreground deadline or delay other completion delivery; transient failures retain tracking. Restart queries the same configured provider and persisted ref without invoking start again. Missing provider configuration does not transfer the execution to another provider. Lost state reports an unknown exit. A real finished status remains real even when reading output fails; output loss is reported separately.
 
 Adapters keep status and output available for normal tracking and describe their retention policy. Core does not promise indefinite remote storage. Start submission and registry persistence retain the existing crash uncertainty window; no transaction, rollback or exactly-once promise is added.

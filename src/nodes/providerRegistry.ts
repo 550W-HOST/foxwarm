@@ -1,7 +1,7 @@
 import { listApprovedNodes } from './registry';
 import type { ExecRuntime } from '../execManager';
 import type { ExecBackend, ExecStarted, ExecSnapshot } from '../../packages/shared/dist/execBackend';
-import { resolveExecTimeoutSeconds } from '../../packages/shared/dist/persistentExec';
+import { resolveExecTimeoutSeconds, type ExecOutputFiles } from '../../packages/shared/dist/persistentExec';
 import { createProviderExecBackend } from './providerExecBackend';
 import path from 'node:path';
 import { decodeNodeTransferFile } from '../nodeFileTransfer';
@@ -85,7 +85,7 @@ export type NodeDefaultCwdRequest = {
 };
 
 export type NodeProviderCallOptions = {
-  /** User Stop must not kill a provider launcher; hard lifecycle/deadline cancellation retains its own signal. */
+  /** Dispatched exec start uses only hard cancellation; per-result read-only observations may use the foreground signal. */
   foregroundToolCancellation?: true;
   hardCancellationSignal?: AbortSignal;
   signal?: AbortSignal;
@@ -452,18 +452,49 @@ export class NodeProviderRegistry {
       onBeforeProcessLaunch: () => throwIfToolStopped(options?.signal),
       hardCancellationSignal: options?.hardCancellationSignal,
     });
+    const waitDeadline = Date.now() + timeout.effectiveSeconds * 1000;
     const status = await runtime.waitForExecCompletion(entry.id, timeout.effectiveSeconds * 1000, options?.signal);
     if (!status) await runtime.markExecForBackgroundNotification(entry.id);
+    // Preserve quick partial snapshots after a normal wait timeout, but never
+    // turn formatting into another provider-sized wait (or persist its signal).
+    const outputController = new AbortController();
+    const outputBudget = status ? Math.max(0, waitDeadline - Date.now()) : 500;
+    const timer = setTimeout(() => outputController.abort(), outputBudget);
+    if (outputBudget <= 0) outputController.abort();
+    const signal = AbortSignal.any([outputController.signal, ...[options?.signal, options?.hardCancellationSignal].filter((value): value is AbortSignal => !!value)]);
     try {
-      const output = status
-        ? await runtime.buildForegroundExecResult(entry, status, timeout.warning)
-        : await runtime.buildBackgroundTimeoutResult(entry, timeout.effectiveSeconds, timeout.warning, options?.signal?.aborted ? 'Stop or Run queued' : undefined);
-      const nextCwd = status ? await runtime.readFinishedExecWorkingDirectory(entry) : await runtime.readLiveExecWorkingDirectory(entry);
-      const result = request.context.programmatic ? await runtime.buildProgrammaticExecResult(entry, status, output) : { output };
-      return nextCwd && request.context.currentNode === request.nodeId
-        ? { ...result, __execBatchCwdSync: { nextCwd, nodeId: request.nodeId } } : result;
+      const { operations } = this.filesystemBackend(provider, request, { signal });
+      const observe = <T>(read: () => Promise<T>): Promise<T> => new Promise((resolve, reject) => {
+        const cancel = () => reject(signal.reason);
+        if (signal.aborted) { cancel(); return; }
+        signal.addEventListener('abort', cancel, { once: true });
+        // Race independently as well as cancelling the adapter: an in-process
+        // provider that ignores its signal still cannot extend this receipt.
+        Promise.resolve().then(() => { signal.throwIfAborted(); return read(); }).then(value => {
+          signal.removeEventListener('abort', cancel);
+          resolve(value);
+        }, error => {
+          signal.removeEventListener('abort', cancel);
+          reject(error);
+        });
+      });
+      const files: ExecOutputFiles = {
+        stat: filePath => observe(() => operations.stat(filePath)),
+        read: (filePath, offset, count) => observe(() => operations.read(filePath, offset, count)),
+      };
+      try {
+        const output = status
+          ? await runtime.buildForegroundExecResult(entry, status, timeout.warning, files)
+          : await runtime.buildBackgroundTimeoutResult(entry, timeout.effectiveSeconds, timeout.warning, options?.signal?.aborted ? 'Stop or Run queued' : undefined, files);
+        const nextCwd = status ? await runtime.readFinishedExecWorkingDirectory(entry) : await runtime.readLiveExecWorkingDirectory(entry);
+        const result = request.context.programmatic ? await runtime.buildProgrammaticExecResult(entry, status, output, files) : { output };
+        return nextCwd && request.context.currentNode === request.nodeId
+          ? { ...result, __execBatchCwdSync: { nextCwd, nodeId: request.nodeId } } : result;
+      } finally {
+        if (status) await runtime.finalizeForegroundExec(entry.id);
+      }
     } finally {
-      if (status) await runtime.finalizeForegroundExec(entry.id);
+      clearTimeout(timer);
     }
   }
 

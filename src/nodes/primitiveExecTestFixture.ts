@@ -72,6 +72,10 @@ async function main() {
       }
       case 'filesystem': {
         const target = local(request.path);
+        if (!fs.existsSync(path.join(root, 'allow-logs')) && /\/output$/.test(target)
+          && ((mode === 'slow-log-stat' && request.operation === 'stat') || (mode === 'slow-log-read' && request.operation === 'read'))) {
+          await new Promise(resolve => setTimeout(resolve, 10_000));
+        }
         if (mode === 'unreadable-log' && /\/output$/.test(target)) throw Object.assign(new Error('No log access'), { code: 'EACCES' });
         switch (request.operation) {
           case 'parent': reply.result = { path: path.dirname(request.path) }; break;

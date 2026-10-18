@@ -70,6 +70,9 @@ export const BACKGROUND_PROCESS_CMDLINE_LIMIT = 100;
 export const BACKGROUND_PROCESS_TREE_LIMIT = 40;
 export const BACKGROUND_COMPLETION_EVENT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const BACKGROUND_PROCESS_TREE_MAX_INDENT = 20;
+/** Per-result read-only observations; never retained in an execution record or backend resolver. */
+export type ExecOutputFiles = Pick<FileOperations, 'stat' | 'read'>;
+
 export interface ExecStatus {
   exitCode: number | null;
   finishedAt: string;
@@ -583,7 +586,7 @@ export class PersistentExecManager {
     return await this.backend(entry).readFinishedWorkingDirectory(entry) || entry.initialCwd;
   }
 
-  private async readLogExcerpt(filePath: string, maxChars: number, files: FileOperations): Promise<LogExcerpt> {
+  private async readLogExcerpt(filePath: string, maxChars: number, files: ExecOutputFiles): Promise<LogExcerpt> {
     const stat = await files.stat(filePath);
     if (stat.size <= 0) {
       return {
@@ -654,9 +657,9 @@ export class PersistentExecManager {
     };
   }
 
-  private async readPartialLog(entry: RunningExecEntry): Promise<LogExcerpt> {
+  private async readPartialLog(entry: RunningExecEntry, files?: ExecOutputFiles): Promise<LogExcerpt> {
     try {
-      const excerpt = await this.readLogExcerpt(entry.logPath, PARTIAL_LOG_BYTES, this.backend(entry).files);
+      const excerpt = await this.readLogExcerpt(entry.logPath, PARTIAL_LOG_BYTES, files || this.backend(entry).files);
       if (excerpt.capturedOutputWasEmpty) {
         return { ...excerpt, text: '(Command started, no output yet)', truncated: false };
       }
@@ -677,9 +680,9 @@ export class PersistentExecManager {
     }
   }
 
-  private async readDisplayOutput(entry: RunningExecEntry): Promise<LogExcerpt> {
+  private async readDisplayOutput(entry: RunningExecEntry, files?: ExecOutputFiles): Promise<LogExcerpt> {
     try {
-      const excerpt = await this.readLogExcerpt(entry.logPath, INLINE_LOG_LIMIT_BYTES, this.backend(entry).files);
+      const excerpt = await this.readLogExcerpt(entry.logPath, INLINE_LOG_LIMIT_BYTES, files || this.backend(entry).files);
       if (excerpt.capturedOutputWasEmpty) return { ...excerpt, text: '(No output)', truncated: false };
       if (!excerpt.truncated && estimateTokenCount(excerpt.text) <= 10000) return excerpt;
       if (excerpt.truncated) return excerpt;
@@ -796,15 +799,16 @@ export class PersistentExecManager {
   }
 
   /** Read only the retained byte snapshot; display footers are never treated as capture data. */
-  async buildProgrammaticExecResult(entry: RunningExecEntry, status: ExecStatus | null, output: string): Promise<ProgrammaticExecResult> {
+  async buildProgrammaticExecResult(entry: RunningExecEntry, status: ExecStatus | null, output: string, files?: ExecOutputFiles): Promise<ProgrammaticExecResult> {
     const metadata = {
       output, status: status ? 'completed' as const : 'running' as const,
       ...(status ? { exitCode: status.exitCode } : {}), execId: entry.id, logPath: entry.logPath,
     };
     try {
-      const stat = await this.backend(entry).files.stat(entry.logPath);
+      files ||= this.backend(entry).files;
+      const stat = await files.stat(entry.logPath);
       if (stat.size > MAX_FULL_LOG_READ_BYTES) return { ...metadata, truncated: true, sizeBytes: stat.size };
-      const bytes = await this.backend(entry).files.read(entry.logPath, 0, stat.size);
+      const bytes = await files.read(entry.logPath, 0, stat.size);
       if (bytes.length !== stat.size) return { ...metadata, truncated: true, sizeBytes: stat.size };
       return { ...metadata, content: bytes.toString('utf8'), truncated: false, sizeBytes: bytes.length };
     } catch (error: any) {
@@ -813,14 +817,14 @@ export class PersistentExecManager {
     }
   }
 
-  async buildForegroundExecResult(entry: RunningExecEntry, status: ExecStatus, warning?: string): Promise<string> {
-    const output = await this.readDisplayOutput(entry);
+  async buildForegroundExecResult(entry: RunningExecEntry, status: ExecStatus, warning?: string, files?: ExecOutputFiles): Promise<string> {
+    const output = await this.readDisplayOutput(entry, files);
     const footerSeparator = output.text.endsWith('\n') ? '' : '\n';
     return `${output.text}${footerSeparator}${this.buildForegroundFooter(entry, status, output, warning)}`;
   }
 
-  async buildBackgroundTimeoutResult(entry: RunningExecEntry, timeoutSeconds: number = DEFAULT_EXEC_TIMEOUT_SECONDS, warning?: string, waitEndedBy?: string): Promise<string> {
-    const partialOutput = await this.readPartialLog(entry);
+  async buildBackgroundTimeoutResult(entry: RunningExecEntry, timeoutSeconds: number = DEFAULT_EXEC_TIMEOUT_SECONDS, warning?: string, waitEndedBy?: string, files?: ExecOutputFiles): Promise<string> {
+    const partialOutput = await this.readPartialLog(entry, files);
     const fullNotice = waitEndedBy
       ? `${waitEndedBy} ended this call's wait. The command was already started and was not killed; it may still be running in the background. Completion will be reported separately.`
       : buildBackgroundTimeoutFullNotice(timeoutSeconds);

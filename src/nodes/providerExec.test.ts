@@ -302,3 +302,110 @@ test('normal Main callTool and batch cwd replay preserve exact provider paths wi
     await sessionManager.deleteSession(sessionId).catch(() => false);
   }
 }));
+
+
+test('canonical provider receipts bound slow output observations at Stop/deadline without poisoning recovery or replaying start', async () => {
+  for (const scenario of [
+    { mode: 'slow-log-stat', stop: true, programmatic: true, restart: true },
+    { mode: 'slow-log-stat', stop: true, programmatic: false, restart: false },
+    { mode: 'slow-log-stat', stop: false, programmatic: true, restart: false },
+    { mode: 'slow-log-read', stop: true, programmatic: true, restart: false },
+    { mode: 'ignore-output-cancellation', stop: false, programmatic: true, restart: false },
+  ]) await temporary(async root => {
+    const delivered: string[] = [];
+    const { provider, registry, runtime } = fixture(root, scenario.mode, 1800, delivered);
+    if (scenario.mode === 'ignore-output-cancellation') {
+      const invoke = provider.invokeFilesystem.bind(provider);
+      provider.invokeFilesystem = (request, options) => request.operation === 'stat' && /\/output$/.test(request.path)
+        ? new Promise(() => {}) : invoke(request, options);
+    }
+    const sourceId = `provider-output-${scenario.mode}-${scenario.stop}-${scenario.programmatic}-${Date.now()}`;
+    const session = await sessionManager.getSession(sourceId);
+    session.currentNode = 'process-fixture';
+    await sessionManager.saveSession(sourceId);
+    const services = new RpcServiceRegistry();
+    services.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ providerRegistry: registry }));
+    await nodeExecution.initializeNodeExecution({ transport: new LocalRpcTransport(services) });
+    const controller = new AbortController();
+    const completed = scenario.mode === 'slow-log-read' || scenario.mode === 'ignore-output-cancellation';
+    const command = completed ? 'printf finished; exit 7' : 'printf before; sleep 2; printf after';
+    let recovered: ReturnType<typeof fixture> | undefined;
+    try {
+      const startedAt = Date.now();
+      const pending = callTool('exec', { command, timeout: 1 }, {
+        sessionId: sourceId, session, signal: controller.signal, ...(scenario.programmatic ? { programmatic: true as const } : {}),
+      });
+      let stoppedAt: number | undefined;
+      if (scenario.stop) {
+        const readyDeadline = Date.now() + 2000;
+        while (completed
+          ? !(await calls(root).catch((): any[] => [])).some(call => call.operation === 'filesystem' && call.request.operation === 'read')
+          : !await fs.pathExists(path.join(root, 'start-ready'))) {
+          if (Date.now() >= readyDeadline) throw new Error('Output fixture did not reach its controlled observation point.');
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        stoppedAt = Date.now();
+        controller.abort();
+      }
+      const result: any = await pending;
+      assert.ok(stoppedAt === undefined ? Date.now() - startedAt < 2000 : Date.now() - stoppedAt < 800, JSON.stringify(scenario));
+      assert.match(result.output, /output unavailable/);
+      if (scenario.programmatic) {
+        assert.equal(result.status, completed ? 'completed' : 'running');
+        assert.equal(result.content, undefined);
+        assert.equal(result.truncated, true);
+        if (completed) assert.equal(result.exitCode, 7, 'cancelling output observation does not discard an actual completed exit');
+      }
+      const recorded = await calls(root);
+      const outputCalls = recorded.filter(call => call.operation === 'filesystem');
+      if (!completed && scenario.stop) assert.deepEqual(outputCalls, [], 'Stop does not start another log request');
+      if (!completed && !scenario.stop) assert.equal(outputCalls.length, 1, 'the bounded timeout snapshot does not start a second observation after cancellation');
+      if (scenario.mode === 'slow-log-read') {
+        assert.deepEqual(outputCalls.map(call => call.request.operation), ['stat', 'read'], 'the programmatic result does not start a second observation after cancellation');
+      }
+      if (completed) {
+        assert.deepEqual(runtime.listRunningExecs(), []);
+      } else {
+        const entry = runtime.listRunningExecs()[0];
+        assert.ok(entry?.notifyOnCompletion, 'background tracking survives the returned receipt');
+        await fs.writeFile(path.join(root, 'allow-logs'), '1');
+        let owner = runtime;
+        if (scenario.restart) {
+          await runtime.shutdown();
+          recovered = fixture(root, scenario.mode, 1800, delivered);
+          owner = recovered.runtime;
+          await owner.initialize();
+        }
+        const status = await owner.waitForExecCompletion(entry.id, 5000);
+        assert.equal(status?.exitCode, 0, 'Stop/deadline never kills the command');
+        const raw = await owner.buildProgrammaticExecResult(entry, status, 'retained result');
+        assert.equal(raw.content, 'beforeafter', 'fresh/default observations do not retain the cancelled foreground signal');
+        await owner.reconcileNow();
+        assert.equal(delivered.length, 1);
+        assert.ok(delivered[0].startsWith(`${sourceId}:0:`));
+      }
+      assert.equal((await calls(root)).filter(call => call.operation === 'exec-start').length, 1);
+    } finally {
+      controller.abort();
+      await nodeExecution.shutdownNodeExecution();
+      nodeExecution.resetNodeExecutionForTests();
+      await recovered?.runtime.shutdown();
+      await runtime.shutdown();
+      await sessionManager.deleteSession(sourceId).catch(() => false);
+    }
+  });
+});
+
+
+test('a normal provider wait timeout retains quickly available partial output within its bounded observation window', async () => temporary(async root => {
+  const { registry, runtime } = fixture(root);
+  try {
+    const result: any = await registry.invokeTool(request('printf before; sleep 1.8; printf after', { timeout: 1 }));
+    assert.equal(result.status, 'running');
+    assert.match(result.output, /before/);
+    assert.equal(result.content, 'before');
+    assert.equal(result.truncated, false);
+    assert.equal((await runtime.waitForExecCompletion(result.execId, 5000))?.exitCode, 0);
+    await runtime.reconcileNow();
+  } finally { await runtime.shutdown(); }
+}));
