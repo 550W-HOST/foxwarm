@@ -147,9 +147,9 @@ internal sealed class McpInboundNodes(NodeConnectionHub nodes, McpExternalAuthor
         await authorization.RequireAsync(context, permission, token);
         if (action == "status")
         {
-            var result = new JsonObject { ["currentNode"] = selection.Node, ["available"] = nodes.SupportsExternal(selection.Node) };
-            if (selection.Cwd is not null) result["cwd"] = selection.Cwd;
-            return result;
+            var status = new JsonObject { ["currentNode"] = selection.Node, ["available"] = nodes.SupportsExternal(selection.Node) };
+            if (selection.Cwd is not null) status["cwd"] = selection.Cwd;
+            return status;
         }
         if (action == "list")
         {
