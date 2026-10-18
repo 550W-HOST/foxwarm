@@ -1,6 +1,6 @@
 # Unit: Archive message store and read queries
 
-Files: `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveMessageStore.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveQueries.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveWriter.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveVector.cs`
+Files: `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveMessageStore.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveQueries.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveWriter.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveVector.cs`, `dotnet/Foxwarm/Sessions/Storage/LegacyArchiveRecords.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveLegacyImport.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveLegacyImport.Sql.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveExport.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteOnlyArchivesMigration.cs`
 
 ## Purpose
 
@@ -26,6 +26,16 @@ The Main data-root owner pins one Archive writer and long-lived non-pooled conne
 
 Immutable message/block/branch writes are exact-current-identity only; historical aliases can read committed rows but cannot redirect those writes. Derived checkpoints retain the reference implementation's exact-key progress semantics and are not identity proof. The schema preserves the source-compatible `archive_messages` columns/primary key and rejects unsupported extra indexes or foreign keys. Archive rows are immutable audit/context records even when active JSON history is cleared or compacted.
 
+## Legacy migration and JSONL export
+
+`SqliteOnlyArchivesMigration.RunAsync` is the fixed Source `sqlite-only-large-archives-v1` owner shared by public model/archive operations and Main's bootstrap, before identity/Session recovery or Vector opening. It takes the existing per-data-root migration lock. A completed `state/migrationVersion.json` entry requires both SQLite databases and matching authority markers, without creating empty replacements. An incomplete/missing version restores interrupted moves using the existing verified backup manifest, imports Session archives, verifies/imports the journal without moving it independently, marks both databases, writes the joint manifest, moves verified physical sources and finally publishes the completed version. Independent SQLite import commits can survive failure; they are not a cross-database transaction. Already-moved timestamped backups from the earlier C# journal importer remain untouched.
+
+`LegacyArchiveRecords` validates the actual Source migration message/block shapes independently of stricter active Session constructors. LF/CRLF framing preserves Unicode line separators. The narrow append-after-torn-string recovery requires one complete matching Session/sequence suffix; divergent recoveries fail. The original physical file is backed up unchanged. Recovery markers and manifest audit fields retain Source identities and retry semantics.
+
+`ImportLegacyAsync` runs on the existing Archive writer. It validates all candidate logs before creating branches/aliases/imported rows; candidates come from persisted Session metadata/backups (or existing C# catalog), supported history metadata recovery and regular legacy log files. Existing identity owners merge ledger/mirror evidence and persisted aliases, reject conflicts/cycles, and preserve uncertain historical payload lifetimes rather than inventing moves. Copied fork prefixes determine branch caps/checkpoint baselines. Source import-state size/mtime checks and bounded transactions remain; preexisting SQLite rows win, while new conflicting duplicates fail full-file verification. Successful import verifies branch topology, record counts/content, file identity and database integrity before backup publication. No Session lifetime is loaded by the standalone CLI.
+
+`ExportJsonlAsync` exports one independent SQLite read snapshot into a temporary Session tree, replaces the prior output tree, and returns nonempty file/record counts. It exports local message/block rows under exact Session IDs, not expanded inherited copies. Path escapes/filesystem-root targets fail. The journal exports its own consistent snapshot and record count. These compatibility JSONL files are readable by the real Source importers; ordinary runtime writes remain SQLite-only.
+
 ## Tests
 
-`dotnet/Foxwarm.Tests/Storage/PersistencePrimitiveTests.cs`; `ArchiveLineageTests.cs`; `CommittedArchiveBoundaryTests.cs`; `dotnet/Foxwarm.Tests/Sessions/SessionCatalogPublicationTests.cs`.
+`dotnet/Foxwarm.Tests/Storage/CliArchiveMigrationTests.cs` and `dotnet/cli-archive-fixture-ts.mjs` exercise real Source-produced legacy forks/journal, public archive stdout/files/counts, Source reimport/reconstruction, structural failure, preexisting authority, duplicate conflict/retry, interrupted joint moves, torn recovery, prior journal backups and ordinary console startup. `dotnet/Foxwarm.Tests/Storage/PersistencePrimitiveTests.cs`; `ArchiveLineageTests.cs`; `CommittedArchiveBoundaryTests.cs`; `dotnet/Foxwarm.Tests/Sessions/SessionCatalogPublicationTests.cs`.

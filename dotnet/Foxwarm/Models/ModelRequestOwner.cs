@@ -258,7 +258,7 @@ internal sealed class ModelRequestOwner(
                 if (journal is not null && journalRequestId is null)
                 {
                     var admission = await journal.EnqueueRequestAsync(
-                        sessionId,
+                        sessionId.Length == 0 ? null : sessionId,
                         journalPurpose,
                         journalIteration,
                         instructions,

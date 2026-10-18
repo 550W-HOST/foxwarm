@@ -1,61 +1,25 @@
-# Unit: model-cli
+# Unit: Public model/archive CLI frontends
 
-Files: scripts/foxwarm.js, scripts/model.js, scripts/model.test.js, scripts/archive.js, scripts/archive.test.js
-Secondary files: package.json, package-lock.json, README.md
+Files: `scripts/foxwarm.js`, `scripts/model.js`, `scripts/model.test.js`, `scripts/archive.js`, `scripts/archive.test.js`
+Secondary/integration references: `package.json`, `package-lock.json`, `README.md`, [Core delivery and one-shot backend](./core-delivery-cli.md).
 
-## Purpose
+## Purpose and exports
 
-Provides the installable `foxwarm` command, its `model` subcommand for one-shot LLM requests, and its `archive export-jsonl` compatibility exporter. Commands are thin adapters over compiled production modules so provider behavior and SQLite archive semantics do not drift from the server.
+The installable `foxwarm` bin is a thin JavaScript frontend over existing C# configuration/model/journal/Archive owners. It does not load TypeScript backend libraries or run Main. Independent Multica remains a JavaScript client.
 
-## Key Exports
+- `run(argv, streams?)` is the root dispatcher. No arguments/help show usage; version reads the root package version; unknown commands return usage exit 2.
+- `runModelCli(argv, options?)` parses options, handles help without Core/configuration, and forwards parsed metadata plus optional raw prompt stdin through `runCoreCli`. `main` maps usage errors to 2 and operational launch failures to 1.
+- Model `parseArgs` retains strict long/short model/prompt/system/list/json/timeout/help options, list aliases and positive finite seconds-to-milliseconds conversion. Missing values, unknown flags and positional arguments fail before backend launch.
+- Archive `parseArgs` requires `export-jsonl --output/-o DIR` and resolves output from caller cwd. `runArchiveCli` validates first, then forwards one archive operation. `ArchiveCliUsageError` preserves root-dispatch exit 2.
 
-- package `bin.foxwarm` — maps installed package execution to `scripts/foxwarm.js`
-- `run(argv, streams?)` — top-level CLI dispatcher
-- `runModelCli(argv, options?)` — parses one-shot model options, loads production runtime modules, and prints text/JSON output
-- `parseArgs(argv)` — strict model-subcommand option parser
-- `loadProductionRuntime()` — loads `lib/config.js` and `lib/llm.js` after selecting CLI-safe logging
-- `CliUsageError` — distinguishes usage failures (exit 2) from runtime/provider failures (exit 1)
-- `runArchiveCli(argv, options?)` — completes the SQLite migration and exports session plus LLM archives as JSONL
+## Backend and build integration
 
-## Function Index
+`runCoreCli` and `CliCommands` own the child operation, native request behavior, stdout/exit contracts and captured settings; see [the canonical Core CLI contract](./core-delivery-cli.md#cli-behavior). The obsolete production-runtime loaders and in-frontend provider invocation are removed rather than retained as fallbacks. The frontend does not parse flags a second time in C#.
 
-| Function | Lines (approx) | Description |
-|----------|----------------|-------------|
-| `printHelp(stream)` | foxwarm.js ~6 | Writes top-level CLI help |
-| `run(argv, streams)` | foxwarm.js ~20 | Dispatches version/help/model commands without spawning a child |
-| `requireValue(argv, index, option)` | model.js ~10 | Requires a non-option value after a value-taking flag |
-| `parseArgs(argv)` | model.js ~18 | Strictly parses model/prompt/system/list/json/timeout/help options |
-| `printHelp(stream)` | model.js ~65 | Writes model-subcommand help |
-| `loadProductionRuntime()` | model.js ~88 | Resolves compiled config/LLM modules and enables synchronous file logging |
-| `readStdin(stream)` | model.js ~113 | Reads a piped UTF-8 prompt or returns empty for TTY input |
-| `writeModelList(config, stream)` | model.js ~125 | Displays resolved model keys without API keys |
-| `runModelCli(argv, options)` | model.js ~138 | Validates model/prompt, calls `requestLlmOnce`, and emits text or JSON |
-| `main(argv)` | model.js ~182 | Converts thrown usage/runtime errors into CLI exit codes |
-| `runArchiveCli(argv, options)` | archive.js | Exports both SQLite-authoritative archive domains to an explicit output directory |
+Root `npm run build` prepares Core plus the retained TypeScript reference/default-launcher lane. Help/version/flag usage paths remain independent of Core/configuration. Complete build/publish resources and prerequisites are owned by [Core delivery](./core-delivery-cli.md#build-and-resource-boundary); this phase does not switch default service/TUI launchers or package `main`.
 
-## Dependencies
+## Tests and consumers
 
-- Compiled `lib/config.js` — canonical model path/schema/default resolution
-- Compiled `lib/llm.js` — canonical `requestLlmOnce` provider request implementation
-- `src/common.ts` — honors `FOXWARM_SYNC_FILE_LOG=1` so a short-lived CLI can log synchronously and exit cleanly
-- Node built-ins (`crypto`, `fs`, `path`, streams/process)
+`scripts/model.test.js` drives the real public child against a controlled Responses provider, including canonical settings, stdin/system/default/virtual/list behavior, timeout/retry, output/exit distinctions, and tool-free `purpose:cli` journaling without a Session/Main or TypeScript fallback. `scripts/archive.test.js` covers parser/output-path/frontend forwarding; `CliArchiveMigrationTests.cs` exercises actual public export artifacts and real Source compatibility consumers. Multica's existing HTTP/JSONL callers retain their independent tests.
 
-## Behavior
-
-- Requires `npm run build` output before live model requests; help/version parsing does not require the build.
-- Installed or linked packages expose `foxwarm`; source checkouts can call `node scripts/foxwarm.js` directly.
-- Unknown flags, positional arguments, missing option values, invalid timeouts, unknown model keys, absent prompts, and empty model responses fail instead of silently falling back. Omitted `--timeout` leaves the core request timeout unspecified so streaming uses the default first-content/inactivity watchdog while nonstreaming retains its five-minute default. An explicit `--timeout` remains a whole-attempt upper bound in addition to streaming progress deadlines.
-- The selected model is validated using `loadModelsConfig`; requests go through `requestLlmOnce` with no tools and a fresh prompt-cache key.
-- CLI requests use request-journal purpose `cli`; they are reconstructable even though no session history exists.
-- Model listing and request forwarding accept virtual keys without reimplementing their routing; result JSON continues to report the concrete `modelId`. Canonical contract: [model routing](../threads/model-routing.md).
-- The CLI suppresses console logs and selects synchronous file logging before importing the production runtime. This keeps stdout machine-readable and avoids pino worker shutdown hangs.
-- The top-level dispatcher runs the model handler in-process, so child signal codes cannot be converted accidentally into success.
-
-## Tests
-
-`scripts/model.test.js` covers strict parsing, stdin, concrete/virtual model validation and listing, empty responses, top-level dispatch, and a built end-to-end mock HTTP test proving `providerType: openai` uses the production `/responses` route and streaming request format. `scripts/archive.test.js` covers migration-before-export dispatch and output routing.
-
-## Integration
-
-- The standalone code-index generator invokes this command instead of implementing provider/config logic.
-- README model configuration documentation includes build, source-checkout, and installed-bin usage.
+The standalone Code Index generator invokes the public model command rather than maintaining its own provider/configuration implementation.

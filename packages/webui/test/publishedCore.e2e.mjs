@@ -1,0 +1,134 @@
+// Runs only against an explicitly prepared, caller-owned Core publish directory.
+import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
+import { createServer as socketServer } from 'node:net'
+import { spawn, execFileSync } from 'node:child_process'
+import { once } from 'node:events'
+import { mkdtemp, mkdir, readFile, writeFile, readdir, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import puppeteer from 'puppeteer-core'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
+import { until } from './experimentHostFixture.mjs'
+
+const payload = process.env.FOXWARM_PUBLISHED_CORE
+assert(payload, 'Set FOXWARM_PUBLISHED_CORE to an owned complete Core publish directory.')
+const root = await mkdtemp(join(tmpdir(), 'foxwarm-published-'))
+const data = join(root, 'selected data'), cwd = join(root, 'unrelated cwd')
+await mkdir(join(data, 'state'), { recursive: true }); await mkdir(cwd)
+const listener = socketServer(); listener.listen(0, '127.0.0.1'); await once(listener, 'listening')
+const port = listener.address().port; await new Promise(done => listener.close(done))
+const origin = `http://127.0.0.1:${port}`
+// The pointer belongs to this owned installation, not the unrelated shell cwd.
+await writeFile(join(payload, 'data_dir'), data)
+await writeFile(join(data, 'state/config.yaml'), `bot:\n  httpPort: ${port}\nvector:\n  enabled: false\n`)
+const env = { ...process.env }
+for (const key of Object.keys(env)) if (key.startsWith('FOXWARM_') || ['CONFIG_PATH', 'MCP_CONFIG_PATH', 'ASPNETCORE_URLS'].includes(key)) delete env[key]
+env.FOXWARM_BIND_ADDRESS = '127.0.0.1'
+const child = spawn(join(process.env.DOTNET_ROOT, 'dotnet'), [join(payload, 'Foxwarm.dll')], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
+let output = '', browser, token, browserErrors = []
+child.stdout.on('data', bytes => { output += bytes }); child.stderr.on('data', bytes => { output += bytes })
+const requests = []
+const peer = createServer(async (request, response) => {
+  try {
+    let raw = ''; for await (const chunk of request) raw += chunk
+    const body = JSON.parse(raw); requests.push(body)
+    const outputRows = requests.length === 1
+      ? [{ type: 'function_call', call_id: 'packaged-toolscript', name: 'run_script', arguments: JSON.stringify({
+        code: "skill = call_tool('skill', {'action':'load','skillName':'code-index'})\nresource = call_tool('read', {'filePath': args['resource']})\ncall_tool('write', {'filePath':'packaged-native-effect.txt','content':'native packaged worker'})\nreturn {'skill':skill,'resource':resource,'answer':6*7}\n",
+        args: { resource: join(payload, 'skills/code-index/INITIALIZATION.md') },
+      }) }]
+      : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'PACKAGED-NATIVE-DONE' }] }]
+    response.writeHead(200, { 'content-type': 'text/event-stream' })
+    response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { id: 'published-' + requests.length, output: outputRows, usage: { input_tokens: 20, output_tokens: 4 } } }) + '\n\n')
+  } catch (error) { browserErrors.push(error.stack); response.destroy() }
+})
+peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
+async function api(method, route, body) {
+  const response = await fetch(origin + route, { method, headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+  return { status: response.status, body: await response.json().catch(() => ({})) }
+}
+try {
+  await until(() => { assert.equal(child.exitCode, null, output); return output.includes('Main HTTP listening: ' + origin) }, 'published Core listening')
+  token = (await readFile(join(data, 'state/token'), 'utf8')).trim()
+  assert.equal((await api('GET', '/health')).body.status, 'ready')
+  assert.deepEqual((await api('GET', '/api/sessions')).body.sessions, [])
+  assert.equal(requests.length, 0)
+  browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'], userDataDir: join(root, 'browser') })
+  const page = await browser.newPage(); page.on('pageerror', error => browserErrors.push(error.message))
+  await page.goto(origin, { waitUntil: 'networkidle0' })
+  await page.waitForSelector('input[type="password"]'); await page.type('input[type="password"]', token); await page.click('button[type="submit"]')
+  await page.waitForSelector('.foxwarm-chat-root'); await waitForWebUiReady(page)
+  assert.equal((await api('GET', '/api/setup/status')).body.oobe, true)
+  assert.deepEqual((await api('GET', '/api/sessions')).body.sessions, [])
+  assert.equal(requests.length, 0)
+  assert((await readFile(join(data, 'agents/00_SYSTEM.md'), 'utf8')).length > 0)
+  assert((await readdir(join(data, 'agents/main/memory'))).length > 0)
+  const version = JSON.parse(await readFile(join(payload, 'package.json'), 'utf8')).version
+  assert.equal(execFileSync(process.execPath, [join(payload, 'scripts/foxwarm.js'), '--version'], { cwd, env, encoding: 'utf8' }).trim(), version)
+  assert.equal(execFileSync(join(process.env.DOTNET_ROOT, 'dotnet'), [join(payload, 'Foxwarm.dll'), '--version'], { cwd, env, encoding: 'utf8' }).trim(), version)
+  const exported = join(root, 'cli-export')
+  const cli = JSON.parse(execFileSync(process.execPath, [join(payload, 'scripts/foxwarm.js'), 'archive', 'export-jsonl', '-o', exported], { cwd, env, encoding: 'utf8' }))
+  assert.equal(cli.sessions.records, 0); assert.equal(cli.llm.records, 0)
+  const archiveResponse = await fetch(origin + '/node/source.tar.gz')
+  assert.equal(archiveResponse.status, 200)
+  const archive = join(root, 'node.tar.gz'), extracted = join(root, 'node-source')
+  await writeFile(archive, Buffer.from(await archiveResponse.arrayBuffer())); await mkdir(extracted)
+  execFileSync('tar', ['-xzf', archive, '-C', extracted])
+  const nodeHelp = execFileSync(process.execPath, [join(extracted, 'packages/cli-node/dist/tui.bundle.js'), '--help'], { cwd, encoding: 'utf8' })
+  assert.match(nodeHelp, /Foxwarm cli-node/)
+  const runtime = JSON.parse(await readFile(join(extracted, 'packages/cli-node-runtime/package.json'), 'utf8'))
+  assert.equal(runtime.dependencies['node-pty'], '1.1.0')
+  assert((await readFile(join(extracted, 'packages/shared/src/codeHelperIpc.ts'), 'utf8')).length > 0)
+  for (const name of ['run.sh', 'run-interactive.sh', 'run.ps1']) assert.equal((await fetch(origin + '/node/' + name)).status, 200)
+  for (const name of ['foxwarm-fs', 'foxwarm-scm', 'foxwarm-webui', 'foxwarm-terminal']) {
+    const base = `/vscode-web/extensions/${name}/`
+    assert.equal((await api('GET', base + 'package.json')).body.browser, './dist/extension.js')
+    const bundle = await fetch(origin + base + 'dist/extension.js', { headers: { authorization: 'Bearer ' + token } })
+    assert.equal(bundle.status, 200); assert((await bundle.text()).length > 0)
+  }
+  const models = JSON.stringify({ default: 'fixture', providers: { fixture: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${peer.address().port}`, models: ['wire'], asyncCompact: false } } }, null, 2) + '\n'
+  await page.evaluate(() => { location.hash = 'setup' })
+  await page.waitForSelector('#setup-tab-models'); await page.click('#setup-tab-models')
+  const editor = '[aria-label="Models YAML editor"] [role="textbox"]'
+  await page.waitForSelector(editor)
+  await page.evaluate(async value => {
+    const moduleUrl = performance.getEntriesByType('resource').map(entry => entry.name)
+      .find(name => /(?:\/|^)(?:monaco-editor|editor\.main)(?:-[^/]+)?\.js(?:\?|$)/.test(new URL(name).pathname))
+    const imported = await import(moduleUrl), monaco = imported.a ?? imported.default ?? imported
+    const editor = monaco.editor.getEditors().find(candidate => candidate.getModel()?.uri.toString() === 'inmemory://foxwarm/setup/foxwarm-models.yaml')
+    if (!editor) throw Error('Original Models editor is missing')
+    editor.getModel().setValue(value)
+  }, models)
+  const saved = page.waitForResponse(response => response.url().endsWith('/api/setup/models') && response.request().method() === 'POST')
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent === 'Save models')?.click())
+  const saveResponse = await saved
+  assert.equal(saveResponse.status(), 200, await saveResponse.text())
+  await until(async () => (await readFile(join(data, 'state/models.yaml'), 'utf8').catch(() => '')).replaceAll('\r\n', '\n') === models, 'original setup saves model configuration')
+  assert.equal((await api('GET', '/api/setup/status')).body.oobe, false)
+  assert.equal(requests.length, 0)
+  const created = await api('POST', '/api/sessions', {})
+  assert.equal(created.status, 200)
+  const id = created.body.sessionId
+  assert(id, JSON.stringify(created))
+  assert.equal((await api('POST', '/api/sessions/' + encodeURIComponent(id) + '/message', { text: 'Run the owned delivery qualification.' })).status, 202)
+  await until(async () => JSON.stringify((await api('GET', '/api/sessions/' + encodeURIComponent(id) + '/history')).body).includes('PACKAGED-NATIVE-DONE'), 'ordinary packaged native ToolScript')
+  assert.equal(requests.length, 2)
+  const effects = JSON.stringify(requests[1].input)
+  assert.match(effects, /completed/); assert.match(effects, /42/); assert.match(effects, /Source: global/); assert.match(effects, /INITIALIZATION.md/)
+  assert.equal(await readFile(join(data, 'agents/main/packaged-native-effect.txt'), 'utf8'), 'native packaged worker')
+  assert(!(await readdir(join(data, 'state'))).includes('db'), 'Disabled Vector stays lazy')
+  assert(!/lance[^\n]*\.so/i.test(await readFile(`/proc/${child.pid}/maps`, 'utf8')), 'Disabled Vector does not load its native library')
+  assert.deepEqual(browserErrors, [])
+  const exited = once(child, 'exit')
+  assert.equal((await api('POST', '/admin/shutdown')).status, 202)
+  const [code, signal] = await exited
+  assert.deepEqual({ code, signal }, { code: 0, signal: null }, output)
+  console.log(JSON.stringify({ published: true, browserLogin: true, noModelSetup: true, implicitSessions: 0, nodeArchive: true, extensionBundles: 4, nativeToolScript: true, globalSkillResource: true, vectorDisabledLazy: true, requests: requests.length }))
+} finally {
+  await browser?.close().catch(() => {})
+  if (child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL'); await once(child, 'exit').catch(() => {}) }
+  peer.closeAllConnections(); await new Promise(done => peer.close(done))
+  await rm(join(payload, 'data_dir'), { force: true })
+  await rm(root, { recursive: true, force: true })
+}

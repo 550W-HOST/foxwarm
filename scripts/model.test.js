@@ -9,208 +9,154 @@ const http = require('node:http');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-
 const { CliUsageError, parseArgs, runModelCli } = require('./model.js');
 const { run } = require('./foxwarm.js');
 
-function captureStream() {
+function capture() {
   let value = '';
-  const stream = new Writable({
-    write(chunk, _encoding, callback) {
-      value += chunk.toString();
-      callback();
-    },
+  return { stream: new Writable({ write(chunk, _encoding, callback) { value += chunk; callback(); } }), value: () => value };
+}
+
+function invoke(args, env, input = '') {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(__dirname, 'foxwarm.js'), ...args], {
+      env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', code => resolve({ code, stdout, stderr }));
+    child.stdin.on('error', error => { if (error.code !== 'EPIPE') reject(error); });
+    child.stdin.end(input);
   });
-  return { stream, value: () => value };
 }
 
-function runtime(overrides = {}) {
-  return {
-    loadModelsConfig: () => ({
-      default: 'provider/model',
-      displayModels: ['provider/model'],
-      models: {
-        'provider/model': {
-          providerType: 'openai',
-          model: 'model',
-          baseUrl: 'https://example.invalid/v1',
-        },
-      },
-    }),
-    requestLlmOnce: async options => ({ text: 'ok', modelId: options.model, usage: null }),
-    ...overrides,
-  };
+function completed(response, text) {
+  response.writeHead(200, { 'content-type': 'text/event-stream' });
+  for (const event of [
+    { type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', content: [] } },
+    { type: 'response.content_part.added', output_index: 0, content_index: 0, part: { type: 'output_text', text: '' } },
+    { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: text },
+    { type: 'response.output_text.done', output_index: 0, content_index: 0, text },
+    { type: 'response.completed', response: { id: 'resp_cli', output: [], usage: { input_tokens: 3, output_tokens: 2 } } },
+  ]) response.write(`data: ${JSON.stringify(event)}\n\n`);
+  response.end('data: [DONE]\n\n');
 }
 
-test('parseArgs rejects unknown options, missing values, and invalid timeouts', () => {
+test('public parser retains aliases, positive timeout and usage errors', () => {
   assert.equal(parseArgs([]).timeoutMs, undefined);
-  assert.throws(() => parseArgs(['--wat']), error => error instanceof CliUsageError && /Unknown/.test(error.message));
-  assert.throws(() => parseArgs(['--model']), error => error instanceof CliUsageError && /requires a value/.test(error.message));
-  assert.throws(() => parseArgs(['--timeout', 'NaN']), error => error instanceof CliUsageError && /positive number/.test(error.message));
-  assert.throws(() => parseArgs(['--timeout', '-1']), error => error instanceof CliUsageError && /requires a value/.test(error.message));
+  assert.deepEqual(parseArgs(['-m', 'x', '-p', 'hello', '-s', 'system', '-t', '.125', '-j', '--list-models']),
+    { model: 'x', prompt: 'hello', system: 'system', timeoutMs: 125, json: true, list: true, help: false });
+  for (const args of [['--wat'], ['--model'], ['--timeout', 'NaN'], ['--timeout', '-1']])
+    assert.throws(() => parseArgs(args), error => error instanceof CliUsageError);
 });
 
-test('model CLI forwards the prompt and options to the production request API contract', async () => {
-  const output = captureStream();
-  let captured;
-  const exitCode = await runModelCli(
-    ['--model', 'provider/model', '--system', 'system', '--timeout', '7', '--prompt', 'hello', '--json'],
-    {
-      stdout: output.stream,
-      runtimeLoader: () => runtime({
-        requestLlmOnce: async options => {
-          captured = options;
-          return { text: 'answer', modelId: 'provider/model', usage: { inputTokens: 1, outputTokens: 2 } };
-        },
-      }),
-    },
-  );
-
-  assert.equal(exitCode, 0);
-  assert.equal(captured.model, 'provider/model');
-  assert.equal(captured.systemPrompt, 'system');
-  assert.equal(captured.timeoutMs, 7000);
-  assert.deepEqual(captured.contents, [{ role: 'user', parts: [{ text: 'hello' }] }]);
-  assert.deepEqual(captured.toolDefinitions, []);
-  assert.equal(captured.purpose, 'cli');
-  assert.equal(JSON.parse(output.value()).text, 'answer');
-});
-
-test('model CLI reads stdin and rejects unknown model keys and empty responses', async () => {
+test('frontend forwards parsed options and stdin without a second parser or backend library', async () => {
   const stdin = new PassThrough();
-  stdin.end('from stdin');
-  const output = captureStream();
-  assert.equal(await runModelCli([], { stdin, stdout: output.stream, runtimeLoader: () => runtime() }), 0);
-  assert.equal(output.value(), 'ok\n');
-
-  await assert.rejects(
-    () => runModelCli(['--model', 'missing', '--prompt', 'x'], { runtimeLoader: () => runtime() }),
-    error => error instanceof CliUsageError && /Unknown model key/.test(error.message),
-  );
-  await assert.rejects(
-    () => runModelCli(['--prompt', 'x'], {
-      runtimeLoader: () => runtime({ requestLlmOnce: async () => ({ text: '' }) }),
-    }),
-    /empty text response/,
-  );
-});
-
-test('model CLI leaves timeout unspecified unless the user supplies an explicit bound', async () => {
-  let captured;
-  await runModelCli(['--prompt', 'hello'], {
-    runtimeLoader: () => runtime({
-      requestLlmOnce: async options => {
-        captured = options;
-        return { text: 'ok', modelId: 'provider/model', usage: null };
-      },
-    }),
+  stdin.end('raw stdin');
+  let received;
+  const code = await runModelCli(['-m', 'chosen', '-s', 'system', '-t', '7', '-j'], {
+    stdin, backend: async (operation, input, options) => { received = { operation, input, stdin: options.stdin }; return 1; },
   });
-  assert.equal(Object.prototype.hasOwnProperty.call(captured, 'timeoutMs'), false);
+  assert.equal(code, 1);
+  assert.equal(received.operation, 'model');
+  assert.equal(received.input.model, 'chosen');
+  assert.equal(received.input.system, 'system');
+  assert.equal(received.input.timeoutMs, 7000);
+  assert.equal(received.stdin, stdin);
 });
 
-test('model CLI lists and forwards virtual model keys through the production request contract', async () => {
-  const virtualRuntime = runtime({
-    loadModelsConfig: () => ({
-      default: 'sticky',
-      displayModels: ['sticky', 'provider/model'],
-      models: {
-        sticky: {
-          providerKey: 'sticky',
-          providerType: 'session-hash',
-          model: '',
-          virtualRouting: {
-            strategy: 'session-hash',
-            targets: ['provider/model'],
-          },
-        },
-        'provider/model': {
-          providerKey: 'provider',
-          providerType: 'openai',
-          model: 'model',
-          baseUrl: 'https://example.invalid/v1',
-        },
-      },
-    }),
-  });
-  const listOutput = captureStream();
-  assert.equal(await runModelCli(['--list'], { stdout: listOutput.stream, runtimeLoader: () => virtualRuntime }), 0);
-  assert.match(listOutput.value(), /sticky \(default\)/);
-  assert.match(listOutput.value(), /provider: session-hash/);
-
-  let selectedModel;
-  const requestOutput = captureStream();
-  assert.equal(await runModelCli(['--model', 'sticky', '--prompt', 'hello'], {
-    stdout: requestOutput.stream,
-    runtimeLoader: () => ({
-      ...virtualRuntime,
-      requestLlmOnce: async options => {
-        selectedModel = options.model;
-        return { text: 'virtual ok', modelId: 'provider/model' };
-      },
-    }),
-  }), 0);
-  assert.equal(selectedModel, 'sticky');
-  assert.equal(requestOutput.value(), 'virtual ok\n');
+test('help/version/no-argument and usage paths do not load Core or configuration', async () => {
+  const stdout = capture(), stderr = capture();
+  assert.equal(await run([], { stdout: stdout.stream }), 0);
+  assert.equal(await run(['--version'], { stdout: stdout.stream }), 0);
+  assert.equal(await run(['model', '--help'], { stdout: stdout.stream, backend: () => { throw Error('backend loaded'); } }), 0);
+  assert.equal(await run(['unknown'], { stderr: stderr.stream }), 2);
+  assert.equal(await run(['archive', 'invalid'], { stderr: stderr.stream, backend: () => { throw Error('backend loaded'); } }), 2);
 });
 
-test('top-level CLI returns nonzero for unknown subcommands without spawning a child', async () => {
-  const stdout = captureStream();
-  const stderr = captureStream();
-  assert.equal(await run(['unknown'], { stdout: stdout.stream, stderr: stderr.stream }), 2);
-  assert.match(stderr.value(), /Unknown subcommand/);
-});
-
-test('built CLI uses production openai routing and Responses request formatting', async t => {
-  const libLlm = path.join(__dirname, '..', 'lib', 'llm.js');
-  if (!fs.existsSync(libLlm)) {
-    t.skip('run npm run build before this integration test');
-    return;
-  }
-
-  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-model-cli-'));
-  fs.mkdirSync(path.join(dataRoot, 'state'), { recursive: true });
-  let requestPath = '';
-  let requestBody = null;
+test('real public model caller uses only Core, captured settings, one-shot requests and clean exits', async t => {
+  const assembly = path.join(__dirname, '../dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll');
+  if (!fs.existsSync(assembly)) { t.skip('requires npm run build'); return; }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-cli-'));
+  const data = path.join(root, 'selected data');
+  fs.mkdirSync(path.join(data, 'state'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'data_dir'), ' selected data \n');
+  fs.writeFileSync(path.join(root, 'app.yaml'), 'llm:\n  maxOutput: 17\n');
+  fs.writeFileSync(path.join(root, 'wrong.yaml'), 'llm:\n  maxOutput: 99\n');
+  const preload = path.join(root, 'no-ts-backend.cjs');
+  fs.writeFileSync(preload, `const Module=require('node:module'); const load=Module._load; Module._load=function(id,...args){ if(typeof id==='string' && id.includes(${JSON.stringify(path.resolve(__dirname, '../lib') + path.sep)})) throw Error('TypeScript backend loaded'); return load.call(this,id,...args); };`);
+  const env = {
+    FOXWARM_APP_ROOT: root, FOXWARM_CONFIG_PATH: 'app.yaml', CONFIG_PATH: 'wrong.yaml',
+    FOXWARM_DATA_DIR: '', FOXWARM_EXPERIMENT_DATA_ROOT: '', FOXWARM_EXPERIMENT_TOOL_ROOT: '',
+    NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require=${preload}`,
+  };
+  const requests = [];
+  let timeoutAttempt = 0;
   const server = http.createServer((request, response) => {
-    requestPath = request.url;
-    let body = '';
-    request.setEncoding('utf8');
-    request.on('data', chunk => { body += chunk; });
+    let raw = '';
+    request.setEncoding('utf8'); request.on('data', chunk => { raw += chunk; });
     request.on('end', () => {
-      requestBody = JSON.parse(body);
-      response.writeHead(200, { 'content-type': 'text/event-stream' });
-      const events = [
-        { type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', content: [] } },
-        { type: 'response.content_part.added', output_index: 0, content_index: 0, part: { type: 'output_text', text: '' } },
-        { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'route-ok' },
-        { type: 'response.output_text.done', output_index: 0, content_index: 0, text: 'route-ok' },
-        { type: 'response.completed', response: { id: 'resp_test', output: [], usage: { input_tokens: 1, output_tokens: 1 } } },
-      ];
-      for (const event of events) response.write(`data: ${JSON.stringify(event)}\n\n`);
-      response.end('data: [DONE]\n\n');
+      const body = JSON.parse(raw);
+      requests.push({ url: request.url, body });
+      const prompt = JSON.stringify(body.input);
+      if (prompt.includes('timeout-probe') && timeoutAttempt++ === 0) return;
+      if (prompt.includes('fatal-probe')) { response.writeHead(400); response.end('{"error":"synthetic invalid request"}'); return; }
+      completed(response, prompt.includes('empty-probe') ? '' : prompt.includes('unicode-response') ? '回覆😀' : 'route-ok');
     });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const port = server.address().port;
-  fs.writeFileSync(path.join(dataRoot, 'state', 'models.yaml'), `default: test/model\nproviders:\n  test:\n    providerType: openai\n    baseUrl: http://127.0.0.1:${port}\n    models: [model]\n`);
+  fs.writeFileSync(path.join(data, 'state/models.yaml'), `default: sticky\nproviders:\n  sticky: test/model\n  test:\n    providerType: openai\n    baseUrl: http://127.0.0.1:${server.address().port}\n    models: [model]\n`);
+  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); fs.rmSync(root, { recursive: true, force: true }); });
 
-  try {
-    const child = spawn(process.execPath, [path.join(__dirname, 'foxwarm.js'), 'model', '--prompt', 'hello', '--timeout', '5'], {
-      env: { ...process.env, FOXWARM_DATA_DIR: dataRoot, FOXWARM_NO_CONSOLE_LOG: '1' },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', chunk => { stdout += chunk; });
-    child.stderr.on('data', chunk => { stderr += chunk; });
-    const exit = await new Promise(resolve => child.on('exit', (code, signal) => resolve({ code, signal })));
-    assert.deepEqual(exit, { code: 0, signal: null }, stderr);
-    assert.equal(stdout.trim(), 'route-ok');
-    assert.equal(requestPath, '/responses');
-    assert.equal(requestBody.stream, true);
-    assert.equal(requestBody.instructions, '');
-  } finally {
-    await new Promise(resolve => server.close(resolve));
-    fs.rmSync(dataRoot, { recursive: true, force: true });
-  }
+  const listed = await invoke(['model', '--list-models'], env);
+  assert.equal(listed.code, 0, listed.stderr);
+  assert.match(listed.stdout, /Default: sticky/);
+  assert.match(listed.stdout, /provider: session-hash/);
+  assert.equal(requests.length, 0);
+  const json = await invoke(['model', '-p', 'hello', '-s', 'only supplied system', '-j'], env);
+  assert.equal(json.code, 0, json.stderr);
+  assert.equal(json.stderr, '');
+  const result = JSON.parse(json.stdout);
+  assert.equal(result.text, 'route-ok');
+  assert.equal(result.modelId, 'test/model');
+  assert.equal(result.usage.outputTokens, 2);
+  assert.equal(requests[0].url, '/responses');
+  assert.equal(requests[0].body.instructions, 'only supplied system');
+  assert.equal(requests[0].body.max_output_tokens, 17);
+  assert.deepEqual(requests[0].body.tools || [], []);
+  assert.equal(JSON.stringify(requests[0].body.input).includes('hello'), true);
+  const piped = await invoke(['model', '-m', 'test/model'], env, 'from stdin 漢字');
+  assert.deepEqual(piped, { code: 0, stdout: 'route-ok\n', stderr: '' });
+  assert.match(JSON.stringify(requests.at(-1).body.input), /from stdin 漢字/);
+  assert.equal(requests.at(-1).body.instructions, '');
+  assert.deepEqual(await invoke(['model', '-p', 'unicode-response'], env), { code: 0, stdout: '回覆😀\n', stderr: '' });
+  assert.equal((await invoke(['model', '-m', 'missing', '-p', 'x'], env)).code, 2);
+  assert.equal((await invoke(['model'], env)).code, 2);
+  const beforeTimeout = requests.length;
+  const timed = await invoke(['model', '-p', 'timeout-probe', '-t', '.1'], env);
+  assert.equal(timed.code, 0, timed.stderr);
+  assert.equal(requests.length, beforeTimeout + 2); // Per-attempt bound, normal owner retry.
+  const empty = await invoke(['model', '-p', 'empty-probe'], env);
+  assert.equal(empty.code, 1);
+  assert.equal(empty.stdout, '');
+  const fatal = await invoke(['model', '-p', 'fatal-probe'], env);
+  assert.equal(fatal.code, 1);
+  assert.equal(fatal.stdout, '');
+  assert.equal(fs.existsSync(path.join(data, 'agents')), false);
+  assert.equal(fs.existsSync(path.join(data, 'state/token')), false);
+  assert.equal(fs.existsSync(path.join(data, 'state/sessions')), false);
+  assert.equal(fs.existsSync(path.join(data, 'state/db')), false);
+  // A real journal export is parseable, tool-free purpose:cli and has no Session identity.
+  const output = path.join(root, 'exported');
+  const exported = await invoke(['archive', 'export-jsonl', '-o', output], env);
+  assert.equal(exported.code, 0, exported.stderr);
+  const summary = JSON.parse(exported.stdout);
+  assert.equal(summary.sessions.records, 0);
+  const records = fs.readFileSync(path.join(output, 'llm-request-journal.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(summary.llm.records, records.length);
+  const manifests = records.filter(row => row.kind === 'request');
+  assert.equal(manifests.length, 6);
+  for (const row of manifests) { assert.equal(row.purpose, 'cli'); assert.equal(row.iteration, 0); assert.equal(row.sessionId, undefined); }
 });

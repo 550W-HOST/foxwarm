@@ -24,6 +24,7 @@ public sealed record ResponsesClientOptions(
     bool DisallowEmptyResponse = false
 )
 {
+    internal double? HardTimeoutMs { get; init; }
     internal string? ProviderPromptCacheKey { get; init; }
     internal Func<JsonNode, Task>? JournalAttemptStart { get; init; }
     internal JsonObject? WebSearch { get; init; }

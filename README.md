@@ -4,6 +4,10 @@ Foxwarm is a self-hosted TypeScript runtime for AI agents. It combines persisten
 
 [Website](https://foxwarm.550w.host/) · [Documentation](https://foxwarm.550w.host/docs/)
 
+## Core build and CLI transition
+
+The public `foxwarm model` and `foxwarm archive export-jsonl` commands use the C# backend. Root `npm run build` therefore also requires the .NET 10 SDK; the existing service/TUI launchers still use the retained TypeScript Main lane pending their separate transition. `npm run build:delivery` and `npm run publish:core` collect the complete shared Core resources. See [Core build, publish and runtime prerequisites](dotnet/README.md#build-publish-and-public-cli), including the qualified Linux x64 / Windows x64 native limits. This does not retire the existing public source-install helpers or switch service launchers.
+
 ## What you can do
 
 - Work with agents in the WebUI, with chat, files, code, and terminals in one place.

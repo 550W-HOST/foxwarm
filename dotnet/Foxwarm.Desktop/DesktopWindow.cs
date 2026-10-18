@@ -71,7 +71,7 @@ internal sealed class DesktopWindow : Form
                 Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_TOOL_ROOT")
                     ?? Path.Combine(Path.GetDirectoryName(data)!, "workspace")
             );
-            var dist = Path.Combine(AppContext.BaseDirectory, "webui");
+            var dist = Path.Combine(AppContext.BaseDirectory, "webui-dist");
             if (
                 !File.Exists(Path.Combine(dist, "index.html"))
                 || !Directory.Exists(Path.Combine(dist, "assets"))

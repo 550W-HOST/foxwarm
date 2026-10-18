@@ -12,7 +12,7 @@ or .NET runtime is bundled.
 2. Install the **Microsoft Edge WebView2 Evergreen Runtime (x64)** if it is not
    already installed. Microsoft Edge alone is not a substitute for this runtime.
 3. Extract the entire ZIP to a folder you can read, then open
-   **Foxwarm.Desktop.exe**. Keep the DLLs, native assets, templates and `webui`
+   **Foxwarm.Desktop.exe**. Keep the DLLs, native assets, templates and `webui-dist`
    directory together. Configure a model/provider in the WebUI's Setup page.
 
 Microsoft downloads:
@@ -82,13 +82,15 @@ The exact official Monty 0.0.19 standalone worker is cached only under `obj`
 and copied with its notices into output; no native binary is tracked. Git is
 an optional external tool for Code SCM, not a bundled dependency.
 
-Build the current WebUI first (`npm ci`, `npm --prefix packages/webui ci`,
-`npm --prefix packages/webui run build`), then use the .NET 10 SDK:
+Prepare the shared delivery assets first (`npm ci`, `npm --prefix packages/webui ci`,
+`npm run build:assets`), then use the .NET 10 SDK:
 
 ```sh
 dotnet publish dotnet/Foxwarm.Desktop -c Release -r win-x64 --self-contained false -p:EnableWindowsTargeting=true -p:DebugType=None -p:DebugSymbols=false -o desktop-publish
 ```
 
-The repository's normal Shared/CLI builds supply the optional Node bootstrap
-assets. A C# build does not build the WebUI. Do not package application state,
+The Core project supplies the same WebUI, public skills, templates, Node bootstrap
+and tracked extension resources to Desktop. Missing required built assets fail
+publish; a backend-only C# build does not build the frontend. Desktop does not
+ship the console Core CLI or its apphost/runtimeconfig. Do not package application state,
 private configuration, `node_modules`, or .NET runtimes in the desktop ZIP.

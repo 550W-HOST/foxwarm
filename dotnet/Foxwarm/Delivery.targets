@@ -1,0 +1,47 @@
+<Project>
+  <!-- Shared Core resources also flow to the optional Desktop project reference.
+       Ordinary compilation never invokes npm; delivery builds prepare these inputs first. -->
+  <ItemGroup>
+    <Content Include="../../templates/**/*" Link="templates/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../skills/**/*" Exclude="../../skills/**/node_modules/**/*;../../skills/**/__pycache__/**/*;../../skills/**/*.pyc" Link="skills/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/webui/dist/**/*" Link="webui-dist/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/webui/public/login.html" Link="packages/webui/login.html" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/shared/**/*" Exclude="../../packages/shared/node_modules/**/*;../../packages/shared/**/*.tsbuildinfo" Link="packages/shared/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/cli-node/**/*" Exclude="../../packages/cli-node/node_modules/**/*;../../packages/cli-node/**/*.tsbuildinfo" Link="packages/cli-node/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/cli-node-runtime/**/*" Exclude="../../packages/cli-node-runtime/node_modules/**/*" Link="packages/cli-node-runtime/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+
+    <Content Include="../../scripts/start-sandbox-node.sh" Link="scripts/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Condition="'$(FoxwarmConsoleEntry)' != 'false'" Include="../../scripts/foxwarm.js;../../scripts/model.js;../../scripts/archive.js;../../scripts/core-cli.js;../../scripts/multicaBridge.js;../../scripts/multicaBridgeHttp.js;../../scripts/multicaBridgeSetup.js" Link="scripts/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Condition="'$(FoxwarmConsoleEntry)' != 'false'" Include="../../package.json" Link="package.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../LICENSE" Link="LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-fs/package.json" Link="packages/vscode-web/foxwarm-fs/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-fs/dist/**/*" Link="packages/vscode-web/foxwarm-fs/dist/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-fs/media/**/*" Link="packages/vscode-web/foxwarm-fs/media/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-scm/package.json" Link="packages/vscode-web/foxwarm-scm/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-scm/dist/**/*" Link="packages/vscode-web/foxwarm-scm/dist/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-scm/media/**/*" Link="packages/vscode-web/foxwarm-scm/media/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-terminal/package.json" Link="packages/vscode-web/foxwarm-terminal/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-terminal/dist/**/*" Link="packages/vscode-web/foxwarm-terminal/dist/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-terminal/media/**/*" Link="packages/vscode-web/foxwarm-terminal/media/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-webui/package.json" Link="packages/vscode-web/foxwarm-webui/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-webui/dist/**/*" Link="packages/vscode-web/foxwarm-webui/dist/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../packages/vscode-web/foxwarm-webui/media/**/*" Link="packages/vscode-web/foxwarm-webui/media/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="CollectSkiaNotices" BeforeTargets="AssignTargetPaths">
+    <ItemGroup>
+      <Content Include="$(PkgSkiaSharp)/LICENSE.txt" Link="SkiaSharp-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+      <Content Include="$(PkgSkiaSharp_NativeAssets_Linux_NoDependencies)/LICENSE.txt" Link="SkiaSharp-native-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="'$(PkgSkiaSharp_NativeAssets_Linux_NoDependencies)' != ''" />
+      <Content Include="$(PkgSkiaSharp_NativeAssets_Linux_NoDependencies)/THIRD-PARTY-NOTICES.txt" Link="SkiaSharp-THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="'$(PkgSkiaSharp_NativeAssets_Linux_NoDependencies)' != ''" />
+      <Content Include="$(PkgSkiaSharp_NativeAssets_Win32)/LICENSE.txt" Link="SkiaSharp-native-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="'$(PkgSkiaSharp_NativeAssets_Win32)' != ''" />
+      <Content Include="$(PkgSkiaSharp_NativeAssets_Win32)/THIRD-PARTY-NOTICES.txt" Link="SkiaSharp-THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="'$(PkgSkiaSharp_NativeAssets_Win32)' != ''" />
+    </ItemGroup>
+  </Target>
+  <Target Name="RequireDeliveryBuildAssets" BeforeTargets="PrepareForBuild" Condition="'$(FoxwarmDelivery)' == 'true'" DependsOnTargets="RequireDeliveryAssets" />
+  <Target Name="RequireDeliveryAssets" BeforeTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <RequiredDeliveryAsset Include="../../packages/webui/dist/index.html;../../packages/cli-node/dist/client.bundle.js;../../packages/cli-node/dist/tui.bundle.js;../../packages/shared/dist/index.js;../../packages/vscode-web/foxwarm-fs/dist/extension.js;../../packages/vscode-web/foxwarm-scm/dist/extension.js;../../packages/vscode-web/foxwarm-terminal/dist/extension.js;../../packages/vscode-web/foxwarm-webui/dist/extension.js" />
+    </ItemGroup>
+    <Error Condition="!Exists('%(RequiredDeliveryAsset.Identity)')" Text="Missing delivery asset %(RequiredDeliveryAsset.Identity). Run npm run build:assets before publishing (or npm run build:delivery for a complete build)." />
+    <Error Condition="!Exists('../../packages/webui/dist/assets')" Text="Missing WebUI assets. Run npm run build:assets before publishing." />
+  </Target>
+</Project>

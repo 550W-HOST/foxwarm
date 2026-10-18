@@ -138,7 +138,7 @@ internal static class SetupProviderRequests
         var endpoint = ResolveListEndpoint(model);
         using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
         request.Headers.Accept.ParseAdd("application/json");
-        request.Headers.UserAgent.ParseAdd("foxwarm/1.0");
+        request.Headers.UserAgent.ParseAdd("foxwarm/" + ProductVersion.Value);
         if (OpenAiProviderTypes.Contains(model.ProviderType))
         {
             if (model.Token.Length > 0)

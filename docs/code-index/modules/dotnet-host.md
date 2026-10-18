@@ -8,6 +8,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 
 ## Units
 
+- [Core delivery resources and public one-shot CLI](../units/core-delivery-cli.md)
 - [Host startup, configuration, and HTTP ingress](../units/host-runtime.md)
 - [Shared access identities and scoped WebUI](../units/dotnet-access-identities.md)
 - [Message routing and presentation commands](../units/message-routing.md)

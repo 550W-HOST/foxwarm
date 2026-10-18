@@ -83,7 +83,7 @@ public sealed class CommittedArchiveBoundaryTests
     }
 
     [Fact]
-    public async Task Fresh_and_noncompleted_predecessor_evidence_does_not_claim_migrated_llm_journal_authority()
+    public async Task Fresh_and_noncompleted_predecessor_evidence_gets_authority_only_after_current_startup_migration()
     {
         foreach (var status in new[] { "absent", "completed_with_failures" })
         {
@@ -113,12 +113,13 @@ public sealed class CommittedArchiveBoundaryTests
                 Options,
                 HostModels.ForTest(Options)
             );
+            Assert.False(await manager.Journal.HasSqliteAuthorityAsync(LlmRequestJournalStore.MigrationId));
             await manager.LoadMainHostAsync();
             await manager.CreateNamedAsync("main", "main", null, null);
             Assert.Equal("main", Assert.Single(manager.Owners()).Id);
-            Assert.False(
-                await manager.Journal.HasSqliteAuthorityAsync(LlmRequestJournalStore.MigrationId)
-            );
+            Assert.True(await manager.Journal.HasSqliteAuthorityAsync(LlmRequestJournalStore.MigrationId));
+            var version = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(data, "state/migrationVersion.json")))!;
+            Assert.Equal("completed", version["migrations"]![LlmRequestJournalStore.MigrationId]!["status"]!.GetValue<string>());
         }
     }
 

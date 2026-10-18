@@ -35,6 +35,14 @@ npm run dev
 npm run build-all
 ```
 
+## Core delivery and retained backend lane
+
+The source service/TUI launchers still run TypeScript Main during this transition, but root `npm run build` now prepares both that lane and .NET Core for the public model/archive commands. Install the .NET 10 SDK in addition to the npm prerequisites above; the helpers do not install it automatically. Linux Core builds also need Python for pinned Monty acquisition and GCC/libutil for the PTY helper. Use `npm run build:reference` for the retained TypeScript-only fixture lane and `npm run test:reference` for its tests. Backend `dotnet test` builds/tests C# without rebuilding a frontend; Source-backed differential tests retain their explicit built `FOXWARM_TS_ROOT` oracle prerequisite.
+
+Use `npm run build:delivery` for a complete Core/WebUI/skills/templates/Node/extension build, or `npm run publish:core -- -r linux-x64 -o /path/to/empty/output` for a framework-dependent Core directory. `npm run build:assets` prepares the independent assets for direct `dotnet publish`. Publishing rejects missing required built inputs; plain backend compilation is not a delivery build. The same resource graph feeds optional Windows Desktop; it does not copy a second WebUI tree. Core's qualified native artifact scope is Linux x64 and Windows x64, not every .NET RID. See [the host build and runtime prerequisites](../dotnet/README.md#build-publish-and-public-cli).
+
+These commands do not switch package `main`, tmux/Windows background management, Main TUI or production Docker. Root `foxwarm` remains a one-shot CLI/help dispatcher; it is not a no-argument Main service launcher.
+
 ## 代码结构
 
 ```text

@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
-const { randomUUID } = require('crypto');
+const { runCoreCli } = require('./core-cli.js');
 
 class CliUsageError extends Error {}
 
@@ -80,109 +78,14 @@ Options:
 `);
 }
 
-function loadProductionRuntime() {
-  const rootDir = path.dirname(__dirname);
-  const configPath = path.join(rootDir, 'lib', 'config.js');
-  const llmPath = path.join(rootDir, 'lib', 'llm.js');
-  const migrationsPath = path.join(rootDir, 'lib', 'migrations', 'index.js');
-  if (!fs.existsSync(configPath) || !fs.existsSync(llmPath) || !fs.existsSync(migrationsPath)) {
-    throw new Error('Foxwarm build output is missing. Run `npm run build` in the Foxwarm checkout first.');
-  }
-
-  // The CLI owns stdout; production logs remain available in Foxwarm's normal log file.
-  if (!process.env.FOXWARM_NO_CONSOLE_LOG) {
-    process.env.FOXWARM_NO_CONSOLE_LOG = '1';
-  }
-  if (!process.env.FOXWARM_SYNC_FILE_LOG) {
-    process.env.FOXWARM_SYNC_FILE_LOG = '1';
-  }
-
-  const { loadModelsConfig } = require(configPath);
-  const { requestLlmOnce } = require(llmPath);
-  const { runSqliteOnlyArchivesMigration } = require(migrationsPath);
-  return { loadModelsConfig, requestLlmOnce, runSqliteOnlyArchivesMigration };
-}
-
-function readStdin(stream) {
-  if (stream.isTTY) return Promise.resolve('');
-  return new Promise((resolve, reject) => {
-    let data = '';
-    stream.setEncoding('utf8');
-    stream.on('data', chunk => { data += chunk; });
-    stream.on('end', () => resolve(data));
-    stream.on('error', reject);
-  });
-}
-
-function writeModelList(config, stream) {
-  stream.write(`Default: ${config.default || '(none)'}\n\nAvailable models:\n`);
-  for (const key of config.displayModels || []) {
-    const entry = config.models[key];
-    const marker = key === config.default ? ' (default)' : '';
-    const modelInfo = entry?.model ? ` -> ${entry.model}` : '';
-    stream.write(`  ${key}${marker}${modelInfo}\n`);
-    if (entry?.providerType) stream.write(`    provider: ${entry.providerType}\n`);
-    if (entry?.baseUrl) stream.write(`    baseUrl:  ${entry.baseUrl}\n`);
-  }
-}
-
 async function runModelCli(argv, options = {}) {
-  const stdin = options.stdin || process.stdin;
-  const stdout = options.stdout || process.stdout;
-  const runtimeLoader = options.runtimeLoader || loadProductionRuntime;
   const args = parseArgs(argv);
-
+  const stdout = options.stdout || process.stdout;
   if (args.help) {
     printHelp(stdout);
     return 0;
   }
-
-  const runtime = runtimeLoader();
-  const modelsConfig = runtime.loadModelsConfig();
-  if (args.list) {
-    writeModelList(modelsConfig, stdout);
-    return 0;
-  }
-
-  if (args.model && !modelsConfig.models[args.model]) {
-    throw new CliUsageError(`Unknown model key: ${args.model}. Use \`foxwarm model --list\` to inspect configured keys.`);
-  }
-
-  const prompt = args.prompt === undefined ? await readStdin(stdin) : args.prompt;
-  if (!prompt || !prompt.trim()) {
-    throw new CliUsageError('No prompt provided. Use --prompt or pipe text through stdin.');
-  }
-
-  await runtime.runSqliteOnlyArchivesMigration?.();
-
-  const result = await runtime.requestLlmOnce({
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    systemPrompt: args.system,
-    model: args.model,
-    promptCacheKey: randomUUID(),
-    iteration: 0,
-    toolDefinitions: [],
-    notifySessionEvents: false,
-    registerAbortController: false,
-    purpose: 'cli',
-    ...(args.timeoutMs !== undefined ? { timeoutMs: args.timeoutMs } : {}),
-  });
-
-  if (!result.text || !result.text.trim()) {
-    throw new Error('Model returned an empty text response.');
-  }
-
-  if (args.json) {
-    stdout.write(`${JSON.stringify({
-      text: result.text,
-      modelId: result.modelId || null,
-      usage: result.usage || null,
-    }, null, 2)}\n`);
-  } else {
-    stdout.write(result.text);
-    if (!result.text.endsWith('\n')) stdout.write('\n');
-  }
-  return 0;
+  return (options.backend || runCoreCli)('model', args, options);
 }
 
 async function main(argv = process.argv.slice(2)) {
@@ -201,10 +104,7 @@ if (require.main === module) {
 
 module.exports = {
   CliUsageError,
-  loadProductionRuntime,
   main,
   parseArgs,
-  readStdin,
   runModelCli,
-  writeModelList,
 };

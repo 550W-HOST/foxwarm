@@ -37,7 +37,7 @@ internal sealed class CompletionsChatService(
                 options,
                 sessionId,
                 progress,
-                "foxwarm/1.0",
+                "foxwarm/" + ProductVersion.Value,
                 (stream, token, callbacks) =>
                     CompletionsSseCollector.CollectAsync(stream, token, callbacks),
                 cancellationToken

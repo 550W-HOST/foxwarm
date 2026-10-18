@@ -10,9 +10,7 @@ if [[ -n "$(find "$output" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
   exit 1
 fi
 cd "$root"
-npm --prefix packages/shared run build
-npm --prefix packages/cli-node run build
-npm --prefix packages/webui run build
+npm run build:assets
 dotnet publish dotnet/Foxwarm.Desktop -c Release -r win-x64 --self-contained false \
   -p:EnableWindowsTargeting=true -p:DebugType=None -p:DebugSymbols=false -o "$output"
 # Symbols and XML API reference files are build/debug artifacts, not runtime assets.

@@ -1,10 +1,26 @@
 # .NET Main host
 
-The root `dotnet/Foxwarm.sln` contains three .NET 10 projects. They remain separate from the repository root launcher/build graph, which has not yet switched from TypeScript Main:
+The root `dotnet/Foxwarm.sln` contains three .NET 10 projects. The root build temporarily prepares both Core and the retained TypeScript lane; the repository service launchers, package `main`, Main TUI and production Docker have not yet switched from TypeScript Main:
 
 - `Foxwarm` is the console host, with an optional HTTP listener (ordinary default `0.0.0.0:3001`). Its `Sessions`, `Models`, `Tools`, `Channels/WebUi`, and `Memory` folders organize the existing Message JSON, Session turns/persistence/compaction, Responses HTTP/WebSocket and Chat Completions client/stream/model selection, and interactive Chat host in one assembly.
 - `Foxwarm.Tests` contains memory, streaming/client, storage and Session contract tests, including current admitted-state and persisted compatibility checks.
 - `Foxwarm.DevTools` runs the original development probes through explicit `conditional-memory`, `responses-request`, `responses-stream`, and `session-restart`, and explicit `catalog-import-dotnet-v1` subcommands. Its corpus JSON and process-restart result shape are unchanged.
+
+## Build, publish and public CLI
+
+With root and WebUI npm dependencies installed, use `npm run build:delivery` for a complete Core build. It builds Shared, CLI Node, the original WebUI and the four tracked Code extensions through their existing package builds, then collects them into Core. `npm run publish:core -- -r linux-x64 -o /path/to/empty/output` performs the same asset preparation and framework-dependent Release publish. The output is a runtime directory, not a source checkout or an npm application-library package. Use a new owned destination rather than overwriting an executing payload.
+
+A direct `dotnet publish dotnet/Foxwarm -c Release -r linux-x64 --self-contained false -o /path/to/empty/output` also collects resources and fails if required built assets are absent; run `npm run build:assets` first. Plain `dotnet build` and backend tests do not invoke npm or rebuild the frontend. They are not complete delivery builds when those assets have not been prepared. Builds require the .NET 10 SDK and restored pinned NuGet packages, Node/npm for assets, Python for exact Monty 0.0.19 acquisition, and GCC/libutil for the Linux PTY helper. A cold native-worker build needs access to the pinned official npm artifact; no toolchain is installed automatically.
+
+Core and optional Desktop consume one resource graph: `webui-dist`, public global skills and their resources, templates, tracked Code extension manifests/bundles/media, Node bootstrap source/package locks/build inputs/bundles, and runtime licenses/notices/native dependencies. Dependency caches, installed Agent/state/token trees and optional operator-provided Code/HEIF installations are not collected. Published Core starts outside the checkout from its installation directory without experiment roots or a separate WebUI copy. Data/configuration still follow the normal settings below. Disabled Vector remains lazy; enabled Vector retains its separately documented native prerequisites.
+
+`node scripts/foxwarm.js` (or the installed `foxwarm` bin) still shows help with no arguments. `foxwarm model` and `foxwarm archive export-jsonl` now launch C# one-shot operations, not TypeScript backend libraries or Main. Model preserves configured list/default/virtual keys, prompt/stdin/system, timeout, text/JSON and exit distinctions. It sends only an explicit tool-free `purpose:cli` request, without a Session, Main system prompt, listener, timers or Vector startup. Archive exports both per-Session JSONL and the LLM request journal, with the original summary/count shape. Both share Main's existing fixed SQLite-only legacy migration. Help/version and flag usage errors remain available without Core/configuration; missing build/runtime errors never fall back to TypeScript. Node is needed for these JavaScript frontends and independent Node/Multica clients, not ordinary .NET Main hosting itself.
+
+Root `npm run build` temporarily builds the retained TypeScript lane plus Core so its public CLI backend exists; `build-all` installs dependencies and also prepares delivery assets. `build:reference` / `test:reference` expose the retained TypeScript fixture/default-launcher lane explicitly, and backend `dotnet test` does not compile a frontend. Source-backed differential tests retain their explicit built `FOXWARM_TS_ROOT` oracle prerequisite. Existing service/TUI entry commands remain in the retained lane pending their separate closure; this is not the final Main launcher switch. Multica remains its independent JavaScript client.
+
+Normal Windows artifacts remain framework-dependent `win-x64`: Core has its console apphost/runtimeconfig; optional Desktop uses its own apphost/runtimeconfig, omits Core-only CLI files and consumes the same resources/assembly one-way. `dotnet/scripts/publish-desktop.sh` prepares an empty output directory, not an installer/updater or a user ZIP. Both need the corresponding .NET/ASP.NET Core 10 x64 runtime; Desktop additionally needs .NET Desktop 10 and WebView2 Evergreen. Cross-publishing does not qualify Windows execution or add other RIDs/platforms. Existing public PowerShell source-install helpers are not retired by this packaging phase.
+
+The fixed archive migration uses `state/migrationVersion.json` and the existing `sqlite-only-large-archives-v1` lock/backup manifest. A completed entry requires both database authority markers. Otherwise it validates/imports legacy Session logs and the journal, verifies both, moves the physical sources into the existing backup layout, then marks the version complete. Partial import commits remain retryable; no cross-database transaction or active-Session replay is introduced. Earlier timestamped C# journal backups remain intact. See [the canonical migration/export contract](../docs/code-index/units/archive-message-store.md#legacy-migration-and-jsonl-export).
 
 ## Current tool authorization boundary
 
@@ -16,14 +32,14 @@ Adjacent exact direct `exec` calls run in bounded segments of at most four. All 
 
 ## Settings and ordinary startup
 
-Build `dotnet/Foxwarm/Foxwarm.csproj`. The application base is the installation/executable directory, not the shell cwd. A caller that knows a different installation base may set `FOXWARM_APP_ROOT`; resource templates/native helpers still come from the binary resource directory. No ancestor search adopts another installation's state. For source-checkout development, use an owned disposable data root and controlled local providers:
+Build `dotnet/Foxwarm/Foxwarm.csproj` for backend-only work, or use the complete delivery build above. The application base is the installation/executable directory, not the shell cwd. A caller that knows a different installation base may set `FOXWARM_APP_ROOT`; resource templates/native helpers still come from the binary resource directory. No ancestor search adopts another installation's state. For source-checkout development, use an owned disposable data root and controlled local providers:
 
 ```sh
 export FOXWARM_APP_ROOT="$PWD"
 export FOXWARM_DATA_DIR=/path/to/new/data
 export FOXWARM_HTTP_PORT=39091
 export FOXWARM_BIND_ADDRESS=127.0.0.1
-# Build packages/webui for the original browser UI when needed.
+# Use build:delivery above for a complete original browser UI payload.
 dotnet run --no-build --project dotnet/Foxwarm/Foxwarm.csproj
 ```
 

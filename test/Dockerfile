@@ -30,9 +30,6 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-COPY dotnet/scripts/acquire-monty-native.py dotnet/scripts/
-COPY dotnet/Foxwarm/ToolScript/MONTY-LICENSE dotnet/Foxwarm/ToolScript/
-RUN python3 dotnet/scripts/acquire-monty-native.py /opt/monty
 COPY . .
 COPY --from=webui /src/packages/webui/dist packages/webui/dist
 COPY --from=node-assets /src/packages/shared/dist packages/shared/dist
@@ -48,8 +45,6 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY --from=build /out ./
-COPY --from=build /opt/monty /opt/monty
-COPY --from=webui /src/packages/webui/dist /app/webui-dist
 
 RUN mkdir -p /data /workspace
 
@@ -57,8 +52,6 @@ ENV ASPNETCORE_ENVIRONMENT=Production \
     DOTNET_EnableDiagnostics=0 \
     FOXWARM_DATA_DIR=/data \
     FOXWARM_EXPERIMENT_TOOL_ROOT=/workspace \
-    FOXWARM_EXPERIMENT_MONTY_BINARY=/opt/monty/bin/monty \
-    FOXWARM_EXPERIMENT_WEBUI_DIST=/app/webui-dist \
     FOXWARM_EXPERIMENT_PORT=3001 \
     FOXWARM_EXPERIMENT_BIND_ADDRESS=0.0.0.0
 

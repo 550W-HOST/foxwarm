@@ -15,7 +15,7 @@ Persists a reconstructable request manifest plus attempt-start/result metadata f
 - `AppendAttemptStartAsync` records concrete model/virtual route/provider, attempt number, effective-prompt override, and `semanticPayloadSha256`; it persists digest/metadata rather than the hydrated wire body, base64 image payload, auth headers, or WebSocket suffix.
 - `AppendAttemptResultAsync` records outcome/result/error metadata; `AppendChatResultAsync` maps a successful `ChatResult` to that result event.
 - `ReconstructAsync` rebuilds the manifest/result view and marks corruption instead of throwing an opaque read failure; `ListAsync` returns bounded request pages.
-- `MigrateLegacyAsync`, `MarkSqliteAuthorityAsync`, `HasSqliteAuthorityAsync`, and `ExportJsonlAsync` own the old JSONL import/authority marker/export boundary. `EncodeCli` exposes canonical CLI JSON encoding.
+- `MigrateLegacyAsync`, `MarkSqliteAuthorityAsync`, `HasSqliteAuthorityAsync`, and `ExportJsonlAsync` own the old JSONL import/authority marker/export boundary. Export returns its record count. The fixed [joint Archive migration](./archive-message-store.md#legacy-migration-and-jsonl-export) can defer the journal source move until both importers verify; the existing standalone journal migration still moves its own source by default. `EncodeCli` exposes canonical CLI JSON encoding.
 
 Callers: `ModelRequestOwner` begins the manifest after request-history repair/visibility and starts an attempt after concrete request payload construction; DevTools reads/export/migration commands; retry logic begins a new request ID when committed semantic context changes.
 

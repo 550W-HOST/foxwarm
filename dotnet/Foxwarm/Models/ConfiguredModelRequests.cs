@@ -165,7 +165,18 @@ internal static class ConfiguredModelRequests
             : throw new InvalidDataException(
                 "Unsupported providerType: " + model.ProviderType + "."
             );
-        return service;
+        return options.HardTimeoutMs is > 0
+            ? new AttemptTimeoutService(service, options.HardTimeoutMs.Value) : service;
+    }
+
+    private sealed class AttemptTimeoutService(IChatService service, double timeoutMs) : IChatService
+    {
+        public async Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken token)
+        {
+            using var attempt = CancellationTokenSource.CreateLinkedTokenSource(token);
+            attempt.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs));
+            return await service.ChatAsync(sessionId, history, attempt.Token);
+        }
     }
 
     internal static string SafeError(Exception error, ConcreteHostModel model)

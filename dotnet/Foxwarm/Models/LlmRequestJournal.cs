@@ -451,7 +451,7 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
         return result;
     }
 
-    public async Task<bool> MigrateLegacyAsync(string sourcePath, CancellationToken token = default)
+    public async Task<bool> MigrateLegacyAsync(string sourcePath, CancellationToken token = default, bool moveSource = true)
     {
         var fullPath = Path.GetFullPath(sourcePath);
         CheckOpen();
@@ -535,6 +535,8 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
                         }
                         transaction.Commit();
                         transaction.Dispose();
+                        if (!moveSource)
+                            return true;
                         var stateRoot = Path.Combine(root, "state");
                         var relative = Path.GetRelativePath(stateRoot, fullPath);
                         if (relative.StartsWith("..", StringComparison.Ordinal))
@@ -603,7 +605,7 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
         );
     }
 
-    public async Task ExportJsonlAsync(string outputPath, CancellationToken token = default)
+    public async Task<long> ExportJsonlAsync(string outputPath, CancellationToken token = default)
     {
         await InitializeAsync(token).ConfigureAwait(false);
         using var connection = OpenReadOnly();
@@ -619,6 +621,7 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
             true
         );
         using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+        long records = 0;
         foreach (
             var table in new[]
             {
@@ -661,6 +664,7 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
                     _ => AttemptResultJson(reader),
                 };
                 await writer.WriteLineAsync(Codec.Write(record));
+                records++;
             }
         }
         await writer.FlushAsync(token);
@@ -670,6 +674,7 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
         snapshot.Commit();
         File.Move(temp, outputPath, true);
         SyncDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
+        return records;
     }
 
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();

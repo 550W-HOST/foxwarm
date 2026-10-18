@@ -9,6 +9,18 @@ if (await Foxwarm.Vector.VectorChild.TryRunAsync(args))
 if (await Foxwarm.Terminal.NativeHelperEntry.TryRunAsync(args))
     return;
 
+if (CliCommands.IsCommand(args))
+{
+    Environment.ExitCode = await CliCommands.RunAsync(args[0]);
+    return;
+}
+
+if (args is ["--version"] or ["-v"])
+{
+    Console.WriteLine(ProductVersion.Value);
+    return;
+}
+
 var configuration = new ModelConfiguration(HostPaths.Capture());
 var paths = configuration.Paths;
 var http = await HttpServerSettings.CaptureAsync(configuration, paths.DataRoot);

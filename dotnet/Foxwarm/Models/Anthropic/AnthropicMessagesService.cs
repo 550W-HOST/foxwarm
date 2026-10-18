@@ -30,7 +30,7 @@ internal sealed class AnthropicMessagesService(
             ["Content-Type"] = "application/json",
             ["anthropic-version"] = "2023-06-01",
             ["anthropic-beta"] = "interleaved-thinking-2025-05-14",
-            ["user-agent"] = "foxwarm/1.0",
+            ["user-agent"] = "foxwarm/" + ProductVersion.Value,
         };
         if (!string.IsNullOrEmpty(options.Token))
             headers["x-api-key"] = options.Token;

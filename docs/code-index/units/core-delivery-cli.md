@@ -1,0 +1,30 @@
+# Unit: Core delivery resources and public one-shot CLI
+
+Files: `dotnet/Directory.Build.props`, `dotnet/Foxwarm/Delivery.targets`, `dotnet/Foxwarm/CliCommands.cs`, `dotnet/Foxwarm/ProductVersion.cs`, `scripts/core-cli.js`
+
+Secondary/integration references: the [public CLI frontends](./model-cli.md), `package.json`, `dotnet/Foxwarm/Foxwarm.csproj`, `dotnet/Foxwarm.Desktop/Foxwarm.Desktop.csproj`, `dotnet/scripts/publish-desktop.sh`.
+
+## Purpose and stable callers
+
+- Root `foxwarm` remains a JavaScript command dispatcher: no arguments/help show usage, version reads the package version, and only `model` and `archive` select operations. It does not start Main. Independent Multica remains a JavaScript HTTP/JSONL client.
+- `parseArgs` in each public frontend is the only flag parser. `runCoreCli` launches the published Core apphost (or `dotnet Foxwarm.dll` when no apphost exists), or the explicit source Debug Core output. Missing builds/runtime fail without a TypeScript backend fallback. One parsed-options JSON header and optional raw prompt stdin feed the child; this is not a Main controller/RPC service.
+- `CliCommands.RunAsync` handles the private one-shot entry before ordinary Main construction, but after private Vector/native-helper dispatch. `ModelAsync` uses `ModelConfiguration`, `HostModels`, `ModelRequestOwner`, provider transports, routing and the journal. `ArchiveAsync` uses the fixed [Archive migration/export owners](./archive-message-store.md#legacy-migration-and-jsonl-export).
+- `Directory.Build.props` reads the product version from root `package.json`; assembly identification, Core `--version`, MCP server information and ordinary provider user agents use `ProductVersion.Value`. Protocol versions and native dependency pins are independent.
+
+## CLI behavior
+
+Model supports existing long/short options, list aliases, configured default/virtual keys, prompt or non-TTY stdin, explicit system text, per-attempt timeout, text and `{text,modelId,usage}` JSON. Model-list and unknown-key checks precede prompt consumption. Missing/blank prompts and unknown keys return usage exit 2; operational/provider/empty-result failures return 1, and successful operations return 0. Frontend help/usage/version do not require Core/configuration. The request is tool-free `purpose:cli`, iteration zero, without a Session ID, Session engine, Main prompt, HTTP listener, timer or Vector startup. Low-level WebSocket history finalizers discard reusable provider state.
+
+Archive preserves `export-jsonl --output/-o DIR`, the `sessions/` JSONL tree and `llm-request-journal.jsonl`, with `{output,sessions:{files,records},llm:{records}}` stdout. Output paths resolve from the caller's cwd; settings/data still use captured installation-relative paths. Diagnostics go to stderr, not JSON/text stdout. Export does not start Main or recover a Session lifetime.
+
+## Build and resource boundary
+
+`npm run build:assets` uses the independent Shared, CLI Node, original WebUI and four tracked Code extension builds. `build:delivery` collects those assets into Core; `publish:core` prepares them then performs framework-dependent publish. Direct Core publish also rejects missing required built inputs. Ordinary `dotnet build`/tests never invoke npm or rebuild the frontend. Root `npm run build` temporarily builds the retained TypeScript reference/default-launcher lane plus Core, so public model/archive callers have their documented backend. `build:reference` and `test:reference` expose that retained lane explicitly. This does not switch package `main`, service launchers, Main TUI or production Docker.
+
+`Delivery.targets` is the shared resource graph: original WebUI, public global skills/resources, templates, tracked Code manifests/bundles/media, Node bootstrap source/manifests/locks/build inputs/bundles, root/native notices and pinned runtime dependencies. It excludes dependency caches and never collects installed Agent/state/token trees or optional operator Code/HEIF installations. Core-only JavaScript CLI entries/package metadata are omitted from Desktop's project-reference resource collection; Desktop intentionally removes Core apphost/runtimeconfig and consumes the same assembly/resources through its own entry. It uses the same `webui-dist` directory, not a second WebUI copy.
+
+Build prerequisites remain .NET 10 SDK, restored pinned NuGet packages, Node/npm asset dependencies, Python for pinned Monty acquisition, and GCC/libutil for the Linux PTY helper. A complete published Core runs outside the checkout without experiment-root overrides or an extra frontend copy. Runtime/qualified-platform limits are described in `dotnet/README.md`; cross-publishing is not Windows runtime qualification.
+
+## Tests
+
+`scripts/model.test.js` drives the real public child against a controlled Responses provider, including settings precedence, stdin/system/default/virtual/list behavior, per-attempt timeout/retry, clean stdout/exit distinctions, tool-free journal export and no TypeScript backend loading. `CliArchiveMigrationTests.cs` and `dotnet/cli-archive-fixture-ts.mjs` use real Source-produced storage and real Source export consumers. `packages/webui/test/publishedCore.e2e.mjs` accepts an explicitly owned publish directory and exercises original login/no-model Setup, packaged templates/global skill/resource, Node source archive/bundled client, extension consumers and ordinary native ToolScript with disabled Vector.

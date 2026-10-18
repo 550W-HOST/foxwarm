@@ -119,7 +119,7 @@ internal sealed class McpInboundHttp : IAsyncDisposable, IHostedService
         };
         var options = new McpServerOptions
         {
-            ServerInfo = new() { Name = "foxwarm", Version = "1.0.0" },
+            ServerInfo = new() { Name = "foxwarm", Version = ProductVersion.Value },
             ProtocolVersion = "2025-11-25",
             Capabilities = new()
             {
