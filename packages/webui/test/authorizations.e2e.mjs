@@ -56,7 +56,7 @@ async function login(page, url, token) {
   await page.goto(url, { waitUntil: 'networkidle0' })
   await page.waitForSelector('#token')
   await page.type('#token', token)
-  await Promise.all([page.waitForNavigation({ waitUntil: 'networkidle0' }), page.click('#loginForm button')])
+  await Promise.all([page.waitForNavigation({ waitUntil: 'networkidle0' }), page.click('#loginForm button[type="submit"]')])
   await page.waitForSelector('[data-authorizations-fixture]')
 }
 async function configure(page, mode, credentials) {

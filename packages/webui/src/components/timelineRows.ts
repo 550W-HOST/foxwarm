@@ -209,7 +209,7 @@ const getMessageUsageAttribution = (msg: Message, timing: DerivedRequestTiming):
 
 /** Whole event/reminder wrappers and metadata-classified display-only LLM retry notices may join a tool run; quoted content does not. */
 const getGroupableSystemKind = (msg: Message): 'event' | 'goal-reminder' | 'llm-error' | null => {
-  if (getSessionNotice(msg)) return null
+  if (getSessionNotice(msg) && !getLlmErrorMessageDetails(msg)) return null
   if (getLlmErrorMessageDetails(msg)) return 'llm-error'
   if (msg.role !== 'user' || msg.parts.length !== 1) return null
   const part = msg.parts[0]
@@ -228,7 +228,7 @@ const getGroupableSystemKind = (msg: Message): 'event' | 'goal-reminder' | 'llm-
 
 const isGroupableSystemMessage = (msg: Message): boolean => getGroupableSystemKind(msg) !== null
 
-const isToolGroupableMessage = (msg: Message): boolean => !getSessionNotice(msg) && (msg.role === 'model' || msg.role === 'tool' || isGroupableSystemMessage(msg))
+const isToolGroupableMessage = (msg: Message): boolean => (!getSessionNotice(msg) || !!getLlmErrorMessageDetails(msg)) && (msg.role === 'model' || msg.role === 'tool' || isGroupableSystemMessage(msg))
 
 const isHeavySystemLikeMessage = (message: Message): boolean => {
   if (getSessionNotice(message)) return true

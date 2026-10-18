@@ -143,9 +143,9 @@ test('LLM retry notices neither receive reasoning information nor prevent a late
     assert.deepEqual(recovered.tokens, [tokens])
     assert.equal(recovered.badges.length, 1)
     assert.equal(recovered.badges[0][target], true)
-    assert.equal(await page.$eval(`#${id} .foxwarm-system-message-card`, el => el.querySelector('[data-reasoning-handoff]') === null), true)
+    assert.equal(await page.$eval(`#${id} [data-system-event]`, el => el.querySelector('[data-reasoning-handoff]') === null), true)
   }
-  assert.equal(await page.$eval('#retryTail .foxwarm-system-message-card', el => el.textContent.includes('Service unavailable.')), true)
+  assert.equal(await page.$eval('#retryTail [data-system-event]', el => el.textContent.includes('Service unavailable.')), true)
 })
 
 test('live empty reasoning stays at the tail through stop, then transfers on real draft output and canonical completion', async () => {

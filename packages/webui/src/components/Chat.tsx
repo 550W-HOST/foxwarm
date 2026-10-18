@@ -433,6 +433,16 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   }, [historyMode, setBottomFollow])
 
   const captureCurrentViewportState = useCallback((): ChatViewportState | null => {
+    const container = messagesContainerRef.current
+    const intent = continuousPagingIntentRef.current
+    if (container && capturedInteractionVersionRef.current !== userInteractionVersionRef.current && intent) {
+      // A queued resize scroll can arrive after input but before its native movement.
+      // It must not acknowledge that input or seed another correction from the old position.
+      const moved = intent === 'earlier'
+        ? container.scrollTop < lastNativeScrollTopRef.current
+        : container.scrollTop > lastNativeScrollTopRef.current
+      if (!moved) return null
+    }
     // A pending restore owns the position until its rows arrive or user input cancels it.
     const pending = pendingViewportRestoreRef.current
     if (pending?.kind === 'state') return pending.state
@@ -659,7 +669,6 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       const pagingIntent = continuousPagingIntentRef.current || (pointerScrollInteractionRef.current
         ? scrollTop < lastNativeScrollTopRef.current ? 'earlier' : scrollTop > lastNativeScrollTopRef.current ? 'later' : null
         : null)
-      lastNativeScrollTopRef.current = scrollTop
 
       if (pointerScrollInteractionRef.current && distanceFromBottom > CHAT_BOTTOM_FOLLOW_REJOIN_THRESHOLD_PX) {
         leaveBottomFollow()
@@ -667,6 +676,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
 
       setShowScrollTopButton(scrollTop > 200)
       captureCurrentViewportState()
+      lastNativeScrollTopRef.current = scrollTop
 
       const { start: windowStart, count: windowCount } = continuousWindowRangeRef.current
       const earlierContinuous = historyMode === 'continuous' && pagingIntent === 'earlier' && scrollTop < HISTORY_PRELOAD_DISTANCE_PX && !archivePage.loading && !archivePage.error

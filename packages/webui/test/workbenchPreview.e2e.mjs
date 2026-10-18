@@ -2775,6 +2775,8 @@ for (const reading of [false, true]) {
 test('idle continuous viewport resize lets upward wheel replace pending bottom restoration', async () => {
   const page = await openIdleViewportChat()
   try {
+    // Exercise native wheel delivery while a previous resize scroll is still queued.
+    if (!firefox) await page.emulateCPUThrottling(8)
     const before = await idleViewportSnapshot(page)
     const box = await (await page.$('.foxwarm-chat-messages')).boundingBox()
     await page.mouse.move(box.x + 100, box.y + 100)
@@ -2782,14 +2784,30 @@ test('idle continuous viewport resize lets upward wheel replace pending bottom r
     await page.evaluate(() => {
       const container = document.querySelector('.foxwarm-chat-messages')
       let wheelSeen = false
-      container.addEventListener('wheel', event => { if (event.deltaY < 0) wheelSeen = true })
+      window.__idleResizeTrace = []
+      const record = (event, deltaY) => {
+        if (window.__idleResizeTrace.length === 128) window.__idleResizeTrace.shift()
+        window.__idleResizeTrace.push({
+          event, at: performance.now(), deltaY, top: container.scrollTop,
+          height: container.clientHeight, scrollHeight: container.scrollHeight,
+          bottomAction: !!document.querySelector('[aria-label="Scroll to bottom"]'),
+        })
+      }
+      record('initial')
+      container.addEventListener('wheel', event => {
+        if (event.deltaY < 0) wheelSeen = true
+        record('wheel', event.deltaY)
+      })
       container.addEventListener('scroll', () => {
+        record('scroll')
         if (!wheelSeen || window.__idleUserAnchor || container.scrollHeight - container.clientHeight - container.scrollTop < 399) return
         const top = container.getBoundingClientRect().top
         const row = [...document.querySelectorAll('[data-chat-message-anchor-key]')].find(row => row.getBoundingClientRect().bottom > top + 1)
         if (row) window.__idleUserAnchor = { key: row.dataset.chatMessageAnchorKey, offset: row.getBoundingClientRect().top - top }
       })
-      window.addEventListener('resize', () => window.__idleResizeWheel().then(() => { window.__idleWheelDone = true }), { once: true })
+      window.addEventListener('resize', () => record('viewport-resize'))
+      new ResizeObserver(() => record('scroller-resize')).observe(container)
+      window.addEventListener('resize', () => window.__idleResizeWheel().then(() => { window.__idleWheelDone = true; record('wheel-command-done') }), { once: true })
     })
     for (const height of [1050, 1000, 950, 900, 850, 800]) {
       await page.setViewport({ width: 1400, height })
@@ -2802,8 +2820,9 @@ test('idle continuous viewport resize lets upward wheel replace pending bottom r
     assert.ok(after.rootSame)
     assert.equal(after.historyReads, before.historyReads)
     assert.equal(after.rows, before.rows)
-    assert.ok(after.distance >= 399, `deferred resize correction must not take back user wheel movement: ${JSON.stringify({ after, userAnchor })}`)
-    assert.ok(Math.abs(after.offset - userAnchor.offset) <= 2, 'subsequent resize retains the user-selected reading anchor')
+    const resizeEvidence = JSON.stringify({ before, after, userAnchor, trace: await page.evaluate(() => window.__idleResizeTrace) })
+    assert.ok(after.distance >= 399, `deferred resize correction must not take back user wheel movement: ${resizeEvidence}`)
+    assert.ok(Math.abs(after.offset - userAnchor.offset) <= 2, `subsequent resize retains the user-selected reading anchor: ${resizeEvidence}`)
     await clickReadyControl(page, '[aria-label="Scroll to bottom"]')
     await waitForIdleBottom(page)
     await page.setViewport({ width: 1400, height: 900 })
@@ -3294,7 +3313,7 @@ test('playful runtime and short right-side queue work in App and Appearance', as
     await page.keyboard.press('Backspace')
     await publish()
     await page.waitForFunction(() => document.querySelector('[data-processing-queue-status]')?.textContent.includes('3 queued'))
-    assert.equal(await page.$eval('[data-fox-thinking-copy] .sr-only', el => el.textContent), 'Thinking...')
+    assert.equal(await page.$eval('[data-fox-thinking-copy] .sr-only', el => el.textContent), 'Requesting model…')
     await page.locator('[data-processing-queue-status] button').click()
     await page.waitForFunction(() => window.__sent.length === 1)
     await page.locator('button[aria-label="Stop session"]').click()
