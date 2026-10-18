@@ -543,22 +543,27 @@ public sealed class CanonicalPathsTests
         var nextAgents = Path.Combine(data, "next-agents");
         var paths = HostPaths.ForDataRoot(data);
         Directory.CreateDirectory(Path.GetDirectoryName(paths.ConfigPath)!);
-        await File.WriteAllTextAsync(paths.ConfigPath, "paths: {agentsDir: '" + nextAgents + "'}\n");
-        var expected = await CanonicalSourceFixture.RunAsync(new JsonObject
-        {
-            ["applicationRoot"] = data,
-            ["operation"] = "authority",
-            ["session"] = new JsonObject
+        await File.WriteAllTextAsync(
+            paths.ConfigPath,
+            "paths: {agentsDir: '" + nextAgents + "'}\n"
+        );
+        var expected = await CanonicalSourceFixture.RunAsync(
+            new JsonObject
             {
-                ["agent"] = "main",
-                ["history"] = new JsonArray(),
-                ["persistentMemorySnapshot"] = "existing Source snapshot",
-                ["queue"] = new JsonArray(),
-                ["busy"] = false,
-                ["currentNode"] = "master",
-                ["lastAppliedMailboxId"] = 0,
-            },
-        });
+                ["applicationRoot"] = data,
+                ["operation"] = "authority",
+                ["session"] = new JsonObject
+                {
+                    ["agent"] = "main",
+                    ["history"] = new JsonArray(),
+                    ["persistentMemorySnapshot"] = "existing Source snapshot",
+                    ["queue"] = new JsonArray(),
+                    ["busy"] = false,
+                    ["currentNode"] = "master",
+                    ["lastAppliedMailboxId"] = 0,
+                },
+            }
+        );
         // Catalog membership has its own established owner; authority JSON is not discovery evidence.
         using (var catalog = new SessionCatalog(data))
         {
@@ -573,8 +578,21 @@ public sealed class CanonicalPathsTests
         Assert.False(Directory.Exists(Path.Combine(nextAgents, "main")));
         var config = new ModelConfiguration(paths);
         Assert.Equal(expected["agents"]!.GetValue<string>(), config.Paths.AgentsRoot);
-        var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "local", "", "", 713);
-        await using var manager = new SessionManager(data, config.Paths.WorkspaceRoot, options, HostModels.ForTest(options), hostPaths: config.Paths);
+        var options = new ResponsesClientOptions(
+            new Uri("http://127.0.0.1:1"),
+            "wire",
+            "local",
+            "",
+            "",
+            713
+        );
+        await using var manager = new SessionManager(
+            data,
+            config.Paths.WorkspaceRoot,
+            options,
+            HostModels.ForTest(options),
+            hostPaths: config.Paths
+        );
         await manager.LoadMainHostAsync();
         Assert.Equal(Path.Combine(nextAgents, "main"), manager.AgentDirectory("main"));
         Assert.True(File.Exists(Path.Combine(nextAgents, "main", "memory", "MEMORY.md")));

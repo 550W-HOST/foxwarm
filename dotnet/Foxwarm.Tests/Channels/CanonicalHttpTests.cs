@@ -172,7 +172,9 @@ public sealed class CanonicalHttpTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Headless_install_checks_the_existing_token_at_save_time_before_replacement_then_restarts_noncolliding_Mcp(bool replaceTokenAfterStartup)
+    public async Task Headless_install_checks_the_existing_token_at_save_time_before_replacement_then_restarts_noncolliding_Mcp(
+        bool replaceTokenAfterStartup
+    )
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
@@ -184,25 +186,40 @@ public sealed class CanonicalHttpTests
         var config = new ModelConfiguration(Paths(data));
         var originalBytes = await File.ReadAllBytesAsync(config.AppPath);
         var before = config.Access.Snapshot;
-        await using (var host = await MainHost.CreateAsync([], config, await HttpServerSettings.CaptureAsync(config, data)))
+        await using (
+            var host = await MainHost.CreateAsync(
+                [],
+                config,
+                await HttpServerSettings.CaptureAsync(config, data)
+            )
+        )
         {
             await host.StartAsync();
             Assert.False(host.HttpEnabled);
             if (replaceTokenAfterStartup)
                 await File.WriteAllTextAsync(tokenFile, " \n" + currentToken + "\n ");
-            var candidate = "bot: {enableWebUI: false, enableTrigger: false}\naccess: {identities: {external: {token: " + currentToken + ", surfaces: {mcp: {}}}}}\n";
-            var source = await CanonicalSourceFixture.RunAsync(new JsonObject
-            {
-                ["applicationRoot"] = data,
-                ["operation"] = "access",
-                ["access"] = ConfigurationYaml.Parse(candidate, "candidate")["access"]!.DeepClone(),
-                ["instanceToken"] = currentToken,
-            });
+            var candidate =
+                "bot: {enableWebUI: false, enableTrigger: false}\naccess: {identities: {external: {token: "
+                + currentToken
+                + ", surfaces: {mcp: {}}}}}\n";
+            var source = await CanonicalSourceFixture.RunAsync(
+                new JsonObject
+                {
+                    ["applicationRoot"] = data,
+                    ["operation"] = "access",
+                    ["access"] = ConfigurationYaml.Parse(candidate, "candidate")[
+                        "access"
+                    ]!.DeepClone(),
+                    ["instanceToken"] = currentToken,
+                }
+            );
             Assert.True(source["rejected"]!.GetValue<bool>());
             await Assert.ThrowsAsync<InvalidDataException>(() => config.SaveAppAsync(candidate));
             Assert.Equal(originalBytes, await File.ReadAllBytesAsync(config.AppPath));
             Assert.Same(before, config.Access.Snapshot);
-            var installed = await config.SaveAppAsync(candidate.Replace(currentToken, "synthetic-external"));
+            var installed = await config.SaveAppAsync(
+                candidate.Replace(currentToken, "synthetic-external")
+            );
             Assert.True(installed["saved"]!.GetValue<bool>());
             Assert.Contains("access.identities", installed["applied"]!.ToString());
             Assert.Contains("access.surfaces.mcp", installed["notApplied"]!.ToString());
@@ -213,17 +230,29 @@ public sealed class CanonicalHttpTests
         var settings = await HttpServerSettings.CaptureAsync(restartedConfig, data);
         Assert.True(settings.HttpEnabled);
         Assert.Equal(currentToken, settings.Token);
-        await using var restarted = await MainHost.CreateAsync([], restartedConfig, Ephemeral(settings));
+        await using var restarted = await MainHost.CreateAsync(
+            [],
+            restartedConfig,
+            Ephemeral(settings)
+        );
         await restarted.StartAsync();
         using var admin = Client(restarted, currentToken);
         Assert.Equal(HttpStatusCode.OK, (await admin.GetAsync("/health")).StatusCode);
-        await using var transport = new HttpClientTransport(new HttpClientTransportOptions
-        {
-            Endpoint = new Uri(admin.BaseAddress!, "/mcp"),
-            TransportMode = HttpTransportMode.StreamableHttp,
-            AdditionalHeaders = new Dictionary<string, string> { ["Authorization"] = "Bearer synthetic-external" },
-        });
-        await using var sdk = await ModelContextProtocol.Client.McpClient.CreateAsync(transport, new McpClientOptions { ProtocolVersion = "2025-11-25" });
+        await using var transport = new HttpClientTransport(
+            new HttpClientTransportOptions
+            {
+                Endpoint = new Uri(admin.BaseAddress!, "/mcp"),
+                TransportMode = HttpTransportMode.StreamableHttp,
+                AdditionalHeaders = new Dictionary<string, string>
+                {
+                    ["Authorization"] = "Bearer synthetic-external",
+                },
+            }
+        );
+        await using var sdk = await ModelContextProtocol.Client.McpClient.CreateAsync(
+            transport,
+            new McpClientOptions { ProtocolVersion = "2025-11-25" }
+        );
         Assert.Equal(5, (await sdk.ListToolsAsync(new ListToolsRequestParams())).Tools.Count);
     }
 

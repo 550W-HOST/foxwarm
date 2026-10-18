@@ -147,7 +147,6 @@ internal sealed record HttpServerSettings(
         await stream.WriteAsync(Encoding.UTF8.GetBytes(token));
         return token;
     }
-
 }
 
 internal sealed record PublicWebAddress(
