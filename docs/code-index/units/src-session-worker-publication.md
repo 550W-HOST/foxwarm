@@ -9,14 +9,14 @@ Provides the fixed trusted-local reverse boundary and Main in-memory coordinator
 
 ## Key exports
 
-- `sessionWorkerPublicationServiceDescriptor` — fixed `session-worker-publication@2.publishCommitted` method.
+- `sessionWorkerPublicationServiceDescriptor` — fixed `session-worker-publication@3.publishCommitted` method.
 - `SessionWorkerProjectionRegistry` — current exact generation/incarnation registry with establish, awaited apply, cloned get/list, ordered subscribers, exact stale marking, and exact clear.
 - `createSessionWorkerPublicationServiceHandler()` — exact identity-fenced, plain/bounded projection validator and apply handler.
 - `initializeSessionWorkerPublication()` / `publishCommitted()` / `shutdownSessionWorkerPublication()` — local or borrowed-reverse client lifecycle.
 
 ## Boundary
 
-A request contains only exact session/generation/incarnation identity plus the existing complete bounded `SessionWorkerProjection`, including nullable raw current/child effort overrides. The projection has exact top-level keys, strict finite plain JSON, bounded strings and total size, strictly shaped current runtime active/tool/waiting records, matching duplicated busy/queue counters, and no `stateRevision`, history, queue items, message bodies, callbacks, or live Session.
+A request contains only exact session/generation/incarnation identity plus the existing complete bounded `SessionWorkerProjection`, including nullable raw current/child effort overrides. currentNode accepts the shared 193-character Core identity bound, retaining its existing nonempty-string validation rather than adding a different identity grammar. The projection has exact top-level keys, strict finite plain JSON, bounded strings and total size, strictly shaped current runtime active/tool/waiting records, matching duplicated busy/queue counters, and no `stateRevision`, history, queue items, message bodies, callbacks, or live Session.
 
 Main establishes an identity as stale before activation. A matching full publication replaces it with a cloned fresh projection and awaits subscribers in registration order. Subscriber failure marks that exact entry stale and fails acknowledgement. Older/mismatched identities cannot apply; stale marking and clear affect only the exact current owner. Registry state is process-local presentation/coordinator state only and never writes `sessions.json` or per-session authority.
 
@@ -34,7 +34,7 @@ Model-stream drafts remain outside this committed publication contract. The runt
 
 ## Tests
 
-Coverage proves exact DTO/source/generation fencing, nested runtime validation and duplicated counter agreement, clone isolation, ordered callbacks, callback-failure staleness, no `stateRevision`, replacement generation full apply, postcommit failure without semantic rollback, malformed primitive tool arguments without publication poison, later same-Worker turn recovery, pre-archive/queue mutation fencing, empty-mailbox no-op behavior, initial/busy/final/settings publications, and real forked reverse publication.
+Coverage includes qualified maximum-length Node selection through a real Worker Host, durable settings writes and projection publication, followed by a successful selection of master without publication poison. Existing coverage proves exact DTO/source/generation fencing, nested runtime validation and duplicated counter agreement, clone isolation, ordered callbacks, callback-failure staleness, no `stateRevision`, replacement generation full apply, postcommit failure without semantic rollback, malformed primitive tool arguments without publication poison, later same-Worker turn recovery, pre-archive/queue mutation fencing, empty-mailbox no-op behavior, initial/busy/final/settings publications, and real forked reverse publication.
 
 ## Design Decisions
 

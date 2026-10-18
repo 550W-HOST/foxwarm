@@ -11,7 +11,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 
 ## Key Exports
 
-- `isCoreNodeId`, `splitProviderNodeId`, `MAX_CORE_NODE_ID_LENGTH` — pure bounded native/qualified Node identity grammar shared by Core, WebUI and Code URI consumers.
+- `isCoreNodeId`, `splitProviderNodeId`, `MAX_CORE_NODE_ID_LENGTH` — pure bounded native/qualified Node identity grammar shared by Core, WebUI and Code URI consumers. Native leading underscores/hyphens retain their existing contract; adapter-local identities keep their protocol-specific alphanumeric start.
 
 - `nodeTools` — aggregated object of all node tool functions (read, write, edit, apply_patch, exec, get_default_cwd, browse_*)
 - `read`, `write`, `edit`, `apply_patch`, `exec`, `get_default_cwd` — file and shell tool functions

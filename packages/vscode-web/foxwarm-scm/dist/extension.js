@@ -41,7 +41,7 @@ var vscode2 = __toESM(require("vscode"));
 // ../../shared/src/nodeIdentity.ts
 var MAX_CORE_NODE_ID_LENGTH = 193;
 function isCoreNodeId(value) {
-  return typeof value === "string" && value.length <= MAX_CORE_NODE_ID_LENGTH && /^(?:[A-Za-z0-9][A-Za-z0-9._:-]{0,63}\/)?[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
+  return typeof value === "string" && value.length <= MAX_CORE_NODE_ID_LENGTH && (/^[A-Za-z0-9._:-]{1,128}$/.test(value) || /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}\/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value));
 }
 
 // src/foxwarmUri.ts

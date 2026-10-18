@@ -1,3 +1,6 @@
+import * as nodeExecution from './nodeExecution';
+import { ExecutableNodeProvider } from './nodes/executableProvider';
+import { MasterNodeProvider, NodeProviderRegistry } from './nodes/providerRegistry';
 import * as toolExecutor from './toolExecutor';
 import { taskService } from './tools/taskTools';
 import test from 'node:test';
@@ -1885,6 +1888,48 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
       await exited;
     }
     store.close();
+    await fs.remove(root);
+  }
+});
+
+
+test('maximum qualified Node selection persists and publishes through Worker Host without poisoning later selection', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-node-identity-'));
+  const initial = await sessionManager.getSession(`worker-qualified-node-${Date.now()}`);
+  const providerId = 'p'.repeat(64);
+  const nodeId = `${providerId}/${'n'.repeat(128)}`;
+  assert.equal(nodeId.length, 193);
+  const providers = new NodeProviderRegistry([new MasterNodeProvider(), new ExecutableNodeProvider({
+    id: providerId, type: 'executable', command: process.execPath,
+    args: [path.join(__dirname, 'nodes', 'executableProviderTestFixture.js'), 'normal', path.join(root, 'requests.jsonl')],
+    timeoutMs: 2000,
+  })]);
+  await providers.ensureNode(providerId, { sourceSessionId: initial.id, nodeId, parameters: {}, context: { agent: initial.agent || 'main' } });
+  assert.ok((await providers.listNodes()).some(node => node.id === nodeId));
+  const services = new RpcServiceRegistry();
+  services.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ providerRegistry: providers, expectedSourceSessionId: initial.id }));
+  const transport = new LocalRpcTransport(services);
+  await nodeExecution.initializeNodeExecution({ transport, placement: 'child-reverse' });
+  const publications = new SessionWorkerProjectionRegistry();
+  const identity = { sessionId: initial.id, generation: 1, incarnationId: 'local-host-incarnation' };
+  publications.establish(identity);
+  try {
+    await withLocalHost(initial, async ({ host, readDurable }) => {
+      await nodeExecution.validateNodeSelection(initial.id, nodeId);
+      await host.updateSettings({ currentNode: nodeId, cwd: null });
+      assert.equal(readDurable().currentNode, nodeId);
+      assert.equal(publications.get(initial.id)?.projection?.currentNode, nodeId);
+      assert.equal(publications.get(initial.id)?.stale, false);
+      await nodeExecution.validateNodeSelection(initial.id, 'master');
+      await host.updateSettings({ currentNode: 'master' });
+      assert.equal(readDurable().currentNode, 'master');
+      assert.equal(publications.get(initial.id)?.projection?.currentNode, 'master');
+      assert.equal(publications.get(initial.id)?.stale, false);
+    }, false, value => publications.apply(identity, value));
+  } finally {
+    await nodeExecution.shutdownNodeExecution(); nodeExecution.resetNodeExecutionForTests();
+    await transport.drain(); transport.close();
+    await sessionManager.deleteSession(initial.id);
     await fs.remove(root);
   }
 });

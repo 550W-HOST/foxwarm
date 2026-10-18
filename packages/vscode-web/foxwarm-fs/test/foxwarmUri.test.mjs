@@ -62,3 +62,12 @@ test('qualified Provider IDs stay one encoded authority and preserve the target 
     namespace: 'node', nodeId: 'development/worker:one', realPath: '/workspace/file.txt',
   });
 });
+
+test('legacy native leading characters survive Code URI generation', () => {
+  for (const nodeId of ['_native-review', '-legacy-native']) {
+    const encoded = buildFoxwarmNodeUriString(nodeId, '/workspace/file.txt');
+    assert.deepEqual(parseFoxwarmUri(uri(encoded)), {
+      namespace: 'node', nodeId, realPath: '/workspace/file.txt',
+    });
+  }
+});

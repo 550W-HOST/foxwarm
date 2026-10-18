@@ -1,3 +1,5 @@
+import { createApprovedNode, removeApprovedNode } from './nodes/registry';
+import { nodesManager } from './nodes/manager';
 import { normalizeAgentToolRules } from './permissions';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,7 +17,7 @@ import * as nodeExecution from './nodeExecution';
 import { createNodeExecutionServiceHandler, nodeExecutionServiceDescriptor } from './nodeExecutionService';
 import { LocalRpcTransport, RpcServiceRegistry } from './rpc';
 import { ExecutableNodeProvider } from './nodes/executableProvider';
-import { MasterNodeProvider, NodeProviderRegistry } from './nodes/providerRegistry';
+import { MasterNodeProvider, AuthenticatedRemoteNodeProvider, NodeProviderRegistry } from './nodes/providerRegistry';
 
 const caller = { id: 'developer/work', agent: 'developer', currentNode: 'development/one' };
 function request(name = 'read', node = 'development/one', args: Record<string, any> = {}, source: 'node' | 'builtin' | 'mcp' = 'node') {
@@ -185,4 +187,57 @@ test('Core namespaces isolate identical adapter-local IDs and preserve lifecycle
       assert.equal(call.request.request.nodeId, 'dynamic');
     }
   } finally { await fs.remove(root); }
+});
+
+
+test('registered native identities retain wildcard denies and explicit allows across direct, unified and Main execution', async () => {
+  const nodeId = `_native-policy-${Date.now()}`;
+  const approved = await createApprovedNode(nodeId);
+  assert.equal(approved.nodeId, nodeId);
+  let effects = 0;
+  const ws: any = {
+    send(raw: string) {
+      const message = JSON.parse(raw);
+      if (message.type !== 'tool_call') return;
+      effects += 1;
+      queueMicrotask(() => nodesManager.handleToolResponse(message.callId, { output: 'native read reached effect' }, nodeId));
+    },
+    close() {},
+  };
+  nodesManager.registerNodeWithTools(ws, {} as any, 'cli-node', {
+    tools: [{ name: 'read', description: 'Native fixture read', parameters: { type: 'object' } }],
+  }, nodeId);
+  const source = await sessionManager.getSession(`native-policy-${Date.now()}`);
+  source.currentNode = nodeId;
+  await sessionManager.saveSession(source.id);
+  const ctx = { sessionId: source.id, session: source };
+  const registry = new RpcServiceRegistry();
+  registry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ expectedSourceSessionId: source.id,
+    providerRegistry: new NodeProviderRegistry([new MasterNodeProvider(), new AuthenticatedRemoteNodeProvider()]) }));
+  const transport = new LocalRpcTransport(registry);
+  await nodeExecution.initializeNodeExecution({ transport, placement: 'child-reverse' });
+  try {
+    setToolAuthorizationPolicyForTests(policy([{ node: '*', action: 'deny' }], 'allow'));
+    await assert.rejects(() => callTool('read', { filePath: '/fixture' }, ctx), /authorization rule denies/);
+    await assert.rejects(() => callTool('call_tool', { toolId: `node:${nodeId}/read`, args: { filePath: '/fixture' } }, ctx), /authorization rule denies/);
+    await assert.rejects(() => nodeExecution.executeNodeTool(source.id, nodeId, 'read', { filePath: '/fixture' }), /authorization rule denies/);
+    assert.equal(effects, 0, 'no authenticated adapter effect is dispatched under the wildcard deny');
+    const hidden: any = await tool_search_tools({ sources: ['node'], nodeId, query: 'read' }, ctx);
+    assert.ok(!hidden.output.includes(`node:${nodeId}/read`));
+
+    setToolAuthorizationPolicyForTests(policy([{ node: { provider: 'authenticated-remote' }, action: 'allow' }]));
+    assert.match(JSON.stringify(await callTool('read', { filePath: '/fixture' }, ctx)), /native read reached effect/);
+    assert.match(JSON.stringify(await callTool('call_tool', { toolId: `node:${nodeId}/read`, args: { filePath: '/fixture' } }, ctx)), /native read reached effect/);
+    assert.match(JSON.stringify(await nodeExecution.executeNodeTool(source.id, nodeId, 'read', { filePath: '/fixture' })), /native read reached effect/);
+    assert.equal(effects, 3);
+    const visible: any = await tool_search_tools({ sources: ['node'], nodeId, query: 'read' }, ctx);
+    assert.ok(visible.output.includes(`node:${nodeId}/read`));
+  } finally {
+    setToolAuthorizationPolicyForTests(undefined);
+    await nodeExecution.shutdownNodeExecution(); nodeExecution.resetNodeExecutionForTests();
+    await transport.drain(); transport.close();
+    nodesManager.unregisterNode(nodeId);
+    await removeApprovedNode(nodeId);
+    await sessionManager.deleteSession(source.id);
+  }
 });
