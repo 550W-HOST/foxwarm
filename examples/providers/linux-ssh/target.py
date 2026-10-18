@@ -123,7 +123,9 @@ def start(request, cwd, state_dir):
     cwd_path = shlex.quote(str(directory / "cwd.txt"))
     # Use a separately quoted trap body so target paths are shell data, never code.
     trap = "foxwarm_exit=$?; pwd > " + cwd_path + '; exit "$foxwarm_exit"'
-    script = "#!/bin/bash\ntrap " + shlex.quote(trap) + " EXIT\n" + request["command"] + "\n"
+    script = "#!/bin/bash\ntrap " + shlex.quote(trap) + " EXIT\n" + request["command"]
+    if not script.endswith("\n"):
+        script += "\n"
     (directory / "command.sh").write_text(script, encoding="utf-8")
     (directory / "output.log").touch(mode=0o600)
     atomic_json(directory / "launch.json", {"cwd": cwd})

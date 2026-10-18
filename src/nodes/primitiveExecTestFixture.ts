@@ -21,8 +21,19 @@ async function main() {
   const request = envelope.request;
   try {
     switch (envelope.operation) {
-      case 'describe': reply.result = { label: 'Process fixture', description: 'Independent process fixture.', lifecycle: [] }; break;
-      case 'list': reply.result = { nodes: [node] }; break;
+      case 'describe': reply.result = { label: 'Process fixture', description: 'Independent process fixture.', lifecycle: mode === 'offline-after-destroy' ? ['destroy'] : [] }; break;
+      case 'list': reply.result = { nodes: [{ ...node, availability: fs.existsSync(path.join(root, 'environment-gone')) ? 'offline' : 'ready' }] }; break;
+      case 'destroy': {
+        fs.writeFileSync(path.join(root, 'environment-gone'), '1');
+        for (const directory of fs.readdirSync(root, { withFileTypes: true }).filter(entry => entry.isDirectory())) {
+          const pidPath = path.join(root, directory.name, 'pid');
+          const statusPath = path.join(root, directory.name, 'status');
+          if (!fs.existsSync(pidPath) || fs.existsSync(statusPath)) continue;
+          try { process.kill(-Number(fs.readFileSync(pidPath, 'utf8')), 'SIGKILL'); } catch (error: any) { if (error.code !== 'ESRCH') throw error; }
+        }
+        reply.result = { nodeId: request.nodeId, effect: 'Owned fixture processes stopped.', dataRetention: 'Workspace and logs retained.' };
+        break;
+      }
       case 'exec-start': {
         const ref = crypto.randomUUID();
         const directory = path.join(root, ref);
@@ -54,7 +65,7 @@ async function main() {
         }
         const directory = path.join(root, request.ref.slice('private:'.length));
         const status = path.join(directory, 'status');
-        if (mode === 'lost' || !fs.existsSync(directory)) reply.result = { state: 'lost', reason: 'Fixture execution records removed.' };
+        if (mode === 'lost' || fs.existsSync(path.join(root, 'environment-gone')) || !fs.existsSync(directory)) reply.result = { state: 'lost', reason: 'Fixture execution records removed.' };
         else if (fs.existsSync(status)) reply.result = { state: 'finished', exitCode: Number(fs.readFileSync(status, 'utf8')), cwd: fs.readFileSync(path.join(directory, 'cwd'), 'utf8').replace(/\n$/, ''), finishedAt: new Date().toISOString() };
         else reply.result = { state: 'running' };
         break;

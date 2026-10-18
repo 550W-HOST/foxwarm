@@ -476,6 +476,9 @@ test('executable provider lifecycle persists provider-defined Nodes and safe eff
   const provider = executableProvider('normal', logPath, 2_000, 'lifecycle-executable');
   const base = { sourceSessionId: 'lifecycle-source', nodeId: 'dynamic:one', parameters: { opaque: { value: 1 } }, context: { agent: 'lifecycle-agent' } };
   try {
+    const description = await new NodeProviderRegistry([provider]).inspectProvider(provider.id);
+    assert.deepEqual(description.createParameters, { type: 'object', properties: { opaque: { type: 'object' } } });
+    assert.deepEqual(description.lifecycle, ['create', 'ensure', 'inspect', 'destroy']);
     const created = await provider.createNode(base);
     assert.equal(created.node?.id, 'dynamic:one');
     assert.match(created.effect || '', /created|registered/i);
@@ -499,7 +502,7 @@ test('executable provider lifecycle persists provider-defined Nodes and safe eff
     assert.equal((await provider.listNodes()).some(node => node.id === 'dynamic:one'), false);
 
     const operations = (await readLog(logPath)).map(entry => entry.request.operation);
-    assert.deepEqual(operations, ['create', 'list', 'ensure', 'inspect', 'destroy', 'create', 'list']);
+    assert.deepEqual(operations, ['describe', 'create', 'list', 'ensure', 'inspect', 'destroy', 'create', 'list']);
   } finally {
     await fs.remove(dir);
   }

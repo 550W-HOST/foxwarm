@@ -108,6 +108,9 @@ test('external SSH adapter: canonical files, raw bytes, cwd, bounded output, bac
     assert.equal(foreground.exitCode, 7);
     assert.equal(foreground.content, '  héllo\n');
     assert.equal(session.cwd, path.join(cwd, ' sub '), 'the exact Worker owner applies cwd returned by the generic backend');
+    const shellEof: any = await callTool('exec', { command: "cat <<'END_OF_COMMAND'\nexact trailing newline\n" }, ctx);
+    assert.ok(shellEof.content.endsWith('exact trailing newline\n'));
+    assert.ok(!shellEof.content.endsWith('exact trailing newline\n\n'), 'the adapter does not append blank command source at shell EOF');
     const background: any = await callTool('exec', { command: 'sleep 1.4; printf survived', timeout: 1 }, ctx);
     assert.equal(background.status, 'running');
     assert.ok(runtime.listRunningExecs().some(entry => entry.id === background.execId));

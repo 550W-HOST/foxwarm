@@ -233,3 +233,31 @@ test('owner loss can bound a dispatched start without replaying or killing the d
     assert.equal((await calls(root)).filter(call => call.operation === 'exec-start').length, 1);
   } finally { await runtime.shutdown(); }
 }));
+
+
+test('registered exec polls its exact backend after provider destroy makes the Node unavailable, preserving lost status and retained logs', async () => temporary(async root => {
+  const delivered: string[] = [];
+  const { registry, runtime } = fixture(root, 'offline-after-destroy', 2000, delivered);
+  try {
+    const result: any = await registry.invokeTool(request('printf before; sleep 2; printf after', { timeout: 1 }));
+    assert.equal(result.status, 'running');
+    const entry = runtime.listRunningExecs().find(candidate => candidate.id === result.execId)!;
+    const destroyed = await registry.destroyNode({ sourceSessionId: 'fixture-owner', nodeId: 'process-fixture', parameters: {}, context: { agent: 'fixture-agent' } });
+    assert.equal(destroyed.nodeId, 'process-fixture');
+    assert.equal((await registry.resolveNode('process-fixture'))?.descriptor.availability, 'offline');
+    const status = await runtime.waitForExecCompletion(entry.id, 3000);
+    assert.equal(status?.exitCode, null);
+    assert.match(status?.error || '', /Execution lost/);
+    await runtime.reconcileNow();
+    assert.equal(delivered.length, 1);
+    assert.match(delivered[0], /^fixture-owner:null:/);
+    assert.match(delivered[0], /Execution lost/);
+    assert.deepEqual(runtime.listRunningExecs(), []);
+    const bytes: any = await registry.execBackend('process-provider', 'process-fixture').files.read(entry.logPath, 0, 100);
+    assert.equal(bytes.toString(), 'before');
+    const recorded = await calls(root);
+    const destruction = recorded.findIndex(call => call.operation === 'destroy');
+    assert.ok(recorded.slice(destruction + 1).some(call => call.operation === 'exec-poll'), 'poll is dispatched after availability changes, not rejected by a ready-node lookup');
+    assert.equal(recorded.filter(call => call.operation === 'exec-start').length, 1);
+  } finally { await runtime.shutdown(); }
+}));
