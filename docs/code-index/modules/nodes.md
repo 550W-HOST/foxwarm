@@ -6,6 +6,8 @@ Main-owned generic Node discovery/provider resolution plus authenticated remote-
 
 ## Units
 
+- [Node development workflow](../units/node-development-workflow.md) — portable existing-Node source/material transfer, Task-linked assignment and committed/evidence-only delivery example.
+
 - [External Linux SSH reference](../units/example-linux-ssh-provider.md) — optional independently runnable executable adapter; not a Core backend or sandbox.
 
 - [Shell HTTP Node](../units/src-nodes-shell-http.md) — POSIX sh/curl exec-only transport, bounded output, and existing scoped background completion.
@@ -48,7 +50,7 @@ Unauthenticated bootstrap routes are:
 
 The source archive normally includes the built CLI bundles produced by the master build. `run.sh` uses `client.bundle.js` without installing the CLI dependency tree; if the bundle is absent it requires npm and builds shared/CLI as a fallback. The optional `node-pty` runtime is installed separately. Bare-metal failure leaves non-PTY capabilities available; Docker image preparation treats its required installation path as fatal.
 
-The operator-facing deployment/configuration workflow is documented by the single `skills/node-setup/SKILL.md` source skill. Temporary isolated-worker creation remains a separate `skills/isolated-worker/SKILL.md` workflow: it binds an already-online Node before agent/session creation. It does not create Git worktrees, add a lease/ownership layer, or replace node setup.
+The operator-facing deployment/configuration workflow is documented by the single `skills/node-setup/SKILL.md` source skill, which also links the [existing-Node development example](../units/node-development-workflow.md) and optional installed SSH adapter resources. Temporary isolated-worker creation remains a separate `skills/isolated-worker/SKILL.md` workflow: it binds an already-online Node before agent/session creation. It does not create Git worktrees, add a lease/ownership layer, or replace node setup.
 
 ## Invariants
 

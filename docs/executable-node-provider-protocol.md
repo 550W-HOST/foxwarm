@@ -2,7 +2,7 @@
 
 A trusted external executable can expose execution environments without installing the authenticated Foxwarm CLI Node runtime. Core derives canonical file tools and manages command waiting, background tracking, output and completion delivery. A provider supplies filesystem primitives, optional process start/poll primitives and optional lifecycle operations. Node is the execution identity; provider identity is routing metadata, not a caller principal or a sandbox guarantee.
 
-The independent [Linux SSH reference provider](../examples/providers/linux-ssh/README.md) uses this exact protocol. Core has no SSH backend, dependency or SSH-specific tool.
+The independent [Linux SSH reference provider](../skills/node-setup/examples/linux-ssh/README.md) uses this exact protocol. Core has no SSH backend, dependency or SSH-specific tool.
 
 ## Startup configuration
 

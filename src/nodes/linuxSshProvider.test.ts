@@ -65,7 +65,7 @@ test('external SSH adapter: canonical files, raw bytes, cwd, bounded output, bac
   const configPath = path.join(root, 'provider.json');
   await fs.writeJson(configPath, { nodes: [{ id: 'ssh:fixture', label: 'SSH fixture', ...connection, cwd, stateDir }] });
   const config = { id: 'external-ssh', type: 'executable' as const, command: 'python3',
-    args: [path.resolve('examples/providers/linux-ssh/provider.py'), '--config', configPath], timeoutMs: 5000 };
+    args: [path.resolve('skills/node-setup/examples/linux-ssh/provider.py'), '--config', configPath], timeoutMs: 5000 };
   const provider = new ExecutableNodeProvider(config);
   const delivered: unknown[] = [];
   const runtime = createExecRuntime({ getDefaultCwd: () => root, getExecTempDir: () => root,

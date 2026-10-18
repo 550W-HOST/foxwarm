@@ -1,6 +1,6 @@
 # Unit: example-linux-ssh-provider
 
-Files: examples/providers/linux-ssh/provider.py, examples/providers/linux-ssh/target.py, examples/providers/linux-ssh/README.md
+Files: skills/node-setup/examples/linux-ssh/provider.py, skills/node-setup/examples/linux-ssh/target.py, skills/node-setup/examples/linux-ssh/README.md
 Secondary files: src/nodes/linuxSshProvider.test.ts, src/nodes/providerExecRestartTestFixture.ts, docs/executable-node-provider-protocol.md
 
 ## Purpose
@@ -23,14 +23,14 @@ An optional independently runnable reference implementation of the generic execu
 ## Contract and limits
 
 - Configure as ordinary `type:executable`, using `python3 provider.py --config <private JSON>`. Connection targets, SSH arguments, account permissions, target cwd and state directory belong solely to this adapter.
-- Local dependencies are Python 3 and OpenSSH. Targets require Python 3, Bash and Linux `/proc`, not Foxwarm, pairing or a CLI daemon. Standard SSH identity/configuration and explicitly configured agent sockets are supported; Core's child-environment allowlist is not bypassed.
+- The adapter and adjacent target helper are bundled resources of `node-setup`; their basic execution needs no source checkout. Local optional administrator prerequisites are Python 3 and OpenSSH. Targets require Python 3, Bash and Linux `/proc`, not Foxwarm, pairing or a CLI daemon. Standard SSH identity/configuration and explicitly configured agent sockets are supported; Core's child-environment allowlist is not bypassed.
 - The adapter enforces noninteractive authentication and strict host verification. Unknown/changed keys fail; production examples contain placeholders only. It never disables host checking for tests.
 - Nodes are existing machines, advertised as remote with read-write filesystem and exec. List probes connectivity/default cwd; describe declares an empty lifecycle. There is no fictitious create/ensure/destroy operation.
 - Commands use the SSH account's real filesystem and network authority. Configured cwd is not a jail. No VM, OS or network sandbox is claimed.
 - File bytes use base64 and target-native byte offsets. Core retains canonical edits, patch semantics, formatting and permission checks. Raw logs are target files, not Main cache paths.
 - Each start has a UUID reference and independent target execution directory. The supervisor and command survive SSH/adapter request exit. Poll distinguishes transient transport failure from explicit lost state and validates kernel process identity before reporting running.
 - Status/logs remain until administrator cleanup. Core's existing tracking expiration does not remove target records or stop the command. Missing launch acknowledgement remains unknown and must not be automatically replayed.
-- No Code/PTY/browser/copy support is implied. Provider lifecycle is optional, and the example does not change selection/cwd policy or manage Agent/worktree resources.
+- No Code/PTY/browser support is implied. Standard cross-Node copy uses the adapter's bounded filesystem primitives. Provider lifecycle is optional, and the example does not change selection/cwd policy or manage Agent/worktree resources.
 
 ## Validation
 
