@@ -229,3 +229,6 @@ Implements the core tool registry and execution layer for the agent system. Defi
 - [2026-06-05] Ordinary fixed-schema tools no longer expose generic `node` arguments. Session current-node routing and explicit target-bearing tools determine the execution node; special multi-node tools keep explicit source/target node arguments.
 - [2026-07-02] `list_sessions` remains removed rather than compatibility-wrapped; current resource-action ownership is canonical in [D-tools-resource-action-consolidation](../modules/tools-and-permissions.md#d-tools-resource-action-consolidation).
 - [2026-08-26] Keep the tool name `wait`, remove the model-facing `timeoutSeconds` argument without an alias, and require every new call to declare at least one valid progress source or fallback. Preserve read compatibility for legacy persisted wait state only.
+### Generic remote image writes
+
+Main remote `image_write_to_file` uses the generic registry writer. Worker image writes retain exact-owner image resolution and cleanup, but authorize a narrowly typed Main-owned image-artifact operation instead of pretending the private handoff is an arbitrary Main file copy. The source/target/routing and scope contracts are canonical in [file delivery](./src-file-delivery.md#owned-image-handoff); ordinary copy still authorizes both caller-selected endpoints.

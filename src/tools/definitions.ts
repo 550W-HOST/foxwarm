@@ -228,14 +228,14 @@ Example:
         {
             name: 'copy_between_nodes',
             defaultInject: true,
-            description: "Copy a file between two Nodes, including master. Both paths are checked against the applicable permissions. Relative paths use this agent's directory on each Node, not the session working directory.",
+            description: "Copy a file between Nodes, including master. Both paths are checked against the applicable permissions. Relative paths use the Agent directory on Main and CLI Nodes, or the environment's default directory on other Nodes, not the Session working directory.",
             parameters: {
                 type: 'object',
                 properties: {
                     sourceNode: { type: 'string', description: "Node containing the source file. Use master for the Main host." },
-                    sourcePath: { type: 'string', description: "Source path on sourceNode. Absolute paths, ~/ paths, and paths relative to the agent directory are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected." },
+                    sourcePath: { type: 'string', description: "Source file path on sourceNode. Relative paths use the Agent directory on Main and CLI Nodes, or the environment's default directory on other Nodes. On Main and CLI Nodes, ~/ paths are accepted and leading $fw_agentdir or $fw_tmp expands to this Agent's directory or tmp directory; other leading $ names are rejected." },
                     targetNode: { type: 'string', description: "Node that will receive the file. Use master for the Main host." },
-                    targetPath: { type: 'string', description: "Destination path on targetNode. Absolute paths, ~/ paths, and paths relative to the agent directory are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected." },
+                    targetPath: { type: 'string', description: "Destination file path on targetNode. Relative paths use the Agent directory on Main and CLI Nodes, or the environment's default directory on other Nodes. On Main and CLI Nodes, ~/ paths are accepted and leading $fw_agentdir or $fw_tmp expands to this Agent's directory or tmp directory; other leading $ names are rejected." },
                     overwrite: { type: 'boolean', description: "Allow replacement of an existing destination file. Defaults to false." },
                 },
                 required: ['sourceNode', 'sourcePath', 'targetNode', 'targetPath']
@@ -265,7 +265,7 @@ Example:
                 type: 'object',
                 properties: {
                     id: { type: 'string', description: "Image ID shown in this session." },
-                    filePath: { type: 'string', description: "Destination path. On master, relative paths use the session working directory or, if unset, the agent directory. On other Nodes, they use that Node's agent directory. Absolute paths and ~/ paths are also accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected." },
+                    filePath: { type: 'string', description: "File path on the selected Node. On master, relative paths use the current Session working directory or its Agent directory if unset. On CLI Nodes they use the Agent directory; other Nodes use their environment's default directory. On Main and CLI Nodes, ~/ paths are accepted and leading $fw_agentdir or $fw_tmp expands to this Agent's directory or tmp directory; other leading $ names are rejected." },
                     overwrite: { type: 'boolean', description: "Allow replacement of an existing file. Defaults to false." },
                     node: { type: 'string', description: "Node on which to save the image. Defaults to the current Node." },
                 },
@@ -375,7 +375,7 @@ Example:
                 properties: {
                     channelTargetId: { type: 'string', description: "One destination in the form <channel-instance-id>:<conversation-id>. Do not combine with sessionId." },
                     sessionId: { type: 'string', description: "Session whose attached channels should receive the file. Defaults to the current session; do not combine with channelTargetId." },
-                    filePath: { type: 'string', description: "Path on the selected Node. On master, relative paths use the current session working directory or, if unset, its agent directory. On other Nodes, they use that Node's agent directory. Absolute paths and ~/ paths are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected." },
+                    filePath: { type: 'string', description: "File path on the selected Node. On master, relative paths use the current Session working directory or its Agent directory if unset. On CLI Nodes they use the Agent directory; other Nodes use their environment's default directory. On Main and CLI Nodes, ~/ paths are accepted and leading $fw_agentdir or $fw_tmp expands to this Agent's directory or tmp directory; other leading $ names are rejected." },
                     node: { type: 'string', description: "Node containing the file. Defaults to the current Node." },
                     caption: { type: 'string', description: "Text to accompany the file, where the destination supports captions." },
                     text: { type: 'string', description: "Alternative name for caption." }

@@ -109,7 +109,8 @@ test('protocol-incompatible Nodes stay visible but list, select, and dispatch fa
 test('Node compound copy keeps bytes inside Main for master and remote sources', async () => {
   const sourceId = makeId('node_copy_source');
   await sessionManager.getSession(sourceId);
-  const originals = { read: nodesManager.readFileFromNode, write: nodesManager.writeFileToNode };
+  const originals = { read: nodesManager.readFileFromNode, write: nodesManager.writeFileToNode, getNode: nodesManager.getNode };
+  (nodesManager as any).getNode = (id: string) => ['remote-a', 'remote-b'].includes(id) ? fakeNode(id, ['read', 'write']) : originals.getNode.call(nodesManager, id);
   const reads: any[] = []; const writes: any[] = [];
   (nodesManager as any).readFileFromNode = async (...args: any[]) => {
     reads.push(args); const data = Buffer.from(`bytes-${args[0]}`);
@@ -146,7 +147,7 @@ test('Node compound copy keeps bytes inside Main for master and remote sources',
       assert.equal(writes.length, writesBeforeInvalidSource);
     }
   } finally {
-    (nodesManager as any).readFileFromNode = originals.read; (nodesManager as any).writeFileToNode = originals.write;
+    (nodesManager as any).readFileFromNode = originals.read; (nodesManager as any).writeFileToNode = originals.write; (nodesManager as any).getNode = originals.getNode;
     await cleanup(sourceId);
   }
 });

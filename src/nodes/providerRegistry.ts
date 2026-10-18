@@ -5,6 +5,7 @@ import { resolveExecTimeoutSeconds, type ExecOutputFiles } from '../../packages/
 import { createProviderExecBackend } from './providerExecBackend';
 import path from 'node:path';
 import { decodeNodeTransferFile } from '../nodeFileTransfer';
+import { readPrimitiveTransferFile, writePrimitiveTransferFile, type NodeTransferFilePayload, type NodeTransferWriteResult } from '../../packages/shared/dist/nodeFileTransfer';
 import { readWholeFile } from '../../packages/shared/dist/fileOperations';
 import { RESOLVED_PATH_SIDECAR } from '../../packages/shared/dist/resolvedPathMetadata';
 import { throwIfToolStopped } from '../toolCallControls';
@@ -84,6 +85,9 @@ export type NodeDefaultCwdRequest = {
   context: { agent: string };
 };
 
+export type NodeTransferReadRequest = NodeDefaultCwdRequest & { filePath: string };
+export type NodeTransferWriteRequest = NodeTransferReadRequest & { dataBase64: string; overwrite: boolean };
+
 export type NodeProviderCallOptions = {
   /** Dispatched exec start uses only hard cancellation; per-result read-only observations may use the foreground signal. */
   foregroundToolCancellation?: true;
@@ -102,7 +106,7 @@ export type NodeFilesystemRequest = {
   offset?: number;
   count?: number;
   contentBase64?: string;
-  flag?: 'w' | 'wx';
+  flag?: 'w' | 'wx' | 'a';
   context: Extract<NodeToolRequest, { sourceSessionId: string }>['context'];
 };
 
@@ -166,6 +170,8 @@ export interface NodeProvider {
   invokeFilesystem?(request: NodeFilesystemRequest, options?: NodeProviderCallOptions): Promise<unknown>;
   /** Complete internal file bytes, not a formatted or truncated model result. */
   readFile?(request: Extract<NodeToolRequest, { sourceSessionId: string }> & { toolName: 'read' }, options?: NodeProviderCallOptions): Promise<Buffer>;
+  readTransferFile?(request: NodeTransferReadRequest): Promise<NodeTransferFilePayload>;
+  writeTransferFile?(request: NodeTransferWriteRequest): Promise<NodeTransferWriteResult>;
   describe?(options?: NodeProviderCallOptions): Promise<NodeProviderDescription>;
   startExec?(request: NodeExecStartRequest, options?: NodeProviderCallOptions): Promise<ExecStarted>;
   pollExec?(request: NodeExecPollRequest): Promise<ExecSnapshot>;
@@ -359,6 +365,36 @@ export class NodeProviderRegistry {
     throw new NodeProviderError('NODE_FILE_READ_UNAVAILABLE', `Node \`${request.nodeId}\` does not support complete file reads.`);
   }
 
+  async readTransferFile(request: NodeTransferReadRequest): Promise<NodeTransferFilePayload> {
+    const resolved = await this.resolveNode(request.nodeId);
+    if (!resolved) throw new NodeProviderError('NODE_EXECUTION_NODE_UNAVAILABLE', `Node \`${request.nodeId}\` is not available.`);
+    if (!resolved.descriptor.primitiveBackends) {
+      if (resolved.provider.readTransferFile) return resolved.provider.readTransferFile(request);
+      throw new NodeProviderError('NODE_FILE_TRANSFER_UNAVAILABLE', `Node \`${request.nodeId}\` does not support file transfer.`);
+    }
+    const toolRequest = { sourceSessionId: request.sourceSessionId, nodeId: request.nodeId,
+      toolName: 'read', args: { filePath: request.filePath }, context: request.context };
+    await this.resolveAvailableTool(toolRequest);
+    rejectUnsupportedAgentPathVariable(request.filePath);
+    const { operations } = this.filesystemBackend(resolved.provider, toolRequest);
+    return readPrimitiveTransferFile(request.filePath, operations);
+  }
+
+  async writeTransferFile(request: NodeTransferWriteRequest): Promise<NodeTransferWriteResult> {
+    const resolved = await this.resolveNode(request.nodeId);
+    if (!resolved) throw new NodeProviderError('NODE_EXECUTION_NODE_UNAVAILABLE', `Node \`${request.nodeId}\` is not available.`);
+    if (!resolved.descriptor.primitiveBackends) {
+      if (resolved.provider.writeTransferFile) return resolved.provider.writeTransferFile(request);
+      throw new NodeProviderError('NODE_FILE_TRANSFER_UNAVAILABLE', `Node \`${request.nodeId}\` does not support file transfer.`);
+    }
+    const toolRequest = { sourceSessionId: request.sourceSessionId, nodeId: request.nodeId,
+      toolName: 'write', args: { filePath: request.filePath }, context: request.context };
+    await this.resolveAvailableTool(toolRequest);
+    rejectUnsupportedAgentPathVariable(request.filePath);
+    const { operations, providerParent } = this.filesystemBackend(resolved.provider, toolRequest);
+    return writePrimitiveTransferFile(request.filePath, Buffer.from(request.dataBase64, 'base64'), request.overwrite, operations, providerParent);
+  }
+
   private materializeDescriptor(descriptor: NodeProviderDescriptor, provider?: NodeProvider): NodeDescriptor {
     if (!descriptor.primitiveBackends) return { ...descriptor, tools: descriptor.tools || [] };
     const backendKeys = Object.keys(descriptor.primitiveBackends);
@@ -516,8 +552,7 @@ export class NodeProviderRegistry {
       stat: async filePath => this.normalizeFileStat(await call('stat', { path: filePath })),
       read: async (filePath, offset, count) => {
         const result = await call('read', { path: filePath, offset, count });
-        if (!result || typeof result !== 'object' || typeof (result as any).dataBase64 !== 'string'
-          || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test((result as any).dataBase64)) {
+        if (!result || typeof result !== 'object' || typeof (result as any).dataBase64 !== 'string') {
           throw new NodeProviderError('NODE_PROVIDER_FILESYSTEM_INVALID_RESULT', 'Filesystem read returned an invalid result.');
         }
         const data = Buffer.from((result as any).dataBase64, 'base64');
@@ -788,6 +823,13 @@ function masterTools(): NodeCapabilityDescriptor[] {
 }
 
 export class MasterNodeProvider implements NodeProvider {
+  readTransferFile(request: NodeTransferReadRequest): Promise<NodeTransferFilePayload> {
+    return nodesManager.readFileFromNode(request.nodeId, request.filePath, request.sourceSessionId);
+  }
+  writeTransferFile(request: NodeTransferWriteRequest): Promise<NodeTransferWriteResult> {
+    return nodesManager.writeFileToNode(request.nodeId, request.filePath, request.dataBase64, request.overwrite, request.sourceSessionId);
+  }
+
   readonly id = 'master';
   async describe(): Promise<NodeProviderDescription> {
     return { label: 'Main host', description: 'The colocated Main execution environment.', lifecycle: [] };
@@ -823,6 +865,13 @@ export class MasterNodeProvider implements NodeProvider {
 }
 
 export class AuthenticatedRemoteNodeProvider implements NodeProvider {
+  readTransferFile(request: NodeTransferReadRequest): Promise<NodeTransferFilePayload> {
+    return nodesManager.readFileFromNode(request.nodeId, request.filePath, request.sourceSessionId);
+  }
+  writeTransferFile(request: NodeTransferWriteRequest): Promise<NodeTransferWriteResult> {
+    return nodesManager.writeFileToNode(request.nodeId, request.filePath, request.dataBase64, request.overwrite, request.sourceSessionId);
+  }
+
   readonly supportsExecWaitCancellation = true;
   readonly id = 'authenticated-remote';
   async describe(): Promise<NodeProviderDescription> {

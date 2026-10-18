@@ -120,8 +120,12 @@ export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) 
         overwrite,
     });
 
-    const file = await nodesManager.readFileFromNode(String(sourceNode), String(sourcePath), ctx.sessionId);
-    const result = await nodesManager.writeFileToNode(String(targetNode), String(targetPath), file.dataBase64, overwrite === true, ctx.sessionId);
+    const source = sessionManager.getSessionCatalog(ctx.sessionId);
+    if (!source) throw new Error(`Session \`${ctx.sessionId}\` not found`);
+    const { nodeProviderRegistry } = await import('../nodes/providers');
+    const context = { agent: source.agent || 'main' };
+    const file = await nodeProviderRegistry.readTransferFile({ nodeId: String(sourceNode), filePath: String(sourcePath), sourceSessionId: ctx.sessionId, context });
+    const result = await nodeProviderRegistry.writeTransferFile({ nodeId: String(targetNode), filePath: String(targetPath), dataBase64: file.dataBase64, overwrite: overwrite === true, sourceSessionId: ctx.sessionId, context });
 
     const lines = [
         `Copied \`${sourcePath}\` from node \`${sourceNode}\` to \`${targetPath}\` on node \`${targetNode}\`.`,

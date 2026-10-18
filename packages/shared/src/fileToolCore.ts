@@ -551,7 +551,7 @@ function shouldDiagnoseWriteParentError(err: any): boolean {
 
 export async function writeFileToolPath(
   fullPath: string,
-  content: string,
+  content: string | Buffer,
   options: WriteFileToolPathOptions,
   operations: FileOperations = nativeFileOperations,
 ): Promise<void> {

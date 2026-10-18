@@ -108,6 +108,19 @@ test('external SSH adapter: canonical files, raw bytes, cwd, bounded output, bac
     assert.equal(foreground.exitCode, 7);
     assert.equal(foreground.content, '  héllo\n');
     assert.equal(session.cwd, path.join(cwd, ' sub '), 'the exact Worker owner applies cwd returned by the generic backend');
+    const transferNodeId = (await registry.listNodes()).find(node => node.provider === provider.id)!.id;
+    const transferBytes = Buffer.alloc(12 * 1024 * 1024 + 7, 0xc3);
+    transferBytes[0] = 0;
+    transferBytes[transferBytes.length - 1] = 0xff;
+    const transferred = await registry.writeTransferFile({ sourceSessionId: sessionId, nodeId: transferNodeId,
+      filePath: 'transfer-large.bin', dataBase64: transferBytes.toString('base64'), overwrite: false, context: { agent: 'main' } });
+    assert.equal(transferred.sizeBytes, transferBytes.length);
+    assert.deepEqual(await fs.readFile(path.join(cwd, 'transfer-large.bin')), transferBytes);
+    const transferredBack = await registry.readTransferFile({ sourceSessionId: sessionId, nodeId: transferNodeId,
+      filePath: 'transfer-large.bin', context: { agent: 'main' } });
+    assert.equal(transferredBack.sha256, transferred.sha256);
+    assert.deepEqual(Buffer.from(transferredBack.dataBase64, 'base64'), transferBytes);
+
     const shellEof: any = await callTool('exec', { command: "cat <<'END_OF_COMMAND'\nexact trailing newline\n" }, ctx);
     assert.ok(shellEof.content.endsWith('exact trailing newline\n'));
     assert.ok(!shellEof.content.endsWith('exact trailing newline\n\n'), 'the adapter does not append blank command source at shell EOF');

@@ -1,7 +1,7 @@
 # Unit: src-node-providers
 
 Files: src/nodes/providerRegistry.ts, src/nodes/providers.ts, src/nodes/executableProvider.ts, src/nodes/providerExecBackend.ts
-Secondary files: src/nodeExecutionService.ts, src/nodes/manager.ts, src/nodeExecution.test.ts, src/nodes/executableProvider.test.ts, src/nodes/executableProviderTestFixture.ts, src/nodes/providerExec.test.ts, src/nodes/primitiveExecTestFixture.ts, src/nodes/providerExecRestartTestFixture.ts, docs/executable-node-provider-protocol.md
+Secondary files: src/nodeExecutionService.ts, src/nodes/manager.ts, src/nodeExecution.test.ts, src/nodes/executableProvider.test.ts, src/nodes/executableProviderTestFixture.ts, src/nodes/providerExec.test.ts, src/nodes/providerTransfer.test.ts, src/nodes/primitiveExecTestFixture.ts, src/nodes/providerExecRestartTestFixture.ts, docs/executable-node-provider-protocol.md
 
 ## Purpose
 
@@ -23,6 +23,7 @@ Production has fixed master/authenticated-remote adapters plus startup-configure
 | `NodeProviderRegistry.initialize()` / `shutdown()` | Shared ordered initialization, reverse rollback and reverse idempotent shutdown |
 | `listNodes()` / `resolveNode()` | Global duplicate detection, fixed-provider-first deferred lookup and exact ownership |
 | `invokeTool()` / `readFile()` | Ready-capability checks and canonical composition; complete source reads never consume truncated model display |
+| `readTransferFile()` / `writeTransferFile()` | Same exact registry endpoints for primitive binary transfer and unchanged Main/resident transfer adapters |
 | `execBackend()` | Rebind a persisted provider ID/Node ID directly to the same configured provider and target log filesystem |
 | `inspectProvider()` / `listProviders()` | Structured discovery, including providers with no lifecycle; parameter schemas belong to full inspection |
 | `createNode()` / `ensureNode()` / `inspectNode()` / `destroyNode()` | Existing provider-neutral lifecycle, requested-ID preflight and Main mutation lane |
@@ -41,6 +42,14 @@ Production has fixed master/authenticated-remote adapters plus startup-configure
 - External executable file/process primitives contain only immutable target data, not a Session, Agent, callback, programmatic flag, notification address or Main environment/credentials. Lifecycle retains its bounded authorized Main source/context envelope. The executable itself is trusted administrator-configured code, not a security boundary.
 - The verified external-owner `NodeToolRequest` branch remains supported only by authenticated CLI complete tools. Primitive tools reject it before effect; no new inbound MCP provider authority is added.
 - Fixed master/authenticated-remote lookup precedes deferred executable discovery, so a broken optional adapter does not block an exact connected native/CLI owner. Full listing still detects duplicate identities. Approved disconnected CLI Nodes appear offline with no executable tools; incompatible connected Nodes retain structured error/protocol information and no execution capability.
+
+## Generic binary transfer
+
+`readTransferFile()` and `writeTransferFile()` resolve opaque Core IDs and preserve the exact source. Main/resident implementations retain their existing path roots, native publication, errors and SHA256 receipts. Primitive implementations compose shared target-owned operations, check declared read/write capability, and never normalize paths on Main or substitute another provider.
+
+Primitive requests contain at most 1 MiB of file bytes. The initial write creates exclusively or overwrites; later writes append and ordinary failure leaves the partial prefix. Empty files still create one empty write. No target absolute path is invented for an opaque namespace. Relative transfer paths use the environment default, not Session cwd. Main/CLI and boundary limits are unchanged. Canonical ownership is [generic Node transfer](../threads/tool-dispatch-node-execution.md#d-dispatch-generic-node-transfer).
+
+`providerTransfer.test.ts` uses real executable processes and covers binary/empty/12 MiB data, cross-provider/default paths, overwrite/refusal, partial failure, both endpoint checks, Main-owned delivery cache and the exact-source image handoff. Native CLI and actual SSH tests cover their existing mechanics and bounded append respectively.
 
 ## Process integration
 
@@ -74,7 +83,7 @@ Malformed/multiple/oversized responses, identity mismatch, invalid primitive res
 
 - `src/nodeExecutionService.ts` owns source/reverse fences, authorization, isolation, bounded topology/summary disclosure and Main provider routing. Session workers use the same service; selection mutates only the exact Session owner after validation.
 - `src/tools/resolvedTools.ts` routes all non-master capability targets generically and handles the exact-Node cwd result marker without provider-type branching. `nodesManager` remains the resident transport owner, not a new generic-provider process manager.
-- Both WebUI directory and Session picker consume generic provider topology; approved offline labels/state are retained. File/exec primitives do not imply Code, PTY, browser or copy support. Credential revocation remains distinct from provider destroy.
+- Both WebUI directory and Session picker consume generic provider topology; approved offline labels/state are retained. Filesystem primitives support Core transfer at their declared read/write level; they do not imply Code, PTY or browser services. Credential revocation remains distinct from provider destroy.
 - `nodeExecution.test.ts` covers canonical file composition over opaque paths, capability/source/isolation fences, snapshots and no fallback. `nodeLifecycle.test.ts` covers lifecycle identity, mutation ordering, confirmations, structured discovery, schema/DTO bounds and Main/Worker routing.
 - `executableProvider.test.ts` uses actual subprocess envelopes for discovery, filesystem, source loading, lifecycle and transport failures. `providerExec.test.ts` uses an independent process fixture for native/provider tracking coexistence, Stop, uncertain start, hard owner loss, transient/slow poll, lost state, missing provider, output loss, bounded raw logs, exact source/permission fences and reattachment without replay.
 - SSH transport, account-authenticated filesystem/process work and reattachment across actual Core process exits are independently covered by [example-linux-ssh-provider](./example-linux-ssh-provider.md).

@@ -23,7 +23,7 @@ export interface FileOperations {
   stat(filePath: string): Promise<FileOperationStat>;
   read(filePath: string, offset: number, count: number): Promise<Buffer>;
   readdir(dirPath: string): Promise<FileOperationDirectoryEntry[]>;
-  write(filePath: string, content: string | Buffer, flag: 'w' | 'wx'): Promise<void>;
+  write(filePath: string, content: string | Buffer, flag: 'w' | 'wx' | 'a'): Promise<void>;
   mkdir(dirPath: string): Promise<void>;
   remove(filePath: string): Promise<void>;
 }
@@ -98,9 +98,8 @@ export async function fileOperationPathExists(operations: FileOperations, filePa
 }
 
 /** Read a complete file through bounded primitive requests. */
-export async function readWholeFile(operations: FileOperations, filePath: string): Promise<Buffer> {
+export async function readWholeFile(operations: FileOperations, filePath: string, chunkSize = 64 * 1024): Promise<Buffer> {
   const chunks: Buffer[] = [];
-  const chunkSize = 64 * 1024;
   let offset = 0;
   while (true) {
     const chunk = await operations.read(filePath, offset, chunkSize);

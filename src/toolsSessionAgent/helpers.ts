@@ -6,7 +6,6 @@ import * as sessionManager from '../sessionManager';
 import * as timers from '../timers';
 import type { ChannelFile } from '../channel';
 import { getAgentDir, MODEL_EFFORTS, resolveModelConfig, type ModelEffort } from '../config';
-import { nodesManager } from '../nodes/manager';
 
 import { expandHomePath, resolveAgentPath } from '../utils/pathResolve';
 
@@ -460,7 +459,8 @@ export async function prepareRemoteChannelFile(filePath: string, nodeId: string,
   if (!ctx?.sessionId) {
     throw new Error('send_file requires an active session context when reading a file from a remote node.');
   }
-  const payload = await nodesManager.readFileFromNode(nodeId, filePath, ctx.sessionId);
+  const { nodeProviderRegistry } = await import('../nodes/providers');
+  const payload = await nodeProviderRegistry.readTransferFile({ nodeId, filePath, sourceSessionId: ctx.sessionId, context: { agent: ctx.session?.agent || 'main' } });
   const agentName = ctx?.session?.agent || 'main';
   const tempDir = path.join(getAgentDir(agentName), '.temp', 'send-file-cache');
   const fs = await import('fs-extra');

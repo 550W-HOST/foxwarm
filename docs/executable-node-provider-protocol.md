@@ -108,11 +108,13 @@ The `filesystem` request is one byte-oriented primitive:
 | `stat` | `path` | `{ "kind": "file|directory|symlink|other", "size": 0, "modifiedAtMs": 0 }` |
 | `read` | `path`, nonnegative safe integer `offset`, `count` | `{ "dataBase64": "..." }` |
 | `readdir` | `path` | array of stat objects plus exact `name` |
-| `write` | `path`, `contentBase64`, `flag:"w"|"wx"` | any JSON result, normally `null` |
+| `write` | `path`, `contentBase64`, `flag:"w"|"wx"|"a"` | any JSON result, normally `null` |
 | `mkdir` | `path` | any JSON result, normally `null` |
 | `remove` | `path` | any JSON result, normally `null` |
 
-Size, offsets and counts are bytes. Read fills the requested range up to EOF and returns canonical base64 for at most `count` bytes. An incomplete log snapshot is reported unavailable rather than presented as complete retained content. Write replaces the entire content; `wx` fails when the destination exists. `mkdir` creates parents recursively. Errors use filesystem codes such as `ENOENT`, `EACCES`, `ENOTDIR` and `EEXIST`; only `ENOENT` means missing. Do not translate permission or transport failures into missing files.
+Size, offsets and counts are bytes. Read fills the requested range up to EOF and returns canonical base64 for at most `count` bytes. An incomplete log snapshot is reported unavailable rather than presented as complete retained content. Write uses binary bytes: `w` replaces the entire content, `wx` creates exclusively and fails when the destination exists, and `a` appends the supplied bytes (creating a missing file). `mkdir` creates parents recursively. Errors use filesystem codes such as `ENOENT`, `EACCES`, `ENOTDIR` and `EEXIST`; only `ENOENT` means missing. Do not translate permission or transport failures into missing files.
+
+Core also composes `copy_between_nodes` and file-delivery preparation from these primitives. Transfer reads and writes use at most 1 MiB of file bytes per primitive request, so a complete transfer can exceed the executable request-envelope budget without a new upload protocol. The first write uses `w` or `wx`; subsequent writes use `a`. Empty files still create one empty initial write. A later failure leaves the written prefix, with no automatic replay, rollback or successful receipt. Main retains the existing full transfer payload/cache and SHA256 receipts; this is not a resumable or streaming-memory transfer platform. Relative primitive-transfer paths use the environment default directory, not a Session cwd. Main and authenticated CLI transfer roots and native publication semantics are unchanged.
 
 Core composes bounded reads, directory and image presentation, parent diagnostics, exact replacement and add/update/delete patch sequencing. Existing partial-effect semantics are unchanged. Target home expansion, path separators, URI interpretation, symlinks and restrictions belong to the adapter. Core does not resolve target paths through Main's filesystem. Reserved native Agent path variables are rejected when no actual target Agent directory mapping exists.
 

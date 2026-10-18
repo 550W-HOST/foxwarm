@@ -63,9 +63,9 @@ def filesystem(request, default_cwd):
         return [{"name": entry.name, **file_stat(entry.stat(follow_symlinks=False))} for entry in os.scandir(path)]
     if operation == "write":
         flag = request["flag"]
-        if flag not in ("w", "wx"):
+        if flag not in ("w", "wx", "a"):
             raise ValueError("Invalid write flag.")
-        with open(path, "xb" if flag == "wx" else "wb") as stream:
+        with open(path, {"wx": "xb", "w": "wb", "a": "ab"}[flag]) as stream:
             stream.write(base64.b64decode(request["contentBase64"], validate=True))
         return None
     if operation == "mkdir":

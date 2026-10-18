@@ -375,7 +375,7 @@ export function createNodeExecutionServiceHandler(options: {
       return { nodeId, defaultCwd: 'node process cwd (run `pwd` to inspect)' };
     },
     async copy(input) {
-      const { sourceSessionId } = await requireSource(input,
+      const { sourceSessionId, source } = await requireSource(input,
         ['sourceSessionId', 'sourceNode', 'sourcePath', 'targetNode', 'targetPath', 'overwrite'], 'Node copy request');
       const sourceNode = requireBoundedString(input.sourceNode, 'sourceNode', 128); const sourcePath = requireBoundedPath(input.sourcePath, 'sourcePath');
       const targetNode = requireBoundedString(input.targetNode, 'targetNode', 128); const targetPath = requireBoundedPath(input.targetPath, 'targetPath');
@@ -383,9 +383,9 @@ export function createNodeExecutionServiceHandler(options: {
       await checkToolPermission({ source: 'builtin', tool: 'copy_between_nodes' }, sourceSessionId, 'master', { sourceNode, sourcePath, targetNode, targetPath, overwrite: input.overwrite === true });
       if (sourceNode !== 'master') await requireNodeExecutionAccess(sourceSessionId, sourceNode);
       if (targetNode !== 'master') await requireNodeExecutionAccess(sourceSessionId, targetNode);
-      const file = await nodesManager.readFileFromNode(sourceNode, sourcePath, sourceSessionId);
+      const file = await providers.readTransferFile({ nodeId: sourceNode, filePath: sourcePath, sourceSessionId, context: { agent: source.agent || 'main' } });
       try { decodeNodeTransferFile(file); } catch (error) { invalidResponse((error as Error).message); }
-      const written = await nodesManager.writeFileToNode(targetNode, targetPath, file.dataBase64, input.overwrite === true, sourceSessionId);
+      const written = await providers.writeTransferFile({ nodeId: targetNode, filePath: targetPath, dataBase64: file.dataBase64, overwrite: input.overwrite === true, sourceSessionId, context: { agent: source.agent || 'main' } });
       if (typeof written.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(written.sha256)) invalidResponse('Node copy returned an invalid sha256.');
       if (typeof written.overwritten !== 'boolean') invalidResponse('Node copy returned an invalid overwritten flag.');
       if (written.absolutePath !== undefined && (typeof written.absolutePath !== 'string' || written.absolutePath.length > 4096)) invalidResponse('Node copy returned an invalid absolutePath.');
