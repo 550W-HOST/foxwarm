@@ -20,6 +20,6 @@ Root `npm run build` prepares Core plus the retained TypeScript reference/defaul
 
 ## Tests and consumers
 
-`scripts/model.test.js` drives the real public child against a controlled Responses provider, including canonical settings, stdin/system/default/virtual/list behavior, timeout/retry, output/exit distinctions, and tool-free `purpose:cli` journaling without a Session/Main or TypeScript fallback. `scripts/archive.test.js` covers parser/output-path/frontend forwarding; `CliArchiveMigrationTests.cs` exercises actual public export artifacts and real Source compatibility consumers. Multica's existing HTTP/JSONL callers retain their independent tests.
+`scripts/model.test.js` drives the real public child against controlled Responses and nonstream Anthropic providers, including canonical settings, stdin/system/default/virtual/list behavior, timeout/retry, output/exit distinctions, and tool-free `purpose:cli` journaling without a Session/Main or TypeScript fallback. `scripts/archive.test.js` covers parser/output-path/frontend forwarding; `CliArchiveMigrationTests.cs` exercises actual public export artifacts and real Source compatibility consumers. Multica's existing HTTP/JSONL callers retain their independent tests.
 
 The standalone Code Index generator invokes the public model command rather than maintaining its own provider/configuration implementation.

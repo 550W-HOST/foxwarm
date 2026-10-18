@@ -100,6 +100,12 @@ test('real public model caller uses only Core, captured settings, one-shot reque
     request.on('end', () => {
       const body = JSON.parse(raw);
       requests.push({ url: request.url, body });
+      if (request.url === '/v1/messages') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ content: [{ type: 'text', text: 'anthropic-cli-ok' }], usage: { input_tokens: 2, output_tokens: 1 } }));
+        return;
+      }
+      if (!Array.isArray(body.input)) { response.writeHead(400); response.end('{"error":"unexpected fixture request"}'); return; }
       const prompt = JSON.stringify(body.input);
       if (prompt.includes('timeout-probe') && timeoutAttempt++ === 0) return;
       if (prompt.includes('fatal-probe')) { response.writeHead(400); response.end('{"error":"synthetic invalid request"}'); return; }
@@ -107,7 +113,7 @@ test('real public model caller uses only Core, captured settings, one-shot reque
     });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  fs.writeFileSync(path.join(data, 'state/models.yaml'), `default: sticky\nproviders:\n  sticky: test/model\n  test:\n    providerType: openai\n    baseUrl: http://127.0.0.1:${server.address().port}\n    models: [model]\n`);
+  fs.writeFileSync(path.join(data, 'state/models.yaml'), `default: sticky\nproviders:\n  sticky: test/model\n  test:\n    providerType: openai\n    baseUrl: http://127.0.0.1:${server.address().port}\n    models: [model]\n  anthro:\n    providerType: anthropic\n    baseUrl: http://127.0.0.1:${server.address().port}\n    extraFields: {stream: false}\n    models: [wire]\n`);
   t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); fs.rmSync(root, { recursive: true, force: true }); });
 
   const listed = await invoke(['model', '--list-models'], env);
@@ -132,6 +138,13 @@ test('real public model caller uses only Core, captured settings, one-shot reque
   assert.match(JSON.stringify(requests.at(-1).body.input), /from stdin 漢字/);
   assert.equal(requests.at(-1).body.instructions, '');
   assert.deepEqual(await invoke(['model', '-p', 'unicode-response'], env), { code: 0, stdout: '回覆😀\n', stderr: '' });
+  const anthropic = await invoke(['model', '-m', 'anthro/wire', '-p', 'Anthropic prompt', '-s', 'standalone', '-j', '-t', '.5'], env);
+  assert.equal(anthropic.code, 0, anthropic.stderr);
+  assert.equal(JSON.parse(anthropic.stdout).text, 'anthropic-cli-ok');
+  assert.equal(JSON.parse(anthropic.stdout).modelId, 'anthro/wire');
+  assert.equal(requests.at(-1).url, '/v1/messages');
+  assert.equal(requests.at(-1).body.stream, false);
+  assert.match(JSON.stringify(requests.at(-1).body.system), /standalone/);
   assert.equal((await invoke(['model', '-m', 'missing', '-p', 'x'], env)).code, 2);
   assert.equal((await invoke(['model'], env)).code, 2);
   const beforeTimeout = requests.length;
@@ -157,6 +170,6 @@ test('real public model caller uses only Core, captured settings, one-shot reque
   const records = fs.readFileSync(path.join(output, 'llm-request-journal.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(summary.llm.records, records.length);
   const manifests = records.filter(row => row.kind === 'request');
-  assert.equal(manifests.length, 6);
+  assert.equal(manifests.length, 7);
   for (const row of manifests) { assert.equal(row.purpose, 'cli'); assert.equal(row.iteration, 0); assert.equal(row.sessionId, undefined); }
 });

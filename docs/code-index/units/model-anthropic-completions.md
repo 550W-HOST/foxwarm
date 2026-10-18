@@ -17,7 +17,7 @@ Callers: `SessionChatService`, `ConfiguredModelRequests`, `ModelRequestOwner`, r
 
 ## Contract and side effects
 
-Messages defaults to `stream:true` and top-level ephemeral `cache_control`; explicit `extraFields` overrides remain authoritative. Nonboolean `stream` fails preparation before an attempt-start record or provider send. `stream:false` retains JSON conversion and five-minute header/body-byte idle handling.
+Messages defaults to `stream:true` and top-level ephemeral `cache_control`; explicit `extraFields` overrides remain authoritative. Nonboolean `stream` fails preparation before an attempt-start record or provider send. `stream:false` retains JSON conversion and five-minute header/body-byte idle handling by default. An explicit [one-shot CLI timeout](./core-delivery-cli.md#cli-behavior) replaces that idle default while the request owner bounds the complete attempt.
 
 Streaming gets three minutes to first model activity, then the configured content-inactivity allowance (default one minute). Thinking/redacted-thinking open and close switch the inactivity allowance to at least ten minutes and back. Text, thinking and tool-input fragments reset semantic activity; pings, signatures, headers and usage do not. Progress snapshots contain visible text/reasoning and ordered tool arguments, never signatures or redacted data. Caller Stop, callback exceptions, terminal completion and failed partial streams dispose the owned transport.
 
