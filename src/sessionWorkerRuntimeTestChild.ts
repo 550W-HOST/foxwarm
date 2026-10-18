@@ -17,6 +17,7 @@ import { writeAuthoritativeSessionState } from './session/stateFile';
 import { readSessionHistorySnapshot } from './session/metadataStore';
 import { initArchiveStore } from './session/archiveStore';
 import { appendMessagesToArchive, readArchiveMessagesBySeqRange } from './session/archive';
+import * as sessionArchive from './session/archive';
 import { COMPACT_PLAN_TOOL_NAME } from './session/compactPlan';
 import { INTER_AGENT_HANDOFF_RECALL_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_PREFIX, INTER_AGENT_HANDOFF_CONFIRMATION_SUFFIX } from './toolCallControls';
 
@@ -49,6 +50,13 @@ async function start(): Promise<void> {
     // the RPC server starts so the candidate status RPC is never answered.
     await new Promise(resolve => setTimeout(resolve, 150));
     process.exit(1);
+  }
+  if (process.env.FOXWARM_TEST_FAIL_ARCHIVE_APPEND === '1') {
+    (sessionArchive as any).appendMessagesToArchive = async () => {
+      const error = new Error('archive storage failure');
+      (error as any).code = 'SESSION_ARCHIVE_COMMIT_FAILED';
+      throw error;
+    };
   }
   const processIdentity = readSessionWorkerProcessIdentity(process.pid)!;
   // Mock-axios mode: keep the REAL llm.chat path (model resolution, request

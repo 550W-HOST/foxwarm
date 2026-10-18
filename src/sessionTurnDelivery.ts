@@ -77,7 +77,7 @@ export function snapshotQueueSource(ctx: ChannelContext): QueueSource {
 
 function finalOptions(outcome: SessionTurnFinalKind, turnId?: string): any {
   return {
-    ...(outcome === 'response' ? { excludePlatforms: ['webui'] } : {}),
+    ...((outcome === 'response' || outcome === 'error') ? { excludePlatforms: ['webui'] } : {}),
     ...(outcome === 'empty-final' ? { allowEmptyBroadcast: true } : {}),
     ...(turnId ? { channelProgressTurnId: turnId } : {}),
     turnFinal: true,

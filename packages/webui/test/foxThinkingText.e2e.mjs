@@ -28,7 +28,7 @@ before(async () => {
           runtimeState={{state: state === 'interrupted' ? 'idle' : state === 'compacting' ? 'requesting-model' : state === 'exec' ? 'running-tool' : state,
             active: {phase: state === 'compacting' ? 'compaction' : 'normal-turn'},
             tool: {name: state === 'exec' ? 'exec' : 'read', index: 0, total: 2, executionNode: 'fixture-node', argsPreview: 'echo WORK', startedAt: 1}}}
-          onContinue={() => window.fixture.continues++} onStop={() => window.fixture.stops++} />
+          onContinue={() => window.fixture.continues++} />
           <QueuedMessageStatus count={queue} alignment="left" isMobile={innerWidth < 768} onRunQueued={() => window.fixture.runs++} /></>
       }
       window.fixture = {stops: 0, runs: 0, continues: 0}
@@ -107,7 +107,7 @@ test('phrases wipe and resize without moving text or rendering a runtime Stop ac
   const page = await open()
   try {
     const before = await geometry(page)
-    const style = await page.$eval('.fw-processing-badge', element => {
+    const style = await page.$eval('[data-runtime-caption]', element => {
       const style = getComputedStyle(element)
       return { border: style.borderTopWidth, background: style.backgroundColor, font: getComputedStyle(element.querySelector('[data-fox-thinking-copy]')).fontSize }
     })
@@ -131,7 +131,7 @@ test('phrases wipe and resize without moving text or rendering a runtime Stop ac
     assert.equal(middle.badge.x, before.badge.x)
     assert.equal(middle.slot.height, before.slot.height)
     assert.equal(await page.$eval('[data-fox-thinking-copy]', element => element.getAnimations().some(animation => animation.transitionProperty === 'width')), true)
-    assert.equal(await page.$eval('[data-fox-thinking-copy] .sr-only', element => element.textContent), 'Thinking...')
+    assert.equal(await page.$eval('[data-fox-thinking-copy] .sr-only', element => element.textContent), 'Requesting model…')
     assert.equal(await page.$eval('.fw-fox-thinking-phrases', element => element.getAttribute('aria-hidden')), 'true')
     await page.waitForFunction(() => {
       const copy = document.querySelector('[data-fox-thinking-copy]')
@@ -174,33 +174,27 @@ test('narrow caption-only rows preserve fixed status height and timer cleanup ac
 })
 
 
-test('exec gets borderless action copy, distinct semantic color, and real details without a tag', async () => {
-  const page = await open()
+test('exec shows real identity, special ink and details without decorative captions or timers', async () => {
+  const page=await open()
   try {
-    const thinking = await page.$eval('[data-fox-thinking-copy]', element => getComputedStyle(element).color)
-    await page.evaluate(() => window.fixture.setState('exec'))
-    await page.waitForSelector('[data-fox-copy-mode="exec"]')
-    const exec = await page.$eval('[data-fox-thinking-copy]', element => getComputedStyle(element).color)
-    assert.notEqual(exec, thinking)
-    assert.equal(await page.$eval('[data-processing-runtime-state]', element => getComputedStyle(element).borderTopWidth), '0px')
-    assert.match(await page.$eval('[data-fox-copy-mode="exec"]', element => element.textContent), /Prowling through the pines/)
-    assert.equal(await page.$eval('.fw-processing-exec .fw-fox', element => getComputedStyle(element).stroke), exec)
-    assert.match(await page.$eval('[title*="echo WORK"]', element => element.title), /tool: exec 1\/2.*fixture-node.*echo WORK/)
-    assert.equal(await page.$eval('[data-fox-copy-mode="exec"] .sr-only', element => element.textContent), 'tool: exec 1/2')
-    assert.equal(await page.$('[data-processing-tool-tag]'), null)
-    assert.equal(await page.evaluate(() => window.thinkingTimers.size), 1)
-    await page.evaluate(() => window.fixture.setState('requesting-model'))
-    await page.waitForFunction(() => document.querySelector('[data-fox-copy-mode="thinking"]') && window.thinkingTimers.size === 1)
-    assert.equal(await page.$eval('[data-fox-thinking-copy] .sr-only', el => el.textContent), 'Thinking...')
-    assert.match(await page.$eval('[data-thinking-phrase]', el => el.textContent), /Negotiating with squirrels/)
-    await page.evaluate(() => window.fixture.setState('exec'))
-    await page.waitForFunction(() => document.querySelector('[data-fox-copy-mode="exec"]') && window.thinkingTimers.size === 1)
-    assert.match(await page.$eval('[data-thinking-phrase]', el => el.textContent), /Prowling through the pines/)
-    await page.evaluate(() => window.fixture.setState('idle'))
-    await page.waitForFunction(() => window.thinkingTimers.size === 0)
-  } finally { await page.close() }
+    const thinking=await page.$eval('[data-runtime-caption]', el=>getComputedStyle(el).color)
+    await page.evaluate(()=>window.fixture.setState('exec'))
+    await page.waitForSelector('[data-runtime-presentation="tool"]')
+    assert.equal(await page.$('[data-fox-thinking-copy]'),null)
+    const ink=await page.$eval('[data-runtime-caption]', el=>getComputedStyle(el).color)
+    assert.notEqual(ink,thinking)
+    assert.match(await page.$eval('[data-runtime-caption]', el=>el.textContent),/Executing exec.*fixture-node/)
+    assert.equal(await page.$eval('[data-runtime-fox="tool"]',el=>getComputedStyle(el).stroke),ink)
+    assert.equal(await page.evaluate(()=>window.thinkingTimers.size),0)
+    await page.click('[data-runtime-caption]');await page.waitForSelector('[data-runtime-details]')
+    assert.match(await page.$eval('[data-runtime-details]',el=>el.innerText),/echo WORK/)
+    await page.keyboard.press('Escape')
+    await page.evaluate(()=>window.fixture.setState('requesting-model'))
+    await page.waitForFunction(()=>document.querySelector('[data-fox-thinking-copy]')&&window.thinkingTimers.size===1)
+    await page.evaluate(()=>window.fixture.setState('idle'))
+    await page.waitForFunction(()=>window.thinkingTimers.size===0)
+  }finally{await page.close()}
 })
-
 
 test('all runtime states and queue copy are borderless, with smaller muted queue metadata', async () => {
   const page = await open()
@@ -208,7 +202,7 @@ test('all runtime states and queue copy are borderless, with smaller muted queue
     for (const state of ['requesting-model', 'exec', 'compacting', 'running-tool', 'waiting']) {
       await page.evaluate(state => window.fixture.setState(state), state)
       await page.waitForFunction(state => document.querySelector('[data-processing-runtime-state]')?.dataset.processingRuntimeState === (state === 'exec' ? 'running-tool' : state === 'compacting' ? 'requesting-model' : state), {}, state)
-      assert.deepEqual(await page.$eval('.fw-processing-badge', element => {
+      assert.deepEqual(await page.$eval('[data-runtime-caption]', element => {
         const css = getComputedStyle(element)
         return {border: css.borderTopWidth, background: css.backgroundColor}
       }), {border: '0px', background: 'rgba(0, 0, 0, 0)'})
@@ -245,8 +239,8 @@ test('short queued count and real actions remain visible in wide and narrow stat
       for (const state of ['requesting-model', 'exec', 'waiting', 'idle', 'interrupted', 'loading']) {
         await page.evaluate(state => window.fixture.setState(state), state)
         await page.waitForFunction(state => {
-          if (state === 'loading') return !!document.querySelector('[aria-label="Loading"]')
-          if (state === 'idle') return !document.querySelector('[data-processing-runtime-state], [aria-label="Loading"]')
+          if (state === 'loading') return document.querySelector('[data-runtime-caption]')?.textContent.includes('Sending')
+          if (state === 'idle') return !document.querySelector('[data-processing-runtime-state]')
           return document.querySelector('[data-processing-runtime-state]')?.dataset.processingRuntimeState === (state === 'exec' ? 'running-tool' : state)
         }, {}, state)
         await page.waitForFunction(() => document.querySelector('[data-processing-queue-status]')?.textContent.includes('3 queued'))
@@ -282,7 +276,7 @@ test('waiting sleeps in warning color without a caption timer and respects reduc
     assert.equal(await page.$('[data-fox-loader="spinner"]'),null)
     assert.equal(await page.evaluate(()=>window.thinkingTimers.size),0)
     const normal=await page.$eval('[data-fox-loader="sleeping"]',el=>({
-      color:getComputedStyle(el).color,caption:getComputedStyle(el.nextElementSibling).color,
+      color:getComputedStyle(el).color,caption:getComputedStyle(el.closest('[data-runtime-caption]')).color,
       body:getComputedStyle(el.querySelector('.fw-fox-body')).animationName,
       sleep:getComputedStyle(el,'::after').animationName,
       slot:el.closest('[data-processing-status-slot]').getBoundingClientRect().height,
@@ -298,7 +292,7 @@ test('waiting sleeps in warning color without a caption timer and respects reduc
       getComputedStyle(el.querySelector('.fw-fox-body')).animationName,getComputedStyle(el,'::after').animationName,
     ]),['none','none'])
     await page.evaluate(()=>window.fixture.setState('interrupted'))
-    await page.waitForSelector('[data-processing-status-dot="static"]')
+    await page.waitForSelector('[data-runtime-fox="interrupted"]')
     assert.equal(await page.$('[data-fox-loader="sleeping"]'),null)
   }finally{await page.close()}
 })

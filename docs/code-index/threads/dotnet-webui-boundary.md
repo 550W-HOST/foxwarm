@@ -27,11 +27,22 @@ Static WebUI and state-changing routes are served only after normal host auth; `
 
 ## Current gaps
 
-The .NET channel has real routes for current tasks/terminal/files/images/history and connected external Node onboarding, ordinary tools, exec/completion, file consumers, Code/PTY and exec-only Shell HTTP. The connected Node contract and remaining Worker boundary belong to [Remote Node compatibility](./remote-node-compatibility.md#net-external-node-integration). Vector-backed history/admission remains `VECTOR_DISABLED`. Root package start/build still targets TypeScript Main even though this .NET host is the active replacement architecture.
+The .NET channel has real routes for current tasks/terminal/files/images/history and connected external Node onboarding, ordinary tools, exec/completion, file consumers, Code/PTY and exec-only Shell HTTP. The connected Node contract belongs to [Remote Node compatibility](./remote-node-compatibility.md#net-external-node-integration); excluded hosting/lifecycle platforms are listed in [delivery scope](../overview.md#d-dotnet-delivery-scope). Vector-backed history/admission remains `VECTOR_DISABLED`. Root package start/build still targets TypeScript Main even though this .NET host is the active replacement architecture.
 
 The current React entry point requests `GET /api/auth/session` before mounting any normal, popup, or embedded root. It expects `{ role: 'admin' }` for the administrator app or a verified scoped WebUI identity response for the restricted root. The .NET host implements the authenticated administrator response, so successful instance-token login allows the merged client to mount the administrator app. Restricted WebUI identities remain explicitly deferred and are not accepted or represented as supported.
 
 The merged React Node picker now uses real authenticated `GET /api/sessions/{id}/nodes` and `POST /api/sessions/{id}/node` handlers. Directory reads use catalog/topology; selection uses the exact owner/save lane with cwd retention. History/realtime/composer DTOs expose committed Node/cwd, and the original App is qualified with owned official Node clients. The [WebUI contract unit](../units/dotnet-webui-core.md) maps these consumers. The current Setup omits Authorizations; the browser callback and implemented [instance-shared outbound MCP OAuth](../units/dotnet-mcp-oauth.md) administrator routes/grant lifecycle remain supported; inbound MCP and restricted identities remain deferred.
+
+### Runtime and communication projection gaps
+
+The current shared React sources include [runtime presentation](./session-runtime-presentation.md) and [communication cards](./session-communication-presentation.md), whose TypeScript Main producers are not automatically .NET implementations:
+
+- `useChatConversationSync.sendSessionCommand` adds `controlRequestId` for Stop, Continue, Run queued, compaction and compaction cancellation, and waits for a correlated `session-control-feedback` Session event. The .NET `/message` allowlist rejects this field with HTTP 400; `MessageRouter` returns the older synchronous command results and does not emit the new event. These existing controls require backend alignment before the updated frontend can use them against .NET.
+- `.NET SessionRuntimeState.Build` exposes the base state and wait details, but not the new stopping, resolved tool identity/arguments, model-attempt retry or owned compaction operation projections. The richer status/details UI therefore lacks those facts. Existing committed `llm-retry` history notices do not substitute for the runtime retry projection and physical-attempt clearing hook.
+- `.NET` run and compaction failures do not yet produce the shared typed `system-event` notice envelope and owner-safe deduplication/temporary publication contract. Ordinary error text is not sufficient to render the new `SystemEventCard` or its failure status.
+- Direct and ToolScript Session sends do not yet record canonical resolved destinations and bounded bodies in the new UI-only `sessionMessages`/`sessionMessage` metadata. Legacy paired direct sends and trusted incoming envelopes can still render, but do not establish full outgoing alias or scripted-send projection support. New metadata must stay outside provider replay.
+
+The standalone login retains the existing packaged `public/login.html` and prefix-relative authentication boundary. History preparation/navigation use existing active-tail and continuous-history routes; the saved prompt projection remains a .NET-owned field in the shared history response. Session Worker publication changes remain TypeScript compatibility behavior under the [delivery exclusions](../overview.md#d-dotnet-delivery-scope).
 
 ## Merged original-App qualification
 

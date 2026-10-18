@@ -119,7 +119,7 @@ test('default normal rows, detailed toggle, persistence, canonical status, theme
     assert.equal(await page.$eval(row('main'), e => e.getBoundingClientRect().height), 40)
     assert.equal(await page.$eval(row('main'), e => e.textContent.includes('12 msgs')), false)
     assert.deepEqual(await page.$$eval('[data-session-status]', els => els.map(e => [e.dataset.sessionStatus, e.getAttribute('aria-label')])), [
-      ['requesting-model', 'Status: compacting'], ['running-tool', 'Status: tool: exec'], ['waiting', 'Status: waiting: input'], ['requesting-model', 'Status: thinking'],
+      ['requesting-model', 'Status: Compacting context…'], ['running-tool', 'Status: Executing exec'], ['waiting', 'Status: Waiting for input'], ['requesting-model', 'Status: Running…'],
     ])
     assert.ok(await page.$(`${row('idle')} [aria-label="Unread idle completion"]`))
     assert.equal(await page.$(`${row('wait')} .runtime-busy-spinner`), null)
@@ -551,7 +551,7 @@ test('remote node indicator shows only for non-master sessions in both densities
     assert.equal(await page.$eval(`${row('remote')} [data-session-node]`, e => getComputedStyle(e).animationName), 'none')
     assert.equal(await page.$(row('remote') + ' [data-session-status]'), null)
     assert.equal(await page.$eval(`${row('tool')} [data-session-node]`, e => e.dataset.sessionNode), 'gpu-box-2')
-    assert.equal(await page.$eval(`${row('tool')} [data-session-status]`, e => e.getAttribute('aria-label')), 'Status: tool: exec')
+    assert.equal(await page.$eval(`${row('tool')} [data-session-status]`, e => e.getAttribute('aria-label')), 'Status: Executing exec · gpu-box-2')
     assert.deepEqual(await indicators('long'), ['node:visualdust-a6000-ws1', 'branch', 'own'])
     const geometry = await page.$eval(row('long'), row => {
       const node = row.querySelector('[data-session-node]')
@@ -582,7 +582,7 @@ test('remote node indicator shows only for non-master sessions in both densities
     assert.equal(metadata.inTitleRow, false)
     assert.equal(metadata.sameLine, true)
     assert.equal(metadata.separator, '•')
-    assert.equal(metadata.stateText, 'tool: exec')
+    assert.equal(metadata.stateText, 'Executing exec · gpu-box-2')
     assert.equal(metadata.nodes, 1)
     assert.equal(metadata.iconSize, 14)
     assert.equal(metadata.followsSeparator, '•')
@@ -598,7 +598,7 @@ test('busy rings retain stepped motion while thinking uses Fox loaders and sideb
     await page.setViewport({ width: 1080, height: 700 })
     await page.evaluateOnNewDocument(() => localStorage.setItem('foxwarm_session_list_compact_v1', 'true'))
     await page.goto(`${url}?activity`)
-    await page.waitForSelector('[data-activity-timeline] .runtime-busy-spinner')
+    await page.waitForSelector('[data-activity-timeline] [data-runtime-fox]')
     await page.waitForSelector(row('child'))
     assert.ok(await page.$(`${row('main')} [aria-label="Unread idle completion"]`))
     assert.ok(await page.$(`${row('main')} .runtime-busy-spinner`))
@@ -615,7 +615,7 @@ test('busy rings retain stepped motion while thinking uses Fox loaders and sideb
     assert.equal(await page.$(`${railWaiting} [data-runtime-perimeter]`), null)
     for (const id of ['main', 'child', 'legacy']) {
       const selector = `${timeline} [data-activity-case="demo/${id}"]`
-      assert.equal(await page.$$eval(`${selector} ${id === 'legacy' ? '[data-fox-loader=thinking]' : '.runtime-busy-spinner'}`, nodes => nodes.length), 1)
+      assert.equal(await page.$$eval(`${selector} [data-runtime-fox=${id === 'legacy' ? 'unknown' : id === 'main' ? 'compact' : 'tool'}]`, nodes => nodes.length), 1)
       assert.equal(await page.$(`${selector} button::-p-text(Stop)`), null)
       assert.equal(await page.$(`${selector} .animate-bounce`), null)
     }

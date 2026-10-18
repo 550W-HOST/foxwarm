@@ -13,7 +13,7 @@ Foxwarm is an AI agent system with a .NET Main host, browser WebUI, model adapte
 
 ## .NET solution
 
-`dotnet/Foxwarm.sln` contains three projects: `Foxwarm` (the host executable), `Foxwarm.DevTools` (developer-facing request/journal probes), and `Foxwarm.Tests` (xUnit coverage of the host contracts). The host targets .NET 10 and embeds/serves selected WebUI and VS Code Web assets through its project file.
+`dotnet/Foxwarm.sln` contains three projects: `Foxwarm` (the host executable), `Foxwarm.DevTools` (developer-facing request/journal probes), and `Foxwarm.Tests` (xUnit coverage of the host contracts). The optional `dotnet/Foxwarm.Desktop` project hosts the same Main and WebUI in Windows WinForms/WebView2 outside the cross-platform solution. The host targets .NET 10 and embeds/serves selected WebUI and VS Code Web assets through its project file.
 
 ## Runtime shape
 
@@ -35,7 +35,8 @@ Current integration boundaries:
   Vector-backed admission/search remains disabled or unsupported in the .NET host;
   ordinary external Node tools, remote exec/completion, whole-file consumers and fixed
   Code/PTY services and exec-only Shell HTTP connect through .NET trust/transport/dispatch;
-  Worker ownership remains a separate boundary.
+  Session Worker hosting, managed ToolScript/controllers and Node Provider environment
+  lifecycle are excluded from this .NET delivery (see delivery scope below).
 
 Optional remote and compatibility components:
   CLI Node, browser extension, Android Node, sandbox runtime, VS Code Web assets,
@@ -99,5 +100,10 @@ Optional remote and compatibility components:
 ## Current gaps and open questions
 
 - **Current gap:** .NET Vector admission/search is disabled or explicitly unsupported (`WebUIChannel.History` returns `VECTOR_DISABLED`; identity-move/configuration paths do not make Vector a runtime capability). The TypeScript Vector implementation remains a compatibility/reference boundary only.
-- **Current gap:** ordinary external Nodes, remote exec/completion, file transfer/delivery and fixed Code/PTY services are connected. Exec-only Shell HTTP is also connected; Worker ownership is not yet connected to the .NET Main owner chain.
+- **Current gap:** the React runtime/control, typed-notice and communication projections include TypeScript Main changes that are not yet implemented by .NET. [The WebUI boundary](./threads/dotnet-webui-boundary.md#runtime-and-communication-projection-gaps) owns the concrete consumer dependencies; a shared frontend build does not establish backend parity.
+- **Intentional exclusions:** the platforms listed in [delivery scope](#d-dotnet-delivery-scope) are not remaining milestones. Ordinary external Nodes, remote exec/completion, file transfer/delivery, fixed Code/PTY services and exec-only Shell HTTP remain supported.
 - **Unconfirmed:** which remaining TypeScript Main routes and channel adapters will be retired versus retained as compatibility services after the .NET Main reaches production parity.
+
+## D-dotnet-delivery-scope
+
+[2026-10-18] This .NET Main delivery will not implement Session Worker hosting, managed ToolScript/controller execution, or Node Provider environment lifecycle. These are intentional exclusions, not deferred milestones. Existing external Node connection and execution remain supported. The TypeScript compatibility implementations, shared protocols and their documentation remain in the repository; excluding a platform from .NET does not retire those components.

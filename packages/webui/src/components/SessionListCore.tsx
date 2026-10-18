@@ -1,3 +1,4 @@
+import { getSessionRuntimeTone } from '../sessionRuntimeState'
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
@@ -171,11 +172,8 @@ const sessionMatchesFilter = (session: Session, normalizedQuery: string): boolea
 }
 
 const getRuntimeBadgeTone = (session: Session): string => {
-  const state = getSessionRuntimeStateName(session)
-  if (state === 'requesting-model') return 'text-fw-accent dark:text-fw-accent'
-  if (state === 'running-tool') return 'text-fw-special dark:text-fw-special'
-  if (state === 'waiting') return 'text-fw-warning dark:text-fw-warning'
-  return 'text-fw-text-muted'
+  const tone = getSessionRuntimeTone(session)
+  return tone === 'muted' ? 'text-fw-text-muted' : `text-fw-${tone}`
 }
 
 const RuntimeActivityIndicator = ({ state }: { state: string }) => state === 'waiting'
@@ -1172,7 +1170,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
     const isCurrentSession = resolvedCurrentSessionId === session.id
     const runtimeStateName = getSessionRuntimeStateName(session)
-    const showRuntimeBadge = session.runtimeState ? runtimeStateName !== 'idle' : !!session.busy
+    const showRuntimeBadge = session.runtimeState ? runtimeStateName !== 'idle' || !!session.runtimeState.compaction : !!session.busy
     const resolvedNodeId = getResolvedSessionNodeId(session)
     const rowParentSessionId = visibleParentMap.get(session.id) || null
     const targetParentWouldCreateCycle = rowParentSessionId

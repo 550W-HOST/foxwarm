@@ -6,6 +6,8 @@ Persistent administrator-approved trust, credential-authenticated WebSocket and 
 
 This module connects existing CLI/browser/Android Node protocol clients to the .NET host. It does not create environments or grant OS isolation. Fixed Code/PTY services use advertised authenticated capabilities, not model-tool dispatch. Whole-file consumers connect through the existing CLI transfer protocol. Remote exec authority is transient and bounded; the client owns its process and pending replay. [Remote Node integration](../threads/remote-node-compatibility.md#net-external-node-integration) owns the canonical connected contract and remaining phase boundaries.
 
+Session Worker hosting and Node Provider environment lifecycle are excluded from this delivery; see [delivery scope](../overview.md#d-dotnet-delivery-scope).
+
 ## Units
 
 - [External Shell HTTP exec transport](../units/external-shell-http.md)

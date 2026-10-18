@@ -1,3 +1,5 @@
+import { createSessionNoticeMessage, markSystemFailurePublished, isSystemFailurePublished } from './sessionNotices';
+import { getActiveSessionRuntimeState, boundRuntimeRetry } from './sessionRuntimeState';
 /** Canonical per-session queue and turn state machine. */
 
 import type { CurrentSessionTurnEffects, CurrentSessionEffects } from './session/currentSessionEffects';
@@ -229,6 +231,9 @@ export class LocalSessionTurnHost implements SessionTurnHost {
       this.assertOwnerId(sessionId);
       const controller = new AbortController();
       this.currentSessionEffects.registerAbortController(sessionId, controller);
+      const since = Date.now();
+      this.currentSessionEffects.setRuntimeState(sessionId, { state: 'requesting-model', since, active: { phase: 'compaction' } });
+      const ownedRuntime = getActiveSessionRuntimeState(sessionId);
       try {
         const outcome = await sessionManager.waitForCompactPlanningSettle(sessionId, controller.signal);
         if (outcome === 'aborted' && controller.signal.reason instanceof SessionTurnShutdownError) {
@@ -237,6 +242,8 @@ export class LocalSessionTurnHost implements SessionTurnHost {
         return outcome === 'aborted' ? 'released' : outcome;
       } finally {
         this.currentSessionEffects.clearAbortController(sessionId, controller);
+        const active = getActiveSessionRuntimeState(sessionId);
+        if (ownedRuntime && active === ownedRuntime && active.since === since && active.active?.phase === 'compaction') this.currentSessionEffects.clearRuntimeState(sessionId);
       }
     });
   }
@@ -385,6 +392,14 @@ export class SessionTurnRunner {
     let eventCount = 0;
 
     return async (event: llm.LlmRetryEvent) => {
+      {
+        const active = getActiveSessionRuntimeState(session.id);
+        this.host.setActiveSessionRuntimeState(session.id, {
+          state: 'requesting-model', since: active?.since || Date.now(), active: active?.active || { phase: 'normal-turn' },
+          retry: boundRuntimeRetry({ ...(event.final ? { final: true } : {}), attempt: event.attempt, maxAttempts: event.maxRetries, nextAttempt: event.nextAttempt,
+            retryAt: Date.now() + (event.delayMs || 0), reason: formatRetryReason(event) }),
+        });
+      }
       const initial = eventCount === 0;
       const sameError = previousError !== undefined
         && previousError.status === event.status
@@ -701,9 +716,10 @@ export class SessionTurnRunner {
     } catch (error: any) {
       logger.error({ err: error, sessionId }, 'Safe-point compaction failed');
       if (propagateFailure) throw error;
+      this.presentUncommittedError(session, error);
       if (stopped) {
         if (this.host.hasBroadcast(session)) {
-          this.host.broadcast(session, `Error: ${error?.message || 'Compaction commit failed'}`);
+          this.host.broadcast(session, `Error: ${error?.message || 'Compaction commit failed'}`, { excludePlatforms: ['webui'] });
         }
       } else {
         await this.sendSessionError(session, error);
@@ -857,11 +873,23 @@ export class SessionTurnRunner {
     }
   }
 
-  private async appendTerminalModelMessage(session: Session, text: string): Promise<void> {
-    await this.host.appendSessionMessage(session, {
-      role: 'model',
-      parts: [{ text }],
-    });
+  private async appendTerminalModelMessage(session: Session, text: string, error: unknown): Promise<void> {
+    if (isSystemFailurePublished(session.id, error)) return;
+    try {
+      await this.host.appendSessionMessage(session, createSessionNoticeMessage({ source: 'session', severity: 'error', title: 'Run failed', summary: 'The current run did not complete.', details: text }));
+    } catch (noticeError) { this.presentUncommittedError(session, error); throw noticeError; }
+    markSystemFailurePublished(session.id, error);
+  }
+
+  private presentUncommittedError(session: Session, error: unknown): void {
+    if (isSystemFailurePublished(session.id, error)) return;
+    const last = session.history.at(-1);
+    if (last?.modelVisible === false && last.__meta?.noticeType === 'llm-retry' && last.__meta.retry?.final === true) {
+      markSystemFailurePublished(session.id, error); return;
+    }
+    const notice = createSessionNoticeMessage({ source: 'session', severity: 'error', title: 'Run failed', summary: 'The current run did not complete.', details: formatTerminalSessionError(error) });
+    this.host.notifyHistoryUpdate(session.id, { ...notice, __meta: { ...notice.__meta, temporary: true } });
+    markSystemFailurePublished(session.id, error);
   }
 
   private async maybeQueueChildReminder(session: Session): Promise<void> {
@@ -946,9 +974,10 @@ export class SessionTurnRunner {
   }
 
   private async sendSessionError(session: Session, error: any, broadcast: Session['broadcast'] | undefined = undefined): Promise<void> {
+    this.presentUncommittedError(session, error);
     const text = formatTerminalSessionError(error);
-    if (broadcast) broadcast(text, { turnFinal: true });
-    else if (this.host.hasBroadcast(session)) this.host.broadcast(session, text, { turnFinal: true });
+    if (broadcast) broadcast(text, { turnFinal: true, excludePlatforms: ['webui'] });
+    else if (this.host.hasBroadcast(session)) this.host.broadcast(session, text, { turnFinal: true, excludePlatforms: ['webui'] });
   }
 
   private sendEmptyTurnFinal(broadcast: Session['broadcast'] | undefined): void {
@@ -1063,6 +1092,12 @@ export class SessionTurnRunner {
         try {
           this.assertCanContinue();
           result = await this.host.chat(parts, session, iteration, {
+            onAttempt: () => {
+              const active = getActiveSessionRuntimeState(session.id);
+              this.host.setActiveSessionRuntimeState(session.id, {
+                state: 'requesting-model', since: active?.since || Date.now(), active: { iteration, phase: 'normal-turn', ...(session.model ? { modelKey: session.model } : {}) },
+              });
+            },
             onRetry: this.createLlmRetryNotifier(session, broadcast, turnId, () => { terminalRetryDelivered = true; }),
             requestContext: createTaskRequestContext(session),
             prepareRetry: signal => this.prepareLlmRetry(session, iteration, signal),
@@ -1189,7 +1224,7 @@ export class SessionTurnRunner {
           session,
           previousLlmRequest: result.previousLlmRequest,
           broadcast,
-          onToolStart: (tool: { id?: string; name: string; index?: number; total?: number; executionNode?: string; argsPreview?: string; startedAt?: number }) => {
+          onToolStart: (tool: { invocationName?: string; source?: 'builtin' | 'node' | 'mcp'; server?: string; action?: string; target?: string; id?: string; name: string; index?: number; total?: number; executionNode?: string; argsPreview?: string; startedAt?: number }) => {
             this.host.setActiveSessionRuntimeState(session.id, {
               state: 'running-tool',
               since: tool.startedAt || Date.now(),
@@ -1200,6 +1235,11 @@ export class SessionTurnRunner {
               tool: {
                 id: tool.id,
                 name: tool.name,
+                ...(tool.invocationName ? { invocationName: tool.invocationName } : {}),
+                ...(tool.source ? { source: tool.source } : {}),
+                ...(tool.server ? { server: tool.server } : {}),
+                ...(tool.action ? { action: tool.action } : {}),
+                ...(tool.target ? { target: tool.target } : {}),
                 index: tool.index,
                 total: tool.total,
                 executionNode: tool.executionNode,
@@ -1368,6 +1408,7 @@ export class SessionTurnRunner {
       const mutationFencedMaintenance = e?.code === 'SESSION_WORKER_AUTO_COMPACTION_FATAL';
       const archiveCommitFailure = isSessionArchiveCommitError(e);
       if (archiveCommitFailure) {
+        this.presentUncommittedError(session, e);
         // The required archive boundary already restored/resynced the owner.
         // Do not try to append another semantic error row through the same
         // failed archive. Make at most one presentation-only final attempt.
@@ -1379,6 +1420,7 @@ export class SessionTurnRunner {
         return 'suppress-trailing-handoff';
       }
       if (mutationFencedMaintenance) {
+        this.presentUncommittedError(session, e);
         fencedMaintenanceError = e;
         if (this.host.deliverCommittedFinal) {
           fencedMaintenanceDirect = true;
@@ -1386,8 +1428,9 @@ export class SessionTurnRunner {
           return;
         }
       } else if (!llm.isLlmRequestError(e)) {
-        await this.appendTerminalModelMessage(session, errorText);
+        await this.appendTerminalModelMessage(session, errorText, e);
       }
+      if (!mutationFencedMaintenance) this.presentUncommittedError(session, e);
       if (!mutationFencedMaintenance && this.host.deliverCommittedFinal
         && !(llm.isLlmRequestError(e) && terminalRetryDelivered)) {
         await this.maybeQueueChildReminder(session);

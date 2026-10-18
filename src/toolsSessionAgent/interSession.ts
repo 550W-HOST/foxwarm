@@ -110,6 +110,7 @@ export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
     ? `Message sent to session \`${result.resolvedSessionId}\` (requested \`${result.requestedSessionId}\`)`
     : `Message sent to session \`${result.resolvedSessionId}\``;
   const successfulSendToSessionTarget = result.resolvedSessionId;
+  try { ctx.onSessionMessageDelivered?.({ targetSessionId: result.resolvedSessionId, message }); } catch { /* Presentation cannot change successful delivery. */ }
   const includeSuccessfulTarget = !!ctx?.persistCurrentSession
     || ctx?.sessionPlacement === 'session-worker'
     || ctx?.captureSuccessfulSendToSessionTarget === true

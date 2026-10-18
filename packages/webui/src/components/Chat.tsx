@@ -1,3 +1,4 @@
+import { getLastSessionFailure } from '../sessionNotices'
 import { CONTINUOUS_HISTORY_WINDOW_SIZE, type HistoryMode } from '../continuousHistory'
 import { useContentBeforeResize } from '../contentResize'
 import { historyModeForTimelineView, useMobileChatViewport, type TimelineView } from '../chatPreferences'
@@ -189,7 +190,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     messages: activeMessages, continuousMessages, archivePage, loadArchivePage, queuedMessages, sessionRecord, sessionMissing, sessionBusy, sessionQueueLength,
     persistentMemorySnapshot, streamingAssistantDraft, toolScriptProgress,
     historyLoaded, isFullHistoryLoaded, earlierHistoryError, connectionState, reconnectCountdown,
-    loading, retryEarlierHistory, sendMessage: handleSend, sendSessionCommand, mergeConfirmedSettings,
+    pendingControl, controlFeedback, loading, retryEarlierHistory, sendMessage: handleSend, sendSessionCommand, mergeConfirmedSettings,
   } = useChatConversationSync(sessionId, webUiIdentityMode, historyMode, initialContinuousAnchorSeq)
   const messages = historyMode === 'continuous' ? continuousMessages : activeMessages
   const [continuousWindowKey, setContinuousWindowKey] = useState<string | null>(null)
@@ -1287,6 +1288,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     void sendSessionCommand('/dequeue')
   }, [sendSessionCommand])
 
+  const handleCancelCompaction = useCallback(() => { void sendSessionCommand('/stop compact') }, [sendSessionCommand])
+
   const handleContinue = useCallback(() => {
     void sendSessionCommand('/continue')
   }, [sendSessionCommand])
@@ -1431,6 +1434,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
 
   const renderQueuedFooter = (alignment: 'left' | 'right') => <QueuedMessageStatus
     count={sessionQueueLength}
+    disabled={!!pendingControl || !!sessionRecord?.runtimeState?.stopping}
     alignment={alignment}
     isMobile={isMobile}
     onRunQueued={webUiIdentityMode ? undefined : handleRunQueued}
@@ -1621,6 +1625,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
               sessionQueueLength={sessionQueueLength}
               turnIncomplete={sessionRecord?.runtimeState?.state === 'idle' && turnIncomplete}
               loading={loading}
+              pendingControl={pendingControl}
+              controlFeedback={controlFeedback}
+              failure={getLastSessionFailure(messages)}
+              onCancelCompaction={webUiIdentityMode ? undefined : handleCancelCompaction}
               isMobile={isMobile}
               onContinue={webUiIdentityMode ? undefined : handleContinue}
             />}
@@ -1670,6 +1678,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
         onChangeNode={updateSessionNode}
         sessionMissing={sessionMissing}
         loading={loading}
+        stopPending={pendingControl === 'stop' || !!sessionRecord?.runtimeState?.stopping}
         sessionRunning={isSessionRuntimeActive({runtimeState: sessionRecord?.runtimeState, busy: sessionBusy})}
         onStop={webUiIdentityMode ? undefined : handleStop}
         asrAvailable={asrAvailable}

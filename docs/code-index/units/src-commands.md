@@ -132,3 +132,5 @@ Inline handlers: /whoami, /help, /status, /btw, /fork, /stop, /dequeue, /continu
 - [2026-09-05] Bare `/node` is an operator-oriented authenticated Node summary, not a second view of generic provider discovery. Show `master` first in one `Nodes` section, then approved remote Nodes; reserve `✅` for online status and keep generic provider topology on the model-facing `node({ action: "list" })` surface.
 
 - [2026-07-12] The user-facing fork command syntax is `/fork [suffix] [message]`: suffix is an optional ASCII-safe child-session suffix, and message is all remaining raw text after the suffix delimiter, including internal spaces and newlines. Omitted suffix uses the existing generated-session suffix behavior; there is no ambiguous legacy `/fork [message]` interpretation.
+
+WebUI Stop/Continue/Dequeue/Compact/cancellation acknowledgements use [structured control feedback](./src-session-notices.md); non-WebUI text remains unchanged. Continue acknowledgement precedes awaiting the full resumed run.

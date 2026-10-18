@@ -1,8 +1,11 @@
+import SessionMessageCard from './SessionMessageCard'
+import SystemEventCard from './SystemEventCard'
+import { getSessionNotice } from '../sessionNotices'
 import ReplyFileGrid from './ReplyFileGrid'
 import { buildReplyFileGroups } from './replyFiles'
 import { useMobileChatViewport, type TimelineView } from '../chatPreferences'
 import { getMessageViewportAnchorKey, getMessageStableKey } from '../chatViewportState'
-import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useId } from 'react'
 import { File as FileIcon, Image as ImageIcon, Eye, Code, FileJson, Copy, Check, Cloud, ChevronRight } from 'lucide-react'
 import {
   IconToggleButton,
@@ -964,6 +967,7 @@ const MessageRow = memo(function MessageRow({
     scrollbarAnchorKey,
   } = row
   const llmError = useMemo(() => getLlmErrorMessageDetails(msg), [msg])
+  const sessionNotice = useMemo(() => getSessionNotice(msg), [msg])
   const toolDisclosure = {
     hideCollapsedContent: conversationDetails,
     neutralSuccess: conversationDetails || neutralToolSuccess,
@@ -1030,10 +1034,10 @@ const MessageRow = memo(function MessageRow({
     const text = stripGeneratedDescriptorLines(getPartDisplayText(part), attachmentCorrelations)
     return parsePastedTextSegments(text).some(segment => segment.kind === 'pasted-text' || segment.text
       .replace(/<attachment-ref\s+ref="(attachment[1-9]\d*)"\s*\/>/g, (tag, ref: string) => attachmentCorrelations.has(ref) ? 'FILE' : tag)
-      .split('\n').some(line => !!line.trim() && (showUserMessageMetadata || !parseFoxwarmMetadataLine(line.trim()))))
+      .split('\n').some(line => !!line.trim() && (row.literalUserText && !!part.text || showUserMessageMetadata || !parseFoxwarmMetadataLine(line.trim()))))
   })
   const ordinaryContent = msg.role === 'model' && (ordinaryParts.length > 0 || imageParts.length > 0)
-  if (surface === 'ordinary' && !ordinaryContent) return null
+  if (surface === 'ordinary' && (!ordinaryContent || sessionNotice)) return null
   if (surface === 'grouped' && msg.role === 'model' && groupedParts.length === 0 && !msg.parts.some(part => part.functionCall || part.functionResponse)) return null
   const suppressAnchor = groupFirst || (surface === 'grouped' && ordinaryContent)
 
@@ -1051,7 +1055,7 @@ const MessageRow = memo(function MessageRow({
             : ''
         }`}
       >
-        {systemLikeMessage ? (
+        {row.communication ? <SessionMessageCard communication={row.communication}><MarkdownContent text={row.communication.message} className="prose prose-sm dark:prose-invert max-w-none break-words text-fw-text" /></SessionMessageCard> : sessionNotice ? <SystemEventCard notice={sessionNotice} reveal={!!rowSearchTarget} /> : systemLikeMessage ? (
           <SystemLikeMessageCard msg={msg} messageKey={messageKey} searchReveal={rowSearchTarget?.surface === 'system'} />
         ) : msg.role === 'user' ? (
           <>
@@ -1224,6 +1228,8 @@ const TimelineActivity = memo(function TimelineActivity({ row, identityKey, expa
   rowProps: Omit<MessageRowProps, 'row'>
 }) {
   const { ref, prepare } = useThreadCardHeightTransition(expanded)
+  const detailsId = useId()
+  const toggleRef = useRef<HTMLButtonElement>(null)
   const activity = row.activity!
   const preview = activity.preview
   const showPreview = preview && !expanded
@@ -1237,15 +1243,20 @@ const TimelineActivity = memo(function TimelineActivity({ row, identityKey, expa
       data-chat-history-end-key={getMessageViewportAnchorKey(activity.sources?.at(-1) || activity.messages.at(-1) || row.msg)}
       className={`min-w-0 ${row.widthClass} ${row.marginClass}`}>
       <ConversationUsage badge={activity.usage} pendingRequests={activity.pendingRequests || 0} missingRequests={activity.missingRequests || 0} sessionId={rowProps.sessionId}>
-        {activity.runtimeOnly ? <div className="px-2 py-1 text-left text-xs text-fw-text-muted">{activity.summary}</div> : <button type="button" aria-expanded={expanded} aria-label={expanded ? 'Collapse activity' : 'Expand activity'}
+        {activity.runtimeOnly ? <div className="px-2 py-1 text-left text-xs text-fw-text-muted">{activity.summary}</div> : <button ref={toggleRef} data-activity-toggle="top" type="button" aria-expanded={expanded} aria-controls={detailsId} aria-label={expanded ? 'Collapse activity' : 'Expand activity'}
           className="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1 text-left text-xs text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong focus-visible:outline focus-visible:outline-fw-focus-ring"
           onClick={() => { prepare(); onToggle(identityKey, !expanded) }}>
           <ChevronRight size={13} aria-hidden="true" className={`shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} /><span>{activity.summary}</span>
         </button>}
       </ConversationUsage>
-      {expanded && !activity.runtimeOnly && <div className="foxwarm-conversation-process min-w-0 border-l border-fw-border py-1 pl-2" data-activity-details data-search-row={previewKey ? row.key : undefined} data-search-message-key={previewKey}>
+      {expanded && !activity.runtimeOnly && <div id={detailsId} tabIndex={-1} role="region" aria-label="Activity details" className="foxwarm-conversation-process focus:outline-none min-w-0 border-l border-fw-border py-1 pl-2" data-activity-details data-search-row={previewKey ? row.key : undefined} data-search-message-key={previewKey}>
         {rowProps.renderNestedMessages(activity.messages, identityKey, rowProps.nestedDepth + 1, 'detailed', previewSearch)}
       </div>}
+      {expanded && !activity.runtimeOnly && <button type="button" data-activity-toggle="bottom" aria-expanded="true" aria-controls={detailsId} aria-label="Collapse activity"
+        className="mt-1 inline-flex items-center gap-2 rounded px-2 py-1 text-xs text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong focus-visible:outline focus-visible:outline-fw-focus-ring"
+        onClick={() => { prepare(); onToggle(identityKey,false); requestAnimationFrame(() => toggleRef.current?.focus({preventScroll:true})) }}>
+        <ChevronRight size={13} className="-rotate-90" aria-hidden="true"/>Collapse activity
+      </button>}
       {showPreview && <div data-conversation-preview data-search-row={row.key} className="min-w-0">
         <AssistantTextCard conversation text={preview.message.parts[preview.partIndex].text || ''} message={preview.message} searchPartIndex={preview.partIndex} searchReveal={rowProps.searchTarget?.rowKey === row.key} onOpenCodeCommit={rowProps.onOpenCodeCommit} />
       </div>}

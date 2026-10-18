@@ -56,6 +56,7 @@ interface ChatComposerProps {
   onChangeNode?: (nodeId: string, signal: AbortSignal) => Promise<void>
   sessionMissing: boolean
   loading: boolean
+  stopPending?: boolean
   sessionRunning?: boolean
   onStop?: () => void
   asrAvailable: boolean
@@ -706,6 +707,7 @@ const ChatComposer = memo(function ChatComposer({
   onChangeNode,
   sessionMissing,
   loading,
+  stopPending = false,
   sessionRunning = false,
   onStop,
   asrAvailable,
@@ -1021,7 +1023,7 @@ const ChatComposer = memo(function ChatComposer({
   )
   const mobileUi = useMobileChatViewport()
   const [pendingCompositionText, setPendingCompositionText] = useState(false)
-  const showStop = !pendingCompositionText && !!onStop && sessionRunning && !input.trim() && attachmentSegments.length === 0
+  const showStop = !pendingCompositionText && !!onStop && (sessionRunning || stopPending) && !input.trim() && attachmentSegments.length === 0
 
   const availableAttachments = useMemo(() => attachmentSegments.flatMap(segment => {
     const file = getMessageAttachmentFile(sessionId, segment.ref)
@@ -1631,7 +1633,7 @@ const ChatComposer = memo(function ChatComposer({
               if (serializeComposerDraft(current).trim() || current.segments.some(segment => segment.type === 'attachment')) { void handleSubmit(); return }
               if (!recordingLockRef.current && !sessionMissing) onStop?.()
             } : undefined}
-            disabled={sessionMissing || recordingLocked || (!showStop && (loading || (!input.trim() && attachmentSegments.length === 0 && !pendingCompositionText)))}
+            disabled={sessionMissing || recordingLocked || (showStop && stopPending) || (!showStop && (loading || (!input.trim() && attachmentSegments.length === 0 && !pendingCompositionText)))}
             className="foxwarm-composer-send-button inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-fw-text-strong text-fw-surface transition hover:bg-fw-text disabled:bg-fw-border-strong disabled:text-fw-text-muted disabled:cursor-not-allowed"
             data-composer-action={showStop ? 'stop' : 'send'}
             aria-label={showStop ? 'Stop session' : 'Send message'}

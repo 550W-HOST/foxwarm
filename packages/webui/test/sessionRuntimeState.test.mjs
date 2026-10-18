@@ -34,31 +34,20 @@ const runtimeState = (state, extra = {}) => ({
   ...extra,
 })
 
-test('runtime summaries distinguish compaction from ordinary requesting-model work', () => {
-  assert.equal(getRuntimeStateSummary(runtimeState('requesting-model')), 'thinking')
-  assert.equal(getRuntimeStateSummary(runtimeState('requesting-model', { active: { phase: 'normal-turn' } })), 'thinking')
-  assert.equal(getRuntimeStateSummary(runtimeState('requesting-model', { active: { phase: 'compaction' } })), 'compacting')
-  assert.equal(getRuntimeStateSummary(undefined, true), 'thinking')
-  assert.equal(getSessionRuntimeSummary({ busy: true }), 'thinking')
+
+test('human-readable summaries name the actual phase and keep idle quiet', () => {
+  assert.equal(getRuntimeStateSummary(runtimeState('requesting-model')), 'Requesting model…')
+  assert.equal(getRuntimeStateSummary(runtimeState('requesting-model', { active: { phase: 'compaction' } })), 'Compacting context…')
+  assert.equal(getRuntimeStateSummary(undefined, true), 'Running…')
+  assert.equal(getSessionRuntimeSummary({ busy: true }), 'Running…')
+  assert.equal(getRuntimeStateSummary(runtimeState('idle')), 'idle')
 })
 
-test('runtime summaries preserve tool batch, waiting details, and idle', () => {
-  assert.equal(getRuntimeStateSummary(runtimeState('running-tool', {
-    tool: { name: 'exec', index: 1, total: 3, startedAt: 1 },
-  })), 'tool: exec 2/3')
-  assert.equal(getRuntimeStateSummary(runtimeState('waiting', {
-    waiting: {
-      waitId: 'sessions',
-      waitingFor: 'all-sessions',
-      waitAllSessions: ['one', 'two'],
-      satisfiedSessions: ['one'],
-    },
-  })), 'waiting: sessions 1/2')
-  assert.equal(getRuntimeStateSummary(runtimeState('waiting', {
-    waiting: { waitId: 'exec', waitingFor: 'exec', waitExecIds: ['job-a', 'job-b'] },
-  })), 'waiting: exec 2')
-  assert.equal(getRuntimeStateSummary(runtimeState('waiting', {
-    waiting: { waitId: 'timer', waitingFor: 'fallback', timeoutSeconds: 30 },
-  })), 'waiting: fallback 30s')
-  assert.equal(getRuntimeStateSummary(runtimeState('idle')), 'idle')
+test('summaries expose actual tools and pending dependencies rather than generic Working/Waiting', () => {
+  assert.equal(getRuntimeStateSummary(runtimeState('running-tool', { tool: { name:'exec', index:1, total:3, startedAt:1 } })), 'Executing exec')
+  assert.equal(getRuntimeStateSummary(runtimeState('running-tool', { tool: { name:'node', action:'list', startedAt:1 } })), 'Listing nodes')
+  assert.equal(getRuntimeStateSummary(runtimeState('running-tool', { tool: { name:'read', target:'report.md', startedAt:1 } })), 'Reading report.md')
+  assert.equal(getRuntimeStateSummary(runtimeState('waiting', { waiting:{waitId:'demo',waitingFor:'all-sessions',waitAllSessions:['one','two'],satisfiedSessions:['one']} })), 'Waiting for 1 session')
+  assert.equal(getRuntimeStateSummary(runtimeState('waiting', { waiting:{waitId:'demo',waitingFor:'exec',waitExecIds:['job-a','job-b']} })), 'Waiting for 2 commands')
+  assert.equal(getRuntimeStateSummary(runtimeState('waiting', { waiting:{waitId:'demo',waitingFor:'input',waitForInput:true} })), 'Waiting for input')
 })

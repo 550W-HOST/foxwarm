@@ -1,3 +1,4 @@
+import type { FunctionResponse } from './types';
 import * as tools from './tools';
 import { logger } from './common';
 import type { FunctionCall, LinkedTaskCompletion, Message, MessagePart, Session, ToolScriptSubCall } from './types';
@@ -73,6 +74,7 @@ type ExecutedToolCall = PreparedToolCall & {
     executionTiming?: { startedAt: number; completedAt: number; durationMs: number };
     resolvedPaths?: Array<{ raw: string; resolved: string; nodeId: string }>;
     toolScriptSubCalls?: ToolScriptSubCall[];
+    sessionMessages?: NonNullable<FunctionResponse["__meta"]>["sessionMessages"];
     imageParts: MessagePart[];
     stopCurrentTurn: boolean;
     waitForReply: boolean;
@@ -177,11 +179,15 @@ async function prepareToolCall(
         const startedAt = Date.now();
         await Promise.resolve(toolContext.onToolStart?.({
             id: toolId,
-            name: call.name,
+            name: resolved?.name || call.name,
+            ...(resolved ? { source: resolved.source, ...(resolved.server ? { server: resolved.server } : {}) } : {}),
+            ...(resolved?.name && resolved.name !== call.name ? { invocationName: call.name } : {}),
+            ...(resolved?.source === 'builtin' && resolved.name === 'node' && typeof resolved.args.action === 'string' ? { action: resolved.args.action.slice(0, 64) } : {}),
+            ...(resolved?.source === 'node' && resolved.name === 'read' && typeof resolved.args.filePath === 'string' ? { target: resolved.args.filePath.split(/[\\/]/).at(-1)!.slice(0, 160) } : {}),
             index,
             total,
             executionNode,
-            argsPreview: argsPreview.length > 500 ? `${argsPreview.slice(0, 500)}…` : argsPreview,
+            argsPreview: resolved ? buildToolArgsPreview({ ...call, name: resolved.name, args: resolved.args }) : argsPreview,
             startedAt,
         }));
     }
@@ -251,6 +257,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
     let executionTiming: ExecutedToolCall['executionTiming'];
     let resolvedPaths: ExecutedToolCall['resolvedPaths'];
     let toolScriptSubCalls: ToolScriptSubCall[] | undefined;
+    let sessionMessages: NonNullable<FunctionResponse["__meta"]>["sessionMessages"];
     let imageParts: MessagePart[] = [];
     let stopCurrentTurn = false;
     let waitForReply = false;
@@ -283,6 +290,12 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
                     && ['run_script', 'continue_script', 'start_toolscript_run'].includes(prepared.resolved.name);
                 result = normalizeExecutedToolResult(await executeResolvedTool(prepared.resolved, {
                     ...localToolContext,
+                    ...(prepared.resolved.source === 'builtin' && prepared.resolved.name === 'send_to_session' ? {
+                        onSessionMessageDelivered: (delivery: {targetSessionId:string;message:string}) => {
+                            sessionMessages = [{id:prepared.toolId,targetSessionId:delivery.targetSessionId,message:delivery.message.slice(0,32768),
+                                ...(delivery.message.length > 32768 ? {truncated:true} : {})}];
+                        },
+                    } : {}),
                     ...(isToolScriptExecution ? { onToolScriptSubCalls: (subCalls: ToolScriptSubCall[]) => {
                         toolScriptSubCalls = subCalls.map(subCall => ({ ...subCall }));
                     } } : {}),
@@ -328,6 +341,12 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
             if (result.__execBatchCwdSync && typeof result.__execBatchCwdSync.nextCwd === 'string') {
                 deferredExecCwdSync = { nextCwd: result.__execBatchCwdSync.nextCwd };
             }
+            const actualArgs = prepared.resolved?.args || prepared.call.args;
+            if (!sessionMessages && prepared.resolved?.source === 'builtin' && prepared.resolved.name === 'send_to_session'
+                && typeof result.__toolPostAction?.successfulSendToSessionTarget === 'string' && typeof actualArgs?.message === 'string') {
+                sessionMessages = [{ id: prepared.toolId, targetSessionId: result.__toolPostAction.successfulSendToSessionTarget,
+                    message: actualArgs.message.slice(0, 32768), ...(actualArgs.message.length > 32768 ? { truncated: true } : {}) }];
+            }
             const { __toolLoopControl, __toolPostAction, __execBatchCwdSync, ...visibleResult } = result;
             result = visibleResult;
         }
@@ -355,6 +374,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
         ...(executionTiming ? { executionTiming } : {}),
         ...(resolvedPaths?.length ? { resolvedPaths } : {}),
         ...(toolScriptSubCalls !== undefined ? { toolScriptSubCalls } : {}),
+        ...(sessionMessages ? { sessionMessages } : {}),
         imageParts,
         stopCurrentTurn,
         waitForReply,
@@ -627,8 +647,9 @@ async function executeToolBatch(
                 tool_use_id: execution.toolId,
                 name: execution.call.name,
                 ...(execution.executionTiming ? { executionTiming: execution.executionTiming } : {}),
-                ...(resolvedPaths || execution.toolScriptSubCalls !== undefined ? { __meta: {
+                ...(resolvedPaths || execution.toolScriptSubCalls !== undefined || execution.sessionMessages ? { __meta: {
                     ...(resolvedPaths ? { resolvedPaths } : {}),
+                    ...(execution.sessionMessages ? { sessionMessages: execution.sessionMessages } : {}),
                     ...(execution.toolScriptSubCalls !== undefined ? { toolScriptSubCalls: execution.toolScriptSubCalls } : {}),
                 } } : {}),
                 ...(execution.index === 0 && toolContext.previousLlmRequest ? {

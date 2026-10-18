@@ -3,6 +3,7 @@ import fs from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { DatabaseSync } from 'node:sqlite';
 import { serializeSessionHistoryPayload } from './session/metadataStore';
 import { SessionWorkerIngressCoordinator } from './sessionWorkerIngress';
 import { createSessionWorkerPresentationServiceHandler } from './sessionWorkerPresentationService';
@@ -64,6 +65,44 @@ function makeFixture(root: string, extraEnv: Record<string, string> = {}) {
   const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, () => true);
   return { store, supervisor, ingress, receivedMessages, receivedBatches, receivedEvents, receivedPresentation, readySessions };
 }
+
+test('Worker archive failure reaches subscribed WebUI as one temporary system event without committing history', async () => {
+  const sessionId = `worker-uncommitted-error-${Date.now()}`;
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-error-'));
+  const fixture = makeFixture(root, { FOXWARM_TEST_FAIL_ARCHIVE_APPEND: '1' });
+  const statePath = path.join(root, 'state', 'sessions', `${sessionId}.json`);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(baseSession(sessionId)));
+  try {
+    await fixture.supervisor.reconcileStartupOwnerships();
+    const owner = await fixture.ingress.ensureWorkerOwner(sessionId);
+    await fixture.supervisor.setPresentationSubscription(sessionId, true);
+    await fixture.ingress.submitEnsuringWorker(sessionId, {
+      type: 'user', source: { platform: 'webui', channelUserId: sessionId }, parts: [{ text: 'Run this' }],
+    });
+    await waitFor(() => fixture.receivedMessages.length > 0);
+    assert.equal(fixture.receivedMessages.length, 1);
+    const notice = fixture.receivedMessages[0];
+    assert.equal(notice.__meta?.temporary, true);
+    assert.equal(notice.modelVisible, false);
+    assert.equal(notice.__meta?.noticeType, 'system-event');
+    assert.equal(notice.__meta?.seq, undefined);
+    assert.match(JSON.stringify(notice), /archive storage failure/);
+    assert.equal(fixture.receivedBatches.length, 0);
+    const durable = await fs.readJson(statePath);
+    assert.deepEqual(durable.history, []);
+    assert.equal(durable.busy, false);
+    assert.equal(durable.nextMessageSeq || 1, 1);
+    assert.equal(durable.queue.length, 1, 'failed input remains queued, not converted to history');
+    assert.equal((await fixture.supervisor.loadProjectionActivated(sessionId, owner)).messageCount, 0);
+    const archive = new DatabaseSync(path.join(root, 'state', 'archive-store.sqlite'), { readOnly: true });
+    try { assert.equal((archive.prepare('SELECT COUNT(*) AS count FROM archive_messages').get() as any).count, 0); }
+    finally { archive.close(); }
+  } finally {
+    await fixture.supervisor.shutdown(3_000).catch(() => {});
+    fixture.store.close();
+    await fs.remove(root);
+  }
+});
 
 test('subscribed workers forward appended messages and coalesced stream deltas as pure presentation', async () => {
   const sessionId = `mc-pres-${Date.now()}`;

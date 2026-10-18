@@ -6,6 +6,7 @@ Owns reusable cross-package implementations for patch application, file/exec/bro
 
 ## Units
 
+- [Session presentation contracts](../units/shared-session-presentation.md) — bounded notices and control feedback.
 - [shared-apply-patch](../units/shared-apply-patch.md) — patch envelope parsing and add/update/delete content operations.
 - [shared-session-continuation](../units/shared-session-continuation.md) — pure committed-history continuation and canonical compact maintenance classification for Main and WebUI.
 - [shared-node-tools](../units/shared-node-tools.md) — shared file core, node tool registry/schemas, transfer, cwd, browser, token, and formatting helpers.

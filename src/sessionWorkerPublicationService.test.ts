@@ -66,3 +66,20 @@ test('subscriber apply failure marks the exact projection stale', async () => {
   assert.equal(registry.get(identity.sessionId)?.stale, true);
   await assert.rejects(() => registry.apply(identity, projection(identity.sessionId)), { code: 'SESSION_WORKER_PUBLICATION_STALE' });
 });
+
+test('retry/compaction/tool presentation fields survive strict publication and reject malformed extensions', async () => {
+  const registry=new SessionWorkerProjectionRegistry();const identity={sessionId:'runtime-fields',generation:1,incarnationId:'one'};registry.establish(identity);
+  const value=projection(identity.sessionId);
+  value.busy=true;value.runtimeState={state:'running-tool',queueLength:0,busy:true,stopping:true,
+    tool:{name:'read',startedAt:1,source:'node',invocationName:'call_tool',target:'report.md',action:'read',executionNode:'compute-node'},
+    compaction:{operationId:'compact-demo',phase:'planning',background:true,retry:{attempt:1,maxAttempts:6,nextAttempt:2,retryAt:123,reason:'Connection closed'}}};
+  await registry.apply(identity,value);
+  assert.equal(registry.get(identity.sessionId)?.projection?.runtimeState.tool?.target,'report.md');
+  for(const patch of [
+    {tool:{...value.runtimeState.tool,source:'untrusted'}}, {tool:{...value.runtimeState.tool,target:{path:'injected'}}},
+    {tool:{...value.runtimeState.tool,action:'x'.repeat(65)}}, {stopping:false},
+    {retry:{attempt:0,maxAttempts:6}}, {compaction:{operationId:'x',phase:'unknown',background:true}},
+    {compaction:{...value.runtimeState.compaction,retry:{attempt:1,maxAttempts:6,reason:'x'.repeat(1025)}}},
+  ]) await assert.rejects(()=>registry.apply(identity,{...value,runtimeState:{...value.runtimeState,...patch}}),{code:'SESSION_WORKER_PUBLICATION_INVALID'});
+  registry.clear(identity);
+});

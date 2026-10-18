@@ -1,6 +1,6 @@
 # Unit: src-tool-executor
 
-Files: src/toolExecutor.ts, src/session/currentSessionEffects.ts, src/session/defaultCurrentSessionEffects.ts, src/parallelToolExecution.test.ts, src/stopActiveTools.test.ts
+Files: src/toolExecutor.ts, src/session/currentSessionEffects.ts, src/session/defaultCurrentSessionEffects.ts, src/parallelToolExecution.test.ts, src/stopActiveTools.test.ts, src/toolExecutorSessionMessages.test.ts
 Secondary files: src/sessionTurnRunner.ts, src/sessionWorkerHost.ts, src/llm.test.ts, src/toolCallArgs.test.ts, src/toolCallControls.test.ts, src/toolOutputGuard.test.ts, src/toolAuthorization.test.ts, src/tools/taskTools.test.ts, src/tools/execDetachedOwner.test.ts, src/sessionWorkerToolPlacement.test.ts
 
 ## Purpose
@@ -34,3 +34,7 @@ Owns ordinary model-returned tool batch planning, scheduling, execution and aggr
 The executor uses the existing tool registry and resolved-tool pipeline. Its no-effects entry retains the established SessionManager source-owner lookup and abort/wait operations. Registry and SessionManager imports still transitively reach provider code; this split does not replace their bootstrap wiring or remove the provider dependencies still reached through SessionManager's compaction owner. It introduces no LLM import, compatibility re-export, alternate registry or scheduler.
 
 Canonical behavior remains in [authorization and batches](../threads/tool-dispatch-authorization.md), [Node execution](../threads/tool-dispatch-node-execution.md), and [message processing](../threads/message-processing-pipeline.md). The returned batch envelope is an in-process contract, not persisted data or an RPC DTO.
+
+Runtime tool-start metadata uses the trusted resolved capability name/source and resolved argument preview, retaining wrapper identity separately. Node actions and file basenames come from structured resolved arguments, not frontend parsing of truncated preview text. This is presentation metadata only.
+
+Successful builtin Session sends capture canonical destination/body through an in-process delivery hook or the existing exact-target post-action fallback. The persisted `functionResponse.__meta.sessionMessages` is UI-only and excluded from provider replay. See [Session communication presentation](../threads/session-communication-presentation.md).
