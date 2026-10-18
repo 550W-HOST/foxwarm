@@ -36,7 +36,10 @@ internal sealed class MontyWorker : IAsyncDisposable
         };
         info.ArgumentList.Add("subprocess");
         info.Environment.Clear();
-        if (OperatingSystem.IsWindows() && Environment.GetEnvironmentVariable("SystemRoot") is { } systemRoot)
+        if (
+            OperatingSystem.IsWindows()
+            && Environment.GetEnvironmentVariable("SystemRoot") is { } systemRoot
+        )
             info.Environment["SystemRoot"] = systemRoot;
         process = Process.Start(info) ?? throw new IOException("Unable to start native Monty.");
         // Native protocol carries actionable errors. Drain stderr without accumulating another unbounded string.

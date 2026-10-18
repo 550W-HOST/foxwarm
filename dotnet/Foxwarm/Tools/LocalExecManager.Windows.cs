@@ -16,7 +16,12 @@ internal sealed partial class LocalExecManager
         var scriptPath = Path.Combine(allocated.Directory, "command.ps1");
         // Windows PowerShell 5.1 needs a BOM for non-ASCII script source. As in
         // Source, a separate user script preserves exit and LASTEXITCODE semantics.
-        await File.WriteAllTextAsync(commandPath, allocated.Command + "\n", new UTF8Encoding(true), ct);
+        await File.WriteAllTextAsync(
+            commandPath,
+            allocated.Command + "\n",
+            new UTF8Encoding(true),
+            ct
+        );
         await File.WriteAllTextAsync(scriptPath, WindowsWrapper, new UTF8Encoding(true), ct);
         var start = new ProcessStartInfo(WindowsPowerShell)
         {
@@ -24,40 +29,92 @@ internal sealed partial class LocalExecManager
             CreateNoWindow = true,
             WorkingDirectory = allocated.Cwd,
         };
-        foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath })
+        foreach (
+            var argument in new[]
+            {
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                scriptPath,
+            }
+        )
             start.ArgumentList.Add(argument);
         // Keep the existing Main adapter's finite environment, with the Windows
         // process/runtime variables required by native executables and PowerShell.
         start.Environment.Clear();
-        foreach (var key in new[] { "PATH", "HOME", "LANG", "LC_ALL", "TERM", "TMPDIR", "USER", "SystemRoot", "WINDIR", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ComSpec", "PATHEXT", "PSModulePath" })
+        foreach (
+            var key in new[]
+            {
+                "PATH",
+                "HOME",
+                "LANG",
+                "LC_ALL",
+                "TERM",
+                "TMPDIR",
+                "USER",
+                "SystemRoot",
+                "WINDIR",
+                "TEMP",
+                "TMP",
+                "USERPROFILE",
+                "APPDATA",
+                "LOCALAPPDATA",
+                "ProgramFiles",
+                "ProgramFiles(x86)",
+                "ProgramW6432",
+                "ComSpec",
+                "PATHEXT",
+                "PSModulePath",
+            }
+        )
             if (Environment.GetEnvironmentVariable(key) is { Length: > 0 } value)
                 start.Environment[key] = value;
         start.Environment["fw_agentdir"] = agentDirectory;
         start.Environment["fw_tmp"] = Path.Combine(agentDirectory, "tmp");
         start.Environment["FOXWARM_EXEC_COMMAND_PATH"] = commandPath;
-        start.Environment["FOXWARM_EXEC_LOG_PATH"] = Path.Combine(allocated.Directory, "output.log");
-        start.Environment["FOXWARM_EXEC_STATUS_PATH"] = Path.Combine(allocated.Directory, "status.json");
+        start.Environment["FOXWARM_EXEC_LOG_PATH"] = Path.Combine(
+            allocated.Directory,
+            "output.log"
+        );
+        start.Environment["FOXWARM_EXEC_STATUS_PATH"] = Path.Combine(
+            allocated.Directory,
+            "status.json"
+        );
         start.Environment["FOXWARM_EXEC_CWD_PATH"] = Path.Combine(allocated.Directory, "cwd.txt");
         ct.ThrowIfCancellationRequested();
         // No redirected Main-owned descriptors or kill-on-close job: this shell
         // owns its transcript and sidecars and survives ordinary Main shutdown.
-        using var process = Process.Start(start) ?? throw new IOException("Failed to launch PowerShell.");
+        using var process =
+            Process.Start(start) ?? throw new IOException("Failed to launch PowerShell.");
         var record = allocated with
         {
             Pid = process.Id,
-            StartedAt = new DateTimeOffset(process.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds(),
+            StartedAt = new DateTimeOffset(
+                process.StartTime.ToUniversalTime()
+            ).ToUnixTimeMilliseconds(),
             ProcessStartTicks = ReadProcessIdentity(process.Id).Ticks,
         };
-        await AtomicWriteAsync(Path.Combine(record.Directory, "meta.json"), JsonSerializer.Serialize(record) + "\n");
-        await AtomicWriteAsync(Path.Combine(record.Directory, "tracking.json"), "{\"notify\":false}\n");
+        await AtomicWriteAsync(
+            Path.Combine(record.Directory, "meta.json"),
+            JsonSerializer.Serialize(record) + "\n"
+        );
+        await AtomicWriteAsync(
+            Path.Combine(record.Directory, "tracking.json"),
+            "{\"notify\":false}\n"
+        );
         pending[Key(record.SessionId, record.Id)] = record;
         return record;
     }
 
-    internal static string WindowsPowerShell => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.System),
-        "WindowsPowerShell", "v1.0", "powershell.exe"
-    );
+    internal static string WindowsPowerShell =>
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe"
+        );
 
     private const string WindowsWrapper = """
         $ErrorActionPreference = 'Continue'

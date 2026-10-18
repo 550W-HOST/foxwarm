@@ -706,7 +706,12 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 using var process = Process.GetProcessById(pid);
                 return process.HasExited
                     ? (null, '?')
-                    : (process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture), 'R');
+                    : (
+                        process
+                            .StartTime.ToUniversalTime()
+                            .Ticks.ToString(CultureInfo.InvariantCulture),
+                        'R'
+                    );
             }
             var raw = File.ReadAllText($"/proc/{pid}/stat");
             var close = raw.LastIndexOf(')');

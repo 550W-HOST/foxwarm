@@ -140,7 +140,16 @@ internal static class CodeFileService
     {
         var errno = Marshal.GetLastPInvokeError();
         if (OperatingSystem.IsWindows())
-            return new(errno switch { 2 or 3 => "FileNotFound", 5 => "NoPermissions", 80 or 183 => "FileExists", _ => "Unknown" }, new System.ComponentModel.Win32Exception(errno).Message + ": " + path);
+            return new(
+                errno switch
+                {
+                    2 or 3 => "FileNotFound",
+                    5 => "NoPermissions",
+                    80 or 183 => "FileExists",
+                    _ => "Unknown",
+                },
+                new System.ComponentModel.Win32Exception(errno).Message + ": " + path
+            );
         var code = errno switch
         {
             2 or 20 => "FileNotFound",
@@ -363,7 +372,11 @@ internal static class CodeFileService
                 throw new CodeServiceException("FileExists", "Destination already exists.");
             Delete(newPath, true);
         }
-        if (OperatingSystem.IsWindows() ? !MoveFileExW(oldPath, newPath, 0) : RenameNative(oldPath, newPath) != 0)
+        if (
+            OperatingSystem.IsWindows()
+                ? !MoveFileExW(oldPath, newPath, 0)
+                : RenameNative(oldPath, newPath) != 0
+        )
             throw NativeError(oldPath);
         return new() { ["success"] = true };
     }

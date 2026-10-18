@@ -16,7 +16,12 @@ internal sealed class WindowsPseudoConsole : IDisposable
     private Task? close;
     internal int Pid { get; }
 
-    private WindowsPseudoConsole(IntPtr console, ProcessInformation child, SafeFileHandle read, SafeFileHandle write)
+    private WindowsPseudoConsole(
+        IntPtr console,
+        ProcessInformation child,
+        SafeFileHandle read,
+        SafeFileHandle write
+    )
     {
         this.console = console;
         process = new SafeFileHandle(child.Process, true);
@@ -26,7 +31,14 @@ internal sealed class WindowsPseudoConsole : IDisposable
         input = new FileStream(write, FileAccess.Write, 4096, false);
     }
 
-    internal static WindowsPseudoConsole Spawn(string shell, IReadOnlyList<string> arguments, string cwd, IReadOnlyDictionary<string, string> environment, int cols, int rows)
+    internal static WindowsPseudoConsole Spawn(
+        string shell,
+        IReadOnlyList<string> arguments,
+        string cwd,
+        IReadOnlyDictionary<string, string> environment,
+        int cols,
+        int rows
+    )
     {
         if (!CreatePipe(out var inputRead, out var inputWrite, IntPtr.Zero, 0))
             throw new Win32Exception();
@@ -36,7 +48,9 @@ internal sealed class WindowsPseudoConsole : IDisposable
             throw new Win32Exception();
         using var readOutput = outputRead;
         using var writeOutput = outputWrite;
-        Marshal.ThrowExceptionForHR(CreatePseudoConsole(new Coord(cols, rows), inputRead, outputWrite, 0, out var console));
+        Marshal.ThrowExceptionForHR(
+            CreatePseudoConsole(new Coord(cols, rows), inputRead, outputWrite, 0, out var console)
+        );
         IntPtr attributes = IntPtr.Zero;
         var attributesInitialized = false;
         IntPtr block = IntPtr.Zero;
@@ -48,15 +62,54 @@ internal sealed class WindowsPseudoConsole : IDisposable
             if (!InitializeProcThreadAttributeList(attributes, 1, 0, ref size))
                 throw new Win32Exception();
             attributesInitialized = true;
-            if (!UpdateProcThreadAttribute(attributes, 0, (IntPtr)0x00020016, console, (nuint)IntPtr.Size, IntPtr.Zero, IntPtr.Zero))
+            if (
+                !UpdateProcThreadAttribute(
+                    attributes,
+                    0,
+                    (IntPtr)0x00020016,
+                    console,
+                    (nuint)IntPtr.Size,
+                    IntPtr.Zero,
+                    IntPtr.Zero
+                )
+            )
                 throw new Win32Exception();
             // ConPTY supplies console standard handles; do not copy Main's
             // redirected console/pipe handles into the interactive child.
-            var startup = new StartupInfoEx { Startup = new StartupInfo { Size = Marshal.SizeOf<StartupInfoEx>(), Flags = 0x00000100 }, Attributes = attributes };
-            var command = new StringBuilder(string.Join(" ", new[] { shell }.Concat(arguments).Select(Quote)));
-            var variables = string.Join('\0', environment.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase).Select(pair => pair.Key + "=" + pair.Value)) + "\0\0";
+            var startup = new StartupInfoEx
+            {
+                Startup = new StartupInfo
+                {
+                    Size = Marshal.SizeOf<StartupInfoEx>(),
+                    Flags = 0x00000100,
+                },
+                Attributes = attributes,
+            };
+            var command = new StringBuilder(
+                string.Join(" ", new[] { shell }.Concat(arguments).Select(Quote))
+            );
+            var variables =
+                string.Join(
+                    '\0',
+                    environment
+                        .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                        .Select(pair => pair.Key + "=" + pair.Value)
+                ) + "\0\0";
             block = Marshal.StringToHGlobalUni(variables);
-            if (!CreateProcessW(shell, command, IntPtr.Zero, IntPtr.Zero, false, 0x00080000 | 0x00000400, block, cwd, ref startup, out var child))
+            if (
+                !CreateProcessW(
+                    shell,
+                    command,
+                    IntPtr.Zero,
+                    IntPtr.Zero,
+                    false,
+                    0x00080000 | 0x00000400,
+                    block,
+                    cwd,
+                    ref startup,
+                    out var child
+                )
+            )
                 throw new Win32Exception();
             // Transfer only the host-facing pipe ends. The console-side ends close
             // after spawn so EOF describes the actual console lifetime.
@@ -121,7 +174,8 @@ internal sealed class WindowsPseudoConsole : IDisposable
         input.Flush();
     }
 
-    internal void Resize(int cols, int rows) => Marshal.ThrowExceptionForHR(ResizePseudoConsole(console, new Coord(cols, rows)));
+    internal void Resize(int cols, int rows) =>
+        Marshal.ThrowExceptionForHR(ResizePseudoConsole(console, new Coord(cols, rows)));
 
     internal void Close()
     {
@@ -129,7 +183,9 @@ internal sealed class WindowsPseudoConsole : IDisposable
         {
             // ClosePseudoConsole may synchronously emit a final frame. Keep the
             // reader draining on its own thread until the output channel closes.
-            close ??= Task.Run(() => ClosePseudoConsole(Interlocked.Exchange(ref console, IntPtr.Zero)));
+            close ??= Task.Run(() =>
+                ClosePseudoConsole(Interlocked.Exchange(ref console, IntPtr.Zero))
+            );
         }
     }
 
@@ -162,10 +218,23 @@ internal sealed class WindowsPseudoConsole : IDisposable
     private struct StartupInfo
     {
         internal int Size;
-        internal IntPtr Reserved, Desktop, Title;
-        internal int X, Y, XSize, YSize, XCountChars, YCountChars, FillAttribute, Flags;
-        internal short ShowWindow, ReservedSize;
-        internal IntPtr ReservedData, StdInput, StdOutput, StdError;
+        internal IntPtr Reserved,
+            Desktop,
+            Title;
+        internal int X,
+            Y,
+            XSize,
+            YSize,
+            XCountChars,
+            YCountChars,
+            FillAttribute,
+            Flags;
+        internal short ShowWindow,
+            ReservedSize;
+        internal IntPtr ReservedData,
+            StdInput,
+            StdOutput,
+            StdError;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -178,30 +247,77 @@ internal sealed class WindowsPseudoConsole : IDisposable
     [StructLayout(LayoutKind.Sequential)]
     private struct ProcessInformation
     {
-        internal IntPtr Process, Thread;
-        internal uint ProcessId, ThreadId;
+        internal IntPtr Process,
+            Thread;
+        internal uint ProcessId,
+            ThreadId;
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CreatePipe(out SafeFileHandle read, out SafeFileHandle write, IntPtr attributes, uint size);
+    private static extern bool CreatePipe(
+        out SafeFileHandle read,
+        out SafeFileHandle write,
+        IntPtr attributes,
+        uint size
+    );
+
     [DllImport("kernel32.dll")]
-    private static extern int CreatePseudoConsole(Coord size, SafeFileHandle input, SafeFileHandle output, uint flags, out IntPtr console);
+    private static extern int CreatePseudoConsole(
+        Coord size,
+        SafeFileHandle input,
+        SafeFileHandle output,
+        uint flags,
+        out IntPtr console
+    );
+
     [DllImport("kernel32.dll")]
     private static extern int ResizePseudoConsole(IntPtr console, Coord size);
+
     [DllImport("kernel32.dll")]
     private static extern void ClosePseudoConsole(IntPtr console);
+
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, uint flags, ref nuint size);
+    private static extern bool InitializeProcThreadAttributeList(
+        IntPtr list,
+        int count,
+        uint flags,
+        ref nuint size
+    );
+
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool UpdateProcThreadAttribute(IntPtr list, uint flags, IntPtr attribute, IntPtr value, nuint size, IntPtr previous, IntPtr returnSize);
+    private static extern bool UpdateProcThreadAttribute(
+        IntPtr list,
+        uint flags,
+        IntPtr attribute,
+        IntPtr value,
+        nuint size,
+        IntPtr previous,
+        IntPtr returnSize
+    );
+
     [DllImport("kernel32.dll")]
     private static extern void DeleteProcThreadAttributeList(IntPtr list);
+
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool CreateProcessW(string application, StringBuilder command, IntPtr processAttributes, IntPtr threadAttributes, bool inherit, uint flags, IntPtr environment, string directory, ref StartupInfoEx startup, out ProcessInformation process);
+    private static extern bool CreateProcessW(
+        string application,
+        StringBuilder command,
+        IntPtr processAttributes,
+        IntPtr threadAttributes,
+        bool inherit,
+        uint flags,
+        IntPtr environment,
+        string directory,
+        ref StartupInfoEx startup,
+        out ProcessInformation process
+    );
+
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern uint WaitForSingleObject(SafeFileHandle handle, uint milliseconds);
+
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetExitCodeProcess(SafeFileHandle process, out uint exitCode);
+
     [DllImport("kernel32.dll")]
     private static extern bool CloseHandle(IntPtr handle);
 }

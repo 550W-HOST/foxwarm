@@ -59,7 +59,9 @@ internal sealed partial class MainToolScript : IAsyncDisposable
     {
         var name = OperatingSystem.IsWindows() ? "monty.exe" : "monty";
         var shipped = Path.Combine(AppContext.BaseDirectory, "ToolScript", "native", name);
-        return File.Exists(shipped) ? shipped : Path.Combine(root, ".temp", "monty-native", "bin", name);
+        return File.Exists(shipped)
+            ? shipped
+            : Path.Combine(root, ".temp", "monty-native", "bin", name);
     }
 
     internal async Task<JsonObject> ExecuteAsync(

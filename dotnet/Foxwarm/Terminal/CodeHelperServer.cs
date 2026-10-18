@@ -1,5 +1,5 @@
-using System.Net.Sockets;
 using System.IO.Pipes;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -39,7 +39,11 @@ internal sealed class CodeHelperServer : IAsyncDisposable
             capabilities[capability] = terminalId;
         var directory = helperDirectory!;
         Directory.CreateDirectory(Path.Combine(directory, "bin"));
-        var path = Path.Combine(directory, "bin", OperatingSystem.IsWindows() ? "code.ps1" : "code");
+        var path = Path.Combine(
+            directory,
+            "bin",
+            OperatingSystem.IsWindows() ? "code.ps1" : "code"
+        );
         if (!File.Exists(path))
             await WriteWrapperAsync(path);
         return (
@@ -103,12 +107,21 @@ internal sealed class CodeHelperServer : IAsyncDisposable
         var assembly = typeof(CodeHelperServer).Assembly.Location;
         if (OperatingSystem.IsWindows())
         {
-            var prefix = Path.GetFileNameWithoutExtension(process).Equals("dotnet", StringComparison.OrdinalIgnoreCase)
-                ? $"{PsQuote(process)} {PsQuote(assembly)}" : PsQuote(process);
+            var prefix = Path.GetFileNameWithoutExtension(process)
+                .Equals("dotnet", StringComparison.OrdinalIgnoreCase)
+                ? $"{PsQuote(process)} {PsQuote(assembly)}"
+                : PsQuote(process);
             // The pipeline waits for a GUI-subsystem Desktop helper as well as a console host.
-            await File.WriteAllTextAsync(path, $"& {prefix} --code-helper @args | Out-Host\nif ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}\n", new UTF8Encoding(true));
+            await File.WriteAllTextAsync(
+                path,
+                $"& {prefix} --code-helper @args | Out-Host\nif ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}\n",
+                new UTF8Encoding(true)
+            );
             var cmd = Path.ChangeExtension(path, ".cmd");
-            await File.WriteAllTextAsync(cmd, $"@echo off\r\n\"{Foxwarm.Tools.LocalExecManager.WindowsPowerShell}\" -NoProfile -ExecutionPolicy Bypass -File \"%~dp0code.ps1\" %*\r\n");
+            await File.WriteAllTextAsync(
+                cmd,
+                $"@echo off\r\n\"{Foxwarm.Tools.LocalExecManager.WindowsPowerShell}\" -NoProfile -ExecutionPolicy Bypass -File \"%~dp0code.ps1\" %*\r\n"
+            );
             return;
         }
         var launcher = Path.GetFileNameWithoutExtension(process)
@@ -123,7 +136,8 @@ internal sealed class CodeHelperServer : IAsyncDisposable
             );
     }
 
-    private static string PsQuote(string value) => "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
+    private static string PsQuote(string value) =>
+        "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
 
     private async Task AcceptPipeLoopAsync(CancellationToken token)
     {
@@ -131,8 +145,13 @@ internal sealed class CodeHelperServer : IAsyncDisposable
         {
             while (!token.IsCancellationRequested)
             {
-                var pipe = new NamedPipeServerStream(socketPath!, PipeDirection.InOut, 16, PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+                var pipe = new NamedPipeServerStream(
+                    socketPath!,
+                    PipeDirection.InOut,
+                    16,
+                    PipeTransmissionMode.Byte,
+                    PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly
+                );
                 try
                 {
                     await pipe.WaitForConnectionAsync(token);
@@ -165,7 +184,8 @@ internal sealed class CodeHelperServer : IAsyncDisposable
         catch (SocketException) when (Volatile.Read(ref closed) != 0) { }
     }
 
-    private Task HandleAsync(Socket client) => HandleStreamAsync(new NetworkStream(client, ownsSocket: true));
+    private Task HandleAsync(Socket client) =>
+        HandleStreamAsync(new NetworkStream(client, ownsSocket: true));
 
     private async Task HandleStreamAsync(Stream connection)
     {
@@ -324,7 +344,12 @@ internal sealed class CodeHelperServer : IAsyncDisposable
             throw new InvalidOperationException("--add requires a directory.");
         if (go && Directory.Exists(path))
             throw new InvalidOperationException("--goto requires a file.");
-        return new(add || Directory.Exists(path) ? "addFolder" : "openFile", Foxwarm.Code.CodeNativePaths.Transport(path), line, column);
+        return new(
+            add || Directory.Exists(path) ? "addFolder" : "openFile",
+            Foxwarm.Code.CodeNativePaths.Transport(path),
+            line,
+            column
+        );
     }
 
     public async ValueTask DisposeAsync()
@@ -423,7 +448,12 @@ internal static class CodeHelperClient
         Stream connection;
         if (OperatingSystem.IsWindows())
         {
-            var pipe = new NamedPipeClientStream(".", socketPath, PipeDirection.InOut, PipeOptions.Asynchronous);
+            var pipe = new NamedPipeClientStream(
+                ".",
+                socketPath,
+                PipeDirection.InOut,
+                PipeOptions.Asynchronous
+            );
             try
             {
                 await pipe.ConnectAsync(timeout.Token);
@@ -437,7 +467,11 @@ internal static class CodeHelperClient
         }
         else
         {
-            var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            var socket = new Socket(
+                AddressFamily.Unix,
+                SocketType.Stream,
+                ProtocolType.Unspecified
+            );
             try
             {
                 await socket.ConnectAsync(new UnixDomainSocketEndPoint(socketPath), timeout.Token);

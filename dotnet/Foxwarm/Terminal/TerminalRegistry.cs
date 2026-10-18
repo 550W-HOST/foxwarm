@@ -45,11 +45,15 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
             throw new DirectoryNotFoundException(full);
         cols = Math.Max(20, cols);
         rows = Math.Max(5, rows);
-        if (cols > (OperatingSystem.IsWindows() ? short.MaxValue : ushort.MaxValue)
-            || rows > (OperatingSystem.IsWindows() ? short.MaxValue : ushort.MaxValue))
+        if (
+            cols > (OperatingSystem.IsWindows() ? short.MaxValue : ushort.MaxValue)
+            || rows > (OperatingSystem.IsWindows() ? short.MaxValue : ushort.MaxValue)
+        )
             throw new ArgumentOutOfRangeException(nameof(cols));
 
-        var environment = new Dictionary<string, string>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        var environment = new Dictionary<string, string>(
+            OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal
+        );
         foreach (System.Collections.DictionaryEntry item in Environment.GetEnvironmentVariables())
             if (item.Key is string key && item.Value is string value)
                 environment[key] = value;
@@ -59,9 +63,9 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
             ? configured.Trim()
             : "";
         var shell =
-            configuredShell.Length > 0 && File.Exists(configuredShell)
-                ? configuredShell
-                : OperatingSystem.IsWindows() ? Foxwarm.Tools.LocalExecManager.WindowsPowerShell : "/bin/bash";
+            configuredShell.Length > 0 && File.Exists(configuredShell) ? configuredShell
+            : OperatingSystem.IsWindows() ? Foxwarm.Tools.LocalExecManager.WindowsPowerShell
+            : "/bin/bash";
         if (!File.Exists(shell))
             throw new FileNotFoundException("A usable terminal shell is unavailable.", shell);
 
@@ -73,9 +77,15 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
             var id = Guid.NewGuid().ToString("N");
             Directory.CreateDirectory(terminalDirectory);
             var cwdFile = Path.Combine(terminalDirectory, id + ".cwd");
-            var powershell = OperatingSystem.IsWindows() && Path.GetFileNameWithoutExtension(shell).Contains("powershell", StringComparison.OrdinalIgnoreCase);
-            var rcFile = powershell ? Path.Combine(terminalDirectory, id + ".ps1")
-                : shell.Contains("bash", StringComparison.Ordinal) ? Path.Combine(terminalDirectory, id + ".bashrc") : null;
+            var powershell =
+                OperatingSystem.IsWindows()
+                && Path.GetFileNameWithoutExtension(shell)
+                    .Contains("powershell", StringComparison.OrdinalIgnoreCase);
+            var rcFile =
+                powershell ? Path.Combine(terminalDirectory, id + ".ps1")
+                : shell.Contains("bash", StringComparison.Ordinal)
+                    ? Path.Combine(terminalDirectory, id + ".bashrc")
+                : null;
             environment["FOXWARM_TERMINAL_ID"] = id;
             environment["FOXWARM_TERMINAL_CWD_PATH"] = cwdFile;
             var helperInfo = await helper.RegisterAsync(id);
@@ -85,14 +95,29 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
             try
             {
                 if (rcFile is not null)
-                    await File.WriteAllTextAsync(rcFile, powershell ? PowerShellRc : BashRc, new UTF8Encoding(powershell));
+                    await File.WriteAllTextAsync(
+                        rcFile,
+                        powershell ? PowerShellRc : BashRc,
+                        new UTF8Encoding(powershell)
+                    );
                 if (rcFile is not null && OperatingSystem.IsLinux())
                     File.SetUnixFileMode(rcFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
                 var native = TerminalNative.Handle.Spawn(
                     shell,
-                    powershell ? ["-NoLogo", "-NoProfile", "-NoExit", "-ExecutionPolicy", "Bypass", "-File", rcFile!]
+                    powershell
+                            ?
+                            [
+                                "-NoLogo",
+                                "-NoProfile",
+                                "-NoExit",
+                                "-ExecutionPolicy",
+                                "Bypass",
+                                "-File",
+                                rcFile!,
+                            ]
                         : OperatingSystem.IsWindows() ? []
-                        : rcFile is null ? ["-i"] : ["--rcfile", rcFile, "-i"],
+                        : rcFile is null ? ["-i"]
+                        : ["--rcfile", rcFile, "-i"],
                     full,
                     environment,
                     cols,
@@ -366,8 +391,10 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
         {
             cols = Math.Max(20, cols);
             rows = Math.Max(5, rows);
-            if (cols > (OperatingSystem.IsWindows() ? short.MaxValue : ushort.MaxValue)
-            || rows > (OperatingSystem.IsWindows() ? short.MaxValue : ushort.MaxValue))
+            if (
+                cols > (OperatingSystem.IsWindows() ? short.MaxValue : ushort.MaxValue)
+                || rows > (OperatingSystem.IsWindows() ? short.MaxValue : ushort.MaxValue)
+            )
                 throw new ArgumentOutOfRangeException(nameof(cols));
             lock (gate)
             {

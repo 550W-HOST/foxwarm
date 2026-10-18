@@ -12,8 +12,18 @@ public static class NativeHelperEntry
             return false;
         if (OperatingSystem.IsWindows() && AttachConsole(uint.MaxValue))
         {
-            Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = true });
-            Console.SetError(new StreamWriter(Console.OpenStandardError(), new UTF8Encoding(false)) { AutoFlush = true });
+            Console.SetOut(
+                new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false))
+                {
+                    AutoFlush = true,
+                }
+            );
+            Console.SetError(
+                new StreamWriter(Console.OpenStandardError(), new UTF8Encoding(false))
+                {
+                    AutoFlush = true,
+                }
+            );
         }
         try
         {

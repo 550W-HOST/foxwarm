@@ -495,8 +495,13 @@ public sealed class CodeRoutesTests
                 + config["workspaceUri"]!["path"]!.ToString()
         );
         var encodedFolder = "foxwarm://node+master/W%3A/work%20space/%E9%9B%AA";
-        var folderHtml = await f.Client.GetStringAsync("/vscode-web/?folderUri=" + Uri.EscapeDataString(encodedFolder));
-        var folderMatch = System.Text.RegularExpressions.Regex.Match(folderHtml, "data-settings=\"([^\"]+)\"");
+        var folderHtml = await f.Client.GetStringAsync(
+            "/vscode-web/?folderUri=" + Uri.EscapeDataString(encodedFolder)
+        );
+        var folderMatch = System.Text.RegularExpressions.Regex.Match(
+            folderHtml,
+            "data-settings=\"([^\"]+)\""
+        );
         var folderConfig = JsonNode.Parse(WebUtility.HtmlDecode(folderMatch.Groups[1].Value))!;
         Assert.Equal("/W:/work space/雪", folderConfig["folderUri"]!["path"]!.GetValue<string>());
         Assert.Contains("foxwarm-terminal", config["additionalBuiltinExtensions"]!.ToJsonString());

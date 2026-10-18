@@ -19,8 +19,16 @@ internal static class CodeNativePaths
         var value = path;
         if (value.Length >= 4 && value[0] == '/' && char.IsAsciiLetter(value[1]) && value[2] == ':')
             value = value[1..];
-        if (value.Length < 3 || !char.IsAsciiLetter(value[0]) || value[1] != ':' || value[2] is not ('/' or '\\'))
-            throw new CodeServiceException("InvalidPath", "Windows Code requires an absolute drive path.");
+        if (
+            value.Length < 3
+            || !char.IsAsciiLetter(value[0])
+            || value[1] != ':'
+            || value[2] is not ('/' or '\\')
+        )
+            throw new CodeServiceException(
+                "InvalidPath",
+                "Windows Code requires an absolute drive path."
+            );
         return Path.GetFullPath(value.Replace('/', '\\'));
     }
 }

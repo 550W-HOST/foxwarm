@@ -197,17 +197,30 @@
   <!-- Native worker selection follows the requested target, never the build host. -->
   <PropertyGroup>
     <MontyTargetRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</MontyTargetRid>
-    <MontyTargetRid Condition="'$(MontyTargetRid)' == ''">$(NETCoreSdkRuntimeIdentifier)</MontyTargetRid>
+    <MontyTargetRid Condition="'$(MontyTargetRid)' == ''"
+      >$(NETCoreSdkRuntimeIdentifier)</MontyTargetRid>
     <MontyExecutable Condition="'$(MontyTargetRid)' == 'win-x64'">monty.exe</MontyExecutable>
     <MontyExecutable Condition="'$(MontyTargetRid)' == 'linux-x64'">monty</MontyExecutable>
     <MontyNativePrefix>$(MSBuildProjectDirectory)/obj/monty-0.0.19/$(MontyTargetRid)</MontyNativePrefix>
     <MontyPython Condition="'$(OS)' != 'Windows_NT'">python3</MontyPython>
     <MontyPython Condition="'$(OS)' == 'Windows_NT'">python</MontyPython>
   </PropertyGroup>
-  <Target Name="PrepareMontyWorker" BeforeTargets="AssignTargetPaths" Condition="'$(MontyExecutable)' != ''">
-    <Exec Condition="!Exists('$(MontyNativePrefix)/bin/$(MontyExecutable)')" Command="$(MontyPython) &quot;$(MSBuildProjectDirectory)/../scripts/acquire-monty-native.py&quot; &quot;$(MontyNativePrefix)&quot; --rid $(MontyTargetRid)" />
+  <Target
+    Name="PrepareMontyWorker"
+    BeforeTargets="AssignTargetPaths"
+    Condition="'$(MontyExecutable)' != ''"
+  >
+    <Exec
+      Condition="!Exists('$(MontyNativePrefix)/bin/$(MontyExecutable)')"
+      Command="$(MontyPython) &quot;$(MSBuildProjectDirectory)/../scripts/acquire-monty-native.py&quot; &quot;$(MontyNativePrefix)&quot; --rid $(MontyTargetRid)"
+    />
     <ItemGroup>
-      <Content Include="$(MontyNativePrefix)/bin/$(MontyExecutable)" Link="ToolScript/native/$(MontyExecutable)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+      <Content
+        Include="$(MontyNativePrefix)/bin/$(MontyExecutable)"
+        Link="ToolScript/native/$(MontyExecutable)"
+        CopyToOutputDirectory="PreserveNewest"
+        CopyToPublishDirectory="PreserveNewest"
+      />
     </ItemGroup>
   </Target>
 </Project>

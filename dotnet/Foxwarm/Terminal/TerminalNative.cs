@@ -111,7 +111,9 @@ internal static class TerminalNative
         )
         {
             if (OperatingSystem.IsWindows())
-                return new Handle(WindowsPseudoConsole.Spawn(shell, arguments, cwd, environment, cols, rows));
+                return new Handle(
+                    WindowsPseudoConsole.Spawn(shell, arguments, cwd, environment, cols, rows)
+                );
             if (!IsSupported)
                 throw new PlatformNotSupportedException(
                     "Main terminal PTY is unavailable on this Linux host."
@@ -149,7 +151,8 @@ internal static class TerminalNative
             }
         }
 
-        internal long Read(byte[] buffer) => windows?.Read(buffer) ?? fw_read(Pointer, buffer, (nuint)buffer.Length);
+        internal long Read(byte[] buffer) =>
+            windows?.Read(buffer) ?? fw_read(Pointer, buffer, (nuint)buffer.Length);
 
         internal void Write(byte[] buffer)
         {
