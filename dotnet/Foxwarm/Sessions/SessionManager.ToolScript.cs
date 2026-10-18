@@ -16,6 +16,7 @@ internal sealed partial class SessionManager
         if (
             !ToolAuthorizationEvaluation.Within(actual, own)
             || owner.Agent == "main"
+                && agents.AgentDirectory("main") == toolWorkspace
                 && ToolAuthorizationEvaluation.Within(
                     actual,
                     AuthorizationPaths.CanonicalPotential(Path.Combine(own, "agents"))

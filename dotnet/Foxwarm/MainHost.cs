@@ -10,18 +10,31 @@ internal sealed class MainHost : IAsyncDisposable
 {
     private readonly SessionManager sessions;
     private readonly TerminalRegistry terminals;
-    private readonly McpInboundHttp inboundMcp;
-    internal WebApplication App { get; }
+    private readonly McpInboundHttp? inboundMcp;
+    private readonly IHost host;
+    internal WebApplication App => host as WebApplication
+        ?? throw new InvalidOperationException("HTTP is disabled for this host.");
+    internal IHostApplicationLifetime Lifetime => host.Services.GetRequiredService<IHostApplicationLifetime>();
+    internal bool HttpEnabled => host is WebApplication;
+    internal Task StartAsync() => host.StartAsync();
     private readonly object lifecycle = new();
     private Task? disposal;
 
-    private MainHost(SessionManager sessions, TerminalRegistry terminals, HttpServer server)
+    private MainHost(SessionManager sessions, TerminalRegistry terminals, IHost host, McpInboundHttp? inboundMcp)
     {
         this.sessions = sessions;
         this.terminals = terminals;
-        inboundMcp = server.InboundMcp;
-        App = server.App;
+        this.inboundMcp = inboundMcp;
+        this.host = host;
     }
+
+    internal static Task<MainHost> CreateAsync(
+        string[] args,
+        ModelConfiguration configuration,
+        HttpServerSettings http,
+        string? distRoot = null
+    ) => CreateAsync(args, configuration.Paths.DataRoot, configuration.Paths.WorkspaceRoot,
+        configuration, http, distRoot, configuration.Paths);
 
     internal static async Task<MainHost> CreateAsync(
         string[] args,
@@ -29,10 +42,12 @@ internal sealed class MainHost : IAsyncDisposable
         string workspaceRoot,
         ModelConfiguration configuration,
         HttpServerSettings http,
-        string? distRoot
+        string? distRoot,
+        HostPaths? paths = null
     )
     {
-        configuration.Access.ReserveInstanceToken(http.Token);
+        if (http.HttpEnabled)
+            configuration.Access.ReserveInstanceToken(http.Token);
         var options = new ResponsesClientOptions(
             new Uri("http://127.0.0.1:1/v1"),
             "",
@@ -46,16 +61,31 @@ internal sealed class MainHost : IAsyncDisposable
             workspaceRoot,
             options,
             configuration.Models,
-            Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_SKILLS_ROOT")
+            paths?.SkillsRoot ?? Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_SKILLS_ROOT"),
+            paths
         );
         TerminalRegistry? terminals = null;
         HttpServer? server = null;
+        IHost? headless = null;
         try
         {
             await sessions.LoadMainHostAsync();
             terminals = new TerminalRegistry(dataRoot, CancellationToken.None);
             var runtime = new SessionRuntime(sessions);
             var router = new MessageRouter(runtime);
+            if (!http.HttpEnabled)
+            {
+                var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+                {
+                    Args = args,
+                    ContentRootPath = paths?.ApplicationRoot ?? AppContext.BaseDirectory,
+                });
+                builder.Logging.ClearProviders();
+                headless = builder.Build();
+                headless.Services.GetRequiredService<IHostApplicationLifetime>()
+                    .ApplicationStopping.Register(sessions.BeginShutdown);
+                return new MainHost(sessions, terminals, headless, null);
+            }
             server = new HttpServer(
                 args,
                 http.Port,
@@ -66,13 +96,14 @@ internal sealed class MainHost : IAsyncDisposable
                 http.Address,
                 http.WebUiEnabled,
                 http.BindAddress,
-                http.Desktop
+                http.Desktop,
+                http.TriggerEnabled
             );
             if (server.WebUiEnabled)
                 new WebUIChannel(sessions, runtime, router, terminals, server.Downloads).Register(
                     server.App
                 );
-            return new MainHost(sessions, terminals, server);
+            return new MainHost(sessions, terminals, server.App, server.InboundMcp);
         }
         catch
         {
@@ -83,6 +114,7 @@ internal sealed class MainHost : IAsyncDisposable
                 await server.InboundMcp.DisposeAsync();
                 await server.App.DisposeAsync();
             }
+            headless?.Dispose();
             if (terminals is not null)
                 await terminals.DisposeAsync();
             await sessions.DisposeAsync();
@@ -93,7 +125,7 @@ internal sealed class MainHost : IAsyncDisposable
     internal async Task WaitForShutdownAsync()
     {
         var stopping = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var registration = App.Lifetime.ApplicationStopping.Register(() =>
+        using var registration = Lifetime.ApplicationStopping.Register(() =>
             stopping.TrySetResult()
         );
         await stopping.Task.ConfigureAwait(false);
@@ -107,8 +139,9 @@ internal sealed class MainHost : IAsyncDisposable
 
     private async Task DisposeCoreAsync()
     {
-        await inboundMcp.DisposeAsync().ConfigureAwait(false);
         sessions.BeginShutdown();
+        if (inboundMcp is not null)
+            await inboundMcp.DisposeAsync().ConfigureAwait(false);
         try
         {
             // Do not let RunAsync dispose ASP.NET (including Node sockets) first.
@@ -122,8 +155,11 @@ internal sealed class MainHost : IAsyncDisposable
             throw;
         }
         await terminals.DisposeAsync().ConfigureAwait(false);
-        await App.StopAsync().ConfigureAwait(false);
-        await App.DisposeAsync().ConfigureAwait(false);
+        await host.StopAsync().ConfigureAwait(false);
+        if (host is IAsyncDisposable asyncHost)
+            await asyncHost.DisposeAsync().ConfigureAwait(false);
+        else
+            host.Dispose();
         await sessions.DisposeAsync().ConfigureAwait(false);
     }
 }

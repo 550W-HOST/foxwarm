@@ -9,42 +9,28 @@ if (await Foxwarm.Vector.VectorChild.TryRunAsync(args))
 if (await Foxwarm.Terminal.NativeHelperEntry.TryRunAsync(args))
     return;
 
-static string Required(string name) =>
-    Environment.GetEnvironmentVariable(name) is { Length: > 0 } value
-        ? value
-        : throw new InvalidOperationException(
-            $"Missing experiment host environment variable {name}."
-        );
-
-var dataRoot =
-    Environment.GetEnvironmentVariable("FOXWARM_DATA_DIR")
-    ?? Required("FOXWARM_EXPERIMENT_DATA_ROOT");
-var workspaceRoot = Required("FOXWARM_EXPERIMENT_TOOL_ROOT");
-var configuration = new ModelConfiguration(dataRoot);
-var http = await HttpServerSettings.CaptureAsync(configuration, dataRoot);
+var configuration = new ModelConfiguration(HostPaths.Capture());
+var paths = configuration.Paths;
+var http = await HttpServerSettings.CaptureAsync(configuration, paths.DataRoot);
 var distRoot = Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_WEBUI_DIST");
-if (http.WebUiEnabled && distRoot is not null)
+if (distRoot is not null)
+    distRoot = HostPaths.Resolve(distRoot, paths.ApplicationRoot);
+else
 {
-    distRoot = Path.GetFullPath(distRoot);
-    if (
-        !File.Exists(Path.Combine(distRoot, "index.html"))
-        || !Directory.Exists(Path.Combine(distRoot, "assets"))
-    )
-        throw new InvalidOperationException(
-            "Configured experimental WebUI dist needs index.html and assets/."
-        );
+    var packaged = Path.Combine(paths.ResourceRoot, "webui-dist");
+    var installed = Path.Combine(paths.ApplicationRoot, "packages", "webui", "dist");
+    distRoot = Directory.Exists(packaged) ? packaged : Directory.Exists(installed) ? installed : null;
 }
-await using var host = await MainHost.CreateAsync(
-    args,
-    dataRoot,
-    workspaceRoot,
-    configuration,
-    http,
-    distRoot
-);
-host.App.Lifetime.ApplicationStarted.Register(() =>
+if (http.WebUiEnabled && distRoot is not null
+    && (!File.Exists(Path.Combine(distRoot, "index.html"))
+        || !Directory.Exists(Path.Combine(distRoot, "assets"))))
+    throw new InvalidOperationException("Configured WebUI dist needs index.html and assets/.");
+await using var host = await MainHost.CreateAsync(args, configuration, http, distRoot);
+host.Lifetime.ApplicationStarted.Register(() =>
 {
-    Console.WriteLine("Main HTTP listening: " + string.Join(", ", host.App.Urls));
+    Console.WriteLine(host.HttpEnabled
+        ? "Main HTTP listening: " + string.Join(", ", host.App.Urls)
+        : "Main started without HTTP.");
 });
-await host.App.StartAsync();
+await host.StartAsync();
 await host.WaitForShutdownAsync();

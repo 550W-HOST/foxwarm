@@ -89,6 +89,19 @@ internal sealed class SessionRuntime(SessionManager manager)
         remove => manager.TopologyChanged -= value;
     }
 
+    internal async Task QueueTriggerAsync(string id, string text)
+    {
+        var owner = await manager.RequiredAsync(id);
+        await SubmitExternalAsync(owner,
+            new QueueItem(QueueItemType.Trigger,
+                [new JsonObject { ["system"] = SessionBoundary.SessionEvent("trigger", text) }]),
+            () =>
+            {
+                if (!manager.Accepting)
+                    throw new InvalidOperationException("Host is shutting down.");
+            });
+    }
+
     public async Task ContinueAsync(string id) =>
         await (await manager.RequiredAsync(id)).StartProcessing(retry: true);
 

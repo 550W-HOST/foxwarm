@@ -12,6 +12,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
 {
     private readonly PendingWriteRefs pendingWrites = new();
     private readonly string root;
+    private readonly HostPaths? hostPaths;
     internal Foxwarm.Images.ImageBlobStore Images { get; }
     private readonly ResponsesClientOptions clientOptions;
     private readonly HostModels models;
@@ -54,9 +55,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
         string workspace,
         ResponsesClientOptions options,
         HostModels models,
-        string? skillsRoot = null
+        string? skillsRoot = null,
+        HostPaths? hostPaths = null
     )
     {
+        this.hostPaths = hostPaths;
         Images = new(root);
         ToolScript = new(root);
         HandoffConfirmationEnabled = models.HandoffConfirmationEnabled;
@@ -66,18 +69,6 @@ internal sealed partial class SessionManager : IAsyncDisposable
         var workspaceRoot = Path.GetFullPath(workspace);
         toolWorkspace = workspaceRoot;
         authorization = new ToolAuthorizationAuthority(this.root);
-        if (
-            workspaceRoot == this.root
-            || workspaceRoot.StartsWith(
-                this.root + Path.DirectorySeparatorChar,
-                StringComparison.Ordinal
-            )
-            || this.root.StartsWith(
-                workspaceRoot + Path.DirectorySeparatorChar,
-                StringComparison.Ordinal
-            )
-        )
-            throw new ArgumentException("Tool workspace and authority root must not overlap.");
         CommittedArchiveIdentity.ValidateStartupEvidence(
             this.root,
             allowPendingIdentityRecovery: true
@@ -116,11 +107,12 @@ internal sealed partial class SessionManager : IAsyncDisposable
             workspaceRoot,
             recoveringMove is { OwnsAgent: true, Phase: "rolling-back" }
                 ? recoveringMove.OwnedAgent
-                : null
+                : null,
+            canonicalLayout: hostPaths is { LegacyWorkspace: null }
         );
         skills = new Skills(
             agents,
-            Path.GetFullPath(skillsRoot ?? Path.Combine(AppContext.BaseDirectory, "skills"))
+            Path.GetFullPath(skillsRoot ?? hostPaths?.SkillsRoot ?? Path.Combine(AppContext.BaseDirectory, "skills"))
         );
         memory = new AgentMemory(agents, skills);
         executor = new LocalExecManager(
@@ -216,7 +208,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             definitions.Add(definition?.DeepClone());
         mcp = new Foxwarm.McpClient(
             this.root,
-            SessionWait.Text(models.ConfigurationOwner?.AppConfiguration["url"])
+            SessionWait.Text(models.ConfigurationOwner?.AppConfiguration["url"]),
+            hostPaths?.McpConfigPath
         );
         tools = SessionToolExecutor.CreateRegistry(
             definitions,

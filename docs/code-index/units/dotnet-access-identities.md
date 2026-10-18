@@ -7,7 +7,7 @@ Secondary files: `dotnet/Foxwarm/HttpServer.cs`, `dotnet/Foxwarm/MainHost.cs`, `
 
 Implements the shared [access identity decision](./src-access-config.md#d-config-shared-access-identities) and [Session scope contract](../modules/webui.md#d-webui-identity-session-scope) at the .NET Main boundary. A scoped browser identity is not an administrator or an internal Session principal. The built original React entry mounts `WebUiIdentityApp`, not an administrator workbench leaf.
 
-The empty MCP surface is validated and persisted by the same snapshot owner. Normal Main registers the [ordinary inbound MCP service](./dotnet-inbound-mcp.md), and successful live installation reports `access.surfaces.mcp` applied, including first/last identity activation without restart. A configuration-only installer with no registered runtime still reports a declared MCP surface not applied. Inbound MCP remains separate from browser/admin authority and outbound administrator OAuth routes.
+The empty MCP surface is validated and persisted by the same snapshot owner. Normal Main registers the [ordinary inbound MCP service](./dotnet-inbound-mcp.md), and successful live installation reports `access.surfaces.mcp` applied, including first/last identity activation without restart. When no HTTP runtime was started, a newly declared MCP surface is saved but reported not applied and requiring restart. Inbound MCP remains separate from browser/admin authority and outbound administrator OAuth routes.
 
 ## Producer and authority map
 

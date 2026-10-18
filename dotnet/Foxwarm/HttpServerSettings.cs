@@ -12,17 +12,21 @@ internal sealed record HttpServerSettings(
     string BindAddress,
     PublicWebAddress Address,
     bool WebUiEnabled,
-    bool Desktop = false
+    bool Desktop = false,
+    bool TriggerEnabled = true,
+    bool HttpEnabled = true
 )
 {
-    internal static bool Enabled(ModelConfiguration? configuration)
+    internal static bool Enabled(ModelConfiguration? configuration) => Feature(configuration, "enableWebUI");
+
+    internal static bool Feature(ModelConfiguration? configuration, string name)
     {
-        var value = configuration?.AppConfiguration["bot"]?["enableWebUI"];
+        var value = configuration?.AppConfiguration["bot"]?[name];
         if (value is null)
             return true;
         return value is JsonValue scalar && scalar.TryGetValue<bool>(out var enabled)
             ? enabled
-            : throw new InvalidDataException("bot.enableWebUI must be a boolean.");
+            : throw new InvalidDataException($"bot.{name} must be a boolean.");
     }
 
     internal static async Task<HttpServerSettings> CaptureAsync(
@@ -30,12 +34,13 @@ internal sealed record HttpServerSettings(
         string dataRoot
     )
     {
-        var portOverride = Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_PORT");
+        var portOverride = Environment.GetEnvironmentVariable("FOXWARM_HTTP_PORT")
+            ?? Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_PORT");
         int port;
         if (portOverride is not null)
         {
             if (!int.TryParse(portOverride, out port))
-                throw new InvalidDataException("FOXWARM_EXPERIMENT_PORT must be a port number.");
+                throw new InvalidDataException("HTTP port override must be a port number.");
         }
         else
         {
@@ -51,23 +56,26 @@ internal sealed record HttpServerSettings(
         }
         if (port is <= 0 or > 65535)
             throw new InvalidDataException("HTTP port must be between 1 and 65535.");
-        var bindAddress = Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_BIND_ADDRESS");
+        var bindAddress = Environment.GetEnvironmentVariable("FOXWARM_BIND_ADDRESS")
+            ?? Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_BIND_ADDRESS");
         if (string.IsNullOrWhiteSpace(bindAddress))
-            bindAddress = "127.0.0.1";
+            bindAddress = "0.0.0.0";
         if (
             !System.Net.IPAddress.TryParse(bindAddress, out var parsedBindAddress)
             || parsedBindAddress.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork
         )
             throw new InvalidDataException(
-                "FOXWARM_EXPERIMENT_BIND_ADDRESS must be an IPv4 address."
+                "HTTP bind address must be an IPv4 address."
             );
         var configuredUrl = SessionWait.Text(configuration.AppConfiguration["url"]);
         var address = PublicWebAddress.Capture(port, configuredUrl);
         var enabled = Enabled(configuration);
-        var token = await LoadOrCreateTokenAsync(dataRoot);
-        if (string.IsNullOrWhiteSpace(token))
+        var trigger = Feature(configuration, "enableTrigger");
+        var http = enabled || trigger || configuration.Access.Snapshot.Values.Any(identity => identity.Mcp);
+        var token = http ? await LoadOrCreateTokenAsync(dataRoot) : "";
+        if (http && string.IsNullOrWhiteSpace(token))
             throw new InvalidDataException("HTTP access token must not be blank.");
-        return new(port, token, bindAddress, address, enabled);
+        return new(port, token, bindAddress, address, enabled, TriggerEnabled: trigger, HttpEnabled: http);
     }
 
     // Desktop deliberately ignores the server bind/port/public URL settings. Kestrel

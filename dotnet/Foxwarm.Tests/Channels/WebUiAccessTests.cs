@@ -66,7 +66,7 @@ public sealed class WebUiAccessTests
         Assert.Contains("access.identities", result["applied"]!.ToString());
         Assert.Contains("access.surfaces.mcp", result["notApplied"]!.ToString());
         Assert.Contains("access.connections", result["notApplied"]!.ToString());
-        Assert.DoesNotContain("access", result["restartRequired"]!.ToString());
+        Assert.Contains("access.surfaces.mcp", result["restartRequired"]!.ToString());
         Assert.NotNull(config.Access.Authenticate("synthetic-alice"));
         Assert.Equal(1, calls);
         await Assert.ThrowsAsync<InvalidDataException>(() =>

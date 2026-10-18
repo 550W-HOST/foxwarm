@@ -20,6 +20,14 @@ Defines stable Session/Agent identity and message shapes used by owner/runtime, 
 
 These are value/domain boundaries, not persistence writers. JSON authority owns active history/queue/wait semantic instances; catalog owns Main identity/topology/presentation summaries. Agent memory selection can affect a prompt but does not mutate Session history until a turn save commits its canonical result.
 
+## Agent directories and retained layouts
+
+Canonical Source-style installs store every Agent, including main, at `<Agents root>/<name>`. `state/agents.json` is the plain Source name-to-metadata map, not a membership registry. Existing non-dot, valid real directories participate in membership even without a metadata row; orphan metadata does not invent an Agent directory. Unknown metadata fields survive supported mutations. Inheritance, isolated Node and exact tool rules retain the existing metadata/evaluation owners. Framework and missing-only main-memory bootstrap use these resolved directories and packaged templates; an existing main `memory/00_SYSTEM.md` remains the framework fallback. No default Session is created at application startup.
+
+The identified C# v1 list and v2 list-plus-metadata envelopes retain their original main-at-workspace layout through the existing explicit workspace caller/override. They continue writing v2 metadata in that same single file. Main files/memory, non-main `workspace/agents/<name>`, stored Session cwd and the old policy workspace are not rebased or relocated. Normal entry encountering an old envelope without its original workspace rejects with guidance before creating another main-memory tree. Main-only C# installs may have no Agent envelope: when their declared version-1 Session authority exists and canonical main is absent, startup likewise rejects the ambiguous location. This check neither admits a lifetime nor discovers a workspace; it never searches for or guesses an old workspace. Desktop retains its known workspace caller. Selecting a new physical layout for old data requires a separately authorized migration, not automatic startup conversion.
+
+Directory membership is not Session identity recovery evidence. The existing identity journal still proves its exact owned destination, unique lifetime and recovery direction before removing owned files. Unrelated directories remain ordinary Agent members, not recovered Session lifetimes. The historical unindexed-directory startup rejection is not a Source authority boundary.
+
 ## History ownership
 
 `HistoryMessage` owns an immutable `JsonElement`: mutable JSON is serialized at admission, and externally supplied elements are cloned out of their document lifetime. Its `Data`, scalar properties, and history indexing/enumeration are read-only; `ToJson` and `SessionHistory.Materialize` explicitly create detached mutable projections. `SessionHistory` wraps a persistent immutable list. Snapshot capture shares its root, append path-copies the list with newly owned records, and retry replaces only its changed record. `SessionHistoryBuffer` changes the owner's root under the existing state gate. Registry restore and fork can share roots without sharing mutable JSON.
@@ -30,4 +38,4 @@ Compaction builds a new root while retaining unchanged immutable records; preser
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Sessions/*` (including `SessionHistoryOwnershipTests.cs`); `dotnet/Foxwarm.Tests/Memory/MessageJsonTests.cs`; `ConditionalMemoryTests.cs`; presentation/list/identity tests.
+`CanonicalPathsTests.cs` covers frozen Source metadata and directory membership, unknown fields, fallback memory, retained physical layouts and exact identity recovery. `dotnet/Foxwarm.Tests/Sessions/*` (including `SessionHistoryOwnershipTests.cs`); `dotnet/Foxwarm.Tests/Memory/MessageJsonTests.cs`; `ConditionalMemoryTests.cs`; presentation/list/identity tests.

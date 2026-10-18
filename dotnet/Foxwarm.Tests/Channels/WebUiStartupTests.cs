@@ -71,6 +71,7 @@ public sealed class WebUiStartupTests
             foreach (
                 var key in new[]
                 {
+                    "FOXWARM_HTTP_PORT",
                     "FOXWARM_EXPERIMENT_PORT",
                     "FOXWARM_EXPERIMENT_BIND_ADDRESS",
                     "FOXWARM_PUBLIC_BASE_URL",
@@ -78,6 +79,7 @@ public sealed class WebUiStartupTests
                 }
             )
                 info.Environment.Remove(key);
+            info.Environment["FOXWARM_BIND_ADDRESS"] = "127.0.0.1";
             info.Environment["FOXWARM_DATA_DIR"] = Data;
             info.Environment["FOXWARM_CONFIG_PATH"] = ConfigPath;
             info.Environment["FOXWARM_EXPERIMENT_TOOL_ROOT"] = Work;

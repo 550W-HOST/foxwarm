@@ -118,7 +118,10 @@ internal sealed partial class ModelConfiguration
                 restart.Add("channels.webui");
             var notApplied = new List<string>();
             if (access.Values.Any(identity => identity.Mcp) && !Access.McpRuntimeAvailable)
+            {
                 notApplied.Add("access.surfaces.mcp");
+                restart.Add("access.surfaces.mcp");
+            }
             if (config.ContainsKey("channels") || app.ContainsKey("channels"))
                 notApplied.Add("channels");
             await ReplaceRawAsync(AppPath, bytes, token);

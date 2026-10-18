@@ -4,7 +4,7 @@ using Foxwarm.Tools;
 
 namespace Foxwarm;
 
-internal sealed class McpConfiguration(string root)
+internal sealed class McpConfiguration(string root, string? configPath = null)
 {
     private readonly SemaphoreSlim mutation = new(1, 1);
     private readonly object gate = new();
@@ -17,7 +17,7 @@ internal sealed class McpConfiguration(string root)
         {
             if (live is not null)
                 return live;
-            var file = Path.Combine(root, "state", "mcp.json");
+            var file = configPath ?? Path.Combine(root, "state", "mcp.json");
             var payload = File.Exists(file)
                 ? JsonNode.Parse(File.ReadAllText(file)) as JsonObject
                     ?? throw new InvalidDataException("Invalid MCP config payload.")
@@ -101,7 +101,7 @@ internal sealed class McpConfiguration(string root)
 
     private void Persist(JsonObject servers)
     {
-        new LinuxAtomicJsonFile(root, "state/mcp.json", privateFile: true).WritePayload(
+        new LinuxAtomicJsonFile(Path.GetDirectoryName(configPath ?? Path.Combine(root, "state", "mcp.json"))!, Path.GetFileName(configPath ?? "mcp.json"), privateFile: true).WritePayload(
             new JsonObject { ["servers"] = servers.DeepClone() }
         );
     }

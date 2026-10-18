@@ -43,7 +43,7 @@ internal sealed partial class AgentCatalog
     internal string SourceDirectory(string name)
     {
         ValidateName(name);
-        return name == "main" ? workspaceRoot : Path.Combine(agentRoot, name);
+        return !canonicalLayout && name == "main" ? workspaceRoot : Path.Combine(agentRoot, name);
     }
 
     internal void ValidateInheritance(string name, string? inherit)
@@ -153,8 +153,8 @@ internal sealed partial class AgentCatalog
         }
     }
 
-    private static JsonObject Payload(IEnumerable<string> names, JsonObject metadata) =>
-        new()
+    private JsonObject Payload(IEnumerable<string> names, JsonObject metadata) =>
+        canonicalLayout ? metadata : new()
         {
             ["version"] = 2,
             ["agents"] = new JsonArray(

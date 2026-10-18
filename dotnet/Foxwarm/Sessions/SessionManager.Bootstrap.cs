@@ -15,7 +15,7 @@ internal sealed partial class SessionManager
             await Journal.MarkSqliteAuthorityAsync(LlmRequestJournalStore.MigrationId);
         }
         await EnsureIdentityStartupAsync();
-        await agents.BootstrapMainMemoryAsync(AppContext.BaseDirectory);
+        await agents.BootstrapMainMemoryAsync(hostPaths?.ResourceRoot ?? AppContext.BaseDirectory);
         await LoadOwnersAsync(startMainServices: true);
     }
 }

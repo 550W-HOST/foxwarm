@@ -240,6 +240,7 @@ internal static class IsolatedToolCompatibility
                     && (
                         !ToolAuthorizationEvaluation.Within(path.Resolved, ownDirectory)
                         || request.Agent == "main"
+                            && request.AgentDirectory == request.Workspace
                             && ToolAuthorizationEvaluation.Within(
                                 path.Resolved,
                                 AuthorizationPaths.CanonicalPotential(

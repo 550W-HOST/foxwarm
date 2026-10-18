@@ -19,9 +19,9 @@ internal sealed partial class McpClient : IAsyncDisposable
     private long nextOperation;
     private bool closed;
 
-    internal McpClient(string root, string? publicBaseUrl = null)
+    internal McpClient(string root, string? publicBaseUrl = null, string? configPath = null)
     {
-        configuration = new(root);
+        configuration = new(root, configPath);
         OAuth = new(root, publicBaseUrl, configuration.Get, FenceServer, shutdown.Token);
     }
 

@@ -1,93 +1,128 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Foxwarm.Sessions;
 
 namespace Foxwarm.Sessions;
 
-/// <summary>One-host Agent directory and metadata owner. main keeps the pre-Agent workspace root.</summary>
+/// <summary>One-host Agent directories and metadata, with a bounded retained-layout reader.</summary>
 internal sealed partial class AgentCatalog
 {
     private readonly string workspaceRoot;
     private readonly string agentRoot;
     private readonly string indexPath;
+    private readonly bool canonicalLayout;
     private readonly SemaphoreSlim createGate = new(1, 1);
     private readonly object stateGate = new();
     private JsonObject metadata = new();
     private readonly HashSet<string> known = new(StringComparer.Ordinal) { "main" };
 
-    public AgentCatalog(string dataRoot, string workspaceRoot, string? recoveringOwnedAgent = null)
+    public AgentCatalog(
+        string dataRoot,
+        string workspaceRoot,
+        string? recoveringOwnedAgent = null,
+        bool canonicalLayout = false
+    )
     {
         this.workspaceRoot = Path.GetFullPath(workspaceRoot);
-        agentRoot = Path.Combine(this.workspaceRoot, "agents");
+        this.canonicalLayout = canonicalLayout;
+        agentRoot = canonicalLayout ? this.workspaceRoot : Path.Combine(this.workspaceRoot, "agents");
         indexPath = Path.Combine(Path.GetFullPath(dataRoot), "state", "agents.json");
+        if (File.Exists(indexPath))
+        {
+            var index = JsonNode.Parse(File.ReadAllText(indexPath)) as JsonObject
+                ?? throw new InvalidDataException("Agent metadata must be an object.");
+            // Only the identified C# envelope selects the retained list reader.
+            // Source metadata may itself contain Agents named version or agents.
+            var legacy = index["version"] is JsonValue versionValue
+                && versionValue.TryGetValue<int>(out var storedVersion)
+                && storedVersion is 1 or 2
+                && index["agents"] is JsonArray;
+            if (legacy)
+            {
+                if (canonicalLayout)
+                    throw new InvalidDataException(
+                        "Retained C# Agent data requires its original workspace. Supply the existing FOXWARM_EXPERIMENT_TOOL_ROOT override; no files were relocated."
+                    );
+                var version = index["version"]!.GetValue<int>();
+                if (index.Count != (version == 1 ? 2 : 3) || version == 2 && index["metadata"] is not JsonObject)
+                    throw new InvalidDataException("Unsupported retained Agent catalog format.");
+                if (version == 2)
+                    metadata = (JsonObject)index["metadata"]!.DeepClone();
+                foreach (var item in index["agents"]!.AsArray())
+                {
+                    var name = item?.GetValue<string>()
+                        ?? throw new InvalidDataException("Invalid Agent catalog entry.");
+                    ValidateName(name);
+                    if (name == "main" || !known.Add(name))
+                        throw new InvalidDataException("Duplicate Agent catalog entry.");
+                }
+            }
+            else
+                metadata = (JsonObject)index.DeepClone();
+        }
+        if (canonicalLayout
+            && !Directory.Exists(Path.Combine(agentRoot, "main"))
+            && !File.Exists(indexPath)
+            && HasRetainedMainOnlyAuthority(Path.GetFullPath(dataRoot)))
+            throw new InvalidDataException(
+                "Retained C# Session data has no canonical main Agent directory. Supply its original FOXWARM_EXPERIMENT_TOOL_ROOT workspace; startup will not initialize a second main memory tree."
+            );
         Directory.CreateDirectory(agentRoot);
         if ((File.GetAttributes(agentRoot) & FileAttributes.ReparsePoint) != 0)
             throw new InvalidDataException("Agent directory root cannot be a symbolic link.");
-        if (File.Exists(indexPath))
-        {
-            var index =
-                JsonNode.Parse(File.ReadAllText(indexPath)) as JsonObject
-                ?? throw new InvalidDataException("Agent catalog must be an object.");
-            var version = index["version"]?.GetValue<int>();
-            if (
-                version is not (1 or 2)
-                || index.Count != (version == 1 ? 2 : 3)
-                || index["agents"] is not JsonArray list
-                || version == 2 && index["metadata"] is not JsonObject
-            )
-                throw new InvalidDataException("Unsupported Agent catalog format.");
-            if (version == 2)
-                metadata = (JsonObject)index["metadata"]!.DeepClone();
-            foreach (var item in list)
-            {
-                var name =
-                    item?.GetValue<string>()
-                    ?? throw new InvalidDataException("Invalid Agent catalog entry.");
-                ValidateName(name);
-                if (name == "main" || !known.Add(name))
-                    throw new InvalidDataException("Duplicate Agent catalog entry.");
-            }
-        }
         foreach (var row in metadata)
             _ = Foxwarm.Tools.IsolatedToolCompatibility.Metadata(row.Value);
-        foreach (var name in known.Where(name => name != "main"))
-        {
-            var directory = Path.Combine(agentRoot, name);
-            if (
-                !Directory.Exists(directory)
-                || (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0
-                || !Directory.Exists(Path.Combine(directory, "memory"))
-            )
-                if (
-                    name != recoveringOwnedAgent
-                    || Directory.Exists(directory)
-                        && (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0
-                )
-                    throw new InvalidDataException(
-                        $"Agent '{name}' directory or memory folder is missing or invalid."
-                    );
-        }
-        // A crash before catalog rename may leave a new directory. Do not silently adopt
-        // or delete it: operator inspection is safer than merging Agent lifetimes.
-        foreach (var directory in Directory.EnumerateDirectories(agentRoot))
-        {
-            if (
-                Path.GetFileName(directory) == recoveringOwnedAgent
-                && (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0
-            )
-                throw new InvalidDataException(
-                    "Owned identity destination cannot be a symbolic link."
-                );
-            if (
-                !known.Contains(Path.GetFileName(directory))
-                && Path.GetFileName(directory) != recoveringOwnedAgent
-            )
-                throw new InvalidDataException(
-                    "Unindexed Agent directory; creation may have been interrupted."
-                );
-        }
+        if (!canonicalLayout)
+            foreach (var name in known.Where(name => name != "main"))
+            {
+                var directory = Path.Combine(agentRoot, name);
+                if (!Directory.Exists(directory)
+                    || (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                    if (name != recoveringOwnedAgent
+                        || Directory.Exists(directory) && (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                        throw new InvalidDataException($"Agent '{name}' directory is missing or invalid.");
+            }
+        if (recoveringOwnedAgent is not null
+            && Directory.Exists(Path.Combine(agentRoot, recoveringOwnedAgent))
+            && (File.GetAttributes(Path.Combine(agentRoot, recoveringOwnedAgent)) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("Owned identity destination cannot be a symbolic link.");
     }
+
+    // Main-only C# installs never needed to write agents.json. Their declared
+    // authority format is enough to reject an ambiguous new memory location,
+    // not to recover/admit a Session or discover the original workspace.
+    private static bool HasRetainedMainOnlyAuthority(string dataRoot)
+    {
+        var directory = Path.Combine(dataRoot, "state", "sessions");
+        if (!Directory.Exists(directory))
+            return false;
+        foreach (var file in Directory.EnumerateFiles(directory, "*.json"))
+        {
+            try
+            {
+                using var stream = File.OpenRead(file);
+                using var document = JsonDocument.Parse(stream);
+                if (document.RootElement.ValueKind == JsonValueKind.Object
+                    && document.RootElement.TryGetProperty("sessionStateVersion", out var version)
+                    && version.ValueKind == JsonValueKind.Number
+                    && version.TryGetInt32(out var number) && number == 1)
+                    return true;
+            }
+            catch (JsonException)
+            {
+                // Unrecognized files prove no retained C# layout or live lifetime.
+            }
+        }
+        return false;
+    }
+
+    private IEnumerable<string> DirectoryMembers() => Directory.EnumerateDirectories(agentRoot)
+        .Where(path => (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0)
+        .Select(Path.GetFileName)
+        .OfType<string>()
+        .Where(name => AgentName().IsMatch(name));
 
     public static void ValidateName(string name)
     {
@@ -100,26 +135,34 @@ internal sealed partial class AgentCatalog
     public bool Exists(string name)
     {
         lock (stateGate)
-            return known.Contains(name);
+        {
+            if (known.Contains(name))
+                return true;
+            if (!canonicalLayout || !AgentName().IsMatch(name))
+                return false;
+            var directory = Path.Combine(agentRoot, name);
+            return Directory.Exists(directory)
+                && (File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0;
+        }
     }
 
     public string[] List()
     {
         lock (stateGate)
-            return known.Order(StringComparer.Ordinal).ToArray();
+            return (canonicalLayout ? known.Concat(DirectoryMembers()).Distinct(StringComparer.Ordinal) : known).Order(StringComparer.Ordinal).ToArray();
     }
 
     public string AgentDirectory(string name)
     {
         if (!Exists(name))
             throw new InvalidDataException($"Agent '{name}' does not exist.");
-        return name == "main" ? workspaceRoot : Path.Combine(agentRoot, name);
+        return SourceDirectory(name);
     }
 
     public string MemoryDirectory(string name) => Path.Combine(AgentDirectory(name), "memory");
 
     public string FrameworkSystemPath => Path.Combine(agentRoot, "00_SYSTEM.md");
-    public string MainFallbackSystemPath => Path.Combine(workspaceRoot, "memory", "00_SYSTEM.md");
+    public string MainFallbackSystemPath => Path.Combine(SourceDirectory("main"), "memory", "00_SYSTEM.md");
 
     public async Task CreateAsync(string name, string? initialMemory = null, string? inherit = null)
     {
@@ -158,43 +201,27 @@ internal sealed partial class AgentCatalog
             committed = true;
             lock (stateGate)
             {
-                known.Add(name);
+                if (!canonicalLayout)
+                    known.Add(name);
                 if (inherit is not null)
                     metadata[name] = new JsonObject { ["inherit"] = inherit };
             }
         }
+        catch (AuthorityCommittedException)
+        {
+            lock (stateGate)
+            {
+                if (!canonicalLayout)
+                    known.Add(name);
+                if (inherit is not null)
+                    metadata[name] = new JsonObject { ["inherit"] = inherit };
+            }
+            throw;
+        }
         catch
         {
             if (createdDirectory && !committed)
-            {
-                // If an authority rename happened but its directory sync failed, the
-                // index now owns the directory; removing it would orphan that catalog.
-                if (File.Exists(indexPath))
-                {
-                    try
-                    {
-                        var root = JsonNode.Parse(File.ReadAllText(indexPath)) as JsonObject;
-                        if (
-                            root?["agents"] is JsonArray names
-                            && names.Any(item => item?.GetValue<string>() == name)
-                        )
-                            committed = true;
-                    }
-                    catch (System.Text.Json.JsonException)
-                    { /* Preserve the directory if authority is ambiguous. */
-                        committed = true;
-                    }
-                }
-                if (!committed)
-                    Directory.Delete(directory, recursive: true);
-            }
-            if (committed)
-                lock (stateGate)
-                {
-                    known.Add(name);
-                    if (inherit is not null)
-                        metadata[name] = new JsonObject { ["inherit"] = inherit };
-                }
+                Directory.Delete(directory, recursive: true);
             throw;
         }
         finally

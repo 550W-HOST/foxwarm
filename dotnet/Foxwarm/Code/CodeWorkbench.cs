@@ -12,7 +12,7 @@ namespace Foxwarm.Code;
 internal sealed partial class CodeWorkbench
 {
     private readonly PublicWebAddress publicAddress;
-    private readonly string applicationRoot = Path.GetFullPath(AppContext.BaseDirectory);
+    private readonly string applicationRoot;
     private readonly string dataRoot;
     private readonly string? appConfig;
     private readonly string? modelsConfig;
@@ -42,18 +42,20 @@ internal sealed partial class CodeWorkbench
         publicAddress = address;
         dataRoot = sessions.DataRoot;
         var config = sessions.Models.ConfigurationOwner;
+        applicationRoot = config?.Paths.ApplicationRoot ?? Path.GetFullPath(AppContext.BaseDirectory);
+        var resources = config?.Paths.ResourceRoot ?? AppContext.BaseDirectory;
         appConfig = config is null ? null : Path.GetFullPath(config.AppPath);
         modelsConfig = config is null ? null : Path.GetFullPath(config.ActivePath);
         assetRoot = Environment.GetEnvironmentVariable("FOXWARM_VSCODE_WEB_ASSET_DIR")
             is { Length: > 0 } assets
             ? Path.GetFullPath(assets)
-            : Path.Combine(applicationRoot, "packages", "vscode-web", "assets", "vscode-web");
-        extensionRoot = Path.Combine(applicationRoot, "packages", "vscode-web");
+            : Path.Combine(resources, "packages", "vscode-web", "assets", "vscode-web");
+        extensionRoot = Path.Combine(resources, "packages", "vscode-web");
         yamlRoot = Environment.GetEnvironmentVariable("FOXWARM_VSCODE_YAML_EXTENSION_DIR")
             is { Length: > 0 } yaml
             ? Path.GetFullPath(yaml)
             : Path.Combine(
-                applicationRoot,
+                resources,
                 "packages",
                 "vscode-web",
                 "assets",

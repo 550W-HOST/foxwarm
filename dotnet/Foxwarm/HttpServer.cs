@@ -28,7 +28,8 @@ internal sealed class HttpServer
         PublicWebAddress? publicAddress = null,
         bool? webUiEnabled = null,
         string bindAddress = "127.0.0.1",
-        bool desktop = false
+        bool desktop = false,
+        bool triggerEnabled = true
     )
     {
         var address = publicAddress ?? PublicWebAddress.Capture(port);
@@ -48,7 +49,11 @@ internal sealed class HttpServer
                 )
             )
             .ToLowerInvariant();
-        var builder = WebApplication.CreateBuilder(args);
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            Args = args,
+            ContentRootPath = sessions.Models.ConfigurationOwner?.Paths.ApplicationRoot ?? AppContext.BaseDirectory,
+        });
         // Node authentication uses Source-compatible query credentials. Do not log request URLs.
         builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
         builder.WebHost.UseUrls($"http://{bindAddress}:{port}");
@@ -318,6 +323,8 @@ internal sealed class HttpServer
                 return Results.Accepted();
             }
         );
+        if (triggerEnabled)
+            TriggerHttp.Register(app, new SessionRuntime(sessions));
         Foxwarm.Nodes.NodeRoutes.Register(app, sessions, address);
         McpOAuthRoutes.Register(app, sessions.OutboundMcp);
         InboundMcp.Register(app);

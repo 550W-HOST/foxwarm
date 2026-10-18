@@ -19,7 +19,7 @@ internal sealed partial class AgentCatalog
                     );
                 Directory.Delete(directory, true);
             }
-            if (Exists(name))
+            if (Exists(name) || MetadataSnapshot().ContainsKey(name))
             {
                 var next = MetadataSnapshot();
                 next.Remove(name);

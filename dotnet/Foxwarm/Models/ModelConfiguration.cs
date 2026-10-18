@@ -12,6 +12,7 @@ internal sealed partial class ModelConfiguration
     private readonly JsonObject app;
     private HostModels? catalog;
     private string? cachedRaw;
+    internal HostPaths Paths { get; }
     public string ActivePath { get; }
     public string TemplatePath { get; }
     public string AppPath { get; }
@@ -133,17 +134,17 @@ internal sealed partial class ModelConfiguration
     public double CompactKeep { get; }
     public double CompactThreshold { get; }
 
-    internal ModelConfiguration(string dataRoot)
+    internal ModelConfiguration(string dataRoot) : this(HostPaths.ForDataRoot(dataRoot)) { }
+
+    internal ModelConfiguration(HostPaths paths)
     {
-        ActivePath = Path.Combine(dataRoot, "state", "models.yaml");
-        TemplatePath = Path.Combine(AppContext.BaseDirectory, "templates", "models.example.yaml");
-        AppPath =
-            Environment.GetEnvironmentVariable("FOXWARM_CONFIG_PATH")
-            ?? Environment.GetEnvironmentVariable("CONFIG_PATH")
-            ?? Path.Combine(dataRoot, "state", "config.yaml");
+        ActivePath = paths.ModelsPath;
+        TemplatePath = Path.Combine(paths.ResourceRoot, "templates", "models.example.yaml");
+        AppPath = paths.ConfigPath;
         AppRaw = File.Exists(AppPath) ? File.ReadAllText(AppPath, Encoding.UTF8) : "";
         app = ConfigurationYaml.Parse(AppRaw, "app config");
         AppConfigurationRules.Validate(app);
+        Paths = paths.WithConfiguration(app);
         Access = new(app);
         HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app);
         var llm = app["llm"] as JsonObject;

@@ -20,6 +20,8 @@ The hidden `node_create_auth_token` builtin uses absolute Main `filePath` facts,
 
 The non-default setter is `set_config` with required `target` (`config`, `models`, or `tool-rules`) and `filePath`. There is no obsolete `set_tool_rules` command alias. Persisted generic policies that explicitly name that removed builtin fail validation with migration guidance toward deliberate `set_config` target restrictions; exact isolated metadata receives explicit migration guidance rather than an unconstrained replacement. The new setter retains the independent isolation/path/authority boundaries.
 
+The captured `${workspace}` base is the configured Agents directory for canonical installs. Retained main-at-workspace callers keep their original policy scope. The isolated-main nested `agents` exclusion applies only to that retained layout, where it protects sibling Agent directories; a canonical main Agent may use an ordinary `main/agents` subdirectory. Generic path rules, physical resolution and isolated own-directory checks remain independent of membership and startup layout.
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/Tools/ToolAuthorizationEffectsTests.cs`; `ToolAuthorizationPathTests.cs`; `ToolAuthorizationSourceTests.cs`; isolation compatibility tests.
