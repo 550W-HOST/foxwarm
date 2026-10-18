@@ -3574,3 +3574,59 @@ for (const liveDuringCatchup of [false, true]) test(`prepared continuous history
     await page.close()
   }
 })
+
+test('prepared Chat remount retains its native reading anchor through the first Workbench layout', async () => {
+  const chatMessages = Array.from({ length: 246 }, (_, index) => ({
+    role: index % 2 ? 'model' : 'user',
+    parts: [{ text: `Original message ${index + 1}: ` + 'Bounded original conversation. '.repeat(8) }],
+    __meta: { seq: index + 1, timestamp: 1700000000000 + index * 1000 },
+  }))
+  const page = await openFixture({ responsiveChat: true, chatMessages, timelineView: 'conversation', width: 1200 })
+  const readingPosition = () => {
+    const scroller = document.querySelector('.foxwarm-chat-messages')
+    const top = scroller.getBoundingClientRect().top
+    const row = [...scroller.querySelectorAll('[data-chat-message-anchor-key]')].find(element => element.getBoundingClientRect().bottom > top)
+    return { key: row?.dataset.chatMessageAnchorKey, offset: row?.getBoundingClientRect().top - top }
+  }
+  try {
+    await page.waitForSelector('[data-chat-message-anchor-key="seq-local-240"]')
+    // Load the preceding bounded page, then choose a real reading position with native wheel input.
+    await page.evaluate(() => {
+      const scroller = document.querySelector('.foxwarm-chat-messages')
+      scroller.scrollTop = 0
+      scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -400, bubbles: true }))
+      scroller.dispatchEvent(new Event('scroll'))
+    })
+    await page.waitForSelector('[data-chat-message-anchor-key="seq-local-142"]')
+    await page.evaluate(() => {
+      const scroller = document.querySelector('.foxwarm-chat-messages')
+      const row = scroller.querySelector('[data-chat-message-anchor-key="seq-local-142"]')
+      scroller.scrollTop += row.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+    })
+    await page.hover('.foxwarm-chat-messages')
+    await page.mouse.wheel({ deltaY: 41.5 })
+    await page.waitForFunction(() => {
+      const scroller = document.querySelector('.foxwarm-chat-messages')
+      const row = scroller.querySelector('[data-chat-message-anchor-key="seq-local-142"]')
+      return row.getBoundingClientRect().top - scroller.getBoundingClientRect().top < -30
+    })
+    const saved = await page.evaluate(readingPosition)
+    assert.equal(saved.key, 'seq-local-142')
+    await page.click('[data-session-id="e2e-b"]')
+    await page.waitForFunction(() => location.hash.includes('e2e-b') && !!document.querySelector('[data-workbench-content-tab="chat:e2e-b"]'))
+    assert.equal(await page.$('[data-workbench-content-tab="chat:e2e-a"]'), null, 'ordinary away navigation unmounts Chat')
+    const before = await page.evaluate(() => window.__fetches.length)
+    await page.click('[data-session-id="e2e-a"]')
+    await page.waitForSelector('[data-workbench-content-tab="chat:e2e-a"] [data-chat-message-anchor-key="seq-local-142"]')
+    await page.waitForFunction(() => window.__fetches.some(value => value.path.endsWith('/e2e-a/history/continuous') && value.search === '?afterSeq=242'))
+    // Let native scroll and the existing two-frame resize/width-band handoff settle.
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))))
+    const restored = await page.evaluate(readingPosition)
+    assert.equal(restored.key, saved.key)
+    assert.ok(Math.abs(restored.offset - saved.offset) <= 2, JSON.stringify({ saved, restored }))
+    const reads = await page.evaluate(before => window.__fetches.slice(before).filter(value => value.path.endsWith('/e2e-a/history/continuous')), before)
+    assert.deepEqual(reads.map(value => value.search), ['?beforeSeq=143', '?afterSeq=142', '?afterSeq=242'])
+    const geometry = await page.$eval('[data-workbench-content-tab="chat:e2e-a"]', host => ({ width: host.clientWidth, height: host.clientHeight, visible: host.style.visibility }))
+    assert.ok(geometry.width > 0 && geometry.height > 0 && geometry.visible === 'visible', JSON.stringify(geometry))
+  } finally { await page.close() }
+})

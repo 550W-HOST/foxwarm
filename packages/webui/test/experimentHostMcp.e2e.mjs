@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { writeModelFixture } from './experimentModelFixture.mjs'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 // Concentrated original-App -> scripted Responses -> real official-SDK MCP workflow.
 import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
@@ -45,9 +46,11 @@ async function task(calls, { owner = current, final = true, browserSend = false 
   const key = 'task-' + (++serial); scripts.set(key, { calls, final, owner }); const message = 'MCP-TASK ' + key
   if (browserSend) {
     await page.evaluate(id => { location.hash = '#session/' + encodeURIComponent(id) }, owner)
-    await page.waitForSelector('[role="textbox"][aria-label="Message"]')
-    await page.click('[role="textbox"][aria-label="Message"]'); await page.type('[role="textbox"][aria-label="Message"]', message)
-    await page.click('button[aria-label="Send message"]')
+    const chat = `[data-workbench-content-tab=${JSON.stringify('chat:' + owner)}] .foxwarm-chat-root[data-chat-connection-state="connected"]`
+    await page.waitForSelector(chat, { visible: true })
+    const editor = chat + ' [role="textbox"][aria-label="Message"]'
+    await page.click(editor); await page.type(editor, message)
+    await page.click(chat + ' button[aria-label="Send message"]')
   } else assert.equal((await request('POST', route(owner) + '/message', { text: message })).status, 202)
   if (final) {
     await until(async () => (await history(owner)).some(row => row.parts?.some(part => part.text === 'DONE-' + key)), key + ' final')
@@ -110,7 +113,7 @@ try {
   current = await create('driver'); const admin = await create('operator')
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'], userDataDir: join(root, 'browser') })
   page = await browser.newPage(); await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' }); await page.waitForSelector('#token')
-  await page.type('#token', token); await page.click('button[type="submit"]'); await page.waitForSelector('button[aria-label="New session"]')
+  await page.type('#token', token); await page.click('button[type="submit"]'); await page.waitForSelector('button[aria-label="New session"]'); await waitForWebUiReady(page)
 
   await task([fn('discover-builtin', 'search_tools', { query: 'MCP server', sources: ['builtin'], limit: 10 }), fn('discover-node', 'search_tools', { query: 'read', sources: ['node'], limit: 1 })], { browserSend: true })
   assert.match((await pair('discover-builtin')).output, /builtin:mcp_config/); assert.match((await pair('discover-builtin')).output, /builtin:list_mcp_servers/)
