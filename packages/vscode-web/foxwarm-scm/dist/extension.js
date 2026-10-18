@@ -38,6 +38,12 @@ __export(extension_exports, {
 module.exports = __toCommonJS(extension_exports);
 var vscode2 = __toESM(require("vscode"));
 
+// ../../shared/src/nodeIdentity.ts
+var MAX_CORE_NODE_ID_LENGTH = 193;
+function isCoreNodeId(value) {
+  return typeof value === "string" && value.length <= MAX_CORE_NODE_ID_LENGTH && /^(?:[A-Za-z0-9][A-Za-z0-9._:-]{0,63}\/)?[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
+}
+
 // src/foxwarmUri.ts
 function decodePathSegment(segment) {
   try {
@@ -70,8 +76,8 @@ function parseFoxwarmUri(uri) {
   return { namespace: "node", nodeId, realPath: `/${realPathSegments.join("/")}` };
 }
 function buildFoxwarmNodeUriString(nodeId, realPath) {
-  if (!nodeId || nodeId.includes("/")) {
-    throw new Error("nodeId must be a non-empty single path segment.");
+  if (!isCoreNodeId(nodeId)) {
+    throw new Error("nodeId must be a valid Core Node ID.");
   }
   if (!realPath.startsWith("/")) {
     throw new Error("realPath must be absolute.");
@@ -90,7 +96,6 @@ function normalizeGitRelativePath(value) {
 
 // src/commitDetails.ts
 var vscode = __toESM(require("vscode"));
-var NODE_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
 var SHORT_OID_RE = /^[0-9a-f]{7,64}$/i;
 var FULL_OID_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 var activeCommitPanels = /* @__PURE__ */ new Map();
@@ -110,7 +115,7 @@ function normalizeCommitOpenRequest(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Commit request must be an object.");
   const request = value;
   if (request.kind !== "openCommit") throw new Error("Expected an openCommit request.");
-  if (typeof request.nodeId !== "string" || !NODE_ID_RE.test(request.nodeId)) throw new Error("Commit node id is invalid.");
+  if (typeof request.nodeId !== "string" || !isCoreNodeId(request.nodeId)) throw new Error("Commit node id is invalid.");
   if (typeof request.commitId !== "string" || !SHORT_OID_RE.test(request.commitId)) throw new Error("Commit id must contain 7 to 64 hexadecimal characters.");
   return { kind: "openCommit", nodeId: request.nodeId, path: normalizeAbsolutePath(request.path), commitId: request.commitId.toLowerCase() };
 }

@@ -118,3 +118,12 @@ test('tool Code paths keep plain text and expose only an adjacent native icon ac
   assert.doesNotMatch(component, /role="button"|tabIndex=/)
   assert.doesNotMatch(component, /hover:underline cursor-pointer|text-blue|dark:text-blue/)
 })
+
+test('Provider-qualified workspace and tool targets retain their Node through encoded Code URLs', () => {
+  const target = { nodeId: 'development/worker:one', path: '/workspace' }
+  const url = makeVscodeWebUrl('/proxy/api', 'https://example.test', target)
+  assert.equal(url.searchParams.get('folderUri'), 'foxwarm://node+development%2Fworker%3Aone/workspace')
+  assert.deepEqual(resolveToolCodeFileTarget('/workspace/file.ts', target.nodeId), {
+    kind: 'openFile', nodeId: target.nodeId, path: '/workspace/file.ts',
+  })
+})

@@ -28,10 +28,11 @@ function fixture(root: string, mode = 'normal', timeoutMs = 1000, delivered: str
 }
 
 const request = (command: string, extra: Record<string, unknown> = {}): NodeToolRequest => ({
-  sourceSessionId: 'fixture-owner', nodeId: 'process-fixture', toolName: 'exec', args: { command, ...extra },
-  context: { agent: 'fixture-agent', currentNode: 'process-fixture', cwd: 'fixture://cwd', programmatic: true },
+  sourceSessionId: 'fixture-owner', nodeId: 'process-provider/process-fixture', toolName: 'exec', args: { command, ...extra },
+  context: { agent: 'fixture-agent', currentNode: 'process-provider/process-fixture', cwd: 'fixture://cwd', programmatic: true },
 });
-const calls = async (root: string): Promise<any[]> => (await fs.readFile(path.join(root, 'requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+const calls = async (root: string): Promise<any[]> => await fs.pathExists(path.join(root, 'requests.jsonl'))
+  ? (await fs.readFile(path.join(root, 'requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line)) : [];
 
 async function temporary(run: (root: string) => Promise<void>) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'fw-provider-exec-'));
@@ -76,20 +77,24 @@ test('Stop during a provider start awaits its receipt and releases waiting witho
   } finally { await runtime.shutdown(); }
 }));
 
-test('provider background tracking reattaches to the same persisted handle and notifies its original owner after manager restart', async () => temporary(async root => {
+test('legacy local-ID provider tracking reattaches to the same persisted handle without rewriting history or replaying', async () => temporary(async root => {
   let first = fixture(root);
   let entry;
   try {
     await first.runtime.initialize();
-    entry = await first.runtime.startPersistentExec({ command: 'sleep 0.8; printf done', backend: { providerId: first.provider.id }, nodeId: 'process-fixture', sessionId: 'original-owner', agentName: 'fixture-agent' });
+    entry = await first.runtime.startPersistentExec({ command: 'sleep 0.8; printf done', backend: { providerId: first.provider.id }, nodeId: 'process-provider/process-fixture', sessionId: 'original-owner', agentName: 'fixture-agent' });
     assert.equal(await first.runtime.waitForExecCompletion(entry.id, 30), null);
     await first.runtime.markExecForBackgroundNotification(entry.id);
   } finally { await first.runtime.shutdown(); }
+  const persisted = await fs.readJson(path.join(root, 'running-exec.json'));
+  persisted.execs[0].nodeId = 'process-fixture';
+  await fs.writeJson(path.join(root, 'running-exec.json'), persisted);
   const delivered: string[] = [];
   const second = fixture(root, 'normal', 1000, delivered);
   try {
     await second.runtime.initialize();
     assert.equal(second.runtime.listRunningExecs()[0].backend?.ref, entry!.backend?.ref);
+    assert.equal(second.runtime.listRunningExecs()[0].nodeId, 'process-fixture');
     assert.equal((await second.runtime.waitForExecCompletion(entry!.id, 5000))?.exitCode, 0);
     await second.runtime.reconcileNow();
     assert.equal(delivered.length, 1);
@@ -137,7 +142,7 @@ test('slow provider queries share one in-flight request, do not block Stop, and 
   const controller = new AbortController();
   try {
     await runtime.initialize();
-    const entry = await runtime.startPersistentExec({ command: 'sleep 0.5', backend: { providerId: 'process-provider' }, nodeId: 'process-fixture', sessionId: 'owner', agentName: 'agent' });
+    const entry = await runtime.startPersistentExec({ command: 'sleep 0.5', backend: { providerId: 'process-provider' }, nodeId: 'process-provider/process-fixture', sessionId: 'owner', agentName: 'agent' });
     const started = Date.now();
     const first = runtime.waitForExecCompletion(entry.id, 5000, controller.signal);
     const second = runtime.waitForExecCompletion(entry.id, 80);
@@ -182,13 +187,13 @@ test('exact Node and raw-call permission fences deny provider execution before a
   const agent = `provider-permission-agent-${Date.now()}`;
   const session = await sessionManager.getSession(sourceId);
   session.agent = agent;
-  session.currentNode = 'process-fixture';
+  session.currentNode = 'process-provider/process-fixture';
   await sessionManager.saveSession(sourceId);
-  await sessionManager.setAgentMetadata(agent, { isolated: true, isolatedNode: 'process-fixture', toolRules: [{ effect: 'deny', source: 'node', node: 'process-fixture', tool: 'exec' }] });
+  await sessionManager.setAgentMetadata(agent, { isolated: true, isolatedNode: 'process-provider/process-fixture', toolRules: [{ effect: 'deny', source: 'node', node: 'process-provider/process-fixture', tool: 'exec' }] });
   const handler = createNodeExecutionServiceHandler({ expectedSourceSessionId: sourceId, providerRegistry: registry });
   const context: any = { signal: new AbortController().signal };
   try {
-    const input = { sourceSessionId: sourceId, nodeId: 'process-fixture', toolName: 'exec', args: { command: 'touch must-not-exist' } };
+    const input = { sourceSessionId: sourceId, nodeId: 'process-provider/process-fixture', toolName: 'exec', args: { command: 'touch must-not-exist' } };
     await assert.rejects(async () => handler.execute(input, context), /tool rule denies/i);
     await assert.rejects(async () => handler.execute({ ...input, sourceSessionId: 'wrong-owner' }, context), (error: any) => error.code === 'NODE_EXECUTION_SOURCE_MISMATCH');
     await assert.rejects(() => registry.invokeTool({ ...request('touch must-not-exist'), nodeId: 'wrong-node' }), /not available/);
@@ -204,7 +209,7 @@ test('exact Node and raw-call permission fences deny provider execution before a
 test('a removed provider cannot silently hand a persisted execution to native or another provider', async () => temporary(async root => {
   const first = fixture(root);
   await first.runtime.initialize();
-  const entry = await first.runtime.startPersistentExec({ backend: { providerId: 'process-provider' }, nodeId: 'process-fixture', command: 'printf retained', sessionId: 'original-owner', agentName: 'main' });
+  const entry = await first.runtime.startPersistentExec({ backend: { providerId: 'process-provider' }, nodeId: 'process-provider/process-fixture', command: 'printf retained', sessionId: 'original-owner', agentName: 'main' });
   await first.runtime.markExecForBackgroundNotification(entry.id);
   await first.runtime.shutdown();
   const second = createExecRuntime({ getDefaultCwd: () => root, getExecTempDir: () => root, registryPath: path.join(root, 'running-exec.json'),
@@ -248,9 +253,9 @@ test('registered exec polls its exact backend after provider destroy makes the N
     const result: any = await registry.invokeTool(request('printf before; sleep 2; printf after', { timeout: 1 }));
     assert.equal(result.status, 'running');
     const entry = runtime.listRunningExecs().find(candidate => candidate.id === result.execId)!;
-    const destroyed = await registry.destroyNode({ sourceSessionId: 'fixture-owner', nodeId: 'process-fixture', parameters: {}, context: { agent: 'fixture-agent' } });
-    assert.equal(destroyed.nodeId, 'process-fixture');
-    assert.equal((await registry.resolveNode('process-fixture'))?.descriptor.availability, 'offline');
+    const destroyed = await registry.destroyNode({ sourceSessionId: 'fixture-owner', nodeId: 'process-provider/process-fixture', parameters: {}, context: { agent: 'fixture-agent' } });
+    assert.equal(destroyed.nodeId, 'process-provider/process-fixture');
+    assert.equal((await registry.resolveNode('process-provider/process-fixture'))?.descriptor.availability, 'offline');
     const status = await runtime.waitForExecCompletion(entry.id, 3000);
     assert.equal(status?.exitCode, null);
     assert.match(status?.error || '', /Execution lost/);
@@ -259,7 +264,7 @@ test('registered exec polls its exact backend after provider destroy makes the N
     assert.match(delivered[0], /^fixture-owner:null:/);
     assert.match(delivered[0], /Execution lost/);
     assert.deepEqual(runtime.listRunningExecs(), []);
-    const bytes: any = await registry.execBackend('process-provider', 'process-fixture').files.read(entry.logPath, 0, 100);
+    const bytes: any = await registry.execBackend('process-provider', 'process-provider/process-fixture').files.read(entry.logPath, 0, 100);
     assert.equal(bytes.toString(), 'before');
     const recorded = await calls(root);
     const destruction = recorded.findIndex(call => call.operation === 'destroy');
@@ -273,7 +278,7 @@ test('normal Main callTool and batch cwd replay preserve exact provider paths wi
   const { registry, runtime } = fixture(root);
   const sessionId = `provider-main-cwd-${Date.now()}`;
   const session = await sessionManager.getSession(sessionId);
-  session.currentNode = 'process-fixture';
+  session.currentNode = 'process-provider/process-fixture';
   session.cwd = root;
   await sessionManager.saveSession(sessionId);
   const exact = path.join(root, 'destination ');
@@ -321,7 +326,7 @@ test('canonical provider receipts bound slow output observations at Stop/deadlin
     }
     const sourceId = `provider-output-${scenario.mode}-${scenario.stop}-${scenario.programmatic}-${Date.now()}`;
     const session = await sessionManager.getSession(sourceId);
-    session.currentNode = 'process-fixture';
+    session.currentNode = 'process-provider/process-fixture';
     await sessionManager.saveSession(sourceId);
     const services = new RpcServiceRegistry();
     services.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ providerRegistry: registry }));

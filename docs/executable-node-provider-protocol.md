@@ -1,6 +1,6 @@
 # Executable Node Provider Protocol
 
-A trusted external executable can expose execution environments without installing the authenticated Foxwarm CLI Node runtime. Core derives canonical file tools and manages command waiting, background tracking, output and completion delivery. A provider supplies filesystem primitives, optional process start/poll primitives and optional lifecycle operations. Node is the execution identity; provider identity is routing metadata, not a permission identity or a sandbox guarantee.
+A trusted external executable can expose execution environments without installing the authenticated Foxwarm CLI Node runtime. Core derives canonical file tools and manages command waiting, background tracking, output and completion delivery. A provider supplies filesystem primitives, optional process start/poll primitives and optional lifecycle operations. Node is the execution identity; provider identity is routing metadata, not a caller principal or a sandbox guarantee.
 
 The independent [Linux SSH reference provider](../examples/providers/linux-ssh/README.md) uses this exact protocol. Core has no SSH backend, dependency or SSH-specific tool.
 
@@ -15,7 +15,7 @@ nodeProviders:
     timeoutSeconds: 90
 ```
 
-The provider ID uses 1–64 ASCII letters, digits, dots, underscores or hyphens. Node IDs use `[A-Za-z0-9][A-Za-z0-9._:-]*`, at most 128 characters, and cannot equal `master` in any letter case. IDs are globally unique across providers.
+The provider ID uses 1–64 ASCII letters, digits, dots, underscores or hyphens. Adapter-local Node IDs use `[A-Za-z0-9][A-Za-z0-9._:-]*`, at most 128 characters, and cannot equal `master` in any letter case. Core exposes them as `provider-id/local-id` (at most 193 characters). Local IDs need be unique only inside their Provider. Core qualifies descriptor/lifecycle identity fields and removes the namespace before invoking the executable; all protocol examples below intentionally use local IDs. Native `master` and authenticated CLI IDs/protocols are unchanged.
 
 Commands and fixed arguments are administrator configuration. Core uses `shell:false`, never interpolates model commands into the launcher command line and passes only its small existing allowlisted child environment. Providers own their connection configuration and credentials. Configuration is loaded at startup, not hot-reloaded.
 
@@ -59,6 +59,8 @@ Operations are `describe`, `list`, `filesystem`, `exec-start`, `exec-poll`, and 
 ```
 
 `label`, `description` and `lifecycle` are required. The other fields are optional. Lifecycle can be empty: accessing an existing machine does not imply creating or destroying it. Parameter schemas are bounded plain JSON for discovery; the adapter performs final business-parameter validation. Core does not implement another schema-validation engine. Successful descriptions are cached for the configured process lifetime.
+
+Agents use qualified IDs in Node selection, file/exec tools and Node lifecycle requests, for example `node({action:"select",nodeId:"provider-id/example-node"})`. A supplied create/ensure Node ID must also have that Provider prefix; the adapter receives only `example-node`. Provider-defined `details` remain opaque.
 
 Agents use `node({action:"inspect",providerId:"provider-id"})` to discover the description, supported operations and parameters. `providerId` and `nodeId` are mutually exclusive for inspection. Programmatic `node({action:"list"})` returns structured `nodes`, `providers` and `currentNode` beside readable `output`.
 
@@ -140,7 +142,7 @@ Tool authorization applies to the original model call and exact target Node, not
 }
 ```
 
-`ref`, `outputPath` and actual initial `cwd` are required. `startedAt` and `pid` are optional and must represent actual facts. Ref identifies this execution across adapter exits and Core restarts; a reusable PID alone is insufficient. Ref is persisted privately and is not a model-visible exec ID.
+`ref`, `outputPath` and actual initial `cwd` are required. `startedAt` and `pid` are optional and must represent actual facts. Ref identifies this execution across adapter exits and Core restarts; a reusable PID alone is insufficient. Ref is persisted privately and is not a model-visible exec ID. New Core execution records store the qualified Node ID. Recovery of older provider records accepts their local Node ID only beside the already-persisted exact Provider ID; it does not add an ordinary routing alias, rewrite history, or restart the command. Existing provider selections and exact policy rules are not automatically migrated.
 
 The command must survive the adapter request's process exit. Do not retain inherited stdin/stdout/stderr that would prevent the one-shot launcher from closing. Logs contain raw merged command output, append without rewriting published prefixes and are readable through the Node's own filesystem primitives. Do not return a Main-host cache path as a remote log path.
 

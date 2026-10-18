@@ -349,7 +349,7 @@ for (const stopFirst of [false, true]) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-provider-close-'));
     const logPath = path.join(root, 'provider.jsonl');
     const session = await sessionManager.getSession(`provider-worker-${randomUUID()}`);
-    session.currentNode = 'fixture-sandbox';
+    session.currentNode = 'close-fixture/fixture-sandbox';
     const provider = new ExecutableNodeProvider({ id: 'close-fixture', type: 'executable', command: process.execPath,
       args: [path.join(__dirname, 'nodes/executableProviderTestFixture.js'), 'delayed-filesystem', logPath], timeoutMs: 5000 });
     const providers = new NodeProviderRegistry([provider]);

@@ -54,7 +54,7 @@ Exact tool description:
 | `parentTaskId` | Existing parent task ID for a simple child task. Set only when creating. |
 | `taskId` | Existing task ID. Required for get, claim, update, complete, and cancel. |
 | `status` | For list, filter by task status. For update, set only open or active. |
-| `scope` | For list, choose tasks created by or assigned to the current Session (default), any Session in the current Agent, or all Sessions and users. |
+| `scope` | For list, choose tasks created by or assigned to the current Session (default), tasks owned by the current Session, tasks in the current Agent, or all tasks. |
 | `note` | Short progress note to append when updating a task. |
 | `result` | Completion summary for a completed task. For long description or result text, use ToolScript to compose the operation so you do not regenerate duplicate content. |
 | `notifySession` | When true, create/assign notify the new owner and, on transfer or release, the previous owner after the change is saved. For update with a note, notify the current owner unless it is the caller. Omitted or false saves without these notifications. |
@@ -64,7 +64,7 @@ Exact tool description:
 ### Actions
 
 - `create`: Create a new task. Requires title; accepts description, an existing parentTaskId, optional existing ownerSessionId (or null), and notifySession. Records the current Session as creator. Without an owner it starts open/unclaimed; an explicit owner commits active ownership atomically with creation. Optional notification uses the same postcommit assignment delivery/self-skip/failure rules, with no previous recipient. Self-owned creation seeds fresh fixed-30 progress.
-- `list`: List bounded task summaries, optionally filtered by status and scope. Scope defaults to `current-session`, includes tasks created by or assigned to that Session; `current-agent` includes creator or owner Sessions in the current Agent; `all` includes every Session- or user-created task. Agent membership resolves through the real Session catalog, and local scopes include user-created tasks when assigned to a matching Session.
+- `list`: List bounded task summaries, optionally filtered by status and scope. Scope defaults to `current-session`, includes tasks created by or assigned to that Session; `owned` includes only current ownership; `current-agent` includes creator or owner Sessions in the current Agent; `all` includes every Session- or user-created task. Agent membership resolves through the real Session catalog, and local scopes include user-created tasks when assigned to a matching Session.
 - `get`: Inspect one task and its bounded child/note summary. Requires taskId.
 - `claim`: Claim an unowned task for the current Session. A task owned by another Session is not transferred. Same-owner retries return the current task; a fresh claim sets active.
 - `assign`: Assign or transfer to an existing Session, or release its owner. Creator/current owner may assign; targets resolve through the real catalog. Null releases ownership and sets open; a target sets active. Changes record a short authored note. Optional `notifySession` defaults false. When true, the committed change notifies a new owner normally and a previous owner on transfer/release through queue-only delivery. New-owner notices for create-with-owner and assign/transfer include the complete stored description together with the original task ID, title, and status; previous-owner transfer/release notices remain brief and passive. Self targets are skipped. Each recipient has independent persisted pending/sent/failed/skipped state. Successful/pending retries do not resend; explicitly repeating a failed notification retries only that recipient. An assignment revision prevents an older delayed result from marking a newer assignment delivered. Null ownership may notify the released owner, but there is no new recipient. Notification failure warns without undoing assignment. Queue-only behavior is canonical in [the pipeline](../threads/message-processing-pipeline.md#d-pipeline-passive-task-notification).
@@ -102,6 +102,8 @@ Bodies cannot override route action/taskId or supply arbitrary creator identity.
 
 ## Tests
 
+`tools/taskTools.test.ts` also exercises the explicit owned-Task policy matcher across Main, Worker, unified and nested ToolScript paths, real Session aliases, unowned/missing/other-owner targets and ownership transfer. The default shared get/update contracts remain unchanged; policy resolution is canonical in [generic authorization](../threads/tool-dispatch-authorization.md#d-dispatch-generic-tool-authorization).
+
 The task-linked creation/transfer case in `tools/taskTools.test.ts` covers both fresh and forked children receiving task assignments without a fabricated model confirmation, while preserving completion notifications.
 
 `session/taskContext.test.ts` covers request-only fixed-30 progress and authority-save migration failure/retry. `sessionQueueOptions.test.ts` and real Worker ingress tests cover passive persistence/restart without wake; the detached runner exercises finish-window passivity and three-Session linked completion. `taskService.test.ts` verifies independent recipient results, retries and assignment-revision races. `taskStore.test.ts` exercises the coordinator/executor lifecycle, permission and terminal-state boundaries, simultaneous SQLite connections with one claim winner, immutable parent relationships, fresh-process persistence, bounded list/get output and argument validation. `tools/taskTools.test.ts` checks the single schema/placement, direct/unified/Worker facade behavior, context-derived identities, unchanged Session state and generic authorization at both dispatch and Main effect boundaries. Real local Session moves verify old task references remain readable, writes become canonical, ownership/creator notifications and attached completion still work, and fixed-30 progress/migration mappings survive aliases.
@@ -118,7 +120,7 @@ TaskStore persists a unique legacy Session mapping plus per-task visible-message
 
 ### D-task-list-scopes
 
-[2026-10-09] Model-facing `list` defaults to tasks created by or assigned to the current Session, with explicit `current-agent` and `all` scopes. Current-Agent membership comes from Session catalog Agent metadata, not Session ID naming. The authenticated WebUI list route retains its global listing behavior.
+[2026-10-09] Model-facing `list` defaults to tasks created by or assigned to the current Session, with explicit `owned`, `current-agent` and `all` scopes. `owned` filters only the canonical current owner, preserving the creator-or-owner default. Current-Agent membership comes from Session catalog Agent metadata, not Session ID naming. The authenticated WebUI list route retains its global listing behavior.
 
 ### D-task-note-notification-opt-in
 

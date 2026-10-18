@@ -1,3 +1,4 @@
+import { MAX_CORE_NODE_ID_LENGTH } from '../packages/shared/dist/nodeIdentity';
 import { parseFileDeliveryArtifact, type FileDeliveryArtifact } from '../packages/shared/dist/fileDelivery';
 import { defineRpcService, rpcMethod, RpcError, type RpcServiceHandler } from './rpc';
 import * as sessionManager from './sessionManager';
@@ -56,8 +57,8 @@ export function createFileDeliveryServiceHandler(options: { expectedSourceSessio
       if (!input.routing || typeof input.routing !== 'object' || Array.isArray(input.routing)) throw new RpcError('FILE_DELIVERY_INVALID_REQUEST', 'routing must be an object.');
       onlyKeys(input.intent, ['sessionId', 'channelTargetId', 'filePath', 'caption', 'text'], 'intent');
       onlyKeys(input.routing, ['runtimeNodeId', 'currentNode', 'cwd'], 'routing');
-      const runtimeNodeId = bounded(input.routing.runtimeNodeId, 'routing.runtimeNodeId', 128)!;
-      const currentNode = bounded(input.routing.currentNode, 'routing.currentNode', 128)!;
+      const runtimeNodeId = bounded(input.routing.runtimeNodeId, 'routing.runtimeNodeId', MAX_CORE_NODE_ID_LENGTH)!;
+      const currentNode = bounded(input.routing.currentNode, 'routing.currentNode', MAX_CORE_NODE_ID_LENGTH)!;
       const cwd = input.routing.cwd === undefined ? undefined : boundedRaw(input.routing.cwd, 'routing.cwd', 4096);
       const intent = {
         ...(input.intent.sessionId !== undefined ? { sessionId: bounded(input.intent.sessionId, 'intent.sessionId', 256) } : {}),

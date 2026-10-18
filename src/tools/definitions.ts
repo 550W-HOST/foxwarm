@@ -1,3 +1,4 @@
+import { MAX_CORE_NODE_ID_LENGTH } from '../../packages/shared/dist/nodeIdentity';
 import { DEFAULT_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS } from '../../packages/shared/dist/persistentExec';
 import { COMPACT_PLAN_TOOL_DEFINITION } from '../session/compactPlan';
 import { MAX_AGENT_TOOL_RULES, MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES } from '../permissions';
@@ -24,7 +25,7 @@ const TOOL_RULES_SCHEMA = {
                 properties: {
                     effect: { type: 'string', enum: ['allow', 'deny'] },
                     source: { type: 'string', enum: ['node'] },
-                    node: { type: 'string', maxLength: MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES },
+                    node: { type: 'string', maxLength: MAX_CORE_NODE_ID_LENGTH },
                     tool: { type: 'string', maxLength: MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES },
                 },
                 required: ['effect', 'source', 'node', 'tool'],
@@ -68,7 +69,7 @@ const baseDefinitions = [
                     parentTaskId: { type: 'string', maxLength: 128, description: "Existing parent task ID for a simple child task. Set only when creating." },
                     taskId: { type: 'string', maxLength: 128, description: "Existing task ID. Required for get, claim, update, complete, and cancel." },
                     status: { type: 'string', enum: ['open', 'active', 'completed', 'cancelled'], description: "For list, filter by task status. For update, set only open or active." },
-                    scope: { type: 'string', enum: ['current-session', 'current-agent', 'all'], description: "For list, choose tasks created by or assigned to the current Session (default), any Session in the current Agent, or all Sessions and users." },
+                    scope: { type: 'string', enum: ['current-session', 'owned', 'current-agent', 'all'], description: "For list, choose tasks created by or assigned to the current Session (default), tasks owned by the current Session, tasks in the current Agent, or all tasks." },
                     notifySession: { type: 'boolean', description: "When true, create/assign notify the new owner and, on transfer or release, the previous owner after the change is saved. For update with a note, notify the current owner unless it is the caller. Omitted or false saves without these notifications." },
                     ownerSessionId: { type: ['string', 'null'], maxLength: 256, description: "For create, the optional existing Session ID to receive the new task. For assign, the existing Session ID to receive the task, or null to release the current owner." },
                     note: { type: 'string', maxLength: 1000, description: "Short progress note to append when updating a task." },

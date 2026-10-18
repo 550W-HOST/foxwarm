@@ -53,3 +53,11 @@ test('normalizes git relative paths and rejects traversal', () => {
   assert.throws(() => normalizeGitRelativePath('../secret'), /must not contain/);
   assert.throws(() => normalizeGitRelativePath('src/../index.ts'), /must not contain/);
 });
+
+test('qualified Provider Node IDs round-trip as one encoded URI authority', () => {
+  const encoded = buildFoxwarmNodeUriString('development/worker:one', '/workspace/file.txt');
+  assert.equal(encoded, 'foxwarm://node+development%2Fworker%3Aone/workspace/file.txt');
+  assert.deepEqual(parseFoxwarmUri(uri(encoded)), {
+    namespace: 'node', nodeId: 'development/worker:one', realPath: '/workspace/file.txt',
+  });
+});

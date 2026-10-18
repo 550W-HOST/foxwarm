@@ -1,6 +1,6 @@
 # Unit: src-node-providers
 
-Files: src/nodes/providerRegistry.ts, src/nodes/providers.ts, src/nodes/executableProvider.ts, src/nodes/providerExecBackend.ts
+Files: src/nodes/providerRegistry.ts, src/nodes/providerNamespace.ts, src/nodes/providers.ts, src/nodes/executableProvider.ts, src/nodes/providerExecBackend.ts
 Secondary files: src/nodeExecutionService.ts, src/nodes/manager.ts, src/nodeExecution.test.ts, src/nodes/executableProvider.test.ts, src/nodes/executableProviderTestFixture.ts, src/nodes/providerExec.test.ts, src/nodes/primitiveExecTestFixture.ts, src/nodes/providerExecRestartTestFixture.ts, docs/executable-node-provider-protocol.md
 
 ## Purpose
@@ -19,6 +19,7 @@ Production has fixed master/authenticated-remote adapters plus startup-configure
 | `NodeExecStartRequest` / `NodeExecPollRequest` | Public process inputs: exact Node plus command/optional cwd, or exact Node plus opaque execution ref |
 | `NodeProviderDescription` / `NodeProviderSummary` | Full label/description/lifecycle/parameter-schema/retention discovery, or bounded ID/label/lifecycle list summary |
 | `NodeLifecycleAction` and lifecycle DTOs | Existing authorized Main control-plane requests and exact result identities |
+| `namespaceNodeProvider()` | Core-facing wrapper for adapters marked `namespaceNodeIds:true`; qualifies known result identities and strips prefixes before adapter operations |
 | `NodeProvider` | Optional describe, filesystem, start/poll and lifecycle methods; historical complete tools belong only to resident authenticated transports |
 | `NodeProviderRegistry.initialize()` / `shutdown()` | Shared ordered initialization, reverse rollback and reverse idempotent shutdown |
 | `listNodes()` / `resolveNode()` | Global duplicate detection, fixed-provider-first deferred lookup and exact ownership |
@@ -34,7 +35,7 @@ Production has fixed master/authenticated-remote adapters plus startup-configure
 
 ## Capability, path and authority contracts
 
-- Node IDs are globally unique exact routing identities, using bounded slash-free ASCII `[A-Za-z0-9][A-Za-z0-9._:-]*`; executable providers cannot claim reserved `master`. Capabilities remain `source=node`, independent of provider kind.
+- Executable-provider Core IDs are `provider-id/local-id` (up to 193 characters); local adapter IDs remain slash-free and at most 128 characters. Native master/CLI IDs stay unchanged. Namespace and persisted-recovery compatibility are canonical in [generic providers](../threads/tool-dispatch-node-execution.md#d-dispatch-generic-node-providers).
 - Primitive filesystem access derives `read` or the complete canonical `read/write/edit/apply_patch` set. Exec additionally requires a readable filesystem, `startExec` and `pollExec`; its output must be readable at the returned target path. Unsupported combinations fail without Main fallback.
 - Core/shared owns read formatting, exact replacement and patch grammar/partial effects. Providers own target-relative path resolution, home/URI/separator/symlink semantics, errors and actual restrictions. Main does not resolve opaque target paths or invent a target Agent directory. Leading native Agent tokens are rejected; see [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch-node-execution.md#d-dispatch-native-agent-paths-and-code-targets).
 - Core authorizes the original raw call and exact Node once. Internal primitive operations are not new model calls, statistics or history entries. The source facade separately authorizes complete ToolScript `read` and uses one exact routing snapshot.
@@ -52,7 +53,7 @@ External start/poll DTOs map into the existing `PersistentExecManager` and same 
 - Per-receipt read-only output views carry foreground Stop/hard cancellation and race reads independently of an adapter honoring cancellation. Completed exec output uses the remaining requested foreground budget; after ordinary background wait timeout, one shared 500 ms snapshot window preserves quick partial output without waiting for the provider RPC deadline. Display and programmatic observations share that window, so cancellation does not trigger a second stat/read. These views/signals never enter persisted entries or backend resolution; subsequent/recovered reads remain independent.
 - Logs use target `FileOperations`, the same display formatter and the inclusive 1 MiB programmatic snapshot budget. Missing/unreadable output is reported separately from real exit status. Core does not create another Main log cache or expose the adapter ref as a PID.
 - Known target cwd becomes a private exact-Node result marker. Only the exact owner applies it while still selecting that Node, including deferred parallel-exec replay. Target whitespace is preserved through both injected Worker-owner persistence and the loaded Main owner when ordinary Main batches have no persistence hook. Catalog stubs/detached contexts cannot become exact cwd owners, and the selected Node is rechecked at mutation. Ordinary Session settings/native string normalization is unchanged. Native cwd and existing Node-selection entry points are not changed.
-- Recovery binds the original configured provider/ref directly, without new start or fallback to another provider. Provider configuration removal retains tracking until recovery or ordinary expiration.
+- Recovery binds the original configured provider/ref directly, qualifying an old local-ID record only within that exact persisted Provider, without new start or fallback to another provider. Provider configuration removal retains tracking until recovery or ordinary expiration.
 
 ## Discovery and lifecycle
 

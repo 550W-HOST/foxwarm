@@ -12,7 +12,7 @@ Defines the persisted exact agent tool-rule shape, validates and canonicalizes s
 - `ToolCapabilitySource` — canonical capability source: `builtin | node | mcp`.
 - `AgentToolRule` — exact persisted rule union. Builtins use source+tool; Node rules add exact node; MCP rules add exact server.
 - `ResolvedToolPermissionIdentity` — canonical runtime identity consumed by authorization and visibility.
-- `normalizeAgentToolRules(value)` — validates, trims, canonicalizes, and rejects wildcard, extra-field, duplicate, conflicting, or permission-neutral dispatcher/container identities, more than 256 rules, and node/server/tool strings over 128 UTF-8 bytes.
+- `normalizeAgentToolRules(value)` — validates, trims, canonicalizes, and rejects wildcard, extra-field, duplicate, conflicting, or permission-neutral dispatcher/container identities, more than 256 rules, and server/tool/native-Node strings over 128 UTF-8 bytes; valid qualified Provider Node IDs may use 193 bytes.
 - `isPermissionNeutralBuiltinDispatcher(tool)` — identifies the exact non-capability builtin dispatcher `call_tool` without generalizing the rule to other placement labels.
 - `toolRuleIdentity(rule)` — stable exact identity key.
 - `findExactAgentToolRule(rules, identity)` — exact source-aware lookup.

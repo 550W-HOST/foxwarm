@@ -334,6 +334,7 @@ export type ExecutableNodeProviderResponse = {
 export class ExecutableNodeProvider implements NodeProvider {
   readonly id: string;
   readonly deferredLookup = true;
+  readonly namespaceNodeIds = true;
   private activeRequests = 0;
   private descriptionPromise?: Promise<NodeProviderDescription>;
 

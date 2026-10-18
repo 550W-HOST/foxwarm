@@ -238,9 +238,9 @@ test('worker direct and unified current-node routing carries exact cwd while exp
     await tool_call_tool({ source: 'node', name: 'read', args: { filePath: 'x' } }, ctx);
     await tool_call_tool({ source: 'node', nodeId: 'remote-other', name: 'read', args: { filePath: 'x' } }, ctx);
     assert.deepEqual(calls.map(call => call[4]), [
-      { currentNode: 'remote-current', cwd: '/exact/cwd' },
-      { currentNode: 'remote-current', cwd: '/exact/cwd' },
-      undefined,
+      { currentNode: 'remote-current', callerCurrentNode: 'remote-current', cwd: '/exact/cwd' },
+      { currentNode: 'remote-current', callerCurrentNode: 'remote-current', cwd: '/exact/cwd' },
+      { currentNode: 'remote-current', callerCurrentNode: 'remote-current' },
     ]);
   } finally { (nodeExecution as any).executeNodeTool = original; }
 });

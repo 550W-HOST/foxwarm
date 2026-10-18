@@ -75,7 +75,7 @@ test('external SSH adapter: canonical files, raw bytes, cwd, bounded output, bac
   const registry = new NodeProviderRegistry([provider], { getExecRuntime: () => runtime });
   const sessionId = `ssh-fixture-${Date.now()}`;
   const session = await sessionManager.getSession(sessionId);
-  session.currentNode = 'ssh:fixture';
+  session.currentNode = 'external-ssh/ssh:fixture';
   session.cwd = cwd;
   await sessionManager.saveSession(sessionId);
   const service = new RpcServiceRegistry();
@@ -86,7 +86,7 @@ test('external SSH adapter: canonical files, raw bytes, cwd, bounded output, bac
     persistCurrentSession: async () => sessionManager.saveSession(sessionId) };
   try {
     const discovery: any = await callTool('node', { action: 'list' }, ctx);
-    assert.equal(discovery.nodes[0].id, 'ssh:fixture');
+    assert.equal(discovery.nodes[0].id, 'external-ssh/ssh:fixture');
     assert.deepEqual(discovery.providers[0].lifecycle, []);
     assert.equal(discovery.providers[0].label, 'Linux SSH');
     const inspection: any = await callTool('node', { action: 'inspect', providerId: 'external-ssh' }, ctx);
@@ -127,7 +127,7 @@ test('external SSH adapter: canonical files, raw bytes, cwd, bounded output, bac
     const workerRegistry = path.join(root, 'restart-execs.json');
     const startResult = path.join(root, 'started.json');
     const recoveredResult = path.join(root, 'recovered.json');
-    await fs.writeJson(workerConfig, { provider: config, nodeId: 'ssh:fixture', command: 'sleep 1.4; printf restart' });
+    await fs.writeJson(workerConfig, { provider: config, nodeId: 'external-ssh/ssh:fixture', command: 'sleep 1.4; printf restart' });
     const helper = path.join(__dirname, 'providerExecRestartTestFixture.js');
     await execute(process.execPath, [helper, 'start', workerConfig, workerRegistry, startResult]);
     const { entry } = await fs.readJson(startResult);

@@ -55,3 +55,10 @@ test('parses legacy node path URI shape for existing links', () => {
 test('rejects non-node namespaces', () => {
   assert.throws(() => parseFoxwarmUri(uri('foxwarm://repo/example/path')), /authority/);
 });
+
+test('qualified Provider IDs stay one encoded authority and preserve the target path', () => {
+  const encoded = buildFoxwarmNodeUriString('development/worker:one', '/workspace/file.txt');
+  assert.deepEqual(parseFoxwarmUri(uri(encoded)), {
+    namespace: 'node', nodeId: 'development/worker:one', realPath: '/workspace/file.txt',
+  });
+});

@@ -1,3 +1,5 @@
+import { namespaceNodeProvider } from './providerNamespace';
+import { isCoreNodeId, splitProviderNodeId } from '../../packages/shared/dist/nodeIdentity';
 import { listApprovedNodes } from './registry';
 import type { ExecRuntime } from '../execManager';
 import type { ExecBackend, ExecStarted, ExecSnapshot } from '../../packages/shared/dist/execBackend';
@@ -152,6 +154,8 @@ export type NodeProviderSummary = {
 };
 
 export interface NodeProvider {
+  /** Core qualifies this adapter's local IDs with its exact provider ID. */
+  readonly namespaceNodeIds?: true;
   /** Cancellation ends foreground exec waiting with a real background receipt, never by killing its launcher. */
   readonly supportsExecWaitCancellation?: true;
   readonly id: string;
@@ -203,7 +207,7 @@ export class NodeProviderRegistry {
       }
       ids.add(provider.id);
     }
-    this.providers = [...providers];
+    this.providers = providers.map(provider => provider.namespaceNodeIds ? namespaceNodeProvider(provider) : provider);
   }
 
   async initialize(): Promise<void> {
@@ -432,10 +436,13 @@ export class NodeProviderRegistry {
   execBackend(providerId: string, nodeId: string): ExecBackend {
     const provider = this.providers.find(candidate => candidate.id === providerId);
     if (!provider?.startExec || !provider.pollExec || !provider.invokeFilesystem) throw new Error('Configured Node provider exec backend is unavailable.');
+    // Older provider exec records stored the local ID beside an authoritative providerId.
+    // Read those records without adding an alias to ordinary routing or rewriting history.
+    const targetNode = provider.namespaceNodeIds && !nodeId.includes('/') ? `${provider.id}/${nodeId}` : nodeId;
     const { operations } = this.filesystemBackend(provider, {
-      sourceSessionId: '', nodeId, toolName: 'read', args: {}, context: { agent: '' },
+      sourceSessionId: '', nodeId: targetNode, toolName: 'read', args: {}, context: { agent: '' },
     });
-    return createProviderExecBackend(provider, nodeId, operations);
+    return createProviderExecBackend(provider, targetNode, operations);
   }
 
   private async invokePrimitiveExec(provider: NodeProvider, request: Extract<NodeToolRequest, { sourceSessionId: string }>, options?: NodeProviderCallOptions): Promise<unknown> {
@@ -614,20 +621,17 @@ export class NodeProviderRegistry {
     request: NodeLifecycleProviderRequest,
     options?: NodeProviderCallOptions,
   ): Promise<NodeLifecycleResult> {
-    if (request.nodeId !== undefined && (
-      request.nodeId.length < 1
-      || request.nodeId.length > 128
-      || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(request.nodeId)
-      || request.nodeId.toLowerCase() === 'master'
-    )) {
-      throw new NodeProviderError(
-        'NODE_LIFECYCLE_INVALID_NODE_ID',
-        'create/ensure nodeId must use the canonical slash-free grammar and cannot be reserved `master`.',
-      );
-    }
     const provider = this.providers.find(candidate => candidate.id === providerId);
     if (!provider) {
       throw new NodeProviderError('NODE_LIFECYCLE_PROVIDER_NOT_FOUND', `Node provider \`${providerId}\` is not configured.`);
+    }
+    if (request.nodeId !== undefined) {
+      const identity = splitProviderNodeId(request.nodeId);
+      if (!isCoreNodeId(request.nodeId) || request.nodeId.toLowerCase() === 'master'
+        || (provider.namespaceNodeIds ? identity?.providerId !== provider.id : !!identity)) {
+        throw new NodeProviderError('NODE_LIFECYCLE_INVALID_NODE_ID',
+          'create/ensure nodeId must belong to the selected provider namespace and cannot be reserved `master`.');
+      }
     }
     const method = action === 'create' ? provider.createNode : provider.ensureNode;
     if (!method || (provider.describe && !(await provider.describe(options)).lifecycle.includes(action))) {
