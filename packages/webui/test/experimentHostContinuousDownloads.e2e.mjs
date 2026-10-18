@@ -98,18 +98,44 @@ try {
   await until(() => pages.length > reads, 'reconnected bounded Archive page')
   assert(pages.slice(reads).every(value => value.body.messages.length <= 100))
   // Switch away and back through the App's mounted Chat owner and restore its saved reading window.
-  const restoreReads = pages.filter(value => new URL(value.url).pathname.includes('/continuous-parent/')).length
-  await page.evaluate(() => window.foxwarmTest.switchToSession('main'))
-  await page.waitForSelector('.foxwarm-chat-root')
+  const parentPages = () => pages.filter(value => new URL(value.url).pathname.endsWith(route(seed.parent) + '/history/continuous'))
+  const restoreReads = parentPages().length
+  const savedAnchor = await page.evaluate(() => {
+    const scroll = document.querySelector('.foxwarm-chat-messages'), top = scroll.getBoundingClientRect().top
+    return [...scroll.querySelectorAll('[data-chat-message-anchor-key]')].find(element => element.getBoundingClientRect().bottom > top)?.dataset.chatMessageAnchorKey
+  })
+  assert(savedAnchor)
+  const anchorSeq = Number(savedAnchor.match(/^seq-local-(\d+)$/)?.[1])
+  assert(Number.isSafeInteger(anchorSeq) && anchorSeq > 0)
+  const latestSeq = (await host.api('GET', route(seed.parent) + '/history')).body.latestSeq
+  await page.evaluate(id => window.foxwarmTest.switchToSession(id), seed.child)
+  await page.waitForFunction(id => location.hash.includes(id) && document.querySelector('.foxwarm-chat-root')?.innerText.includes(id), {}, seed.child)
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), seed.parent)
   await page.waitForSelector('[data-continuous-history]')
-  await page.waitForSelector(`[data-chat-message-anchor-key="${anchor}"]`)
-  await until(() => pages.filter(value => new URL(value.url).pathname.includes('/continuous-parent/')).length > restoreReads, 'restored bounded reading window')
-  assert(pages.filter(value => new URL(value.url).pathname.includes('/continuous-parent/')).length - restoreReads <= 2)
+  await page.waitForSelector(`[data-chat-message-anchor-key="${savedAnchor}"]`)
+  // Preparation surrounds the saved row with two exclusive, bounded cursors.
+  // The mounted owner then refreshes from the prepared suffix, not from latest or the Archive start.
+  const beforeQuery = '?beforeSeq=' + (anchorSeq + 1), afterQuery = '?afterSeq=' + anchorSeq
+  await until(() => [beforeQuery, afterQuery].every(query => parentPages().slice(restoreReads).some(value => new URL(value.url).search === query)), 'two restored-window preparation pages')
+  const preparedPages = parentPages().slice(restoreReads)
+  const earlier = preparedPages.find(value => new URL(value.url).search === beforeQuery).body
+  const later = preparedPages.find(value => new URL(value.url).search === afterQuery).body
+  assert.equal(earlier.lastSeq, anchorSeq)
+  assert(earlier.messages.every(row => row.__meta.seq <= anchorSeq))
+  assert(later.messages.every(row => row.__meta.seq > anchorSeq))
+  const catchUpQuery = '?afterSeq=' + later.lastSeq
+  await until(() => parentPages().slice(restoreReads).some(value => new URL(value.url).search === catchUpQuery), 'post-seed bounded catch-up')
+  const restoredPages = parentPages().slice(restoreReads)
+  assert.deepEqual(restoredPages.map(value => new URL(value.url).search).sort(), [beforeQuery, afterQuery, catchUpQuery].sort())
+  const catchUp = restoredPages.find(value => new URL(value.url).search === catchUpQuery).body
+  assert(catchUp.messages.every(row => row.__meta.seq > later.lastSeq))
+  assert.equal(catchUp.lastSeq, latestSeq)
+  assert.equal(catchUp.hasMore, false, 'the small committed suffix needs no automatic page drain')
   assert(pages.every(value => value.body.messages.length <= 100))
   assert.equal((await host.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'other-target' })).status, 200)
   assert.equal((await host.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'deliveries' })).status, 200)
   await page.evaluate(() => window.foxwarmTest.switchToSession('deliveries'))
+  await page.waitForFunction(() => location.hash.includes('deliveries') && document.querySelector('.foxwarm-chat-root')?.innerText.includes('deliveries') && document.querySelector('.foxwarm-chat-root')?.dataset.chatConnectionState === 'connected')
   assert.equal((await host.api('POST', route('other-target') + '/message', { text: '/session unparent' })).status, 200)
   await page.evaluate(() => window.foxwarmTest.sendMessage('DELIVER-FILES'))
   const deliveryState = await done('deliveries', 'DELIVERY-FINISHED')
