@@ -1,3 +1,4 @@
+import { nodeProviderRegistry } from '../nodes/providers';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
@@ -42,6 +43,8 @@ test('WebUI nodes route exposes only public launcher capability summaries', asyn
   setNodeRegistryStoreForTests(createNodeRegistryStore(registryPath));
   resetNodeRegistryForTests();
 
+  const originalList = nodeProviderRegistry.listNodes.bind(nodeProviderRegistry);
+  nodeProviderRegistry.listNodes = async options => [...await originalList(options), { id: 'external:fixture', label: 'External fixture', kind: 'remote', provider: 'external', type: 'generic', availability: 'ready', tools: [] }];
   const port = 35100 + Math.floor(Math.random() * 400);
   const server = new HttpServer(port, TEST_TOKEN);
   setHttpServer(server);
@@ -70,7 +73,7 @@ test('WebUI nodes route exposes only public launcher capability summaries', asyn
     const response = await fetch(`${baseUrl}/api/nodes`, { headers: bearerHeaders() });
     assert.equal(response.status, 200);
     const payload = await response.json() as any;
-    assert.deepEqual(payload.nodes.map((node: any) => node.id), ['master', 'capable-node', 'incompatible-node', 'offline-node']);
+    assert.deepEqual(payload.nodes.map((node: any) => node.id), ['master', 'capable-node', 'incompatible-node', 'offline-node', 'external:fixture']);
 
     const master = payload.nodes.find((node: any) => node.id === 'master');
     assert.deepEqual(master, { id: 'master', type: 'master', displayName: 'master', online: true, services: {} });
@@ -95,6 +98,7 @@ test('WebUI nodes route exposes only public launcher capability summaries', asyn
       'vscode-pty': 1,
     });
 
+    assert.deepEqual(payload.nodes.find((node: any) => node.id === 'external:fixture'), { id: 'external:fixture', type: 'generic', displayName: 'External fixture', online: true, availability: 'ready', provider: 'external', services: {} });
     const encoded = JSON.stringify(payload);
     assert.equal(encoded.includes('tokenHash'), false);
     assert.equal(encoded.includes('private-tool'), false);
@@ -102,6 +106,7 @@ test('WebUI nodes route exposes only public launcher capability summaries', asyn
     assert.equal(encoded.includes('requestedName'), false);
     assert.equal(encoded.includes('private-service'), false);
   } finally {
+    nodeProviderRegistry.listNodes = originalList;
     for (const nodeId of onlineNodeIds) nodesManager.unregisterNode(nodeId);
     await server.stop().catch((): void => undefined);
     setHttpServer(null);

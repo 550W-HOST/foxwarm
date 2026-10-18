@@ -83,7 +83,7 @@ type ExecutedToolCall = PreparedToolCall & {
     successfulWaitAfterSendTarget?: string;
     successfulFinishAfterSend: boolean;
     completedLinkedTask?: LinkedTaskCompletion;
-    deferredExecCwdSync?: { nextCwd: string };
+    deferredExecCwdSync?: { nextCwd: string; nodeId?: string };
     fatalCurrentTurn?: { code: string; message: string };
 };
 
@@ -266,7 +266,7 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
     let successfulWaitAfterSendTarget: string | undefined;
     let successfulFinishAfterSend = false;
     let completedLinkedTask: LinkedTaskCompletion | undefined;
-    let deferredExecCwdSync: { nextCwd: string } | undefined;
+    let deferredExecCwdSync: { nextCwd: string; nodeId?: string } | undefined;
     let fatalCurrentTurn: { code: string; message: string } | undefined;
 
     try {
@@ -339,7 +339,8 @@ async function runPreparedToolCall(prepared: PreparedToolCall, toolContext: any)
                     && result.__toolPostAction.finishAfterSend === true;
             }
             if (result.__execBatchCwdSync && typeof result.__execBatchCwdSync.nextCwd === 'string') {
-                deferredExecCwdSync = { nextCwd: result.__execBatchCwdSync.nextCwd };
+                deferredExecCwdSync = { nextCwd: result.__execBatchCwdSync.nextCwd,
+                    ...(typeof result.__execBatchCwdSync.nodeId === 'string' ? { nodeId: result.__execBatchCwdSync.nodeId } : {}) };
             }
             const actualArgs = prepared.resolved?.args || prepared.call.args;
             if (!sessionMessages && prepared.resolved?.source === 'builtin' && prepared.resolved.name === 'send_to_session'

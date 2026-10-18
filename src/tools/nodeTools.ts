@@ -14,7 +14,7 @@ import { buildNodeBootstrapInfo, ensureNodePairingToken } from '../nodes/bootstr
 import {
     copyBetweenNodes,
     executeNodeLifecycle,
-    listNodeLifecycleProviders,
+    listNodeProviders,
     listNodeTopology,
     validateNodeSelection,
 } from '../nodeExecution';
@@ -152,19 +152,20 @@ export const tool_list_nodes = async (_args: ToolArgs = {}, ctx?: ToolContext) =
     if (ctx.sessionPlacement === 'session-worker' && ctx.session?.id !== ctx.sessionId) throw new Error('Node listing requires exact session context.');
     const currentNode = await resolveCurrentNodeForList(ctx);
     const nodes = await listNodeTopology(ctx.sessionId, undefined, currentNode);
-    const lifecycleProviders = await listNodeLifecycleProviders(ctx.sessionId);
-    const providerBody = lifecycleProviders.length > 0
-        ? `\nLifecycle providers:\n${lifecycleProviders.map(provider => `- \`${provider.id}\` (${provider.actions.join(', ')})`).join('\n')}\n`
+    const providersList = await listNodeProviders(ctx.sessionId);
+    const finish = (output: string) => ctx.programmatic ? { output, nodes, providers: providersList, currentNode } : output;
+    const providerBody = providersList.length > 0
+        ? `\nProviders:\n${providersList.map(provider => `- \`${provider.id}\` (${provider.lifecycle.join(', ')})`).join('\n')}\n`
         : '';
-    if (nodes.length === 0) return `No nodes registered. Current node: \`${currentNode}\`.${providerBody}`;
+    if (nodes.length === 0) return finish(`No nodes registered. Current node: \`${currentNode}\`.${providerBody}`);
     const body = nodes.map(node => {
         const label = node.kind === 'master' ? 'local' : node.kind;
         return `- \`${node.id}\` (${label})${node.id === currentNode ? ' ✅ current' : ''}`
             + (node.availability !== 'ready' ? ` ⚠️ ${node.unavailable?.message || node.availability}` : '')
             + (typeof node.lastActivity === 'number' ? ` - Last activity: ${new Date(node.lastActivity).toISOString()}` : '');
     }).join('\n');
-    return `Found ${nodes.length} node(s). Current node: \`${currentNode}\`.\n\n${body}\n${providerBody}`
-        + (nodes.some(node => node.id === currentNode) ? '' : `\nCurrent node \`${currentNode}\` is not currently available.\n`);
+    return finish(`Found ${nodes.length} node(s). Current node: \`${currentNode}\`.\n\n${body}\n${providerBody}`
+        + (nodes.some(node => node.id === currentNode) ? '' : `\nCurrent node \`${currentNode}\` is not currently available.\n`));
 };
 
 export const tool_change_current_node = async (args: ToolArgs, ctx: ToolContext) => {
@@ -220,7 +221,7 @@ export async function tool_node(args: ToolArgs, ctx: ToolContext): Promise<any> 
         assertNodeActionKeys(args, action, action === 'create' || action === 'ensure'
             ? ['providerId', 'nodeId', 'parameters', 'parametersJson']
             : action === 'inspect'
-                ? ['nodeId', 'parameters', 'parametersJson']
+                ? ['providerId', 'nodeId', 'parameters', 'parametersJson']
                 : ['nodeId', 'parameters', 'parametersJson', 'confirmation']);
         const parameters = resolveObjectArgWithJsonFallback(args, 'parameters', 'parametersJson', {
             label: `node ${action} parameters`,
@@ -235,6 +236,12 @@ export async function tool_node(args: ToolArgs, ctx: ToolContext): Promise<any> 
                 ...(args.nodeId === undefined ? {} : { nodeId: args.nodeId }),
                 parameters,
             });
+        }
+        if (action === 'inspect' && args.providerId !== undefined) {
+            if (args.nodeId !== undefined || Object.keys(parameters).length || typeof args.providerId !== 'string' || !args.providerId.trim()) {
+                throw new Error('Provider inspection requires providerId and does not accept nodeId or parameters.');
+            }
+            return executeNodeLifecycle(ctx.sessionId, { action, providerId: args.providerId.trim() });
         }
         if (typeof args.nodeId !== 'string' || !args.nodeId.trim()) {
             throw new Error(`node.nodeId is required for action="${action}".`);

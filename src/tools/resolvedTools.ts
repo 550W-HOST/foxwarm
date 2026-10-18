@@ -1,3 +1,4 @@
+import { applyDeferredExecCwdSync } from './execTools';
 import { throwIfToolStopped } from '../toolCallControls';
 import { resolveObjectArgWithJsonFallback } from '../jsonObjectArgs';
 import * as mcpExternal from '../mcpExternalService';
@@ -205,6 +206,14 @@ export async function executeResolvedTool(resolved: ResolvedTool, ctx: ToolConte
         resolved.routingSnapshot
           ? { ...resolved.routingSnapshot, ...(ctx.deferSessionCwdSync ? { deferSessionCwdSync: true } : {}) }
           : (ctx.deferSessionCwdSync ? { currentNode: resolved.executionNode, deferSessionCwdSync: true } : undefined), ctx.programmatic, ctx.signal);
+      if (resolved.name === 'exec' && result && typeof result === 'object' && result.__execBatchCwdSync) {
+        const { __execBatchCwdSync, ...visible } = result;
+        // Only the exact Session owner can apply cwd, and only while it still selects this Node.
+        const current = ctx.session?.id === ctx.sessionId ? ctx.session : sessionManager.getSessionCatalog(ctx.sessionId);
+        if (current?.currentNode !== resolved.executionNode) return visible;
+        if (ctx.deferSessionCwdSync) return result;
+        return applyDeferredExecCwdSync(ctx, visible, __execBatchCwdSync);
+      }
       if (!fileTool || !result || typeof result !== 'object' || Array.isArray(result)
         || !Object.prototype.hasOwnProperty.call(result, RESOLVED_PATH_SIDECAR)) return result;
       const { [RESOLVED_PATH_SIDECAR]: paths, ...visible } = result;

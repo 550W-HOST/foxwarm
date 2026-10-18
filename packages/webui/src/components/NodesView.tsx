@@ -15,6 +15,7 @@ function NodeOverviewCard({ node }: { node: WebUiNodeTarget }) {
     </div>
     <p className="mt-1 break-all font-mono text-xs text-fw-text-muted">{node.id}</p>
     <p className="mt-2 text-xs text-fw-text-muted">{node.type}{node.lastSeenAt ? ` · Last seen ${new Date(node.lastSeenAt).toLocaleString()}` : ''}</p>
+    {node.availability === 'error' || node.availability === 'unavailable' ? <div className="mt-2"><StatusBadge tone="warning">Unavailable</StatusBadge></div> : null}
     {incompatible ? <div className="mt-2"><StatusBadge tone="warning">Upgrade required</StatusBadge></div> : null}
     {node.protocolMessage && node.protocolMessage !== 'upgrade required' ? <p className="mt-2 text-xs text-fw-warning">{node.protocolMessage}</p> : null}
     <div className="mt-3 flex flex-wrap gap-1.5">

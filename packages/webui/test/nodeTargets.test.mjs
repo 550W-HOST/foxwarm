@@ -45,3 +45,10 @@ test('offline incompatible status remains distinct from connected quarantine', (
   assert.ok(node)
   assert.deepEqual(getNodeTargetAvailability(node, 'vscode-fs'), { available: false, reason: 'offline · upgrade required' })
 })
+test('generic provider Nodes retain canonical IDs and status without inventing Code or terminal support', () => {
+  const node = parseWebUiNodeTargets({ nodes: [{ id: 'external:linux', displayName: 'Build machine', online: true, availability: 'ready', services: {} }] }).find(item => item.id === 'external:linux')
+  assert.ok(node)
+  assert.equal(node.availability, 'ready')
+  assert.deepEqual(getNodeTargetAvailability(node, 'vscode-fs'), { available: false, reason: 'filesystem unavailable' })
+  assert.deepEqual(getNodeTargetAvailability(node, 'vscode-pty'), { available: false, reason: 'terminal unavailable' })
+})

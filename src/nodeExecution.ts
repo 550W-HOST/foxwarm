@@ -118,8 +118,8 @@ export async function validateNodeSelection(sourceSessionId: string, nodeId: str
   return await (await getClient()).call('select', { sourceSessionId, nodeId });
 }
 
-export async function listNodeLifecycleProviders(sourceSessionId: string) {
-  return (await (await getClient()).call('lifecycleProviders', { sourceSessionId })).providers;
+export async function listNodeProviders(sourceSessionId: string) {
+  return (await (await getClient()).call('providersList', { sourceSessionId })).providers;
 }
 
 export async function executeNodeLifecycle(sourceSessionId: string, request: {

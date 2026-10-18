@@ -9,10 +9,13 @@ import {
   PersistentExecManager,
   type ExecCompletionDispatcher,
   type ExecStatus,
+  type ExecOutputFiles,
   type RunningExecEntry,
   type ProgrammaticExecResult,
   type StartPersistentExecOptions,
 } from '../packages/shared/dist/persistentExec';
+import { nodeProviderRegistry } from './nodes/providers';
+import type { ExecBackend } from '../packages/shared/dist/execBackend';
 import { nativeProcessOperations, type ProcessOperations } from '../packages/shared/dist/processOperations';
 
 const RUNNING_EXEC_FILE = path.join(STATE_DIR, 'running-exec.json');
@@ -32,6 +35,7 @@ export interface ExecRuntimeOptions {
   nodeId?: string;
   completionDispatcher?: ExecCompletionDispatcher;
   processOperations?: ProcessOperations;
+  resolveBackend?: (providerId: string, nodeId: string) => ExecBackend;
 }
 
 export interface ExecRuntime {
@@ -40,9 +44,9 @@ export interface ExecRuntime {
   waitForExecCompletion(execId: string, timeoutMs: number, signal?: AbortSignal): Promise<ExecStatus | null>;
   markExecForBackgroundNotification(execId: string): Promise<RunningExecEntry | null>;
   finalizeForegroundExec(execId: string): Promise<void>;
-  buildProgrammaticExecResult(entry: RunningExecEntry, status: ExecStatus | null, output: string): Promise<ProgrammaticExecResult>;
-  buildForegroundExecResult(entry: RunningExecEntry, status: ExecStatus, warning?: string): Promise<string>;
-  buildBackgroundTimeoutResult(entry: RunningExecEntry, timeoutSeconds?: number, warning?: string, waitEndedBy?: string): Promise<string>;
+  buildProgrammaticExecResult(entry: RunningExecEntry, status: ExecStatus | null, output: string, files?: ExecOutputFiles): Promise<ProgrammaticExecResult>;
+  buildForegroundExecResult(entry: RunningExecEntry, status: ExecStatus, warning?: string, files?: ExecOutputFiles): Promise<string>;
+  buildBackgroundTimeoutResult(entry: RunningExecEntry, timeoutSeconds?: number, warning?: string, waitEndedBy?: string, files?: ExecOutputFiles): Promise<string>;
   readFinishedExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null>;
   readLiveExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null>;
   listRunningExecs(): RunningExecEntry[];
@@ -61,6 +65,7 @@ export function createExecRuntime(options: ExecRuntimeOptions): ExecRuntime {
     nodeId,
     logger,
     completionDispatcher: async (entry, status, message) => completionDispatcher(entry, status, message),
+    resolveBackend: options.resolveBackend,
     processOperations: options.processOperations || nativeProcessOperations,
   });
 
@@ -73,9 +78,9 @@ export function createExecRuntime(options: ExecRuntimeOptions): ExecRuntime {
     waitForExecCompletion: (execId, timeoutMs, signal) => manager.waitForExecCompletion(execId, timeoutMs, signal),
     markExecForBackgroundNotification: execId => manager.markExecForBackgroundNotification(execId),
     finalizeForegroundExec: execId => manager.finalizeForegroundExec(execId),
-    buildProgrammaticExecResult: (entry, status, output) => manager.buildProgrammaticExecResult(entry, status, output),
-    buildForegroundExecResult: (entry, status, warning) => manager.buildForegroundExecResult(entry, status, warning),
-    buildBackgroundTimeoutResult: (entry, timeoutSeconds = DEFAULT_EXEC_TIMEOUT_SECONDS, warning, waitEndedBy) => manager.buildBackgroundTimeoutResult(entry, timeoutSeconds, warning, waitEndedBy),
+    buildProgrammaticExecResult: (entry, status, output, files) => manager.buildProgrammaticExecResult(entry, status, output, files),
+    buildForegroundExecResult: (entry, status, warning, files) => manager.buildForegroundExecResult(entry, status, warning, files),
+    buildBackgroundTimeoutResult: (entry, timeoutSeconds = DEFAULT_EXEC_TIMEOUT_SECONDS, warning, waitEndedBy, files) => manager.buildBackgroundTimeoutResult(entry, timeoutSeconds, warning, waitEndedBy, files),
     readFinishedExecWorkingDirectory: entry => manager.readFinishedExecWorkingDirectory(entry),
     readLiveExecWorkingDirectory: entry => manager.readLiveExecWorkingDirectory(entry),
     listRunningExecs: () => manager.listRunningExecs(),
@@ -92,6 +97,7 @@ const defaultCompletionDispatcher: ExecCompletionDispatcher = async (entry, _sta
 };
 
 const defaultRuntime = createExecRuntime({
+  resolveBackend: (providerId, nodeId) => nodeProviderRegistry.execBackend(providerId, nodeId),
   getDefaultCwd: (agentName: string) => getAgentDir(agentName),
   getExecTempDir: (agentName: string) => path.join(getAgentDir(agentName), '.temp', 'exec'),
   getAgentDir,
@@ -124,16 +130,16 @@ export async function finalizeForegroundExec(execId: string): Promise<void> {
   await defaultRuntime.finalizeForegroundExec(execId);
 }
 
-export async function buildProgrammaticExecResult(entry: RunningExecEntry, status: ExecStatus | null, output: string): Promise<ProgrammaticExecResult> {
-  return defaultRuntime.buildProgrammaticExecResult(entry, status, output);
+export async function buildProgrammaticExecResult(entry: RunningExecEntry, status: ExecStatus | null, output: string, files?: ExecOutputFiles): Promise<ProgrammaticExecResult> {
+  return defaultRuntime.buildProgrammaticExecResult(entry, status, output, files);
 }
 
-export async function buildForegroundExecResult(entry: RunningExecEntry, status: ExecStatus, warning?: string): Promise<string> {
-  return await defaultRuntime.buildForegroundExecResult(entry, status, warning);
+export async function buildForegroundExecResult(entry: RunningExecEntry, status: ExecStatus, warning?: string, files?: ExecOutputFiles): Promise<string> {
+  return await defaultRuntime.buildForegroundExecResult(entry, status, warning, files);
 }
 
-export async function buildBackgroundTimeoutResult(entry: RunningExecEntry, timeoutSeconds: number = DEFAULT_EXEC_TIMEOUT_SECONDS, warning?: string, waitEndedBy?: string): Promise<string> {
-  return await defaultRuntime.buildBackgroundTimeoutResult(entry, timeoutSeconds, warning, waitEndedBy);
+export async function buildBackgroundTimeoutResult(entry: RunningExecEntry, timeoutSeconds: number = DEFAULT_EXEC_TIMEOUT_SECONDS, warning?: string, waitEndedBy?: string, files?: ExecOutputFiles): Promise<string> {
+  return await defaultRuntime.buildBackgroundTimeoutResult(entry, timeoutSeconds, warning, waitEndedBy, files);
 }
 
 export async function readFinishedExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null> {
