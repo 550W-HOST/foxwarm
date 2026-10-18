@@ -122,8 +122,7 @@ internal sealed partial class ModelConfiguration
             .Concat(config.Select(pair => pair.Key))
             .Distinct(StringComparer.Ordinal)
             .Where(key =>
-                key is not ("access" or "channels")
-                && !JsonNode.DeepEquals(app[key], config[key])
+                key is not ("access" or "channels") && !JsonNode.DeepEquals(app[key], config[key])
             )
             .ToList();
         if (!JsonNode.DeepEquals(app["channels"]?["webui"], config["channels"]?["webui"]))
@@ -174,10 +173,7 @@ internal sealed partial class ModelConfiguration
     private async Task<(
         JsonObject Config,
         System.Collections.Immutable.ImmutableDictionary<string, AccessIdentity> Access
-    )> PersistAppAsync(
-        Func<CancellationToken, Task<byte[]>> candidate,
-        CancellationToken token
-    )
+    )> PersistAppAsync(Func<CancellationToken, Task<byte[]>> candidate, CancellationToken token)
     {
         // Only persistence is shared with direct command saves. Release before access/runtime
         // application, which may join a Weixin handler that is itself confirming a login.

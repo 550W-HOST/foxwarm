@@ -153,14 +153,19 @@ internal sealed partial class MatrixChannel
     }
 
     private readonly Dictionary<string, string> memberships = new(StringComparer.Ordinal);
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> encryptedRooms = new(StringComparer.Ordinal);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<
+        string,
+        byte
+    > encryptedRooms = new(StringComparer.Ordinal);
 
     private void ProcessRoomState(string room, JsonArray? events)
     {
         foreach (var item in (events ?? []).OfType<JsonObject>())
         {
-            if (SessionWait.Text(item["type"]) == "m.room.encryption"
-                && SessionWait.Text(item["state_key"]) == "")
+            if (
+                SessionWait.Text(item["type"]) == "m.room.encryption"
+                && SessionWait.Text(item["state_key"]) == ""
+            )
                 encryptedRooms.TryAdd(room, 0);
             if (
                 SessionWait.Text(item["type"]) != "m.room.member"

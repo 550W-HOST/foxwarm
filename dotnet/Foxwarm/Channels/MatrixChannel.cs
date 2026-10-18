@@ -155,9 +155,11 @@ internal sealed partial class MatrixChannel : IManagedChannel
     {
         // The SDK refuses known encrypted rooms before adding the event to its send scheduler.
         if (encryptedRooms.ContainsKey(room))
-            return Task.FromException(new InvalidOperationException(
-                "This room is configured to use encryption, but your client does not support encryption."
-            ));
+            return Task.FromException(
+                new InvalidOperationException(
+                    "This room is configured to use encryption, but your client does not support encryption."
+                )
+            );
         var completion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -359,20 +361,23 @@ internal sealed partial class MatrixChannel : IManagedChannel
         if (!response.IsSuccessStatusCode)
         {
             var code = SessionWait.Text(result?["errcode"]);
-            var rateLimited = code == "M_LIMIT_EXCEEDED"
+            var rateLimited =
+                code == "M_LIMIT_EXCEEDED"
                 || (code is null or "M_UNKNOWN" && (int)response.StatusCode == 429);
-            TimeSpan? retry = rateLimited ?
-                response.Headers.RetryAfter?.Delta
-                ?? (
-                    response.Headers.RetryAfter?.Date is { } date
-                        ? date - DateTimeOffset.UtcNow
-                        : null
-                ) : null;
-            retry ??= code == "M_LIMIT_EXCEEDED"
+            TimeSpan? retry = rateLimited
+                ? response.Headers.RetryAfter?.Delta
+                    ?? (
+                        response.Headers.RetryAfter?.Date is { } date
+                            ? date - DateTimeOffset.UtcNow
+                            : null
+                    )
+                : null;
+            retry ??=
+                code == "M_LIMIT_EXCEEDED"
                 && SessionWait.Number(result?["retry_after_ms"]) is { } ms
                 && double.IsInteger(ms)
-                ? TimeSpan.FromMilliseconds(ms)
-                : null;
+                    ? TimeSpan.FromMilliseconds(ms)
+                    : null;
             throw new MatrixApiException((int)response.StatusCode, result, retry);
         }
         return result ?? throw new InvalidDataException("Matrix response is not a JSON object.");

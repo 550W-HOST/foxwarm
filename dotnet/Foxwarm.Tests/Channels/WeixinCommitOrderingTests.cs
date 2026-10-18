@@ -19,23 +19,27 @@ public sealed class WeixinCommitOrderingTests
         peer.Respond = async call =>
         {
             if (call.Path.EndsWith("/get_bot_qrcode", StringComparison.Ordinal))
-                return Results.Json(new
-                {
-                    qrcode = "qr-" + Interlocked.Increment(ref serial),
-                    qrcode_img_content = "synthetic-qr"
-                });
+                return Results.Json(
+                    new
+                    {
+                        qrcode = "qr-" + Interlocked.Increment(ref serial),
+                        qrcode_img_content = "synthetic-qr",
+                    }
+                );
             if (!call.Path.EndsWith("/get_qrcode_status", StringComparison.Ordinal))
                 return null;
             if (Interlocked.Increment(ref waiting) == 2)
                 both.TrySetResult();
             await both.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            return Results.Json(new
-            {
-                status = "confirmed",
-                bot_token = "token-" + call.Query["qrcode"],
-                ilink_user_id = "owner-" + call.Query["qrcode"],
-                baseurl = peer.Address.ToString()
-            });
+            return Results.Json(
+                new
+                {
+                    status = "confirmed",
+                    bot_token = "token-" + call.Query["qrcode"],
+                    ilink_user_id = "owner-" + call.Query["qrcode"],
+                    baseurl = peer.Address.ToString(),
+                }
+            );
         };
         var data = Path.Combine(temp.Path, "data");
         var work = Path.Combine(temp.Path, "work");
@@ -44,17 +48,33 @@ public sealed class WeixinCommitOrderingTests
         var channels = new JsonObject
         {
             ["wx-first"] = peer.Weixin("initial-first"),
-            ["weixin"] = peer.Weixin("initial-default")
+            ["weixin"] = peer.Weixin("initial-default"),
         };
         channels["wx-first"]!["enabled"] = false;
         channels["wx-first"]!["custom"] = "preserve";
         channels["weixin"]!["enabled"] = false;
-        var raw = "# retained YAML comment\nother:\n  preserve: true\nchannels:\n" +
-            string.Join("\n", ModelConfiguration.ChannelsYamlForObject(channels).TrimEnd().Split('\n').Select(line => "  " + line)) + "\n";
+        var raw =
+            "# retained YAML comment\nother:\n  preserve: true\nchannels:\n"
+            + string.Join(
+                "\n",
+                ModelConfiguration
+                    .ChannelsYamlForObject(channels)
+                    .TrimEnd()
+                    .Split('\n')
+                    .Select(line => "  " + line)
+            )
+            + "\n";
         await File.WriteAllTextAsync(Path.Combine(data, "state", "config.yaml"), raw);
         var settings = await HttpServerSettings.CaptureDesktopAsync(data);
         var configuration = new ModelConfiguration(data);
-        await using var host = await MainHost.CreateAsync([], data, work, configuration, settings, null);
+        await using var host = await MainHost.CreateAsync(
+            [],
+            data,
+            work,
+            configuration,
+            settings,
+            null
+        );
         await host.StartAsync();
         using var http = new HttpClient { BaseAddress = new Uri(settings.Address.BaseUrl) };
         http.DefaultRequestHeaders.Authorization = new("Bearer", settings.Token);
@@ -65,18 +85,33 @@ public sealed class WeixinCommitOrderingTests
             return (await response.Content.ReadFromJsonAsync<JsonObject>())!;
         }
         var session = await Post("api/sessions", new { agentId = "main", sessionId = "chat" });
-        var route = "api/sessions/" + Uri.EscapeDataString(SessionWait.Text(session["sessionId"])!) + "/message";
+        var route =
+            "api/sessions/"
+            + Uri.EscapeDataString(SessionWait.Text(session["sessionId"])!)
+            + "/message";
         for (var attempt = 0; attempt < 3; attempt++)
         {
             if (attempt > 0)
                 await Post("api/setup/config", new { yaml = raw });
             waiting = 0;
             both = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            var commandLogin = await Post("api/setup/weixin/login/start", new { channelId = "weixin" });
+            var commandLogin = await Post(
+                "api/setup/weixin/login/start",
+                new { channelId = "weixin" }
+            );
             var setupLogin = await Post("api/setup/weixin/login/start", new { });
             Assert.Equal("wx-first", SessionWait.Text(setupLogin["channelId"]));
-            var confirmSetup = Post("api/setup/weixin/login/wait", new { sessionKey = SessionWait.Text(setupLogin["sessionKey"]) });
-            var confirmCommand = Post(route, new { text = "/channel weixin wait " + SessionWait.Text(commandLogin["sessionKey"]) });
+            var confirmSetup = Post(
+                "api/setup/weixin/login/wait",
+                new { sessionKey = SessionWait.Text(setupLogin["sessionKey"]) }
+            );
+            var confirmCommand = Post(
+                route,
+                new
+                {
+                    text = "/channel weixin wait " + SessionWait.Text(commandLogin["sessionKey"]),
+                }
+            );
             var results = await Task.WhenAll(confirmSetup, confirmCommand);
             Assert.True(SessionCatalog.Flag(results[0]["connected"]));
             var current = configuration.CurrentChannels();
@@ -86,12 +121,20 @@ public sealed class WeixinCommitOrderingTests
             Assert.Equal("token-" + commandQr, SessionWait.Text(current["weixin"]!["token"]));
             Assert.True(SessionCatalog.Flag(current["wx-first"]!["enabled"]));
             Assert.True(SessionCatalog.Flag(current["weixin"]!["enabled"]));
-            Assert.Equal(new[] { "alice", "bob", "owner-" + setupQr }, SessionWait.Strings(current["wx-first"]!["allowedUsers"]));
-            Assert.Equal(new[] { "alice", "bob" }, SessionWait.Strings(current["weixin"]!["allowedUsers"]));
+            Assert.Equal(
+                new[] { "alice", "bob", "owner-" + setupQr },
+                SessionWait.Strings(current["wx-first"]!["allowedUsers"])
+            );
+            Assert.Equal(
+                new[] { "alice", "bob" },
+                SessionWait.Strings(current["weixin"]!["allowedUsers"])
+            );
             Assert.Equal("preserve", SessionWait.Text(current["wx-first"]!["custom"]));
             var saved = await File.ReadAllTextAsync(configuration.AppPath);
             Assert.Contains("# retained YAML comment", saved);
-            Assert.True(SessionCatalog.Flag(ConfigurationYaml.Parse(saved, "app")["other"]!["preserve"]));
+            Assert.True(
+                SessionCatalog.Flag(ConfigurationYaml.Parse(saved, "app")["other"]!["preserve"])
+            );
             Assert.True((await http.GetAsync("api/setup/status")).IsSuccessStatusCode);
         }
     }
