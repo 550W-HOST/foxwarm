@@ -15,7 +15,10 @@ internal sealed class AnthropicMessagesService(
     TimeProvider? clock = null
 ) : IChatService
 {
-    private TimeSpan RequestTimeout => options.HardTimeoutMs == 0 ? Timeout.InfiniteTimeSpan : TimeSpan.FromMilliseconds(options.HardTimeoutMs ?? timeoutMs);
+    private TimeSpan RequestTimeout =>
+        options.HardTimeoutMs == 0
+            ? Timeout.InfiniteTimeSpan
+            : TimeSpan.FromMilliseconds(options.HardTimeoutMs ?? timeoutMs);
 
     public async Task<ChatResult> ChatAsync(
         string sessionId,

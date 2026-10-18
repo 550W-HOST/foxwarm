@@ -189,13 +189,35 @@ public sealed class AnthropicTests
     [Fact]
     public async Task Explicit_cli_timeout_replaces_the_nonstream_transport_default()
     {
-        using var client = new HttpClient(new Handler(async (_, token) =>
+        using var client = new HttpClient(
+            new Handler(
+                async (_, token) =>
+                {
+                    await Task.Delay(100, token);
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(
+                            "{\"content\":[{\"type\":\"text\",\"text\":\"explicit timeout\"}]}"
+                        ),
+                    };
+                }
+            )
+        )
         {
-            await Task.Delay(100, token);
-            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"content\":[{\"type\":\"text\",\"text\":\"explicit timeout\"}]}") };
-        })) { Timeout = Timeout.InfiniteTimeSpan };
-        var result = await new AnthropicMessagesService(client, Options() with { HardTimeoutMs = 1000 }, 1).ChatAsync("", [], CancellationToken.None);
-        Assert.Equal("explicit timeout", result.AssistantMessage!["parts"]![0]!["text"]!.GetValue<string>());
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+        var result = await new AnthropicMessagesService(
+            client,
+            Options() with
+            {
+                HardTimeoutMs = 1000,
+            },
+            1
+        ).ChatAsync("", [], CancellationToken.None);
+        Assert.Equal(
+            "explicit timeout",
+            result.AssistantMessage!["parts"]![0]!["text"]!.GetValue<string>()
+        );
     }
 
     [Fact]
