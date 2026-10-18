@@ -285,7 +285,7 @@ public sealed partial class McpNotificationTests
         );
         Assert.NotNull((await Reply(peer, target, "isolated unattached denied"))!["error"]);
         var messages = new List<string>();
-        peer.Manager.TextChannels.Register(
+        peer.Manager.ChannelRegistry.Register(
             "webui",
             (_, message, _) =>
             {

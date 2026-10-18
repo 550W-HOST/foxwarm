@@ -29,7 +29,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     };
     private readonly Foxwarm.McpClient mcp;
     internal Foxwarm.McpClient OutboundMcp => mcp;
-    internal Foxwarm.Channels.TextChannels TextChannels { get; } = new();
+    internal Foxwarm.Channels.ChannelRegistry ChannelRegistry { get; } = new();
     internal Foxwarm.Nodes.NodeConnectionHub Nodes { get; }
     internal Foxwarm.Nodes.NodeBootstrap? Bootstrap { get; set; }
     private readonly ModelRouting modelRouting = new();
@@ -398,6 +398,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 && value.Kind == SessionEventKind.StateChanged
             )
                 WaitTransition(owner.Id);
+            ObserveChannelTurn(owner, value);
             Changed?.Invoke(value);
         };
         CaptureLocalProjection(owner);
@@ -415,8 +416,14 @@ internal sealed partial class SessionManager : IAsyncDisposable
         }
     }
 
-    private void BindMutations(SessionOwner owner) =>
+    private void BindMutations(SessionOwner owner)
+    {
         owner.Entry.MutationAdmission = () => BeginOwnerMutation(owner);
+        owner.Entry.ToolProgress = (call, start) => ChannelToolProgress(owner, call, start);
+        owner.Entry.TurnStopped = () => ChannelStoppedAsync(owner);
+        owner.Entry.AssistantCommitted = message => ChannelAssistantCommittedAsync(owner, message);
+        owner.Entry.RetryPresented = (retry, initial, same) => ChannelRetryAsync(owner, retry, initial, same);
+    }
 
     public string DataRoot => root;
     public bool Accepting => accepting;
@@ -558,9 +565,18 @@ internal sealed partial class SessionManager : IAsyncDisposable
             memory,
             () => ModelDefinitions(hosted)
         );
-        registry.OnTurnFailure = (error, durable) => hosted.PresentFailureAsync(error, durable);
-        registry.OnTurnStarting = _ => MaybeRefreshStaleAsync(hosted);
+        registry.OnTurnFailure = async (error, durable) =>
+        {
+            await hosted.PresentFailureAsync(error, durable);
+            await ChannelFailureAsync(hosted, error);
+        };
+        registry.OnTurnStarting = async _ =>
+        {
+            StartChannelTurn(hosted);
+            await MaybeRefreshStaleAsync(hosted);
+        };
         registry.OnTurnCompleted = (_, result) => hosted.Compactor.AutoAfterTurnAsync(result);
+        registry.OnProcessorFinalizing = (_, error, interrupted) => FinishChannelTurnAsync(hosted, error, interrupted);
         registry.OnBeforeContinuation = (_, result, consume, token) =>
             hosted.Compactor.BeforeContinuationAsync(result, consume, token);
         registry.OnSafePoint = _ => hosted.Compactor.SafePointAsync();

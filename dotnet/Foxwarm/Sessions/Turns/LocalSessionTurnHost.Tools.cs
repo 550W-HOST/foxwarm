@@ -245,6 +245,7 @@ public sealed partial class LocalSessionTurnHost
             return new(UnsupportedTurnToolExecutor.ToolError("invalid_tool_arguments", error));
         if (prepared is not null && tools is SessionToolExecutor executor)
             return executor.PreparedFailure(prepared);
+        entry.ToolProgress?.Invoke(call, true);
         try
         {
             var owned = (JsonObject)call.DeepClone();
@@ -268,5 +269,6 @@ public sealed partial class LocalSessionTurnHost
         {
             return new(UnsupportedTurnToolExecutor.ToolError("tool_error", exception.Message));
         }
+        finally { entry.ToolProgress?.Invoke(call, false); }
     }
 }

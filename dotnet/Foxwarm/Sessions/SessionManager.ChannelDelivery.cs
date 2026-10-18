@@ -35,7 +35,7 @@ internal sealed partial class SessionManager
         owner.Entry.RequireIdentityAuthority();
         if (!IsCurrentOwner(owner))
             throw new InvalidOperationException("Channel source Session is no longer current.");
-        await TextChannels.SendAsync(target, message, token);
+        await ChannelRegistry.SendAsync(target, message, token);
         return new JsonObject { ["output"] = $"Message sent to channel target `{target}`" };
     }
 

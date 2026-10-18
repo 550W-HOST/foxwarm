@@ -30,7 +30,19 @@ internal sealed partial class ModelConfiguration
                 var currentRaw = ReadCurrentAppRaw();
                 var current = ConfigurationYaml.Parse(currentRaw, "app config");
                 AppConfigurationRules.Validate(current);
+                // A complete app save accepts JSON as YAML too. Preserve that root representation
+                // instead of appending a block section after a closed JSON object.
+                try
+                {
+                    if (JsonNode.Parse(currentRaw) is JsonObject json)
+                    {
+                        json["channels"] = channels.DeepClone();
+                        return Task.FromResult(Encoding.UTF8.GetBytes(json.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true })));
+                    }
+                }
+                catch (System.Text.Json.JsonException) { }
                 var serialized = new SerializerBuilder()
+                    .WithQuotingNecessaryStrings()
                     .Build()
                     .Serialize(JsonNodeToObject(channels))
                     .TrimEnd();
@@ -126,7 +138,9 @@ internal sealed partial class ModelConfiguration
                 notApplied.Add("access.surfaces.mcp");
                 restart.Add("access.surfaces.mcp");
             }
-            if (config.ContainsKey("channels") || app.ContainsKey("channels"))
+            if (ManagedChannels is not null && restart.Contains("channels.webui"))
+                notApplied.Add("channels.webui");
+            if (ManagedChannels is null && (config.ContainsKey("channels") || app.ContainsKey("channels")))
                 notApplied.Add("channels");
             await ReplaceRawAsync(AppPath, bytes, token);
             try
@@ -137,15 +151,22 @@ internal sealed partial class ModelConfiguration
             {
                 notApplied.Add("access.connections");
             }
+            var applied = Access.McpRuntimeAvailable
+                ? new List<string> { "access.identities", "access.surfaces.mcp" }
+                : new List<string> { "access.identities" };
+            JsonObject? reload = null;
+            if (ManagedChannels is { } runtime)
+            {
+                reload = await runtime.ReloadAsync();
+                applied.Add("channels");
+                foreach (var status in (reload["statuses"] as JsonArray ?? []).OfType<JsonObject>())
+                    if (SessionCatalog.Flag(status["enabled"]) && !SessionCatalog.Flag(status["running"]))
+                        notApplied.Add("channels." + SessionWait.Text(status["channelId"]));
+            }
             // Other Main app settings remain startup snapshots.
-            return Installed(
-                target,
-                Access.McpRuntimeAvailable
-                    ? ["access.identities", "access.surfaces.mcp"]
-                    : ["access.identities"],
-                notApplied,
-                restart
-            );
+            var result = Installed(target, applied, notApplied, restart);
+            if (reload is not null) result["reload"] = reload;
+            return result;
         }
         finally
         {

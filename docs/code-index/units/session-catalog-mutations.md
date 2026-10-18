@@ -22,3 +22,5 @@ This unit cannot reconstruct active history, authorize a Session mutation, or by
 ## Tests
 
 `dotnet/Foxwarm.Tests/Sessions/SessionCatalogPublicationTests.cs`; `SessionIdentityMoveTests.cs`; `SessionDeletionTests.cs`; `SessionPresentationTests.cs`.
+
+`SetLastChannel` records external channel instance/type and conversation metadata in the catalog presentation lane. It does not copy that metadata into per-Session JSON authority; [external channels](./dotnet-external-channels.md) owns ingress and the retained best-channel readers.

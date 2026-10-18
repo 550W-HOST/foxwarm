@@ -129,6 +129,15 @@ internal sealed class SessionRuntime(SessionManager manager)
             await owner.Registry.Ingress.EnqueueCheckedAsync(owner.Id, item, beforeAdmission);
     }
 
+    internal async Task SubmitChannelAsync(SessionOwner owner, QueueItem item)
+    {
+        await manager.WaitForIdentityMutationAsync(owner.Id);
+        owner.Entry.RequireIdentityAuthority();
+        if (!ReferenceEquals(manager.Find(owner.Id), owner))
+            throw new InvalidOperationException("Channel input Session owner is no longer current.");
+        await owner.Registry.Ingress.EnqueueAsync(owner.Id, item);
+    }
+
     internal async Task SubmitExternalAsync(
         SessionOwner owner,
         QueueItem item,

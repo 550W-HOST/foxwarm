@@ -24,6 +24,7 @@ internal sealed class ModelRetryNotice(SessionOwner hosted)
             $"Attempt {value.Attempt}/{value.MaxRetries} failed{(descriptor.Length == 0 ? "." : ": " + descriptor + ".")} {after}";
         if (state.Committed is null)
             text = "⚠️ LLM Error: " + text;
+        var initial = state.Committed is null;
         var before = state.Committed?.ToJsonString();
         var update = state.Committed is not null;
         try
@@ -42,6 +43,7 @@ internal sealed class ModelRetryNotice(SessionOwner hosted)
             if (update)
                 hosted.Emit(SessionEventKind.MessageCommitted, state.Committed);
             hosted.PublishStateChanged();
+            if (hosted.Entry.RetryPresented is { } present) await present(value, initial, same);
             return value.Final && (update || state.NotificationSucceeded);
         }
         catch (Exception error)

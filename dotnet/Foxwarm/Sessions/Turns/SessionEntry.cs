@@ -37,6 +37,10 @@ public sealed class SessionEntry
         Volatile.Write(ref identityUnavailable, error);
 
     internal bool Retired { get; set; }
+    internal Action<JsonObject, bool>? ToolProgress { get; set; }
+    internal Func<Task>? TurnStopped { get; set; }
+    internal Func<JsonObject, Task>? AssistantCommitted { get; set; }
+    internal Func<Foxwarm.Models.ModelRetryEvent, bool, bool, Task>? RetryPresented { get; set; }
     internal Func<IDisposable>? MutationAdmission { get; set; }
 
     internal IDisposable? AdmitMutation()

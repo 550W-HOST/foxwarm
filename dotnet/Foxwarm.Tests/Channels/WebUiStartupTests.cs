@@ -188,11 +188,11 @@ public sealed class WebUiStartupTests
         Assert.True(config["saved"]!.GetValue<bool>());
         Assert.Equal("config", config["target"]!.GetValue<string>());
         Assert.Equal(
-            new[] { "access.identities", "access.surfaces.mcp" },
+            new[] { "access.identities", "access.surfaces.mcp", "channels" },
             config["applied"]!.AsArray().Select(value => value!.GetValue<string>())
         );
         Assert.Equal(
-            new[] { "channels" },
+            new[] { "channels.webui" },
             config["notApplied"]!.AsArray().Select(v => v!.GetValue<string>())
         );
         Assert.Contains(
@@ -206,7 +206,7 @@ public sealed class WebUiStartupTests
         Assert.Equal(h.ConfigPath, config["configPath"]!.GetValue<string>());
         Assert.Equal(raw, config["rawYaml"]!.GetValue<string>());
         Assert.Equal(1, config["channelCount"]!.GetValue<int>());
-        Assert.False(config["reload"]!["available"]!.GetValue<bool>());
+        Assert.True(config["reload"]!["available"]!.GetValue<bool>());
         Assert.Equal(raw, await File.ReadAllTextAsync(h.ConfigPath));
 
         var channelResponse = await h.Client.PostAsJsonAsync(
@@ -219,11 +219,11 @@ public sealed class WebUiStartupTests
         Assert.True(channels["saved"]!.GetValue<bool>());
         Assert.Equal("config", channels["target"]!.GetValue<string>());
         Assert.Equal(
-            new[] { "access.identities", "access.surfaces.mcp" },
+            new[] { "access.identities", "access.surfaces.mcp", "channels" },
             channels["applied"]!.AsArray().Select(value => value!.GetValue<string>())
         );
         Assert.Equal(
-            new[] { "channels" },
+            new[] { "channels.webui" },
             channels["notApplied"]!.AsArray().Select(v => v!.GetValue<string>())
         );
         Assert.Contains(
@@ -232,7 +232,7 @@ public sealed class WebUiStartupTests
         );
         Assert.NotNull(channels["channelsYaml"]);
         Assert.Equal(1, channels["channelCount"]!.GetValue<int>());
-        Assert.False(channels["reload"]!["available"]!.GetValue<bool>());
+        Assert.True(channels["reload"]!["available"]!.GetValue<bool>());
         Assert.Equal(
             714d,
             ConfigurationYaml.Parse(await File.ReadAllTextAsync(h.ConfigPath), "config")["llm"]![

@@ -133,6 +133,7 @@ public sealed class SessionTurnRunner
         var failed = false;
         var interrupted = false;
         var turnSelected = retry;
+        Exception? escapingError = null;
         try
         {
             if (retry)
@@ -278,17 +279,27 @@ public sealed class SessionTurnRunner
             else
                 interrupted = claimed && turnSelected;
         }
-        catch
+        catch (Exception error)
         {
             failed = true;
+            escapingError = error;
             throw;
         }
         finally
         {
             try
             {
-                if (claimed && !interrupted)
-                    await hosts.For(entry).ReleaseBusyAsync().ConfigureAwait(false);
+                try
+                {
+                    if (claimed && !interrupted)
+                        await hosts.For(entry).ReleaseBusyAsync().ConfigureAwait(false);
+                }
+                catch (Exception error) { escapingError = error; throw; }
+                finally
+                {
+                    if (registry.OnProcessorFinalizing is { } finalizing)
+                        await finalizing(entry, escapingError, interrupted).ConfigureAwait(false);
+                }
             }
             catch
             {

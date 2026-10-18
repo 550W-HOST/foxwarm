@@ -7,6 +7,31 @@ namespace Foxwarm.Tests;
 public sealed class ModelConfigurationInstallationTests
 {
     [Fact]
+    public async Task Channel_section_saves_preserve_numeric_identity_strings_progress_numbers_and_complete_JSON_app_documents()
+    {
+        using var temp = new TempDirectory();
+        var configuration = new ModelConfiguration(temp.Path);
+        var channels = new JsonObject
+        {
+            ["alpha"] = new JsonObject
+            {
+                ["type"] = "telegram", ["allowedUsers"] = new JsonArray("11"), ["mainAttachUser"] = "42",
+                ["channelProgress"] = new JsonObject { ["intervalMs"] = 30000 },
+            },
+        };
+        await configuration.SaveChannelsAsync(channels);
+        var block = ConfigurationYaml.Parse(configuration.ReadCurrentAppRaw(), "config");
+        Assert.Equal("11", block["channels"]!["alpha"]!["allowedUsers"]![0]!.GetValue<string>());
+        Assert.Equal("42", block["channels"]!["alpha"]!["mainAttachUser"]!.GetValue<string>());
+        Assert.Equal(30000d, block["channels"]!["alpha"]!["channelProgress"]!["intervalMs"]!.GetValue<double>());
+        await configuration.SaveAppAsync("{\"channels\":{},\"unrelated\":{\"retained\":true}}");
+        await configuration.SaveChannelsAsync(channels);
+        var json = JsonNode.Parse(configuration.ReadCurrentAppRaw())!;
+        Assert.True(json["unrelated"]!["retained"]!.GetValue<bool>());
+        Assert.Equal("11", json["channels"]!["alpha"]!["allowedUsers"]![0]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task Queued_section_save_reads_the_latest_installed_document_inside_the_shared_lane()
     {
         using var temp = new TempDirectory();

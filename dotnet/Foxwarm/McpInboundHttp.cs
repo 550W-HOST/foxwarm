@@ -206,7 +206,7 @@ internal sealed class McpInboundHttp : IAsyncDisposable, IHostedService
         );
         connection.Server = McpServer.Create(connection.Transport, options);
         connection.Context.ReplyChannel = new(
-            catalog.TextChannels,
+            catalog.ChannelRegistry,
             connection.Context.Id,
             () =>
             {

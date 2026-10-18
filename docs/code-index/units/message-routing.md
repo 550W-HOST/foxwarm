@@ -4,7 +4,7 @@ Files: `dotnet/Foxwarm/MessageRouter.Controls.cs`, `dotnet/Foxwarm/MessageRouter
 
 ## Purpose
 
-Normalizes Main-local message ingress, handles commands, resolves exact Session owners, and returns explicit route results without becoming a second persistence layer.
+Normalizes Main-local and external-channel message ingress, handles commands, resolves exact Session owners, and returns explicit route results without becoming a second persistence layer.
 
 ## Stable methods and callers
 
@@ -23,3 +23,5 @@ The router returns `202` for accepted ordinary input with a non-durable-completi
 `dotnet/Foxwarm.Tests/Sessions/SessionTurnTests.cs`; `SessionPresentationTests.cs`; `SessionDeletionTests.cs`; `SessionIdentityMoveTests.cs`; `DeferredInputTests.cs`; `dotnet/scripts/qualify-attempt-input.mjs` (actual HTTP ingress and delayed input).
 
 Scoped browser calls reach the ordinary message router only after text/command/upload validation. Their optional final live assertion passes through the exact owner and existing ingress/save lane immediately before hot admission. Administrator selected-Session commands and correlated controls retain their existing authority; see [shared access](./dotnet-access-identities.md).
+
+External-channel discovery, authorization, guest creation, shared commands and attachment resolution are mapped in [external channels](./dotnet-external-channels.md). Telegram retains its distinct pre-Router command hook; ordinary external content reaches the existing User queue lane with external source metadata, not inter-Session authority.

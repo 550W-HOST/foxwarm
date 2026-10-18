@@ -19,7 +19,11 @@ internal sealed class MainHost : IAsyncDisposable
         host.Services.GetRequiredService<IHostApplicationLifetime>();
     internal bool HttpEnabled => host is WebApplication;
 
-    internal Task StartAsync() => host.StartAsync();
+    internal async Task StartAsync()
+    {
+        await host.StartAsync();
+        if (sessions.ManagedChannels is { } channels) await channels.ReloadAsync();
+    }
 
     private readonly object lifecycle = new();
     private Task? disposal;
@@ -60,7 +64,8 @@ internal sealed class MainHost : IAsyncDisposable
         ModelConfiguration configuration,
         HttpServerSettings http,
         string? distRoot,
-        HostPaths? paths = null
+        HostPaths? paths = null,
+        Foxwarm.Channels.ChannelTransportDependencies? channelDependencies = null
     )
     {
         if (http.HttpEnabled)
@@ -91,6 +96,7 @@ internal sealed class MainHost : IAsyncDisposable
             terminals = new TerminalRegistry(dataRoot, CancellationToken.None);
             var runtime = new SessionRuntime(sessions);
             var router = new MessageRouter(runtime);
+            sessions.InitializeChannels(router, configuration, channelDependencies);
             if (!http.HttpEnabled)
             {
                 var builder = Host.CreateApplicationBuilder(
@@ -129,6 +135,7 @@ internal sealed class MainHost : IAsyncDisposable
         catch
         {
             sessions.BeginShutdown();
+            if (sessions.ManagedChannels is { } channels) await channels.DisposeAsync();
             await sessions.ShutdownAsync();
             if (server is not null)
             {
@@ -161,6 +168,7 @@ internal sealed class MainHost : IAsyncDisposable
     private async Task DisposeCoreAsync()
     {
         sessions.BeginShutdown();
+        if (sessions.ManagedChannels is { } channels) await channels.StopIngressAsync();
         if (inboundMcp is not null)
             await inboundMcp.DisposeAsync().ConfigureAwait(false);
         try
@@ -175,6 +183,7 @@ internal sealed class MainHost : IAsyncDisposable
             Environment.FailFast("Accepted Session owners did not settle during shutdown.", error);
             throw;
         }
+        if (sessions.ManagedChannels is { } managed) await managed.DisposeAsync();
         await terminals.DisposeAsync().ConfigureAwait(false);
         await host.StopAsync().ConfigureAwait(false);
         if (host is IAsyncDisposable asyncHost)

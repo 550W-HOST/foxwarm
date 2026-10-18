@@ -5,13 +5,13 @@ namespace Foxwarm;
 
 // A context-owned send-only text adapter. Only successful input admission retains it.
 internal sealed class McpReplyChannel(
-    TextChannels channels,
+    ChannelRegistry channels,
     string contextId,
     Action available,
     Func<string, CancellationToken, Task> send
 )
 {
-    private readonly TextChannels registry = channels;
+    private readonly ChannelRegistry registry = channels;
     private readonly object gate = new();
     private readonly string name = "mcp-" + contextId;
     internal string TargetId => name + ":reply";
@@ -39,7 +39,7 @@ internal sealed class McpReplyChannel(
             Require();
             if (!registered)
             {
-                registry.Register(name, SendAsync);
+                registry.Register(name, new RegisteredChannel("mcp", (conversation, text, _, token) => SendAsync(conversation, text, token)));
                 registered = true;
             }
             pending++;

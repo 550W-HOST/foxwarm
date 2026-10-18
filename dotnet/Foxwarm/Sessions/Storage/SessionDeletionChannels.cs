@@ -7,6 +7,7 @@ namespace Foxwarm.Sessions;
 internal sealed class SessionDeletionChannels(string root)
 {
     private readonly object gate = new();
+    private JsonObject? pendingOrdinary;
     private string FilePath => Path.Combine(root, "state", "channels.json");
     private string EvidencePath =>
         Path.Combine(root, "state", "sessions.json.pre-catalog-sqlite-v1.bak");
@@ -40,12 +41,77 @@ internal sealed class SessionDeletionChannels(string root)
         }
     }
 
+    internal JsonObject? Binding(string destination) =>
+        ReadForDelivery()["channels"]?[destination] is JsonObject binding ? (JsonObject)binding.DeepClone() : null;
+
+    internal void Bind(string destination, string id, JsonObject? updates = null, bool durable = true)
+    {
+        lock (gate)
+        {
+            var payload = ReadLocked(id);
+            var before = (JsonObject)payload.DeepClone();
+            var config = new JsonObject { ["sessionId"] = id };
+            if (updates is not null)
+                foreach (var (key, value) in updates)
+                    config[key] = value?.DeepClone();
+            payload["channels"]![destination] = config;
+            try { PersistMutation(payload, durable); }
+            catch
+            {
+                // Critical binding restores the prior live map even if replacement already happened.
+                // The caller still receives the real persistence error; this is not a cross-file transaction.
+                pendingOrdinary = before;
+                throw;
+            }
+        }
+    }
+
+    internal void MutateBinding(string destination, string? field = null, JsonNode? value = null)
+    {
+        lock (gate)
+        {
+            var payload = ReadLocked(null);
+            var channels = payload["channels"]!.AsObject();
+            if (field is null)
+                channels.Remove(destination);
+            else
+            {
+                var config = channels[destination] as JsonObject
+                    ?? throw new InvalidOperationException("Channel " + destination + " not attached");
+                if (value is null)
+                    config.Remove(field);
+                else
+                    config[field] = value.DeepClone();
+            }
+            PersistMutation(payload, durable: false);
+        }
+    }
+
+    private void PersistMutation(JsonObject payload, bool durable)
+    {
+        foreach (var (_, node) in payload["channels"]!.AsObject())
+        {
+            var config = node!.AsObject();
+            config.Remove("dangerouslyAllowAllGroupMembers");
+            foreach (var key in config.Select(pair => pair.Key).Where(key => key is not ("sessionId" or "mode" or "dangerouslyAllowAllUsers")).ToArray())
+                config.Remove(key);
+        }
+        try { Write(payload); }
+        catch (Exception error) when (!durable && error is IOException or UnauthorizedAccessException)
+        {
+            pendingOrdinary = payload;
+            Console.Error.WriteLine("Channel attachment save failed: " + error.Message);
+        }
+    }
+
     private JsonObject ReadLocked(
         string? participant,
         bool normalize = true,
         bool persistMigration = true
     )
     {
+        if (pendingOrdinary is not null)
+            return (JsonObject)pendingOrdinary.DeepClone();
         if (ReadOptional(FilePath) is { } current)
             return Validate(current, normalize);
         if (ReadOptional(EvidencePath) is not { } evidence)
@@ -90,15 +156,17 @@ internal sealed class SessionDeletionChannels(string root)
     {
         if (payload["channels"] is not JsonObject channels)
             throw new InvalidDataException("Channel authority requires a channels map.");
-        foreach (var (key, value) in channels)
+        foreach (var key in channels.Select(pair => pair.Key).ToArray())
         {
+            var value = channels[key];
+            var legacyId = SessionCatalog.Text(value);
+            if (normalize && legacyId is not null)
+                channels[key] = value = new JsonObject { ["sessionId"] = legacyId };
             var colon = key.IndexOf(':');
-            if (
-                colon <= 0
-                || colon == key.Length - 1
-                || value is not JsonObject config
-                || SessionCatalog.Text(config["sessionId"]) is not { Length: > 0 }
-            )
+            if (colon <= 0 || colon == key.Length - 1)
+                throw new InvalidDataException("Channel authority contains an invalid binding.");
+            if (value is JsonValue && legacyId is { Length: > 0 }) continue;
+            if (value is not JsonObject config || SessionCatalog.Text(config["sessionId"]) is not { Length: > 0 })
                 throw new InvalidDataException("Channel authority contains an invalid binding.");
             if (
                 config["mode"] is not null
@@ -162,12 +230,20 @@ internal sealed class SessionDeletionChannels(string root)
             var payload = ReadLocked(from, normalize: false);
             Barrier(from, "identity-after-read");
             var changed = false;
-            foreach (var (_, value) in payload["channels"]!.AsObject())
-                if (SessionCatalog.Text(value?["sessionId"]) == from)
+            var channels = payload["channels"]!.AsObject();
+            foreach (var (key, value) in channels.ToArray())
+            {
+                if (SessionCatalog.Text(value) == from)
                 {
-                    value!["sessionId"] = to;
+                    channels[key] = to;
                     changed = true;
                 }
+                else if (value is JsonObject config && SessionCatalog.Text(config["sessionId"]) == from)
+                {
+                    config["sessionId"] = to;
+                    changed = true;
+                }
+            }
             if (changed)
                 Write(payload);
         }
@@ -242,6 +318,7 @@ internal sealed class SessionDeletionChannels(string root)
                 stream.Flush(true);
             }
             File.Move(temp, FilePath, true);
+            pendingOrdinary = null;
             LinuxAtomicJsonFile.LinuxDirectorySync.Sync(Path.GetDirectoryName(FilePath)!);
         }
         finally

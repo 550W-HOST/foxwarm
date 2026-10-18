@@ -146,6 +146,16 @@ internal sealed partial class SessionCatalog
         return result;
     }
 
+    internal PresentationChange SetLastChannel(string id, JsonObject channel) =>
+        CommitPresentation(() =>
+        {
+            var row = RequiredMain(id);
+            var meta = row["meta"] as JsonObject ?? new JsonObject();
+            meta["lastChannel"] = channel.DeepClone();
+            row["meta"] = meta;
+            return (new JsonObject { ["success"] = true }, new[] { row });
+        });
+
     internal PresentationChange Archive(
         string requested,
         bool archived,

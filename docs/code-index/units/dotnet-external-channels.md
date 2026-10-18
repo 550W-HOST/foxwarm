@@ -1,0 +1,56 @@
+# Unit: Shared external channels and Telegram
+
+Files: `dotnet/Foxwarm/Channels/ChannelRegistry.cs`, `dotnet/Foxwarm/Channels/ExternalChannelContext.cs`, `dotnet/Foxwarm/Channels/ChannelAuthorization.cs`, `dotnet/Foxwarm/Channels/ExternalCommands.cs`, `dotnet/Foxwarm/Channels/ChannelFileNames.cs`, `dotnet/Foxwarm/Channels/ChannelProgress.cs`, `dotnet/Foxwarm/Channels/ManagedChannels.cs`, `dotnet/Foxwarm/Channels/TelegramChannel.cs`, `dotnet/Foxwarm/MessageRouter.External.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Channels.cs`, `dotnet/Foxwarm/Sessions/SessionManager.ChannelDelivery.cs`, `dotnet/Foxwarm/Sessions/SessionManager.ChannelFiles.cs`, `dotnet/Foxwarm/Sessions/SessionManager.ChannelTurns.cs`
+
+Secondary files: `dotnet/Foxwarm/MainHost.cs`, `dotnet/Foxwarm/Sessions/SessionBoundary.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionDeletionChannels.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Presentation.cs`, `dotnet/Foxwarm/Sessions/Turns/LocalSessionTurnHost.cs`, `dotnet/Foxwarm/Sessions/Turns/LocalSessionTurnHost.Tools.cs`, `dotnet/Foxwarm/Sessions/Turns/SessionEntry.cs`, `dotnet/Foxwarm/Sessions/Turns/SessionRegistry.cs`, `dotnet/Foxwarm/Sessions/Turns/SessionTurnRunner.cs`, `dotnet/Foxwarm/Sessions/ModelRetryNotice.cs`, `dotnet/Foxwarm/Models/ModelConfiguration.Install.cs`
+
+## Purpose and current boundary
+
+Provides the shared external-channel authorization, routing, persisted attachment, delivery, transient progress and managed-lifecycle path, with a real Telegram Bot API polling adapter. Matrix, Weixin, WeWork, QQ and Main TUI adapters are not implemented by this unit. The TypeScript [channel module](../modules/channels.md) remains a compatibility/reference map, not a claim that those adapters run in .NET.
+
+## Stable symbols and callers
+
+- `ExternalChannelContext` keeps channel type, configured instance, conversation, sender and reply closure separate. A target splits at its first colon; the conversation remainder is not split again.
+- `ChannelRegistry.Register`/`Get`/`SendAsync` own the single transport registry shared by WebUI, managed adapters and temporary MCP reply contexts. Registration does not create a persisted attachment. Text-only registrations adapt to the richer text/file/typing/lifecycle contract.
+- `ChannelAuthorizationOwner.Inspect` combines the captured startup allowlist with the current configured allowlist, type/instance wildcard rules and the persisted per-conversation override. Telegram uses the actual sender ID before conversation fallback.
+- `MessageRouter.HandleExternalMessageAsync` performs discovery, authorization/guest provisioning, shared command detection, exact binding resolution and ordinary User queue admission. `HandleExternalCommandAsync` is also Telegram's direct pre-Router command hook. The shared discovery/channel/attach/help commands are available through the ordinary Main-local router.
+- `SessionManager.ResolveChannelAsync` serializes creation for an unbound conversation, durably binds the new owner and compensates a failed creation/bind. An existing binding to a missing owner is an error, not permission to allocate a replacement. `AttachChannel`, `SetChannelBinding` and `DetachChannel` reuse the existing attachment store and identity admission.
+- `RecordLastChannel` writes catalog metadata, not Session JSON authority. `BestChannel` retains narrow current-wrapper and legacy `FROM:`/backtick source readers before the attachment-order fallback.
+- `SaveInboundChannelFileAsync` uses the existing Agent/Node file and image owners. `ChannelFileNames` shares the naming/XML descriptor grammar with WebUI ingress without merging Telegram media admission with WebUI upload staging.
+- `ChannelAssistantCommittedAsync` presents committed intermediate/final model text and generated image refs. The turn host awaits final attempts and generated image delivery; intermediate broadcasts retain fire-and-forget behavior. Explicit tools continue to await actual transport success or failure.
+- `ChannelProgress.Report`/`Decorate`/`Finish`/`Reset` provide bounded target-local presentation with injectable time for tests. Top-level provider tool calls feed neutral names/counts; exact `wait` is silent. Progress never becomes canonical text, another model input or a delivery ledger.
+- `ManagedChannels.ReloadAsync`/`ChangeAsync`/`Statuses` start, stop, restart and describe managed Telegram instances. Main starts them with its normal host lifetime; configuration/Setup/`set_config` share the existing installation lane and reload all managed instances, including unchanged entries. Reload does not unregister WebUI or temporary MCP transports.
+
+## Admission, commands and persistence
+
+Unauthorized `/whoami` reports only the current sender/target, without attachment resolution, guest creation or model admission. Ordinary admitted content is `QueueItemType.User` with external `QueueSource`, never inter-Session or task authority. Source-time/hint wrappers preserve body whitespace, structured image parts and escaped attributes; send-only remains inbound-enabled and carries its explicit-reply notice.
+
+The generic Router command gate protects override-only conversations from administrative slash commands. Telegram's Source direct command hook is a distinct earlier entry path and is preserved as such; it is not described as a stronger common command middleware. Single/inherited guest allocation uses the existing Agent and Session creation owners, with their isolation/Node validation and partial-effect semantics.
+
+The existing `channels.json` owner accepts supported legacy string/object bindings, `push-only` and the old group-wide flag. Normal writes use current names. Ordinary mutations retain live state if persistence fails; a critical bind restores its prior live map and surfaces its error. This is not a transaction across channel, Agent and Session files. Identity rewrite and deletion retain their existing claims and representation-sensitive behavior; see [coordination storage](./session-deletion-storage.md).
+
+The command catalog advertises only current entry points. Channel runtime/auth/mode/override and attach commands are implemented; Session creation and fork rebind the conversation, and other supported controls use the existing router. This does not port all reference administration commands or `/compact` keep/tools variants.
+
+## Delivery and lifecycle
+
+Automatic text, generated images, typing and progress use normal persisted attachments and skip send-only targets. Automatic text excludes WebUI, whose committed-event path already presents the message. Temporary MCP reply contexts are unattached and therefore receive no automatic fanout. Empty terminal turns use a lifecycle hook without sending empty Telegram text. The existing runner finalization hook closes presentation before releasing/retriggering its processor, including escaped committed/release failures, while interrupted shutdown does not fabricate a terminal response. Stops and provider notices retain terminal presentation without converting an automatic transport failure into a second model failure or replay.
+
+`send_to_channel` keeps caller authorization, exact-owner admission and isolated own-attachment restrictions. `send_file` keeps existing Node staging/path authorization and receipts while dispatching supported external transports. Session fanout reports successful deliveries, send-only/no-file skips and unavailable/failed destinations; explicit direct failures remain failures. Neither operation creates destination history or queue rows. A successful API response is a transport outcome, not proof that a person received or read it.
+
+Retry presentation sends the initial/final Source channel snippets rather than cumulative stored notice text; a terminal retry attempt suppresses a second generic request-failure response. Generic terminal failures send the existing plain error form, not the stored notice markup.
+
+Progress is disabled without a valid configured interval from 30,000 to 1,800,000 milliseconds. It has fixed cadence, running heartbeats, per-target counters/baselines, bounded retained state and one-hour idle expiry. Normal automatic text consumes its own target's pending counts; direct tools are not decorated. Completion does not wait for an in-flight standalone progress send, and reload resets/fences future progress work.
+
+## Telegram wire contract and deliberate media order
+
+The adapter follows the used Telegraf 4.16.3 path: register commands, resolve bot identity, delete the webhook without dropping pending updates, then poll from offset zero. Batch offsets advance to the last update plus one; shutdown makes the final offset-sync attempt. Network/429/server polling failures retry with the Source delay rules; 401/409 terminate polling without offset sync. A command stopping its own instance aborts without joining its own handler; ordinary host shutdown still drains ingress before dependent teardown.
+
+Text and photos ignore bot senders; the document path intentionally retains Source's missing bot guard. Own-bot command suffix handling and multiline raw arguments use the pinned adapter behavior. Photos choose the final supplied size; documents retain caption/name/MIME. Both download through `getFile` and the file endpoint, store escaped descriptors and canonical image refs, then schedule Router ingress.
+
+**Telegram media storage remains eager and precedes Router authorization.** The adapter also intentionally passes its type (`telegram`), rather than a named instance ID, to the retained storage helper. Thus unauthorized media can leave stored bytes, and a named instance does not gain attachment-aware placement from a different instance binding. This is the preserved contract, not authorization-first deferred media admission. An effectively isolated bound Session stores on its existing current non-master Node or bound Node; a non-isolated selected remote execution Node does not redirect storage. Image blobs remain Main-owned.
+
+Outbound text/photo/document sends use Markdown with one plain fallback for the Source payload/parse error condition. Other sends retain at most four attempts with 5/10/10-second delays. Upload streams reopen for each actual attempt. Request-context replies schedule observed sends; explicit tools await the transport. No new chunking, outbox, ack ledger or vendor delivery guarantee is introduced.
+
+## Verification
+
+`ExternalChannelRoutingTests`, `TelegramChannelTests`, `ExternalChannelTurnTests`, `TelegramHostTests`, `ExternalChannelNodeTests`, `ChannelProgressTests` and `McpNotificationTests.ChannelReload` exercise real local Bot API/model peers, normal Main/Setup callers, direct/unified/native tools, persisted attachments, actual repository CLI Node file transfer, media order, terminal/stop/empty/no-tool continuation behavior and live MCP contexts across reload. Existing authorization, identity/deletion, WebUI file, MCP and turn tests cover retained boundaries. Controlled peers qualify host/wire behavior only, not a live Telegram account, bot privacy mode, vendor permissions or external network delivery.

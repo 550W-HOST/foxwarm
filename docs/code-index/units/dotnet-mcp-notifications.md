@@ -1,7 +1,7 @@
 # Unit: Session-facing MCP notifications and explicit text channels
 
-Files: `dotnet/Foxwarm/McpClient.Notifications.cs`, `dotnet/Foxwarm/McpClient.ReceiveTransport.cs`, `dotnet/Foxwarm/McpReplyChannel.cs`, `dotnet/Foxwarm/Channels/TextChannels.cs`, `dotnet/Foxwarm/Sessions/SessionManager.McpNotifications.cs`, `dotnet/Foxwarm/Sessions/SessionManager.TextChannels.cs`
-Secondary files: `dotnet/Foxwarm/McpClient.Connections.cs`, `dotnet/Foxwarm/McpInboundHttp.cs`, `dotnet/Foxwarm/McpInboundSessions.cs`, `dotnet/Foxwarm/McpExternalContext.cs`, `dotnet/Foxwarm/McpAttachedResponseStream.cs`, `dotnet/Foxwarm/Sessions/SessionRuntime.cs`, `dotnet/Foxwarm/Tools/SessionToolExecutor.cs`, `dotnet/Foxwarm/Tools/UnifiedToolDefinitions.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.cs`
+Files: `dotnet/Foxwarm/McpClient.Notifications.cs`, `dotnet/Foxwarm/McpClient.ReceiveTransport.cs`, `dotnet/Foxwarm/McpReplyChannel.cs`, `dotnet/Foxwarm/Sessions/SessionManager.McpNotifications.cs`
+Secondary files: `dotnet/Foxwarm/Channels/ChannelRegistry.cs`, `dotnet/Foxwarm/Sessions/SessionManager.ChannelDelivery.cs`, `dotnet/Foxwarm/McpClient.Connections.cs`, `dotnet/Foxwarm/McpInboundHttp.cs`, `dotnet/Foxwarm/McpInboundSessions.cs`, `dotnet/Foxwarm/McpExternalContext.cs`, `dotnet/Foxwarm/McpAttachedResponseStream.cs`, `dotnet/Foxwarm/Sessions/SessionRuntime.cs`, `dotnet/Foxwarm/Tools/SessionToolExecutor.cs`, `dotnet/Foxwarm/Tools/UnifiedToolDefinitions.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.cs`
 
 ## Purpose and Source ownership map
 
@@ -13,7 +13,7 @@ Implements [explicit notification reception and replies](../threads/tool-dispatc
 | `mcpCallerConnections.ts`, `mcpClient.ts` | `McpClient.ManageNotificationsAsync`, `ReceiveNotificationAsync`, `PreflightReplyAsync`, `PingNotificationsAsync`, and the existing caller pool: one ordinary/reception connection, disabled preinstalled handler, exact peer capability and real physical GET readiness. |
 | `mcpExternalService.ts` notification producer | `SessionManager.McpNotifications` → `SessionRuntime.SubmitExternalAsync` → strict normal User save-lane admission, with final binding/source/permission fences. |
 | `mcpInboundHttp.ts`, `mcpInboundSessionService.ts` | `McpReplyChannel`, `McpInboundHttp`, `McpInboundSessions`: context-owned text-only reply registration and admission lease; public SDK notifications use the qualified physical attachment. |
-| `channel.ts`, `session/channels.ts`, `toolsSessionAgent/interSession.ts` | `TextChannels`, `SessionManager.SendToChannelAsync`: real registered destinations, existing exact caller authorization and isolated own-attachment restriction. |
+| `channel.ts`, `session/channels.ts`, `toolsSessionAgent/interSession.ts` | [the shared `ChannelRegistry` and `SessionManager.SendToChannelAsync`](./dotnet-external-channels.md): real registered destinations, existing exact caller authorization and isolated own-attachment restriction. |
 | `channels/webuiChannel.ts.sendMessage` | The running `WebUIChannel` registers its text method. `PresentChannelText` emits the existing trusted temporary message projection; no history append or model turn is created. |
 
 ## Reception and authorization
@@ -45,3 +45,5 @@ Successful builtin sends use the existing ordinary tool result and trusted ToolS
 `McpNotificationTests` partials use normal Session executors, official C# clients, independent official JavaScript SDK peers, real HTTP GET disconnect/reconnect and real strict JSON admission. They cover original text and metadata separation, shared ordinary/start context, independent owners, disabled/malformed/progress filtering, direct/unified/native explicit replies, permission and legacy-rule reauthorization, isolated attachments, physical readiness, unsupported reception preserving ordinary calls, third-party same-name tools, ping, accepted ordinary drain, credential withholding, OAuth renewal/disconnect, selective account/config/owner cleanup, stop/restart and no offline replay.
 
 `experimentHostMcpNotifications.e2e.mjs` runs two normal Main processes and a controlled ordinary provider. It exercises actual User/provider roles and wait wake, normal assistant non-forwarding, direct/unified/native replies and trusted subcall presentation, registered temporary WebUI text through the real realtime socket, official JavaScript capability/read-old explicit reply, and stale destinations after stop/new context. Existing ordinary inbound, pinned attachment, outbound/OAuth and caller permission tests remain relevant; this feature does not replace their raw-result, CLI or browser authority contracts.
+
+Managed Telegram reload leaves live temporary MCP reply transports registered and unattached; `McpNotificationTests.ChannelReload` exercises the real notification context across two reloads. Common automatic delivery and file/typing contracts are owned by [external channels](./dotnet-external-channels.md), not by the MCP notification registry.

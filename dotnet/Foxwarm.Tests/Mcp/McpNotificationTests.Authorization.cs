@@ -111,7 +111,7 @@ public sealed partial class McpNotificationTests
     {
         await using var f = await OutboundMcpFixture.CreateAsync();
         var sent = new List<string>();
-        f.Manager.TextChannels.Register(
+        f.Manager.ChannelRegistry.Register(
             "controlled",
             (conversation, text, _) =>
             {

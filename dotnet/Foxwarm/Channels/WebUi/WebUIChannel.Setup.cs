@@ -27,9 +27,9 @@ internal sealed partial class WebUIChannel
                             ["channels"] = configuration.ChannelDiagnostics(webUiRunning: true),
                             ["capabilities"] = new JsonObject
                             {
-                                ["managedChannels"] = false,
+                                ["managedChannels"] = configuration.ManagedChannels is not null,
                                 ["externalChannelMessage"] =
-                                    "External chat channels are unavailable on this server.",
+                                    "Telegram is supported; other external adapters are not implemented on this server.",
                             },
                         }
                     );
@@ -66,7 +66,7 @@ internal sealed partial class WebUIChannel
                         is JsonObject channels
                         ? channels.Count
                         : 0;
-                    installation["reload"] = new JsonObject
+                    installation["reload"] ??= new JsonObject
                     {
                         ["started"] = new JsonArray(),
                         ["stopped"] = new JsonArray(),
@@ -121,7 +121,7 @@ internal sealed partial class WebUIChannel
                         channels
                     );
                     installation["channelCount"] = channels.Count;
-                    installation["reload"] = new JsonObject
+                    installation["reload"] ??= new JsonObject
                     {
                         ["started"] = new JsonArray(),
                         ["stopped"] = new JsonArray(),

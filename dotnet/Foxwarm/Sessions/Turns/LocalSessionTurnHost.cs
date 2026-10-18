@@ -153,6 +153,7 @@ public sealed partial class LocalSessionTurnHost
                         )
                         .ConfigureAwait(false);
                     result.FinalizeHistory(appended, entry.RecordBestEffortFailure);
+                    if (entry.AssistantCommitted is { } present) await present(appended[^1]);
                     if (result.TruncatedStopReason is string stopReason)
                     {
                         try
@@ -467,6 +468,7 @@ public sealed partial class LocalSessionTurnHost
             .ConfigureAwait(false);
         Interlocked.Increment(ref releaseCommits);
         releaseForeground?.Invoke();
+        if (entry.TurnStopped is { } stopped) await stopped();
         entry.InvokeQueuedCommitted(entry.Snapshot());
     }
 

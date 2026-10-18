@@ -391,7 +391,7 @@ public sealed class WebUiUploadedFilesTests
             Assert.True(row["exactBytes"]!.GetValue<bool>());
             Assert.Equal(
                 name,
-                WebUiUploadedFiles.StorageName(
+                Foxwarm.Channels.ChannelFileNames.StorageName(
                     cases[i].Item1,
                     cases[i].Item2,
                     name[..24],
@@ -400,7 +400,7 @@ public sealed class WebUiUploadedFilesTests
             );
             Assert.Equal(
                 row["descriptor"]!.ToString(),
-                WebUiUploadedFiles.Descriptor(
+                Foxwarm.Channels.ChannelFileNames.Descriptor(
                     cases[i].Item1,
                     row["promptPath"]!.ToString(),
                     cases[i].Item2

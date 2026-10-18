@@ -12,6 +12,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Host startup, configuration, and HTTP ingress](../units/host-runtime.md)
 - [Shared access identities and scoped WebUI](../units/dotnet-access-identities.md)
 - [Message routing and presentation commands](../units/message-routing.md)
+- [Shared external channels and Telegram](../units/dotnet-external-channels.md)
 - [Speech proxy](../units/asr.md)
 
 ## Tests and callers

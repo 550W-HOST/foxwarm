@@ -8,7 +8,7 @@ Validates upload/download/image requests and delegates canonical blob, file-deli
 
 ## Stable methods and callers
 
-`WebUIChannel.Files` resolves bounded deployment-relative paths and file-delivery references through `SessionManager.FileDelivery`; `Images` resolves canonical refs/inline parts through `ImageBlobStore` and converts transport; `WebUiUploadedFiles` owns multipart/temporary upload lifecycle and limits.
+`WebUIChannel.Files` resolves bounded deployment-relative paths and file-delivery references through `SessionManager.FileDelivery`; `Images` resolves canonical refs/inline parts through `ImageBlobStore` and converts transport; `WebUiUploadedFiles` owns multipart/temporary upload lifecycle and limits. Shared `ChannelFileNames` in [external channels](./dotnet-external-channels.md) owns storage naming and escaped descriptor grammar; Telegram does not reuse the browser staging/admission path.
 
 ## Contract and side effects
 

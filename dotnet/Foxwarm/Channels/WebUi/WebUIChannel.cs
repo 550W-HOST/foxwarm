@@ -24,7 +24,7 @@ internal sealed partial class WebUIChannel(
 
     public void Register(WebApplication app)
     {
-        sessions.TextChannels.Register(
+        sessions.ChannelRegistry.Register(
             "webui",
             (conversation, message, token) =>
             {
@@ -33,7 +33,7 @@ internal sealed partial class WebUIChannel(
                 return Task.CompletedTask;
             }
         );
-        app.Lifetime.ApplicationStopped.Register(() => sessions.TextChannels.Unregister("webui"));
+        app.Lifetime.ApplicationStopped.Register(() => sessions.ChannelRegistry.Unregister("webui"));
         var models = sessions.Models;
         app.Lifetime.ApplicationStopped.Register(() =>
             terminalRouter.DisposeAsync().AsTask().GetAwaiter().GetResult()

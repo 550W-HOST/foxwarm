@@ -145,6 +145,7 @@ public sealed class SessionRegistry
     internal Func<Exception, bool, Task>? OnTurnFailure { get; set; }
     public Func<SessionEntry, Task>? OnTurnStarting { get; set; }
     public Func<SessionEntry, ChatResult, Task>? OnTurnCompleted { get; set; }
+    internal Func<SessionEntry, Exception?, bool, Task>? OnProcessorFinalizing { get; set; }
     public Func<SessionEntry, Task>? OnSafePoint { get; set; }
     public Func<SessionEntry, Task>? OnRetrySafePoint { get; set; }
     public Func<

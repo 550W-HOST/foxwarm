@@ -39,3 +39,5 @@ Compaction builds a new root while retaining unchanged immutable records; preser
 ## Tests
 
 `CanonicalPathsTests.cs` covers frozen Source metadata, Session serialization and directory membership, unknown fields, missing-only bootstrap after an explicit Agents-root change, fallback memory, retained physical layouts and exact identity recovery. `dotnet/Foxwarm.Tests/Sessions/*` (including `SessionHistoryOwnershipTests.cs`); `dotnet/Foxwarm.Tests/Memory/MessageJsonTests.cs`; `ConditionalMemoryTests.cs`; presentation/list/identity tests.
+
+`SessionBoundary.ExternalChannelInput` creates the approved escaped normal/send-only external wrapper and optional send-only reply notice before User queue admission. Its routing and identity boundary is owned by [external channels](./dotnet-external-channels.md).
