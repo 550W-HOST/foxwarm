@@ -101,7 +101,10 @@ internal sealed partial class ModelConfiguration
                 throw new InvalidDataException("Unknown configuration target.");
             var config = ConfigurationYaml.Parse(raw, "app config");
             AppConfigurationRules.Validate(config);
-            var access = AccessConfiguration.Normalize(config["access"], config.ContainsKey("access"));
+            var access = AccessConfiguration.Normalize(
+                config["access"],
+                config.ContainsKey("access")
+            );
             Access.Validate(access);
             var restart = app.Select(pair => pair.Key)
                 .Concat(config.Select(pair => pair.Key))

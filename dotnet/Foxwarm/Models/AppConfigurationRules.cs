@@ -329,7 +329,6 @@ internal static class AppConfigurationRules
             );
     }
 
-
     private static void Boolean(JsonNode? value, string label, bool present)
     {
         if (!present)

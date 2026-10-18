@@ -35,7 +35,16 @@ internal sealed class WebUiDownloadSignatures(string token, Func<long>? now = nu
     {
         var input = new StringBuilder("[");
         foreach (
-            var value in new[] { "download-v1", kind, resource, sessionId, filename, preview, expires }
+            var value in new[]
+            {
+                "download-v1",
+                kind,
+                resource,
+                sessionId,
+                filename,
+                preview,
+                expires,
+            }
         )
         {
             if (input.Length > 1)
@@ -49,7 +58,12 @@ internal sealed class WebUiDownloadSignatures(string token, Func<long>? now = nu
         return HMACSHA256.HashData(key, Encoding.UTF8.GetBytes(input.ToString()));
     }
 
-    internal (string Query, long ExpiresAt) Issue(string kind, string resource, JsonObject input, string? sessionId = null)
+    internal (string Query, long ExpiresAt) Issue(
+        string kind,
+        string resource,
+        JsonObject input,
+        string? sessionId = null
+    )
     {
         var filename = Text(input, "filename");
         var preview = Text(input, "preview");
@@ -72,7 +86,12 @@ internal sealed class WebUiDownloadSignatures(string token, Func<long>? now = nu
         return (QueryString.Create(values).Value!, expiresAt);
     }
 
-    internal bool Verify(string kind, string resource, IQueryCollection query, string? sessionId = null)
+    internal bool Verify(
+        string kind,
+        string resource,
+        IQueryCollection query,
+        string? sessionId = null
+    )
     {
         var expires = Text(query, "expires");
         var signature = Text(query, "signature");
@@ -91,7 +110,14 @@ internal sealed class WebUiDownloadSignatures(string token, Func<long>? now = nu
         )
             return false;
         return CryptographicOperations.FixedTimeEquals(
-            Mac(kind, resource, Text(query, "filename"), Text(query, "preview"), expires, sessionId),
+            Mac(
+                kind,
+                resource,
+                Text(query, "filename"),
+                Text(query, "preview"),
+                expires,
+                sessionId
+            ),
             Convert.FromHexString(signature)
         );
     }
@@ -107,7 +133,13 @@ internal sealed class WebUiDownloadSignatures(string token, Func<long>? now = nu
             "blob" or "session-blob" => context.Request.RouteValues["blobId"] as string,
             _ => null,
         };
-        return resource is not null && Verify(kind == "session-blob" ? "blob" : kind!, resource, context.Request.Query, kind == "session-blob" ? WebUIChannel.RouteIdentity(context.Request) : null);
+        return resource is not null
+            && Verify(
+                kind == "session-blob" ? "blob" : kind!,
+                resource,
+                context.Request.Query,
+                kind == "session-blob" ? WebUIChannel.RouteIdentity(context.Request) : null
+            );
     }
 
     internal static string FileName(string? requested, string fallback)

@@ -21,7 +21,12 @@ public sealed class SessionIngress
     internal Task EnqueueTimerAsync(string sessionId, QueueItem item) =>
         EnqueueCoreAsync(sessionId, item, true);
 
-    private async Task EnqueueCoreAsync(string sessionId, QueueItem item, bool timer, Action? beforeAdmission = null)
+    private async Task EnqueueCoreAsync(
+        string sessionId,
+        QueueItem item,
+        bool timer,
+        Action? beforeAdmission = null
+    )
     {
         EnsureSupported(item);
         // Model/channel callers cannot smuggle the trusted passive marker through ingress.
@@ -32,7 +37,9 @@ public sealed class SessionIngress
         var entry = registry.GetRequired(sessionId);
         var admitted = timer
             ? await entry.SaveLane.AdmitTimerAsync(item).ConfigureAwait(false)
-            : await entry.SaveLane.AdmitAsync(item, SaveKind.BestEffort, beforeAdmission).ConfigureAwait(false);
+            : await entry
+                .SaveLane.AdmitAsync(item, SaveKind.BestEffort, beforeAdmission)
+                .ConfigureAwait(false);
         if (
             admitted
             && !entry.WithState(state => state.Busy || state.Stopping)

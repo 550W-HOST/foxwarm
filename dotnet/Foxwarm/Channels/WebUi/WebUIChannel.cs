@@ -39,7 +39,16 @@ internal sealed partial class WebUIChannel(
                     when (context.RequestAborted.IsCancellationRequested) { }
                 catch (WebUiAccessException) when (!context.Response.HasStarted)
                 {
-                    await Results.Json(new { error = "WebUI identity session binding changed.", code = "WEBUI_SESSION_NOT_ALLOWED" }, statusCode: 403).ExecuteAsync(context);
+                    await Results
+                        .Json(
+                            new
+                            {
+                                error = "WebUI identity session binding changed.",
+                                code = "WEBUI_SESSION_NOT_ALLOWED",
+                            },
+                            statusCode: 403
+                        )
+                        .ExecuteAsync(context);
                 }
                 catch (BadHttpRequestException error) when (!context.Response.HasStarted)
                 {
@@ -279,11 +288,37 @@ internal sealed partial class WebUIChannel(
                 var scoped = WebUiAccess.Request(request);
                 if (scoped is not null)
                 {
-                    if (input["parts"] is JsonArray scopedParts && scopedParts.Any(part => part is not JsonObject obj || obj.Count != 1 || SessionWait.Text(obj["text"]) is null))
-                        return Results.BadRequest(new { error = "WebUI identity messages may only include text parts." });
-                    bool Slash(string value) => System.Text.RegularExpressions.Regex.IsMatch(value, @"^\s*(?:@[a-zA-Z_\-.]+\s+)?/");
-                    var partsText = string.Join("\n", (input["parts"] as JsonArray ?? []).OfType<JsonObject>().Select(part => SessionWait.Text(part["text"]) ?? ""));
-                    if (Slash(text) || Slash(partsText)) return Results.Json(new { error = "WebUI identity tokens cannot use slash commands.", code = "WEBUI_COMMANDS_DISABLED" }, statusCode: 403);
+                    if (
+                        input["parts"] is JsonArray scopedParts
+                        && scopedParts.Any(part =>
+                            part is not JsonObject obj
+                            || obj.Count != 1
+                            || SessionWait.Text(obj["text"]) is null
+                        )
+                    )
+                        return Results.BadRequest(
+                            new { error = "WebUI identity messages may only include text parts." }
+                        );
+                    bool Slash(string value) =>
+                        System.Text.RegularExpressions.Regex.IsMatch(
+                            value,
+                            @"^\s*(?:@[a-zA-Z_\-.]+\s+)?/"
+                        );
+                    var partsText = string.Join(
+                        "\n",
+                        (input["parts"] as JsonArray ?? [])
+                            .OfType<JsonObject>()
+                            .Select(part => SessionWait.Text(part["text"]) ?? "")
+                    );
+                    if (Slash(text) || Slash(partsText))
+                        return Results.Json(
+                            new
+                            {
+                                error = "WebUI identity tokens cannot use slash commands.",
+                                code = "WEBUI_COMMANDS_DISABLED",
+                            },
+                            statusCode: 403
+                        );
                 }
                 IReadOnlyList<JsonObject> savedFiles = [];
                 try
@@ -310,10 +345,17 @@ internal sealed partial class WebUIChannel(
                             }
                         );
                     if (scoped is not null && hasUploads)
-                        foreach (var entry in input["uploadedFiles"] as JsonArray ?? input["filePaths"] as JsonArray ?? [])
+                        foreach (
+                            var entry in input["uploadedFiles"] as JsonArray
+                                ?? input["filePaths"] as JsonArray
+                                ?? []
+                        )
                         {
-                            var path = SessionWait.Text(entry) ?? SessionWait.Text((entry as JsonObject)?["path"]);
-                            if (path is null) throw new WebUiAccessException();
+                            var path =
+                                SessionWait.Text(entry)
+                                ?? SessionWait.Text((entry as JsonObject)?["path"]);
+                            if (path is null)
+                                throw new WebUiAccessException();
                             scoped.RequireUpload(ingressOwner!.Id, path);
                         }
                     using var ingress = hasUploads
@@ -340,13 +382,18 @@ internal sealed partial class WebUIChannel(
                 }
                 catch (WebUiAccessException)
                 {
-                    return Results.Json(new { error = "WebUI identity session binding changed.", savedFiles }, statusCode: 403);
+                    return Results.Json(
+                        new { error = "WebUI identity session binding changed.", savedFiles },
+                        statusCode: 403
+                    );
                 }
                 catch (UploadPreparationException error)
                 {
                     return Results.Json(
                         new { error = error.Message, savedFiles = error.SavedFiles },
-                        statusCode: error.InnerException is WebUiAccessException ? 403 : error.InvalidInput ? 400 : 500
+                        statusCode: error.InnerException is WebUiAccessException ? 403
+                            : error.InvalidInput ? 400
+                            : 500
                     );
                 }
                 catch (Foxwarm.Images.ImageInputException error)
@@ -438,19 +485,31 @@ internal sealed partial class WebUIChannel(
                         context,
                         JsonSerializer
                             .SerializeToNode(
-                                new { type = "session-state", session = scoped is null ? (object)hosted.State() : scoped.Session(hosted.BuildDto()) }
+                                new
+                                {
+                                    type = "session-state",
+                                    session = scoped is null
+                                        ? (object)hosted.State()
+                                        : scoped.Session(hosted.BuildDto()),
+                                }
                             )!
                             .AsObject()
                     );
                     await foreach (var item in reader.ReadAllAsync(context.RequestAborted))
                     {
                         scoped?.Require(canonicalId);
-                        var payload = scoped is null ? WebUiContract.CliEvent(item, runtime) : WebUiContract.Event(item, runtime);
-                        if (scoped is not null && payload["session"] is JsonObject session) payload["session"] = scoped.Session(session);
+                        var payload = scoped is null
+                            ? WebUiContract.CliEvent(item, runtime)
+                            : WebUiContract.Event(item, runtime);
+                        if (scoped is not null && payload["session"] is JsonObject session)
+                            payload["session"] = scoped.Session(session);
                         await SendSse(context, payload);
                     }
                 }
-                catch (WebUiAccessException) { context.Abort(); }
+                catch (WebUiAccessException)
+                {
+                    context.Abort();
+                }
                 catch (OperationCanceledException)
                     when (context.RequestAborted.IsCancellationRequested) { }
                 catch (IOException) when (context.RequestAborted.IsCancellationRequested) { }
@@ -500,12 +559,14 @@ internal sealed partial class WebUIChannel(
 
     private async Task<SessionOwner?> FindRouteAsync(HttpRequest request, string routeId)
     {
-        if (RouteIdentity(request) is not { } id) return null;
+        if (RouteIdentity(request) is not { } id)
+            return null;
         var scoped = WebUiAccess.Request(request);
         var canonical = scoped?.Bind(id);
         var owner = await runtime.GetOwnerAsync(id, request.HttpContext.RequestAborted);
         scoped?.Require(id);
-        if (scoped is not null && owner?.Id != canonical) throw new WebUiAccessException();
+        if (scoped is not null && owner?.Id != canonical)
+            throw new WebUiAccessException();
         return owner;
     }
 

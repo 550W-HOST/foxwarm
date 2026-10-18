@@ -4,8 +4,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Foxwarm.Sessions;
 using Foxwarm.Channels.WebUi;
+using Foxwarm.Sessions;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Sockets;
 using Microsoft.Extensions.FileProviders;
 
@@ -32,7 +32,8 @@ internal sealed class HttpServer
     {
         var address = publicAddress ?? PublicWebAddress.Capture(port);
         Downloads = new(apiToken);
-        var accessConfiguration = sessions.Models.ConfigurationOwner?.Access ?? new AccessConfiguration(new JsonObject());
+        var accessConfiguration =
+            sessions.Models.ConfigurationOwner?.Access ?? new AccessConfiguration(new JsonObject());
         accessConfiguration.ReserveInstanceToken(apiToken);
         var access = new WebUiAccess(new SessionRuntime(sessions), accessConfiguration);
         access.Start();
@@ -197,7 +198,8 @@ internal sealed class HttpServer
                     }
                     try
                     {
-                        if (WebUIChannel.RouteIdentity(context.Request) is { } requested) scoped.Bind(requested);
+                        if (WebUIChannel.RouteIdentity(context.Request) is { } requested)
+                            scoped.Bind(requested);
                         using var tracked = access.Track(context, scoped);
                         scoped.Require();
                         await next();
@@ -205,7 +207,13 @@ internal sealed class HttpServer
                     catch (WebUiAccessException) when (!context.Response.HasStarted)
                     {
                         context.Response.StatusCode = 403;
-                        await context.Response.WriteAsJsonAsync(new { error = "WebUI identity session binding changed.", code = "WEBUI_SESSION_NOT_ALLOWED" });
+                        await context.Response.WriteAsJsonAsync(
+                            new
+                            {
+                                error = "WebUI identity session binding changed.",
+                                code = "WEBUI_SESSION_NOT_ALLOWED",
+                            }
+                        );
                     }
                     return;
                 }
@@ -261,7 +269,10 @@ internal sealed class HttpServer
                         || body.Count != 1
                         || body["token"] is not JsonValue value
                         || !value.TryGetValue<string>(out var submitted)
-                        || (!Equal(submitted, apiToken) && accessConfiguration.Authenticate(submitted) is null)
+                        || (
+                            !Equal(submitted, apiToken)
+                            && accessConfiguration.Authenticate(submitted) is null
+                        )
                     )
                         return Results.Unauthorized();
                     context.Response.Cookies.Append(
@@ -279,7 +290,18 @@ internal sealed class HttpServer
                     return Results.Ok(new { success = true });
                 }
             );
-            app.MapGet("/api/auth/session", (HttpContext context) => Results.Ok(WebUiAccess.Request(context)?.AuthPayload() ?? new JsonObject { ["role"] = "admin", ["features"] = WebUiAccess.Features(true) }));
+            app.MapGet(
+                "/api/auth/session",
+                (HttpContext context) =>
+                    Results.Ok(
+                        WebUiAccess.Request(context)?.AuthPayload()
+                            ?? new JsonObject
+                            {
+                                ["role"] = "admin",
+                                ["features"] = WebUiAccess.Features(true),
+                            }
+                    )
+            );
             code!.Register(app);
         }
         app.MapGet("/health", () => Results.Ok(new { status = "ready" }));

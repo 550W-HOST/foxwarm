@@ -65,8 +65,14 @@ internal static class ImageTransport
                 )
                 {
                     var sessionPath = SessionWait.Text(reference["apiPath"]);
-                    copy["apiPath"] = sessionPath is not null && Regex.IsMatch(sessionPath, @"^/sessions/[^/?#]+/blobs/[a-f0-9]{64}\.(png|jpg|gif|webp|svg|bin)(?:\?archiveSeq=[1-9][0-9]*)?$")
-                        ? sessionPath : "/blobs/" + id;
+                    copy["apiPath"] =
+                        sessionPath is not null
+                        && Regex.IsMatch(
+                            sessionPath,
+                            @"^/sessions/[^/?#]+/blobs/[a-f0-9]{64}\.(png|jpg|gif|webp|svg|bin)(?:\?archiveSeq=[1-9][0-9]*)?$"
+                        )
+                            ? sessionPath
+                            : "/blobs/" + id;
                     result[key] = copy;
                 }
                 else

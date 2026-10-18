@@ -204,13 +204,30 @@ internal sealed partial class WebUIChannel
                 }
             }
         );
-        app.MapGet("/api/sessions", (HttpContext context) =>
-        {
-            var scoped = WebUiAccess.Request(context);
-            var rows = runtime.ListSessions();
-            scoped?.Require();
-            return Results.Ok(new { sessions = scoped is null ? rows : rows.Where(row => scoped.Allows(SessionCatalog.Text(row["id"])!)).Select(row => new JsonObject { ["id"] = row["id"]?.DeepClone(), ["displayName"] = row["displayName"]?.DeepClone(), ["busy"] = row["busy"]?.DeepClone() }).ToArray() });
-        });
+        app.MapGet(
+            "/api/sessions",
+            (HttpContext context) =>
+            {
+                var scoped = WebUiAccess.Request(context);
+                var rows = runtime.ListSessions();
+                scoped?.Require();
+                return Results.Ok(
+                    new
+                    {
+                        sessions = scoped is null
+                            ? rows
+                            : rows.Where(row => scoped.Allows(SessionCatalog.Text(row["id"])!))
+                                .Select(row => new JsonObject
+                                {
+                                    ["id"] = row["id"]?.DeepClone(),
+                                    ["displayName"] = row["displayName"]?.DeepClone(),
+                                    ["busy"] = row["busy"]?.DeepClone(),
+                                })
+                                .ToArray(),
+                    }
+                );
+            }
+        );
         app.MapPost(
             "/api/sessions",
             async (HttpRequest request) =>

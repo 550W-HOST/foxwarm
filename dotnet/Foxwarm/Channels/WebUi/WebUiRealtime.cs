@@ -14,7 +14,11 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
     private const int MaxSubscriptions = 5000; // webuiRealtime.ts union limit.
     private const int MaxMessageBytes = 32 * 1024 * 1024; // Two bounded UTF-8 ID arrays, including JSON escaping.
 
-    public async Task RunAsync(WebSocket socket, CancellationToken stopped, WebUiRequest? scoped = null)
+    public async Task RunAsync(
+        WebSocket socket,
+        CancellationToken stopped,
+        WebUiRequest? scoped = null
+    )
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stopped);
         using var sendGate = new SemaphoreSlim(1);
@@ -165,13 +169,22 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
                     await ProtocolError(error.Message);
                     break;
                 }
-                if (scoped is not null && (active || requestedList.Length > 0 || input["logs"] is not null || requestedSessions.Any(id => !scoped.Allows(id))))
+                if (
+                    scoped is not null
+                    && (
+                        active
+                        || requestedList.Length > 0
+                        || input["logs"] is not null
+                        || requestedSessions.Any(id => !scoped.Allows(id))
+                    )
+                )
                 {
                     await ProtocolError("WebUI subscription is not bound to this session.");
                     break;
                 }
                 scoped?.ResetBindings();
-                foreach (var requestedId in requestedSessions) scoped?.Bind(requestedId);
+                foreach (var requestedId in requestedSessions)
+                    scoped?.Bind(requestedId);
                 var resolvedSemantic = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
                 foreach (var chunk in requestedSessions.Chunk(200))
                 foreach (var pair in runtime.Catalog.ResolveMany(chunk))
@@ -499,9 +512,12 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
             if (scoped is not null && SessionCatalog.Text(data["sessionId"]) is { } scopedId)
             {
                 scoped.Require(scopedId);
-                if (data["session"] is JsonObject session) data["session"] = scoped.Session(session);
+                if (data["session"] is JsonObject session)
+                    data["session"] = scoped.Session(session);
             }
-            var bytes = Encoding.UTF8.GetBytes(Foxwarm.Images.ImageTransport.Project(data)!.ToJsonString());
+            var bytes = Encoding.UTF8.GetBytes(
+                Foxwarm.Images.ImageTransport.Project(data)!.ToJsonString()
+            );
             await sendGate.WaitAsync(lifetime.Token);
             try
             {

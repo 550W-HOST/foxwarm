@@ -50,7 +50,9 @@ public sealed class AppConfigurationRulesTests
             "vectorMaintenance: { retentionHours: null }",
             "nodeProviders: { p: { type: executable, command: /bin/echo, timeoutSeconds: null } }",
             "access: { identities: { a: { token: x, surfaces: {} } } }",
-            "access: { identities: { " + new string('a', 129) + ": { token: x, surfaces: {mcp: {}} } } }",
+            "access: { identities: { "
+                + new string('a', 129)
+                + ": { token: x, surfaces: {mcp: {}} } } }",
             "access: { identities: { a: { token: same, surfaces: {mcp: {}} }, b: { token: same, surfaces: {mcp: {}} } } }",
         };
 
