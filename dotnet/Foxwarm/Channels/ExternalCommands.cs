@@ -14,7 +14,7 @@ internal static class ExternalCommands
         ["help"] = "Show help",
         ["attach"] = "Attach to session. `args: <sessionId>`",
         ["channel"] =
-            "View channel status and access, control channel runtime, and change attachment settings.",
+            "View channel status and access, manage channel settings, and sign in to Weixin.",
         ["session"] = "Create or fork sessions and manage the current session.",
         ["fork"] = "Fork current session. `args: [suffix] [message]`",
         ["stop"] = "Stop current run, or use `/stop compact` to cancel compaction only",

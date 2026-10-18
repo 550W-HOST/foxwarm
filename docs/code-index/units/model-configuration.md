@@ -29,3 +29,5 @@ Between eligible retries, an explicitly changed raw model recaptures the live co
 ## Tests
 
 `dotnet/Foxwarm.Tests/Models/RoutingAttemptsTests.cs`; `ProcessRestartTests.cs`; `RetryPreparationTests.cs`; `EffectiveSelectionTests.cs`; `dotnet/Foxwarm.Tests/Channels/AppConfigurationRulesTests.cs`; `ModelConfigurationInstallationTests.cs`; setup/model configuration tests.
+
+Weixin command confirmation reuses this owner's validation, section builder and atomic replacement without acquiring the Setup save-plus-apply lane; Setup keeps its ordinary serialized reload-all contract. The exact Source caller distinction and cross-instance lifecycle evidence are owned by [Matrix/Weixin](./dotnet-matrix-weixin.md#configuration-setup-and-lifecycle-ordering).

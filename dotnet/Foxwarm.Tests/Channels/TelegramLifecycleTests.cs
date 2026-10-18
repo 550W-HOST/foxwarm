@@ -41,68 +41,6 @@ public sealed class TelegramLifecycleTests
     }
 
     [Fact]
-    public async Task Unchanged_configuration_save_does_not_join_a_second_instances_waiting_channel_command()
-    {
-        await using var peer = await TelegramPeer.StartAsync();
-        var channels = new JsonObject
-        {
-            ["alpha"] = ExternalChannelFixture.Channel("a"),
-            ["beta"] = ExternalChannelFixture.Channel("b"),
-        };
-        await using var f = await ExternalChannelFixture.CreateAsync(
-            channels,
-            dependencies: peer.Dependencies
-        );
-        await f.Manager.ManagedChannels!.ReloadAsync();
-        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var bootstrap = 0;
-        peer.Respond = async call =>
-        {
-            if (
-                call.Bot == "a"
-                && call.Method == "getMe"
-                && Interlocked.Increment(ref bootstrap) == 1
-            )
-            {
-                entered.TrySetResult();
-                await release.Task.WaitAsync(TimeSpan.FromSeconds(10));
-            }
-            return null;
-        };
-        // Hold a real restart in the mutation lane, then queue the installer before beta's command.
-        var restarting = f.Manager.ManagedChannels.ChangeAsync("restart", "alpha");
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        var previousWrite = File.GetLastWriteTimeUtc(f.Configuration.AppPath);
-        var save = f.Configuration.SaveChannelsAsync(channels);
-        await TelegramChannelTests.Until(() =>
-            File.GetLastWriteTimeUtc(f.Configuration.AppPath) != previousWrite
-        );
-        peer.Push("b", TelegramPeer.Text("42", "11", "/channel stop alpha"));
-        // The command has no response until it acquires the lane. Let the delivered HTTP batch enter it.
-        await Task.Delay(200);
-        release.TrySetResult();
-        await restarting.WaitAsync(TimeSpan.FromSeconds(10));
-        await save.WaitAsync(TimeSpan.FromSeconds(5));
-        await TelegramChannelTests.Until(() =>
-            peer.Sent("b")
-                .Any(call =>
-                    (SessionWait.Text(call.Body["text"]) ?? "").Contains(
-                        "stop completed",
-                        StringComparison.Ordinal
-                    )
-                )
-        );
-        await f
-            .Manager.ManagedChannels.ChangeAsync("start", "alpha")
-            .WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(
-            4,
-            peer.Calls.Count(call => call.Bot == "a" && call.Method == "setMyCommands")
-        );
-    }
-
-    [Fact]
     public async Task Reload_returns_before_final_offset_sync_settles_and_retains_the_real_offset()
     {
         await using var peer = await TelegramPeer.StartAsync();

@@ -9,7 +9,8 @@ internal sealed record ChannelTransportDependencies(
     Func<HttpClient>? CreateHttp = null,
     Func<string, Uri>? TelegramApi = null,
     Func<string, Uri>? TelegramFiles = null,
-    Func<TimeSpan, CancellationToken, Task>? Delay = null
+    Func<TimeSpan, CancellationToken, Task>? Delay = null,
+    Func<DateTimeOffset>? Now = null
 );
 
 internal sealed class ManagedChannels(
@@ -19,8 +20,11 @@ internal sealed class ManagedChannels(
     ChannelTransportDependencies? dependencies = null
 ) : IAsyncDisposable
 {
-    private readonly SemaphoreSlim mutation = new(1);
-    private readonly Dictionary<string, TelegramChannel> running = new(StringComparer.Ordinal);
+    internal WeixinApi Weixin { get; } = new(dependencies);
+
+    private static bool Implemented(string type) => type is "telegram" or "matrix" or "weixin";
+
+    private readonly Dictionary<string, IManagedChannel> running = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> errors = new(StringComparer.Ordinal);
     private readonly object gate = new();
     private bool closed;
@@ -47,7 +51,7 @@ internal sealed class ManagedChannels(
                 var config = entries[id] as JsonObject ?? new JsonObject();
                 var registered = sessions.ChannelRegistry.Get(id);
                 var type = registered?.Type ?? Type(id, config);
-                var implemented = type == "telegram" && id is not ("webui" or "tui");
+                var implemented = Implemented(type) && id is not ("webui" or "tui");
                 var enabled = config["enabled"]?.GetValue<bool>() != false;
                 var configured =
                     registered is not null || ModelConfiguration.IsConfigured(type, config);
@@ -61,7 +65,7 @@ internal sealed class ManagedChannels(
                         ["configured"] = configured,
                         ["enabled"] = enabled,
                         ["details"] = new JsonArray(
-                            implemented ? "Telegram polling"
+                            implemented ? type + " polling"
                             : registered is not null ? "Registered transport"
                             : "Adapter is not implemented on this server."
                         ),
@@ -80,9 +84,6 @@ internal sealed class ManagedChannels(
 
     internal async Task<JsonObject> ReloadAsync()
     {
-        await mutation.WaitAsync();
-        try
-        {
             if (closed)
                 throw new InvalidOperationException("Channel runtime is shutting down.");
             sessions.ChannelProgress.Reset();
@@ -110,9 +111,9 @@ internal sealed class ManagedChannels(
                 var config = raw as JsonObject ?? new JsonObject();
                 if (
                     id is "webui" or "tui"
-                    || Type(id, config) != "telegram"
+                    || !Implemented(Type(id, config))
                     || config["enabled"]?.GetValue<bool>() == false
-                    || !ModelConfiguration.IsConfigured("telegram", config)
+                    || !ModelConfiguration.IsConfigured(Type(id, config), config)
                 )
                     continue;
                 try
@@ -132,21 +133,15 @@ internal sealed class ManagedChannels(
                 ["statuses"] = Statuses(),
                 ["available"] = true,
             };
-        }
-        finally
-        {
-            mutation.Release();
-        }
     }
 
     internal async Task ChangeAsync(string action, string id)
     {
-        await mutation.WaitAsync();
         try
         {
             if (closed)
                 throw new InvalidOperationException("Channel runtime is shutting down.");
-            if (Type(id, Config(id)) != "telegram" || id is "webui" or "tui")
+            if (!Implemented(Type(id, Config(id))) || id is "webui" or "tui")
                 throw new InvalidOperationException(
                     "Adapter is not implemented on this server: " + id
                 );
@@ -160,10 +155,6 @@ internal sealed class ManagedChannels(
             RecordError(id, error);
             throw;
         }
-        finally
-        {
-            mutation.Release();
-        }
     }
 
     private async Task<bool> StartCoreAsync(string id)
@@ -174,14 +165,13 @@ internal sealed class ManagedChannels(
         if (sessions.ChannelRegistry.Get(id) is not null)
             throw new InvalidOperationException("Channel ID is already registered: " + id);
         var config = Config(id);
-        var channel = new TelegramChannel(
-            id,
-            config,
-            sessions,
-            router,
-            dependencies,
-            error => RecordError(id, error)
-        );
+        IManagedChannel channel = Type(id, config) switch
+        {
+            "telegram" => new TelegramChannel(id, config, sessions, router, dependencies, error => RecordError(id, error)),
+            "matrix" => new MatrixChannel(id, config, sessions, router, dependencies, error => RecordError(id, error)),
+            "weixin" => new WeixinChannel(id, config, router, Weixin, error => RecordError(id, error)),
+            _ => throw new InvalidOperationException("Adapter is not implemented on this server: " + id),
+        };
         try
         {
             await channel.StartAsync();
@@ -192,7 +182,7 @@ internal sealed class ManagedChannels(
                 errors.Remove(id);
             }
             if (
-                SessionWait.Text(config["mainAttachUser"]) is { Length: > 0 } conversation
+                SessionWait.Text(config[Type(id, config) == "matrix" ? "botUserId" : "mainAttachUser"]) is { Length: > 0 } conversation
                 && sessions.ChannelBinding(id + ":" + conversation) is null
             )
                 sessions.AttachConfiguredChannel(id + ":" + conversation, "main");
@@ -207,7 +197,7 @@ internal sealed class ManagedChannels(
 
     private async Task<bool> StopCoreAsync(string id)
     {
-        TelegramChannel? channel;
+        IManagedChannel? channel;
         lock (gate)
             channel = running.GetValueOrDefault(id);
         if (channel is null)
@@ -231,19 +221,11 @@ internal sealed class ManagedChannels(
 
     internal async Task StopIngressAsync()
     {
-        await mutation.WaitAsync();
-        try
-        {
             closed = true;
-            TelegramChannel[] current;
+            IManagedChannel[] current;
             lock (gate)
                 current = running.Values.ToArray();
             await Task.WhenAll(current.Select(channel => channel.StopAsync()));
-        }
-        finally
-        {
-            mutation.Release();
-        }
     }
 
     public async ValueTask DisposeAsync()

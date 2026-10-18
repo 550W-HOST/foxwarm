@@ -2,7 +2,7 @@ namespace Foxwarm.Channels;
 
 internal sealed record ChannelFile(string Path, string Name, string? MimeType, bool IsImage);
 
-internal sealed record ChannelSendOptions(bool TurnFinal = false);
+internal sealed record ChannelSendOptions(bool TurnFinal = false, string? ParseMode = null);
 
 internal sealed record RegisteredChannel(
     string Type,

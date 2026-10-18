@@ -14,7 +14,8 @@ internal sealed partial class SessionManager
         string filename,
         string mime,
         string caption,
-        CancellationToken token
+        CancellationToken token,
+        bool? isImage = null
     )
     {
         var id = SessionWait.Text(ChannelBinding(platform + ":" + conversation)?["sessionId"]);
@@ -61,7 +62,7 @@ internal sealed partial class SessionManager
             if (!await FileToolCore.WriteBytesAtomic(path, bytes, false, () => { }, token))
                 throw new IOException("Inbound file already exists.");
         }
-        var descriptor = ChannelFileNames.Descriptor(filename, path, mime, node);
+        var descriptor = ChannelFileNames.Descriptor(filename, path, mime, node, isImage);
         var parts = new List<JsonObject>
         {
             new()
@@ -71,7 +72,7 @@ internal sealed partial class SessionManager
                     : caption + "\n\n" + descriptor,
             },
         };
-        if (mime.StartsWith("image/", StringComparison.Ordinal))
+        if (isImage ?? mime.StartsWith("image/", StringComparison.Ordinal))
         {
             var imageId = "image_" + Guid.NewGuid();
             var reference = await Images.PutAsync(bytes, mime, imageId, token);

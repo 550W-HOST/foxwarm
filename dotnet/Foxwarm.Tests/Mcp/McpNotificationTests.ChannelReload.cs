@@ -6,8 +6,9 @@ namespace Foxwarm.Tests;
 public sealed partial class McpNotificationTests
 {
     [Fact]
-    public async Task Actual_live_temporary_reply_context_survives_managed_Telegram_reload_without_becoming_an_attachment()
+    public async Task Actual_live_temporary_reply_context_survives_mixed_managed_reload_and_partial_start_without_becoming_an_attachment()
     {
+        await using var protocol = await ExternalProtocolPeer.StartAsync();
         await using var bot = await TelegramPeer.StartAsync();
         await using var peer = await InboundMcpFixture.CreateAsync();
         var router = new MessageRouter(new SessionRuntime(peer.Manager));
@@ -24,12 +25,18 @@ public sealed partial class McpNotificationTests
             )
         );
         var app = JsonNode.Parse(peer.Configuration.ReadCurrentAppRaw())!.AsObject();
-        app["channels"] = new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() };
+        app["channels"] = new JsonObject { ["alpha"] = ExternalChannelFixture.Channel(), ["matrix"] = protocol.Matrix(), ["weixin"] = protocol.Weixin() };
         var first = await peer.Configuration.SaveAppAsync(app.ToJsonString());
-        Assert.Single(first["reload"]!["started"]!.AsArray());
+        Assert.Equal(3, first["reload"]!["started"]!.AsArray().Count);
         var second = await peer.Configuration.SaveAppAsync(app.ToJsonString());
-        Assert.Single(second["reload"]!["stopped"]!.AsArray());
-        Assert.Single(second["reload"]!["started"]!.AsArray());
+        Assert.Equal(3, second["reload"]!["stopped"]!.AsArray().Count);
+        Assert.Equal(3, second["reload"]!["started"]!.AsArray().Count);
+        bot.Fail = call => call.Method == "getMe" ? (401, "controlled bootstrap failure") : null;
+        var partial = await peer.Configuration.SaveAppAsync(app.ToJsonString());
+        Assert.Equal(2, partial["reload"]!["started"]!.AsArray().Count);
+        Assert.Contains("channels.alpha", partial["notApplied"]!.ToString());
+        Assert.NotNull(peer.Manager.ChannelRegistry.Get("matrix"));
+        Assert.NotNull(peer.Manager.ChannelRegistry.Get("weixin"));
         Assert.Null((await Reply(peer, target, "after managed reload"))!["error"]);
         await Until(() => Queue(sender.First).Length == 1);
         Assert.Equal(

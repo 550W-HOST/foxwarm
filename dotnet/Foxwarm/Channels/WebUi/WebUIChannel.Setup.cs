@@ -29,7 +29,7 @@ internal sealed partial class WebUIChannel
                             {
                                 ["managedChannels"] = configuration.ManagedChannels is not null,
                                 ["externalChannelMessage"] =
-                                    "Telegram is supported; other external adapters are not implemented on this server.",
+                                    "Telegram, Matrix and Weixin are supported; WeWork and QQ are not implemented on this server.",
                             },
                         }
                     );
@@ -143,22 +143,7 @@ internal sealed partial class WebUIChannel
                 }
             }
         );
-        app.MapPost(
-            "/api/setup/weixin/login/start",
-            () =>
-                Results.Json(
-                    new { error = "Weixin login is unavailable on this server." },
-                    statusCode: StatusCodes.Status501NotImplemented
-                )
-        );
-        app.MapPost(
-            "/api/setup/weixin/login/wait",
-            () =>
-                Results.Json(
-                    new { error = "Weixin login is unavailable on this server." },
-                    statusCode: StatusCodes.Status501NotImplemented
-                )
-        );
+        RegisterWeixinSetupRoutes(app, configuration);
         app.MapPost(
             "/api/setup/models",
             async (HttpRequest request) =>

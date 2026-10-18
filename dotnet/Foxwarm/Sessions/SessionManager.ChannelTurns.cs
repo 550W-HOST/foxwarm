@@ -307,7 +307,7 @@ internal sealed partial class SessionManager
             {
                 var decorated = ChannelProgress.Decorate(turn.Id, target, text);
                 _ = ChannelProgress.BestEffortAsync(
-                    value => channel.Send(conversation, value, new(final), CancellationToken.None),
+                    value => channel.Send(conversation, value, new(final, final ? null : "Markdown"), CancellationToken.None),
                     decorated
                 );
             }

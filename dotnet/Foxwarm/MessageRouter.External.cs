@@ -219,6 +219,9 @@ internal sealed partial class MessageRouter
         var manager = runtime.Manager;
         switch (sub)
         {
+            case "weixin":
+                await HandleWeixinCommandAsync(source, args.Skip(1).ToArray());
+                return;
             case "info":
                 await source.Reply(
                     $"channelId: `{source.Instance}`\nchannelType: `{source.Type}`\nconversationId: `{source.Conversation}`\nchannelTargetId: `{source.Target}`"
@@ -307,7 +310,7 @@ internal sealed partial class MessageRouter
                 return;
         }
         await source.Reply(
-            "Usage: /channel info|auth|status|start|stop|restart|mode|dangerously-allow-all-users"
+            "Usage: /channel info|auth|status|start|stop|restart|mode|weixin|dangerously-allow-all-users"
         );
     }
 

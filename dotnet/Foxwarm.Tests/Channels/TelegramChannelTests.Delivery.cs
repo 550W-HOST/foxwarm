@@ -168,10 +168,8 @@ public sealed partial class TelegramChannelTests
             ["broken"] = ExternalChannelFixture.Channel("bad"),
             ["later"] = new JsonObject
             {
-                ["type"] = "matrix",
-                ["homeserver"] = "https://example.invalid",
-                ["accessToken"] = "fixture",
-                ["botUserId"] = "@fixture:example.invalid",
+                ["type"] = "wework",
+                ["webhookUrl"] = "http://127.0.0.1:1/fixture",
             },
         };
         var result = await f.Configuration.SaveChannelsAsync(channels);

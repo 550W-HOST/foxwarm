@@ -2,7 +2,6 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
 using Foxwarm.Tools;
-using YamlDotNet.Serialization;
 
 namespace Foxwarm.Models;
 
@@ -23,53 +22,28 @@ internal sealed partial class ModelConfiguration
         InstallAsync("config", _ => Task.FromResult(Encoding.UTF8.GetBytes(raw)));
 
     internal Task<JsonObject> SaveChannelsAsync(JsonObject channels) =>
-        InstallAsync(
-            "config",
-            _ =>
+        InstallAsync("config", _ => Task.FromResult(BuildChannelsBytes(channels)));
+
+    private byte[] BuildChannelsBytes(JsonObject channels)
+    {
+        var currentRaw = ReadCurrentAppRaw();
+        var current = ConfigurationYaml.Parse(currentRaw, "app config");
+        AppConfigurationRules.Validate(current);
+        // JSON is valid YAML; retain a complete JSON root rather than appending YAML to it.
+        try
+        {
+            if (JsonNode.Parse(currentRaw) is JsonObject json)
             {
-                var currentRaw = ReadCurrentAppRaw();
-                var current = ConfigurationYaml.Parse(currentRaw, "app config");
-                AppConfigurationRules.Validate(current);
-                // A complete app save accepts JSON as YAML too. Preserve that root representation
-                // instead of appending a block section after a closed JSON object.
-                try
-                {
-                    if (JsonNode.Parse(currentRaw) is JsonObject json)
-                    {
-                        json["channels"] = channels.DeepClone();
-                        return Task.FromResult(
-                            Encoding.UTF8.GetBytes(
-                                json.ToJsonString(
-                                    new System.Text.Json.JsonSerializerOptions
-                                    {
-                                        WriteIndented = true,
-                                    }
-                                )
-                            )
-                        );
-                    }
-                }
-                catch (System.Text.Json.JsonException) { }
-                var serialized = new SerializerBuilder()
-                    .WithQuotingNecessaryStrings()
-                    .Build()
-                    .Serialize(JsonNodeToObject(channels))
-                    .TrimEnd();
-                var section =
-                    serialized.Length == 0 || serialized == "{}"
-                        ? "channels: {}"
-                        : "channels:\n"
-                            + string.Join(
-                                "\n",
-                                serialized
-                                    .Split('\n')
-                                    .Select(line => line.Length == 0 ? line : "  " + line)
-                            );
-                return Task.FromResult(
-                    Encoding.UTF8.GetBytes(ReplaceTopLevelSection(currentRaw, "channels", section))
-                );
+                json["channels"] = channels.DeepClone();
+                return Encoding.UTF8.GetBytes(json.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
             }
-        );
+        }
+        catch (System.Text.Json.JsonException) { }
+        var serialized = ChannelsYamlForObject(channels).TrimEnd();
+        var section = serialized.Length == 0 || serialized == "{}" ? "channels: {}"
+            : "channels:\n" + string.Join("\n", serialized.Split('\n').Select(line => line.Length == 0 ? line : "  " + line));
+        return Encoding.UTF8.GetBytes(ReplaceTopLevelSection(currentRaw, "channels", section));
+    }
 
     // Every candidate factory and section read runs after prior installations settle.
     internal async Task<JsonObject> InstallAsync(
@@ -120,17 +94,7 @@ internal sealed partial class ModelConfiguration
             }
             if (target != "config")
                 throw new InvalidDataException("Unknown configuration target.");
-            var config = ConfigurationYaml.Parse(raw, "app config");
-            AppConfigurationRules.Validate(config);
-            var access = AccessConfiguration.Normalize(
-                config["access"],
-                config.ContainsKey("access")
-            );
-            Access.Validate(access);
-            AccessConfiguration.Validate(
-                access,
-                await HttpServerSettings.ReadExistingTokenAsync(Paths.DataRoot) ?? ""
-            );
+            var (config, access) = await ValidateAppCandidateAsync(raw);
             var restart = app.Select(pair => pair.Key)
                 .Concat(config.Select(pair => pair.Key))
                 .Distinct(StringComparer.Ordinal)
@@ -188,6 +152,22 @@ internal sealed partial class ModelConfiguration
         {
             mutation.Release();
         }
+    }
+
+    private async Task<(JsonObject Config, System.Collections.Immutable.ImmutableDictionary<string, AccessIdentity> Access)> ValidateAppCandidateAsync(string raw)
+    {
+        var config = ConfigurationYaml.Parse(raw, "app config");
+        AppConfigurationRules.Validate(config);
+        var access = AccessConfiguration.Normalize(
+            config["access"],
+            config.ContainsKey("access")
+        );
+        Access.Validate(access);
+        AccessConfiguration.Validate(
+            access,
+            await HttpServerSettings.ReadExistingTokenAsync(Paths.DataRoot) ?? ""
+        );
+        return (config, access);
     }
 
     internal static JsonObject Installed(

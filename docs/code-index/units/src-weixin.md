@@ -58,7 +58,7 @@ Implements a Weixin (WeChat) messaging channel client, providing API communicati
 
 - **Long-polling**: `getWeixinUpdates` uses a 35s timeout and returns an empty response on abort rather than throwing.
 - **QR login state**: Managed via an in-memory `Map<string, ActiveLogin>` with a 5-minute TTL. Expired sessions are purged on each new login attempt.
-- **Context tokens**: Stored in-memory per user ID; used to maintain conversation continuity across polling cycles.
+- **Context tokens**: Stored in-memory per user ID; shared across configured instances and adapter reloads for the Main lifetime; never persisted.
 - **Inbound parsing**: Extracts text from TEXT or VOICE items and prepends quoted/referenced message content with the literal Unicode prefix `[\u5f15\u7528: ...]`. Media-only messages produce placeholder strings indicating unsupported types.
 - **Headers**: Every request includes a random `X-WECHAT-UIN`, optional Bearer auth, and optional `SKRouteTag` for routing.
 
@@ -66,6 +66,6 @@ Implements a Weixin (WeChat) messaging channel client, providing API communicati
 
 - Consumed by the channel/transport layer to poll for messages and send replies within the bot's message loop.
 - `buildWeixinMessageParts` bridges Weixin's protocol into the shared `MessagePart` type used by the core message processing pipeline.
-- Context tokens allow the polling layer to resume from the correct offset after reconnection or restart.
+- The poll cursor and context tokens are different transient state. Adapter reload retains the module-level per-user context cache but resets its cursor; a fresh Main/process loses both and needs new inbound context before replying.
 - QR login functions are exposed for CLI or admin commands (`/channel weixin login`, `/channel weixin wait`).
 - Adapted portions retain the full MIT notice for `@tencent-weixin/openclaw-weixin` v1.0.2 in the root third-party notices file, which is included by default in repository and npm source distributions.

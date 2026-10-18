@@ -43,7 +43,7 @@ Implements three messaging platform channels (Matrix, Telegram, Weixin) that con
 | `generateClientId()` | ~17 | Creates a random hex client ID for Weixin messages |
 | `WeixinChannel.constructor(options, name?)` | ~30–38 | Stores canonical Weixin channel config options, applying runtime defaults |
 | `WeixinChannel.start()` | ~40–51 | Validates token and starts the poll loop |
-| `WeixinChannel.stop()` | ~53–64 | Aborts the poll loop |
+| `WeixinChannel.stop()` | ~53–64 | Signals the outer loop and joins it without cancelling its fetch/backoff |
 | `WeixinChannel.sendMessage(...)` | ~66–84 | Sends a text message via Weixin API using cached context token |
 | `WeixinChannel.sendTyping(...)` | ~86–104 | Sends typing indicator via Weixin API |
 | `WeixinChannel.onMessage(...)` | ~106–108 | Registers the inbound message handler |
@@ -67,7 +67,7 @@ Implements three messaging platform channels (Matrix, Telegram, Weixin) that con
 - Constructors accept their platform's canonical config object from `src/config.ts` plus an optional channel instance id/name. Runtime/factory code should pass the config through instead of re-spelling individual fields, so new channel config keys do not need duplicated constructor plumbing.
 - Matrix: uses matrix-js-sdk with event-based timeline listener; auto-joins rooms on invite; deduplicates events via a capped Set; skips events older than channel start time.
 - Telegram: uses Telegraf polling; retries API calls up to 3 times with exponential backoff; falls back from Markdown to plain text on parse errors; registers slash commands from the shared `COMMANDS` registry; supports a separate `onCommand` handler.
-- Weixin: uses HTTP long-polling in a loop; caches per-user context tokens required for replies; handles session expiry by throwing a fatal error; backs off on consecutive failures (2s then 30s).
+- Weixin: uses HTTP long-polling in a loop; caches per-user context tokens required for replies; throws expiry inside the loop, where the ordinary error handler catches it; backs off on consecutive failures (2s for the first two, then 30s). Context is shared per user for the Main lifetime across adapter reloads, never persisted. Its typing-ticket map is not populated, so automatic typing is currently a no-op. Stop joins the sequential handler loop and retains the existing self-stop/restart dependency cycle.
 - Inbound images/files are saved to disk via `saveInboundChannelFile` and converted to `MessagePart` arrays with inline base64 data (Matrix, Telegram).
 
 ## Integration

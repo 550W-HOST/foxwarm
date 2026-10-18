@@ -12,7 +12,7 @@ Agent routes delegate catalog/AgentMemory/SessionManager Agent operations; setup
 
 ## Contract and side effects
 
-Setup/Agent changes are authenticated and explicit. Setup save success means the validated file was installed. Shared access identities apply live, while declared inbound MCP and external channels remain unavailable; the forwarded outcome preserves that distinction. Model/settings updates are staged through manager/save-lane boundaries where they affect a Session. Agent memory selection can affect later prompts but does not rewrite active history. Unsupported remote/managed/child fields return explicit validation errors rather than being stored as accepted consumers.
+Setup/Agent changes are authenticated and explicit. Setup save success means the validated file was installed. Shared access identities and registered inbound MCP apply live; external-channel installation returns actual managed reload and partial results. Unsupported adapters remain unavailable rather than being reported as successfully applied. Model/settings updates are staged through manager/save-lane boundaries where they affect a Session. Agent memory selection can affect later prompts but does not rewrite active history. Unsupported remote/managed/child fields return explicit validation errors rather than being stored as accepted consumers.
 
 The current Setup does not expose Authorizations. The normal host retains [outbound OAuth administrator routes](./dotnet-mcp-oauth.md), saved grants and the narrow public callback/client documents independently of this setup file; existing caller tool permissions still control MCP use.
 
@@ -21,3 +21,5 @@ The current Setup does not expose Authorizations. The normal host retains [outbo
 `WebUiStartupTests.cs`; `AppConfigurationRulesTests.cs`; AgentMemory/setup/model configuration tests.
 
 Agent creation and PUT updates accept existing `isolatedNode` metadata through the [external Node unit](./external-nodes.md). Binding changes use the established owner/save lane; they do not create a remote environment.
+
+The real authenticated Weixin QR start/wait routes and confirmed-owner merge use the existing Setup/HTTP boundary; [Matrix/Weixin](./dotnet-matrix-weixin.md) owns their source files, wire contract and selected-command versus reload-all distinction.

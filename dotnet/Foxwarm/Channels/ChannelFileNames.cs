@@ -77,9 +77,10 @@ internal static class ChannelFileNames
         string filename,
         string path,
         string mime,
-        string node = "master"
+        string node = "master",
+        bool? isImage = null
     ) =>
-        mime.StartsWith("image/", StringComparison.Ordinal)
+        (isImage ?? mime.StartsWith("image/", StringComparison.Ordinal))
             ? $"<foxwarm-image name=\"{Escape(filename)}\" node=\"{Escape(node)}\" path=\"{Escape(path)}\" />"
             : $"<foxwarm-file name=\"{Escape(filename)}\" node=\"{Escape(node)}\" path=\"{Escape(path)}\" mime=\"{Escape(mime)}\" />";
 }

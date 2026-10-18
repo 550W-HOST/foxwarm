@@ -19,7 +19,7 @@ internal sealed class TelegramApiException(int code, string description, double?
         Code == 400 || Message.Contains("can't parse entities", StringComparison.Ordinal);
 }
 
-internal sealed class TelegramChannel : IAsyncDisposable
+internal sealed class TelegramChannel : IManagedChannel
 {
     private static readonly HttpClient DefaultHttp = new() { Timeout = TimeSpan.FromSeconds(100) };
     private readonly string id;
@@ -61,7 +61,7 @@ internal sealed class TelegramChannel : IAsyncDisposable
         delay = dependencies?.Delay ?? Task.Delay;
     }
 
-    internal RegisteredChannel Transport =>
+    public RegisteredChannel Transport =>
         new(
             "telegram",
             (conversation, text, _, token) => SendAsync(conversation, text, token),
@@ -69,7 +69,7 @@ internal sealed class TelegramChannel : IAsyncDisposable
             TypingAsync
         );
 
-    internal async Task StartAsync()
+    public async Task StartAsync()
     {
         await ApiAsync(
             "setMyCommands",
@@ -86,7 +86,7 @@ internal sealed class TelegramChannel : IAsyncDisposable
         polling = PollAsync();
     }
 
-    internal Task StopAsync()
+    public Task StopAsync()
     {
         // Telegraf stop aborts polling; it does not join handlers or the final offset sync.
         stopping.Cancel();
