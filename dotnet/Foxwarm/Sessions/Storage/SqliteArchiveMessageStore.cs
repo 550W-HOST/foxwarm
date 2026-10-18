@@ -68,9 +68,14 @@ public sealed record ArchiveMessageRecord(
         }
         // Historical payload metadata is optional. The Archive row owns its
         // sequence/timestamp; active Session validation remains at write/admission.
-        if (seq <= 0 || !double.IsFinite(timestamp)
-            || message.ContainsKey("__meta") && message["__meta"] is not JsonObject)
-            throw new InvalidDataException($"Archive message {sessionId}#{seq} has invalid historical shape.");
+        if (
+            seq <= 0
+            || !double.IsFinite(timestamp)
+            || message.ContainsKey("__meta") && message["__meta"] is not JsonObject
+        )
+            throw new InvalidDataException(
+                $"Archive message {sessionId}#{seq} has invalid historical shape."
+            );
         SessionAuthorityDocument.ValidateMessageContent(message, $"archive message {seq}");
         ValidateArchiveShape(message, seq);
         if (message["role"]?.GetValue<string>() != role)

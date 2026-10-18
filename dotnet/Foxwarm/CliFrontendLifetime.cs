@@ -21,7 +21,12 @@ internal sealed class CliFrontendLifetime : IAsyncDisposable
         var name = Environment.GetEnvironmentVariable("FOXWARM_CLI_LIFETIME_PIPE");
         if (string.IsNullOrEmpty(name))
             throw new InvalidDataException("The CLI frontend lifetime pipe is required.");
-        var pipe = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
+        var pipe = new NamedPipeClientStream(
+            ".",
+            name,
+            PipeDirection.InOut,
+            PipeOptions.Asynchronous
+        );
         try
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -40,9 +45,7 @@ internal sealed class CliFrontendLifetime : IAsyncDisposable
         try
         {
             var buffer = new byte[1];
-            while (await pipe.ReadAsync(buffer, stopping.Token) != 0)
-            {
-            }
+            while (await pipe.ReadAsync(buffer, stopping.Token) != 0) { }
         }
         catch (OperationCanceledException) when (stopping.IsCancellationRequested)
         {

@@ -117,10 +117,17 @@ public sealed partial class SqliteArchiveMessageStore
                 // The established directional recovery owner will move this
                 // existing branch back/forward. Metadata alone must not invent
                 // an empty competing destination before it can do so.
-                if (pending is not null && !exists
-                    && candidate.Id == (pending.Phase == "rolling-back" ? pending.OldId : pending.NewId)
-                    && LegacyBranchExists(connection, pending.Phase == "rolling-back" ? pending.NewId : pending.OldId)
-                    && !sources.Any(source => source.SessionId == candidate.Id))
+                if (
+                    pending is not null
+                    && !exists
+                    && candidate.Id
+                        == (pending.Phase == "rolling-back" ? pending.OldId : pending.NewId)
+                    && LegacyBranchExists(
+                        connection,
+                        pending.Phase == "rolling-back" ? pending.NewId : pending.OldId
+                    )
+                    && !sources.Any(source => source.SessionId == candidate.Id)
+                )
                     continue;
                 if (!exists)
                 {

@@ -122,7 +122,12 @@ public sealed class SessionIdentityRecoveryTests
         var ownerAfter = await recovered.RequiredAsync("old");
         Assert.Equal("old", ownerAfter.Id);
         Assert.Equal("old", ownerAfter.Archive.ReadMessages().Single().SessionId);
-        Assert.Equal("Pending rollback audit", ownerAfter.Archive.ReadMessages().Single().Message["parts"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(
+            "Pending rollback audit",
+            ownerAfter.Archive.ReadMessages().Single().Message["parts"]![0]![
+                "text"
+            ]!.GetValue<string>()
+        );
         Assert.Null(new SqliteArchiveMessageStore(database, "new").ReadBranch());
         Assert.False(File.Exists(journal.FilePath));
     }
