@@ -121,7 +121,8 @@ internal sealed partial class ModelConfiguration
                 && !string.IsNullOrWhiteSpace(SessionWait.Text(config["clientSecret"])),
             "wework" => !string.IsNullOrWhiteSpace(SessionWait.Text(config["webhookUrl"]))
                 || (
-                    SessionWait.Number(config["listenPort"]) is { } port && port != 0
+                    SessionWait.Number(config["listenPort"]) is { } port
+                    && port != 0
                     && !string.IsNullOrWhiteSpace(SessionWait.Text(config["listenPath"]))
                     && !string.IsNullOrWhiteSpace(SessionWait.Text(config["token"]))
                     && !string.IsNullOrWhiteSpace(SessionWait.Text(config["encodingAESKey"]))

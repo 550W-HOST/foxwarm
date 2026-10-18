@@ -1,7 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
-using Foxwarm.Sessions;
 using Foxwarm.Models;
+using Foxwarm.Sessions;
 
 namespace Foxwarm.Tests;
 
@@ -12,25 +12,47 @@ public sealed class WeWorkLifecycleTests
     {
         await using var peer = await WeWorkPeer.StartAsync();
         using var temp = new TempDirectory();
-        var data = Path.Combine(temp.Path, "data"); var work = Path.Combine(temp.Path, "work");
-        Directory.CreateDirectory(Path.Combine(data, "state")); Directory.CreateDirectory(work);
+        var data = Path.Combine(temp.Path, "data");
+        var work = Path.Combine(temp.Path, "work");
+        Directory.CreateDirectory(Path.Combine(data, "state"));
+        Directory.CreateDirectory(work);
         var port = WeWorkPeer.Port();
-        var config = peer.Config(port); config.Remove("webhookUrl");
-        await File.WriteAllTextAsync(Path.Combine(data, "state/config.yaml"), new JsonObject
-        {
-            ["bot"] = new JsonObject { ["enableWebUI"] = false, ["enableTrigger"] = false },
-            ["channels"] = new JsonObject { ["work"] = config },
-        }.ToJsonString());
+        var config = peer.Config(port);
+        config.Remove("webhookUrl");
+        await File.WriteAllTextAsync(
+            Path.Combine(data, "state/config.yaml"),
+            new JsonObject
+            {
+                ["bot"] = new JsonObject { ["enableWebUI"] = false, ["enableTrigger"] = false },
+                ["channels"] = new JsonObject { ["work"] = config },
+            }.ToJsonString()
+        );
         var configuration = new ModelConfiguration(data);
         var settings = await HttpServerSettings.CaptureAsync(configuration, data);
         Assert.False(settings.HttpEnabled);
-        await using var host = await MainHost.CreateAsync([], data, work, configuration, settings, null, channelDependencies: peer.Dependencies);
+        await using var host = await MainHost.CreateAsync(
+            [],
+            data,
+            work,
+            configuration,
+            settings,
+            null,
+            channelDependencies: peer.Dependencies
+        );
         await host.StartAsync();
         Assert.False(host.HttpEnabled);
         Assert.False(File.Exists(Path.Combine(data, "state/token")));
         using var callback = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}/") };
-        var initial = await WeWorkCallbackTests.Post(callback, WeWorkPeer.Text("who", "@企业机器人 /whoami"));
-        Assert.Contains("alice", WeWorkCallbackTests.Content(await WeWorkCallbackTests.Refresh(callback, WeWorkCallbackTests.Id(initial))));
+        var initial = await WeWorkCallbackTests.Post(
+            callback,
+            WeWorkPeer.Text("who", "@企业机器人 /whoami")
+        );
+        Assert.Contains(
+            "alice",
+            WeWorkCallbackTests.Content(
+                await WeWorkCallbackTests.Refresh(callback, WeWorkCallbackTests.Id(initial))
+            )
+        );
         Assert.False(File.Exists(Path.Combine(data, "state/token")));
         Assert.Empty(peer.Calls);
     }
@@ -40,17 +62,27 @@ public sealed class WeWorkLifecycleTests
     {
         await using var peer = await WeWorkPeer.StartAsync();
         var port = WeWorkPeer.Port();
-        await using var f = await ExternalChannelFixture.CreateAsync(new() { ["work"] = peer.Config(port) }, dependencies: peer.Dependencies);
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            new() { ["work"] = peer.Config(port) },
+            dependencies: peer.Dependencies
+        );
         await f.Manager.ManagedChannels!.ReloadAsync();
         using var callback = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}/") };
         var old = f.Manager.ChannelRegistry.Get("work");
-        await WeWorkCallbackTests.Post(callback, WeWorkPeer.Text("restart", "@企业机器人 /channel restart work"));
-        await TelegramChannelTests.Until(() => f.Manager.ChannelRegistry.Get("work") is { } value && !ReferenceEquals(old, value));
+        await WeWorkCallbackTests.Post(
+            callback,
+            WeWorkPeer.Text("restart", "@企业机器人 /channel restart work")
+        );
+        await TelegramChannelTests.Until(() =>
+            f.Manager.ChannelRegistry.Get("work") is { } value && !ReferenceEquals(old, value)
+        );
         using var active = new HttpClient { BaseAddress = callback.BaseAddress };
         var fresh = await WeWorkCallbackTests.Post(active, WeWorkPeer.Text("fresh"));
         Assert.Equal("> 🤔 thinking", WeWorkCallbackTests.Content(fresh));
         var source = WeWorkCallbackTests.Id(fresh);
-        await f.Manager.ManagedChannels.ChangeAsync("restart", "work").WaitAsync(TimeSpan.FromSeconds(3));
+        await f
+            .Manager.ManagedChannels.ChangeAsync("restart", "work")
+            .WaitAsync(TimeSpan.FromSeconds(3));
         // Like Source server.close, a pooled old connection may fail rather than transparently move.
         try
         {
@@ -74,17 +106,44 @@ public sealed class WeWorkLifecycleTests
         var port = WeWorkPeer.Port();
         var channels = new JsonObject
         {
-            ["alpha"] = ExternalChannelFixture.Channel(), ["matrix"] = protocol.Matrix(), ["weixin"] = protocol.Weixin(),
-            ["work"] = peer.Config(port), ["unready"] = new JsonObject { ["type"] = "wework", ["listenPort"] = port + 1, ["listenPath"] = "/callback" },
+            ["alpha"] = ExternalChannelFixture.Channel(),
+            ["matrix"] = protocol.Matrix(),
+            ["weixin"] = protocol.Weixin(),
+            ["work"] = peer.Config(port),
+            ["unready"] = new JsonObject
+            {
+                ["type"] = "wework",
+                ["listenPort"] = port + 1,
+                ["listenPath"] = "/callback",
+            },
         };
-        var dependencies = telegram.Dependencies with { CallbackAddress = System.Net.IPAddress.Loopback };
-        await using var f = await ExternalChannelFixture.CreateAsync(channels, dependencies: dependencies);
+        var dependencies = telegram.Dependencies with
+        {
+            CallbackAddress = System.Net.IPAddress.Loopback,
+        };
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            channels,
+            dependencies: dependencies
+        );
         var first = await f.Manager.ManagedChannels!.ReloadAsync();
         Assert.Equal(4, first["started"]!.AsArray().Count);
-        Assert.False(first["statuses"]!.AsArray().Single(item => item!["channelId"]!.GetValue<string>() == "unready")!["configured"]!.GetValue<bool>());
+        Assert.False(
+            first["statuses"]!
+                .AsArray()
+                .Single(item => item!["channelId"]!.GetValue<string>() == "unready")![
+                "configured"
+            ]!.GetValue<bool>()
+        );
         // Fixed unmanaged registrations are outside managed stop/recreate ownership.
         var received = new List<string>();
-        f.Manager.ChannelRegistry.Register("webui", (_, text, _) => { received.Add(text); return Task.CompletedTask; });
+        f.Manager.ChannelRegistry.Register(
+            "webui",
+            (_, text, _) =>
+            {
+                received.Add(text);
+                return Task.CompletedTask;
+            }
+        );
         var second = await f.Configuration.SaveChannelsAsync(channels);
         Assert.Equal(4, second["reload"]!["stopped"]!.AsArray().Count);
         Assert.Equal(4, second["reload"]!["started"]!.AsArray().Count);

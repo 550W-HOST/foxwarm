@@ -3,7 +3,11 @@ using System.Text.Json.Nodes;
 
 namespace Foxwarm.Channels;
 
-internal sealed record WeWorkDelivery(string Mode, string? ResponseUrl = null, string? ReqId = null);
+internal sealed record WeWorkDelivery(
+    string Mode,
+    string? ResponseUrl = null,
+    string? ReqId = null
+);
 
 internal sealed record WeWorkStreamSnapshot(
     string Conversation,
@@ -14,29 +18,42 @@ internal sealed record WeWorkStreamSnapshot(
     long UpdatedAt
 )
 {
-    internal JsonObject Payload() => new()
-    {
-        ["msgtype"] = "stream",
-        ["stream"] = new JsonObject { ["id"] = Id, ["finish"] = Finish, ["content"] = Content },
-    };
+    internal JsonObject Payload() =>
+        new()
+        {
+            ["msgtype"] = "stream",
+            ["stream"] = new JsonObject
+            {
+                ["id"] = Id,
+                ["finish"] = Finish,
+                ["content"] = Content,
+            },
+        };
 }
 
 // Adapter-local presentation only. Neither IDs nor progress enter Session authority.
 internal sealed class WeWorkStreamAggregator(int maxBytes = 20000, Func<DateTimeOffset>? now = null)
 {
     private abstract class Block;
-    private sealed class TextBlock(string text) : Block { internal string Text = text; }
+
+    private sealed class TextBlock(string text) : Block
+    {
+        internal string Text = text;
+    }
+
     private sealed class ToolEntry(string id, string name, string status)
     {
         internal string Id = id;
         internal string Name = name;
         internal string Status = status;
     }
+
     private sealed class ToolGroup : Block
     {
         internal List<ToolEntry> Tools = [];
         internal bool Thinking;
     }
+
     private sealed class State(string conversation, WeWorkDelivery delivery)
     {
         internal string Conversation = conversation;
@@ -47,6 +64,7 @@ internal sealed class WeWorkStreamAggregator(int maxBytes = 20000, Func<DateTime
         internal string Content = "";
         internal List<Block> Blocks = [new ToolGroup { Thinking = true }];
     }
+
     private readonly object gate = new();
     private readonly Dictionary<string, State> conversations = new(StringComparer.Ordinal);
     private readonly Dictionary<string, State> streams = new(StringComparer.Ordinal);
@@ -64,14 +82,19 @@ internal sealed class WeWorkStreamAggregator(int maxBytes = 20000, Func<DateTime
             }
     }
 
-    internal (WeWorkStreamSnapshot? Old, WeWorkStreamSnapshot Current) Begin(string conversation, WeWorkDelivery delivery)
+    internal (WeWorkStreamSnapshot? Old, WeWorkStreamSnapshot Current) Begin(
+        string conversation,
+        WeWorkDelivery delivery
+    )
     {
         lock (gate)
         {
             Cleanup();
             conversation = conversation.Trim();
             if (conversation.Length == 0)
-                throw new InvalidDataException("conversationId is required to begin a WeWork stream");
+                throw new InvalidDataException(
+                    "conversationId is required to begin a WeWork stream"
+                );
             WeWorkStreamSnapshot? old = null;
             if (conversations.GetValueOrDefault(conversation) is { Finish: false } previous)
             {
@@ -98,13 +121,23 @@ internal sealed class WeWorkStreamAggregator(int maxBytes = 20000, Func<DateTime
 
     // Selection and mutation are synchronous, before any platform await.
     internal (bool Handled, WeWorkStreamSnapshot? Changed) Apply(
-        string conversation, string text, ChannelSendOptions options, ChannelTurnProgress? progress = null)
+        string conversation,
+        string text,
+        ChannelSendOptions options,
+        ChannelTurnProgress? progress = null
+    )
     {
         lock (gate)
         {
             Cleanup();
             var latest = conversations.GetValueOrDefault(conversation.Trim());
-            var id = options.StreamId ?? (string.IsNullOrWhiteSpace(options.WebhookUrl) && latest is { Finish: false } ? latest.Id : null);
+            var id =
+                options.StreamId
+                ?? (
+                    string.IsNullOrWhiteSpace(options.WebhookUrl) && latest is { Finish: false }
+                        ? latest.Id
+                        : null
+                );
             if (id is null)
                 return (false, null);
             var state = latest ?? streams.GetValueOrDefault(id.Trim());
@@ -168,7 +201,10 @@ internal sealed class WeWorkStreamAggregator(int maxBytes = 20000, Func<DateTime
         {
             if (tool.Id.Length == 0)
                 continue;
-            var existing = state.Blocks.OfType<ToolGroup>().SelectMany(block => block.Tools).FirstOrDefault(entry => entry.Id == tool.Id);
+            var existing = state
+                .Blocks.OfType<ToolGroup>()
+                .SelectMany(block => block.Tools)
+                .FirstOrDefault(entry => entry.Id == tool.Id);
             var name = string.IsNullOrEmpty(tool.Name) ? "tool" : tool.Name;
             var status = progress.Type == "tool-calls-start" ? "running" : tool.Status;
             if (existing is not null)
@@ -183,9 +219,20 @@ internal sealed class WeWorkStreamAggregator(int maxBytes = 20000, Func<DateTime
 
     private WeWorkStreamSnapshot Update(State state)
     {
-        var sections = state.Blocks.Select(block => block is TextBlock text ? text.Text : RenderGroup((ToolGroup)block)).Where(value => value.Length > 0);
+        var sections = state
+            .Blocks.Select(block =>
+                block is TextBlock text ? text.Text : RenderGroup((ToolGroup)block)
+            )
+            .Where(value => value.Length > 0);
         var raw = string.Join("\n\n", sections);
-        state.Content = Truncate(raw.Length == 0 ? state.Finish ? "处理完成。" : "> 🤔 thinking" : raw, limit);
+        state.Content = Truncate(
+            raw.Length == 0
+                ? state.Finish
+                    ? "处理完成。"
+                    : "> 🤔 thinking"
+                : raw,
+            limit
+        );
         state.UpdatedAt = Now;
         return Snapshot(state);
     }
@@ -193,17 +240,35 @@ internal sealed class WeWorkStreamAggregator(int maxBytes = 20000, Func<DateTime
     private static string RenderGroup(ToolGroup group)
     {
         var grouped = group.Tools.GroupBy(tool => (tool.Status, tool.Name));
-        var items = grouped.Select(tools =>
-        {
-            var icon = tools.Key.Status switch { "success" => "☑️", "error" => "❌", _ => "⌛️" };
-            return icon + " " + tools.Key.Name + (tools.Count() > 1 ? " ×" + tools.Count() : "");
-        }).ToList();
+        var items = grouped
+            .Select(tools =>
+            {
+                var icon = tools.Key.Status switch
+                {
+                    "success" => "☑️",
+                    "error" => "❌",
+                    _ => "⌛️",
+                };
+                return icon
+                    + " "
+                    + tools.Key.Name
+                    + (tools.Count() > 1 ? " ×" + tools.Count() : "");
+            })
+            .ToList();
         if (group.Thinking)
             items.Add("🤔 thinking");
         return items.Count == 0 ? "" : "> " + string.Join(" | ", items);
     }
 
-    private static WeWorkStreamSnapshot Snapshot(State state) => new(state.Conversation, state.Id, state.Content, state.Finish, state.Delivery, state.UpdatedAt);
+    private static WeWorkStreamSnapshot Snapshot(State state) =>
+        new(
+            state.Conversation,
+            state.Id,
+            state.Content,
+            state.Finish,
+            state.Delivery,
+            state.UpdatedAt
+        );
 
     internal static string Truncate(string value, int maxBytes)
     {

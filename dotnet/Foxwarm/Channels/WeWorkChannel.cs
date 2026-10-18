@@ -25,14 +25,22 @@ internal sealed partial class WeWorkChannel : IManagedChannel
     private bool WebSocketEnabled => SessionCatalog.Flag(websocketConfig["enabled"]);
     private readonly WeWorkStreamAggregator streams;
     private readonly object contextGate = new();
-    private readonly Dictionary<string, (long At, JsonObject? Response)> processed = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (long At, JsonObject? Response)> processed = new(
+        StringComparer.Ordinal
+    );
     private readonly OrderedDictionary<string, string> responseUrls = new(StringComparer.Ordinal);
     private WebApplication? listener;
     private volatile bool stopped;
     private readonly CancellationTokenSource lifetime = new();
 
-    internal WeWorkChannel(string id, JsonObject config, SessionManager sessions, MessageRouter router,
-        ChannelTransportDependencies? dependencies, Action<Exception> log)
+    internal WeWorkChannel(
+        string id,
+        JsonObject config,
+        SessionManager sessions,
+        MessageRouter router,
+        ChannelTransportDependencies? dependencies,
+        Action<Exception> log
+    )
     {
         this.id = id;
         this.config = (JsonObject)config.DeepClone();
@@ -53,22 +61,37 @@ internal sealed partial class WeWorkChannel : IManagedChannel
     }
 
     private static string Text(JsonNode? node) => SessionWait.Text(node) ?? "";
-    private static bool Nonempty(string? text) => !string.IsNullOrWhiteSpace(text);
-    private static JsonObject Markdown(string text) => new()
-    {
-        ["msgtype"] = "markdown", ["markdown"] = new JsonObject { ["content"] = text },
-    };
 
-    public RegisteredChannel Transport => new("wework", SendTextAsync,
-        (conversation, file, caption, token) => SendFileAsync(conversation, file, caption, new(), token),
-        Finalize: (conversation, options, token) => LifecycleAsync(conversation, "", options, null, token),
-        IsLifecycleActive: conversation => streams.Get(conversation) is { Finish: false },
-        Progress: (conversation, progress, token) => LifecycleAsync(conversation, "", new(), progress, token));
+    private static bool Nonempty(string? text) => !string.IsNullOrWhiteSpace(text);
+
+    private static JsonObject Markdown(string text) =>
+        new()
+        {
+            ["msgtype"] = "markdown",
+            ["markdown"] = new JsonObject { ["content"] = text },
+        };
+
+    public RegisteredChannel Transport =>
+        new(
+            "wework",
+            SendTextAsync,
+            (conversation, file, caption, token) =>
+                SendFileAsync(conversation, file, caption, new(), token),
+            Finalize: (conversation, options, token) =>
+                LifecycleAsync(conversation, "", options, null, token),
+            IsLifecycleActive: conversation => streams.Get(conversation) is { Finish: false },
+            Progress: (conversation, progress, token) =>
+                LifecycleAsync(conversation, "", new(), progress, token)
+        );
 
     public async Task StartAsync()
     {
         stopped = false;
-        if (SessionWait.Number(config["listenPort"]) is { } port && port != 0 && Nonempty(Text(config["listenPath"])))
+        if (
+            SessionWait.Number(config["listenPort"]) is { } port
+            && port != 0
+            && Nonempty(Text(config["listenPath"]))
+        )
             await StartListenerAsync((int)port, Text(config["listenPath"]));
         if (WebSocketEnabled)
             _ = ObserveAsync(ConnectionLoopAsync());
@@ -102,19 +125,46 @@ internal sealed partial class WeWorkChannel : IManagedChannel
 
     private async Task ObserveAsync(Task task)
     {
-        try { await task; }
+        try
+        {
+            await task;
+        }
         catch (OperationCanceledException) when (stopped) { }
-        catch (Exception error) { log(error); }
+        catch (Exception error)
+        {
+            log(error);
+        }
     }
 
-    private Task LifecycleAsync(string conversation, string text, ChannelSendOptions options, ChannelTurnProgress? progress, CancellationToken token)
+    private Task LifecycleAsync(
+        string conversation,
+        string text,
+        ChannelSendOptions options,
+        ChannelTurnProgress? progress,
+        CancellationToken token
+    )
     {
         if (streams.Get(conversation) is not { Finish: false } active)
             return Task.CompletedTask;
-        return AggregateAsync(conversation, text, options with { StreamId = active.Id }, progress, token);
+        return AggregateAsync(
+            conversation,
+            text,
+            options with
+            {
+                StreamId = active.Id,
+            },
+            progress,
+            token
+        );
     }
 
-    private async Task<bool> AggregateAsync(string conversation, string text, ChannelSendOptions options, ChannelTurnProgress? progress, CancellationToken token)
+    private async Task<bool> AggregateAsync(
+        string conversation,
+        string text,
+        ChannelSendOptions options,
+        ChannelTurnProgress? progress,
+        CancellationToken token
+    )
     {
         if (!streamEnabled)
             return false;
@@ -124,13 +174,21 @@ internal sealed partial class WeWorkChannel : IManagedChannel
         return handled;
     }
 
-    internal async Task SendTextAsync(string conversation, string text, ChannelSendOptions options, CancellationToken token)
+    internal async Task SendTextAsync(
+        string conversation,
+        string text,
+        ChannelSendOptions options,
+        CancellationToken token
+    )
     {
         try
         {
             if (options.StreamId is not null && !streamEnabled)
                 return;
-            if (await AggregateAsync(conversation, text, options, null, token) || options.StreamId is not null)
+            if (
+                await AggregateAsync(conversation, text, options, null, token)
+                || options.StreamId is not null
+            )
                 return;
             var explicitWebhook = Nonempty(options.WebhookUrl) ? options.WebhookUrl : null;
             if (explicitWebhook is null && options.TurnFinal)
@@ -155,7 +213,9 @@ internal sealed partial class WeWorkChannel : IManagedChannel
             }
             var url = explicitWebhook ?? webhook;
             if (!Nonempty(url))
-                throw new InvalidOperationException("WeWork webhookUrl is not configured for proactive sendMessage");
+                throw new InvalidOperationException(
+                    "WeWork webhookUrl is not configured for proactive sendMessage"
+                );
             JsonObject payload;
             if (options.MessageType is null or "markdown")
                 payload = Markdown(text);
@@ -166,8 +226,16 @@ internal sealed partial class WeWorkChannel : IManagedChannel
                     ["text"] = new JsonObject
                     {
                         ["content"] = text,
-                        ["mentioned_list"] = new JsonArray((options.MentionedList ?? []).Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()),
-                        ["mentioned_mobile_list"] = new JsonArray((options.MentionedMobileList ?? []).Select(value => (JsonNode?)JsonValue.Create(value)).ToArray()),
+                        ["mentioned_list"] = new JsonArray(
+                            (options.MentionedList ?? [])
+                                .Select(value => (JsonNode?)JsonValue.Create(value))
+                                .ToArray()
+                        ),
+                        ["mentioned_mobile_list"] = new JsonArray(
+                            (options.MentionedMobileList ?? [])
+                                .Select(value => (JsonNode?)JsonValue.Create(value))
+                                .ToArray()
+                        ),
                     },
                 };
             if (EffectiveChat(conversation, options) is { } chat)
@@ -181,9 +249,18 @@ internal sealed partial class WeWorkChannel : IManagedChannel
     }
 
     private static string? EffectiveChat(string conversation, ChannelSendOptions options) =>
-        Nonempty(options.ChatId) ? options.ChatId : conversation.StartsWith("wok", StringComparison.Ordinal) || conversation.StartsWith("wrk", StringComparison.Ordinal) ? conversation : null;
+        Nonempty(options.ChatId) ? options.ChatId
+        : conversation.StartsWith("wok", StringComparison.Ordinal)
+        || conversation.StartsWith("wrk", StringComparison.Ordinal)
+            ? conversation
+        : null;
 
-    private async Task<JsonObject> PostAsync(string url, HttpContent content, int timeoutMs, CancellationToken token)
+    private async Task<JsonObject> PostAsync(
+        string url,
+        HttpContent content,
+        int timeoutMs,
+        CancellationToken token
+    )
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
         timeout.CancelAfter(timeoutMs);
@@ -191,15 +268,23 @@ internal sealed partial class WeWorkChannel : IManagedChannel
         response.EnsureSuccessStatusCode();
         var bytes = await response.Content.ReadAsByteArrayAsync(timeout.Token);
         // Axios leaves non-JSON successful bodies as strings. Missing errcode is accepted only on response_url.
-        try { return JsonNode.Parse(bytes) as JsonObject ?? new(); }
-        catch (System.Text.Json.JsonException) { return new(); }
+        try
+        {
+            return JsonNode.Parse(bytes) as JsonObject ?? new();
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return new();
+        }
     }
 
     private async Task SendResponseAsync(string url, string text, CancellationToken token)
     {
         var result = await PostAsync(url, JsonContent.Create(Markdown(text)), 10000, token);
         if (result.ContainsKey("errcode") && !Zero(result["errcode"]))
-            throw new IOException($"WeWork aibot response failed: {Text(result["errmsg"])} (code: {result["errcode"]})");
+            throw new IOException(
+                $"WeWork aibot response failed: {Text(result["errmsg"])} (code: {result["errcode"]})"
+            );
     }
 
     private static bool Zero(JsonNode? code) => SessionWait.Number(code) == 0;
@@ -212,20 +297,47 @@ internal sealed partial class WeWorkChannel : IManagedChannel
             {
                 var result = await PostAsync(url, JsonContent.Create(payload), 10000, token);
                 if (!Zero(result["errcode"]))
-                    throw new IOException($"WeWork API error: {Text(result["errmsg"])} (code: {result["errcode"]})");
+                    throw new IOException(
+                        $"WeWork API error: {Text(result["errmsg"])} (code: {result["errcode"]})"
+                    );
                 return;
             }
-            catch (Exception error) when (attempt < 3 && !token.IsCancellationRequested && (error is not HttpRequestException request || request.StatusCode is null || (int)request.StatusCode >= 500))
+            catch (Exception error)
+                when (attempt < 3
+                    && !token.IsCancellationRequested
+                    && (
+                        error is not HttpRequestException request
+                        || request.StatusCode is null
+                        || (int)request.StatusCode >= 500
+                    )
+                )
             {
                 await delay(TimeSpan.FromSeconds(attempt), token);
             }
         }
     }
 
-    private Task SendProactiveAsync(string conversation, JsonObject payload, ChannelSendOptions options, CancellationToken token)
+    private Task SendProactiveAsync(
+        string conversation,
+        JsonObject payload,
+        ChannelSendOptions options,
+        CancellationToken token
+    )
     {
-        var body = new JsonObject { ["chatid"] = Nonempty(options.ChatId) ? options.ChatId : conversation };
-        int? type = options.NativeChatType ?? (options.ChatType switch { "single" => 1, "group" => 2, _ => (int?)null });
+        var body = new JsonObject
+        {
+            ["chatid"] = Nonempty(options.ChatId) ? options.ChatId : conversation,
+        };
+        int? type =
+            options.NativeChatType
+            ?? (
+                options.ChatType switch
+                {
+                    "single" => 1,
+                    "group" => 2,
+                    _ => (int?)null,
+                }
+            );
         if (type is not null)
             body["chat_type"] = type;
         foreach (var (key, value) in payload)
@@ -235,6 +347,11 @@ internal sealed partial class WeWorkChannel : IManagedChannel
 
     private Task PushStreamAsync(WeWorkStreamSnapshot snapshot, CancellationToken token) =>
         snapshot.Delivery.Mode == "websocket" && Nonempty(snapshot.Delivery.ReqId)
-            ? SendCommandAsync("aibot_respond_msg", snapshot.Payload(), snapshot.Delivery.ReqId, token)
+            ? SendCommandAsync(
+                "aibot_respond_msg",
+                snapshot.Payload(),
+                snapshot.Delivery.ReqId,
+                token
+            )
             : Task.CompletedTask;
 }

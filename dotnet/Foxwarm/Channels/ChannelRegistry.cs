@@ -4,7 +4,11 @@ internal sealed record ChannelFile(string Path, string Name, string? MimeType, b
 
 internal sealed record ChannelTurnTool(string Id, string Name, string Status = "running");
 
-internal sealed record ChannelTurnProgress(string Type, IReadOnlyList<ChannelTurnTool>? Tools = null, string? Text = null);
+internal sealed record ChannelTurnProgress(
+    string Type,
+    IReadOnlyList<ChannelTurnTool>? Tools = null,
+    string? Text = null
+);
 
 internal sealed record ChannelSendOptions(
     bool TurnFinal = false,
