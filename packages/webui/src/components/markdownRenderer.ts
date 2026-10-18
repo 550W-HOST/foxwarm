@@ -1,3 +1,4 @@
+import { parseArtifactMarker, type ArtifactReference } from '../../../shared/src/artifacts/marker'
 import DOMPurify from 'dompurify'
 import katex from 'katex'
 import { Marked } from 'marked'
@@ -17,6 +18,7 @@ export type MarkdownRenderSegment =
   | { kind: 'html'; tokenIndex: number; html: string }
   | { kind: 'latex'; tokenIndex: number; raw: string; source: string; html: string }
   | { kind: 'mermaid'; tokenIndex: number; raw: string; source: string }
+  | { kind: 'artifact'; tokenIndex: number; reference: ArtifactReference }
 
 type MathRenderContext = {
   markerPrefix: string
@@ -223,10 +225,32 @@ const displayMathBlockExtension: TokenizerAndRendererExtension = {
   renderer: renderMathToken,
 }
 
+const artifactReferenceExtension: TokenizerAndRendererExtension = {
+  name: 'artifactReference', level: 'block',
+  start(src: string) {
+    const pattern = /(?:^|\n\n)(<foxwarm-artifact\b|<foxwarm-a[a-z]*$)/g
+    let found: RegExpExecArray | null
+    while ((found = pattern.exec(src))) {
+      const index = found.index + found[0].indexOf('<')
+      if (!isInsideMarkdownCode(src, index)) return index
+    }
+    return undefined
+  },
+  tokenizer(src: string) {
+    const line = src.split('\n', 1)[0].replace(/\r$/, '')
+    if (!/^<foxwarm-artifact(?:\s|$)/.test(line) && !(line.length >= 10 && '<foxwarm-artifact'.startsWith(line))) return
+    // A figure is its own Markdown block. Nested list/quote tokens stay literal.
+    if (src.includes('\n') && src.slice(src.indexOf('\n') + 1).trim() && !/^\r?\n/.test(src.slice(src.indexOf('\n') + 1))) return
+    const raw = src.slice(0, src.indexOf('\n') < 0 ? src.length : src.indexOf('\n') + 1)
+    return { type: 'artifactReference', raw, reference: parseArtifactMarker(line), pending: !src.includes('\n') && !line.includes('>') }
+  },
+  renderer(token) { return `<pre><code>${escapeHtml(token.raw.trimEnd())}</code></pre>` },
+}
+
 const markdown = new Marked({
   breaks: true,
   gfm: true,
-  extensions: [displayMathBlockExtension, displayMathPrefixExtension, displayMathExtension, inlineMathExtension],
+  extensions: [artifactReferenceExtension, displayMathBlockExtension, displayMathPrefixExtension, displayMathExtension, inlineMathExtension],
 })
 
 const sanitizeHtml = (html: string, allowTableScrollWrapper = false): string => {
@@ -312,10 +336,15 @@ export const renderMarkdownSegments = (text: string): Array<Extract<MarkdownRend
 export const renderAssistantMarkdownSegmentsWithSanitizer = (
   text: string,
   sanitizer?: HtmlSanitizer,
+  artifacts?: { enabled: boolean; streaming?: boolean },
 ): MarkdownRenderSegment[] => {
   const segments: MarkdownRenderSegment[] = []
 
   for (const [tokenIndex, token] of markdown.lexer(text).entries()) {
+    if (artifacts?.enabled && token.type === 'artifactReference') {
+      if (token.reference) { segments.push({ kind: 'artifact', tokenIndex, reference: token.reference }); continue }
+      if (artifacts.streaming && token.pending) continue
+    }
     if (token.type === 'code' && token.lang?.trim().toLowerCase() === 'mermaid') {
       segments.push({ kind: 'mermaid', tokenIndex, raw: token.raw, source: token.text })
       continue
@@ -338,6 +367,11 @@ export const renderAssistantMarkdownSegmentsWithSanitizer = (
   return segments
 }
 
-export const renderAssistantMarkdownSegments = (text: string): MarkdownRenderSegment[] => (
-  renderAssistantMarkdownSegmentsWithSanitizer(text)
+export const renderAssistantMarkdownSegments = (text: string, artifacts?: { enabled: boolean; streaming?: boolean }): MarkdownRenderSegment[] => (
+  renderAssistantMarkdownSegmentsWithSanitizer(text, undefined, artifacts)
 )
+/** Reuse the same top-level lexer contract for reply-tail deduplication. */
+export function assistantArtifactReferences(text: string): ArtifactReference[] {
+  if (!text.includes('<foxwarm-artifact')) return []
+  return markdown.lexer(text).flatMap(token => token.type === 'artifactReference' && token.reference ? [token.reference as ArtifactReference] : [])
+}

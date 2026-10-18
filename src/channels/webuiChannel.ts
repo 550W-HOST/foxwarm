@@ -1,3 +1,5 @@
+import { registerDataUsageRoutes } from '../storage/dataUsage';
+import { registerArtifactRoutes } from '../artifacts/routes';
 import { parseSessionControlFeedback, getSessionControlAction } from '../../packages/shared/dist/sessionControlFeedback';
 import { readContinuousHistoryPage } from './webuiContinuousHistory';
 import { registerWebUiFileDownloads, registerWebUiBlobDownloads } from './webuiFileDownloads';
@@ -893,6 +895,8 @@ export class WebUIChannel implements Channel {
       return auth;
     };
     httpServerInstance.setWebUiIdentityVerifier(verifyWebUiIdentity);
+    if (this.enableWebUI) registerDataUsageRoutes(httpServerInstance);
+    if (this.enableWebUI) registerArtifactRoutes(httpServerInstance, (req, res, id) => this.requireSessionAccess(req, res, id));
     const downloadSignatures = registerWebUiFileDownloads(httpServerInstance, this.token);
     if (this.enableWebUI) registerWebUiBlobDownloads(httpServerInstance, downloadSignatures, async (req, res, sessionId, blobId) => {
       const auth = await this.requireSessionAccess(req, res, sessionId);

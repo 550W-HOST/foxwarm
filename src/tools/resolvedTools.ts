@@ -118,7 +118,7 @@ function resolveBuiltin(invocationName: string, name: string, rawArgs: ToolArgs,
   const targetNode = nodeSelectsPlacement ? normalizeNodeId(rawArgs.node, current) : current;
   const args = { ...rawArgs }; if (nodeSelectsPlacement) delete args.node;
   const placement = resolveBuiltinToolPlacement(name, args, targetNode);
-  const sourceNode = builtinNodeArgumentSelectsFileSource(name) ? resolveToolScriptSourceNode(args, current) : undefined;
+  const sourceNode = builtinNodeArgumentSelectsFileSource(name, args) ? resolveToolScriptSourceNode(args, current) : undefined;
   if (sourceNode !== undefined) args.node = sourceNode;
   const permissionNode = sourceNode ?? (nodeSelectsPlacement ? targetNode : placement.executionNode);
   let routingSnapshot: ResolvedTool['routingSnapshot'];
@@ -165,7 +165,7 @@ export async function resolveDirectTool(name: string, args: ToolArgs, ctx: ToolC
 
 /** Keep source path facts bound to resolution without rewriting caller arguments. */
 export function resolvedToolAuthorizationSession(resolved: ResolvedTool, session: Session): Session {
-  return resolved.source === 'builtin' && builtinNodeArgumentSelectsFileSource(resolved.name) && resolved.routingSnapshot
+  return resolved.source === 'builtin' && builtinNodeArgumentSelectsFileSource(resolved.name, resolved.args) && resolved.routingSnapshot
     ? { ...session, cwd: resolved.routingSnapshot.cwd } : session;
 }
 
@@ -220,7 +220,7 @@ export async function executeResolvedTool(resolved: ResolvedTool, ctx: ToolConte
       { ...toolCtx, runtimeNodeId: 'master', ...(fileTool && onResolvedPaths ? { onResolvedPaths } : {}) });
   }
   return activeRuntime().dispatchBuiltin(resolved.name, resolved.args,
-    resolved.source === 'builtin' && builtinNodeArgumentSelectsFileSource(resolved.name) && resolved.routingSnapshot
+    resolved.source === 'builtin' && builtinNodeArgumentSelectsFileSource(resolved.name, resolved.args) && resolved.routingSnapshot
       ? { ...toolCtx, toolScriptSourceRouting: resolved.routingSnapshot }
       : resolved.targetNode ? { ...toolCtx, runtimeNodeId: resolved.targetNode } : toolCtx);
 }

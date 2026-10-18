@@ -34,7 +34,7 @@ export interface SessionSearchMatch extends SearchField {
 // Rendered Markdown text, not Markdown syntax or the source of non-text special blocks.
 const htmlText = (html: string): string => new DOMParser().parseFromString(html, 'text/html').body.textContent || ''
 const markdownText = (text: string, assistant: boolean): string => (
-  (assistant ? renderAssistantMarkdownSegments(text) : renderMarkdownSegments(text))
+  (assistant ? renderAssistantMarkdownSegments(text, { enabled: true }) : renderMarkdownSegments(text))
     .map(segment => segment.kind === 'html' ? htmlText(segment.html) : '\u0000')
     .join('\u0000')
 )

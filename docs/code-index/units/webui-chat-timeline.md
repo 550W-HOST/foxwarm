@@ -1,5 +1,7 @@
 # Unit: webui-chat-timeline
 
+See [artifact rendering](./webui-artifacts.md) for revision-pinned content projected outside Activity.
+
 Files: packages/webui/src/components/ChatTimeline.tsx, packages/webui/test/messageCardPadding.e2e.mjs, packages/webui/test/messageWidth.e2e.mjs, packages/webui/test/timelineOverflowBoundary.e2e.mjs, packages/webui/test/streamMarkdownSelection.e2e.mjs, packages/webui/test/imageGenerationTimeline.e2e.mjs
 Secondary files: packages/webui/test/conversationPresentationPreview.e2e.mjs, packages/webui/src/components/Chat.tsx, packages/webui/src/components/ToolTimelineItems.tsx, packages/webui/src/components/ImageParts.tsx, packages/webui/src/chatViewportState.ts, packages/webui/src/index.css
 

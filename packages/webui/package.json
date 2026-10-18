@@ -65,6 +65,9 @@
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "react-resizable-panels": "^4.10.0",
+    "vega": "6.2.0",
+    "vega-interpreter": "2.1.0",
+    "vega-lite": "6.4.1",
     "yaml": "^2.9.0",
     "zustand": "^5.0.12"
   },

@@ -231,3 +231,5 @@ export function resetMainManagementToolsForTests(): void {
   initializingTransport = undefined;
   initializingPlacement = undefined;
 }
+
+export const tool_artifact = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('artifact', args, ctx);

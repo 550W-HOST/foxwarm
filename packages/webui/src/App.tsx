@@ -292,9 +292,9 @@ function getPersistentChatTabId(sessionId: string) {
 
 function loadStoredLastVisitedSession(): string {
   try {
-    return localStorage.getItem(LAST_VISITED_SESSION_STORAGE_KEY) || 'main'
+    return localStorage.getItem(LAST_VISITED_SESSION_STORAGE_KEY) || ''
   } catch {
-    return 'main'
+    return ''
   }
 }
 
@@ -347,14 +347,14 @@ function getHashState(): RouteState {
       return { view: 'tab', tabId: explicitTabId }
     }
     const sessionId = sessionIdPart || loadStoredLastVisitedSession()
-    return { view: 'tab', tabId: `chat:${sessionId}` }
+    return { view: 'tab', tabId: sessionId ? `chat:${sessionId}` : null }
   }
 
   if (hash.startsWith('__terminal__:')) {
     const remainder = hash.slice('__terminal__:'.length)
     const [sessionIdPart] = remainder.split('?')
     const sessionId = sessionIdPart || loadStoredLastVisitedSession()
-    return { view: 'tab', tabId: `chat:${sessionId}` }
+    return { view: 'tab', tabId: sessionId ? `chat:${sessionId}` : null }
   }
 
   return { view: 'tab', tabId: `chat:${hash}` }
@@ -870,6 +870,7 @@ function App() {
 
     didInitializeEmptyWorkbenchRef.current = true
     const fallbackSessionId = loadStoredLastVisitedSession()
+    if (!fallbackSessionId) return
     const tab = makeChatTab(fallbackSessionId, sessionTitle(fallbackSessionId), { preview: true })
     upsertTab(tab, { paneId: focusedPaneId || paneIds[0], activate: true })
     setRoute({ view: 'tab', tabId: tab.id })

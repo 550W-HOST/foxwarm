@@ -1,0 +1,1060 @@
+{
+  "type": "chart",
+  "schemaVersion": 1,
+  "title": "Training success rate",
+  "description": "Success rate by training iteration",
+  "source": "Synthetic demonstration \u00b7 240 iterations",
+  "data": [
+    {
+      "step": 562,
+      "success": 0.24
+    },
+    {
+      "step": 563,
+      "success": 0.25
+    },
+    {
+      "step": 564,
+      "success": 0.2308
+    },
+    {
+      "step": 565,
+      "success": 0.2645
+    },
+    {
+      "step": 566,
+      "success": 0.2317
+    },
+    {
+      "step": 567,
+      "success": 0.2662
+    },
+    {
+      "step": 568,
+      "success": 0.2456
+    },
+    {
+      "step": 569,
+      "success": 0.2573
+    },
+    {
+      "step": 570,
+      "success": 0.2656
+    },
+    {
+      "step": 571,
+      "success": 0.2477
+    },
+    {
+      "step": 572,
+      "success": 0.2805
+    },
+    {
+      "step": 573,
+      "success": 0.2478
+    },
+    {
+      "step": 574,
+      "success": 0.2828
+    },
+    {
+      "step": 575,
+      "success": 0.2608
+    },
+    {
+      "step": 576,
+      "success": 0.2741
+    },
+    {
+      "step": 577,
+      "success": 0.2806
+    },
+    {
+      "step": 578,
+      "success": 0.2641
+    },
+    {
+      "step": 579,
+      "success": 0.2959
+    },
+    {
+      "step": 580,
+      "success": 0.2632
+    },
+    {
+      "step": 581,
+      "success": 0.2987
+    },
+    {
+      "step": 582,
+      "success": 0.2753
+    },
+    {
+      "step": 583,
+      "success": 0.2902
+    },
+    {
+      "step": 584,
+      "success": 0.2947
+    },
+    {
+      "step": 585,
+      "success": 0.2795
+    },
+    {
+      "step": 586,
+      "success": 0.3102
+    },
+    {
+      "step": 587,
+      "success": 0.2776
+    },
+    {
+      "step": 588,
+      "success": 0.3134
+    },
+    {
+      "step": 589,
+      "success": 0.2886
+    },
+    {
+      "step": 590,
+      "success": 0.3049
+    },
+    {
+      "step": 591,
+      "success": 0.3075
+    },
+    {
+      "step": 592,
+      "success": 0.2937
+    },
+    {
+      "step": 593,
+      "success": 0.3231
+    },
+    {
+      "step": 594,
+      "success": 0.2906
+    },
+    {
+      "step": 595,
+      "success": 0.3266
+    },
+    {
+      "step": 596,
+      "success": 0.3005
+    },
+    {
+      "step": 597,
+      "success": 0.3181
+    },
+    {
+      "step": 598,
+      "success": 0.3187
+    },
+    {
+      "step": 599,
+      "success": 0.3062
+    },
+    {
+      "step": 600,
+      "success": 0.3342
+    },
+    {
+      "step": 601,
+      "success": 0.3019
+    },
+    {
+      "step": 602,
+      "success": 0.338
+    },
+    {
+      "step": 603,
+      "success": 0.3105
+    },
+    {
+      "step": 604,
+      "success": 0.3295
+    },
+    {
+      "step": 605,
+      "success": 0.3279
+    },
+    {
+      "step": 606,
+      "success": 0.3168
+    },
+    {
+      "step": 607,
+      "success": 0.3433
+    },
+    {
+      "step": 608,
+      "success": 0.3112
+    },
+    {
+      "step": 609,
+      "success": 0.3473
+    },
+    {
+      "step": 610,
+      "success": 0.3185
+    },
+    {
+      "step": 611,
+      "success": 0.3386
+    },
+    {
+      "step": 612,
+      "success": 0.335
+    },
+    {
+      "step": 613,
+      "success": 0.3253
+    },
+    {
+      "step": 614,
+      "success": 0.3501
+    },
+    {
+      "step": 615,
+      "success": 0.3184
+    },
+    {
+      "step": 616,
+      "success": 0.3542
+    },
+    {
+      "step": 617,
+      "success": 0.3243
+    },
+    {
+      "step": 618,
+      "success": 0.3455
+    },
+    {
+      "step": 619,
+      "success": 0.3398
+    },
+    {
+      "step": 620,
+      "success": 0.3314
+    },
+    {
+      "step": 621,
+      "success": 0.3546
+    },
+    {
+      "step": 622,
+      "success": 0.3232
+    },
+    {
+      "step": 623,
+      "success": 0.3588
+    },
+    {
+      "step": 624,
+      "success": 0.3276
+    },
+    {
+      "step": 625,
+      "success": 0.3499
+    },
+    {
+      "step": 626,
+      "success": 0.3421
+    },
+    {
+      "step": 627,
+      "success": 0.3351
+    },
+    {
+      "step": 628,
+      "success": 0.3566
+    },
+    {
+      "step": 629,
+      "success": 0.3256
+    },
+    {
+      "step": 630,
+      "success": 0.3608
+    },
+    {
+      "step": 631,
+      "success": 0.3286
+    },
+    {
+      "step": 632,
+      "success": 0.3519
+    },
+    {
+      "step": 633,
+      "success": 0.3421
+    },
+    {
+      "step": 634,
+      "success": 0.3365
+    },
+    {
+      "step": 635,
+      "success": 0.3561
+    },
+    {
+      "step": 636,
+      "success": 0.3257
+    },
+    {
+      "step": 637,
+      "success": 0.3604
+    },
+    {
+      "step": 638,
+      "success": 0.3272
+    },
+    {
+      "step": 639,
+      "success": 0.3515
+    },
+    {
+      "step": 640,
+      "success": 0.3396
+    },
+    {
+      "step": 641,
+      "success": 0.3354
+    },
+    {
+      "step": 642,
+      "success": 0.3533
+    },
+    {
+      "step": 643,
+      "success": 0.3234
+    },
+    {
+      "step": 644,
+      "success": 0.3576
+    },
+    {
+      "step": 645,
+      "success": 0.3235
+    },
+    {
+      "step": 646,
+      "success": 0.3487
+    },
+    {
+      "step": 647,
+      "success": 0.3348
+    },
+    {
+      "step": 648,
+      "success": 0.3321
+    },
+    {
+      "step": 649,
+      "success": 0.3481
+    },
+    {
+      "step": 650,
+      "success": 0.319
+    },
+    {
+      "step": 651,
+      "success": 0.3526
+    },
+    {
+      "step": 652,
+      "success": 0.3177
+    },
+    {
+      "step": 653,
+      "success": 0.3438
+    },
+    {
+      "step": 654,
+      "success": 0.328
+    },
+    {
+      "step": 655,
+      "success": 0.3268
+    },
+    {
+      "step": 656,
+      "success": 0.341
+    },
+    {
+      "step": 657,
+      "success": 0.3126
+    },
+    {
+      "step": 658,
+      "success": 0.3456
+    },
+    {
+      "step": 659,
+      "success": 0.3101
+    },
+    {
+      "step": 660,
+      "success": 0.337
+    },
+    {
+      "step": 661,
+      "success": 0.3194
+    },
+    {
+      "step": 662,
+      "success": 0.3197
+    },
+    {
+      "step": 663,
+      "success": 0.332
+    },
+    {
+      "step": 664,
+      "success": 0.3046
+    },
+    {
+      "step": 665,
+      "success": 0.3369
+    },
+    {
+      "step": 666,
+      "success": 0.3009
+    },
+    {
+      "step": 667,
+      "success": 0.3286
+    },
+    {
+      "step": 668,
+      "success": 0.3093
+    },
+    {
+      "step": 669,
+      "success": 0.3112
+    },
+    {
+      "step": 670,
+      "success": 0.3217
+    },
+    {
+      "step": 671,
+      "success": 0.2953
+    },
+    {
+      "step": 672,
+      "success": 0.3269
+    },
+    {
+      "step": 673,
+      "success": 0.2905
+    },
+    {
+      "step": 674,
+      "success": 0.319
+    },
+    {
+      "step": 675,
+      "success": 0.298
+    },
+    {
+      "step": 676,
+      "success": 0.3015
+    },
+    {
+      "step": 677,
+      "success": 0.3102
+    },
+    {
+      "step": 678,
+      "success": 0.285
+    },
+    {
+      "step": 679,
+      "success": 0.3159
+    },
+    {
+      "step": 680,
+      "success": 0.2792
+    },
+    {
+      "step": 681,
+      "success": 0.3085
+    },
+    {
+      "step": 682,
+      "success": 0.286
+    },
+    {
+      "step": 683,
+      "success": 0.2912
+    },
+    {
+      "step": 684,
+      "success": 0.2981
+    },
+    {
+      "step": 685,
+      "success": 0.2742
+    },
+    {
+      "step": 686,
+      "success": 0.3043
+    },
+    {
+      "step": 687,
+      "success": 0.2675
+    },
+    {
+      "step": 688,
+      "success": 0.2976
+    },
+    {
+      "step": 689,
+      "success": 0.2737
+    },
+    {
+      "step": 690,
+      "success": 0.2806
+    },
+    {
+      "step": 691,
+      "success": 0.2858
+    },
+    {
+      "step": 692,
+      "success": 0.2632
+    },
+    {
+      "step": 693,
+      "success": 0.2926
+    },
+    {
+      "step": 694,
+      "success": 0.2558
+    },
+    {
+      "step": 695,
+      "success": 0.2867
+    },
+    {
+      "step": 696,
+      "success": 0.2615
+    },
+    {
+      "step": 697,
+      "success": 0.2701
+    },
+    {
+      "step": 698,
+      "success": 0.2736
+    },
+    {
+      "step": 699,
+      "success": 0.2526
+    },
+    {
+      "step": 700,
+      "success": 0.2811
+    },
+    {
+      "step": 701,
+      "success": 0.2446
+    },
+    {
+      "step": 702,
+      "success": 0.2762
+    },
+    {
+      "step": 703,
+      "success": 0.2498
+    },
+    {
+      "step": 704,
+      "success": 0.2602
+    },
+    {
+      "step": 705,
+      "success": 0.262
+    },
+    {
+      "step": 706,
+      "success": 0.2426
+    },
+    {
+      "step": 707,
+      "success": 0.2703
+    },
+    {
+      "step": 708,
+      "success": 0.2342
+    },
+    {
+      "step": 709,
+      "success": 0.2665
+    },
+    {
+      "step": 710,
+      "success": 0.239
+    },
+    {
+      "step": 711,
+      "success": 0.2512
+    },
+    {
+      "step": 712,
+      "success": 0.2515
+    },
+    {
+      "step": 713,
+      "success": 0.2338
+    },
+    {
+      "step": 714,
+      "success": 0.2607
+    },
+    {
+      "step": 715,
+      "success": 0.225
+    },
+    {
+      "step": 716,
+      "success": 0.258
+    },
+    {
+      "step": 717,
+      "success": 0.2295
+    },
+    {
+      "step": 718,
+      "success": 0.2436
+    },
+    {
+      "step": 719,
+      "success": 0.2423
+    },
+    {
+      "step": 720,
+      "success": 0.2265
+    },
+    {
+      "step": 721,
+      "success": 0.2525
+    },
+    {
+      "step": 722,
+      "success": 0.2175
+    },
+    {
+      "step": 723,
+      "success": 0.251
+    },
+    {
+      "step": 724,
+      "success": 0.2218
+    },
+    {
+      "step": 725,
+      "success": 0.2377
+    },
+    {
+      "step": 726,
+      "success": 0.2349
+    },
+    {
+      "step": 727,
+      "success": 0.2209
+    },
+    {
+      "step": 728,
+      "success": 0.246
+    },
+    {
+      "step": 729,
+      "success": 0.2118
+    },
+    {
+      "step": 730,
+      "success": 0.2459
+    },
+    {
+      "step": 731,
+      "success": 0.2159
+    },
+    {
+      "step": 732,
+      "success": 0.2337
+    },
+    {
+      "step": 733,
+      "success": 0.2294
+    },
+    {
+      "step": 734,
+      "success": 0.2174
+    },
+    {
+      "step": 735,
+      "success": 0.2416
+    },
+    {
+      "step": 736,
+      "success": 0.2083
+    },
+    {
+      "step": 737,
+      "success": 0.2429
+    },
+    {
+      "step": 738,
+      "success": 0.2123
+    },
+    {
+      "step": 739,
+      "success": 0.2319
+    },
+    {
+      "step": 740,
+      "success": 0.2262
+    },
+    {
+      "step": 741,
+      "success": 0.2162
+    },
+    {
+      "step": 742,
+      "success": 0.2394
+    },
+    {
+      "step": 743,
+      "success": 0.207
+    },
+    {
+      "step": 744,
+      "success": 0.2422
+    },
+    {
+      "step": 745,
+      "success": 0.211
+    },
+    {
+      "step": 746,
+      "success": 0.2324
+    },
+    {
+      "step": 747,
+      "success": 0.2253
+    },
+    {
+      "step": 748,
+      "success": 0.2173
+    },
+    {
+      "step": 749,
+      "success": 0.2396
+    },
+    {
+      "step": 750,
+      "success": 0.2083
+    },
+    {
+      "step": 751,
+      "success": 0.2438
+    },
+    {
+      "step": 752,
+      "success": 0.2122
+    },
+    {
+      "step": 753,
+      "success": 0.2353
+    },
+    {
+      "step": 754,
+      "success": 0.2268
+    },
+    {
+      "step": 755,
+      "success": 0.221
+    },
+    {
+      "step": 756,
+      "success": 0.2421
+    },
+    {
+      "step": 757,
+      "success": 0.212
+    },
+    {
+      "step": 758,
+      "success": 0.2478
+    },
+    {
+      "step": 759,
+      "success": 0.2159
+    },
+    {
+      "step": 760,
+      "success": 0.2406
+    },
+    {
+      "step": 761,
+      "success": 0.2308
+    },
+    {
+      "step": 762,
+      "success": 0.227
+    },
+    {
+      "step": 763,
+      "success": 0.2471
+    },
+    {
+      "step": 764,
+      "success": 0.2182
+    },
+    {
+      "step": 765,
+      "success": 0.2541
+    },
+    {
+      "step": 766,
+      "success": 0.222
+    },
+    {
+      "step": 767,
+      "success": 0.2483
+    },
+    {
+      "step": 768,
+      "success": 0.2372
+    },
+    {
+      "step": 769,
+      "success": 0.2355
+    },
+    {
+      "step": 770,
+      "success": 0.2543
+    },
+    {
+      "step": 771,
+      "success": 0.2267
+    },
+    {
+      "step": 772,
+      "success": 0.2628
+    },
+    {
+      "step": 773,
+      "success": 0.2304
+    },
+    {
+      "step": 774,
+      "success": 0.2582
+    },
+    {
+      "step": 775,
+      "success": 0.2457
+    },
+    {
+      "step": 776,
+      "success": 0.2461
+    },
+    {
+      "step": 777,
+      "success": 0.2637
+    },
+    {
+      "step": 778,
+      "success": 0.2375
+    },
+    {
+      "step": 779,
+      "success": 0.2734
+    },
+    {
+      "step": 780,
+      "success": 0.2409
+    },
+    {
+      "step": 781,
+      "success": 0.2701
+    },
+    {
+      "step": 782,
+      "success": 0.2563
+    },
+    {
+      "step": 783,
+      "success": 0.2587
+    },
+    {
+      "step": 784,
+      "success": 0.275
+    },
+    {
+      "step": 785,
+      "success": 0.2501
+    },
+    {
+      "step": 786,
+      "success": 0.2859
+    },
+    {
+      "step": 787,
+      "success": 0.2532
+    },
+    {
+      "step": 788,
+      "success": 0.2838
+    },
+    {
+      "step": 789,
+      "success": 0.2686
+    },
+    {
+      "step": 790,
+      "success": 0.273
+    },
+    {
+      "step": 791,
+      "success": 0.2878
+    },
+    {
+      "step": 792,
+      "success": 0.2644
+    },
+    {
+      "step": 793,
+      "success": 0.2998
+    },
+    {
+      "step": 794,
+      "success": 0.2671
+    },
+    {
+      "step": 795,
+      "success": 0.2988
+    },
+    {
+      "step": 796,
+      "success": 0.2823
+    },
+    {
+      "step": 797,
+      "success": 0.2887
+    },
+    {
+      "step": 798,
+      "success": 0.302
+    },
+    {
+      "step": 799,
+      "success": 0.2799
+    },
+    {
+      "step": 800,
+      "success": 0.3149
+    },
+    {
+      "step": 801,
+      "success": 0.2822
+    }
+  ],
+  "spec": {
+    "height": 280,
+    "encoding": {
+      "x": {
+        "field": "step",
+        "type": "quantitative",
+        "title": "Training iteration",
+        "scale": {
+          "zero": false
+        }
+      },
+      "y": {
+        "type": "quantitative",
+        "title": "Success rate",
+        "axis": {
+          "format": ".0%"
+        },
+        "scale": {
+          "domain": [
+            0,
+            0.5
+          ]
+        }
+      }
+    },
+    "layer": [
+      {
+        "name": "raw",
+        "title": "Raw success rate",
+        "mark": {
+          "type": "line",
+          "color": "#20bfa9",
+          "strokeWidth": 2
+        },
+        "encoding": {
+          "y": {
+            "field": "success",
+            "type": "quantitative"
+          },
+          "tooltip": [
+            {
+              "field": "step",
+              "type": "quantitative"
+            },
+            {
+              "field": "success",
+              "type": "quantitative"
+            }
+          ]
+        }
+      },
+      {
+        "name": "average",
+        "title": "Rolling average",
+        "mark": {
+          "type": "line",
+          "color": "#9474ef",
+          "strokeWidth": 3
+        },
+        "encoding": {
+          "y": {
+            "field": "smoothed",
+            "type": "quantitative"
+          }
+        }
+      }
+    ]
+  },
+  "controls": {
+    "recent": 200,
+    "smoothing": {
+      "field": "success",
+      "as": "smoothed",
+      "window": 20
+    }
+  },
+  "metrics": [
+    {
+      "label": "Latest success rate",
+      "field": "success",
+      "aggregate": "last",
+      "percent": true
+    },
+    {
+      "label": "Last 20 iterations",
+      "field": "success",
+      "aggregate": "mean",
+      "window": 20,
+      "percent": true
+    }
+  ]
+}

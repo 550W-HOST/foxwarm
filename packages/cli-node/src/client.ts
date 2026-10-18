@@ -5,6 +5,8 @@
  */
 
 import crypto from 'crypto';
+import { DataUsageSampler } from '../../shared/dist/dataUsageScanner';
+import { getNodeAgentDir } from '../../shared/dist/nodeFileTransfer';
 import fs from 'fs-extra';
 import http from 'http';
 import path from 'path';
@@ -160,6 +162,7 @@ export class NodeClient {
   private requestedName: string;
   private pairingToken?: string;
   private credentialsFile?: string;
+  private dataUsage: DataUsageSampler;
   private initialAuthCredentialsPending = false;
   private connectedNodeId: string | null = null;
   private authToken?: string;
@@ -198,6 +201,9 @@ export class NodeClient {
     this.requestedName = options.nodeId || `node_${Date.now()}`;
     this.pairingToken = options.token;
     this.credentialsFile = options.credentialsFile;
+    const usageState = resolveNodeStateDir(this.credentialsFile);
+    const usageData = path.basename(usageState) === 'state' && path.basename(path.dirname(usageState)) === 'data' ? path.dirname(usageState) : undefined;
+    this.dataUsage = new DataUsageSampler({state:usageState,...(usageData?{data:usageData}:{}),agents:process.env.FOXWARM_AGENT_DIR?.trim()?getNodeAgentDir('main'):path.dirname(getNodeAgentDir('main')),...(process.env.FOXWARM_AGENT_DIR?.trim()?{singleAgent:'workspace'}:{})});
     this.connectedNodeId = options.authToken && options.nodeId ? options.nodeId : null;
     this.authToken = options.authToken;
     this.initialAuthCredentialsPending = !!(options.authToken && options.nodeId);
@@ -225,6 +231,7 @@ export class NodeClient {
       features: { execWaitCancellation: true, remoteExecBackgroundRegistration: true, programmaticToolData: true, ...(!this.toolCallInterceptor ? { externalToolOwner: 1 } : {}) },
       services: {
         ...CLI_NODE_CAPABILITIES.services,
+        'foxwarm-data': 1,
         ...(this.nodePtyService ? { 'vscode-pty': 1 } : {}),
       },
     };
@@ -721,6 +728,11 @@ export class NodeClient {
 
   private async executeNodeService(service: string, operation: string, args: any): Promise<any> {
     const serviceArgs = args && typeof args === 'object' ? args : {};
+    if (service === 'foxwarm-data') {
+      if (args !== undefined && (!args || typeof args !== 'object' || Array.isArray(args))) throw new Error('Invalid data usage request');
+      if (operation !== 'read' || Object.keys(serviceArgs).some(k=>k!=='refresh') || serviceArgs.refresh !== undefined && typeof serviceArgs.refresh !== 'boolean') throw new Error('Invalid data usage request');
+      return this.dataUsage.read(serviceArgs.refresh === true);
+    }
     if (service === 'vscode-pty') {
       if (!this.nodePtyService) throw new Error('vscode-pty service is unavailable on this node.');
       return this.nodePtyService.execute(operation, serviceArgs);

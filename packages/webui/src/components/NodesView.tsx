@@ -1,3 +1,4 @@
+import NodeDataUsage from '../storage/NodeDataUsage'
 import { useCallback, useState } from 'react'
 import { ArrowLeft, Server } from 'lucide-react'
 import type { WebUiNodeTarget } from '../nodeTargets'
@@ -17,6 +18,7 @@ function NodeOverviewCard({ node }: { node: WebUiNodeTarget }) {
     <p className="mt-2 text-xs text-fw-text-muted">{node.type}{node.lastSeenAt ? ` · Last seen ${new Date(node.lastSeenAt).toLocaleString()}` : ''}</p>
     {incompatible ? <div className="mt-2"><StatusBadge tone="warning">Upgrade required</StatusBadge></div> : null}
     {node.protocolMessage && node.protocolMessage !== 'upgrade required' ? <p className="mt-2 text-xs text-fw-warning">{node.protocolMessage}</p> : null}
+    <div className="mt-3"><NodeDataUsage nodeId={node.id} name={node.displayName}/></div>
     <div className="mt-3 flex flex-wrap gap-1.5">
       {Object.entries(node.services).map(([name, version]) => <span key={name} className="rounded bg-fw-canvas px-2 py-1 text-xs text-fw-text-muted">{name} v{version}</span>)}
     </div>

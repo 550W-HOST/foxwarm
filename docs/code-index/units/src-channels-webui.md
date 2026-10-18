@@ -1,5 +1,7 @@
 # Unit: src-channels-webui
 
+See [artifact publication and reads](./src-artifacts.md) for authenticated immutable interactive content.
+
 Files: src/channels/webuiContinuousHistory.ts, src/channels/webuiContinuousHistory.test.ts, src/channels/webuiChannel.ts, src/channels/webuiSetup.ts, src/channels/webuiSetup.test.ts, src/providerModelList.ts, src/providerModelList.test.ts, src/channels/webuiQueuePreview.ts, src/channels/webuiQueuePreview.test.ts, src/channels/webuiAgentsRoute.test.ts, src/channels/webuiUpload.ts, src/channels/webuiUpload.test.ts, src/channels/webuiSessionsRoute.test.ts, src/channels/webuiHistorySearch.test.ts, src/channels/webuiSendFile.test.ts, src/channels/webuiModelsDiagnostics.test.ts, src/channels/webuiNodesRoute.test.ts, src/channels/webuiTerminalsRoute.test.ts, src/channels/webuiTrigger.test.ts, src/channels/webuiTerminalStream.test.ts, src/channels/webuiFileDownloads.ts, src/channels/webuiFileDownloads.test.ts
 Secondary files: src/webuiSessionScope.ts, src/channels/webuiAccess.test.ts, src/channels/webuiSessionNodesRoute.test.ts, src/channels/webuiLogs.ts, src/channels/webuiRealtime.ts, src/channels/webuiRealtime.test.ts, src/webuiSettings.ts, src/webuiSettings.test.ts, src/vscodeWebRoutes.ts
 
