@@ -5,7 +5,7 @@ import { WorkbenchTabHeaderProvider } from './WorkbenchTabHeader'
 import WorkbenchTabErrorBoundary from './WorkbenchTabErrorBoundary'
 import { PaneDropTargets, WorkbenchPaneToolbar, type WorkbenchPaneProps } from './WorkbenchPane'
 import { useWorkbenchTabMenu } from './useWorkbenchTabMenu'
-import { ContentBeforeResizeContext } from '../contentResize'
+import { ContentBeforeResizeContext, type ContentResizeOwner } from '../contentResize'
 import type { WorkbenchTab } from '../workbench/types'
 import { isWorkbenchPaneDragBlankTarget } from './WorkbenchPaneDragArea'
 
@@ -179,7 +179,11 @@ export default function WorkbenchContentHost(props: ContentHostProps) {
     const animation = elementRef.current?.animate([{opacity:0.86},{opacity:1}], {duration:130,easing:'ease-out'})
     return () => animation?.cancel()
   }, [tab.id, tab.type, visible])
-  const beforeResize = useRef<(() => void) | null>(null)
+  const contentResize = useMemo<ContentResizeOwner>(() => ({
+    beforeResize: null,
+    // Geometry publishes visibility only after assigning the actual slot size.
+    isLayoutReady: () => elementRef.current?.style.visibility === 'visible',
+  }), [])
   const handleOverlayMount = useCallback((element: HTMLDivElement | null) => {
     if (element) positions.measure()
   }, [positions])
@@ -197,7 +201,7 @@ export default function WorkbenchContentHost(props: ContentHostProps) {
       paneId,
       visible,
       onFocus: () => { if (!props.focused) onFocusPane(paneId) },
-      beforeResize: () => beforeResize.current?.(),
+      beforeResize: () => contentResize.beforeResize?.(),
     })
   })
   useLayoutEffect(() => () => positions.registerHost(tab.id, null), [positions, tab.id])
@@ -215,7 +219,7 @@ export default function WorkbenchContentHost(props: ContentHostProps) {
     data-history-search-portal={tab.type === 'search' ? tab.id : undefined}
     onPointerDownCapture={activate} onFocusCapture={activate}>
     <div ref={bodyRef} className="h-full min-h-0 overflow-hidden transition-opacity duration-150 motion-reduce:transition-none" style={{ opacity: props.navigationPending?.showLoader ? 0.65 : 1, borderRadius: 'inherit' }}>
-      <ContentBeforeResizeContext.Provider value={beforeResize}>
+      <ContentBeforeResizeContext.Provider value={contentResize}>
         <WorkbenchTabHeaderProvider value={header}>
           <WorkbenchTabErrorBoundary tabId={tab.id} tabTitle={tab.title} canClose={props.canClose !== false}
             onClose={() => onCloseTab(tab.id)}>

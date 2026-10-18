@@ -435,7 +435,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
   }, [historyMode, setBottomFollow])
 
   const captureCurrentViewportState = useCallback((): ChatViewportState | null => {
-    // A pending restore owns the position until its rows arrive or user input cancels it.
+    // A pending restore owns the position until its rows and host layout are ready,
+    // or user input cancels it.
     const pending = pendingViewportRestoreRef.current
     if (pending?.kind === 'state') return pending.state
     if (pendingContentResizeRef.current) return pendingContentResizeRef.current.state
@@ -456,7 +457,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     return state
   }, [readCurrentViewportState, updateBottomFollowState, viewportSessionId, historyMode])
 
-  useContentBeforeResize(useCallback(() => {
+  const isContentLayoutReady = useContentBeforeResize(useCallback(() => {
     // Do not acknowledge detached user input before its native scroll captures position.
     if (!shouldAutoScrollRef.current && capturedInteractionVersionRef.current !== userInteractionVersionRef.current) return
     const state = captureCurrentViewportState()
@@ -465,7 +466,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
 
   const applyViewportState = useCallback((state: ChatViewportState): boolean => {
     const container = messagesContainerRef.current
-    if (!container) return false
+    if (!container || !isContentLayoutReady()) return false
 
     if (state.kind === 'bottom') {
       container.scrollTop = container.scrollHeight
@@ -493,7 +494,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
     setBottomFollow(false)
     storeChatViewportState(viewportSessionId, state, historyMode)
     return true
-  }, [setBottomFollow, viewportSessionId, historyMode])
+  }, [isContentLayoutReady, setBottomFollow, viewportSessionId, historyMode])
 
   const applyViewportAnchorCandidates = useCallback((anchors: Array<{ messageKey: string; offsetPx: number }>): boolean => {
     for (const candidate of anchors) {
@@ -1138,7 +1139,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
         return
       }
 
-      if (historyMode === 'continuous' ? !archivePage.loaded : !historyLoaded) return
+      // Prepared rows mount before the Workbench assigns its first pane rectangle.
+      // Do not mistake that unavailable viewport for a missing saved anchor.
+      if (!isContentLayoutReady() || (historyMode === 'continuous' ? !archivePage.loaded : !historyLoaded)) return
       const fallbackState: ChatViewportState = { kind: 'bottom' }
       pendingViewportRestoreRef.current = null
       applyViewportState(fallbackState)
@@ -1166,7 +1169,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       return
     }
 
-    if (historyMode === 'active' ? !showFullTimeline || !historyLoaded : !archivePage.loaded) return
+    if (!isContentLayoutReady() || (historyMode === 'active' ? !showFullTimeline || !historyLoaded : !archivePage.loaded)) return
 
     const container = messagesContainerRef.current
     if (!container) return
@@ -1187,7 +1190,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       }
       capturedInteractionVersionRef.current = userInteractionVersionRef.current
     }
-  }, [applyViewportAnchorCandidates, applyViewportState, historyLoaded, messages.length, readCurrentViewportState, setBottomFollow, showFullTimeline, timelineMessages, viewportSessionId, historyMode, archivePage.loaded, continuousWindowStart, continuousWindowKey, continuousWindowEndKey, visibleMessages])
+  }, [applyViewportAnchorCandidates, applyViewportState, historyLoaded, isContentLayoutReady, messages.length, readCurrentViewportState, setBottomFollow, showFullTimeline, timelineMessages, viewportSessionId, historyMode, archivePage.loaded, continuousWindowStart, continuousWindowKey, continuousWindowEndKey, visibleMessages])
 
   useLayoutEffect(() => {
     const pending = pendingContextScrollbarNavigationRef.current
@@ -1235,7 +1238,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
         if (pending) {
           if (pending.interactionVersion === userInteractionVersionRef.current) {
             if (pending.kind === 'state') {
-              applyViewportState(pending.state)
+              if (applyViewportState(pending.state)) pendingViewportRestoreRef.current = null
             } else {
               applyViewportAnchorCandidates(pending.anchors)
             }
