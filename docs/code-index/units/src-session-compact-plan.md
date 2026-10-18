@@ -80,4 +80,4 @@ Exact raw preservation/removal uses top-level sequence arrays. It never changes 
 
 ### D-compact-plan-unconfirmed-text
 
-Summary guidance preserves requester wording and unresolved terms when meaning matters; it must not infer a later resolution from facts outside the summarized source range.
+Summary guidance preserves the source range's state without importing outside outcomes, including force-kept context. It retains requester intent, constraints and authorization scope, consequential decisions and reasons, active or blocked work, open questions, and next steps. Confirmed results stay distinct from hypotheses or proposals; important corrections, superseded decisions, and rejected approaches retain their reasons. Unclear terms keep their original wording or explicit uncertainty. Compact, natural summaries support continuation alongside retained context and identify when recall is needed. Evidence pointers may replace recoverable detail, not essential decisions or constraints; no fixed style examples or word-count template is prescribed.
