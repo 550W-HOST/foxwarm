@@ -31,6 +31,8 @@ For concrete remote `read`, `write`, `edit` and `apply_patch`, `SessionToolExecu
 
 Guard summaries use ordinary response formatting, including the existing .NET `outputTruncated: true` envelope whose error branch carries an `error` excerpt without `output`. This preserves both current and persisted summaries without wrapping the excerpt in a new execution metadata section.
 
+Resolved, authorized top-level dispatch supplies runtime name/source/server/Node, optional wrapper invocation, short resolved-argument preview and zero-based batch position. Programmatic subcalls preserve the outer script runtime and use its existing subcall progress. Successful builtin `send_to_session` delivery supplies separate display-only canonical destination/body evidence, bounded to 32,768 UTF-16 units. `TurnToolExecution.SessionMessages` flows to function-response `__meta.sessionMessages`, while ToolScript captures only its current completed host subcall's `sessionMessage`. These values do not broaden child-to-parent handoff receipts, alter returned values or delivery count, or trust arbitrary MCP/result JSON. Existing provider projection removes the metadata.
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/Tools/MainLocalToolsTests.cs`; `ToolAuthorizationEffectsTests.cs`; `HandoffConfirmationTests.cs`; ToolScript tool tests and `ToolScriptPresentationTests.cs`. `RemoteExecProtocolTests.cs` covers selected-Node exec advertisement, policy hiding, builtin collisions and explicit overrides. `packages/webui/test/experimentHostRemoteExecSchemas.e2e.mjs` checks real provider request schemas before direct and adjacent exec effects through the unchanged official CLI, plus policy-hidden schemas and canonical pairs; its provider refuses undeclared calls.

@@ -10,14 +10,15 @@ internal sealed partial class SessionManager
         SessionOwner source,
         string name,
         JsonObject? args,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        Action<string, string>? sessionMessageDelivered = null
     )
     {
         var previous = semanticCaller.Value;
         semanticCaller.Value = cancellationToken;
         try
         {
-            return await ExecuteAgentToolCoreAsync(source, name, args);
+            return await ExecuteAgentToolCoreAsync(source, name, args, sessionMessageDelivered);
         }
         finally
         {
@@ -28,7 +29,8 @@ internal sealed partial class SessionManager
     private async Task<(JsonObject Response, bool Finish)> ExecuteAgentToolCoreAsync(
         SessionOwner source,
         string name,
-        JsonObject? args
+        JsonObject? args,
+        Action<string, string>? sessionMessageDelivered
     )
     {
         try
@@ -286,6 +288,8 @@ internal sealed partial class SessionManager
                         requested,
                         RequiredString(args, "message")
                     );
+                    try { sessionMessageDelivered?.Invoke(target, RequiredString(args, "message")); }
+                    catch (Exception error) { source.Entry.RecordBestEffortFailure(error); }
                     return (
                         Output(
                             target == requested

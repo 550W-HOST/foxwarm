@@ -119,7 +119,7 @@ internal sealed partial class SessionOwner
     private static JsonNode JsonSerializerNode(object value) =>
         System.Text.Json.JsonSerializer.SerializeToNode(value)!;
 
-    public Task StartProcessing(bool retry = false)
+    public Task StartProcessing(bool retry = false, Action? admitted = null)
     {
         if (Registry.Runner.Closing)
         {
@@ -135,7 +135,7 @@ internal sealed partial class SessionOwner
             await ready.Task;
             try
             {
-                await Registry.Runner.ProcessQueueAsync(Id, retry);
+                await Registry.Runner.ProcessQueueAsync(Id, retry, admitted);
             }
             catch (Exception error)
             {
@@ -158,14 +158,8 @@ internal sealed partial class SessionOwner
                 if (failures != lastReportedFailureCount)
                 {
                     lastReportedFailureCount = failures;
-                    if (
-                        Entry.LastBackgroundProcessorFailure
-                        is not ModelRequestException { TerminalNoticeDelivered: true }
-                    )
-                        Emit(
-                            SessionEventKind.ProcessingError,
-                            JsonValue.Create(Entry.LastBackgroundProcessorFailure?.Message)
-                        );
+                    if (Entry.LastBackgroundProcessorFailure is { } failure)
+                        await PresentFailureAsync(failure, durable: false);
                 }
                 Emit(SessionEventKind.StateChanged);
                 running.TryRemove(index, out _);
@@ -228,6 +222,5 @@ internal sealed partial class SessionOwner
 
     public void PublishStateChanged() => Emit(SessionEventKind.StateChanged);
 
-    public void PublishCompactError(Exception error) =>
-        Emit(SessionEventKind.ProcessingError, JsonValue.Create(error.Message));
+
 }

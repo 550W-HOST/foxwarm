@@ -42,27 +42,42 @@ internal static class SessionRuntimeState
         return view;
     }
 
-    internal static JsonObject Build(SessionMetadata meta, bool toolActive, bool compacting)
+    internal static JsonObject Build(SessionMetadata meta, bool toolActive, bool compacting,
+        JsonObject? foreground = null, JsonObject? compaction = null)
+        => Build(meta.Busy, meta.Stopping, meta.BusyStartedAt, meta.QueueLength, meta.Wait, toolActive, compacting, foreground, compaction);
+
+    internal static JsonObject Build(bool busy, bool stopping, long? busyStartedAt, int queueLength,
+        JsonObject? wait, bool toolActive, bool compacting, JsonObject? foreground = null, JsonObject? compaction = null)
     {
-        var wait = meta.Wait;
         var state = new JsonObject
         {
-            ["state"] = meta.Busy
+            ["state"] = busy
                 ? toolActive
                     ? "running-tool"
                     : "requesting-model"
                 : wait is not null
                     ? "waiting"
                     : "idle",
-            ["busy"] = meta.Busy,
-            ["queueLength"] = meta.QueueLength,
+            ["busy"] = busy,
+            ["queueLength"] = queueLength,
         };
-        if (meta.Busy)
+        if (compaction is not null)
+            state["compaction"] = compaction.DeepClone();
+        if (busy)
         {
-            if (meta.BusyStartedAt is long since)
+            if (stopping)
+                state["stopping"] = true;
+            if (foreground is not null)
+                foreach (var (key, value) in foreground)
+                    state[key] = value?.DeepClone();
+            if (!state.ContainsKey("since") && busyStartedAt is long since)
                 state["since"] = since;
-            if (compacting)
-                state["active"] = new JsonObject { ["phase"] = "compaction" };
+            if (foreground is null)
+            {
+                state["active"] = new JsonObject { ["phase"] = compacting ? "compaction" : "unknown" };
+                if (!compacting)
+                    state["note"] = "Session is busy, but exact runtime phase is not available.";
+            }
             return state;
         }
         if (wait is null)
@@ -117,6 +132,71 @@ internal static class SessionRuntimeState
 
 internal sealed partial class SessionOwner
 {
+    private readonly object runtimeGate = new();
+    private JsonObject? foregroundRuntime;
+    private JsonObject? compactRuntime;
+
+    internal JsonObject RuntimeSnapshot(SessionMetadata? meta = null)
+    {
+        meta ??= Metadata();
+        lock (runtimeGate)
+            return SessionRuntimeState.Build(meta, ToolActive, Compacting, foregroundRuntime, compactRuntime);
+    }
+
+    internal void BeginModelAttempt()
+    {
+        lock (runtimeGate)
+            foregroundRuntime = new JsonObject
+            {
+                ["state"] = "requesting-model",
+                ["since"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                ["active"] = new JsonObject { ["phase"] = "normal-turn" },
+            };
+        PublishStateChanged();
+    }
+
+    internal static JsonObject RetryProjection(Foxwarm.Models.ModelRetryEvent value) => new()
+    {
+        ["attempt"] = Math.Max(1, value.Attempt),
+        ["maxAttempts"] = Math.Max(1, value.MaxRetries),
+        ["final"] = value.Final ? true : null,
+        ["nextAttempt"] = value.Final ? null : value.Attempt + 1,
+        ["retryAt"] = value.DelayMs is { } delay ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + Math.Max(0, delay) : null,
+        ["reason"] = Bound(System.Text.RegularExpressions.Regex.Replace(value.Reason, @"\s+", " ").Trim(), 1024),
+    };
+
+    internal static string Bound(string value, int max) => value.Length > max ? value[..max] : value;
+
+    internal void SetModelRetry(Foxwarm.Models.ModelRetryEvent value)
+    {
+        lock (runtimeGate)
+            if (foregroundRuntime is not null)
+                foregroundRuntime["retry"] = RetryProjection(value);
+        PublishStateChanged();
+    }
+
+    internal void SetCompactRuntime(string operationId, string phase, bool background, JsonObject? retry)
+    {
+        lock (runtimeGate)
+            compactRuntime = new JsonObject
+            {
+                ["operationId"] = operationId, ["phase"] = phase, ["background"] = background,
+                ["retry"] = retry?.DeepClone(),
+            };
+        PublishStateChanged();
+    }
+
+    internal void ClearCompactRuntime(string operationId)
+    {
+        lock (runtimeGate)
+        {
+            if (SessionWait.Text(compactRuntime?["operationId"]) != operationId)
+                return;
+            compactRuntime = null;
+        }
+        PublishStateChanged();
+    }
+
     internal JsonObject? WaitSnapshot() =>
         Entry.WithState(state => SessionRuntimeState.WaitProjection(state.Meta));
 }

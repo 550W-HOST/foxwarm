@@ -142,7 +142,8 @@ internal sealed partial class WebUIChannel
                     tail,
                     prefix,
                     after,
-                    hosted.ExecutionNode(snapshot.AuthorityEnvelope)
+                    hosted.ExecutionNode(snapshot.AuthorityEnvelope),
+                    hosted.RuntimeSnapshot()
                 );
                 result["session"]!["childPolicyChain"] = hosted
                     .BuildDto()["childPolicyChain"]

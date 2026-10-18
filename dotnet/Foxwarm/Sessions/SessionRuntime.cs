@@ -243,6 +243,7 @@ internal sealed partial class SessionOwner
     public JsonObject BuildDto(SessionMetadata meta)
     {
         var dto = SessionPresentation.Build(meta, models, ResolveAncestry, ToolActive, Compacting);
+        dto["runtimeState"] = RuntimeSnapshot(meta);
         Entry.WithState(state =>
         {
             dto["currentNode"] = ExecutionNode(state.AuthorityEnvelope);

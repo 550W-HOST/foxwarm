@@ -171,7 +171,9 @@ internal sealed partial class SessionToolExecutor(
 
     internal async Task<TurnToolExecution> ExecuteAttributedAsync(
         JsonObject call,
-        CancellationToken token
+        CancellationToken token,
+        int? index = null,
+        int? total = null
     )
     {
         await sessions.WaitForIdentityMutationAsync(hosted.Id, token);
@@ -186,6 +188,8 @@ internal sealed partial class SessionToolExecutor(
             Files = workspace is WorkspaceTools ? sessions.IdentityWorkspace(hosted) : null,
             Node = captured.Node,
             Cwd = captured.Cwd,
+            Index = index,
+            Total = total,
         };
         invocation.Value = current;
         try
@@ -199,7 +203,8 @@ internal sealed partial class SessionToolExecutor(
                 (response as JsonObject)?["error"] is null ? current.ResolvedPaths : null,
                 current.DeferredCwd,
                 current.ToolScriptSubCalls,
-                current.Receipt
+                current.Receipt,
+                current.SessionMessages
             );
         }
         finally
@@ -256,6 +261,46 @@ internal sealed partial class SessionToolExecutor(
         JsonObject functionCall,
         CancellationToken cancellationToken
     ) => (await ExecuteAttributedAsync(functionCall, cancellationToken)).Response;
+
+    private JsonObject ToolRuntime(ResolvedTool resolved)
+    {
+        var current = invocation.Value;
+        var result = new JsonObject
+        {
+            ["id"] = current?.CallId,
+            ["name"] = resolved.Name,
+            ["source"] = resolved.Source,
+            ["index"] = current?.Index,
+            ["total"] = current?.Total,
+            ["executionNode"] = resolved.ExecutionNode,
+            ["argsPreview"] = ToolArgsPreview(resolved.Name, resolved.Args),
+            ["startedAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
+        if (resolved.Name != resolved.InvocationName)
+            result["invocationName"] = resolved.InvocationName;
+        if (resolved.Server is not null)
+            result["server"] = resolved.Server;
+        if (resolved.Source == "builtin" && resolved.Name == "node" && SessionWait.Text(resolved.Args["action"]) is { } action)
+            result["action"] = SessionOwner.Bound(action, 64);
+        if (resolved.Source == "node" && resolved.Name == "read" && SessionWait.Text(resolved.Args["filePath"]) is { } file)
+            result["target"] = SessionOwner.Bound(file.Split(['/', '\\']).Last(), 160);
+        return result;
+    }
+
+    internal static string ToolArgsPreview(string name, JsonObject args)
+    {
+        static string Text(JsonNode? value) => SessionWait.Text(value) ?? (value is null ? "null" : EcmaJson.Stringify(value));
+        var preview = name switch
+        {
+            "exec" => Text(args["command"]),
+            "edit" or "write" or "edit_memory" or "write_memory" or "delete_memory" => Text(args["filePath"]),
+            "apply_patch" or "apply_patch_memory" => SessionWait.Text(args["input"]) ?? "",
+            "read" or "read_memory" => (SessionWait.Text(args["filePath"]) ?? "") +
+                (SessionWait.Number(args["startLine"]) is > 0 ? $" (lines {Text(args["startLine"])}-{Text(args["endLine"])})" : ""),
+            _ => args.Count == 1 ? Text(args.First().Value) : string.Join('\n', args.Select(pair => pair.Key + ": " + Text(pair.Value))),
+        };
+        return preview.Length > 200 ? preview[..197] + "..." : preview;
+    }
 
     private async Task<JsonNode?> ExecuteCoreAsync(
         JsonObject functionCall,
@@ -319,7 +364,7 @@ internal sealed partial class SessionToolExecutor(
             cancellationToken.ThrowIfCancellationRequested();
             hosted.Registry.Runner.AssertCanContinue();
             dispatched = true;
-            hosted.BeginTool();
+            var runtimeLease = Programmatic ? null : hosted.BeginTool(ToolRuntime(resolved));
             var startedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var monotonic = System.Diagnostics.Stopwatch.GetTimestamp();
             try
@@ -337,7 +382,8 @@ internal sealed partial class SessionToolExecutor(
                             .Diagnostics.Stopwatch.GetElapsedTime(monotonic)
                             .TotalMilliseconds,
                     };
-                hosted.EndTool();
+                if (runtimeLease is not null)
+                    hosted.EndTool(runtimeLease);
             }
         }
         catch (TaskError error)
@@ -535,7 +581,19 @@ internal sealed partial class SessionToolExecutor(
             hosted,
             name,
             args,
-            cancellationToken
+            cancellationToken,
+            (target, body) =>
+            {
+                if (invocation.Value is not { } current) return;
+                var delivery = new JsonObject
+                {
+                    ["id"] = current.CallId,
+                    ["targetSessionId"] = target,
+                    ["message"] = SessionOwner.Bound(body, 32768),
+                };
+                if (body.Length > 32768) delivery["truncated"] = true;
+                current.SessionMessages = new JsonArray(delivery);
+            }
         );
         if (!Programmatic && sessions.ConsumeSuccessfulSendReceipt() is { } receiptTarget)
             invocation.Value!.Receipt = new TurnToolReceipt(receiptTarget, null, null);
@@ -767,7 +825,8 @@ internal sealed record TurnToolExecution(
     JsonArray? ResolvedPaths = null,
     string? DeferredCwd = null,
     JsonArray? ToolScriptSubCalls = null,
-    TurnToolReceipt? Receipt = null
+    TurnToolReceipt? Receipt = null,
+    JsonArray? SessionMessages = null
 );
 
 internal sealed record TurnToolReceipt(
@@ -781,6 +840,8 @@ internal sealed record ToolScriptSourcePlacement(string Node, string? Cwd, Works
 internal sealed class TurnToolInvocation(string callId)
 {
     internal string CallId { get; } = callId;
+    internal int? Index { get; set; }
+    internal int? Total { get; set; }
     internal string Node { get; set; } = "master";
     internal string? Cwd { get; set; }
     internal WorkspaceTools? Files { get; set; }
@@ -791,4 +852,5 @@ internal sealed class TurnToolInvocation(string callId)
     internal string? DeferredCwd { get; set; }
     internal JsonArray? ToolScriptSubCalls { get; set; }
     internal TurnToolReceipt? Receipt { get; set; }
+    internal JsonArray? SessionMessages { get; set; }
 }

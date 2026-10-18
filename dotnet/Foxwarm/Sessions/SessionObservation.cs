@@ -37,7 +37,7 @@ internal sealed partial class SessionOwner
                 actualStart,
                 total,
                 state.HistoryVersion,
-                SessionRuntimeState.Build(metadata, ToolActive, Compacting),
+                RuntimeSnapshot(metadata),
                 rows
             );
         });

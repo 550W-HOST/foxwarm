@@ -552,6 +552,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             memory,
             () => ModelDefinitions(hosted)
         );
+        registry.OnTurnFailure = (error, durable) => hosted.PresentFailureAsync(error, durable);
         registry.OnTurnStarting = _ => MaybeRefreshStaleAsync(hosted);
         registry.OnTurnCompleted = (_, result) => hosted.Compactor.AutoAfterTurnAsync(result);
         registry.OnBeforeContinuation = (_, result, consume, token) =>

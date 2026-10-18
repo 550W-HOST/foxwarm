@@ -148,6 +148,11 @@ public sealed partial class CompactLifecycleTests
         await fixture.Peer.PlanReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await fixture.ContinuationReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.False(fixture.Continuation!.IsCompleted);
+        var runtime = fixture.Owner.RuntimeSnapshot();
+        Assert.Equal("compaction", runtime["active"]!["phase"]!.GetValue<string>());
+        Assert.Equal("planning", runtime["compaction"]!["phase"]!.GetValue<string>());
+        Assert.True(runtime["compaction"]!["background"]!.GetValue<bool>());
+        Assert.Null(runtime["tool"]);
         Assert.Equal(8, fixture.Peer.NormalRequests);
         Assert.Equal(0, fixture.Owner.Entry.Snapshot().HistoryVersion);
         if (queued)

@@ -15,7 +15,8 @@ internal sealed partial class SessionCompactor
         CancellationToken cancellationToken,
         string cacheKey,
         ModelRequestScope scope,
-        string capturedDefault
+        string capturedDefault,
+        CompactRun? run = null
     )
     {
         var detached = snapshot
@@ -72,8 +73,23 @@ internal sealed partial class SessionCompactor
                         turnId,
                         detached,
                         ResolvePrompt,
-                        null,
-                        null,
+                        value =>
+                        {
+                            if (run is not null)
+                            {
+                                lock (gate) run.Retry = SessionOwner.RetryProjection(value);
+                                PublishRuntime(run);
+                            }
+                            return Task.FromResult(false);
+                        },
+                        () =>
+                        {
+                            if (run is not null)
+                            {
+                                lock (gate) run.Retry = null;
+                                PublishRuntime(run);
+                            }
+                        },
                         null,
                         hosted.Entry.RecordBestEffortFailure,
                         cancellationToken,

@@ -48,7 +48,9 @@ internal sealed partial class SessionCompactor
         internal readonly TaskCompletionSource Completion = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        internal readonly string OperationId = Guid.NewGuid().ToString("N");
         internal string Phase = "planning";
+        internal JsonObject? Retry;
         internal bool Committed,
             Applying,
             Ready,
@@ -139,14 +141,21 @@ internal sealed partial class SessionCompactor
             var run = new CompactRun(snapshot, catalog, keep, background, standalone);
             active = run;
             lifetimes[run] = run.Completion.Task;
+            PublishRuntime(run);
             return run;
         }
+    }
+
+    private void PublishRuntime(CompactRun run)
+    {
+        lock (gate)
+            if (ReferenceEquals(active, run))
+                hosted.SetCompactRuntime(run.OperationId, run.Phase, run.Background, run.Retry);
     }
 
     private void Report(Exception error)
     {
         hosted.Entry.RecordBestEffortFailure(error);
-        hosted.PublishCompactError(error);
     }
 
     private async Task FinishAsync(CompactRun run)
@@ -172,6 +181,7 @@ internal sealed partial class SessionCompactor
         }
         finally
         {
+            hosted.ClearCompactRuntime(run.OperationId);
             if (run.PhaseLease is not null)
                 hosted.EndCompactPhase(run.PhaseLease);
             run.Cancellation.Dispose();
@@ -180,7 +190,7 @@ internal sealed partial class SessionCompactor
         }
     }
 
-    public async Task<(bool Cancelled, bool TooLate)> StopAsync()
+    public async Task<(bool Cancelled, bool TooLate)> StopAsync(Action? requested = null)
     {
         CompactRun? run;
         lock (gate)
@@ -192,6 +202,8 @@ internal sealed partial class SessionCompactor
             run.Cancellation.Cancel();
         }
         catch (ObjectDisposedException) { }
+        if (!run.Committed)
+            requested?.Invoke();
         await run.PipelineDone.Task;
         bool finish;
         lock (gate)
@@ -414,10 +426,15 @@ internal sealed partial class SessionCompactor
                 // Readiness/completion releases the wait; the exact owner applies it below.
                 // The normal turn token interrupts only this wait, never the planner.
                 AssertCanContinue();
-                await pending.PlanningSettled.Task.WaitAsync(token);
-                AssertCanContinue();
-                if (await SafePointAsync(propagateFailure: true) == true)
-                    return;
+                var phaseLease = hosted.BeginCompactPhase();
+                try
+                {
+                    await pending.PlanningSettled.Task.WaitAsync(token);
+                    AssertCanContinue();
+                    if (await SafePointAsync(propagateFailure: true) == true)
+                        return;
+                }
+                finally { hosted.EndCompactPhase(phaseLease); }
             }
             throw new ModelPreparationException(
                 $"Context compaction did not complete, so this turn stopped before another provider request (previous usage {UsageTotal(result)}, limit {limit})."
@@ -493,7 +510,8 @@ internal sealed partial class SessionCompactor
                     run.Background
                         ? ModelRequestScope.BackgroundCompactPlan
                         : ModelRequestScope.CompactPlan,
-                    run.Catalog.DefaultKey
+                    run.Catalog.DefaultKey,
+                    run
                 );
     }
 
@@ -522,6 +540,7 @@ internal sealed partial class SessionCompactor
                 run.Ready = true;
                 run.Phase = "enqueueing";
             }
+            PublishRuntime(run);
             run.PlanningSettled.TrySetResult();
             await hosted.Entry.SaveLane.PublishCompactWakeAsync(
                 run,
@@ -531,6 +550,7 @@ internal sealed partial class SessionCompactor
             lock (gate)
                 if (ReferenceEquals(active, run) && !run.Applying)
                     run.Phase = "ready";
+            PublishRuntime(run);
         }
         catch (OperationCanceledException) when (run.Cancellation.IsCancellationRequested) { }
         catch (CompactionSnapshotIncompatibleException)
@@ -580,6 +600,7 @@ internal sealed partial class SessionCompactor
             run.Applying = true;
             run.Phase = "committing";
         }
+        PublishRuntime(run);
         run.PhaseLease = hosted.BeginCompactPhase();
         try
         {
@@ -593,6 +614,7 @@ internal sealed partial class SessionCompactor
         catch (Exception error)
         {
             Report(error);
+            await hosted.PresentFailureAsync(error, durable: ReferenceEquals(run.Failure, error), source: "compaction", operationId: run.OperationId, applying: run.Failure is null);
             if (propagateFailure)
                 throw;
         }
@@ -632,9 +654,19 @@ internal sealed partial class SessionCompactor
 
     private async Task PlanAndApplyAwaitedAsync(CompactRun run, string? guidance)
     {
-        await PreparePlanAsync(run, guidance);
+        try { await PreparePlanAsync(run, guidance); }
+        catch (Exception error) when (error is not OperationCanceledException and not CompactionSnapshotIncompatibleException and not SessionTurnShutdownException)
+        {
+            await hosted.PresentFailureAsync(error, true, "compaction", run.OperationId);
+            throw;
+        }
         if (run.Plan is not null)
-            await ApplyAsync(run);
+            try { await ApplyAsync(run); }
+            catch (Exception error) when (error is not OperationCanceledException and not CompactionSnapshotIncompatibleException and not SessionTurnShutdownException)
+            {
+                await hosted.PresentFailureAsync(error, false, "compaction", run.OperationId, applying: true);
+                throw;
+            }
     }
 
     private async Task ApplyAsync(CompactRun run)
@@ -642,6 +674,7 @@ internal sealed partial class SessionCompactor
         run.Cancellation.Token.ThrowIfCancellationRequested();
         lock (gate)
             run.Phase = "committing";
+        PublishRuntime(run);
         try
         {
             long archiveMaximum = 0;

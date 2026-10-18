@@ -11,6 +11,7 @@ internal sealed class ModelRetryNotice(SessionOwner hosted)
 
     internal async Task<bool> NotifyAsync(ModelRetryEvent value)
     {
+        hosted.SetModelRetry(value);
         var same =
             previous is { } prior && prior.Status == value.Status && prior.Reason == value.Reason;
         var reason = same ? "(same error)" : value.Reason;

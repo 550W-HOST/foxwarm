@@ -324,7 +324,9 @@ internal sealed class ModelRequestOwner(
                     websockets,
                     scope
                 );
+                cancellationToken.ThrowIfCancellationRequested();
                 beginAttempt?.Invoke();
+                cancellationToken.ThrowIfCancellationRequested();
                 ModelAttemptFailure failure;
                 ChatResult? result = null;
                 var succeeded = false;

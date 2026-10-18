@@ -32,7 +32,7 @@ public sealed partial class LocalSessionTurnHost
             }
             if (SessionWait.Text(planned[cursor].Call["name"]) != "exec")
             {
-                results[cursor] = await ExecutePlannedToolAsync(planned[cursor], token)
+                results[cursor] = await ExecutePlannedToolAsync(planned[cursor], token, index: cursor, total: planned.Count)
                     .ConfigureAwait(false);
                 if (
                     IsNodeSelection(planned[cursor].Call)
@@ -80,7 +80,9 @@ public sealed partial class LocalSessionTurnHost
                     results[index] = await ExecutePlannedToolAsync(
                             planned[index],
                             token,
-                            preparation[index - start]
+                            preparation[index - start],
+                            index,
+                            planned.Count
                         )
                         .ConfigureAwait(false);
                 }
@@ -118,6 +120,12 @@ public sealed partial class LocalSessionTurnHost
                 && result.ResolvedPaths is { Count: > 0 } paths
             )
                 response["__meta"] = new JsonObject { ["resolvedPaths"] = paths.DeepClone() };
+            if (result.SessionMessages is { Count: > 0 } deliveries)
+            {
+                var meta = response["__meta"] as JsonObject ?? new JsonObject();
+                meta["sessionMessages"] = deliveries.DeepClone();
+                response["__meta"] = meta;
+            }
             if (result.ToolScriptSubCalls is { } scriptCalls)
             {
                 var meta = response["__meta"] as JsonObject ?? new JsonObject();
@@ -196,7 +204,9 @@ public sealed partial class LocalSessionTurnHost
     private async Task<TurnToolExecution> ExecutePlannedToolAsync(
         (JsonObject Call, JsonObject? Preset) planned,
         CancellationToken token,
-        TurnToolPreparation? prepared = null
+        TurnToolPreparation? prepared = null,
+        int? index = null,
+        int? total = null
     )
     {
         var call = planned.Call;
@@ -234,7 +244,7 @@ public sealed partial class LocalSessionTurnHost
         {
             var owned = (JsonObject)call.DeepClone();
             return tools is SessionToolExecutor current
-                ? await current.ExecuteAttributedAsync(owned, token).ConfigureAwait(false)
+                ? await current.ExecuteAttributedAsync(owned, token, index, total).ConfigureAwait(false)
                 : new(await tools.ExecuteAsync(owned, token).ConfigureAwait(false));
         }
         catch (OperationCanceledException)

@@ -232,6 +232,7 @@ internal sealed partial class WebUIChannel(
                                 or "uploadedFiles"
                                 or "filePaths"
                                 or "clientMessageId"
+                                or "controlRequestId"
                             )
                     )
                 )
@@ -265,6 +266,9 @@ internal sealed partial class WebUIChannel(
                         : null;
                 if (input.ContainsKey("clientMessageId") && clientId is null)
                     return Results.BadRequest(new { error = "Invalid clientMessageId" });
+                var controlId = SessionWait.Text(input["controlRequestId"]);
+                if (input.ContainsKey("controlRequestId") && (controlId is null || controlId.Length is < 1 or > 128))
+                    return Results.BadRequest(new { error = "Invalid controlRequestId" });
                 IReadOnlyList<JsonObject> savedFiles = [];
                 try
                 {
@@ -303,7 +307,7 @@ internal sealed partial class WebUIChannel(
                         canonical = ingressOwner.Id;
                     var result = await router.HandleMessageAsync(
                         new ChannelContext(canonical, "webui"),
-                        new ChannelMessage(text, clientId, prepared.Parts),
+                        new ChannelMessage(text, clientId, prepared.Parts, controlId),
                         hasUploads ? ingressOwner : null
                     );
                     return Results.Json(result.Value, statusCode: result.Status);

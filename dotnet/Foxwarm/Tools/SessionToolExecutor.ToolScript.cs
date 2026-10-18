@@ -37,7 +37,8 @@ internal sealed partial class SessionToolExecutor
         var rootCall = invocation.Value;
         var nested = Programmatic;
         var literal = scriptScope.Value?.LiteralOwner ?? hosted.Id;
-        var context = new ToolScriptContext(
+        ToolScriptContext context = null!;
+        context = new ToolScriptContext(
             hosted,
             literal,
             async (wrapper, budget, currentToken) =>
@@ -70,6 +71,9 @@ internal sealed partial class SessionToolExecutor
                         },
                         currentToken
                     );
+                    if (execution.SessionMessages is { Count: > 0 } deliveries)
+                        foreach (var delivery in deliveries.OfType<JsonObject>())
+                            context.SessionMessageDelivered?.Invoke(delivery);
                     if (
                         execution.Receipt is not null
                         && resolved.Name == "task"

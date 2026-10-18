@@ -146,13 +146,15 @@ internal sealed partial class SessionManager
             return;
         var meta = owner.Metadata();
         var context = ExecutionPlacement(owner);
+        var runtime = owner.RuntimeSnapshot(meta);
         var active =
             meta.Busy
             || meta.Stopping
             || meta.QueueLength > 0
             || meta.Wait is not null
             || owner.ToolActive
-            || owner.Compacting;
+            || owner.Compacting
+            || runtime["compaction"] is not null;
         var projected = new JsonObject
         {
             ["id"] = meta.Id,
@@ -192,6 +194,8 @@ internal sealed partial class SessionManager
         projected = SessionCatalog
             .Project(projected)
             .AlsoRuntimeFlags(owner.ToolActive, owner.Compacting);
+        if (active)
+            projected["_runtimeState"] = runtime;
         var persisted = Catalog.Get(owner.Id);
         if (persisted is not null)
             SessionCatalog.OverlayMain(projected, persisted);
@@ -243,6 +247,7 @@ internal sealed partial class SessionManager
             var field in new[] { "totalCachedTokens", "totalInputTokens", "totalOutputTokens" }
         )
             signature[field] = SessionCatalog.Number(row["stats"]?[field]) ?? 0;
+        signature["runtimeState"] = row["_runtimeState"]?.DeepClone();
         signature["wait"] = SessionCatalog.WaitProjection(row["meta"]?["wait"]);
         return signature;
     }
@@ -306,6 +311,8 @@ internal sealed partial class SessionManager
                     SessionCatalog.Flag(row["_toolActive"]),
                     SessionCatalog.Flag(row["_compacting"])
                 );
+                if (row["_runtimeState"] is JsonObject runtime)
+                    dto["runtimeState"] = runtime.DeepClone();
                 dto["aliases"] = row["aliases"]?.DeepClone() ?? new JsonArray();
                 dto["currentNode"] = row["currentNode"]?.DeepClone();
                 dto["cwd"] = row["cwd"]?.DeepClone();

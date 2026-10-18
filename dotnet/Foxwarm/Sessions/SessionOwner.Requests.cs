@@ -19,7 +19,14 @@ internal sealed partial class SessionOwner
 
     public object BeginCompactPhase()
     {
-        var lease = new object();
+        var lease = new JsonObject
+        {
+            ["state"] = "requesting-model",
+            ["since"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            ["active"] = new JsonObject { ["phase"] = "compaction" },
+        };
+        lock (runtimeGate)
+            foregroundRuntime = lease;
         Interlocked.Exchange(ref compactPhase, lease);
         PublishStateChanged();
         return lease;
@@ -29,6 +36,9 @@ internal sealed partial class SessionOwner
     {
         if (!ReferenceEquals(Interlocked.CompareExchange(ref compactPhase, null, lease), lease))
             return;
+        lock (runtimeGate)
+            if (ReferenceEquals(foregroundRuntime, lease))
+                foregroundRuntime = null;
         PublishStateChanged();
     }
 
@@ -318,26 +328,35 @@ internal sealed partial class SessionOwner
         Emit(SessionEventKind.DraftChanged);
     }
 
-    internal void BeginTool()
+    internal object BeginTool(JsonObject? details = null)
     {
-        if (Interlocked.Increment(ref activeTools) != 1)
-            return;
-        try
+        var projection = new JsonObject
         {
-            Emit(SessionEventKind.StateChanged);
-        }
+            ["state"] = "running-tool",
+            ["since"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            ["tool"] = details?.DeepClone(),
+        };
+        Interlocked.Increment(ref activeTools);
+        lock (runtimeGate)
+            foregroundRuntime = projection;
+        try { PublishStateChanged(); }
         catch
         {
-            Interlocked.Decrement(ref activeTools);
+            EndTool(projection);
             throw;
         }
+        return projection;
     }
 
-    internal void EndTool()
+    internal void EndTool(object? lease = null)
     {
-        if (Interlocked.Decrement(ref activeTools) == 0)
-            Emit(SessionEventKind.StateChanged);
+        Interlocked.Decrement(ref activeTools);
+        lock (runtimeGate)
+            if (lease is null || ReferenceEquals(foregroundRuntime, lease))
+                foregroundRuntime = null;
+        PublishStateChanged();
     }
+
 }
 
 internal sealed class RequestChatService(IChatService inner, SessionOwner hosted)

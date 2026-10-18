@@ -16,6 +16,14 @@ public sealed partial class SessionSaveLane
     private readonly object laneGate = new();
     private Task tail = Task.CompletedTask;
     private bool retired;
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Exception, object> failedOperations = new();
+
+    internal bool FailedOperation(Exception error)
+    {
+        for (Exception? cause = error; cause is not null; cause = cause.InnerException)
+            if (failedOperations.TryGetValue(cause, out _)) return true;
+        return false;
+    }
 
     internal Task RetireAsync(Action closeStore)
     {
@@ -419,7 +427,7 @@ public sealed partial class SessionSaveLane
         return current;
     }
 
-    private static async Task RunAfterAsync(Task launch, Task previous, Func<Task> operation)
+    private async Task RunAfterAsync(Task launch, Task previous, Func<Task> operation)
     {
         await launch.ConfigureAwait(false);
         try
@@ -429,6 +437,11 @@ public sealed partial class SessionSaveLane
         catch
         { /* A failed best-effort attempt must not poison later strict work. */
         }
-        await operation().ConfigureAwait(false);
+        try { await operation().ConfigureAwait(false); }
+        catch (Exception error)
+        {
+            failedOperations.GetValue(error, _ => new object());
+            throw;
+        }
     }
 }

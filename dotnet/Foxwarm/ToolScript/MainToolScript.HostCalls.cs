@@ -61,7 +61,19 @@ internal sealed partial class MainToolScript
                         ?? throw new InvalidDataException("Missing ToolScript subcall state.")
                     ).Add(subcall);
                     Emit();
-                    var result = await context.CallTool(wrapper, budget, run.Token);
+                    var previousDeliveryCapture = context.SessionMessageDelivered;
+                    JsonNode? result;
+                    try
+                    {
+                        context.SessionMessageDelivered = delivery =>
+                        {
+                            var evidence = (JsonObject)delivery.DeepClone();
+                            evidence["id"] = subcall["id"]!.DeepClone();
+                            subcall["sessionMessage"] = evidence;
+                        };
+                        result = await context.CallTool(wrapper, budget, run.Token);
+                    }
+                    finally { context.SessionMessageDelivered = previousDeliveryCapture; }
                     budget.JsonValue(result);
                     (
                         record["executedTools"] as JsonArray

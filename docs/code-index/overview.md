@@ -100,7 +100,7 @@ Optional remote and compatibility components:
 ## Current gaps and open questions
 
 - **Current gap:** .NET Vector admission/search is disabled or explicitly unsupported (`WebUIChannel.History` returns `VECTOR_DISABLED`; identity-move/configuration paths do not make Vector a runtime capability). The TypeScript Vector implementation remains a compatibility/reference boundary only.
-- **Current gap:** the React runtime/control, typed-notice and communication projections include TypeScript Main changes that are not yet implemented by .NET. [The WebUI boundary](./threads/dotnet-webui-boundary.md#runtime-and-communication-projection-gaps) owns the concrete consumer dependencies; a shared frontend build does not establish backend parity.
+- **Qualification boundary:** .NET implements the shared runtime/control, typed-notice and communication producers through its existing exact owners. [The WebUI boundary](./threads/dotnet-webui-boundary.md#runtime-controls-notices-and-communications) maps the concrete consumer paths; a shared frontend build or merge alone does not establish complete feature parity.
 - **Intentional exclusions:** the platforms listed in [delivery scope](#d-dotnet-delivery-scope) are not remaining milestones. Ordinary external Nodes, remote exec/completion, file transfer/delivery, fixed Code/PTY services and exec-only Shell HTTP remain supported.
 - **Unconfirmed:** which remaining TypeScript Main routes and channel adapters will be retired versus retained as compatibility services after the .NET Main reaches production parity.
 

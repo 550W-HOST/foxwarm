@@ -126,6 +126,7 @@ internal sealed class SessionChatService(
                 notice.NotifyAsync,
                 () =>
                 {
+                    hosted.BeginModelAttempt();
                     if (++attempts > 1 && prepareRetry is null)
                         hosted.RestartDraft();
                 },

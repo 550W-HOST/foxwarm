@@ -73,7 +73,7 @@ public sealed class SessionTurnRunner
         }
     }
 
-    public async Task ProcessQueueAsync(string sessionId, bool retry = false)
+    public async Task ProcessQueueAsync(string sessionId, bool retry = false, Action? admitted = null)
     {
         var entry = registry.GetRequired(sessionId);
         if (closing)
@@ -113,14 +113,15 @@ public sealed class SessionTurnRunner
             return;
         }
         admission?.Dispose();
-        await RunProcessorAsync(sessionId, entry, settled, retry).ConfigureAwait(false);
+        await RunProcessorAsync(sessionId, entry, settled, retry, admitted).ConfigureAwait(false);
     }
 
     private async Task RunProcessorAsync(
         string sessionId,
         SessionEntry entry,
         TaskCompletionSource settled,
-        bool retry
+        bool retry,
+        Action? admitted
     )
     {
         var turnScope = entry.EnterTurnScope();
@@ -146,6 +147,7 @@ public sealed class SessionTurnRunner
             claimed = await host.TryClaimBusyAsync().ConfigureAwait(false);
             if (!claimed)
                 return;
+            admitted?.Invoke();
             var retryPending = retry;
             while (true)
             {
@@ -235,6 +237,8 @@ public sealed class SessionTurnRunner
                 {
                     failed = true; // This terminal outcome must not immediately consume/retrigger queued work.
                     entry.RecordBackgroundProcessorFailure(error);
+                    if (registry.OnTurnFailure is not null)
+                        await registry.OnTurnFailure(error, true).ConfigureAwait(false);
                     break;
                 }
                 catch (AuthorityCommittedException)
@@ -247,6 +251,8 @@ public sealed class SessionTurnRunner
                     // must be able to report its terminal outcome rather than imply success.
                     failed = error is Foxwarm.Models.ModelPreparationException;
                     entry.RecordBackgroundProcessorFailure(error);
+                    if (registry.OnTurnFailure is not null)
+                        await registry.OnTurnFailure(error, true).ConfigureAwait(false);
                     break;
                 }
             }

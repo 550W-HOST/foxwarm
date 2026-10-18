@@ -16,4 +16,7 @@ internal sealed record ToolScriptContext(
     > ReadSource,
     Action<JsonArray>? Progress = null,
     string? SourceNode = null
-);
+)
+{
+    internal Action<JsonObject>? SessionMessageDelivered { get; set; }
+}

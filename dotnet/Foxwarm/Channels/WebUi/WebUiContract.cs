@@ -11,7 +11,8 @@ internal static class WebUiContract
         HostModels models,
         bool toolActive,
         bool compacting,
-        string? executionNode = null
+        string? executionNode = null,
+        JsonObject? runtimeState = null
     )
     {
         models = models.Capture();
@@ -23,20 +24,8 @@ internal static class WebUiContract
         var effectiveEffort =
             rawEffort is not null && allowed.Contains(rawEffort) ? rawEffort : defaultEffort;
         var queueLength = snapshot.Queue.Count(SessionCompactor.Ordinary);
-        var runtime = new JsonObject
-        {
-            ["state"] = snapshot.Busy
-                ? toolActive
-                    ? "running-tool"
-                    : "requesting-model"
-                : "idle",
-            ["busy"] = snapshot.Busy,
-            ["queueLength"] = queueLength,
-        };
-        if (snapshot.BusyStartedAt is long since)
-            runtime["since"] = since;
-        if (compacting)
-            runtime["active"] = new JsonObject { ["phase"] = "compaction" };
+        var runtime = SessionRuntimeState.Build(snapshot.Busy, snapshot.Stopping, snapshot.BusyStartedAt,
+            queueLength, SessionRuntimeState.WaitProjection(snapshot.Meta), toolActive, compacting);
         var result = new JsonObject
         {
             ["id"] = snapshot.Id,
@@ -52,7 +41,7 @@ internal static class WebUiContract
             ["queueLength"] = queueLength,
             ["messageCount"] = snapshot.History.Count,
             ["historyVersion"] = snapshot.HistoryVersion,
-            ["runtimeState"] = runtime,
+            ["runtimeState"] = runtimeState?.DeepClone() ?? runtime,
             ["model"] = rawModel,
             ["modelKey"] =
                 rawModel is not null && models.Contains(rawModel) ? rawModel : models.DefaultKey,
@@ -83,7 +72,8 @@ internal static class WebUiContract
         int? tail,
         int? prefixLength,
         long? afterSeq,
-        string? executionNode = null
+        string? executionNode = null,
+        JsonObject? runtimeState = null
     )
     {
         IReadOnlyList<HistoryMessage> selected = snapshot.History;
@@ -164,7 +154,7 @@ internal static class WebUiContract
         }
         var result = new JsonObject
         {
-            ["session"] = Session(snapshot, models, toolActive, compacting, executionNode),
+            ["session"] = Session(snapshot, models, toolActive, compacting, executionNode, runtimeState),
             ["messages"] = new JsonArray(
                 selected.Select(message => (JsonNode?)message.ToJson()).ToArray()
             ),

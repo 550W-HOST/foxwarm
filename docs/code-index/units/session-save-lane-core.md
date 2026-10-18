@@ -18,6 +18,8 @@ Serializes all persistence operations for one `SessionEntry` through a task tail
 
 `EnqueueOperationAsync` waits for the prior task but catches a prior failure before running the next operation, so a failed best-effort write does not poison strict persistence. Publication depends on the operation kind: strict canonical/compaction/setting paths publish after the store result, while ordinary queue admission in `SessionSaveLane.Wait.cs` intentionally updates hot queue state before attempting its `SaveKind.BestEffort` write; a best-effort failure is recorded and the hot input remains queued even though the caller must not claim durable completion. `AuthorityCommittedException` publishes staged strict state because the JSON rename already occurred. A retired lane rejects new operations and closes the store after its predecessor drains.
 
+`FailedOperation` recognizes an exception, including a wrapped cause, from this exact lane using weak error-identity attribution. Failure presentation uses it only to avoid sending another semantic append down the failed authority path. It neither poisons later independent saves nor changes operation/commit/rollback ordering.
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/Sessions/PersistentSessionTurnTests.cs`; `RetryInputSafePointTests.cs`; `SessionCwdCommitTests.cs`; `SessionPresentationTests.cs`.

@@ -10,6 +10,8 @@ The xUnit project is the executable contract map for the .NET host: channels/rou
 
 Use the test namespace/directory matching the owning module, then follow the production unit and thread. Held-writer and real transaction regressions live in `SqliteBatchWriterTests`, `JournalWriterOverlapTests` and `ArchiveWriterOverlapTests`: they cover actual preparation overlap versus provider/publication barriers, grouped outer commits, savepoint isolation, deferred foreign-key commit failure, queued/executing cancellation, backpressure, exclusive maintenance and shutdown/root lifetime transitions. High-value persistence tests include `PersistentSessionTurnTests`, `SessionCatalogPublicationTests`, `PersistencePrimitiveTests`, `ArchiveLineageTests`, `SessionIdentityRecoveryTests`, and `CommittedArchiveBoundaryTests`; TaskStoreTests and SessionTurnTests cover Task anchors and terminal-loop behavior.
 
+`RuntimePresentationTests` covers exact foreground/compact cleanup, physical retry clearing, bounded tool previews, exact-owner notice deduplication, durable/reopened notice visibility and failed-authority temporary presentation without another append. `experimentHostRuntimeDelta.e2e.mjs` drives the built original App, an owned normal host and a controlled Responses provider through correlated controls, common runtime projections, real direct/unified/ToolScript delivery metadata, typed notices, real cookie/prefix login and prepared navigation. These are focused producer/consumer checks, not complete feature-parity evidence.
+
 ## Contract boundary
 
 Tests establish source behavior for the checked revision, not release acceptance or root launcher migration. Documentation-only validation intentionally does not run this project or restart the runtime.

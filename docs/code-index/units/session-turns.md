@@ -35,6 +35,12 @@ Passive trusted rows remain durable and wait-neutral. The outer loop does not co
 
 The turn runner does not write raw JSON or Archive directly. It stages snapshots and canonical rows through [the save lane](./session-save-lane-core.md) and [the authority store](./session-authority-store.md), preserving pre/post-rename failure classification.
 
+## Transient presentation and failure feedback
+
+`SessionOwner.RuntimeSnapshot` composes bounded foreground, independent compaction, busy/stopping/queue and existing durable wait facts. Model-attempt callbacks replace foreground backoff; tool starts carry resolved identities and zero-based batch positions only after authorization. `BeginCompactPhase`/`EndCompactPhase` and tool cleanup use exact projection leases, so older completion cannot erase newer work. History, observation and bounded list/reconnect paths share this projection; no transient runtime object is stored as Session authority.
+
+`SessionTurnRunner.ProcessQueueAsync` optionally signals admission after continuation validation and busy claim, before waiting for a provider answer or tool settlement. The existing owner failure callback presents safe terminal run failures; escaped persistence failures use temporary typed presentation from the owner. This does not change processor, queue, launched-effect or journal semantics.
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/Sessions/SessionTurnTests.cs`; `PersistentSessionTurnTests.cs`; `SessionAdmissionTests.cs`; `RetryInputSafePointTests.cs`; `SessionExecutionEnvironmentTests.cs`; `SessionWait` and `SessionIdentityInterleaving` coverage; `DeferredInputTests.cs`; `PassiveTaskInputTests.cs`; `CompactContinuationTests.cs`; `SessionShutdownTests.cs`; `dotnet/scripts/qualify-shutdown-recovery.mjs`; `SessionUsageTests.cs` (cumulative usage, metadata/explicit usage, usage-only completions, reopen and pre/post-commit boundaries).
