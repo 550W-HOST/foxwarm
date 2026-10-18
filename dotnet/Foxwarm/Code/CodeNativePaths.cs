@@ -17,8 +17,14 @@ internal static class CodeNativePaths
         if (!OperatingSystem.IsWindows())
             return path;
         var value = path;
-        if (value.Length >= 4 && value[0] == '/' && char.IsAsciiLetter(value[1]) && value[2] == ':')
+        if (value.Length >= 3 && value[0] == '/' && char.IsAsciiLetter(value[1]) && value[2] == ':')
+        {
+            // Slash-based Code consumers normalize a drive root to /C:.
+            // Only this explicitly mapped form denotes a root; native C: is relative.
             value = value[1..];
+            if (value.Length == 2)
+                value += "/";
+        }
         if (
             value.Length < 3
             || !char.IsAsciiLetter(value[0])

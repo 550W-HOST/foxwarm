@@ -125,10 +125,8 @@ internal sealed partial class CodeWorkbench
             {
                 ["scheme"] = "foxwarm",
                 ["authority"] = match.Groups[1].Value,
-                ["path"] =
-                    match.Groups[2].Value.Length > 0
-                        ? Uri.UnescapeDataString(match.Groups[2].Value)
-                        : "/",
+                // Official foxwarm URI readers decode each path segment once.
+                ["path"] = match.Groups[2].Value.Length > 0 ? match.Groups[2].Value : "/",
                 ["query"] = match.Groups[3].Value,
                 ["fragment"] = match.Groups[4].Value,
             };

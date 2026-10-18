@@ -26,6 +26,7 @@ const {
   normalizeCodePath,
   planCodeOpen,
   resolveToolCodeFileTarget,
+  resolveSessionCodeTarget,
   selectCodeFrameStarted,
 } = await import(pathToFileURL(bundledPath).href)
 
@@ -121,6 +122,13 @@ test('tool Code paths keep plain text and expose only an adjacent native icon ac
 
 
 test('Windows drive paths use the same Code URI while preserving relative resolution and drive roots', () => {
+  const root = resolveSessionCodeTarget('master', 'W:\\')
+  assert.deepEqual(root, { nodeId: 'master', path: '/W:' })
+  assert.equal(makeVscodeWebUrl('/api', 'https://example.test', root).searchParams.get('folderUri'), 'foxwarm://node+master/W%3A')
+  assert.equal(normalizeCodePath('/W:/'), '/W:')
+  assert.deepEqual(resolveToolCodeFileTarget('sub\\file.txt', 'master', 'W:\\'), {
+    kind: 'openFile', nodeId: 'master', path: '/W:/sub/file.txt',
+  })
   assert.equal(normalizeCodePath('w:\\work space\\file.txt'), '/W:/work space/file.txt')
   assert.equal(normalizeCodePath('W:/../file.txt'), '/W:/file.txt')
   assert.equal(normalizeCodePath('W:relative'), null)

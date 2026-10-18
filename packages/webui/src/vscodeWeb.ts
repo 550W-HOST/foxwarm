@@ -52,7 +52,7 @@ export function normalizeCodePath(value: unknown): string | null {
   if (!trimmed.startsWith('/') || trimmed.includes('\0')) return null
 
   const segments: string[] = []
-  const rootDepth = /^\/[A-Za-z]:\//.test(trimmed) ? 1 : 0
+  const rootDepth = /^\/[A-Za-z]:(?:\/|$)/.test(trimmed) ? 1 : 0
   for (const segment of trimmed.split('/')) {
     if (!segment || segment === '.') continue
     if (segment === '..') {
@@ -75,7 +75,7 @@ export function resolveToolCodeFileTarget(
   if (typeof filePath !== 'string' || !filePath.trim() || filePath.trim().startsWith('~')) return null
   const rawPath = filePath.trim()
   const normalizedCwd = normalizeCodePath(cwd)
-  const relative = normalizedCwd && /^\/[A-Za-z]:\//.test(normalizedCwd) ? rawPath.replaceAll('\\', '/') : rawPath
+  const relative = normalizedCwd && /^\/[A-Za-z]:(?:\/|$)/.test(normalizedCwd) ? rawPath.replaceAll('\\', '/') : rawPath
   const absolutePath = normalizeCodePath(rawPath)
     || (normalizedCwd ? normalizeCodePath(`${normalizedCwd}/${relative}`) : null)
   if (!absolutePath) return null

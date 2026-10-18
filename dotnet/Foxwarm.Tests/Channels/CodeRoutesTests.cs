@@ -27,7 +27,7 @@ public sealed class CodeRoutesTests
         internal HttpServer Server = null!;
         internal HttpClient Client = null!;
         internal Foxwarm.Terminal.TerminalRegistry Terminals = null!;
-        internal string Data => Path.Combine(Temp.Path, "data");
+        internal string Data => Path.Combine(Temp.Path, "data literal%20 space 雪");
         internal string Work => Path.Combine(Temp.Path, "work");
 
         internal static async Task<Fixture> Create(
@@ -452,6 +452,25 @@ public sealed class CodeRoutesTests
     }
 
     [Fact]
+    public async Task Windows_Code_normalized_drive_root_reaches_filesystem_and_terminal()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+        await using var f = await Fixture.Create();
+        var root = Path.GetPathRoot(f.Work)!;
+        var mapped = CodeFileService.PathValue(CodeNativePaths.Transport(root));
+        Assert.Equal(root, CodeNativePaths.Native(mapped));
+        Assert.Throws<CodeServiceException>(() => CodeNativePaths.Native(root[..2]));
+        var stat = await f.Json(await f.Client.GetAsync(f.Fs("stat", mapped)));
+        Assert.Equal(2, stat["type"]!.GetValue<int>());
+        var listing = await f.Json(await f.Client.GetAsync(f.Fs("read-directory", mapped)));
+        Assert.NotNull(listing["entries"]);
+        var terminal = await f.Terminals.CreateAsync(mapped, 80, 24, CancellationToken.None);
+        Assert.Equal(root, terminal.Cwd);
+        await f.Terminals.CloseAsync(terminal.Id, "test-complete");
+    }
+
+    [Fact]
     public async Task Workspace_settings_and_malformed_file_retention_with_narrow_capability_scope()
     {
         await using var f = await Fixture.Create();
@@ -489,7 +508,7 @@ public sealed class CodeRoutesTests
         var match = System.Text.RegularExpressions.Regex.Match(html, "data-settings=\"([^\"]+)\"");
         var config = JsonNode.Parse(WebUtility.HtmlDecode(match.Groups[1].Value))!;
         Assert.Equal(
-            Uri.UnescapeDataString(CodeWorkbench.FoxwarmUri(workspace)),
+            CodeWorkbench.FoxwarmUri(workspace),
             "foxwarm://"
                 + config["workspaceUri"]!["authority"]!.ToString()
                 + config["workspaceUri"]!["path"]!.ToString()
@@ -503,7 +522,13 @@ public sealed class CodeRoutesTests
             "data-settings=\"([^\"]+)\""
         );
         var folderConfig = JsonNode.Parse(WebUtility.HtmlDecode(folderMatch.Groups[1].Value))!;
-        Assert.Equal("/W:/work space/雪", folderConfig["folderUri"]!["path"]!.GetValue<string>());
+        Assert.Equal("/W%3A/work%20space/%E9%9B%AA", folderConfig["folderUri"]!["path"]!.GetValue<string>());
+        // The official FS reader decodes bootstrap path segments before HTTP dispatch.
+        var workspaceTarget = Uri.UnescapeDataString(config["workspaceUri"]!["path"]!.ToString());
+        Assert.Equal(
+            await File.ReadAllTextAsync(workspace),
+            await f.Client.GetStringAsync(f.Fs("read-file", workspaceTarget))
+        );
         Assert.Contains("foxwarm-terminal", config["additionalBuiltinExtensions"]!.ToJsonString());
         Assert.DoesNotContain("@@", html);
         var retained = JsonNode.Parse(await File.ReadAllTextAsync(workspace))!;

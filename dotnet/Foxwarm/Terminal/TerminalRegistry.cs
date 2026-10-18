@@ -45,7 +45,7 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
         // resolution, including Windows's current-drive root for "/".
         if (
             OperatingSystem.IsWindows()
-            && nativeCwd.Length >= 4
+            && nativeCwd.Length >= 3
             && nativeCwd[0] == '/'
             && char.IsAsciiLetter(nativeCwd[1])
             && nativeCwd[2] == ':'

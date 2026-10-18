@@ -72,7 +72,7 @@ Use official Code for the Web with browser extensions, not a Monaco clone or ser
 
 ### D-code-real-path-uri
 
-Represent node identity in URI authority and retain the absolute slash-based path as URI path; do not invent opaque workspace-root IDs. Windows Main presents an absolute native drive path as `/C:/...` within the unchanged `foxwarm://node+master/...` URI. Only local Code filesystem/Git/terminal dispatch converts that representation back to a fully qualified native path. Native Session cwd and ordinary tool metadata remain unchanged; WebUI Code actions normalize native drive targets at presentation. Remote POSIX paths and legacy URI readers retain their existing namespace. UNC and device-path mapping are not supported by this drive-only adaptation.
+Represent node identity in URI authority and retain the absolute slash-based path as URI path; do not invent opaque workspace-root IDs. Windows Main presents an absolute native drive path as `/C:/...` within the unchanged `foxwarm://node+master/...` URI. The normalized Code root `/C:` also denotes the mapped drive root, since the existing slash-based consumers remove a trailing separator. Only local Code filesystem/Git/terminal dispatch converts those representations back to a fully qualified native path; ordinary native `C:` remains drive-relative, not an absolute Session/tool cwd. Native Session cwd and ordinary tool metadata remain unchanged; WebUI Code actions normalize native drive targets at presentation. Remote POSIX paths and legacy URI readers retain their existing namespace. UNC and device-path mapping are not supported by this drive-only adaptation.
 
 ### D-code-persistent-workspace
 
