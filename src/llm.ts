@@ -2694,9 +2694,10 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
                 attempt,
                 requestedEffort,
             });
-            if (abortController.signal.aborted) throw makeAbortError();
-            await options.onAttempt?.(attempt);
-            if (abortController.signal.aborted) throw makeAbortError();
+            // A prepared plan still uses the established start/abort journal
+            // path if Stop arrived during preparation. Do not publish a new
+            // active-attempt notice, and let the dispatch guard below abort it.
+            if (!abortController.signal.aborted) await options.onAttempt?.(attempt);
             if (!requestJournalStarted) {
                 await beginLlmRequestJournal({
                     requestId,
