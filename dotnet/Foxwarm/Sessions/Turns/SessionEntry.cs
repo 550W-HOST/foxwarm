@@ -84,6 +84,7 @@ public sealed class SessionEntry
     public Exception? LastBackgroundProcessorFailure =>
         Volatile.Read(ref lastBackgroundProcessorFailure);
     public Action<SessionSnapshot>? Committed { get; set; }
+    internal Func<Action>? CaptureForegroundRelease { get; set; }
 
     public SessionEntry(
         SessionState state,

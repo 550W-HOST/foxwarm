@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
@@ -7,6 +8,102 @@ namespace Foxwarm.Tests;
 
 public sealed class RuntimePresentationTests
 {
+    [Fact]
+    public async Task Completed_foreground_retry_does_not_reappear_during_next_input_preparation()
+    {
+        using var temp = new TempDirectory();
+        var store = new PersistentSessionAuthorityStore(temp.Path, "s");
+        using var fixture = new ProviderFixture(temp.Path, store);
+        var owner = fixture.Owner;
+        owner.SetCompactRuntime("independent", "planning", true, null);
+        await owner.Entry.SaveLane.SaveStrictAsync();
+        await owner.Registry.Ingress.EnqueueAsync("s", QueueItem.UserText("first request"));
+        await owner.DrainForegroundAsync();
+        Assert.IsType<ModelRequestException>(owner.Entry.LastBackgroundProcessorFailure);
+        Assert.False(owner.Entry.Snapshot().Busy);
+        Assert.Null(owner.RuntimeSnapshot()["retry"]);
+        Assert.Equal(1, fixture.Attempts);
+
+        var preparing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        owner.Registry.OnTurnStarting = async _ =>
+        {
+            preparing.TrySetResult();
+            await release.Task;
+        };
+        await owner.Registry.Ingress.EnqueueAsync("s", QueueItem.UserText("second request"));
+        try
+        {
+            await preparing.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var runtime = owner.RuntimeSnapshot();
+            Assert.True(runtime["busy"]!.GetValue<bool>());
+            Assert.Equal("requesting-model", runtime["state"]!.GetValue<string>());
+            Assert.Null(runtime["retry"]);
+            Assert.Equal("unknown", runtime["active"]!["phase"]!.GetValue<string>());
+            Assert.Equal("independent", runtime["compaction"]!["operationId"]!.GetValue<string>());
+            Assert.Equal(1, fixture.Attempts);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await owner.DrainForegroundAsync();
+        }
+        Assert.Equal(2, fixture.Attempts);
+        Assert.Empty(owner.Entry.Snapshot().Queue);
+        Assert.False(owner.Entry.Snapshot().Busy);
+        Assert.NotNull(owner.RuntimeSnapshot()["compaction"]);
+    }
+
+    [Fact]
+    public async Task Failed_terminal_retry_save_uses_temporary_model_fallback_but_still_attempts_busy_release()
+    {
+        using var temp = new TempDirectory();
+        var failedWrites = new List<string>();
+        var fault = false;
+        var store = new PersistentSessionAuthorityStore(
+            temp.Path,
+            "s",
+            authorityStageHook: stage =>
+            {
+                if (stage != AtomicJsonWriteStage.BeforeRename || !fault)
+                    return;
+                var pending = Directory.GetFiles(Path.Combine(temp.Path, "state", "sessions"), "s.json.tmp-*").Single();
+                var snapshot = JsonNode.Parse(File.ReadAllText(pending))!;
+                var last = snapshot["history"]!.AsArray().LastOrDefault();
+                failedWrites.Add(last?["__meta"]?["noticeType"]?.GetValue<string>() ?? "ordinary");
+                throw new IOException("authority unavailable after terminal provider response");
+            }
+        );
+        using var fixture = new ProviderFixture(temp.Path, store, () => fault = true);
+        var owner = fixture.Owner;
+        var events = new List<SessionRuntimeEvent>();
+        owner.Changed += events.Add;
+        await owner.Entry.SaveLane.SaveStrictAsync();
+        await owner.Registry.Ingress.EnqueueAsync("s", QueueItem.UserText("provider failure"));
+        await owner.DrainForegroundAsync();
+
+        Assert.Equal(new[] { "llm-retry", "ordinary" }, failedWrites);
+        Assert.Equal(1, fixture.Attempts);
+        Assert.Equal("user", Assert.Single(owner.History())["role"]!.GetValue<string>());
+        Assert.Single(store.Archive.ReadMessages());
+        Assert.True(owner.Entry.Snapshot().Busy);
+        Assert.True((await store.LoadAsync("s"))!.Busy);
+        Assert.True(owner.RuntimeSnapshot()["retry"]!["final"]!.GetValue<bool>());
+        var notices = events.Where(item => item.Kind == SessionEventKind.MessageCommitted
+            && item.Data?["__meta"]?["temporary"]?.GetValue<bool>() == true).ToArray();
+        Assert.Equal(2, notices.Length);
+        Assert.Contains("terminal provider rejection", notices[0].Data!["__meta"]!["sessionNotice"]!["details"]!.GetValue<string>());
+        Assert.Contains("authority unavailable", notices[1].Data!["__meta"]!["sessionNotice"]!["details"]!.GetValue<string>());
+
+        // A failed notice does not poison independent lifecycle or later safe ordinary notice saves.
+        fault = false;
+        await owner.Registry.HostFor("s").ReleaseBusyAsync();
+        await owner.PresentFailureAsync(new InvalidOperationException("ordinary preparation failure"), true);
+        Assert.False(owner.Entry.Snapshot().Busy);
+        Assert.Equal(2, owner.History().Count);
+        Assert.Null(owner.History()[1]["__meta"]!["temporary"]);
+    }
+
     private static SessionOwner Owner(ISessionAuthorityStore store, string id = "s")
     {
         var models = HostModels.ForTest(
@@ -190,5 +287,49 @@ public sealed class RuntimePresentationTests
             IReadOnlyList<JsonObject> history,
             CancellationToken token
         ) => throw new NotSupportedException();
+    }
+
+    private sealed class ProviderFixture : IDisposable
+    {
+        private readonly HttpClient http;
+        internal SessionOwner Owner { get; }
+        internal int Attempts { get; private set; }
+
+        internal ProviderFixture(string root, PersistentSessionAuthorityStore store, Action? onResponse = null)
+        {
+            var work = Path.Combine(root, "work");
+            Directory.CreateDirectory(work);
+            var options = new ResponsesClientOptions(new Uri("http://localhost"), "wire", "a/wire", "", "", 50);
+            var models = HostModels.ForTest(options);
+            Owner = new SessionOwner("s", "main", models) { Archive = store.Archive };
+            var agents = new AgentCatalog(root, work);
+            var memory = new AgentMemory(agents, new Skills(agents, Path.Combine(root, "skills")));
+            http = new HttpClient(new TerminalPeer(() =>
+            {
+                Attempts++;
+                onResponse?.Invoke();
+            }));
+            var requests = new ModelRequestOwner(http, options, new ModelRouting());
+            var chat = new SessionChatService(requests, options, Owner, models, memory, (_, _) => { });
+            Owner.Registry = new SessionRegistry(store, chat);
+            Owner.Registry.Add("s");
+            Owner.EnableCommittedNotifications();
+            Owner.Registry.OnTurnFailure = (error, durable) => Owner.PresentFailureAsync(error, durable);
+            Owner.Registry.TriggerOverride = _ => Owner.StartProcessing();
+        }
+
+        public void Dispose() => http.Dispose();
+    }
+
+    private sealed class TerminalPeer(Action onResponse) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            onResponse();
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest)
+            {
+                Content = new StringContent("{\"error\":{\"message\":\"terminal provider rejection\"}}"),
+            });
+        }
     }
 }

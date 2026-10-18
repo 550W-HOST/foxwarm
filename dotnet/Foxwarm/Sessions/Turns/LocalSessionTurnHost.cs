@@ -409,6 +409,7 @@ public sealed partial class LocalSessionTurnHost
 
     public async Task ReleaseBusyAsync()
     {
+        var releaseForeground = entry.CaptureForegroundRelease?.Invoke();
         var beforeBusy = false;
         long? beforeBusyStartedAt = null;
         var changed = entry.WithState(state =>
@@ -422,7 +423,10 @@ public sealed partial class LocalSessionTurnHost
             return true;
         });
         if (!changed)
+        {
+            releaseForeground?.Invoke();
             return;
+        }
         Interlocked.Increment(ref releaseCommits);
         try
         {
@@ -441,12 +445,14 @@ public sealed partial class LocalSessionTurnHost
                 });
             throw;
         }
+        releaseForeground?.Invoke();
         entry.InvokeCommitted(entry.Snapshot());
     }
 
     public async Task FinalizeStoppedAsync()
     {
         await SafePointAsync().ConfigureAwait(false);
+        var releaseForeground = entry.CaptureForegroundRelease?.Invoke();
         var items = entry.WithState(state =>
         {
             DeferredQueueInput.Mark(state.Queue);
@@ -460,6 +466,7 @@ public sealed partial class LocalSessionTurnHost
             )
             .ConfigureAwait(false);
         Interlocked.Increment(ref releaseCommits);
+        releaseForeground?.Invoke();
         entry.InvokeQueuedCommitted(entry.Snapshot());
     }
 

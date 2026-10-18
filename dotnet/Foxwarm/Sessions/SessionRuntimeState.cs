@@ -188,6 +188,20 @@ internal sealed partial class SessionOwner
         PublishStateChanged();
     }
 
+    private Action CaptureForegroundRelease()
+    {
+        // Busy release retires only this foreground projection, never independent compaction or a successor.
+        JsonObject? released;
+        lock (runtimeGate)
+            released = foregroundRuntime;
+        return () =>
+        {
+            lock (runtimeGate)
+                if (ReferenceEquals(foregroundRuntime, released))
+                    foregroundRuntime = null;
+        };
+    }
+
     internal static JsonObject RetryProjection(Foxwarm.Models.ModelRetryEvent value) =>
         new()
         {

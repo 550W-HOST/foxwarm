@@ -99,6 +99,7 @@ internal sealed partial class SessionOwner
 
     public void EnableCommittedNotifications()
     {
+        Entry.CaptureForegroundRelease = CaptureForegroundRelease;
         lastNotifiedSeq = Entry.WithState(state => state.History.LastOrDefault()?.Sequence ?? 0);
         Entry.Committed = snapshot =>
         {
