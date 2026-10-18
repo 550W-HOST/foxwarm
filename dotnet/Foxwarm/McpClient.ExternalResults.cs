@@ -11,7 +11,9 @@ namespace Foxwarm;
 
 internal sealed partial class McpClient
 {
-    private static readonly JsonSerializerOptions ExternalResultOptions = new(McpJsonUtilities.DefaultOptions)
+    private static readonly JsonSerializerOptions ExternalResultOptions = new(
+        McpJsonUtilities.DefaultOptions
+    )
     {
         RespectNullableAnnotations = true,
         PropertyNameCaseInsensitive = false,
@@ -25,7 +27,10 @@ internal sealed partial class McpClient
         if (result is not JsonObject obj)
             throw new JsonException("Invalid MCP tool result.");
         var known = ExternalProtocolFields(obj, "isError", "structuredContent", "_meta");
-        if (known["isError"] is { } error && error.GetValueKind() is not (JsonValueKind.True or JsonValueKind.False))
+        if (
+            known["isError"] is { } error
+            && error.GetValueKind() is not (JsonValueKind.True or JsonValueKind.False)
+        )
             throw new JsonException("Invalid MCP error flag.");
         if (known["structuredContent"] is { } structured && structured is not JsonObject)
             throw new JsonException("Invalid MCP structured content.");
@@ -33,14 +38,25 @@ internal sealed partial class McpClient
         {
             if (metadata is not JsonObject meta)
                 throw new JsonException("Invalid MCP metadata.");
-            if (meta.TryGetPropertyValue("progressToken", out var progress)
-                && !(progress?.GetValueKind() == JsonValueKind.String
+            if (
+                meta.TryGetPropertyValue("progressToken", out var progress)
+                && !(
+                    progress?.GetValueKind() == JsonValueKind.String
                     || progress?.GetValueKind() == JsonValueKind.Number
-                    && progress.GetValue<double>() is var number && double.IsFinite(number)
-                    && Math.Abs(number) <= 9007199254740991 && Math.Truncate(number) == number))
+                        && progress.GetValue<double>() is var number
+                        && double.IsFinite(number)
+                        && Math.Abs(number) <= 9007199254740991
+                        && Math.Truncate(number) == number
+                )
+            )
                 throw new JsonException("Invalid MCP progress token.");
-            if (meta.TryGetPropertyValue("io.modelcontextprotocol/related-task", out var related)
-                && (related is not JsonObject task || task["taskId"]?.GetValueKind() != JsonValueKind.String))
+            if (
+                meta.TryGetPropertyValue("io.modelcontextprotocol/related-task", out var related)
+                && (
+                    related is not JsonObject task
+                    || task["taskId"]?.GetValueKind() != JsonValueKind.String
+                )
+            )
                 throw new JsonException("Invalid MCP task metadata.");
         }
         if (!obj.TryGetPropertyValue("content", out var content))
@@ -59,7 +75,8 @@ internal sealed partial class McpClient
             switch (SessionWait.Text(block["type"]))
             {
                 case "text":
-                    ExternalProtocolFields(block, "text").Deserialize<TextContentBlock>(ExternalResultOptions);
+                    ExternalProtocolFields(block, "text")
+                        .Deserialize<TextContentBlock>(ExternalResultOptions);
                     break;
                 case "image":
                 case "audio":
@@ -90,7 +107,14 @@ internal sealed partial class McpClient
                     }
                     break;
                 case "resource_link":
-                    var link = ExternalProtocolFields(block, "uri", "name", "title", "description", "mimeType");
+                    var link = ExternalProtocolFields(
+                        block,
+                        "uri",
+                        "name",
+                        "title",
+                        "description",
+                        "mimeType"
+                    );
                     link.Deserialize<ResourceLinkBlock>(ExternalResultOptions);
                     if (block.TryGetPropertyValue("icons", out var icons))
                     {
@@ -100,10 +124,27 @@ internal sealed partial class McpClient
                         {
                             if (icon is not JsonObject descriptor)
                                 throw new JsonException("Invalid MCP icon.");
-                            var iconFields = ExternalProtocolFields(descriptor, "src", "mimeType", "sizes", "theme");
-                            if (iconFields["sizes"] is { } sizes && (sizes is not JsonArray entries || entries.Any(entry => entry?.GetValueKind() != JsonValueKind.String)))
+                            var iconFields = ExternalProtocolFields(
+                                descriptor,
+                                "src",
+                                "mimeType",
+                                "sizes",
+                                "theme"
+                            );
+                            if (
+                                iconFields["sizes"] is { } sizes
+                                && (
+                                    sizes is not JsonArray entries
+                                    || entries.Any(entry =>
+                                        entry?.GetValueKind() != JsonValueKind.String
+                                    )
+                                )
+                            )
                                 throw new JsonException("Invalid MCP icon sizes.");
-                            if (iconFields["theme"] is { } theme && SessionWait.Text(theme) is not ("light" or "dark"))
+                            if (
+                                iconFields["theme"] is { } theme
+                                && SessionWait.Text(theme) is not ("light" or "dark")
+                            )
                                 throw new JsonException("Invalid MCP icon theme.");
                             iconFields.Deserialize<Icon>(ExternalResultOptions);
                         }
@@ -120,7 +161,8 @@ internal sealed partial class McpClient
         var result = new JsonObject();
         foreach (var name in names)
             if (source.TryGetPropertyValue(name, out var value))
-                result[name] = value?.DeepClone() ?? throw new JsonException("Null MCP protocol field.");
+                result[name] =
+                    value?.DeepClone() ?? throw new JsonException("Null MCP protocol field.");
         return result;
     }
 
@@ -130,7 +172,9 @@ internal sealed partial class McpClient
             throw new JsonException("Invalid MCP binary data.");
         // Source uses atob: ASCII whitespace and omitted padding are legal. The
         // discarded SDK validation copy needs padding; the returned raw data does not.
-        var compact = string.Concat(value.GetValue<string>().Where(c => c is not (' ' or '\t' or '\r' or '\n' or '\f')));
+        var compact = string.Concat(
+            value.GetValue<string>().Where(c => c is not (' ' or '\t' or '\r' or '\n' or '\f'))
+        );
         if (compact.Length % 4 == 1 || compact.Length % 4 != 0 && compact.Contains('='))
             throw new JsonException("Invalid MCP binary data.");
         var padded = compact.PadRight((compact.Length + 3) / 4 * 4, '=');
@@ -143,16 +187,34 @@ internal sealed partial class McpClient
         if (value is not JsonObject annotations)
             throw new JsonException("Invalid MCP annotations.");
         var fields = ExternalProtocolFields(annotations, "audience", "priority", "lastModified");
-        if (fields["audience"] is { } audience && (audience is not JsonArray roles || roles.Any(role => SessionWait.Text(role) is not ("user" or "assistant"))))
+        if (
+            fields["audience"] is { } audience
+            && (
+                audience is not JsonArray roles
+                || roles.Any(role => SessionWait.Text(role) is not ("user" or "assistant"))
+            )
+        )
             throw new JsonException("Invalid MCP audience.");
-        if (fields["priority"] is { } priority && (priority.GetValueKind() != JsonValueKind.Number || priority.GetValue<double>() is not (>= 0 and <= 1)))
+        if (
+            fields["priority"] is { } priority
+            && (
+                priority.GetValueKind() != JsonValueKind.Number
+                || priority.GetValue<double>() is not (>= 0 and <= 1)
+            )
+        )
             throw new JsonException("Invalid MCP priority.");
         if (fields["lastModified"] is { } modified)
         {
             // Match Source's ISO date/time shape, including optional seconds,
             // arbitrary fractional precision and its two-digit offset grammar.
             var text = modified.GetValue<string>();
-            if (!Regex.IsMatch(text, @"\A[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\.[0-9]+)?)?(Z|[+-][0-9]{2}:[0-9]{2})\z", RegexOptions.CultureInvariant))
+            if (
+                !Regex.IsMatch(
+                    text,
+                    @"\A[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9](\.[0-9]+)?)?(Z|[+-][0-9]{2}:[0-9]{2})\z",
+                    RegexOptions.CultureInvariant
+                )
+            )
                 throw new JsonException("Invalid MCP modification time.");
             var year = int.Parse(text.AsSpan(0, 4), CultureInfo.InvariantCulture);
             var month = int.Parse(text.AsSpan(5, 2), CultureInfo.InvariantCulture);

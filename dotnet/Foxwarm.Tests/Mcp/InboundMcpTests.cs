@@ -114,10 +114,15 @@ public sealed class InboundMcpTests
     {
         await using var f = await InboundMcpFixture.CreateAsync();
         await using var peer = await OutboundSdkPeer.StartAsync(Path.Combine(f.Temp.Path, "peer"));
-        await f.Manager.OutboundMcp.ConfigureAsync(new JsonObject
-        {
-            ["name"] = "peer", ["url"] = peer.Url + "/mcp", ["transport"] = "streamable-http",
-        }, default);
+        await f.Manager.OutboundMcp.ConfigureAsync(
+            new JsonObject
+            {
+                ["name"] = "peer",
+                ["url"] = peer.Url + "/mcp",
+                ["transport"] = "streamable-http",
+            },
+            default
+        );
         await using var client = await f.ClientAsync();
         string[] invalid =
         [
@@ -146,27 +151,43 @@ public sealed class InboundMcpTests
         for (var i = 0; i < invalid.Length; i++)
         {
             var tag = "invalid-" + i;
-            var result = await client.CallToolAsync(new CallToolRequestParams
-            {
-                Name = "foxwarm_call",
-                Arguments = new Dictionary<string, JsonElement>
+            var result = await client.CallToolAsync(
+                new CallToolRequestParams
                 {
-                    ["toolId"] = JsonSerializer.SerializeToElement("mcp:peer/result"),
-                    ["args"] = JsonSerializer.SerializeToElement(new JsonObject
+                    Name = "foxwarm_call",
+                    Arguments = new Dictionary<string, JsonElement>
                     {
-                        ["rawResult"] = JsonNode.Parse(invalid[i]), ["tag"] = tag,
-                    }),
-                },
-            });
+                        ["toolId"] = JsonSerializer.SerializeToElement("mcp:peer/result"),
+                        ["args"] = JsonSerializer.SerializeToElement(
+                            new JsonObject
+                            {
+                                ["rawResult"] = JsonNode.Parse(invalid[i]),
+                                ["tag"] = tag,
+                            }
+                        ),
+                    },
+                }
+            );
             Assert.True(result.IsError, invalid[i]);
             var text = Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
             Assert.Contains("outcome may be unknown", text);
             Assert.Contains("do not retry automatically", text);
-            Assert.Single(await peer.EventsAsync(), row => row["kind"]!.GetValue<string>() == "effect" && row["tag"]?.GetValue<string>() == tag);
+            Assert.Single(
+                await peer.EventsAsync(),
+                row =>
+                    row["kind"]!.GetValue<string>() == "effect"
+                    && row["tag"]?.GetValue<string>() == tag
+            );
         }
         Assert.Equal(5, (await client.ListToolsAsync(new ListToolsRequestParams())).Tools.Count);
-        Assert.Contains("id", Text(await InboundMcpFixture.ConcreteAsync(client, "mcp:peer/probe")));
-        Assert.Single(await peer.EventsAsync(), row => row["kind"]!.GetValue<string>() == "initialize");
+        Assert.Contains(
+            "id",
+            Text(await InboundMcpFixture.ConcreteAsync(client, "mcp:peer/probe"))
+        );
+        Assert.Single(
+            await peer.EventsAsync(),
+            row => row["kind"]!.GetValue<string>() == "initialize"
+        );
     }
 
     [Fact]
@@ -174,12 +195,18 @@ public sealed class InboundMcpTests
     {
         await using var f = await InboundMcpFixture.CreateAsync();
         await using var peer = await OutboundSdkPeer.StartAsync(Path.Combine(f.Temp.Path, "peer"));
-        await f.Manager.OutboundMcp.ConfigureAsync(new JsonObject
-        {
-            ["name"] = "peer", ["url"] = peer.Url + "/mcp", ["transport"] = "streamable-http",
-        }, default);
+        await f.Manager.OutboundMcp.ConfigureAsync(
+            new JsonObject
+            {
+                ["name"] = "peer",
+                ["url"] = peer.Url + "/mcp",
+                ["transport"] = "streamable-http",
+            },
+            default
+        );
         await using var client = await f.ClientAsync();
-        var raw = JsonNode.Parse("""
+        var raw = JsonNode.Parse(
+            """
             {
               "content": [
                 {"type":"text","text":"untouched","isError":"business","data":{"opaque":true},
@@ -193,16 +220,25 @@ public sealed class InboundMcpTests
               "structuredContent":{"arbitrary":[null,false,42]},"_meta":{"progressToken":"p","retained":true},
               "customTag":{"retained":true},"error":{"business":true},"canceled":true,"__cancelAllToolsThisTurn":true
             }
-            """)!;
+            """
+        )!;
         foreach (var value in new[] { new JsonObject(), raw })
         {
-            var result = await InboundMcpFixture.ConcreteAsync(client, "mcp:peer/result", new JsonObject
-            {
-                ["rawResult"] = value.DeepClone(), ["tag"] = "valid-" + value.AsObject().Count,
-            });
+            var result = await InboundMcpFixture.ConcreteAsync(
+                client,
+                "mcp:peer/result",
+                new JsonObject
+                {
+                    ["rawResult"] = value.DeepClone(),
+                    ["tag"] = "valid-" + value.AsObject().Count,
+                }
+            );
             Assert.True(JsonNode.DeepEquals(value, result), result.ToJsonString());
         }
-        Assert.Equal(2, (await peer.EventsAsync()).Count(row => row["kind"]!.GetValue<string>() == "effect"));
+        Assert.Equal(
+            2,
+            (await peer.EventsAsync()).Count(row => row["kind"]!.GetValue<string>() == "effect")
+        );
     }
 
     [Fact]
@@ -365,29 +401,39 @@ public sealed class InboundMcpTests
     [InlineData(-2L, 10, 1, 2)]
     [InlineData(3L, 10, 3, 0)]
     public async Task Session_read_counts_the_selected_messages_not_the_limit_or_preview(
-        long? start, int count, int expectedStart, int expectedCount
+        long? start,
+        int count,
+        int expectedStart,
+        int expectedCount
     )
     {
         await using var f = await InboundMcpFixture.CreateAsync();
         f.Target.Entry.WithState(state =>
         {
             for (var seq = 1; seq <= 3; seq++)
-                state.History.Add(new JsonObject
-                {
-                    ["role"] = "user",
-                    ["parts"] = new JsonArray(new JsonObject { ["text"] = new string('x', 2000) }),
-                    ["__meta"] = new JsonObject { ["seq"] = seq, ["timestamp"] = seq },
-                });
+                state.History.Add(
+                    new JsonObject
+                    {
+                        ["role"] = "user",
+                        ["parts"] = new JsonArray(
+                            new JsonObject { ["text"] = new string('x', 2000) }
+                        ),
+                        ["__meta"] = new JsonObject { ["seq"] = seq, ["timestamp"] = seq },
+                    }
+                );
             state.NextMessageSeq = 4;
         });
         await f.Target.Entry.SaveLane.SaveStrictAsync();
         await using var client = await f.ClientAsync();
         var args = new JsonObject
         {
-            ["action"] = "read", ["sessionId"] = f.Target.Id,
-            ["count"] = count, ["previewLength"] = 1000,
+            ["action"] = "read",
+            ["sessionId"] = f.Target.Id,
+            ["count"] = count,
+            ["previewLength"] = 1000,
         };
-        if (start is not null) args["start"] = start;
+        if (start is not null)
+            args["start"] = start;
         var read = Value(await InboundMcpFixture.CallAsync(client, "foxwarm_session", args));
         Assert.Equal(expectedStart, read["start"]!.GetValue<int>());
         Assert.Equal(expectedCount, read["count"]!.GetValue<int>());
