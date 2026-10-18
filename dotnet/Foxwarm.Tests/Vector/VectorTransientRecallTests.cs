@@ -9,6 +9,43 @@ namespace Foxwarm.Tests;
 public sealed class VectorTransientRecallTests
 {
     [Fact]
+    public async Task Complete_channel_parts_exclude_siblings_without_discarding_ordinary_dual_fields()
+    {
+        await using var f = await VectorFixture.CreateAsync();
+        const string id = "main/channel";
+        var wrapped = new JsonObject
+        {
+            ["role"] = "user",
+            ["parts"] = new JsonArray(new JsonObject
+            {
+                ["system"] = "<foxwarm-message type=\"channel\">\nactual inbound body\n</foxwarm-message>",
+                ["text"] = "SiblingOnlyIdentifier"
+            })
+        };
+        var ordinary = new JsonObject
+        {
+            ["role"] = "user",
+            ["parts"] = new JsonArray(new JsonObject { ["system"] = "stable context", ["text"] = "OrdinaryDualIdentifier" })
+        };
+        wrapped["__meta"] = new JsonObject { ["seq"] = 1, ["timestamp"] = 1000 };
+        ordinary["__meta"] = new JsonObject { ["seq"] = 2, ["timestamp"] = 2000 };
+        f.Archive(id).WriteMessages([
+            ArchiveMessageRecord.Create(id, "main", 1, 1000, wrapped),
+            ArchiveMessageRecord.Create(id, "main", 2, 2000, ordinary)
+        ]);
+        var dense = VectorText.Message(wrapped);
+        var substantive = VectorText.Message(wrapped, rolePrefix: false, substantive: true, toolLimit: 0);
+        Assert.Contains("actual inbound body", dense);
+        Assert.Contains("actual inbound body", substantive);
+        Assert.DoesNotContain("SiblingOnlyIdentifier", dense);
+        Assert.DoesNotContain("SiblingOnlyIdentifier", substantive);
+        Assert.Empty(ArchiveLexicalRecall.Search(f.Archive(id), "SiblingOnlyIdentifier", 5));
+        Assert.NotEmpty(ArchiveLexicalRecall.Search(f.Archive(id), "OrdinaryDualIdentifier", 5));
+        Assert.Contains("stable context", VectorText.Message(ordinary));
+        Assert.Contains("OrdinaryDualIdentifier", VectorText.Message(ordinary));
+    }
+
+    [Fact]
     public async Task Bootstrap_uses_the_last_visible_message_window_before_row_limits_and_obeys_captured_fork_caps_like_Source()
     {
         await using var f = await VectorFixture.CreateAsync();

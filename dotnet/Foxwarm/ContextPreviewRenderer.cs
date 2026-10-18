@@ -214,8 +214,6 @@ internal sealed partial class ContextPreviewRenderer
     {
         var selected = items.AsEnumerable();
         var notices = new List<string>(warnings);
-        if (extraNotices is not null)
-            notices.AddRange(extraNotices);
         void Filter(Func<PreviewItem, bool> predicate, string label)
         {
             var before = selected.Count();
@@ -246,20 +244,47 @@ internal sealed partial class ContextPreviewRenderer
                 "[filter] excludeRegex excluded {count} additional item(s) that remained after earlier filter stages."
             );
         var matched = (maxItems is { } maximum ? selected.Take(maximum) : selected).ToArray();
+        var selectionOmitted = selected.Count() - matched.Length;
+        if (selectionOmitted > 0)
+            notices.Add($"[selection] {selectionOmitted} additional matched item(s) omitted by the requested result limit.");
+        var priority = (extraNotices ?? [])
+            .Concat(matched.SelectMany(item => item.PriorityNotices ?? []))
+            .Select(SessionGoal.Trim)
+            .Where(notice => notice.Length > 0)
+            .Take(4)
+            .Select(notice => Clip(notice, 560));
         var title = titleFor(matched.Length);
-        var runtimeLine = Clip(context, Math.Min(560, budget - 242));
-        var medium = string.Join('\n', notices);
-        var prefixBudget = budget - 242;
-        var prefix = runtimeLine;
-        if (medium.Length > 0)
-            prefix +=
-                "\n" + Clip(medium, Math.Max(0, prefixBudget - prefix.Length - title.Length - 2));
-        prefix += "\n\n" + Clip(title, Math.Max(0, prefixBudget - prefix.Length - 2));
+        string Prefix(int reserveForBody)
+        {
+            var available = Math.Max(0, budget - reserveForBody);
+            var sections = new List<string>();
+            var used = 0;
+            void Append(string text, int max)
+            {
+                var separator = sections.Count > 0 ? 1 : 0;
+                if (text.Length == 0 || max <= separator)
+                    return;
+                var bounded = Clip(text, max - separator);
+                if (bounded.Length == 0)
+                    return;
+                sections.Add(bounded);
+                used += bounded.Length + separator;
+            }
+            var priorityText = string.Join('\n', priority);
+            Append(priorityText, Math.Min(priorityText.Length, Math.Max(0, Math.Min(700, available - used))));
+            var medium = string.Join('\n', notices);
+            Append(medium, Math.Min(medium.Length, Math.Max(0, available - used)));
+            Append(context, Math.Max(0, Math.Min(560, available - used)));
+            Append(title, Math.Max(0, available - used));
+            return string.Join('\n', sections);
+        }
         if (matched.Length == 0)
         {
-            return Clip(prefix + "\n\n" + empty, budget);
+            var suffix = "\n\n" + empty;
+            return Clip((Prefix(suffix.Length) + suffix).TrimStart(), budget);
         }
-        var output = prefix + "\n\n";
+        var prefix = Prefix(242);
+        var output = prefix.Length > 0 ? prefix + "\n\n" : "";
         var omitted = 0;
         for (var index = 0; index < matched.Length; index++)
         {

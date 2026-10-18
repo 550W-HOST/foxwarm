@@ -120,15 +120,19 @@ internal static class VectorText
         "Channel is in send-only mode.",
     ];
 
-    private static string? SystemText(string text)
+    private static string? SystemText(string text, out bool channel)
     {
+        channel = false;
         var wrapped = Regex.Match(
             text,
             @"^\s*<foxwarm-message\b(?<attrs>[^>]*)>\s*\n?(?<body>[\s\S]*)\n?\s*</foxwarm-message\s*>\s*$",
             RegexOptions.CultureInvariant | RegexOptions.IgnoreCase
         );
         if (wrapped.Success && Attribute(wrapped.Groups["attrs"].Value, "type") == "channel")
+        {
+            channel = true;
             return Multiline(wrapped.Groups["body"].Value);
+        }
         var opening = Regex.Match(
             text,
             @"^\s*<(?<tag>foxwarm-(?:system|message))\b(?<attrs>[^>]*)>\s*",
@@ -193,8 +197,14 @@ internal static class VectorText
         var lines = new List<string>();
         foreach (var part in (message["parts"] as JsonArray)?.OfType<JsonObject>() ?? [])
         {
-            if (part["system"] is JsonValue && SystemText(Text(part["system"])) is { } system)
-                lines.Add(system);
+            if (part["system"] is JsonValue)
+            {
+                var system = SystemText(Text(part["system"]), out var channel);
+                if (system is not null)
+                    lines.Add(system);
+                if (channel)
+                    continue;
+            }
             var text = Text(part["text"]);
             if (
                 Trim(text).Length > 0

@@ -149,7 +149,6 @@ internal static class VectorRecall
         }
         var items = new List<PreviewItem>();
         var sources = new JsonArray();
-        var notices = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var hit in hits)
         {
@@ -284,9 +283,9 @@ internal static class VectorRecall
                             messageItems
                                 .Select(message => message.OmittedTools)
                                 .Where(text => !string.IsNullOrEmpty(text))
-                        )
+                        ),
+                        window.Notices
                     );
-                    notices.AddRange(window.Notices);
                     source = new()
                     {
                         ["key"] = key,
@@ -365,6 +364,6 @@ internal static class VectorRecall
             : fallbackUsed
                 ? "semantic search with bounded identifier fallback"
                 : "vector search";
-        return new(items, sources, labelText, hits.Count, notices);
+        return new(items, sources, labelText, hits.Count, []);
     }
 }

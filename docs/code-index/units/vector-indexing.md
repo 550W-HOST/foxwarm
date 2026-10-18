@@ -9,13 +9,15 @@ Owns the enabled derived dense index, embedding requests, raw/block/fact recipes
 ## Stable methods and callers
 
 - `VectorConfiguration.Capture` consumes validated app configuration once: object/boolean/absent Vector state, legacy `ollamaBaseUrl`, normalized endpoint, lexical/hybrid opt-ins, `dbWorkers` default true, and configured maintenance retention.
-- `VectorText` translates substantive model-visible message/tool/image text, wrapper exclusions, Source token estimation, Unicode handling, and embedding truncation. Query embeddings add the Source query instruction; document embeddings do not. Both use `qwen3-embedding:0.6b`, 1024 finite components and the existing 60-second HTTP bound.
+- `VectorText` translates substantive model-visible message/tool/image text, wrapper exclusions, Source token estimation, Unicode handling, and embedding truncation. A complete recognized channel wrapper supplies the entire part body; its sibling fields are not formatted, while ordinary system/text parts retain both fields. Query embeddings add the Source query instruction; document embeddings do not. Both use `qwen3-embedding:0.6b`, 1024 finite components and the existing 60-second HTTP bound.
 - `VectorRows` builds overlapping raw segments, deterministic raw chunks, block chunks, and deduplicated facts. Fact identity retains the persisted Source kind-plus-normalized-text SHA-256 recipe, attribution and context.
 - `VectorTable.OpenAsync` owns exactly one connection/table in its runtime. Existing `messages_v7` tables open without conversion; new tables use the explicitly nullable Source-equivalent Arrow schema, Float64 numeric metadata, a nullable fixed-size Float32 vector, and storage format `2.0`.
 - `VectorRuntime.Schedule`, `ForceAsync` and `IndexFactsAsync` are called after actual authority publication, at explicit `/session index`, and from committed compaction. Startup visits pending local Archive owners parent-before-child. Readiness does not mean backfill completed.
 - `VectorMaintenance` translates startup, 128-successful-mutation, one-minute non-sliding coalescing, daily periodic and one-hour retry scheduling. `VectorOperationGate` lets ordinary operations overlap while queued exclusive maintenance runs before waiting ordinary work.
 
 ## Ordering and failure contract
+
+Per-Session force requests enqueue their own captured target run behind any active indexing work and await that run, including its failure. Background scheduling still coalesces into the existing batch/deadline; a force caller does not wait for later appends beyond its captured target.
 
 Raw batches rebuild the persisted tail: delete overlapping derived rows first, embed/add rebuilt rows, then advance SQLite progress. An embedding/add/checkpoint failure does not claim progress or undo the earlier derived deletion. A retry uses committed Archive and the old checkpoint. Block IDs merge atomically before checkpoint advancement; facts merge by deterministic ID, making retries idempotent. Startup replays raw/block progress, not historical fact publication hooks.
 

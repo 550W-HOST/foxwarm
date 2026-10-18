@@ -103,9 +103,9 @@ internal sealed partial class SessionManager
         if (scope.SessionIds is { Length: > 0 } ids)
             return ids.Any(id => ArchiveReader(id).CanonicalSessionId == canonical);
         // Current-agent model recall must satisfy the same canonical target contract as explicit recall.
-        // Archive and dense metadata retain historical agents across moves; neither can grant this authority.
+        // Canonical identity survives catalog deletion; historical Archive/dense Agent metadata does not grant authority.
         return scope.Agent is null
-            || SessionCatalog.Text(Catalog.Get(canonical)?["agent"]) == scope.Agent;
+            || SessionIdentity.Agent(canonical) == scope.Agent;
     }
 
     internal (VectorSearchOptions Options, string Scope, string? SessionId) ResolveVectorScope(

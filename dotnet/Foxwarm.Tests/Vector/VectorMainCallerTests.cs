@@ -137,6 +137,134 @@ public sealed class VectorMainCallerTests
     }
 
     [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task Force_waits_for_its_queued_committed_target_and_publishes_compatibility_only_on_success(
+        bool child,
+        bool failTarget
+    )
+    {
+        await using var f = await VectorFixture.CreateAsync();
+        await using var manager = await f.ManagerAsync(child);
+        await manager.Vector.WaitForStartupAsync();
+        var owner = await manager.CreateNamedAsync("main", "queued-force", null, null);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requests = 0;
+        f.Peer.BeforeResponse = async input =>
+        {
+            if (Interlocked.Increment(ref requests) == 1)
+            {
+                entered.TrySetResult();
+                await release.Task;
+            }
+            if (failTarget && input.Contains("queued suffix", StringComparison.Ordinal))
+                f.Peer.Fail = true;
+        };
+        try
+        {
+            await ForkClearLifecycleTests.AppendAsync(owner, VectorFixture.Message(new string('a', 25000)));
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await ForkClearLifecycleTests.AppendAsync(owner, VectorFixture.Message("violet queued suffix"));
+            var forced = manager.ForceVectorIndexAsync(owner);
+            // FIFO dispatch makes this a transport barrier without releasing the held background run.
+            Assert.Equal(2, VectorRuntime.Integer((await manager.Vector.StatusAsync(owner.Id))["latestLocalMessageSeq"]));
+            release.TrySetResult();
+            if (failTarget)
+            {
+                await Assert.ThrowsAsync<HttpRequestException>(() => forced.WaitAsync(TimeSpan.FromSeconds(10)));
+                Assert.Equal(1, owner.Archive.VectorCheckpoint().RawLastIndexedSeq);
+                Assert.Equal(0, VectorRuntime.Integer(owner.Entry.Snapshot().AuthorityEnvelope["vectorIndexPosition"]));
+            }
+            else
+            {
+                Assert.Equal(2, await forced.WaitAsync(TimeSpan.FromSeconds(10)));
+                var status = await manager.Vector.StatusAsync(owner.Id);
+                Assert.Equal(2, VectorRuntime.Integer(status["lastIndexedSeq"]));
+                Assert.Equal(0, VectorRuntime.Integer(status["pendingMessageCount"]));
+                Assert.Equal(2, VectorRuntime.Integer(owner.Entry.Snapshot().AuthorityEnvelope["vectorIndexPosition"]));
+            }
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public async Task Current_agent_model_recall_retains_never_moved_deleted_Archive_sources()
+    {
+        await using var f = await VectorFixture.CreateAsync();
+        await using var manager = await f.ManagerAsync();
+        var source = await manager.CreateNamedAsync("main", "retained", null, null);
+        var caller = await manager.CreateNamedAsync("main", "caller", null, null);
+        await ForkClearLifecycleTests.AppendAsync(source, VectorFixture.Message("violet retained authority marker"));
+        await manager.ForceVectorIndexAsync(source);
+        await manager.DeleteAsync(source.Id);
+        Assert.Null(manager.Catalog.Get(source.Id));
+        Assert.Single(manager.ArchiveReader(source.Id).ReadMessages());
+        var result = await Recall(manager, caller, new() { ["vector_query"] = "violet", ["scope"] = "current-agent" });
+        Assert.Contains("retained authority marker", result.ToJsonString());
+    }
+
+    [Fact]
+    public void Query_notices_remain_separate_from_selected_source_notices_and_precede_the_title()
+    {
+        var renderer = new ContextPreviewRenderer(new() { ["excludeRegex"] = "excluded" });
+        var items = new PreviewItem[]
+        {
+            new("selected", "selected body", "selected", null, ["SelectedSourceNotice"]),
+            new("limited", "limited body", "limited", null, ["LimitedSourceNotice"]),
+            new("excluded", "excluded body", "excluded", null, ["ExcludedSourceNotice"])
+        };
+        var output = renderer.RenderItems(items, "", _ => "TitleMarker", "EmptyMarker", ["QueryNotice"], maxItems: 1);
+        Assert.Contains("QueryNotice", output);
+        Assert.Contains("SelectedSourceNotice", output);
+        Assert.DoesNotContain("LimitedSourceNotice", output);
+        Assert.DoesNotContain("ExcludedSourceNotice", output);
+        Assert.True(output.IndexOf("QueryNotice", StringComparison.Ordinal) < output.IndexOf("SelectedSourceNotice", StringComparison.Ordinal));
+        Assert.True(output.IndexOf("SelectedSourceNotice", StringComparison.Ordinal) < output.IndexOf("TitleMarker", StringComparison.Ordinal));
+        var empty = renderer.RenderItems(items, "", _ => "TitleMarker", "EmptyMarker", ["QueryNotice"], maxItems: 0);
+        Assert.Contains("QueryNotice", empty);
+        Assert.DoesNotContain("SelectedSourceNotice", empty);
+    }
+
+    [Fact]
+    public async Task Source_window_notices_follow_final_filtered_and_result_limited_groups()
+    {
+        await using var f = await VectorFixture.CreateAsync();
+        await using var manager = await f.ManagerAsync();
+        var caller = await manager.CreateNamedAsync("main", "caller", null, null);
+        foreach (var count in new[] { 25, 35 })
+        {
+            var source = await manager.CreateNamedAsync("main", "notice-" + count, null, null);
+            await ForkClearLifecycleTests.AppendAsync(source, Enumerable.Range(1, count).Select(seq => VectorFixture.Message(
+                seq == 1 ? "violet literalneedle" : seq == count ? "violet includeneedle" : "violet surrounding context"
+            )).ToArray());
+            await manager.ForceVectorIndexAsync(source);
+        }
+        var args = new JsonObject
+        {
+            ["vector_query"] = "violet", ["scope"] = "current-agent",
+            ["contentFilter"] = "literalneedle", ["includeRegex"] = "includeneedle", ["previewLength"] = 20000
+        };
+        var all = (await Recall(manager, caller, (JsonObject)args.DeepClone()))["output"]!.GetValue<string>();
+        Assert.Contains("`msg#25`", all);
+        Assert.Contains("`msg#35`", all);
+        args["excludeRegex"] = "violet";
+        var excluded = (await Recall(manager, caller, (JsonObject)args.DeepClone()))["output"]!.GetValue<string>();
+        Assert.DoesNotContain("`msg#25`", excluded);
+        Assert.DoesNotContain("`msg#35`", excluded);
+        args.Remove("excludeRegex");
+        args["limit"] = 1;
+        var limited = (await Recall(manager, caller, (JsonObject)args.DeepClone()))["output"]!.GetValue<string>();
+        var selectedFirst = limited.Contains("session:notice-25;", StringComparison.Ordinal);
+        Assert.Contains(selectedFirst ? "`msg#25`" : "`msg#35`", limited);
+        Assert.DoesNotContain(selectedFirst ? "`msg#35`" : "`msg#25`", limited);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Canonical_scope_fence_blocks_supported_cross_agent_move_leak_and_keeps_captured_lineage_and_admin_scope(
@@ -232,6 +360,22 @@ public sealed class VectorMainCallerTests
             (await manager.Vector.SearchAsync("violet", 5, new(Agent: "destination"))).Hits,
             hit => hit["kind"]!.GetValue<string>() == "raw"
         );
+        await manager.DeleteAsync(source.Id);
+        Assert.Null(manager.Catalog.Get(source.Id));
+        Assert.Equal(source.Id, manager.ArchiveReader(oldId).CanonicalSessionId);
+        Assert.False(manager.VectorCanonicalSourceAllowed(oldId, authorized.Options));
+        Assert.DoesNotContain("transferred authority marker", (await Recall(
+            manager, caller, new() { ["vector_query"] = "violet", ["scope"] = "current-agent" }
+        )).ToJsonString());
+        Assert.Empty((await VectorRecall.SearchAsync(
+            manager.Vector,
+            _ => throw new InvalidOperationException("Deleted foreign sources must not reach fallback."),
+            "violet", 5, authorized.Options, authorized.Scope, authorized.SessionId,
+            sourceAllowed: id => manager.VectorCanonicalSourceAllowed(id, authorized.Options)
+        )).Items);
+        Assert.Contains("transferred authority marker", (await Recall(
+            manager, fork, new() { ["vector_query"] = "violet", ["scope"] = "current-session" }
+        )).ToJsonString());
     }
 
     [Fact]

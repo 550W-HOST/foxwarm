@@ -8,7 +8,8 @@ internal sealed record PreviewItem(
     string Heading,
     string Body,
     string Search,
-    string? OmittedTools
+    string? OmittedTools,
+    IReadOnlyList<string>? PriorityNotices = null
 );
 
 internal sealed partial class ContextPreviewRenderer

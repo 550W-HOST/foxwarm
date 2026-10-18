@@ -83,6 +83,44 @@ public sealed class VectorStorageTests
     }
 
     [Fact]
+    public async Task Force_returns_its_captured_run_without_waiting_for_later_committed_appends()
+    {
+        await using var f = await VectorFixture.CreateAsync();
+        const string id = "main/captured-force";
+        f.Append(id, 1, "violet initial");
+        await using var runtime = new VectorRuntime(f.Data, f.Configuration());
+        await runtime.StartAsync();
+        await runtime.WaitForStartupAsync();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        f.Peer.BeforeResponse = async _ =>
+        {
+            entered.TrySetResult();
+            await release.Task;
+        };
+        f.Append(id, 2, "violet captured suffix");
+        runtime.Schedule(id, 2, 10, 0);
+        var forced = runtime.ForceAsync(id, 2, 0);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            f.Append(id, 3, "violet later append");
+            runtime.Schedule(id, 3, 10, 0);
+            release.TrySetResult();
+            Assert.Equal(2, await forced.WaitAsync(TimeSpan.FromSeconds(5)));
+            var status = runtime.Status(id);
+            Assert.Equal(2, VectorRuntime.Integer(status["lastIndexedSeq"]));
+            Assert.Equal(3, VectorRuntime.Integer(status["latestLocalMessageSeq"]));
+            Assert.Equal(1, VectorRuntime.Integer(status["pendingMessageCount"]));
+            Assert.NotNull(status["maxLatencyDeadline"]);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+    }
+
+    [Fact]
     public async Task Dense_tail_deletion_precedes_embedding_failure_and_retry_rebuilds_without_advancing_failed_progress()
     {
         await using var f = await VectorFixture.CreateAsync();

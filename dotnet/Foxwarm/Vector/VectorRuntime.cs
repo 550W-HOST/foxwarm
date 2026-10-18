@@ -296,10 +296,10 @@ internal sealed partial class VectorRuntime : IAsyncDisposable
             Arm(id, state);
     }
 
-    private Task<long> StartRun(string id, Batch state)
+    private Task<long> StartRun(string id, Batch state, bool force = false)
     {
         CancelDeadline(state);
-        if (state.Active is not null)
+        if (state.Active is not null && !force)
             return state.Active;
         var seq = state.Seq;
         var block = state.Block;
@@ -329,7 +329,7 @@ internal sealed partial class VectorRuntime : IAsyncDisposable
                 {
                     if (chains.GetValueOrDefault(id) == task)
                         chains.Remove(id);
-                    if (batches.GetValueOrDefault(id) == state)
+                    if (batches.GetValueOrDefault(id) == state && state.Active == task)
                     {
                         state.Active = null;
                         var checkpoint = Archive(id).VectorCheckpoint();
@@ -377,7 +377,8 @@ internal sealed partial class VectorRuntime : IAsyncDisposable
                 batches.Remove(id);
                 return Task.FromResult(checkpoint.RawLastIndexedSeq);
             }
-            return StartRun(id, state);
+            // Force owns a queued target run, even when a background batch is already active.
+            return StartRun(id, state, force: true);
         }
     }
 
