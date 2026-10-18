@@ -137,6 +137,37 @@ public sealed class PersistencePrimitiveTests
         );
     }
 
+    [Theory]
+    [InlineData("created-timestamp")]
+    [InlineData("raw-missing-metadata")]
+    [InlineData("raw-sequence")]
+    public async Task CurrentArchiveAdmissionRejectsHistoricalMetadataInconsistency(string kind)
+    {
+        using var temp = new TempDirectory();
+        var store = new SqliteArchiveMessageStore(
+            Path.Combine(temp.Path, "state/archive-store.sqlite"), Fixture.SessionId
+        );
+        var message = Fixture.Message(1, "Current admission", 1001);
+        ArchiveMessageRecord record;
+        if (kind == "created-timestamp")
+            record = ArchiveMessageRecord.Create(Fixture.SessionId, "main", 1, 2002, message);
+        else
+        {
+            if (kind == "raw-missing-metadata")
+                message.Remove("__meta");
+            else
+                message["__meta"]!["seq"] = 90;
+            record = new(Fixture.SessionId, "main", 1, 1001, "user", message, message.ToJsonString());
+        }
+        Assert.Throws<InvalidDataException>(() => store.WriteMessages([record]));
+        await Assert.ThrowsAsync<InvalidDataException>(async () =>
+        {
+            var receipt = await store.EnqueueMessagesAsync([record]);
+            await receipt.Completion;
+        });
+        Assert.Empty(store.ReadMessages());
+    }
+
     [Fact]
     public void ArchiveStoreUsesExactReplayConflictAndInsertedOnlyRollback()
     {

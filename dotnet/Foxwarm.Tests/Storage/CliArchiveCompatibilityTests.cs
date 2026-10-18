@@ -9,7 +9,7 @@ public sealed partial class CliArchiveMigrationTests
     [InlineData("exact")]
     [InlineData("ambiguous")]
     [InlineData("unique")]
-    public async Task Accepted_catalog_aliases_keep_exact_first_unique_Archive_authority(
+    public async Task Migration_preserves_settled_catalog_identity_authority(
         string kind
     )
     {
@@ -46,8 +46,7 @@ public sealed partial class CliArchiveMigrationTests
         );
         using var catalog = new SessionCatalog(root);
         catalog.Initialize(); // The real accepted legacy catalog import, including retired metadata.
-        if (kind != "unique")
-            await new CommittedArchiveIdentity(root).InitializeAsync(catalog);
+        await new CommittedArchiveIdentity(root).InitializeAsync(catalog);
         var store = new SqliteArchiveMessageStore(
             Database(root),
             kind == "exact" ? "exact" : "alpha"
@@ -55,7 +54,7 @@ public sealed partial class CliArchiveMigrationTests
         store.Initialize();
         var expected = kind == "unique" ? "alpha" : alias;
         var historical = new SqliteArchiveMessageStore(Database(root), alias);
-        Assert.Equal(alias, historical.CanonicalSessionId);
+        Assert.Equal(expected, historical.CanonicalSessionId);
         await Migrate(root);
         Assert.Equal(expected, historical.CanonicalSessionId);
         store.Initialize();
@@ -151,6 +150,14 @@ public sealed partial class CliArchiveMigrationTests
         Assert.Throws<InvalidDataException>(() =>
             ArchiveMessageRecord.Create("legacy", "main", 1, 1001, messages[0])
         );
+        // Historical read permission does not authorize replay through the live
+        // writer or exact compensation, even when the payload matches storage.
+        foreach (var historical in native)
+        {
+            Assert.Throws<InvalidDataException>(() => archive.WriteMessages([historical]));
+            Assert.Throws<InvalidDataException>(() => archive.RollbackInsertedMessages([historical]));
+        }
+        Assert.Equal(2, archive.ReadMessages().Count);
         archive.WriteBlocks([
             new ArchiveBlockRecord(
                 "legacy",

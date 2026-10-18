@@ -8,11 +8,11 @@ Reconciles committed historical Session IDs, Archive aliases, and startup identi
 
 ## Stable methods and callers
 
-- `CommittedArchiveIdentity.InitializeAsync` validates migration evidence, reads the JSONL reservation ledger and SQLite mirror, imports only proven catalog aliases through `ProvenCatalogAliases`, validates the mapping graph, and mirrors committed mappings.
-- `ReadLegacyMappings`/`AddLegacyMapping` reuse the ledger/graph owner for the fixed [legacy Archive importer](./archive-message-store.md#legacy-migration-and-jsonl-export), without starting a Session engine or inferring a move from copied log payloads. Source metadata aliases retain their legacy bootstrap behavior; accepted catalog aliases reuse `ProvenCatalogAliases` rather than becoming unconditional Archive authority.
+- `CommittedArchiveIdentity.InitializeAsync` validates migration evidence, reads the JSONL reservation ledger and SQLite mirror, imports catalog aliases only when exact-first resolution uniquely selects their owner, validates the mapping graph, and mirrors committed mappings.
+- `ReadLegacyMappings`/`AddLegacyMapping` reuse the ledger/graph owner for the fixed [legacy Archive importer](./archive-message-store.md#legacy-migration-and-jsonl-export), without starting a Session engine or inferring a move from copied log payloads. Source metadata aliases retain their legacy bootstrap behavior. The importer does not bootstrap C# catalog identities; accepted catalog aliases are reconciled by `InitializeAsync` after pending directional recovery.
 - `ValidateRename` and `CommitRenameAsync` reserve an old-to-new identity only after graph validation. Ledger rename and directory-sync failures are classified as committed or rolled back according to whether the rename happened.
 - `Resolve`/`ResolveReadOnly` follow committed alias chains and reject cycles; ordinary readers do not repair identity state.
-- `SessionIdentityMoveJournal` records staged artifact ownership and phases; `SqliteArchiveIdentityMove` renames existing SQLite rows for a proven move/recovery direction.
+- `SessionIdentityMoveJournal` records staged artifact ownership and phases. A target catalog row can already be published while the journal still directs rollback; catalog aliases are not a committed rename at that boundary. Startup recovery owns the direction before catalog alias reconciliation; `SqliteArchiveIdentityMove` renames existing SQLite rows for a proven move/recovery direction.
 
 Callers: `SessionManager.IdentityMove`, startup bootstrap, `SqliteArchiveMessageStore` identity checks, and deletion/recovery operations. A move operation holds the manager's identity gate and save-lane ordering before replacing the owner/store binding.
 

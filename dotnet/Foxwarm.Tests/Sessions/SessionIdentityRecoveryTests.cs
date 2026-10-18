@@ -133,6 +133,59 @@ public sealed class SessionIdentityRecoveryTests
     }
 
     [Theory]
+    [InlineData("rolling-back", false)]
+    [InlineData("rolling-back", true)]
+    [InlineData("finishing", false)]
+    [InlineData("finishing", true)]
+    public async Task Late_catalog_move_keeps_recovery_direction_before_alias_commit(
+        string phase,
+        bool ordinaryStartup
+    )
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        var work = Path.Combine(temp.Path, "work");
+        await using (var seed = Manager(data, work))
+        {
+            await seed.LoadAsync();
+            var owner = await seed.CreateNamedAsync("main", "old", null, null);
+            await ForkClearLifecycleTests.AppendAsync(owner, Text("Late catalog audit"));
+        }
+        var journal = new SessionIdentityMoveJournal(data);
+        var database = Path.Combine(data, "state/archive-store.sqlite");
+        journal.Write(new("rolling-back", "old", "new", "main", [], false, null, 1000));
+        // ExecuteIdentityMoveAsync publishes these outputs before changing the
+        // journal to finishing and committing the old-to-new alias.
+        journal.MoveArtifacts("old", "new");
+        SqliteArchiveIdentityMove.Rename(database, "old", "new");
+        var raw = JsonNode.Parse(await File.ReadAllTextAsync(journal.AuthorityPath("new")))!.AsObject();
+        raw["id"] = "new";
+        raw["agent"] = "main";
+        raw["aliases"] = new JsonArray("old");
+        new LinuxAtomicJsonFile(data, "state/sessions/new.json").WritePayload(raw);
+        using (var catalog = new SessionCatalog(data))
+            catalog.RewriteIdentity("old", "new", "main", ["old"]);
+        if (phase == "finishing")
+            journal.Write(new(phase, "old", "new", "main", [], false, null, 1000));
+
+        await using var recovered = Manager(data, work);
+        if (ordinaryStartup)
+            await recovered.LoadMainHostAsync();
+        else
+            await recovered.LoadAsync();
+        var ownerAfter = await recovered.RequiredAsync("old");
+        var expected = phase == "rolling-back" ? "old" : "new";
+        Assert.Equal(expected, ownerAfter.Id);
+        var audit = Assert.Single(ownerAfter.Archive.ReadMessages());
+        Assert.Equal(expected, audit.SessionId);
+        Assert.Equal("Late catalog audit", audit.Message["parts"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(expected, new SqliteArchiveMessageStore(database, "old").CanonicalSessionId);
+        if (phase == "rolling-back")
+            Assert.Null(new SqliteArchiveMessageStore(database, "new").ReadBranch());
+        Assert.False(File.Exists(journal.FilePath));
+    }
+
+    [Theory]
     [InlineData("owned-name")]
     [InlineData("old-agent")]
     [InlineData("symlink")]

@@ -26,24 +26,10 @@ public sealed partial class SqliteArchiveMessageStore
                     ?? []
             );
         }
-        var loaded = false;
-        // An accepted C# catalog is presentation evidence, not Source bootstrap
-        // authority. Reuse its exact-first, unique alias proof even if old
-        // metadata backups remain alongside it.
-        if (File.Exists(Path.Combine(root, "state", "catalog.sqlite")))
-        {
-            using var catalog = new SessionCatalog(root);
-            foreach (var row in catalog.List())
-            {
-                var id = row["id"]!.GetValue<string>();
-                Add(id, row);
-                result[id] = result[id] with
-                {
-                    Aliases = CommittedArchiveIdentity.ProvenCatalogAliases(catalog, row).ToArray(),
-                };
-            }
-            loaded = true;
-        }
+        // A C# catalog belongs to identity recovery, not legacy bootstrap.
+        // Its branches and committed aliases already have SQLite/ledger owners;
+        // retired metadata and versioned authority files are not legacy input.
+        var loaded = File.Exists(Path.Combine(root, "state", "catalog.sqlite"));
         var primary = Path.Combine(root, "state", "sessions.json");
         foreach (
             var candidate in new[] { primary }

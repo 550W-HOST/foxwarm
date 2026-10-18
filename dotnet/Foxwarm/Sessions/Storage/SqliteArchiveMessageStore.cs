@@ -607,6 +607,21 @@ public sealed partial class SqliteArchiveMessageStore
             record.Role,
             record.MessageJson
         );
+        // Historical readers accept row-owned metadata. New writes and exact
+        // compensation retain the current-message admission contract.
+        SessionAuthorityDocument.ValidateMessage(
+            parsed.Message,
+            checked((int)record.Seq),
+            $"archive message {record.Seq}"
+        );
+        var innerTimestamp = SessionAuthorityDocument.ReadFiniteNumber(
+            parsed.Message["__meta"]!["timestamp"]!,
+            $"archive message {record.SessionId}#{record.Seq} timestamp"
+        );
+        if (innerTimestamp != record.Timestamp)
+            throw new InvalidDataException(
+                $"Archive message {record.SessionId}#{record.Seq} timestamp does not match message_json."
+            );
         if (!JsonNode.DeepEquals(parsed.Message, record.Message))
             throw new InvalidDataException(
                 "Archive message object does not match its raw message_json."
