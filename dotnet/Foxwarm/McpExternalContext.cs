@@ -26,8 +26,8 @@ internal sealed class McpExternalPrincipal
         return result;
     }
 
-    internal bool Current => access.Snapshot.TryGetValue(Id, out var next)
-        && next.Mcp && next.Token == captured.Token;
+    internal bool Current =>
+        access.Snapshot.TryGetValue(Id, out var next) && next.Mcp && next.Token == captured.Token;
 }
 
 internal sealed class McpExternalContext(McpExternalPrincipal principal)
@@ -41,7 +41,14 @@ internal sealed class McpExternalContext(McpExternalPrincipal principal)
     private long generation;
     private readonly HashSet<string> usedNodes = new(StringComparer.Ordinal);
     internal CancellationTokenSource Lifetime { get; } = new();
-    internal bool Available { get { lock (gate) return !disposed && principal.Current; } }
+    internal bool Available
+    {
+        get
+        {
+            lock (gate)
+                return !disposed && principal.Current;
+        }
+    }
 
     internal void Require()
     {
@@ -51,7 +58,11 @@ internal sealed class McpExternalContext(McpExternalPrincipal principal)
 
     internal (string Node, string? Cwd, long Generation) Selection
     {
-        get { lock (gate) return (node, cwd, generation); }
+        get
+        {
+            lock (gate)
+                return (node, cwd, generation);
+        }
     }
 
     internal void Select(string id, string? defaultCwd)
@@ -94,31 +105,63 @@ internal sealed class McpExternalContext(McpExternalPrincipal principal)
         return nodes;
     }
 
-    internal JsonObject WireOwner() => new()
-    {
-        ["kind"] = "external", ["externalId"] = ExternalId, ["contextId"] = Id,
-    };
+    internal JsonObject WireOwner() =>
+        new()
+        {
+            ["kind"] = "external",
+            ["externalId"] = ExternalId,
+            ["contextId"] = Id,
+        };
 }
 
 internal sealed class McpInboundSafeException(string message) : InvalidOperationException(message);
 
-internal sealed class McpExternalAuthorization(ToolAuthorizationAuthority authority, string workspace)
+internal sealed class McpExternalAuthorization(
+    ToolAuthorizationAuthority authority,
+    string workspace
+)
 {
-    internal ToolAuthorizationRequest Request(McpExternalContext context, string source, string name,
-        JsonObject args, string? server = null, string? node = null,
-        IReadOnlyList<AuthorizationPath>? paths = null) => new(source, name, server,
-            args, paths ?? [], null, context.Id, node, workspace, null, null,
-            Principal: "external", ExternalId: context.ExternalId);
+    internal ToolAuthorizationRequest Request(
+        McpExternalContext context,
+        string source,
+        string name,
+        JsonObject args,
+        string? server = null,
+        string? node = null,
+        IReadOnlyList<AuthorizationPath>? paths = null
+    ) =>
+        new(
+            source,
+            name,
+            server,
+            args,
+            paths ?? [],
+            null,
+            context.Id,
+            node,
+            workspace,
+            null,
+            null,
+            Principal: "external",
+            ExternalId: context.ExternalId
+        );
 
-    internal async Task RequireAsync(McpExternalContext context, ToolAuthorizationRequest request, CancellationToken token)
+    internal async Task RequireAsync(
+        McpExternalContext context,
+        ToolAuthorizationRequest request,
+        CancellationToken token
+    )
     {
         context.Require();
         var policy = await authority.LoadAsync(token);
         Require(context, request, policy);
     }
 
-    internal void Require(McpExternalContext context, ToolAuthorizationRequest request,
-        ToolAuthorizationPolicy? policy = null)
+    internal void Require(
+        McpExternalContext context,
+        ToolAuthorizationRequest request,
+        ToolAuthorizationPolicy? policy = null
+    )
     {
         context.Require();
         if (!ToolAuthorizationEvaluation.Evaluate(policy ?? authority.Load(), request).Allowed)

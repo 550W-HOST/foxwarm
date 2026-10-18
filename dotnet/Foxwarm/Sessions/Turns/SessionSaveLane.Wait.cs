@@ -77,7 +77,8 @@ public sealed partial class SessionSaveLane
                     };
                 }
             }
-            if (kind == SaveKind.BestEffort) beforeAdmission?.Invoke();
+            if (kind == SaveKind.BestEffort)
+                beforeAdmission?.Invoke();
             var prepared = entry.WithState(state =>
             {
                 var snapshot = state.Snapshot();

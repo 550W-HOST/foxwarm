@@ -41,9 +41,7 @@ public sealed class SessionIngress
         var entry = registry.GetRequired(sessionId);
         var admitted = timer
             ? await entry.SaveLane.AdmitTimerAsync(item).ConfigureAwait(false)
-            : await entry
-                .SaveLane.AdmitAsync(item, kind, beforeAdmission)
-                .ConfigureAwait(false);
+            : await entry.SaveLane.AdmitAsync(item, kind, beforeAdmission).ConfigureAwait(false);
         if (
             admitted
             && !entry.WithState(state => state.Busy || state.Stopping)

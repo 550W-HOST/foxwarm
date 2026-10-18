@@ -258,7 +258,10 @@ internal sealed partial class McpClient : IAsyncDisposable
                         external
                     );
                 }
-                catch (McpInboundSafeException) { throw; }
+                catch (McpInboundSafeException)
+                {
+                    throw;
+                }
                 catch (Exception error) when (!token.IsCancellationRequested)
                 {
                     throw new InvalidOperationException(SafeError(error.Message, config));
@@ -346,12 +349,17 @@ internal sealed partial class McpClient : IAsyncDisposable
                                     throw new TimeoutException("MCP tool call timed out.");
                                 throw;
                             }
-                            return raw ? result.Result?.DeepClone() : NormalizeResult(result.Result?.DeepClone());
+                            return raw
+                                ? result.Result?.DeepClone()
+                                : NormalizeResult(result.Result?.DeepClone());
                         },
                         external
                     );
                 }
-                catch (McpInboundSafeException) { throw; }
+                catch (McpInboundSafeException)
+                {
+                    throw;
+                }
                 catch (Exception error) when (!token.IsCancellationRequested)
                 {
                     throw new InvalidOperationException(SafeError(error.Message, config));

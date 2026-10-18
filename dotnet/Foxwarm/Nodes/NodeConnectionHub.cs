@@ -257,7 +257,11 @@ internal sealed partial class NodeConnectionHub : IDisposable
         return result;
     }
 
-    internal async Task<JsonObject> ApproveAsync(string pendingId, string? nodeId, Action? beforeMutation = null)
+    internal async Task<JsonObject> ApproveAsync(
+        string pendingId,
+        string? nodeId,
+        Action? beforeMutation = null
+    )
     {
         var result = Registry.Approve(pendingId, nodeId, beforeMutation);
         var delivered = false;
@@ -650,7 +654,12 @@ internal sealed partial class NodeConnectionHub : IDisposable
                         HandleToolReply(connection, message, type == "tool_call_response");
                         continue;
                     }
-                    if (type is "external_exec_background" or "external_exec_completed" or "external_exec_result_response")
+                    if (
+                        type
+                        is "external_exec_background"
+                            or "external_exec_completed"
+                            or "external_exec_result_response"
+                    )
                     {
                         await HandleExternalMessageAsync(connection, message, type, lifetime.Token);
                         continue;

@@ -156,13 +156,18 @@ internal sealed partial class McpClient
             try
             {
                 var value = await operation(client, config, requestToken);
-                return external is null ? value : ValidateExternalResult(value, OAuth.Credentials(), config);
+                return external is null
+                    ? value
+                    : ValidateExternalResult(value, OAuth.Credentials(), config);
             }
             catch (OperationCanceledException) when (requestToken.IsCancellationRequested)
             {
                 throw;
             }
-            catch (McpInboundSafeException) { throw; }
+            catch (McpInboundSafeException)
+            {
+                throw;
+            }
             catch (Exception error)
             {
                 // Use the exact configuration which supplied this connection's credentials,
@@ -291,8 +296,16 @@ internal sealed partial class McpClient
         entry.Lifetime.Cancel();
         retiringConnections.Add(entry);
         TrackClosing(entry.Closed = CloseEntryAsync(entry));
-        _ = entry.Closed.ContinueWith(_ => { lock (poolGate) retiringConnections.Remove(entry); },
-            CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+        _ = entry.Closed.ContinueWith(
+            _ =>
+            {
+                lock (poolGate)
+                    retiringConnections.Remove(entry);
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.None,
+            TaskScheduler.Default
+        );
     }
 
     private static async Task CloseEntryAsync(PoolEntry entry)
@@ -328,7 +341,11 @@ internal sealed partial class McpClient
         Task[] pending;
         lock (poolGate)
         {
-            var entries = pool.Values.Concat(retiringConnections).Distinct().Where(entry => ReferenceEquals(entry.Key.External, context)).ToArray();
+            var entries = pool
+                .Values.Concat(retiringConnections)
+                .Distinct()
+                .Where(entry => ReferenceEquals(entry.Key.External, context))
+                .ToArray();
             foreach (var entry in entries)
                 InvalidateEntry(entry);
             pending = entries.Select(entry => entry.Closed ?? Task.CompletedTask).ToArray();
@@ -379,7 +396,10 @@ internal sealed partial class McpClient
     {
         try
         {
-            await Task.Delay(entry.Key.External is null ? TimeSpan.FromSeconds(60) : TimeSpan.FromMinutes(15), idle.Token);
+            await Task.Delay(
+                entry.Key.External is null ? TimeSpan.FromSeconds(60) : TimeSpan.FromMinutes(15),
+                idle.Token
+            );
             lock (poolGate)
                 if (entry.Active == 0 && entry.Idle == idle && !entry.Invalid)
                     InvalidateEntry(entry);

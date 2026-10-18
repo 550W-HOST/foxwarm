@@ -131,7 +131,14 @@ internal sealed partial class ModelConfiguration
                 notApplied.Add("access.connections");
             }
             // Other Main app settings remain startup snapshots.
-            return Installed(target, Access.McpRuntimeAvailable ? ["access.identities", "access.surfaces.mcp"] : ["access.identities"], notApplied, restart);
+            return Installed(
+                target,
+                Access.McpRuntimeAvailable
+                    ? ["access.identities", "access.surfaces.mcp"]
+                    : ["access.identities"],
+                notApplied,
+                restart
+            );
         }
         finally
         {
