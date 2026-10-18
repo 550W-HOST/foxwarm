@@ -15,11 +15,14 @@ public sealed class WebUiPromptSnapshotTests
         var owner = await f.Manager.CreateNamedAsync("main", "prompt-history", null, null);
         await ForkClearLifecycleTests.AppendAsync(
             owner,
-            Enumerable.Range(1, 3).Select(i => new JsonObject
-            {
-                ["role"] = "user",
-                ["parts"] = new JsonArray(new JsonObject { ["text"] = "input " + i }),
-            }).ToArray()
+            Enumerable
+                .Range(1, 3)
+                .Select(i => new JsonObject
+                {
+                    ["role"] = "user",
+                    ["parts"] = new JsonArray(new JsonObject { ["text"] = "input " + i }),
+                })
+                .ToArray()
         );
         const string saved = "  Saved prompt\r\n<literal> & \"quotes\" \\ café 🦊\n\n";
         await owner.Entry.SaveLane.CommitMemorySnapshotAsync(saved);
@@ -29,27 +32,44 @@ public sealed class WebUiPromptSnapshotTests
         await File.WriteAllTextAsync(memory, "Changed on disk, not the saved prompt.");
         var route = "api/sessions/" + owner.Id + "/history";
         Assert.Equal(HttpStatusCode.Unauthorized, (await f.Native.GetAsync(route)).StatusCode);
-        foreach (var query in new[]
-        {
-            "",
-            "?tail=1",
-            "?prefixLength=2&historyVersion=" + captured.HistoryVersion,
-            "?afterSeq=2&historyVersion=" + captured.HistoryVersion,
-        })
+        foreach (
+            var query in new[]
+            {
+                "",
+                "?tail=1",
+                "?prefixLength=2&historyVersion=" + captured.HistoryVersion,
+                "?afterSeq=2&historyVersion=" + captured.HistoryVersion,
+            }
+        )
         {
             var history = (await f.Admin.GetFromJsonAsync<JsonObject>(route + query))!;
             Assert.Equal(saved, history["persistentMemorySnapshot"]!.GetValue<string>());
             Assert.False(history["session"]!.AsObject().ContainsKey("persistentMemorySnapshot"));
         }
-        var authority = JsonNode.Parse(await File.ReadAllTextAsync(
-            Path.Combine(f.Manager.DataRoot, "state", "sessions", owner.Id + ".json")
-        ))!;
+        var authority = JsonNode.Parse(
+            await File.ReadAllTextAsync(
+                Path.Combine(f.Manager.DataRoot, "state", "sessions", owner.Id + ".json")
+            )
+        )!;
         Assert.Equal(saved, authority["persistentMemorySnapshot"]!.GetValue<string>());
 
         await owner.Entry.SaveLane.CommitMemorySnapshotAsync("Later saved prompt");
-        var oldResponse = WebUiContract.History(captured, f.Manager.Models, false, false, null, null, null);
+        var oldResponse = WebUiContract.History(
+            captured,
+            f.Manager.Models,
+            false,
+            false,
+            null,
+            null,
+            null
+        );
         Assert.Equal(saved, oldResponse["persistentMemorySnapshot"]!.GetValue<string>());
-        Assert.Equal("Later saved prompt", (await f.Admin.GetFromJsonAsync<JsonObject>(route))!["persistentMemorySnapshot"]!.GetValue<string>());
+        Assert.Equal(
+            "Later saved prompt",
+            (await f.Admin.GetFromJsonAsync<JsonObject>(route))![
+                "persistentMemorySnapshot"
+            ]!.GetValue<string>()
+        );
     }
 
     [Theory]
@@ -63,8 +83,19 @@ public sealed class WebUiPromptSnapshotTests
             state.AuthorityEnvelope["persistentMemorySnapshot"] = text;
         else
             state.AuthorityEnvelope.Remove("persistentMemorySnapshot");
-        var models = Foxwarm.Models.HostModels.Parse(new JsonObject { ["providers"] = new JsonObject() }, new JsonObject());
-        var history = WebUiContract.History(state.Snapshot(), models, false, false, null, null, null);
+        var models = Foxwarm.Models.HostModels.Parse(
+            new JsonObject { ["providers"] = new JsonObject() },
+            new JsonObject()
+        );
+        var history = WebUiContract.History(
+            state.Snapshot(),
+            models,
+            false,
+            false,
+            null,
+            null,
+            null
+        );
         Assert.Equal("", history["persistentMemorySnapshot"]!.GetValue<string>());
     }
 }
