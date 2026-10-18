@@ -160,7 +160,30 @@ test('actual Chat menu exposes default-on Conversation switches immediately befo
   assert.ok((await text()).includes('SCRIPT_ACK_WITHOUT_BODY'))
   await search('RECEIVED_BODY'); await hits('0/0')
   await closeSearch()
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-timeline-activity], .foxwarm-tool-card')].every(node => !node.style.height))
+  const settled = await page.evaluate(() => {
+    const activities = [...document.querySelectorAll('[data-timeline-activity]')]
+    const reply = text => [...document.querySelectorAll('.foxwarm-conversation-reply')].find(node => node.textContent.includes(text))
+    return {
+      firstBottom: activities[0].getBoundingClientRect().bottom,
+      firstCollapseBottom: activities[0].querySelector('[data-activity-toggle="bottom"]').getBoundingClientRect().bottom,
+      unmarkedTop: reply('UNMARKED_PROSE').getBoundingClientRect().top,
+      lastBottom: activities.at(-1).getBoundingClientRect().bottom,
+      scriptBottom: [...document.querySelectorAll('[data-session-communication]')].find(node => node.textContent.includes('SCRIPT_METADATA_BODY')).getBoundingClientRect().bottom,
+      endTop: reply('END_PROSE').getBoundingClientRect().top,
+    }
+  })
+  assert.ok(settled.firstCollapseBottom <= settled.firstBottom + 1, JSON.stringify(settled))
+  assert.ok(settled.firstBottom <= settled.unmarkedTop + 1, JSON.stringify(settled))
+  assert.ok(settled.scriptBottom <= settled.lastBottom + 1, JSON.stringify(settled))
+  assert.ok(settled.lastBottom <= settled.endTop + 1, JSON.stringify(settled))
+  const viewport = await page.$eval('.foxwarm-chat-messages', node => node.getBoundingClientRect().toJSON())
+  await page.mouse.move(viewport.left + viewport.width / 2, viewport.top + viewport.height / 2)
+  await page.mouse.wheel({deltaY:-10000})
+  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages').scrollTop < 1)
   await screenshot('desktop-folded-activity')
+  await page.$$eval('[data-session-communication]', nodes => nodes.find(node => node.textContent.includes('SCRIPT_METADATA_BODY')).scrollIntoView({block:'start'}))
+  await screenshot('desktop-folded-activity-tail')
 })
 
 test('mode changes, reload, and another browser root retain preferences without changing technical search', async () => {
