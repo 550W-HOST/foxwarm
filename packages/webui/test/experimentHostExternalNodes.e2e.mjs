@@ -121,7 +121,9 @@ try {
   assert.match(JSON.stringify(pair(state, 'search')), /node:official-cli\/read/)
   assert(JSON.stringify(pair(state, 'search')).includes('node:official-cli/exec'))
   assert(!pair(state, 'exec').error, JSON.stringify(pair(state, 'exec')))
-  assert.equal(await readFile(join(remote, 'agents/main/ordinary-exec'), 'utf8'), 'ordinary-exec')
+  assert.equal(state.currentNode, 'official-cli'); assert.equal(state.cwd, undefined)
+  assert.equal(await readFile(join(remote, 'ordinary-exec'), 'utf8'), 'ordinary-exec')
+  assert(!await exists(join(fixture.work, 'ordinary-exec')))
   // A wrapped failed selection fences all later calls, including another selection.
   state = await turn(actor, 'failed-select', [call('failed', 'call_tool', { toolId: 'builtin:node', argsJson: JSON.stringify({ action: 'select', nodeId: 'missing' }) }), call('later-select', 'node', { action: 'select', nodeId: 'master' }), call('never', 'write', { filePath: 'never-started', content: 'no' })])
   assert(pair(state, 'failed').error)
@@ -265,8 +267,10 @@ try {
   // Replace a live connection with an in-flight tool. Its late close cannot evict the successor.
   await begin('replacement', [call('replaced', 'call_tool', { toolId: 'node:probe-peer/probe', args: {} })]); await probe.take('tool_call')
   const successor = await socket(probeCredentials); successor.send(offer({ min: 1, max: 3 })); await successor.take('registered')
-  state = await finish('replacement'); assert.match(JSON.stringify(pair(state, 'replaced')), /replaced/)
+  state = await finish('replacement'); assert.equal(pair(state, 'replaced').error.type, 'tool_error')
+  assert.match(pair(state, 'replaced').error.message, /may have occurred/); assert.match(pair(state, 'replaced').error.message, /not retried/)
   await sleep(80); await online('probe-peer'); probe = successor
+  assert.equal(probe.messages.filter(message => message.type === 'tool_call').length, 0, 'the replaced call was not retried on its successor')
   await begin('successor', [call('successor', 'call_tool', { toolId: 'node:probe-peer/probe', args: {} })]); const successorCall = await probe.take('tool_call')
   probe.send({ type: 'tool_call_response', callId: successorCall.callId, result: 'successor' }); state = await finish('successor'); assert.equal(pair(state, 'successor').output, 'successor')
   // Incompatible authenticated Nodes stay alive for JSON heartbeat diagnostics but cannot be selected.
@@ -322,7 +326,13 @@ try {
   assert(await exists(join(remote, 'agents/main/remote.txt')))
   const history = await fixture.api('GET', route(bound) + '/history'); assert.equal(history.status, 200)
   assert.equal((await fixture.api('DELETE', route(bound))).status, 200)
-  assert.equal((await fixture.api('POST', '/api/nodes/onboarding/create-shell', { nodeId: 'not-a-shell' })).status, 501)
+  const bootstrap = await fixture.api('POST', '/api/nodes/onboarding/create-shell', { nodeId: 'bootstrap-cli' })
+  assert.equal(bootstrap.status, 200); assert.equal(bootstrap.body.nodeId, 'bootstrap-cli')
+  assert.equal(typeof bootstrap.body.command, 'string')
+  assert(bootstrap.body.command.includes(hostUrl.replace(/\/$/, '') + '/node/run-shell.sh'))
+  assert(bootstrap.body.command.includes("--node-id='bootstrap-cli'"))
+  assert(bootstrap.body.command.includes('NODE_AUTH_TOKEN='))
+  assert.equal(bootstrap.body.authToken, undefined)
   await fixture.stop(); assert.equal(errors.length, 0)
   console.log(JSON.stringify({ result: 'passed', hostProcesses: fixture.hostPids.length, realModelRequests: requests.length, officialCli: 'pair, reconnect, credentials, files, restart, offline claim', browserExtension: 'MV3 pairing, tabs, text, screenshot image pipeline, JSON heartbeat', androidHardware: 'unavailable; not qualified', phase: 'ordinary tools only' }))
 } catch (error) {

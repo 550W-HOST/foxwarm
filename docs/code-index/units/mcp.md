@@ -1,6 +1,6 @@
 # Unit: Outbound MCP client
 
-Files: `dotnet/Foxwarm/McpClient.Connections.cs`, `dotnet/Foxwarm/McpClient.External.cs`, `dotnet/Foxwarm/McpClient.cs`, `dotnet/Foxwarm/McpClient.Authorizations.cs`, `dotnet/Foxwarm/McpConfiguration.cs`
+Files: `dotnet/Foxwarm/McpClient.Connections.cs`, `dotnet/Foxwarm/McpClient.External.cs`, `dotnet/Foxwarm/McpClient.ExternalResults.cs`, `dotnet/Foxwarm/McpClient.cs`, `dotnet/Foxwarm/McpClient.Authorizations.cs`, `dotnet/Foxwarm/McpConfiguration.cs`
 Secondary files: `dotnet/Foxwarm.Tests/Mcp/OutboundMcpFixture.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpLifecycleTests.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpResultsTests.cs`, `dotnet/Foxwarm.Tests/Mcp/Fixtures/outbound-peer.mjs`, `packages/webui/test/experimentHostMcp.e2e.mjs`, `packages/webui/test/experimentHostMcp.peer.mjs`
 
 ## Purpose
@@ -27,7 +27,7 @@ The pinned official Core SDK owns transport initialization/fallback and stateful
 
 Secrets are redacted using the exact configuration which supplied a connection's credentials, including failures after a concurrent configuration change. Internal MCP discovery/execution remains subject to the ordinary unified authorization boundary.
 
-`ListExternalToolsAsync`, `CallExternalAsync` and `ReleaseExternalAsync` use the real verified external context rather than an internal Session. Their HTTP/SSE/auto keys are separate from internal keys; stdio keeps its existing process-key semantics. Disposal awaits selected live/retiring bindings. External calls keep raw content, structured content, media, metadata and error flags, without internal normalization. Exact known-credential validation runs while the existing OAuth operation scope still retains refreshed/retired credentials: unsafe descriptors are omitted whole, binary media is not scanned as text, and unsafe post-effect output is withheld without retry. Ordinary internal OAuth result guards remain unchanged.
+`ListExternalToolsAsync`, `CallExternalAsync` and `ReleaseExternalAsync` use the real verified external context rather than an internal Session. Their HTTP/SSE/auto keys are separate from internal keys; stdio keeps its existing process-key semantics. Disposal awaits selected live/retiring bindings. External calls keep raw content, structured content, media, metadata and error flags, without internal normalization. `ValidateExternalResult` validates only the frozen Source-known protocol fields before returning the untouched raw result: discriminator-selected public SDK subtypes supply field parsing, with validation-only copies for Source base64/resource-union compatibility and explicit null/shape checks. Opaque extensions are not SDK control fields; malformed downstream results become bounded uncertain-outcome inbound errors, never a replay. Exact known-credential validation runs while the existing OAuth operation scope still retains refreshed/retired credentials: unsafe descriptors are omitted whole, binary media is not scanned as text, and unsafe post-effect output is withheld without retry. Ordinary internal OAuth result guards remain unchanged.
 
 ## Tests
 

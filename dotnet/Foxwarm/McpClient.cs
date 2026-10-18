@@ -349,6 +349,8 @@ internal sealed partial class McpClient : IAsyncDisposable
                                     throw new TimeoutException("MCP tool call timed out.");
                                 throw;
                             }
+                            if (raw)
+                                ValidateExternalResult(result.Result);
                             return raw
                                 ? result.Result?.DeepClone()
                                 : NormalizeResult(result.Result?.DeepClone());

@@ -335,37 +335,17 @@ internal sealed class McpInboundNodes(
         }
         if (action == "list")
         {
-            var allowed = Tools(context)
+            var permittedIds = Tools(context)
                 .Select(tool => SessionWait.Text(tool["nodeId"])!)
-                .ToHashSet(StringComparer.Ordinal);
-            var descriptors = nodes
-                .List()
-                .OfType<JsonObject>()
-                .Where(row => allowed.Contains(SessionWait.Text(row["id"])!))
+                .Distinct(StringComparer.Ordinal)
                 .Take(100)
-                .Select(row =>
-                {
-                    var descriptor = new JsonObject
-                    {
-                        ["id"] = row["id"]!.DeepClone(),
-                        ["kind"] = "remote",
-                        ["provider"] = "authenticated-remote",
-                        ["type"] = row["type"]?.DeepClone() ?? JsonValue.Create("remote"),
-                        ["availability"] = "ready",
-                        ["tools"] = row["tools"]!.DeepClone(),
-                    };
-                    if (row["protocolCompatibility"] is not null)
-                        descriptor["protocolCompatibility"] = row[
-                            "protocolCompatibility"
-                        ]!.DeepClone();
-                    return (JsonNode?)descriptor;
-                })
+                .Select(id => (JsonNode?)JsonValue.Create(id))
                 .ToArray();
             context.Require();
             return new JsonObject
             {
                 ["currentNode"] = selection.Node,
-                ["nodes"] = new JsonArray(descriptors),
+                ["nodes"] = new JsonArray(permittedIds),
             };
         }
         if (

@@ -40,7 +40,18 @@ function result(kind) {
     default: return { content: [text({ kind })] };
   }
 }
-function peer(id, authorization = "") {
+function peer(id, authorization = "", transport) {
+  const invalidResults = new Map();
+  if (transport) {
+    const send = transport.send.bind(transport);
+    transport.send = (message, options) => {
+      if (invalidResults.has(message.id) && message.result) {
+        message = { ...message, result: invalidResults.get(message.id) };
+        invalidResults.delete(message.id);
+      }
+      return send(message, options);
+    };
+  }
   const server = new Server({ name: 'outbound-qualification-peer', version: '1' }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     await record({ kind: 'list', id });
@@ -54,6 +65,13 @@ function peer(id, authorization = "") {
       throw new Error('Synthetic completed effect followed by an error');
     }
     if (name === 'result') {
+      if (Object.hasOwn(args, 'rawResult')) {
+        await record({ kind: 'effect', id, tag: args.tag });
+        // Inject only this qualified wire result, after the real counted effect.
+        // The official server otherwise validates its response before transport.send.
+        invalidResults.set(extra.requestId, args.rawResult);
+        return { content: [text('typed placeholder')] };
+      }
       if (args.kind === 'credential') { await record({ kind: 'effect', id, tag: args.tag }); return { content: [text(authorization)] }; }
       if (args.kind === 'large') { await record({ kind: 'effect', id, tag: args.tag }); return { content: [text('é'.repeat(args.length))] }; }
       if (args.kind === 'ordinary') return { content: [text({ command: 'printf ordinary', cwd: '/ordinary/path', env: args.value })] };
@@ -136,7 +154,7 @@ if (mode === 'stdio') {
       if (!bound && req.method === 'POST' && body?.method === 'initialize') {
         const session = randomUUID();
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => session });
-        const server = peer(session, url.searchParams.get("descriptorSecret") ?? req.headers.authorization ?? "");
+        const server = peer(session, url.searchParams.get("descriptorSecret") ?? req.headers.authorization ?? "", transport);
         bound = { transport, server };
         connections.set(session, bound);
         await server.connect(transport);

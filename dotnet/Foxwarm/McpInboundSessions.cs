@@ -124,7 +124,7 @@ internal sealed class McpInboundSessions(
         {
             ["sessionId"] = id,
             ["start"] = actualStart,
-            ["count"] = count,
+            ["count"] = messages.Length,
             ["total"] = history.Count,
             ["executionState"] = new JsonObject
             {

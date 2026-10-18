@@ -110,6 +110,16 @@ try {
     if (kind === 'meta') assert.equal(result._meta.retained, true)
     if (kind === 'opaque') assert.equal(result.customTag.retained, true)
   }
+  for (const [index, rawResult] of [{ content: 'invalid-content', isError: 'not-a-boolean' }, { content: [null] }].entries()) {
+    const tag = 'malformed-effect-' + index
+    const result = await concrete(alpha, 'mcp:peer/result', { rawResult, tag })
+    assert.equal(result.isError, true); assert.match(rawText(result), /outcome may be unknown/); assert.match(rawText(result), /do not retry automatically/)
+    assert.equal((await events()).filter(event => event.kind === 'effect' && event.tag === tag).length, 1)
+  }
+  assert.equal((await alpha.client.listTools()).tools.length, 5, 'malformed downstream output does not retire the initialized context')
+  const validProtocol = await concrete(alpha, 'mcp:peer/result', { rawResult: { content: [{ type: 'text', text: 'business extension', isError: 'business' }, { type: 'image', data: 'AA', mimeType: 'image/png' }, { type: 'resource_link', uri: 'ordinary-resource', name: 'resource', size: 'business' }], customTag: { retained: true } }, tag: 'valid-protocol-effect' })
+  assert.equal(validProtocol.content[1].data, 'AA'); assert.equal(validProtocol.customTag.retained, true)
+  assert.equal((await events()).filter(event => event.kind === 'effect' && event.tag === 'valid-protocol-effect').length, 1)
   const secret = await concrete(alpha, 'mcp:peer/result', { kind: 'credential', tag: 'secret-effect' })
   assert(secret.isError); assert.match(rawText(secret), /withheld/); assert(!JSON.stringify(secret).includes('synthetic-known-outbound-credential'))
   assert.equal((await events()).filter(event => event.kind === 'effect' && event.tag === 'secret-effect').length, 1)
@@ -118,6 +128,7 @@ try {
   assert.equal((await api(alphaToken, 'GET', '/api/setup/status')).status, 403, 'MCP/WebUI surface does not grant admin')
   assert.equal((await api(alphaToken, 'GET', '/api/auth/session')).body.role, 'webui')
   const listed = value(await call(alpha, 'foxwarm_session', { action: 'list', count: 1 })); assert.equal(listed.count, 1)
+  const emptyRead = value(await call(alpha, 'foxwarm_session', { action: 'read', sessionId: 'target', count: 10 })); assert.equal(emptyRead.count, 0); assert.equal(emptyRead.total, 0)
   const sent = value(await call(alpha, 'foxwarm_session', { action: 'send', sessionId: 'target', message: 'EXTERNAL-INPUT-ONCE', allowReply: false })); assert.equal(sent.accepted, true)
   const saved = await until(async () => {
     const state = JSON.parse(await readFile(join(host.data, 'state/sessions/target.json'), 'utf8'))
@@ -151,7 +162,13 @@ try {
   const pending = await until(async () => value(await concrete(alpha, 'builtin:node_pair_list')).requests.find(item => item.requestedName === 'official-external'), 'actual pending official CLI')
   const approved = value(await concrete(alpha, 'builtin:node_pair_approve', { pendingId: pending.id }))
   assert.equal(approved.nodeId, 'official-external'); assert(!JSON.stringify(approved).includes('authToken')); assert(!JSON.stringify(approved).includes(pairing))
-  await until(async () => value(await call(alpha, 'foxwarm_node', { action: 'list' })).nodes.some(node => node.id === 'official-external'), 'authenticated v3 external-owner CLI capabilities')
+  await until(async () => value(await call(alpha, 'foxwarm_node', { action: 'list' })).nodes.includes('official-external'), 'authenticated v3 external-owner CLI capabilities')
+  await installRules('version: 1\nrules:\n  - id: list\n    action: allow\n    match:\n      externalId: alpha\n      tool: {source: builtin, name: node}\n  - id: read-only\n    action: allow\n    match:\n      externalId: alpha\n      tool: {source: node, name: read}\n')
+  assert.deepEqual(value(await call(alpha, 'foxwarm_discover', { sources: ['node'] })).tools.map(tool => tool.name), ['read'])
+  assert.deepEqual(value(await call(alpha, 'foxwarm_node', { action: 'list' })).nodes, ['official-external'], 'only permitted IDs, no hidden capability descriptors')
+  assert((await concrete(alpha, 'node:official-external/exec', { command: 'printf forbidden > forbidden-exec' })).isError)
+  assert(!await exists(join(remote, 'forbidden-exec'))); assert(!await exists(join(host.work, 'forbidden-exec')))
+  await installRules('version: 1\nrules:\n  - id: external\n    action: allow\n    match: {externalId: [alpha, beta]}\n')
   const selected = value(await call(alpha, 'foxwarm_node', { action: 'select', nodeId: 'official-external' })); assert.equal(selected.cwd, remote)
   value(await concrete(alpha, 'node:official-external/write', { filePath: 'owned.txt', content: 'one' }))
   value(await concrete(alpha, 'node:official-external/edit', { filePath: 'owned.txt', oldText: 'one', newText: 'two' }))
@@ -180,7 +197,7 @@ try {
   const otherCredential = (await admin('POST', '/api/nodes/onboarding/create', { nodeId: 'other-external' })).body
   const otherCli = spawn(process.execPath, [resolve('packages/cli-node/dist/client.js'), '--host', host.origin + prefix, '--id', 'other-external', '--auth-token', otherCredential.authToken, '--credentials-file', join(otherRemote, 'credentials.json'), '--no-local-trigger'], { cwd: otherRemote, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, FOXWARM_AGENTS_DIR: join(otherRemote, 'agents') } })
   children.push(otherCli); otherCli.stdout.on('data', () => {}); otherCli.stderr.on('data', () => {})
-  await until(async () => value(await call(alpha, 'foxwarm_node', { action: 'list' })).nodes.some(node => node.id === 'other-external'), 'second actual CLI owner')
+  await until(async () => value(await call(alpha, 'foxwarm_node', { action: 'list' })).nodes.includes('other-external'), 'second actual CLI owner')
   const lateCwd = value(await command(alpha, 'sleep 2; cd ..; printf late-cwd', 1))
   assert(lateCwd.background)
   assert.equal(value(await call(alpha, 'foxwarm_node', { action: 'select', nodeId: 'other-external' })).cwd, otherRemote)

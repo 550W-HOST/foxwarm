@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
 using ModelContextProtocol.Protocol;
@@ -106,6 +107,102 @@ public sealed class InboundMcpTests
             Assert.Equal(HttpStatusCode.OK, (await f.Http.SendAsync(deletion)).StatusCode);
         Assert.Single(await peer.EventsAsync(), row => row["kind"]!.GetValue<string>() == "delete");
         Assert.Contains("id", Text(await InboundMcpFixture.ConcreteAsync(beta, "mcp:peer/probe")));
+    }
+
+    [Fact]
+    public async Task Malformed_known_protocol_fields_return_valid_uncertain_errors_after_one_effect_without_retiring_context()
+    {
+        await using var f = await InboundMcpFixture.CreateAsync();
+        await using var peer = await OutboundSdkPeer.StartAsync(Path.Combine(f.Temp.Path, "peer"));
+        await f.Manager.OutboundMcp.ConfigureAsync(new JsonObject
+        {
+            ["name"] = "peer", ["url"] = peer.Url + "/mcp", ["transport"] = "streamable-http",
+        }, default);
+        await using var client = await f.ClientAsync();
+        string[] invalid =
+        [
+            "{\"content\":\"invalid-content\",\"isError\":\"not-a-boolean\"}",
+            "{\"content\":[] ,\"isError\":\"not-a-boolean\"}",
+            "{\"content\":null}",
+            "{\"content\":[null]}",
+            "{\"isError\":null}",
+            "{\"structuredContent\":42}",
+            "{\"structuredContent\":null}",
+            "{\"_meta\":null}",
+            "{\"_meta\":{\"progressToken\":1.5}}",
+            "{\"content\":[{\"type\":\"text\"}]}",
+            "{\"content\":[{\"type\":\"text\",\"text\":null}]}",
+            "{\"content\":[{\"type\":\"image\",\"data\":\"AA==\"}]}",
+            "{\"content\":[{\"type\":\"audio\",\"data\":42,\"mimeType\":\"audio/wav\"}]}",
+            "{\"content\":[{\"type\":\"image\",\"data\":\"AA=\",\"mimeType\":\"image/png\"}]}",
+            "{\"content\":[{\"type\":\"text\",\"text\":\"ok\",\"annotations\":{\"priority\":2}}]}",
+            "{\"content\":[{\"type\":\"text\",\"text\":\"ok\",\"annotations\":{\"audience\":[1]}}]}",
+            "{\"content\":[{\"type\":\"text\",\"text\":\"ok\",\"annotations\":{\"lastModified\":\"2026-02-29T12:00Z\"}}]}",
+            "{\"content\":[{\"type\":\"resource\",\"resource\":{\"text\":\"missing uri\"}}]}",
+            "{\"content\":[{\"type\":\"resource_link\",\"uri\":\"x\",\"name\":\"x\",\"icons\":[null]}]}",
+            "{\"content\":[{\"type\":\"resource_link\",\"uri\":\"x\",\"name\":\"x\",\"icons\":[{\"src\":\"x\",\"theme\":\"other\"}]}]}",
+            "{\"content\":[{\"type\":\"tool_use\",\"id\":\"x\",\"name\":\"x\",\"input\":{}}]}",
+        ];
+        for (var i = 0; i < invalid.Length; i++)
+        {
+            var tag = "invalid-" + i;
+            var result = await client.CallToolAsync(new CallToolRequestParams
+            {
+                Name = "foxwarm_call",
+                Arguments = new Dictionary<string, JsonElement>
+                {
+                    ["toolId"] = JsonSerializer.SerializeToElement("mcp:peer/result"),
+                    ["args"] = JsonSerializer.SerializeToElement(new JsonObject
+                    {
+                        ["rawResult"] = JsonNode.Parse(invalid[i]), ["tag"] = tag,
+                    }),
+                },
+            });
+            Assert.True(result.IsError, invalid[i]);
+            var text = Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
+            Assert.Contains("outcome may be unknown", text);
+            Assert.Contains("do not retry automatically", text);
+            Assert.Single(await peer.EventsAsync(), row => row["kind"]!.GetValue<string>() == "effect" && row["tag"]?.GetValue<string>() == tag);
+        }
+        Assert.Equal(5, (await client.ListToolsAsync(new ListToolsRequestParams())).Tools.Count);
+        Assert.Contains("id", Text(await InboundMcpFixture.ConcreteAsync(client, "mcp:peer/probe")));
+        Assert.Single(await peer.EventsAsync(), row => row["kind"]!.GetValue<string>() == "initialize");
+    }
+
+    [Fact]
+    public async Task Protocol_validation_preserves_Source_valid_opaque_fields_media_and_resource_union_data()
+    {
+        await using var f = await InboundMcpFixture.CreateAsync();
+        await using var peer = await OutboundSdkPeer.StartAsync(Path.Combine(f.Temp.Path, "peer"));
+        await f.Manager.OutboundMcp.ConfigureAsync(new JsonObject
+        {
+            ["name"] = "peer", ["url"] = peer.Url + "/mcp", ["transport"] = "streamable-http",
+        }, default);
+        await using var client = await f.ClientAsync();
+        var raw = JsonNode.Parse("""
+            {
+              "content": [
+                {"type":"text","text":"untouched","isError":"business","data":{"opaque":true},
+                 "annotations":{"audience":["assistant"],"priority":0.25,"lastModified":"2026-10-18T12:34:56.123456789+99:99","extra":{"retained":true}},"_meta":{"retained":true}},
+                {"type":"image","data":"AA","mimeType":"image/png","_meta":{"image":true}},
+                {"type":"audio","data":"AA\n==","mimeType":"audio/wav","extension":[0,false,null]},
+                {"type":"resource_link","uri":"ordinary-resource","name":"resource","size":"business","icons":[{"src":"ordinary-icon","theme":"dark","sizes":["any"],"custom":true}]},
+                {"type":"resource","resource":{"uri":"ordinary-text","text":"text wins","blob":{"opaque":true},"_meta":{"retained":true}}},
+                {"type":"resource","resource":{"uri":"ordinary-blob","text":false,"blob":"AA"}}
+              ],
+              "structuredContent":{"arbitrary":[null,false,42]},"_meta":{"progressToken":"p","retained":true},
+              "customTag":{"retained":true},"error":{"business":true},"canceled":true,"__cancelAllToolsThisTurn":true
+            }
+            """)!;
+        foreach (var value in new[] { new JsonObject(), raw })
+        {
+            var result = await InboundMcpFixture.ConcreteAsync(client, "mcp:peer/result", new JsonObject
+            {
+                ["rawResult"] = value.DeepClone(), ["tag"] = "valid-" + value.AsObject().Count,
+            });
+            Assert.True(JsonNode.DeepEquals(value, result), result.ToJsonString());
+        }
+        Assert.Equal(2, (await peer.EventsAsync()).Count(row => row["kind"]!.GetValue<string>() == "effect"));
     }
 
     [Fact]
@@ -255,11 +352,46 @@ public sealed class InboundMcpTests
                 new JsonObject { ["action"] = "read", ["sessionId"] = f.Target.Id }
             )
         );
-        Assert.Equal(10, read["count"]!.GetValue<int>());
+        Assert.Equal(0, read["count"]!.GetValue<int>());
         Assert.NotNull(read["preview"]);
         Assert.Null(read["messages"]);
         Assert.Null(read["queue"]);
         Assert.Null(read["persistentMemorySnapshot"]);
+    }
+
+    [Theory]
+    [InlineData(null, 10, 0, 3)]
+    [InlineData(2L, 10, 2, 1)]
+    [InlineData(-2L, 10, 1, 2)]
+    [InlineData(3L, 10, 3, 0)]
+    public async Task Session_read_counts_the_selected_messages_not_the_limit_or_preview(
+        long? start, int count, int expectedStart, int expectedCount
+    )
+    {
+        await using var f = await InboundMcpFixture.CreateAsync();
+        f.Target.Entry.WithState(state =>
+        {
+            for (var seq = 1; seq <= 3; seq++)
+                state.History.Add(new JsonObject
+                {
+                    ["role"] = "user",
+                    ["parts"] = new JsonArray(new JsonObject { ["text"] = new string('x', 2000) }),
+                    ["__meta"] = new JsonObject { ["seq"] = seq, ["timestamp"] = seq },
+                });
+            state.NextMessageSeq = 4;
+        });
+        await f.Target.Entry.SaveLane.SaveStrictAsync();
+        await using var client = await f.ClientAsync();
+        var args = new JsonObject
+        {
+            ["action"] = "read", ["sessionId"] = f.Target.Id,
+            ["count"] = count, ["previewLength"] = 1000,
+        };
+        if (start is not null) args["start"] = start;
+        var read = Value(await InboundMcpFixture.CallAsync(client, "foxwarm_session", args));
+        Assert.Equal(expectedStart, read["start"]!.GetValue<int>());
+        Assert.Equal(expectedCount, read["count"]!.GetValue<int>());
+        Assert.Equal(3, read["total"]!.GetValue<int>());
     }
 
     [Fact]
