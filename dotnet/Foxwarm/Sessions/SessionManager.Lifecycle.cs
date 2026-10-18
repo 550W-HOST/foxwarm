@@ -163,6 +163,8 @@ internal sealed partial class SessionManager
                 var committed = false;
                 try
                 {
+                    try { await Vector.ForkAsync(id); }
+                    catch { VectorDiagnostic("VECTOR_FORK_BASELINE_FAILED", id); }
                     var suffixRows = new List<JsonObject>();
                     if (
                         copied.History.LastOrDefault()?.ToJson() is JsonObject tail
@@ -257,7 +259,7 @@ internal sealed partial class SessionManager
                         );
                     try
                     {
-                        CompensateCreatedBranch(store, branch);
+                        await CompensateCreatedBranchAsync(store, branch);
                     }
                     catch (Exception cleanup)
                     {
@@ -273,7 +275,7 @@ internal sealed partial class SessionManager
         );
     }
 
-    private void CompensateCreatedBranch(
+    private async Task CompensateCreatedBranchAsync(
         PersistentSessionAuthorityStore store,
         ArchiveBranch? branch
     )
@@ -292,6 +294,8 @@ internal sealed partial class SessionManager
                 throw new IOException("Injected experimental branch cleanup failure.");
             }
         }
+        try { await Vector.ResetAsync(store.SessionId); }
+        catch { VectorDiagnostic("VECTOR_DERIVED_RESET_FAILED", store.SessionId); }
         store.Archive.RollbackInsertedBranch(branch);
     }
 

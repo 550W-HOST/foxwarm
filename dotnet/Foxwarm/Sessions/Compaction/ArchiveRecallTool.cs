@@ -12,7 +12,7 @@ internal static class ArchiveRecallTool
                 {
                   "type": "function",
                   "name": "recall",
-                  "description": "Recover earlier conversation context from archived blocks and messages. Use target to inspect an overview, drill into a context block, or read an exact message range. Filters narrow the selected context; they do not perform semantic search.",
+                  "description": "Recover earlier conversation context. Use target to open a known context block or message range, or vector_query to search by meaning. Filters narrow the retrieved items; they do not change which range is opened or replace semantic search.",
                   "parameters": {
                     "type": "object",
                     "properties": {
@@ -23,6 +23,27 @@ internal static class ArchiveRecallTool
                       "target": {
                         "type": "string",
                         "description": "What to open: overview (default), blocks, a block such as B#126, its raw messages with msg:B#126, or messages such as msg#10637 or msg#10637-10680. block#126 is also accepted. `msg#N` is the archived message sequence shown in logs and user references; it reads archived context and is not an offset into a Session's live context (see `get_session_messages.start`)."
+                      },
+                      "vector_query": {
+                        "type": "string",
+                        "description": "Search earlier context by meaning and return matching messages or block summaries."
+                      },
+                      "limit": {
+                        "type": "number",
+                        "description": "Maximum semantic search results. Defaults to 5, up to 20."
+                      },
+                      "scope": {
+                        "type": "string",
+                        "enum": [
+                          "all",
+                          "current-session",
+                          "current-agent"
+                        ],
+                        "description": "Scope for semantic search. Searches stay within this agent; legacy isolated agents are further limited to the current session."
+                      },
+                      "agentName": {
+                        "type": "string",
+                        "description": "Agent for semantic search. Only this session's agent is supported."
                       },
                       "previewLength": {
                         "type": "number",
@@ -40,6 +61,10 @@ internal static class ArchiveRecallTool
                         "type": "string",
                         "description": "Exclude retrieved items matching this regular expression, ignoring case."
                       },
+                      "preferBlocks": {
+                        "type": "boolean",
+                        "description": "Give context-block summaries a small ranking preference in semantic search."
+                      },
                       "toolDetail": {
                         "type": "string",
                         "description": "Tool display detail: names (default) shows name, ID, and status; snippets adds short excerpts; full includes arguments and results within the response budget.",
@@ -53,7 +78,8 @@ internal static class ArchiveRecallTool
                     "required": [],
                     "additionalProperties": false
                   },
-                  "strict": false
+                  "strict": false,
+                  "defaultInject": true
                 }
                 """
             )!
@@ -122,6 +148,11 @@ internal static class ArchiveRecallTool
             {
                 "sessionId",
                 "target",
+                "vector_query",
+                "limit",
+                "scope",
+                "agentName",
+                "preferBlocks",
                 "previewLength",
                 "contentFilter",
                 "includeRegex",
@@ -149,6 +180,19 @@ internal static class ArchiveRecallTool
                 null,
                 cancellationToken
             );
+            if (SessionWait.Text(args["vector_query"]) is { } semantic && SessionGoal.Trim(semantic).Length > 0)
+            {
+                var query = SessionGoal.Trim(semantic);
+                var limit = Foxwarm.Vector.VectorRecall.Limit(args["limit"]);
+                var scope = manager.ResolveVectorScope(source, args);
+                var semanticRenderer = new ContextPreviewRenderer(args, 1000);
+                var result = await Foxwarm.Vector.VectorRecall.SearchAsync(manager.Vector, manager.ArchiveReader, query, limit,
+                    scope.Options, scope.Scope, scope.SessionId, args, args["preferBlocks"]?.GetValue<bool>() == true,
+                    sourceAllowed: sourceId => manager.VectorCanonicalSourceAllowed(sourceId, scope.Options));
+                return Output(semanticRenderer.RenderItems(result.Items, "",
+                    matched => $"Recall {result.SearchLabel} for `{query}` ({scope.Scope}; source archive ranges loaded before preview) - showing {matched} unique source group(s) from {result.HitCount} ranked source group(s).",
+                    "No archived source messages or blocks found for this vector_query.", result.Notices, maxItems: limit));
+            }
             var owner = await manager.GetExistingAsync(id, cancellationToken);
             if (owner is null)
                 return Output($"Session `{id}` not found.");

@@ -32,3 +32,13 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## .NET Vector dependencies
+
+The optional .NET Vector owner uses the community `LanceDB` NuGet package
+version 2.5.0 and `Apache.Arrow` version 22.1.0. Both are distributed under
+Apache License 2.0. Their license texts are included in .NET publish output as
+`LanceDB-LICENSE.txt` and `Apache-Arrow-LICENSE.txt`.
+
+- LanceDB C# SDK: <https://github.com/lennylxx/lancedb-csharp>
+- Apache Arrow: <https://github.com/apache/arrow>

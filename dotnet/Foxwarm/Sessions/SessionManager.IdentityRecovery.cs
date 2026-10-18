@@ -98,6 +98,7 @@ internal sealed partial class SessionManager
                 // Direction is persisted before any reversal. The audit transaction never merges competing branches.
                 IdentityJournal.MoveArtifacts(from, to, record.Version);
                 SqliteArchiveIdentityMove.Rename(ArchiveDatabase, from, to);
+                await Vector.RenameAsync(from, to);
                 if (raw.ContainsKey("id"))
                     raw["id"] = to;
                 raw["agent"] = agent;

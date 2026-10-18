@@ -306,13 +306,8 @@ public sealed class SessionIdentityBoundaryTests
         Assert.False(File.Exists(Path.Combine(data, "state", "session-id-move-pending.json")));
     }
 
-    [Theory]
-    [InlineData("sessionWorkers", "Session-worker")]
-    [InlineData("vector", "Vector")]
-    public async Task Actual_captured_unsupported_placement_or_external_index_configuration_fails_before_move_effects(
-        string field,
-        string detail
-    )
+    [Fact]
+    public async Task Captured_Session_worker_placement_fails_before_move_effects()
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
@@ -324,9 +319,7 @@ public sealed class SessionIdentityBoundaryTests
         );
         await File.WriteAllTextAsync(
             Path.Combine(data, "state", "config.yaml"),
-            field == "vector"
-                ? "vector: {enabled: true, baseUrl: 'http://127.0.0.1:1'}\n"
-                : field + ": {enabled: true}\n"
+            "sessionWorkers: {enabled: true}\n"
         );
         var configuration = new ModelConfiguration(data);
         await using var manager = new SessionManager(data, work, Options, configuration.Models);
@@ -337,7 +330,7 @@ public sealed class SessionIdentityBoundaryTests
         var error = await Assert.ThrowsAsync<NotSupportedException>(() =>
             manager.MoveIdentityAsync(owner, new JsonObject { ["newSessionId"] = "new" })
         );
-        Assert.Contains(detail, error.Message);
+        Assert.Contains("Session-worker", error.Message);
         Assert.Equal("old", owner.Id);
         Assert.Equal(bytes, await File.ReadAllBytesAsync(file));
         Assert.False(File.Exists(Path.Combine(data, "state", "session-id-move-pending.json")));

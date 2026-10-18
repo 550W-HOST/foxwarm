@@ -32,7 +32,7 @@ MessageRouter -> SessionRuntime -> SessionOwner / SessionTurnRunner
                                   `-- Session catalog and authority persistence
 
 Current integration boundaries:
-  Vector-backed admission/search remains disabled or unsupported in the .NET host;
+  Optional Vector indexing/search uses one local or supervised child derived owner;
   ordinary external Node tools, remote exec/completion, whole-file consumers and fixed
   Code/PTY services and exec-only Shell HTTP connect through .NET trust/transport/dispatch;
   Session Worker hosting, managed ToolScript/controllers and Node Provider environment
@@ -99,7 +99,7 @@ Optional remote and compatibility components:
 
 ## Current gaps and open questions
 
-- **Current gap:** .NET Vector admission/search is disabled or explicitly unsupported (`WebUIChannel.History` returns `VECTOR_DISABLED`; identity-move/configuration paths do not make Vector a runtime capability). The TypeScript Vector implementation remains a compatibility/reference boundary only.
+- **Vector boundary:** optional dense/lexical indexing, semantic recall and administrator History use the [derived Vector owner](./units/vector-owner.md) after authoritative migrations/publication. Disabled configuration remains lazy; child failure is unavailable without local fallback. [Source selection](./units/vector-recall.md) reloads Archive and rechecks canonical model scope. Dense rename does not migrate old Lance rows.
 - **Qualification boundary:** .NET implements the shared runtime/control, typed-notice and communication producers through its existing exact owners. [The WebUI boundary](./threads/dotnet-webui-boundary.md#runtime-controls-notices-and-communications) maps the concrete consumer paths; a shared frontend build or merge alone does not establish complete feature parity.
 - **Intentional exclusions:** the platforms listed in [delivery scope](#d-dotnet-delivery-scope) are not remaining milestones. Ordinary external Nodes, remote exec/completion, file transfer/delivery, fixed Code/PTY services and exec-only Shell HTTP remain supported.
 - **Unconfirmed:** which remaining TypeScript Main routes and channel adapters will be retired versus retained as compatibility services after the .NET Main reaches production parity.

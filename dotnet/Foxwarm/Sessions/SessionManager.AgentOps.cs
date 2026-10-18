@@ -468,7 +468,7 @@ internal sealed partial class SessionManager
                 {
                     try
                     {
-                        CompensateCreatedBranch(store, branch);
+                        await CompensateCreatedBranchAsync(store, branch);
                     }
                     catch (Exception cleanup)
                     {
@@ -865,7 +865,8 @@ internal sealed partial class SessionManager
                         throw new InvalidOperationException(
                             "Session authority lifetime has retired."
                         );
-            }
+            },
+            archiveCommitted: OnArchiveCommitted
         );
         return store;
     }

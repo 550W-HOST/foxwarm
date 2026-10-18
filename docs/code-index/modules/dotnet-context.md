@@ -10,6 +10,10 @@ This module documents current .NET source behavior. Cross-module contracts belon
 
 - [Compaction plans and Archive recall](../units/session-compaction.md)
 - [Conditional Agent memory](../units/conditional-memory.md)
+- [Vector owner and Main callers](../units/vector-owner.md)
+- [Vector storage and committed indexing](../units/vector-indexing.md)
+- [Optional lexical index](../units/vector-lexical.md)
+- [Semantic recall and authoritative previews](../units/vector-recall.md)
 
 ## Tests and callers
 

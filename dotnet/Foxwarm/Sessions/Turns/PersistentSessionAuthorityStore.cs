@@ -24,6 +24,7 @@ public sealed class PersistentSessionAuthorityStore
     private readonly Action<SessionSnapshot>? publishProjection;
     private readonly Func<JsonObject?>? mainFields;
     private readonly Action? checkLifetime;
+    private readonly Action<SessionSnapshot, IReadOnlyList<ArchiveMessageRecord>, IReadOnlyList<ArchiveBlockRecord>>? archiveCommitted;
     private volatile bool retired;
     private Exception? identityUnavailable;
 
@@ -49,7 +50,8 @@ public sealed class PersistentSessionAuthorityStore
         Func<int, CancellationToken, Task>? canonicalCommitBarrier = null,
         Action<SessionSnapshot>? publishProjection = null,
         Func<JsonObject?>? mainFields = null,
-        Action? checkLifetime = null
+        Action? checkLifetime = null,
+        Action<SessionSnapshot, IReadOnlyList<ArchiveMessageRecord>, IReadOnlyList<ArchiveBlockRecord>>? archiveCommitted = null
     )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
@@ -64,6 +66,7 @@ public sealed class PersistentSessionAuthorityStore
         this.publishProjection = publishProjection;
         this.mainFields = mainFields;
         this.checkLifetime = checkLifetime;
+        this.archiveCommitted = archiveCommitted;
         authorityFile = new LinuxAtomicJsonFile(
             root,
             $"state/sessions/{sessionId}.json",
@@ -140,6 +143,7 @@ public sealed class PersistentSessionAuthorityStore
         var records = appendedMessages.Select(ToArchiveRecord).ToArray();
         var receipt = await archive.EnqueueMessagesAsync(records).ConfigureAwait(false);
         IReadOnlyList<ArchiveMessageRecord> inserted = [];
+        var published = false;
         try
         {
             // Build, validate and serialize the owned snapshot while Archive persistence is pending.
@@ -152,9 +156,11 @@ public sealed class PersistentSessionAuthorityStore
                     .ConfigureAwait(false);
             inserted = await receipt.Completion.ConfigureAwait(false);
             authorityFile.WriteTextPayload(payload, default);
+            published = true;
         }
         catch (AuthorityCommittedException)
         {
+            published = true;
             throw;
         }
         catch (Exception writeError)
@@ -177,6 +183,11 @@ public sealed class PersistentSessionAuthorityStore
             }
             throw;
         }
+        finally
+        {
+            if (published)
+                NotifyArchiveCommitted(stagedSnapshot, records, []);
+        }
         PublishProjection(stagedSnapshot);
     }
 
@@ -189,20 +200,24 @@ public sealed class PersistentSessionAuthorityStore
     {
         cancellationToken.ThrowIfCancellationRequested();
         ValidateBoundSnapshot(stagedSnapshot);
+        var records = messages.Select(ToArchiveRecord).ToArray();
         var receipt = await archive
-            .EnqueueCompactionAsync(blocks, messages.Select(ToArchiveRecord).ToArray())
+            .EnqueueCompactionAsync(blocks, records)
             .ConfigureAwait(false);
         IReadOnlyList<ArchiveBlockRecord> newBlocks = [];
         IReadOnlyList<ArchiveMessageRecord> newMessages = [];
+        var published = false;
         try
         {
             var payload = ToAuthority(stagedSnapshot).ToJson(indented: true);
             (newBlocks, newMessages) = await receipt.Completion.ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             authorityFile.WriteTextPayload(payload, cancellationToken);
+            published = true;
         }
         catch (AuthorityCommittedException)
         {
+            published = true;
             throw;
         }
         catch (Exception error)
@@ -221,7 +236,19 @@ public sealed class PersistentSessionAuthorityStore
             }
             throw;
         }
+        finally
+        {
+            if (published)
+                NotifyArchiveCommitted(stagedSnapshot, records, newBlocks);
+        }
         PublishProjection(stagedSnapshot);
+    }
+
+    private void NotifyArchiveCommitted(SessionSnapshot snapshot, IReadOnlyList<ArchiveMessageRecord> messages, IReadOnlyList<ArchiveBlockRecord> blocks)
+    {
+        // Derived indexing cannot change the result of an authority commit, including a post-rename failure.
+        try { archiveCommitted?.Invoke(snapshot, messages, blocks); }
+        catch { }
     }
 
     private void PublishProjection(SessionSnapshot snapshot)

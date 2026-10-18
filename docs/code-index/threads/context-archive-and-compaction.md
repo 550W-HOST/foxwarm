@@ -26,11 +26,13 @@ Per-Session JSON/history is the only active source used to construct the next li
 
 ## Memory and compatibility
 
-`ConditionalMemory` and `AgentMemory.Selected` influence prompt construction but do not mutate active history. Vector admission/search is not part of the current .NET chain: `WebUIChannel.History` returns `VECTOR_DISABLED`, and identity/configuration paths do not imply Vector runtime support. TypeScript archive/vector readers remain compatibility references only.
+`ConditionalMemory` and `AgentMemory.Selected` influence prompt construction but do not mutate active history. Optional [Vector indexing](../units/vector-indexing.md) starts after authoritative migrations and receives only committed append/compaction notifications; its failure cannot change the authority commit result. The [owner facade](../units/vector-owner.md) selects one local or supervised child owner. [Semantic recall](../units/vector-recall.md) and administrator History reload authoritative Archive sources, recheck canonical model scope, and use opt-in [lexical fusion](../units/vector-lexical.md). Readiness is separate from backfill; disabled/unavailable search is an explicit error, not empty success.
 
 ## Canonical units and tests
 
 - [Compaction unit](../units/session-compaction.md)
+- [Vector owner and callers](../units/vector-owner.md)
+- [Vector source selection and previews](../units/vector-recall.md)
 - [Archive message store](../units/archive-message-store.md)
 - [Archive branches/lineage](../units/archive-branch-lineage.md)
 - [Session authority JSON](../units/session-authority-json.md)

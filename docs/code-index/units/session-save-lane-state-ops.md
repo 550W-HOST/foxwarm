@@ -1,6 +1,6 @@
 # Unit: Session save-lane settings, prompt cache, goals, retry, and compact wake state
 
-Files: dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Cache.cs, dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Compact.cs, dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Cwd.cs, dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Retry.cs, dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Settings.cs, dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Selection.cs
+Files: dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Cache.cs, dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Compact.cs, dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Cwd.cs, dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Retry.cs, dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Settings.cs, dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Selection.cs, dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Vector.cs
 
 Primary source: dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.cs
 
@@ -14,6 +14,8 @@ Provides narrow save-lane operations for fields that are still part of active Se
 - `EnsurePromptCacheKeyAsync` persists a generated/reused prefix key through the lane rather than changing it concurrently with history.
 - `PublishCompactWakeAsync`, `RemoveCompactWakeAsync`, and `ReleaseStandaloneCompactAsync` keep ready/standalone compact markers ordered with ordinary saves.
 - `CommitCwdAsync`, `CommitRetryNoticeAsync`, and `CommitSettingsAsync` each stage a narrow authority envelope change and publish only after the store result. `SessionSaveLane` invokes the TaskService legacy-Goal migration hook for staged owner saves, including best-effort queue admission and strict identity pre-save; invalid truthy Goal values block the write, while valid migration removes the legacy field after the task transaction commits.
+
+- `CommitVectorIndexPositionAsync` publishes legacy index-position compatibility fields only after explicit force indexing succeeds; it uses the same ordered authority commit and does not make the derived index an authority.
 
 Callers: SessionManager settings/goal/timer operations, SessionOwner retry/compaction hooks, and the model request preparation path.
 

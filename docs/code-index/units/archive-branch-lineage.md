@@ -16,7 +16,7 @@ Callers: `SessionSaveLane.CommitCompactionAsync`, `SessionManager.ForkAsync`, `A
 
 ## Contract and side effects
 
-Branch existence/replay decisions and branch/block mutations run in the shared Archive writer transaction, including exact compensation. Block JSON strings are prepared once outside the writer; queued records own their values.
+Branch existence/replay decisions and branch/block mutations run in the shared Archive writer transaction, including exact compensation. A newly inserted fork seeds Source-compatible Vector progress from its immutable message/block caps in that transaction, independently of enabled Vector. Exact owned-branch compensation removes its checkpoint; the Main lifecycle resets derived dense/lexical state before this compensation, not after it. Committed clear/deletion retains Archive and derived sources. Block JSON strings are prepared once outside the writer; queued records own their values.
 
 Nested effective reads apply cumulative fork caps: late parent/child rows do not leak into a descendant after its fork point. Parent rows are never copied or deleted when a child branch is compensated. Block pruning in a compaction operation concerns active context selection; it does not rewrite immutable Archive rows or alter committed branch identity.
 

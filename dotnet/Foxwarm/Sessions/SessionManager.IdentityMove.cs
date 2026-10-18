@@ -241,14 +241,6 @@ internal sealed partial class SessionManager
             throw new NotSupportedException(
                 "Session identity move is unavailable while Session-worker placement is enabled."
             );
-        if (
-            SessionCatalog.Flag(
-                app?["vector"] is JsonObject vector ? vector["enabled"] : app?["vector"]
-            )
-        )
-            throw new NotSupportedException(
-                "Configured Vector identity updates are not supported by this host."
-            );
         new SessionDeletionWorkerStore(root).Preflight([old]);
         string? parent = null;
         var parentProvided = args.ContainsKey("parentSessionId");
@@ -424,6 +416,7 @@ internal sealed partial class SessionManager
             ["identityCommitted"] = false,
         };
         var mutated = false;
+        var vectorMoved = false;
         var committed = false;
         string[] children = [];
         unresolvedIdentityMove = record;
@@ -450,6 +443,8 @@ internal sealed partial class SessionManager
                 details["stage"] = "archive";
                 SqliteArchiveIdentityMove.Rename(ArchiveDatabase, record.OldId, record.NewId);
                 details["archiveMoved"] = true;
+                vectorMoved = true;
+                await Vector.RenameAsync(record.OldId, record.NewId);
                 RebindIdentityOwner(owner, record.NewId, record.TargetAgent);
                 owner.Entry.WithState(state =>
                 {
@@ -535,6 +530,8 @@ internal sealed partial class SessionManager
                             errors.Add(error);
                         }
                     }
+                    if (vectorMoved)
+                        await Attempt(() => Vector.RenameAsync(record.NewId, record.OldId));
                     await Attempt(async () =>
                     {
                         await IdentityStageAsync(operation, "reverse-archive");

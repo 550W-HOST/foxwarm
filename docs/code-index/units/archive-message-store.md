@@ -1,6 +1,6 @@
 # Unit: Archive message store and read queries
 
-Files: `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveMessageStore.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveQueries.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveWriter.cs`
+Files: `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveMessageStore.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveQueries.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveWriter.cs`, `dotnet/Foxwarm/Sessions/Storage/SqliteArchiveVector.cs`
 
 ## Purpose
 
@@ -12,6 +12,8 @@ Owns immutable raw Archive message rows and the bounded local/effective readers 
 - `WriteMessages` validates canonical message shape, inserts exact `(session, seq)` rows transactionally, treats identical replay as a no-op, and rejects conflicting payloads.
 - `RollbackInsertedMessages` removes only rows whose stored payload exactly matches the inserted set; pre-existing replay rows are never compensation targets.
 - `ReadMessages`, `ReadMessagesRange`, `ReadMessageBySeq`, `ReadEffectiveMessagesRange`, and page/topology helpers serve local or lineage-bounded read paths. Effective reads apply cumulative branch caps without copying or mutating parent rows.
+- `VectorCheckpoint`, `SetVectorCheckpoint`, `LocalVectorMaxima`, `VectorLineage` and local stats expose Source-compatible derived progress and cumulative scopes. Checkpoint writes retain exact Source Session keys through the same queued writer; they never redirect a historical key into audit writes. Read-only readers do not repair aliases or create storage. Checkpoints do not authorize or rebuild active history.
+- Local numeric readers support bounded Vector/FTS batches and substantive message windows, applying role/visibility selection before the limit. Block ranges support bounded descending transient search.
 - Query helpers preserve alias-aware, bounded, read-only behavior for counts, candidate search, list sequence maxima, and vector backfill inputs.
 
 Callers: `PersistentSessionAuthorityStore`, `SessionCompactor`, `ArchiveContextReader`, Session list query projections, and image/context/vector preparation. Missing active JSON is handled by the authority store, not this reader.
@@ -22,7 +24,7 @@ The Main data-root owner pins one Archive writer and long-lived non-pooled conne
 
 `EnqueueMessagesAsync` validates and owns appended raw values before admission, returning a separate committed inserted-row receipt. The synchronous `WriteMessages` API still waits for durability and returns only newly inserted input records. The writer checks exact current identity and immutable replay/conflict state in transaction order; one rejected command rolls back its savepoint without discarding unrelated commands. Exact compensation is also queued. Blocks and messages belonging to one compaction command share its savepoint and outer transaction.
 
-Writes are exact-current-identity only; historical aliases can read committed rows but cannot redirect writes. The schema preserves the source-compatible `archive_messages` columns/primary key and rejects unsupported extra indexes or foreign keys. Archive rows are immutable audit/context records even when active JSON history is cleared or compacted.
+Immutable message/block/branch writes are exact-current-identity only; historical aliases can read committed rows but cannot redirect those writes. Derived checkpoints retain the reference implementation's exact-key progress semantics and are not identity proof. The schema preserves the source-compatible `archive_messages` columns/primary key and rejects unsupported extra indexes or foreign keys. Archive rows are immutable audit/context records even when active JSON history is cleared or compacted.
 
 ## Tests
 

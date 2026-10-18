@@ -54,8 +54,17 @@ execution are unavailable on Windows. Unsupported local exec/ToolScript tools
 are not advertised; supported connected Nodes retain their own capabilities.
 Chat, provider setup, file tools and persistent settings/history are available.
 Linux directory-fsync durability is not claimed on Windows. Code workbench
-assets, optional external tools/services, vector search and optional HEIF support
-are not supplied by this package. There is no updater, autostart or installer.
+assets, optional external tools/services and optional HEIF support are not
+supplied by this package. There is no updater, autostart or installer.
+
+Optional Vector indexing/search includes the pinned LanceDB native dependency,
+not an embedding service. Configure a compatible embedding endpoint to enable
+it; disabled configuration does not start a native owner. The default supervised
+child runs through the Desktop executable before UI and single-instance setup,
+without a separate console apphost/runtimeconfig. Windows x64 requires system
+Visual C++/Universal C runtime dependencies; minimum versions are not established.
+The package includes `LanceDB-LICENSE.txt` and `Apache-Arrow-LICENSE.txt`. A successful
+cross-build does not establish Windows application or child runtime qualification.
 
 The fox icon is derived from OpenMoji and distributed under CC BY-SA 4.0;
 see `Foxwarm-icon-LICENSE.txt`. The WebView2 SDK is version 1.0.4258.31;

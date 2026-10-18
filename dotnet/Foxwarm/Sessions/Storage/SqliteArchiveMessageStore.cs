@@ -263,6 +263,7 @@ public sealed partial class SqliteArchiveMessageStore
         InitializeBlocks(connection);
         InitializeBranches(connection);
         InitializeReservations(connection);
+        InitializeVectorCheckpoints(connection);
     }
 
     public IReadOnlyList<ArchiveMessageRecord> WriteMessages(
@@ -465,7 +466,8 @@ public sealed partial class SqliteArchiveMessageStore
         double? startSeq,
         double? endSeq,
         int? limit = null,
-        bool descending = false
+        bool descending = false,
+        bool substantiveWindow = false
     )
     {
         if (!File.Exists(databasePath))
@@ -474,7 +476,7 @@ public sealed partial class SqliteArchiveMessageStore
         var canonical = ResolveReadOnly(connection, sessionId);
         using var command = connection.CreateCommand();
         command.CommandText =
-            $"SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=$session AND ($first IS NULL OR seq >= $first) AND ($last IS NULL OR seq <= $last) ORDER BY seq {(descending ? "DESC" : "ASC")}";
+            $"SELECT agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=$session AND ($first IS NULL OR seq >= $first) AND ($last IS NULL OR seq <= $last){(substantiveWindow ? " AND role IN ('user','model') AND coalesce(json_extract(message_json,'$.modelVisible'),1)!=0" : "")} ORDER BY seq {(descending ? "DESC" : "ASC")}";
         if (limit is int boundedLimit)
         {
             command.CommandText += " LIMIT $limit";

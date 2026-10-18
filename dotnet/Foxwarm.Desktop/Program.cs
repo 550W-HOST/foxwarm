@@ -5,8 +5,10 @@ namespace Foxwarm.Desktop;
 internal static class Program
 {
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
+        if (Foxwarm.Vector.VectorChild.TryRunAsync(args).GetAwaiter().GetResult())
+            return;
         ApplicationConfiguration.Initialize();
         using var instance = new Mutex(
             false,

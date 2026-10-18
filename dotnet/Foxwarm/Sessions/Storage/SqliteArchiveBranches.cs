@@ -130,6 +130,18 @@ public sealed partial class SqliteArchiveMessageStore
                 command.Parameters.AddWithValue("$b", blockCap);
                 command.Parameters.AddWithValue("$at", now);
                 command.ExecuteNonQuery();
+                if (parent is not null)
+                {
+                    using var checkpoint = connection.CreateCommand();
+                    checkpoint.Transaction = transaction;
+                    checkpoint.CommandText = "INSERT OR IGNORE INTO archive_checkpoints(session_id,raw_last_indexed_seq,raw_tail_start_seq,last_indexed_block_id,updated_at) VALUES($s,$m,$t,$b,$at)";
+                    checkpoint.Parameters.AddWithValue("$s", sessionId);
+                    checkpoint.Parameters.AddWithValue("$m", messageCap);
+                    checkpoint.Parameters.AddWithValue("$t", messageCap > 0 ? messageCap + 1 : 0);
+                    checkpoint.Parameters.AddWithValue("$b", blockCap);
+                    checkpoint.Parameters.AddWithValue("$at", now);
+                    checkpoint.ExecuteNonQuery();
+                }
                 return new ArchiveBranch(sessionId, parent, messageCap, blockCap, now, now);
             }
         );
@@ -158,6 +170,11 @@ public sealed partial class SqliteArchiveMessageStore
                 command.Parameters.AddWithValue("$updated", branch.UpdatedAt);
                 if (command.ExecuteNonQuery() != 1)
                     throw new IOException("Owned Archive branch rollback conflict.");
+                using var checkpoint = connection.CreateCommand();
+                checkpoint.Transaction = transaction;
+                checkpoint.CommandText = "DELETE FROM archive_checkpoints WHERE session_id=$s";
+                checkpoint.Parameters.AddWithValue("$s", branch.SessionId);
+                checkpoint.ExecuteNonQuery();
                 return true;
             }
         );

@@ -153,6 +153,14 @@
       Link="skills/mcp-management/%(RecursiveDir)%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest"
     />
+    <PackageReference Include="LanceDB" Version="[2.5.0]" />
+    <PackageReference Include="Apache.Arrow" Version="[22.1.0]" />
+    <Content
+      Include="Vector/Licenses/*.txt"
+      Link="%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <PackageReference Include="YamlDotNet" Version="18.1.0" />
     <Content

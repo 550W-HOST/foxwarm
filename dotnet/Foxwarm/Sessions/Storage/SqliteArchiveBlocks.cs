@@ -352,7 +352,7 @@ public sealed partial class SqliteArchiveMessageStore
         return blocks;
     }
 
-    internal IReadOnlyList<ArchiveBlockRecord> ReadBlocksNumericRange(double? first, double? last)
+    internal IReadOnlyList<ArchiveBlockRecord> ReadBlocksNumericRange(double? first, double? last, int? limit = null, bool descending = false)
     {
         if (!File.Exists(databasePath))
             return [];
@@ -360,7 +360,12 @@ public sealed partial class SqliteArchiveMessageStore
         var canonical = ResolveReadOnly(connection, sessionId);
         using var command = connection.CreateCommand();
         command.CommandText =
-            $"SELECT agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at,{(HasFrictionColumn(connection) ? "friction_score" : "NULL")} FROM archive_blocks WHERE session_id=$session AND ($first IS NULL OR id >= $first) AND ($last IS NULL OR id <= $last) ORDER BY id";
+            $"SELECT agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,created_at,{(HasFrictionColumn(connection) ? "friction_score" : "NULL")} FROM archive_blocks WHERE session_id=$session AND ($first IS NULL OR id >= $first) AND ($last IS NULL OR id <= $last) ORDER BY id {(descending ? "DESC" : "ASC")}";
+        if (limit is { } boundedLimit)
+        {
+            command.CommandText += " LIMIT $limit";
+            command.Parameters.AddWithValue("$limit", boundedLimit);
+        }
         command.Parameters.AddWithValue("$session", canonical);
         command.Parameters.AddWithValue("$first", (object?)first ?? DBNull.Value);
         command.Parameters.AddWithValue("$last", (object?)last ?? DBNull.Value);

@@ -3,6 +3,9 @@ using Foxwarm.Channels.WebUi;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
 
+if (await Foxwarm.Vector.VectorChild.TryRunAsync(args))
+    return;
+
 if (await Foxwarm.Terminal.CodeHelperClient.TryRunAsync(args))
     return;
 

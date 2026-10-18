@@ -208,7 +208,8 @@ internal sealed partial class ContextPreviewRenderer
         string context,
         Func<int, string> titleFor,
         string empty,
-        IReadOnlyList<string>? extraNotices = null
+        IReadOnlyList<string>? extraNotices = null,
+        int? maxItems = null
     )
     {
         var selected = items.AsEnumerable();
@@ -244,7 +245,7 @@ internal sealed partial class ContextPreviewRenderer
                 item => !exclude.IsMatch(item.Search),
                 "[filter] excludeRegex excluded {count} additional item(s) that remained after earlier filter stages."
             );
-        var matched = selected.ToArray();
+        var matched = (maxItems is { } maximum ? selected.Take(maximum) : selected).ToArray();
         var title = titleFor(matched.Length);
         var runtimeLine = Clip(context, Math.Min(560, budget - 242));
         var medium = string.Join('\n', notices);

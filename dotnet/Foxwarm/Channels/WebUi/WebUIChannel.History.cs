@@ -314,7 +314,7 @@ internal sealed partial class WebUIChannel
         );
         app.MapGet(
             "/api/history/search",
-            (HttpRequest request) =>
+            async (HttpRequest request) =>
             {
                 if (
                     !TryReadHistoryQuery(
@@ -391,14 +391,19 @@ internal sealed partial class WebUIChannel
                             }
                         );
                 }
-                return Results.Json(
-                    new
-                    {
-                        error = "Semantic history search is unavailable. You can still open an exact message reference.",
-                        code = "VECTOR_DISABLED",
-                    },
-                    statusCode: 503
-                );
+                try
+                {
+                    return Results.Ok(await sessions.SearchVectorHistoryAsync(search, (int)(limit ?? 5), agentName, sessionId));
+                }
+                catch (Foxwarm.Vector.VectorUnavailableException error)
+                {
+                    return Results.Json(new { error = error.Message, code = error.Code },
+                        statusCode: error.Code is "VECTOR_DISABLED" or "VECTOR_UNAVAILABLE" ? 503 : 500);
+                }
+                catch (Exception error)
+                {
+                    return Results.Json(new { error = error.Message, code = "HISTORY_SEARCH_FAILED" }, statusCode: 500);
+                }
             }
         );
         app.MapGet(

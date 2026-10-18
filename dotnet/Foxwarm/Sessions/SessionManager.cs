@@ -33,6 +33,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     internal Foxwarm.Nodes.NodeBootstrap? Bootstrap { get; set; }
     private readonly ModelRouting modelRouting = new();
     internal LlmRequestJournalStore Journal { get; }
+    internal Foxwarm.Vector.VectorService Vector { get; }
     private readonly Foxwarm.Persistence.SqliteWriterOwners.Lease archiveWriter;
     internal TaskService Tasks { get; }
     private readonly ResponsesWsTransport websockets = new();
@@ -230,6 +231,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         waitLiveness = new WaitLiveness(this);
         Journal = new LlmRequestJournalStore(this.root);
         archiveWriter = SqliteArchiveMessageStore.AcquireWriter(ArchiveDatabase);
+        Vector = new(this.root, Foxwarm.Vector.VectorConfiguration.Capture(models.ConfigurationOwner?.AppConfiguration));
+        Vector.Diagnostic = (code, id) => Console.Error.WriteLine("Vector " + code + (id.Length == 0 ? "" : " session=" + id));
     }
 
     internal string? ResolveTaskSessionId(string requested)
@@ -335,6 +338,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private async Task LoadOwnersAsync(bool startMainServices)
     {
         await EnsureIdentityStartupAsync();
+        await Vector.StartAsync();
         await timers.LoadAsync();
         foreach (var row in Catalog.List())
         {
@@ -475,7 +479,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 {
                     try
                     {
-                        CompensateCreatedBranch(store, branch);
+                        await CompensateCreatedBranchAsync(store, branch);
                     }
                     catch (Exception cleanup)
                     {
@@ -607,6 +611,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         foreach (var session in current)
             if (!session.Entry.Retired)
                 await session.Entry.SaveLane.SaveStrictAsync();
+        await DrainVectorHooksAsync();
+        await Vector.DisposeAsync();
         foreach (var session in current)
             session.CloseSubscribers();
     }
