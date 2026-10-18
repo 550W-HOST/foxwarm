@@ -9,6 +9,7 @@ internal sealed partial class SessionManager
     private readonly ToolAuthorizationAuthority authorization;
     private readonly string toolWorkspace;
     internal ToolAuthorizationAuthority Authorization => authorization;
+    internal string ToolWorkspace => toolWorkspace;
 
     internal AgentIsolation Isolation(string agent) =>
         IsolatedToolCompatibility.Metadata(agents.MetadataSnapshot()[agent]);

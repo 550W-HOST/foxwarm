@@ -328,7 +328,7 @@ internal sealed partial class SessionManager
         return trimmed.Length == 0 ? null : trimmed;
     }
 
-    private (long Total, JsonObject[] Page) CatalogMetadataOffset(
+    internal (long Total, JsonObject[] Page) CatalogMetadataOffset(
         int start,
         int count,
         string? agent = null,

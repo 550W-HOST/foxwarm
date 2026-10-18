@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="Code/workbench.html" />
+    <EmbeddedResource Include="McpInboundTools.json" />
     <Content
       Include="../../templates/node/**/*"
       Link="templates/node/%(RecursiveDir)%(Filename)%(Extension)"

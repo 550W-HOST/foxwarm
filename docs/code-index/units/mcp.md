@@ -1,11 +1,11 @@
 # Unit: Outbound MCP client
 
-Files: `dotnet/Foxwarm/McpClient.Connections.cs`, `dotnet/Foxwarm/McpClient.cs`, `dotnet/Foxwarm/McpClient.Authorizations.cs`, `dotnet/Foxwarm/McpConfiguration.cs`
+Files: `dotnet/Foxwarm/McpClient.Connections.cs`, `dotnet/Foxwarm/McpClient.External.cs`, `dotnet/Foxwarm/McpClient.cs`, `dotnet/Foxwarm/McpClient.Authorizations.cs`, `dotnet/Foxwarm/McpConfiguration.cs`
 Secondary files: `dotnet/Foxwarm.Tests/Mcp/OutboundMcpFixture.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpLifecycleTests.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpResultsTests.cs`, `dotnet/Foxwarm.Tests/Mcp/Fixtures/outbound-peer.mjs`, `packages/webui/test/experimentHostMcp.e2e.mjs`, `packages/webui/test/experimentHostMcp.peer.mjs`
 
 ## Purpose
 
-Loads configured outbound MCP servers, maintains official SDK clients/transports, and supplies discovery and calls to the unified tool registry. It does not implement inbound MCP or Session notifications.
+Loads configured outbound MCP servers, maintains official SDK clients/transports, and supplies discovery and calls to the unified tool registry. The separately owned [inbound service](./dotnet-inbound-mcp.md) uses explicit external list/call seams; neither direction creates Session notification authority.
 
 ## Stable methods and callers
 
@@ -19,13 +19,15 @@ Loads configured outbound MCP servers, maintains official SDK clients/transports
 
 ## Connection and cancellation contract
 
-HTTP/SSE/auto bindings belong to one in-process Session owner/lifetime, generation, named server, and configuration. Different Sessions never share a stateful peer Session. No model argument, fabricated principal, or persisted peer-session record supplies this identity. The owner's ordinary mutation admission protects acquisition against current identity/deletion claims; SDK initialization remains independently cancellable rather than holding the mutation lease for a network round trip.
+Internal HTTP/SSE/auto bindings belong to one in-process Session owner/lifetime, generation, named server, and configuration. Different Sessions never share a stateful peer Session. No model argument, fabricated principal, or persisted peer-session record supplies this identity. The owner's ordinary mutation admission protects acquisition against current identity/deletion claims; SDK initialization remains independently cancellable rather than holding the mutation lease for a network round trip.
 
-Stdio retains the process key of server, command, args, env, cwd, and stderr. Token/header/timeout-only changes do not restart its process. A changed/disabled stdio configuration removes the prior binding from new acquisition: established active calls may finish using their captured process, while idle processes and unpublished initialization are closed. The existing 60-second idle cleanup remains stdio-only.
+Stdio retains the process key of server, command, args, env, cwd, and stderr. Token/header/timeout-only changes do not restart its process. A changed/disabled stdio configuration removes the prior binding from new acquisition: established active calls may finish using their captured process, while idle processes and unpublished initialization are closed. The existing 60-second internal idle cleanup remains stdio-only. External-owned HTTP bindings additionally use the Source 15-minute idle lifetime.
 
-The pinned official Core SDK owns transport initialization/fallback and stateful HTTP session termination through `OwnsSession`; there is no custom HTTP DELETE or idle timer. A failed already-sent tool call is not retried through another transport. Request cancellation uses the SDK token/API boundary. The existing bounded, typed stdio cancellation notification remains because a token-only timeout did not reliably notify the official peer with this SDK; it cannot undo completed peer effects. Cancelling one HTTP request does not close a binding while another lease remains active; a cancelled last lease may close its idle binding. Configuration/owner invalidation cancels the affected HTTP lifetime, and a late connection cannot be published after invalidation.
+The pinned official Core SDK owns transport initialization/fallback and stateful HTTP session termination through `OwnsSession`; there is no custom outbound HTTP DELETE. A failed already-sent tool call is not retried through another transport. Request cancellation uses the SDK token/API boundary. The existing bounded, typed stdio cancellation notification remains because a token-only timeout did not reliably notify the official peer with this SDK; it cannot undo completed peer effects. Cancelling one HTTP request does not close a binding while another lease remains active; a cancelled last lease may close its idle binding. Configuration/owner invalidation cancels the affected HTTP lifetime, and a late connection cannot be published after invalidation.
 
-Secrets are redacted using the exact configuration which supplied a connection's credentials, including failures after a concurrent configuration change. MCP discovery/execution remains subject to the ordinary unified authorization boundary.
+Secrets are redacted using the exact configuration which supplied a connection's credentials, including failures after a concurrent configuration change. Internal MCP discovery/execution remains subject to the ordinary unified authorization boundary.
+
+`ListExternalToolsAsync`, `CallExternalAsync` and `ReleaseExternalAsync` use the real verified external context rather than an internal Session. Their HTTP/SSE/auto keys are separate from internal keys; stdio keeps its existing process-key semantics. Disposal awaits selected live/retiring bindings. External calls keep raw content, structured content, media, metadata and error flags, without internal normalization. Exact known-credential validation runs while the existing OAuth operation scope still retains refreshed/retired credentials: unsafe descriptors are omitted whole, binary media is not scanned as text, and unsafe post-effect output is withheld without retry. Ordinary internal OAuth result guards remain unchanged.
 
 ## Tests
 

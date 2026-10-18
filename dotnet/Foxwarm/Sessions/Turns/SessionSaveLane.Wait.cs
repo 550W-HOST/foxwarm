@@ -14,9 +14,10 @@ public sealed partial class SessionSaveLane
     private static readonly AsyncLocal<bool> WaitCommitScope = new();
     internal static bool IsWaitCommit => WaitCommitScope.Value;
 
-    private async Task CommitWaitSnapshotAsync(SessionSnapshot staged)
+    private async Task CommitWaitSnapshotAsync(SessionSnapshot staged, Action? beforeCommit = null)
     {
         staged = await PrepareGoalOnlyAsync(staged).ConfigureAwait(false);
+        beforeCommit?.Invoke();
         var previous = WaitCommitScope.Value;
         WaitCommitScope.Value = true;
         try
@@ -76,7 +77,7 @@ public sealed partial class SessionSaveLane
                     };
                 }
             }
-            beforeAdmission?.Invoke();
+            if (kind == SaveKind.BestEffort) beforeAdmission?.Invoke();
             var prepared = entry.WithState(state =>
             {
                 var snapshot = state.Snapshot();
@@ -159,7 +160,7 @@ public sealed partial class SessionSaveLane
             {
                 try
                 {
-                    await CommitWaitSnapshotAsync(prepared.Snapshot);
+                    await CommitWaitSnapshotAsync(prepared.Snapshot, beforeAdmission);
                 }
                 catch (AuthorityCommittedException)
                 {

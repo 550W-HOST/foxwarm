@@ -244,7 +244,7 @@ internal sealed class ApprovedNodeRegistry
         });
     }
 
-    internal JsonObject Approve(string pendingId, string? id)
+    internal JsonObject Approve(string pendingId, string? id, Action? beforeMutation = null)
     {
         Cleanup();
         return Change(next =>
@@ -271,6 +271,7 @@ internal sealed class ApprovedNodeRegistry
             }
             if (Approved(next).ContainsKey(id))
                 throw new InvalidDataException("Node id already exists.");
+            beforeMutation?.Invoke();
             var auth = Token();
             Approved(next)[id] = new JsonObject
             {

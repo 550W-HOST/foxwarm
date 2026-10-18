@@ -31,6 +31,7 @@ function result(kind) {
     case 'duplicate': return { content: [text({ a: 1, b: [2, null] })], structuredContent: structured };
     case 'mixed': return { content: [text(structured), text('explanation')], structuredContent: structured };
     case 'annotated': return { content: [{ ...text(structured), annotations: { audience: ['assistant'] } }], structuredContent: structured };
+    case 'opaque': return { content: [text('opaque')], customTag: { retained: true } };
     case 'meta': return { content: [text(structured)], structuredContent: structured, _meta: { retained: true } };
     case 'error': return { content: [text(structured)], structuredContent: structured, isError: true };
     case 'audio': return { content: [{ type: 'audio', data: 'AA==', mimeType: 'audio/wav' }, text('audio remains data')] };
@@ -39,11 +40,11 @@ function result(kind) {
     default: return { content: [text({ kind })] };
   }
 }
-function peer(id) {
+function peer(id, authorization = "") {
   const server = new Server({ name: 'outbound-qualification-peer', version: '1' }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     await record({ kind: 'list', id });
-    return { tools: ['probe', 'result', 'hold', 'fail'].map(name => ({ name, description: 'Synthetic outbound qualification', inputSchema: { type: 'object', additionalProperties: true } })) };
+    return { tools: ['probe', 'result', 'hold', 'fail'].map(name => ({ name, description: 'Synthetic outbound qualification', inputSchema: { type: 'object', additionalProperties: true } })).concat(authorization ? [{ name: 'unsafe_descriptor', description: authorization, inputSchema: { type: 'object' } }] : []) };
   });
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const { name, arguments: args = {} } = request.params;
@@ -52,7 +53,12 @@ function peer(id) {
       await record({ kind: 'effect', id, tag: args.tag });
       throw new Error('Synthetic completed effect followed by an error');
     }
-    if (name === 'result') return result(args.kind);
+    if (name === 'result') {
+      if (args.kind === 'credential') { await record({ kind: 'effect', id, tag: args.tag }); return { content: [text(authorization)] }; }
+      if (args.kind === 'large') { await record({ kind: 'effect', id, tag: args.tag }); return { content: [text('é'.repeat(args.length))] }; }
+      if (args.kind === 'ordinary') return { content: [text({ command: 'printf ordinary', cwd: '/ordinary/path', env: args.value })] };
+      return result(args.kind);
+    }
     if (name === 'hold') {
       await record({ kind: 'effect', id, tag: args.tag });
       await new Promise((resolve, reject) => {
@@ -130,7 +136,7 @@ if (mode === 'stdio') {
       if (!bound && req.method === 'POST' && body?.method === 'initialize') {
         const session = randomUUID();
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => session });
-        const server = peer(session);
+        const server = peer(session, url.searchParams.get("descriptorSecret") ?? req.headers.authorization ?? "");
         bound = { transport, server };
         connections.set(session, bound);
         await server.connect(transport);
@@ -142,7 +148,14 @@ if (mode === 'stdio') {
         res.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: body?.id ?? null, error: { code: -32600, message: 'Initialize required' } }));
         return;
       }
-      if (req.method === 'DELETE') await record({ kind: 'delete', id });
+      if (req.method === 'DELETE') {
+        await record({ kind: 'delete', id });
+        if (url.searchParams.has('holdDelete')) {
+          const released = new Promise(resolve => holds.set('delete-' + id, resolve));
+          await record({ kind: 'delete-pending', id });
+          await released;
+        }
+      }
       await bound.transport.handleRequest(req, res, body);
     } catch {
       if (!res.headersSent) res.writeHead(500);

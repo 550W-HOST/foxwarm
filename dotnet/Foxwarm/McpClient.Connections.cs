@@ -37,7 +37,8 @@ internal sealed partial class McpClient
         string Server,
         SessionOwner? Owner,
         long Generation,
-        string? Process
+        string? Process,
+        McpExternalContext? External = null
     );
 
     private sealed class PoolEntry
@@ -61,12 +62,14 @@ internal sealed partial class McpClient
         internal int Active;
         internal bool Invalid;
         internal bool Retiring;
+        internal Task? Closed;
         internal CancellationTokenSource? Idle;
     }
 
     private readonly object poolGate = new();
     private readonly Dictionary<ConnectionKey, PoolEntry> pool = [];
     private readonly HashSet<Task> closing = [];
+    private readonly HashSet<PoolEntry> retiringConnections = [];
 
     private static string ProcessSettings(JsonObject config)
     {
@@ -81,11 +84,13 @@ internal sealed partial class McpClient
         CancellationToken token,
         SessionOwner? owner,
         long? ownerGeneration,
-        Func<SdkClient, JsonObject, CancellationToken, Task<T>> operation
+        Func<SdkClient, JsonObject, CancellationToken, Task<T>> operation,
+        McpExternalContext? external = null
     ) =>
         await OAuth.GuardAsync(
             configuration.Get(server),
-            () => WithClientCoreAsync(server, token, owner, ownerGeneration, operation)
+            () => WithClientCoreAsync(server, token, owner, ownerGeneration, operation, external),
+            external is null ? null : (value, secrets) => ValidateExternalResult(value, secrets)
         );
 
     private async Task<T> WithClientCoreAsync<T>(
@@ -93,7 +98,8 @@ internal sealed partial class McpClient
         CancellationToken token,
         SessionOwner? owner,
         long? ownerGeneration,
-        Func<SdkClient, JsonObject, CancellationToken, Task<T>> operation
+        Func<SdkClient, JsonObject, CancellationToken, Task<T>> operation,
+        McpExternalContext? external = null
     )
     {
         PoolEntry? entry = null;
@@ -103,6 +109,7 @@ internal sealed partial class McpClient
         {
             token.ThrowIfCancellationRequested();
             shutdown.Token.ThrowIfCancellationRequested();
+            external?.Require();
             using var admission = owner?.Entry.AdmitMutation();
             if (owner is not null)
             {
@@ -114,13 +121,14 @@ internal sealed partial class McpClient
             }
             config = configuration.Get(server);
             var stdio = SessionWait.Text(config["transport"]) == "stdio";
-            if (stdio || owner is not null)
+            if (stdio || owner is not null || external is not null)
             {
                 var key = new ConnectionKey(
                     server,
                     stdio ? null : owner,
-                    stdio ? 0 : ownerGeneration!.Value,
-                    stdio ? ProcessSettings(config) : null
+                    stdio ? 0 : ownerGeneration ?? 0,
+                    stdio ? ProcessSettings(config) : null,
+                    stdio ? null : external
                 );
                 if (pool.TryGetValue(key, out entry) && !MatchesConfiguration(entry, config))
                     InvalidateEntry(entry, preserveActiveStdio: true);
@@ -147,12 +155,14 @@ internal sealed partial class McpClient
         {
             try
             {
-                return await operation(client, config, requestToken);
+                var value = await operation(client, config, requestToken);
+                return external is null ? value : ValidateExternalResult(value, OAuth.Credentials(), config);
             }
             catch (OperationCanceledException) when (requestToken.IsCancellationRequested)
             {
                 throw;
             }
+            catch (McpInboundSafeException) { throw; }
             catch (Exception error)
             {
                 // Use the exact configuration which supplied this connection's credentials,
@@ -167,6 +177,7 @@ internal sealed partial class McpClient
             var connection = await entry.Connected.Task.WaitAsync(request.Token);
             // Lifecycle invalidation can cancel a lease; ordinary Stop only cancels this request.
             request.Token.ThrowIfCancellationRequested();
+            external?.Require();
             return await InvokeAsync(connection.Client, request.Token);
         }
         catch (OperationCanceledException)
@@ -192,7 +203,7 @@ internal sealed partial class McpClient
                 {
                     if (cancelled && entry.Key.Process is null)
                         InvalidateEntry(entry);
-                    else if (entry.Key.Process is not null)
+                    else if (entry.Key.Process is not null || entry.Key.External is not null)
                     {
                         var idle = new CancellationTokenSource();
                         entry.Idle = idle;
@@ -278,7 +289,10 @@ internal sealed partial class McpClient
     private void CloseEntry(PoolEntry entry)
     {
         entry.Lifetime.Cancel();
-        TrackClosing(CloseEntryAsync(entry));
+        retiringConnections.Add(entry);
+        TrackClosing(entry.Closed = CloseEntryAsync(entry));
+        _ = entry.Closed.ContinueWith(_ => { lock (poolGate) retiringConnections.Remove(entry); },
+            CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
     }
 
     private static async Task CloseEntryAsync(PoolEntry entry)
@@ -307,6 +321,19 @@ internal sealed partial class McpClient
             )
                 InvalidateEntry(entry);
         }
+    }
+
+    internal async Task ReleaseExternalAsync(McpExternalContext context)
+    {
+        Task[] pending;
+        lock (poolGate)
+        {
+            var entries = pool.Values.Concat(retiringConnections).Distinct().Where(entry => ReferenceEquals(entry.Key.External, context)).ToArray();
+            foreach (var entry in entries)
+                InvalidateEntry(entry);
+            pending = entries.Select(entry => entry.Closed ?? Task.CompletedTask).ToArray();
+        }
+        await Task.WhenAll(pending);
     }
 
     private JsonObject? CurrentConfiguration(string server)
@@ -352,7 +379,7 @@ internal sealed partial class McpClient
     {
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(60), idle.Token);
+            await Task.Delay(entry.Key.External is null ? TimeSpan.FromSeconds(60) : TimeSpan.FromMinutes(15), idle.Token);
             lock (poolGate)
                 if (entry.Active == 0 && entry.Idle == idle && !entry.Invalid)
                     InvalidateEntry(entry);

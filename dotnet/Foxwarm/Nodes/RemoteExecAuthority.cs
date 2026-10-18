@@ -113,6 +113,35 @@ internal sealed class RemoteExecAuthority
         }
     }
 
+    internal string IssueExternal(string node, string externalId, string contextId, string execId)
+    {
+        var payload = new JsonObject { ["v"] = 2, ["purpose"] = "external-exec-completion",
+            ["nodeId"] = node, ["externalId"] = externalId, ["contextId"] = contextId,
+            ["execId"] = execId, ["issuedAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() };
+        var encoded = Encode(Encoding.UTF8.GetBytes(payload.ToJsonString()));
+        return encoded + "." + Encode(HMACSHA256.HashData(secret, Encoding.ASCII.GetBytes(encoded)));
+    }
+
+    internal bool VerifyExternal(string node, string externalId, string contextId, string execId, string grant)
+    {
+        try
+        {
+            var parts = grant.Split('.');
+            if (parts.Length != 2 || !CryptographicOperations.FixedTimeEquals(Decode(parts[1]),
+                HMACSHA256.HashData(secret, Encoding.ASCII.GetBytes(parts[0])))) return false;
+            var payload = JsonNode.Parse(Decode(parts[0])) as JsonObject;
+            return SessionWait.Number(payload?["v"]) == 2
+                && SessionWait.Text(payload?["purpose"]) == "external-exec-completion"
+                && SessionWait.Text(payload?["nodeId"]) == node
+                && SessionWait.Text(payload?["externalId"]) == externalId
+                && SessionWait.Text(payload?["contextId"]) == contextId
+                && SessionWait.Text(payload?["execId"]) == execId
+                && SessionWait.Number(payload?["issuedAt"]) is double issued && double.IsFinite(issued);
+        }
+        catch (Exception error) when (error is FormatException or System.Text.Json.JsonException or ArgumentException)
+        { return false; }
+    }
+
     private void Prune()
     {
         foreach (

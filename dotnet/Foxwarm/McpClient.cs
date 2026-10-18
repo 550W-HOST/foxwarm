@@ -57,6 +57,10 @@ internal sealed partial class McpClient : IAsyncDisposable
             {
                 completion.TrySetCanceled(linked.Token);
             }
+            catch (McpInboundSafeException error)
+            {
+                completion.TrySetException(error);
+            }
             catch (Exception error)
             {
                 completion.TrySetException(
@@ -216,7 +220,8 @@ internal sealed partial class McpClient : IAsyncDisposable
         string server,
         CancellationToken cancellationToken,
         SessionOwner? owner = null,
-        long? ownerGeneration = null
+        long? ownerGeneration = null,
+        McpExternalContext? external = null
     ) =>
         RunAsync(
             async token =>
@@ -249,9 +254,11 @@ internal sealed partial class McpClient : IAsyncDisposable
                                 cursor = page.NextCursor;
                             } while (cursor is not null);
                             return (IReadOnlyList<JsonObject>)tools;
-                        }
+                        },
+                        external
                     );
                 }
+                catch (McpInboundSafeException) { throw; }
                 catch (Exception error) when (!token.IsCancellationRequested)
                 {
                     throw new InvalidOperationException(SafeError(error.Message, config));
@@ -266,7 +273,10 @@ internal sealed partial class McpClient : IAsyncDisposable
         JsonObject args,
         CancellationToken cancellationToken,
         SessionOwner? owner = null,
-        long? ownerGeneration = null
+        long? ownerGeneration = null,
+        McpExternalContext? external = null,
+        bool raw = false,
+        Action? beforeSend = null
     ) =>
         RunAsync<JsonNode?>(
             async token =>
@@ -300,6 +310,8 @@ internal sealed partial class McpClient : IAsyncDisposable
                                 },
                             };
                             callBudget.Token.ThrowIfCancellationRequested();
+                            external?.Require();
+                            beforeSend?.Invoke();
                             JsonRpcResponse result;
                             try
                             {
@@ -334,10 +346,12 @@ internal sealed partial class McpClient : IAsyncDisposable
                                     throw new TimeoutException("MCP tool call timed out.");
                                 throw;
                             }
-                            return NormalizeResult(result.Result?.DeepClone());
-                        }
+                            return raw ? result.Result?.DeepClone() : NormalizeResult(result.Result?.DeepClone());
+                        },
+                        external
                     );
                 }
+                catch (McpInboundSafeException) { throw; }
                 catch (Exception error) when (!token.IsCancellationRequested)
                 {
                     throw new InvalidOperationException(SafeError(error.Message, config));

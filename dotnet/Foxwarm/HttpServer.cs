@@ -14,6 +14,7 @@ namespace Foxwarm;
 internal sealed class HttpServer
 {
     public WebApplication App { get; }
+    internal McpInboundHttp InboundMcp { get; }
     internal bool WebUiEnabled { get; }
     internal Channels.WebUi.WebUiDownloadSignatures Downloads { get; }
 
@@ -81,6 +82,8 @@ internal sealed class HttpServer
         builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
             options.MultipartBodyLengthLimit = 51L * 1024 * 1024
         );
+        InboundMcp = new(accessConfiguration, new McpInboundCatalog(sessions));
+        builder.Services.AddSingleton<IHostedService>(InboundMcp);
         var app = builder.Build();
         app.Lifetime.ApplicationStopped.Register(access.Dispose);
         var code = WebUiEnabled
@@ -132,7 +135,8 @@ internal sealed class HttpServer
             async (context, next) =>
             {
                 if (
-                    context.Request.Path == "/node_ws"
+                    context.Request.Path == "/mcp"
+                    || context.Request.Path == "/node_ws"
                     || Foxwarm.Nodes.NodeConnectionHub.IsShellPath(context.Request.Path)
                     || Foxwarm.Nodes.NodeBootstrap.IsPublicPath(context.Request.Path)
                     || McpOAuthRoutes.IsPublic(context.Request)
@@ -316,6 +320,7 @@ internal sealed class HttpServer
         );
         Foxwarm.Nodes.NodeRoutes.Register(app, sessions, address);
         McpOAuthRoutes.Register(app, sessions.OutboundMcp);
+        InboundMcp.Register(app);
         if (port == 0 || desktop)
             app.Lifetime.ApplicationStarted.Register(() =>
                 address.Origin = app.Urls.Single().TrimEnd('/')

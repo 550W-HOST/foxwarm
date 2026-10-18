@@ -26,6 +26,10 @@ Stop and Run queued end foreground waiting through actual advertised cancellatio
 
 Remote cwd is forwarded only for the captured selected Node. Explicit cwd and the official client's default selection work unchanged; stdout is not a cwd protocol. Main filesystem resolution never receives a remote namespace. Main-owned status/history and Session creation remain possible offline; an actual remote effect fails without Master fallback. Model-created named Sessions, children, forks and timer-created Sessions retain their applicable source/captured or bound Node. Timer admission and internal wait clocks are Main-owned rather than conditioned on an online external process.
 
+## External owners
+
+[Ordinary inbound MCP](./dotnet-inbound-mcp.md) owns a separate `ExternalExecOwnership` record set and actual v3 external wire owner. `RemoteExecAuthority.IssueExternal`/`VerifyExternal` reuse the persisted capability secret with the Source v2 external-completion payload; internal Session claims and completion ownership remain unchanged.
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/Tools/RemoteExecProtocolTests.cs` uses real authenticated WebSockets and actual Session save lanes for strict pre/post-rename faults, duplicate ACK, exact registration, supported/unsupported Stop, explicit legacy/collision rejection, Session rename/delete and restart receipt-versus-new-authority evidence. `packages/webui/test/experimentHostRemoteExec.e2e.mjs` uses owned real .NET hosts, unchanged official CLI processes and real Monty dispatch. It verifies side-effect counts, canonical pairs, Archive/authority, foreground/timeout/background, bounded direct parallel calls, concrete authorization, current/explicit/default cwd, switch/wait, strict-save retry, dropped ACK, official pre-start collision, interactive pre-start Stop, post-start Stop, Run queued, Session/Node lifecycle, official pending-event replay, Main restart uncertainty, creation/fork/timer placement and genuine ordinary background/trigger/onboot producers.

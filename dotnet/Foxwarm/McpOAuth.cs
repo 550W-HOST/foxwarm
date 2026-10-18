@@ -395,7 +395,7 @@ internal sealed partial class McpOAuthService
         return false;
     }
 
-    internal async Task<T> GuardAsync<T>(JsonObject config, Func<Task<T>> run)
+    internal async Task<T> GuardAsync<T>(JsonObject config, Func<Task<T>> run, Func<T, string[], T>? validateResult = null)
     {
         var active = new Operation();
         var previous = operation.Value;
@@ -405,6 +405,7 @@ internal sealed partial class McpOAuthService
         try
         {
             var result = await run();
+            if (validateResult is not null) return validateResult(result, Credentials());
             var value = result switch
             {
                 JsonNode node => node,

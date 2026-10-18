@@ -10,6 +10,7 @@ internal sealed class MainHost : IAsyncDisposable
 {
     private readonly SessionManager sessions;
     private readonly TerminalRegistry terminals;
+    private readonly McpInboundHttp inboundMcp;
     internal WebApplication App { get; }
     private readonly object lifecycle = new();
     private Task? disposal;
@@ -18,6 +19,7 @@ internal sealed class MainHost : IAsyncDisposable
     {
         this.sessions = sessions;
         this.terminals = terminals;
+        inboundMcp = server.InboundMcp;
         App = server.App;
     }
 
@@ -77,7 +79,10 @@ internal sealed class MainHost : IAsyncDisposable
             sessions.BeginShutdown();
             await sessions.ShutdownAsync();
             if (server is not null)
+            {
+                await server.InboundMcp.DisposeAsync();
                 await server.App.DisposeAsync();
+            }
             if (terminals is not null)
                 await terminals.DisposeAsync();
             await sessions.DisposeAsync();
@@ -102,6 +107,7 @@ internal sealed class MainHost : IAsyncDisposable
 
     private async Task DisposeCoreAsync()
     {
+        await inboundMcp.DisposeAsync().ConfigureAwait(false);
         sessions.BeginShutdown();
         try
         {

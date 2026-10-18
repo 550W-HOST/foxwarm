@@ -27,6 +27,7 @@ internal sealed class AccessConfiguration
     private string reservedToken = "";
     internal ImmutableDictionary<string, AccessIdentity> Snapshot => Volatile.Read(ref snapshot);
     internal event Func<AccessChange, Task>? Changed;
+    internal bool McpRuntimeAvailable { get; set; }
 
     internal AccessConfiguration(JsonObject app) =>
         snapshot = Normalize(app["access"], app.ContainsKey("access"));

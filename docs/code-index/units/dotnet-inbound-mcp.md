@@ -1,0 +1,62 @@
+# Unit: .NET ordinary inbound MCP
+
+Files: `dotnet/Foxwarm/McpInboundHttp.cs`, `dotnet/Foxwarm/McpAttachedResponseStream.cs`, `dotnet/Foxwarm/McpExternalContext.cs`, `dotnet/Foxwarm/McpInboundCatalog.cs`, `dotnet/Foxwarm/McpInboundTools.json`, `dotnet/Foxwarm/McpInboundSessions.cs`, `dotnet/Foxwarm/McpInboundNodes.cs`, `dotnet/Foxwarm/Nodes/ExternalExecOwnership.cs`, `dotnet/Foxwarm/Nodes/NodeConnectionHub.External.cs`
+Secondary files: `dotnet/Foxwarm/HttpServer.cs`, `dotnet/Foxwarm/MainHost.cs`, `dotnet/Foxwarm/McpClient.External.cs`, `dotnet/Foxwarm/Nodes/RemoteExecAuthority.cs`, `dotnet/Foxwarm/Sessions/SessionRuntime.cs`, `dotnet/Foxwarm/Sessions/Turns/SessionIngress.cs`, `dotnet/Foxwarm/Sessions/Turns/SessionSaveLane.Wait.cs`
+
+## Purpose and Source ownership map
+
+Provides initialized external tool access on Main's existing deployment-relative `/mcp` listener. It does not create internal Agents or Sessions, use an administrator cookie as external authority, or execute Main builtins through an invented Session.
+
+| TypeScript behavioral Source | .NET owner and actual callers |
+| --- | --- |
+| `accessConfig.ts`, `mcpInboundHttp.ts` | `McpExternalPrincipal.Authenticate`, `McpExternalContext`, `McpInboundHttp.HandleAsync`: Main-authenticated identity plus a random, process-local context; independent POST/GET/DELETE checks and selected cleanup. |
+| `mcpInboundCatalog.ts` | `McpInboundCatalog.Tools`, `DiscoverAsync`, `CallAsync`: the five original wrappers, concrete external-default-deny discovery/dispatch and bounded raw MCP results. The embedded JSON preserves the wrapper schemas/copy. |
+| `mcpExternalService.ts`, `mcpCallerConnections.ts` | [Outbound client](./mcp.md) external list/call seams and real external-context connection keys; no Session-shaped connection authority or internal result normalization. |
+| `mcpInboundSessionService.ts` | `McpInboundSessions.ListAsync`, `ReadAsync`, `SendAsync`, actual `SessionRuntime` and its existing owner/save lane: bounded metadata/preview and strictly durable User input. |
+| `mcpInboundPairingService.ts`, existing Node tools | `PairAsync`, `ApprovedNodeRegistry.Approve`, `NodeConnectionHub.ApproveAsync`: existing pending trust flow with a final policy/context assertion immediately before registry mutation. |
+| `mcpInboundNodeService.ts`, `nodes/externalExecOwnership.ts`, `nodes/sessionEventCapability.ts` | `McpInboundNodes`, `NodeConnectionHub.External`, `ExternalExecOwnership`, external capability signing in `RemoteExecAuthority`: actual v3 external wire owner, bounded ownership/results and context release. |
+
+## HTTP and context lifetime
+
+`HttpServer` registers `/mcp` outside its administrator/browser token middleware, including headless startup and an empty identity map. `MainHost` owns shutdown ordering; the service is also registered with the HTTP host lifetime. A normal live configuration save reports `access.surfaces.mcp` applied. First/last identity activation needs no restart. MCP identity comparison uses only token plus the MCP surface, so WebUI-only edits do not retire its contexts.
+
+Each request independently accepts only the configured surface's strict Bearer credential. Instance tokens/cookies, client metadata, tool arguments and the transport ID cannot issue an external principal. Origin, when supplied, must be the same HTTP(S) authority with no additional path/query/fragment. Content/Accept/protocol headers, bounded JSON syntax and exact context ownership are checked before SDK dispatch. Unknown/cross-owner/stale contexts return 404; reinitializing an existing context is rejected.
+
+The production budgets are 8 MiB request JSON, 32 live/retiring contexts, four concurrent HTTP requests per context (including its physical GET), a 65-minute POST deadline, 15-minute POST-idle lifetime, 64 catalog entries/256 KiB, and 16 MiB serialized tool results. Active POSTs hold the idle lifetime; an idle GET does not. Oversized completed output is withheld with an uncertain-outcome error, never replayed. Errors replace only an unstarted response; an already-started failed SSE body is aborted rather than rewritten as successful JSON.
+
+A per-POST `CancellationToken` flows through the public SDK request execution context; handlers capture/link that token with the context lifetime without retaining `HttpContext`. A request disconnect can cancel that wait or downstream request without retiring an initialized owner. Context disposal synchronously fences new effects, stops/drains physical GET writes, disposes both SDK objects, releases selected outbound MCP bindings and all used CLI execution namespaces, and awaits actual GET scope exit. DELETE sends its response only after this selected asynchronous cleanup, including the downstream SDK DELETE. There is no effect replay or transport retry after initialization/output failure.
+
+## D-dotnet-inbound-mcp-pinned-sdk
+
+[2026-10-18] Keep the already-qualified official MCP 2.2.0 packages and initialize revision `2025-11-25`. Public `StreamableHttpServerTransport` plus `McpServer` own framing and protocol dispatch. A public outgoing-message filter replaces the typed tool-result placeholder with that POST's bounded raw result; a typed `CallToolResult` round trip would discard opaque extension fields. Its mutable per-POST scope contains only a token/result, never an HTTP context, and is neither an offline record nor a replay store. SSE POST is a permitted representation and is exercised by unmodified official JavaScript and C# clients. This integration contract is qualified against those exact packages.
+
+`McpAttachedResponseStream` is a small public-API attachment seam for the SDK's one logical unsolicited GET writer. A real GET attaches its response body, flushes headers and only then becomes physically ready. A disconnected physical GET does not end the SDK task or initialized context; the same context can attach a successor without `Last-Event-ID` or initialize. Resumption headers are rejected because there is no event store. The application must distinguish this physical attachment from the existence of the SDK GET task.
+
+The seam intentionally depends on SDK 2.2.0 writing each complete SSE event in one `WriteAsync`. Attachment generation is captured before waiting on the SDK writer, so a stale queued send cannot acquire a successor response. Detachment clears body references immediately and tracks genuine in-flight write drain; write/flush/cancellation failure detaches only that physical attachment without poisoning the SDK writer. Sends with no ready attachment are dropped. It does not parse frames, retain an offline queue/event store, offer replay/retry, patch/fork/reflect into the SDK or create a general relay. `McpAttachmentTests` qualifies complete Unicode frames, held partial failures, stale sends and actual retirement drain against the real official SDK and the framework SSE reader; rerun it for SDK upgrades.
+
+## Concrete catalog and retained effects
+
+`foxwarm_discover`, `foxwarm_call`, `foxwarm_node`, `foxwarm_exec_result` and `foxwarm_session` are transport wrappers, not blanket grants. Discovery exposes only permitted configured MCP tools, compatible external Node tools and the two existing pairing builtins. Execution reconstructs concrete builtin/MCP/Node policy facts, including the real external identity/context, original arguments and remote path facts. It never grants local workspace/Agent/path ancestry to an external principal.
+
+`McpInboundSessions.ListAsync` reuses the existing bounded catalog page query, not the unbounded legacy Session listing. Read returns a bounded text preview and small actual runtime-state projection, not raw history/queue/prompt snapshots. Send resolves an exact canonical target, preserves the external-input wrapper and enqueues a real User item without internal intersession source authority. `SubmitExternalAsync` uses a strict save-lane admission; its final context, canonical-target and policy check runs after awaited input/goal preparation and before durable admission. It returns `accepted` only after strict persistence. A pre-rename failure does not publish hot queue state; committed/unsynced failure retains its actual committed input and reports uncertainty rather than accepted success. Ordinary WebUI/internal best-effort admission is unchanged.
+
+False/omitted `allowReply` works; legacy `reply` is read-compatible and conflicts reject. True requires actual negotiated Foxwarm notification reception, which is not implemented in this ordinary phase, so it rejects before enqueue. The server does not advertise that extension or invent reply destinations.
+
+## CLI effects and bounded ownership
+
+Only an authenticated, live, compatible Node wire connection with negotiated protocol 3 and `features.externalToolOwner: 1` can receive the external owner envelope. Master execution and excluded resident Providers are unavailable, with no Main fallback. Supported remote file/patch/exec definitions come from actual advertised capabilities. Pairing uses the existing persistent trust owner and omits returned authentication credentials from the external result.
+
+Exec reserves a unique identity before dispatch, captures the selected Node/cwd generation and carries `{kind: external, externalId, contextId}` with the Source-compatible signed v2 completion capability. The final assertion runs after the connection send gate and before the authenticated socket effect. Results/completions require the same owner, Node, execution ID and capability. There are at most 20 retained executions per context, original arguments are at most 64 KiB, and output is at most 256 KiB. Completed records can be evicted; active saturation rejects before dispatch. Used Nodes are tracked independently of record eviction and all receive context release. New contexts do not recover authority from artifacts.
+
+Result access reauthorizes the original exec arguments under current policy, including retained completed output. Query failures report unavailable/unknown state without retry. A late old-selection completion can retain its own cwd but cannot overwrite a successor selection. Started CLI processes survive caller/context loss; release retires their namespace after active work settles, not by killing effects or replaying commands. Internal Session claims, internal completion ownership and normal Node execution remain separate.
+
+## Qualification and remaining boundary
+
+- `InboundMcpTests` and `InboundMcpLifetimeTests`: official C# client, independent real SDK peer, owner reuse/separation, external-default-deny policy, exact raw content/structured/image/error metadata, credential withholding, actual strict local JSON ingress/failures, final lane assertions and production body/result/capacity/concurrency budgets.
+- `InboundMcpMainHostTests`: the official C# client against normal headless `MainHost`, real outgoing SDK initialization/reuse and a local catalog that gains no fabricated Session.
+- `InboundMcpTransportTests`: actual service clocks, idle versus active POST/GET, captured abort cancellation, initialized deadline recovery without replay and an explicitly held real downstream DELETE cleanup barrier.
+- `ExternalExecOwnershipTests`: signed owner separation, bounded arguments/output/retention, original-argument reauthorization, used Nodes beyond eviction and cwd generation.
+- `experimentHostInboundMcp.e2e.mjs`: normal Main and official JavaScript SDK, real peer/raw results/known-secret handling, hot Setup/configuration and real internal policy installation, actual durable Session/provider turn, unchanged paired CLI files/patch/foreground/background/signed completion, protocol/feature rejection, result policy change, two actual Node selections, surviving DELETE effects/namespace cleanup, physical GET reconnect and headless restart.
+- Existing outbound/OAuth, authorization, scoped/admin WebUI, Session and Node regressions retain their original owners and guarantees. Fixtures establish valid-path behavior, not a replacement for production header/origin/authorization checks.
+
+Active MCP message reception/replies, Vector, external chat adapters, Windows-local tools, Session Worker hosting, managed controllers and Node Provider environment lifecycle are not supplied by this unit. The last three remain explicit whole-delivery exclusions in the [delivery scope](../overview.md#d-dotnet-delivery-scope).

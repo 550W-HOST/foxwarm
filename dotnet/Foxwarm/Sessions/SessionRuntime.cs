@@ -65,6 +65,8 @@ internal sealed class SessionRuntime(SessionManager manager)
 
     public JsonObject[] ListSessions() => manager.ListPresentations();
 
+    internal (long Total, JsonObject[] Page) ListPage(int start, int count) => manager.CatalogMetadataOffset(start, count);
+
     internal SessionCatalog Catalog => manager.Catalog;
     internal string PresentationRevision => manager.PresentationRevision;
 
@@ -107,6 +109,13 @@ internal sealed class SessionRuntime(SessionManager manager)
             await owner.Registry.Ingress.EnqueueAsync(owner.Id, item);
         else
             await owner.Registry.Ingress.EnqueueCheckedAsync(owner.Id, item, beforeAdmission);
+    }
+
+    internal async Task SubmitExternalAsync(SessionOwner owner, QueueItem item, Action beforeAdmission)
+    {
+        await manager.WaitForIdentityMutationAsync(owner.Id);
+        manager.RequireFileIngressOwner(owner);
+        await owner.Registry.Ingress.EnqueueExternalAsync(owner.Id, item, beforeAdmission);
     }
 
     public async Task<JsonObject> UpdateSettingsAsync(string id, JsonObject settings) =>

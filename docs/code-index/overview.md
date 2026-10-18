@@ -70,7 +70,7 @@ Optional remote and compatibility components:
 | [Tasks and timers](./modules/dotnet-tasks-timers.md) | Task authority/service, cron parsing, timer persistence, and scheduling. |
 | [Images](./modules/dotnet-images.md) | Blob storage, codecs, transport conversion, provider deduplication, and token estimates. |
 | [External Nodes](./modules/dotnet-nodes.md) | Persistent trust, authenticated WebSocket negotiation, placement and ordinary remote tools. |
-| [MCP](./modules/dotnet-mcp.md) | Official SDK client connections, configuration, pooling, and outbound server calls. |
+| [MCP](./modules/dotnet-mcp.md) | Ordinary inbound external contexts/catalog and official outbound SDK configuration, pooling and calls. |
 
 ## Remaining repository components
 

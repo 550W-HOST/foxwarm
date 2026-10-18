@@ -1,0 +1,169 @@
+[
+  {
+    "name": "foxwarm_discover",
+    "description": "Search available Foxwarm tools and inspect their inputs. Results identify each tool's source and, where applicable, its Node or MCP server. A listed tool may still require permission for the arguments used in a call.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Words to match in tool names and descriptions. Omit to list tools."
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "builtin",
+              "node",
+              "mcp"
+            ]
+          },
+          "uniqueItems": true,
+          "description": "Tool sources to include. Omit to search supported sources."
+        },
+        "nodeId": {
+          "type": "string",
+          "description": "Limit Node tools to this Node."
+        },
+        "server": {
+          "type": "string",
+          "description": "Limit outbound MCP tools to this configured server."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 5,
+          "description": "Maximum number of matching tools to return."
+        },
+        "includeSchema": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include input schemas with the returned tools."
+        }
+      }
+    }
+  },
+  {
+    "name": "foxwarm_call",
+    "description": "Call a tool by the exact toolId returned by foxwarm_discover. The call uses this external session's identity and checks permission for the resolved tool, target, and arguments.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "toolId"
+      ],
+      "properties": {
+        "toolId": {
+          "type": "string",
+          "description": "Exact toolId returned by foxwarm_discover."
+        },
+        "args": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {},
+          "description": "Arguments accepted by the selected tool."
+        }
+      }
+    }
+  },
+  {
+    "name": "foxwarm_node",
+    "description": "List accessible Nodes, inspect this external session's current Node, or select a Node for subsequent calls.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action"
+      ],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "list",
+            "status",
+            "select"
+          ],
+          "description": "list shows accessible Nodes; status shows this session's current Node and working directory; select changes its current Node."
+        },
+        "nodeId": {
+          "type": "string",
+          "description": "Exact Node ID to select. Required for select."
+        }
+      }
+    }
+  },
+  {
+    "name": "foxwarm_exec_result",
+    "description": "Read the status and output of a command started by this external session, or list its known execution IDs. Results remain available only while this session is retained; closing a connection does not itself stop a command.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "execId": {
+          "type": "string",
+          "description": "Execution ID to inspect. Omit to list this session's known executions."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "default": 5,
+          "description": "Maximum executions to return when execId is omitted."
+        }
+      }
+    }
+  },
+  {
+    "name": "foxwarm_session",
+    "description": "List Foxwarm Sessions, read a Session's recent messages, or send it a message. A successful send confirms that the message was queued, not that the Session has read or answered it.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action"
+      ],
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "list",
+            "read",
+            "send"
+          ],
+          "description": "list shows Sessions; read returns a bounded message preview; send queues a message for an exact Session."
+        },
+        "sessionId": {
+          "type": "string",
+          "description": "Exact internal Session ID for read or send. Current-session and parent aliases are not accepted."
+        },
+        "start": {
+          "type": "integer",
+          "description": "Zero-based offset for list or read. A negative read offset counts from the end. Omit to list from the beginning or read the latest messages."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "description": "Maximum entries to return. Defaults to 20 for list and 10 for read."
+        },
+        "previewLength": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 20000,
+          "description": "Total character budget for the read preview. Omit to use the normal preview budget."
+        },
+        "message": {
+          "type": "string",
+          "description": "Non-empty message to queue when action is send."
+        },
+        "allowReply": {
+          "type": "boolean",
+          "description": "Allow the receiving Session to send an explicit reply through the client's active Foxwarm notification connection. Omitted or false does not provide a reply destination."
+        }
+      }
+    }
+  }
+]

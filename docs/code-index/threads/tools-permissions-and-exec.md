@@ -33,6 +33,10 @@ The [outbound MCP client](../units/mcp.md) receives an actual trusted Session ow
 
 `TurnToolReceipt` remains a separately typed trusted executor result. Untrusted MCP result fields do not create send/task/wait receipts, mutate caller identity, supply local resolved paths, or trigger a control operation. Provider output formatting is a history projection; it does not replace the source value or perform MCP normalization.
 
+## Ordinary external MCP entry
+
+[Inbound MCP](../units/dotnet-inbound-mcp.md) uses verified Main-owned external contexts and concrete external-default-deny facts, not the internal Session executor or result formatter. Its five wrappers resolve real outbound MCP, bounded Session operations, existing pairing and compatible CLI external-owner effects. Strict external Session admission remains separate from ordinary best-effort WebUI input. Notifications/reply channels are not advertised in this phase.
+
 ## Canonical units and tests
 
 - [Unified tools](../units/tools-registry.md)

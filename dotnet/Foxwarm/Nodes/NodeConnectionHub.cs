@@ -49,6 +49,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
     {
         Registry = new(root);
         ExecClaims = new(root);
+        ExternalExec = new(ExecClaims);
         Registry.Expired += id => RejectSocket(id, "Pairing request expired after 1 hour");
         expiry = new Timer(
             _ =>
@@ -256,9 +257,9 @@ internal sealed partial class NodeConnectionHub : IDisposable
         return result;
     }
 
-    internal async Task<JsonObject> ApproveAsync(string pendingId, string? nodeId)
+    internal async Task<JsonObject> ApproveAsync(string pendingId, string? nodeId, Action? beforeMutation = null)
     {
-        var result = Registry.Approve(pendingId, nodeId);
+        var result = Registry.Approve(pendingId, nodeId, beforeMutation);
         var delivered = false;
         if (pending.TryRemove(pendingId, out var connection) && connection.Open)
         {
@@ -430,12 +431,14 @@ internal sealed partial class NodeConnectionHub : IDisposable
     private static async Task SendAsync(
         Connection connection,
         JsonObject value,
-        CancellationToken token
+        CancellationToken token,
+        Action? beforeSend = null
     )
     {
         await connection.SendGate.WaitAsync(token);
         try
         {
+            beforeSend?.Invoke();
             await connection.Socket.SendAsync(
                 Encoding.UTF8.GetBytes(value.ToJsonString()),
                 WebSocketMessageType.Text,
@@ -645,6 +648,11 @@ internal sealed partial class NodeConnectionHub : IDisposable
                     if (type is "tool_call_response" or "tool_call_error")
                     {
                         HandleToolReply(connection, message, type == "tool_call_response");
+                        continue;
+                    }
+                    if (type is "external_exec_background" or "external_exec_completed" or "external_exec_result_response")
+                    {
+                        await HandleExternalMessageAsync(connection, message, type, lifetime.Token);
                         continue;
                     }
                     if (type is "session_event" or "remote_exec_background")

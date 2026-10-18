@@ -117,7 +117,7 @@ internal sealed partial class ModelConfiguration
             if (!JsonNode.DeepEquals(app["channels"]?["webui"], config["channels"]?["webui"]))
                 restart.Add("channels.webui");
             var notApplied = new List<string>();
-            if (access.Values.Any(identity => identity.Mcp))
+            if (access.Values.Any(identity => identity.Mcp) && !Access.McpRuntimeAvailable)
                 notApplied.Add("access.surfaces.mcp");
             if (config.ContainsKey("channels") || app.ContainsKey("channels"))
                 notApplied.Add("channels");
@@ -131,7 +131,7 @@ internal sealed partial class ModelConfiguration
                 notApplied.Add("access.connections");
             }
             // Other Main app settings remain startup snapshots.
-            return Installed(target, ["access.identities"], notApplied, restart);
+            return Installed(target, Access.McpRuntimeAvailable ? ["access.identities", "access.surfaces.mcp"] : ["access.identities"], notApplied, restart);
         }
         finally
         {

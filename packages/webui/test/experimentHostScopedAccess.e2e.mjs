@@ -73,7 +73,7 @@ const bob = (method, path, body) => api('synthetic-bob', method, path, body)
 async function install(next) {
   const raw = '# retained access candidate\r\n' + JSON.stringify(next, null, 2) + '\r\n'
   const result = await admin('POST', '/api/setup/config', { yaml: raw })
-  assert.equal(result.status, 200, JSON.stringify(result)); assert.deepEqual(result.body.applied, ['access.identities']); assert.deepEqual(result.body.notApplied, ['access.surfaces.mcp', 'channels']); assert(!result.body.restartRequired.some(value => value.startsWith('access')))
+  assert.equal(result.status, 200, JSON.stringify(result)); assert.deepEqual(result.body.applied, ['access.identities', 'access.surfaces.mcp']); assert.deepEqual(result.body.notApplied, ['channels']); assert(!result.body.restartRequired.some(value => value.startsWith('access')))
   assert.equal(await readFile(join(host.data, 'state/config.yaml'), 'utf8'), raw); current = next
   return result
 }

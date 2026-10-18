@@ -251,7 +251,7 @@ internal static partial class UnifiedTools
         return response;
     }
 
-    private static int Score(string query, params string[] fields)
+    internal static int Score(string query, params string[] fields)
     {
         query = query.Trim().ToLowerInvariant();
         if (query.Length == 0)

@@ -186,8 +186,8 @@ public sealed class WebUiStartupTests
         Assert.True(config["saved"]!.GetValue<bool>());
         Assert.Equal("config", config["target"]!.GetValue<string>());
         Assert.Equal(
-            "access.identities",
-            Assert.Single(config["applied"]!.AsArray())!.GetValue<string>()
+            new[] { "access.identities", "access.surfaces.mcp" },
+            config["applied"]!.AsArray().Select(value => value!.GetValue<string>())
         );
         Assert.Equal(
             new[] { "channels" },
@@ -217,8 +217,8 @@ public sealed class WebUiStartupTests
         Assert.True(channels["saved"]!.GetValue<bool>());
         Assert.Equal("config", channels["target"]!.GetValue<string>());
         Assert.Equal(
-            "access.identities",
-            Assert.Single(channels["applied"]!.AsArray())!.GetValue<string>()
+            new[] { "access.identities", "access.surfaces.mcp" },
+            channels["applied"]!.AsArray().Select(value => value!.GetValue<string>())
         );
         Assert.Equal(
             new[] { "channels" },

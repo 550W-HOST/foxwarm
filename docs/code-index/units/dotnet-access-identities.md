@@ -7,7 +7,7 @@ Secondary files: `dotnet/Foxwarm/HttpServer.cs`, `dotnet/Foxwarm/MainHost.cs`, `
 
 Implements the shared [access identity decision](./src-access-config.md#d-config-shared-access-identities) and [Session scope contract](../modules/webui.md#d-webui-identity-session-scope) at the .NET Main boundary. A scoped browser identity is not an administrator or an internal Session principal. The built original React entry mounts `WebUiIdentityApp`, not an administrator workbench leaf.
 
-The declared empty MCP surface is validated and persisted, but this host does not register `/mcp` or implement inbound transport. A successful installation reports supported `access.identities` applied and declared `access.surfaces.mcp` not applied. Restart does not make the missing transport available. This is separate from the implemented outbound MCP client and its administrator OAuth routes.
+The empty MCP surface is validated and persisted by the same snapshot owner. Normal Main registers the [ordinary inbound MCP service](./dotnet-inbound-mcp.md), and successful live installation reports `access.surfaces.mcp` applied, including first/last identity activation without restart. A configuration-only installer with no registered runtime still reports a declared MCP surface not applied. Inbound MCP remains separate from browser/admin authority and outbound administrator OAuth routes.
 
 ## Producer and authority map
 
@@ -43,6 +43,6 @@ Session blob reads and issuance require live scope plus an active-history refere
 
 ## Tests
 
-`WebUiAccessTests` covers whole-map validation, secret-safe errors, raw persistence/publication order, failed-save nonpublication, all-listener fencing, staged MCP and post-publication cleanup outcomes, selective surface changes, upload ownership and independent grant namespaces/lifetime. Existing startup, upload, download, realtime, history and owner tests remain the administrator/regression boundary.
+`WebUiAccessTests` covers whole-map validation, secret-safe errors, raw persistence/publication order, failed-save nonpublication, all-listener fencing, configuration-only MCP staging and post-publication cleanup outcomes, selective surface changes, upload ownership and independent grant namespaces/lifetime. Existing startup, upload, download, realtime, history and owner tests remain the administrator/regression boundary.
 
 `packages/webui/test/experimentHostScopedAccess.e2e.mjs` uses a disposable normal .NET host, real Setup and model `set_config`, original administrator/restricted React roots, distinct scoped users, exact/Agent scopes and moves, active/effective Archive images and signed GET/HEAD, denied management/forged input, held HTTP/WS/SSE/upload/input work, and truthful already-admitted/saved effects. It uses only synthetic credentials and caller-owned data.

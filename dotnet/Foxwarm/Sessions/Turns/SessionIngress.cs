@@ -18,6 +18,9 @@ public sealed class SessionIngress
     internal Task EnqueueCheckedAsync(string sessionId, QueueItem item, Action beforeAdmission) =>
         EnqueueCoreAsync(sessionId, item, false, beforeAdmission);
 
+    internal Task EnqueueExternalAsync(string sessionId, QueueItem item, Action beforeAdmission) =>
+        EnqueueCoreAsync(sessionId, item, false, beforeAdmission, SaveKind.Strict);
+
     internal Task EnqueueTimerAsync(string sessionId, QueueItem item) =>
         EnqueueCoreAsync(sessionId, item, true);
 
@@ -25,7 +28,8 @@ public sealed class SessionIngress
         string sessionId,
         QueueItem item,
         bool timer,
-        Action? beforeAdmission = null
+        Action? beforeAdmission = null,
+        SaveKind kind = SaveKind.BestEffort
     )
     {
         EnsureSupported(item);
@@ -38,7 +42,7 @@ public sealed class SessionIngress
         var admitted = timer
             ? await entry.SaveLane.AdmitTimerAsync(item).ConfigureAwait(false)
             : await entry
-                .SaveLane.AdmitAsync(item, SaveKind.BestEffort, beforeAdmission)
+                .SaveLane.AdmitAsync(item, kind, beforeAdmission)
                 .ConfigureAwait(false);
         if (
             admitted
