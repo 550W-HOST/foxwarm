@@ -1,7 +1,8 @@
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import type { ExternalNodeOwner } from './nodeProtocol';
-import { nativeFileOperations } from './fileOperations';
+import type { FileOperations } from './fileOperations';
+import type { ExecBackend, ProviderExecReference } from './execBackend';
 import path from 'path';
 import type { ExecCwdSource } from './execCwd';
 import { NativeExecBackend, MISSING_STATUS_ERROR } from './nativeExecBackend';
@@ -72,6 +73,7 @@ const BACKGROUND_PROCESS_TREE_MAX_INDENT = 20;
 export interface ExecStatus {
   exitCode: number | null;
   finishedAt: string;
+  durationMs?: number;
   /** Internal display hint; the event timestamp is not a measured exit time. */
   finishedAtIsEstimated?: boolean;
   error?: string;
@@ -90,18 +92,20 @@ export type ProgrammaticExecResult = {
 
 export interface RunningExecEntry {
   id: string;
-  pid: number;
+  pid?: number;
+  backend?: ProviderExecReference;
   sessionId?: string;
   agentName?: string;
   externalOwner?: ExternalNodeOwner;
   nodeId: string;
   command: string;
   initialCwd: string;
+  resolvedCwd?: string;
   cwdRaw?: string;
   cwdSource?: ExecCwdSource;
   logPath: string;
-  statusPath: string;
-  cwdPath: string;
+  statusPath?: string;
+  cwdPath?: string;
   startedAt: number;
   notifyOnCompletion: boolean;
   completionCapability?: string;
@@ -110,6 +114,7 @@ export interface RunningExecEntry {
 
 export interface StartPersistentExecOptions {
   execId?: string;
+  backend?: { providerId: string };
   command: string;
   sessionId?: string;
   agentName?: string;
@@ -120,6 +125,8 @@ export interface StartPersistentExecOptions {
   completionCapability?: string;
   /** Optional caller fence after artifact setup but before trying to launch a process. */
   onBeforeProcessLaunch?: () => void;
+  /** Independent owner-loss/deadline cancellation; ordinary foreground Stop is not forwarded to start. */
+  hardCancellationSignal?: AbortSignal;
   onProcessStarted?: () => void;
 }
 
@@ -147,6 +154,7 @@ export interface PersistentExecManagerOptions {
   nodeId?: string;
   completionDispatcher?: ExecCompletionDispatcher;
   processOperations?: ProcessOperations;
+  resolveBackend?: (providerId: string, nodeId: string) => ExecBackend;
   processSnapshotProvider?: () => Promise<ProcessSnapshotEntry[]>;
   onRegistryIdle?: () => void;
   onTrackingExpired?: (entry: RunningExecEntry) => void;
@@ -286,7 +294,7 @@ export function formatExecDuration(milliseconds: number): string | undefined {
 
 function formatCompletedExecDuration(entry: RunningExecEntry, status: ExecStatus): string {
   // Older fallback files recorded detection time, not the process's exit time.
-  const duration = status.finishedAtIsEstimated || status.error === MISSING_STATUS_ERROR ? undefined
+  const duration = status.durationMs !== undefined ? formatExecDuration(status.durationMs) : status.finishedAtIsEstimated || status.error === MISSING_STATUS_ERROR ? undefined
     : formatExecDuration(Date.parse(status.finishedAt) - entry.startedAt);
   return `Duration: ${duration ?? 'unknown'}`;
 }
@@ -362,6 +370,7 @@ export class PersistentExecManager {
   private execIdAllocationChain: Promise<void> = Promise.resolve();
   private readonly reservedExecIds = new Set<string>();
   private recentExecIds: string[] = [];
+  private readonly pendingStatus = new Map<string, Promise<ExecStatus | null>>();
   private readonly nativeBackend: NativeExecBackend;
   private readonly completionDispatcher: ExecCompletionDispatcher;
 
@@ -440,8 +449,11 @@ export class PersistentExecManager {
       const rawExecs = Array.isArray(data?.execs) ? data.execs : [];
       for (const raw of rawExecs) {
         if (!raw || typeof raw !== 'object') continue;
-        if (!isSupportedPersistentExecId(raw.id) || typeof raw.logPath !== 'string' || typeof raw.statusPath !== 'string') continue;
-        if (!Number.isFinite(Number(raw.pid)) || !Number.isFinite(Number(raw.startedAt))) continue;
+        if (!isSupportedPersistentExecId(raw.id) || typeof raw.logPath !== 'string' || !Number.isFinite(Number(raw.startedAt))) continue;
+        const backend = raw.backend && typeof raw.backend.providerId === 'string' && typeof raw.backend.ref === 'string'
+          ? { providerId: raw.backend.providerId, ref: raw.backend.ref } : undefined;
+        if (raw.backend !== undefined && !backend) continue;
+        if (!backend && (typeof raw.statusPath !== 'string' || !Number.isFinite(Number(raw.pid)))) continue;
         const externalOwner: ExternalNodeOwner | undefined = raw.externalOwner?.kind === 'external'
           && typeof raw.externalOwner.externalId === 'string' && raw.externalOwner.externalId
           && typeof raw.externalOwner.contextId === 'string' && raw.externalOwner.contextId
@@ -451,11 +463,13 @@ export class PersistentExecManager {
         const agentName = externalOwner ? undefined : (typeof raw.agentName === 'string' && raw.agentName.trim().length > 0 ? raw.agentName : 'main');
         const entry: RunningExecEntry = {
           id: raw.id,
-          pid: Number(raw.pid),
+          ...(!backend ? { pid: Number(raw.pid) } : typeof raw.pid === 'number' ? { pid: raw.pid } : {}),
+          ...(backend ? { backend } : {}),
           sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : undefined,
           ...(externalOwner ? { externalOwner } : { agentName }),
           nodeId: typeof raw.nodeId === 'string' && raw.nodeId.trim().length > 0 ? raw.nodeId : (this.options.nodeId || 'master'),
           command: typeof raw.command === 'string' ? raw.command : '',
+          ...(typeof raw.resolvedCwd === 'string' ? { resolvedCwd: raw.resolvedCwd } : {}),
           initialCwd: typeof raw.initialCwd === 'string' && raw.initialCwd.trim().length > 0 ? raw.initialCwd
             : externalOwner ? this.options.getExternalDefaultCwd!(externalOwner) : this.getDefaultCwd(agentName!),
           cwdRaw: typeof raw.cwdRaw === 'string' ? raw.cwdRaw : undefined,
@@ -554,7 +568,9 @@ export class PersistentExecManager {
   async startPersistentExec(options: StartPersistentExecOptions): Promise<RunningExecEntry> {
     const execId = await this.reserveExecId(options.execId);
     try {
-      const entry = await this.nativeBackend.start({ ...options, execId });
+      const backend = options.backend ? this.options.resolveBackend?.(options.backend.providerId, options.nodeId || this.options.nodeId || 'master') : this.nativeBackend;
+      if (!backend) throw new Error('Exec backend is unavailable.');
+      const entry = await backend.start({ ...options, execId });
       await this.commitRegistryMutation(() => { this.runningExecs.set(entry.id, entry); });
       this.options.logger?.info?.({ execId: entry.id, pid: entry.pid, sessionId: entry.sessionId, nodeId: entry.nodeId }, 'Persistent exec started');
       return entry;
@@ -564,11 +580,11 @@ export class PersistentExecManager {
   }
 
   async getResolvedExecCwd(entry: RunningExecEntry): Promise<string> {
-    return this.nativeBackend.getResolvedExecCwd(entry);
+    return await this.backend(entry).readFinishedWorkingDirectory(entry) || entry.initialCwd;
   }
 
-  private async readLogExcerpt(filePath: string, maxChars: number): Promise<LogExcerpt> {
-    const stat = await fs.stat(filePath);
+  private async readLogExcerpt(filePath: string, maxChars: number, files: FileOperations): Promise<LogExcerpt> {
+    const stat = await files.stat(filePath);
     if (stat.size <= 0) {
       return {
         text: '',
@@ -579,7 +595,7 @@ export class PersistentExecManager {
     }
 
     if (stat.size > MAX_FULL_LOG_READ_BYTES) {
-      const { head, tail } = await readBoundedFileSamples(filePath, stat.size);
+      const { head, tail } = await readBoundedFileSamples(filePath, stat.size, files);
       const capturedOutputEndedWithLf = tail.length > 0 && tail[tail.length - 1] === 0x0a;
       const excerpt = buildBoundedTextExcerpt(head, tail, {
         headMayEndMidCodePoint: true,
@@ -621,7 +637,9 @@ export class PersistentExecManager {
       };
     }
 
-    const text = await fs.readFile(filePath, 'utf8');
+    const bytes = await files.read(filePath, 0, stat.size);
+    if (bytes.length !== stat.size) throw new Error('Command output read was incomplete.');
+    const text = bytes.toString('utf8');
     const truncation = truncateOutputForDisplay(text, {
       maxChars,
       force: text.length > maxChars,
@@ -636,9 +654,9 @@ export class PersistentExecManager {
     };
   }
 
-  private async readPartialLog(logPath: string): Promise<LogExcerpt> {
+  private async readPartialLog(entry: RunningExecEntry): Promise<LogExcerpt> {
     try {
-      const excerpt = await this.readLogExcerpt(logPath, PARTIAL_LOG_BYTES);
+      const excerpt = await this.readLogExcerpt(entry.logPath, PARTIAL_LOG_BYTES, this.backend(entry).files);
       if (excerpt.capturedOutputWasEmpty) {
         return { ...excerpt, text: '(Command started, no output yet)', truncated: false };
       }
@@ -646,6 +664,7 @@ export class PersistentExecManager {
       const markerSeparator = excerpt.text.endsWith('\n') ? '' : '\n';
       return { ...excerpt, text: `${excerpt.text}${markerSeparator}...(truncated)` };
     } catch (err: any) {
+      if (entry.backend) return { text: '(Command output unavailable)', truncated: true, capturedOutputWasEmpty: true, capturedOutputEndedWithLf: false };
       if (err?.code === 'ENOENT') {
         return {
           text: '(Command started, no output yet)',
@@ -658,9 +677,9 @@ export class PersistentExecManager {
     }
   }
 
-  private async readDisplayOutput(logPath: string): Promise<LogExcerpt> {
+  private async readDisplayOutput(entry: RunningExecEntry): Promise<LogExcerpt> {
     try {
-      const excerpt = await this.readLogExcerpt(logPath, INLINE_LOG_LIMIT_BYTES);
+      const excerpt = await this.readLogExcerpt(entry.logPath, INLINE_LOG_LIMIT_BYTES, this.backend(entry).files);
       if (excerpt.capturedOutputWasEmpty) return { ...excerpt, text: '(No output)', truncated: false };
       if (!excerpt.truncated && estimateTokenCount(excerpt.text) <= 10000) return excerpt;
       if (excerpt.truncated) return excerpt;
@@ -676,6 +695,7 @@ export class PersistentExecManager {
         truncation,
       };
     } catch (err: any) {
+      if (entry.backend) return { text: '(Command output unavailable)', truncated: true, capturedOutputWasEmpty: true, capturedOutputEndedWithLf: false };
       if (err?.code === 'ENOENT') {
         return {
           text: '(No output)',
@@ -710,6 +730,7 @@ export class PersistentExecManager {
   }
 
   private async buildLiveProcessTree(entry: RunningExecEntry): Promise<string> {
+    if (entry.backend || entry.pid === undefined) return '';
     try {
       const entries = await this.nativeBackend.inspectSnapshot();
       return formatProcessTreeSnapshot(entries, entry.pid);
@@ -719,15 +740,46 @@ export class PersistentExecManager {
     }
   }
 
+  private backend(entry: RunningExecEntry): ExecBackend {
+    if (!entry.backend) return this.nativeBackend;
+    const backend = this.options.resolveBackend?.(entry.backend.providerId, entry.nodeId);
+    if (!backend) throw new Error('The configured exec backend is unavailable.');
+    return backend;
+  }
+
+  private inspectStatus(entry: RunningExecEntry): Promise<ExecStatus | null> {
+    if (!entry.backend) return this.nativeBackend.poll(entry);
+    const pending = this.pendingStatus.get(entry.id);
+    if (pending) return pending;
+    const query = Promise.resolve().then(() => this.backend(entry).poll(entry)).catch(err => {
+      this.options.logger?.warn?.({ err, execId: entry.id }, 'Failed to inspect exec status; tracking retained');
+      return null;
+    }).finally(() => { this.pendingStatus.delete(entry.id); });
+    this.pendingStatus.set(entry.id, query);
+    return query;
+  }
+
   async waitForExecCompletion(execId: string, timeoutMs: number, signal?: AbortSignal): Promise<ExecStatus | null> {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
       const entry = this.runningExecs.get(execId);
       if (!entry) return null;
-      const status = await this.nativeBackend.poll(entry);
+      // Native status reads retain their existing status-before-Stop precedence.
+      if (!entry.backend) {
+        const status = await this.inspectStatus(entry);
+        if (status) return status;
+        if (signal?.aborted) return null;
+        await sleep(Math.min(STATUS_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())), signal);
+        continue;
+      }
+      // A slow read-only provider query must not hold a foreground wait past Stop or its deadline.
+      const status = await Promise.race([
+        this.inspectStatus(entry),
+        sleep(Math.min(STATUS_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())), signal).then(() => null),
+      ]);
       if (status) return status;
       if (signal?.aborted) return null;
-      await sleep(STATUS_POLL_INTERVAL_MS, signal);
+      await sleep(Math.min(STATUS_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())), signal);
     }
     return null;
   }
@@ -750,28 +802,30 @@ export class PersistentExecManager {
       ...(status ? { exitCode: status.exitCode } : {}), execId: entry.id, logPath: entry.logPath,
     };
     try {
-      const stat = await nativeFileOperations.stat(entry.logPath);
+      const stat = await this.backend(entry).files.stat(entry.logPath);
       if (stat.size > MAX_FULL_LOG_READ_BYTES) return { ...metadata, truncated: true, sizeBytes: stat.size };
-      const bytes = await nativeFileOperations.read(entry.logPath, 0, stat.size);
+      const bytes = await this.backend(entry).files.read(entry.logPath, 0, stat.size);
+      if (bytes.length !== stat.size) return { ...metadata, truncated: true, sizeBytes: stat.size };
       return { ...metadata, content: bytes.toString('utf8'), truncated: false, sizeBytes: bytes.length };
     } catch (error: any) {
-      if (error?.code !== 'ENOENT') throw error;
+      if (!entry.backend && error?.code !== 'ENOENT') throw error;
       return { ...metadata, truncated: true };
     }
   }
 
   async buildForegroundExecResult(entry: RunningExecEntry, status: ExecStatus, warning?: string): Promise<string> {
-    const output = await this.readDisplayOutput(entry.logPath);
+    const output = await this.readDisplayOutput(entry);
     const footerSeparator = output.text.endsWith('\n') ? '' : '\n';
     return `${output.text}${footerSeparator}${this.buildForegroundFooter(entry, status, output, warning)}`;
   }
 
   async buildBackgroundTimeoutResult(entry: RunningExecEntry, timeoutSeconds: number = DEFAULT_EXEC_TIMEOUT_SECONDS, warning?: string, waitEndedBy?: string): Promise<string> {
-    const partialOutput = await this.readPartialLog(entry.logPath);
+    const partialOutput = await this.readPartialLog(entry);
     const fullNotice = waitEndedBy
       ? `${waitEndedBy} ended this call's wait. The command was already started and was not killed; it may still be running in the background. Completion will be reported separately.`
       : buildBackgroundTimeoutFullNotice(timeoutSeconds);
     const processTree = await this.buildLiveProcessTree(entry);
+    const pidLine = entry.pid === undefined ? '' : `PID: ${entry.pid}\n`;
     const nodeLine = entry.nodeId && entry.nodeId !== 'master' ? `Node: \`${entry.nodeId}\`\n` : '';
     const warningLine = warning ? `${warning}\n` : '';
     const sizeLine = partialOutput.oversized && partialOutput.originalByteLength !== undefined
@@ -785,7 +839,7 @@ export class PersistentExecManager {
       ? 'Partial output captured so far had no trailing newline.\n'
       : '';
     const elapsed = formatExecDuration((this.options.now?.() ?? Date.now()) - entry.startedAt);
-    return `Partial Output:\n${partialOutput.text}${footerSeparator}---\n${fullNotice}\n${trailingNewlineLine}${warningLine}execId: ${entry.id}\nElapsed: ${elapsed ?? 'unknown'}\n${nodeLine}PID: ${entry.pid}\n${processTree}\nLog file: ${entry.logPath}${sizeLine}${conversionNote}`;
+    return `Partial Output:\n${partialOutput.text}${footerSeparator}---\n${fullNotice}\n${trailingNewlineLine}${warningLine}execId: ${entry.id}\nElapsed: ${elapsed ?? 'unknown'}\n${nodeLine}${pidLine}${processTree ? `${processTree}\n` : ''}Log file: ${entry.logPath}${sizeLine}${conversionNote}`;
   }
 
   buildCompletionMessage(entry: RunningExecEntry, status: ExecStatus): string {
@@ -796,11 +850,11 @@ export class PersistentExecManager {
   }
 
   async readFinishedExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null> {
-    return this.nativeBackend.readFinishedWorkingDirectory(entry);
+    return this.backend(entry).readFinishedWorkingDirectory(entry);
   }
 
   async readLiveExecWorkingDirectory(entry: RunningExecEntry): Promise<string | null> {
-    return this.nativeBackend.readLiveWorkingDirectory(entry);
+    return this.backend(entry).readLiveWorkingDirectory(entry);
   }
 
   listRunningExecs(): RunningExecEntry[] {
@@ -808,8 +862,8 @@ export class PersistentExecManager {
   }
 
   private async reconcileRunningExecs(): Promise<void> {
-    for (const entry of Array.from(this.runningExecs.values())) {
-      if (!entry.notifyOnCompletion) continue;
+    await Promise.all(Array.from(this.runningExecs.values()).map(async entry => {
+      if (!entry.notifyOnCompletion) return;
       if ((this.options.now?.() ?? Date.now()) - entry.startedAt > BACKGROUND_COMPLETION_EVENT_RETENTION_MS) {
         try {
           this.options.onTrackingExpired?.(entry);
@@ -818,16 +872,16 @@ export class PersistentExecManager {
         } catch (err) {
           this.options.logger?.warn?.({ err, execId: entry.id, sessionId: entry.sessionId }, 'Failed to remove expired background exec tracking record; will retry');
         }
-        continue;
+        return;
       }
       let status: ExecStatus | null = null;
       try {
-        status = await this.nativeBackend.poll(entry);
+        status = await this.inspectStatus(entry);
       } catch (err) {
         this.options.logger?.error?.({ err, execId: entry.id, statusPath: entry.statusPath }, 'Failed to inspect exec status');
-        continue;
+        return;
       }
-      if (!status) continue;
+      if (!status) return;
       const message = this.buildCompletionMessage(entry, status);
       try {
         await this.completionDispatcher(entry, status, message);
@@ -836,6 +890,6 @@ export class PersistentExecManager {
       } catch (err) {
         this.options.logger?.warn?.({ err, execId: entry.id, sessionId: entry.sessionId }, 'Failed to deliver background exec completion; will retry');
       }
-    }
+    }));
   }
 }

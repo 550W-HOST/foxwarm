@@ -218,14 +218,11 @@ test('configured executable provider derives canonical tools and preserves exact
 
     const primitives = (await readLog(logPath)).filter(entry => entry.request.operation === 'filesystem').map(entry => entry.request.request);
     assert.equal(primitives.length >= 8, true);
-    assert.equal(primitives.filter(primitive => primitive.context.programmatic === true).length, 2, 'only the nested script read prepares retained data');
     for (const primitive of primitives) {
-      assert.equal(primitive.sourceSessionId, sourceId);
+      assert.equal(primitive.sourceSessionId, undefined);
       assert.equal(primitive.nodeId, 'fixture-sandbox');
       assert.ok(['stat', 'read'].includes(primitive.operation));
-      const { programmatic, ...routing } = primitive.context;
-      assert.ok(programmatic === undefined || programmatic === true);
-      assert.deepEqual(routing, { agent, currentNode: 'fixture-sandbox', cwd: 'memfs://fixture/session' });
+      assert.deepEqual(primitive.context, { cwd: 'memfs://fixture/session' });
       assert.equal(Object.prototype.hasOwnProperty.call(primitive, 'toolName'), false);
       assert.equal(Object.prototype.hasOwnProperty.call(primitive, 'args'), false);
       assert.equal(Object.prototype.hasOwnProperty.call(primitive, 'command'), false);
@@ -282,21 +279,6 @@ test('colon executable Node IDs round-trip through canonical discovery tool IDs'
     await sessionManager.deleteSession(sourceId).catch(() => false);
     await fs.remove(dir);
   }
-});
-
-test('executable providers expose exec only from the fixed exec backend', async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-executable-provider-exec-'));
-  const logPath = path.join(dir, 'requests.jsonl');
-  try {
-    const registry = new NodeProviderRegistry([executableProvider('with-exec', logPath, 2_000, 'exec-provider')]);
-    const node = (await registry.listNodes()).find(item => item.id === 'fixture-sandbox')!;
-    assert.ok(node.tools.some(tool => tool.name === 'exec'));
-    const result: any = await registry.invokeTool({ ...request(), toolName: 'exec', args: { command: 'pwd' } });
-    assert.equal(result.output, 'fixture-exec');
-    const calls = await readLog(logPath);
-    assert.equal(calls.at(-1).request.operation, 'exec');
-    assert.equal(Object.prototype.hasOwnProperty.call(calls.at(-1).request.request, 'toolName'), false);
-  } finally { await fs.remove(dir); }
 });
 
 test('executable provider rejects malformed, mismatched, oversized, and abnormal protocol/process responses without exposing stderr', async () => {

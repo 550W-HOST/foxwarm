@@ -1,4 +1,5 @@
 import { open } from 'fs/promises';
+import type { FileOperations } from './fileOperations';
 
 /** Above this size, callers must use bounded samples rather than full reads. */
 export const MAX_FULL_TEXT_READ_BYTES = 1024 * 1024;
@@ -28,8 +29,12 @@ export interface BoundedTextExcerptOptions {
  * Reads fixed-size samples without decoding or allocating the rest of a file.
  * The caller supplies the stat-time size used for its user-facing metadata.
  */
-export async function readBoundedFileSamples(filePath: string, byteLength: number): Promise<{ head: Buffer; tail: Buffer }> {
+export async function readBoundedFileSamples(filePath: string, byteLength: number, operations?: Pick<FileOperations, 'read'>): Promise<{ head: Buffer; tail: Buffer }> {
   const sampleLength = Math.min(BOUNDED_TEXT_SAMPLE_BYTES, byteLength);
+  if (operations) return {
+    head: await operations.read(filePath, 0, sampleLength),
+    tail: await operations.read(filePath, Math.max(0, byteLength - sampleLength), sampleLength),
+  };
   const file = await open(filePath, 'r');
   try {
     const readAt = async (position: number): Promise<Buffer> => {

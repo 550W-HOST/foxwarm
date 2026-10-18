@@ -351,13 +351,13 @@ for (const stopFirst of [false, true]) {
     const session = await sessionManager.getSession(`provider-worker-${randomUUID()}`);
     session.currentNode = 'fixture-sandbox';
     const provider = new ExecutableNodeProvider({ id: 'close-fixture', type: 'executable', command: process.execPath,
-      args: [path.join(__dirname, 'nodes/executableProviderTestFixture.js'), 'delayed-exec', logPath], timeoutMs: 5000 });
+      args: [path.join(__dirname, 'nodes/executableProviderTestFixture.js'), 'delayed-filesystem', logPath], timeoutMs: 5000 });
     const providers = new NodeProviderRegistry([provider]);
     const settled = gate();
     const stopped = gate();
     let context: any;
     try {
-      await withWorkerTools(root, session, [{ id: 'provider-exec', name: 'exec', args: { command: 'fixture' } }], registry => {
+      await withWorkerTools(root, session, [{ id: 'provider-read', name: 'read', args: { filePath: 'fixture' } }], registry => {
         const handler = createNodeExecutionServiceHandler({ expectedSourceSessionId: session.id, providerRegistry: providers });
         registry.register(nodeExecutionServiceDescriptor, { ...handler, async execute(input, ctx) {
           context = ctx;
@@ -371,7 +371,7 @@ for (const stopFirst of [false, true]) {
         void running.catch(() => {});
         const readyBy = Date.now() + 5000;
         while (!await fs.pathExists(`${logPath}.ready`)) {
-          if (Date.now() > readyBy) throw new Error('Provider exec fixture did not become ready.');
+          if (Date.now() > readyBy) throw new Error('Provider filesystem fixture did not become ready.');
           await new Promise(resolve => setTimeout(resolve, 10));
         }
         const providerPid = Number(await fs.readFile(`${logPath}.ready`, 'utf8'));

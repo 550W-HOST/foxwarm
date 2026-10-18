@@ -21,6 +21,7 @@ import {
 
 export interface DeferredExecCwdSync {
     nextCwd: string;
+    nodeId?: string;
 }
 
 type ExecToolRuntime = Pick<ExecRuntime,
@@ -28,11 +29,11 @@ type ExecToolRuntime = Pick<ExecRuntime,
     | 'finalizeForegroundExec' | 'buildForegroundExecResult' | 'buildBackgroundTimeoutResult'
     | 'readFinishedExecWorkingDirectory' | 'readLiveExecWorkingDirectory' | 'buildProgrammaticExecResult'>;
 
-async function syncSessionCwd(ctx: ToolContext, nextCwd: string | null | undefined): Promise<string | null> {
-    const normalizedNext = typeof nextCwd === 'string' && nextCwd.trim() ? nextCwd.trim() : null;
+async function syncSessionCwd(ctx: ToolContext, nextCwd: string | null | undefined, exact = false): Promise<string | null> {
+    const normalizedNext = typeof nextCwd === 'string' && (exact ? nextCwd.length > 0 : !!nextCwd.trim()) ? (exact ? nextCwd : nextCwd.trim()) : null;
     const trustedSession = ctx.persistCurrentSession && ctx.session?.id === ctx.sessionId ? ctx.session : undefined;
     if (trustedSession) {
-        const previous = typeof trustedSession.cwd === 'string' && trustedSession.cwd.trim() ? trustedSession.cwd.trim() : null;
+        const previous = typeof trustedSession.cwd === 'string' && trustedSession.cwd ? (exact ? trustedSession.cwd : trustedSession.cwd.trim()) : null;
         if (normalizedNext === null) delete trustedSession.cwd;
         else trustedSession.cwd = normalizedNext;
         if (previous !== normalizedNext) await ctx.persistCurrentSession!();
@@ -74,7 +75,11 @@ export async function applyDeferredExecCwdSync(
     result: any,
     cwdSync: DeferredExecCwdSync,
 ): Promise<any> {
-    const notice = await syncSessionCwd(ctx, cwdSync.nextCwd);
+    if (cwdSync.nodeId) {
+        const current = ctx.session?.id === ctx.sessionId ? ctx.session : ctx.sessionId ? sessionManager.getSessionCatalog(ctx.sessionId) : undefined;
+        if ((current?.currentNode || 'master') !== cwdSync.nodeId) return result;
+    }
+    const notice = await syncSessionCwd(ctx, cwdSync.nextCwd, cwdSync.nodeId !== undefined);
     if (!notice) return result;
     if (typeof result === 'object' && result !== null && typeof result.output === 'string') {
         return { ...result, output: appendCwdNotice(result.output, notice) };

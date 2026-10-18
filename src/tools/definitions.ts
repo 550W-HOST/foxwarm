@@ -865,13 +865,13 @@ Example:
         {
             name: 'node',
             defaultInject: true,
-            description: "List available Nodes, select this session's execution Node, or manage a Node through its configured provider. For select, you may put exec or file calls after it in the same response. Those calls use the selected Node; if selection fails, the remaining calls in that batch are skipped. Provider operations may create or remove resources; inspect the provider's behavior before assuming what will be retained or deleted.",
+            description: "List available Nodes, select this session's execution Node, or manage a Node through its configured provider. Inspect a provider to see its supported operations and parameters. For select, you may put exec or file calls after it in the same response. Those calls use the selected Node; if selection fails, the remaining calls in that batch are skipped. Provider operations may create or remove resources; inspect the provider's behavior before assuming what will be retained or deleted.",
             parameters: {
                 type: 'object',
                 properties: {
-                    action: { type: 'string', enum: ['list', 'select', 'create', 'ensure', 'inspect', 'destroy'], description: "list shows Nodes; select changes this session's Node; create or ensure uses a provider; inspect shows a Node's details; destroy requests its removal." },
+                    action: { type: 'string', enum: ['list', 'select', 'create', 'ensure', 'inspect', 'destroy'], description: "list shows Nodes and providers; select changes this session's Node; create or ensure uses a provider; inspect shows Node or provider details; destroy requests a Node's removal." },
                     nodeId: { type: 'string', description: "Node to select, inspect, or destroy. For create or ensure, supply it when requesting a specific Node ID." },
-                    providerId: { type: 'string', description: "Configured provider to use for create or ensure. Existing Nodes identify their own provider for inspect or destroy." },
+                    providerId: { type: 'string', description: "Configured provider to inspect or use for create or ensure. Inspect accepts either providerId or nodeId, not both. Existing Nodes identify their own provider for destroy." },
                     parameters: { type: 'object', description: "Provider-specific options for the lifecycle operation.", additionalProperties: true },
                     parametersJson: { type: 'string', description: "Provider options as a JSON object string when parameters cannot be supplied." },
                     confirmation: { type: 'string', description: "For destroy, exactly: destroy node <nodeId>." }

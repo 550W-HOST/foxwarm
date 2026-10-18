@@ -9,7 +9,7 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 ## Key Exports
 
 - `createExecRuntime(options)` — constructs one isolated application exec runtime around exactly one `PersistentExecManager`
-- `ExecRuntime` / `ExecRuntimeOptions` — closed runtime lifecycle and configurable registry/default-cwd/temp-root providers, process operations, one-shot reconcile, and shutdown
+- `ExecRuntime` / `ExecRuntimeOptions` — closed runtime lifecycle and configurable registry/default-cwd/temp-root providers, process operations, exact-provider backend resolution, one-shot reconcile, and shutdown
 - `getDefaultExecRuntime()` — read-only access to the factory-built process-default runtime; callers cannot replace or stop it
 - `initializeExecManager(options?)` — bootstraps the persistent exec manager
 - `startPersistentExec(options)` — launches a new tracked shell execution
@@ -55,12 +55,12 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 ## Behavior
 
 - The process-default runtime is itself created by `createExecRuntime`, configured with the unchanged project paths (agent directories, temp dirs, registry file at `STATE_DIR/running-exec.json`) and `master` node default. Every existing exported wrapper delegates to that real factory-built default.
-- Each factory call owns independent manager, dispatcher closure, registry, temp-root providers, process backend, and initialization/reconcile state. The native backend is default. `reconcileNow()` performs an awaited pass and `shutdown()` idempotently clears the timer and drains reconcile/registry work without deleting persisted active entries, allowing Core to close runtimes orderly.
+- Each factory call owns independent manager, dispatcher closure, registry, temp-root providers, process backend, and initialization/reconcile state. The native backend is default. Main alone supplies an exact configured-provider resolver for persisted primitive-provider refs; no separate registry or runtime is created per provider. `reconcileNow()` performs an awaited pass and `shutdown()` idempotently clears the timer and drains reconcile/registry work without deleting persisted active entries, allowing Core to close runtimes orderly.
 - The default completion dispatcher sends a system event to the session associated with the exec entry; this can be overridden at initialization.
 - The shared manager removes a `notifyOnCompletion` background tracking record before process inspection or notification when its age from `startedAt` is strictly greater than 24 hours. It does not kill the process or delete artifacts; restart recovery marks recovered records for background notification before reconciliation applies the TTL.
 - All public functions are thin async delegates to the underlying manager instance, adding only the default `nodeId: 'master'`.
 - The exec handler uses shared timeout resolution: finite requests above 60 seconds wait for only 60 seconds, while forwarding the requested/effective warning into either foreground or background-switch result formatting. Oversized persistent logs use the shared bounded excerpt contract rather than full reads; see [D-persistent-exec-bounded-log-excerpts](./shared-persistent-exec.md#d-persistent-exec-bounded-log-excerpts). Background-switch footer and live-tree behavior is canonical in [D-persistent-exec-background-timeout-footer-tree](./shared-persistent-exec.md#d-persistent-exec-background-timeout-footer-tree).
-- The registry file persists running exec state to disk for crash recovery.
+- The same registry file persists native entries and optional provider/ref entries for crash recovery; missing provider configuration never falls back to native.
 - Normal `CurrentSessionEffects` carry the process-default runtime into internal ToolContext, while detached owners may supply another process-local factory runtime. One exec call chooses one runtime for start/wait/cwd/format/mark/finalize and never mixes instances. Legacy/direct handler calls retain the existing wrapper-built default fallback.
 - Exact trusted owners use their persistence hook for the unconditional pre-exec save and normalized cwd updates; legacy/no-hook callers retain SessionManager/SessionRuntime. Parallel direct-exec segments replay cwd against that same passed owner in model order before later barriers, so the last model call owns cwd without a global lookup.
 

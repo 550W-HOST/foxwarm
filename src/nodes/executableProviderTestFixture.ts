@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 
-const PROTOCOL = 'foxwarm-node-provider@1';
+const PROTOCOL = 'foxwarm-node-provider';
 const mode = process.argv[2] || 'normal';
 const logPath = process.argv[3];
 const statePath = logPath ? `${logPath}.nodes.json` : '';
@@ -15,7 +15,6 @@ function descriptor(id = 'fixture-sandbox', availability = 'ready') {
     availability,
     defaultCwd: `memfs://${id}/root`,
     filesystem: mode === 'read-only' ? 'read' : 'read-write',
-    ...(['with-exec', 'delayed-exec'].includes(mode) ? { exec: true } : {}),
   };
 }
 
@@ -85,6 +84,13 @@ async function main(): Promise<void> {
   if (mode === 'request-mismatch') response.requestId = 'wrong-request';
   if (mode === 'operation-mismatch') response.operation = request.operation === 'list' ? 'filesystem' : 'list';
 
+  if (request.operation === 'describe') {
+    response.result = { label: 'Fixture provider', description: 'Process-separated contract fixture.',
+      lifecycle: mode === 'unsupported-lifecycle' ? [] : ['create', 'ensure', 'inspect', 'destroy'],
+      createParameters: { type: 'object', properties: { opaque: { type: 'object' } } },
+      dataRetention: 'Fixture files are owned by the test.' };
+    write(response); return;
+  }
   if (request.operation === 'list') {
     const primaryId = mode === 'slash-id'
       ? 'fixture/sandbox'
@@ -199,6 +205,11 @@ async function main(): Promise<void> {
   }
 
   if (request.operation === 'filesystem') {
+    if (mode === 'delayed-filesystem') {
+      fs.writeFileSync(`${logPath}.ready`, String(process.pid));
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      fs.writeFileSync(`${logPath}.effect`, 'late effect');
+    }
     const primitive = request.request || {};
     const files: Record<string, string> = filesPath && fs.existsSync(filesPath) ? JSON.parse(fs.readFileSync(filesPath, 'utf8')) : {};
     const key = String(primitive.path);
@@ -220,16 +231,6 @@ async function main(): Promise<void> {
     } else if (primitive.operation === 'remove') {
       delete files[key]; if (filesPath) fs.writeFileSync(filesPath, JSON.stringify(files)); response.result = null;
     } else response.result = null;
-    write(response);
-    return;
-  }
-  if (request.operation === 'exec') {
-    if (mode === 'delayed-exec') {
-      fs.writeFileSync(`${logPath}.ready`, String(process.pid));
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      fs.writeFileSync(`${logPath}.effect`, 'late effect');
-    }
-    response.result = { output: 'fixture-exec', observed: request.request };
     write(response);
     return;
   }

@@ -8,6 +8,7 @@ import * as sessionManager from './sessionManager';
 import { nodesManager } from './nodes/manager';
 import {
   NodeLifecycleAction,
+  type NodeProviderSummary,
   NodeLifecycleResult,
   NodeProviderError,
   NodeProviderRegistry,
@@ -43,6 +44,7 @@ export type NodeTopologyListResponse = { nodes: Array<{
   kind: 'master' | 'remote' | 'sandbox';
   provider: string;
   type: string;
+  label?: string;
   availability: 'ready' | 'unavailable' | 'offline' | 'error';
   lastActivity?: number;
   tools: Array<{ name: string; description?: string; parameters?: unknown }>;
@@ -53,8 +55,8 @@ export type NodeSelectRequest = { sourceSessionId: string; nodeId: string };
 export type NodeSelectResponse = { nodeId: string; defaultCwd: string };
 export type NodeCopyRequest = { sourceSessionId: string; sourceNode: string; sourcePath: string; targetNode: string; targetPath: string; overwrite?: boolean };
 export type NodeCopyResponse = { sourceNode: string; sourcePath: string; targetNode: string; targetPath: string; sizeBytes: number; sha256: string; overwritten: boolean; absolutePath?: string };
-export type NodeLifecycleProvidersRequest = { sourceSessionId: string };
-export type NodeLifecycleProvidersResponse = { providers: Array<{ id: string; actions: NodeLifecycleAction[] }> };
+export type NodeProvidersRequest = { sourceSessionId: string };
+export type NodeProvidersResponse = { providers: NodeProviderSummary[] };
 export type NodeLifecycleRequest = {
   sourceSessionId: string;
   action: NodeLifecycleAction;
@@ -65,13 +67,13 @@ export type NodeLifecycleRequest = {
 };
 export type NodeLifecycleResponse = { result: NodeLifecycleResult };
 
-export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 7, {
+export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 8, {
   readFile: rpcMethod<NodeFileReadRequest, NodeFileReadResponse>(),
   execute: rpcMethod<NodeExecutionRequest, NodeExecutionResponse>({ cancellation: 'settle' }),
   list: rpcMethod<NodeTopologyListRequest, NodeTopologyListResponse>(),
   select: rpcMethod<NodeSelectRequest, NodeSelectResponse>(),
   copy: rpcMethod<NodeCopyRequest, NodeCopyResponse>(),
-  lifecycleProviders: rpcMethod<NodeLifecycleProvidersRequest, NodeLifecycleProvidersResponse>(),
+  providersList: rpcMethod<NodeProvidersRequest, NodeProvidersResponse>(),
   lifecycle: rpcMethod<NodeLifecycleRequest, NodeLifecycleResponse>(),
 });
 
@@ -292,7 +294,7 @@ export function createNodeExecutionServiceHandler(options: {
         ['sourceSessionId', 'nodeId', 'filePath', 'routingSnapshot'], 'Node file read request');
       const nodeId = requireBoundedString(input.nodeId, 'nodeId', 128);
       if (nodeId === 'master') throw new RpcError('NODE_EXECUTION_MASTER_FORBIDDEN', 'The colocated master node must read files directly without Node execution RPC.');
-      const filePath = requireString(input.filePath, 'filePath');
+      const filePath = requireBoundedPath(input.filePath, 'filePath');
       const routingSnapshot = normalizeRoutingSnapshot(input.routingSnapshot);
       if (routingSnapshot && routingSnapshot.currentNode !== nodeId) {
         throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'File read cwd must belong to the target Node.');
@@ -347,6 +349,7 @@ export function createNodeExecutionServiceHandler(options: {
           : undefined;
         const protocolCompatibility = node.protocolCompatibility && plainJsonWithin(node.protocolCompatibility, 4096) as NodeProtocolCompatibility | undefined;
         const candidate = { id: node.id, kind: node.kind, provider: node.provider, type: node.type, availability: node.availability,
+          ...(typeof node.label === 'string' && node.label.length <= 256 ? { label: node.label } : {}),
           ...(typeof node.lastActivity === 'number' && Number.isFinite(node.lastActivity) && node.lastActivity >= 0 ? { lastActivity: node.lastActivity } : {}),
           ...(unavailable ? { unavailable } : {}),
           ...(protocolCompatibility ? { protocolCompatibility } : {}),
@@ -389,14 +392,18 @@ export function createNodeExecutionServiceHandler(options: {
       return { sourceNode, sourcePath, targetNode, targetPath, sizeBytes: file.sizeBytes, sha256: written.sha256,
         overwritten: written.overwritten, ...(written.absolutePath ? { absolutePath: written.absolutePath } : {}) };
     },
-    async lifecycleProviders(input) {
+    async providersList(input, rpcContext) {
       const { source } = await requireSource(input, ['sourceSessionId'], 'Node lifecycle provider list request');
       const isolated = sessionManager.isSessionEffectivelyIsolated(source);
-      return { providers: providers.listLifecycleProviders().slice(0, 100).map(provider => ({
-        id: requireBoundedString(provider.id, 'provider.id', 64),
-        actions: provider.actions.filter(action => ['create', 'ensure', 'inspect', 'destroy'].includes(action)
-          && (!isolated || action === 'inspect')).slice(0, 4),
-      })).filter(provider => provider.actions.length > 0) };
+      try {
+        const descriptions = await providers.listProviders({ signal: rpcContext.signal });
+        return { providers: descriptions.slice(0, 100).map(provider => {
+          const safe = plainJsonWithin(provider, 64 * 1024) as typeof provider | undefined;
+          if (!safe) invalidResponse('Provider description exceeds its plain JSON budget.');
+          const actions = safe.lifecycle.filter(action => ['create', 'ensure', 'inspect', 'destroy'].includes(action) && (!isolated || action === 'inspect'));
+          return { id: requireBoundedString(safe.id, 'provider.id', 64), label: requireBoundedString(safe.label, 'provider.label', 256), lifecycle: actions };
+        }) };
+      } catch (error) { rethrowProviderError(error); }
     },
     async lifecycle(input, rpcContext) {
       const { sourceSessionId, source } = await requireSource(
@@ -431,6 +438,15 @@ export function createNodeExecutionServiceHandler(options: {
           return { result: normalizeLifecycleResult(result) };
         }
 
+        if (action === 'inspect' && input.providerId !== undefined) {
+          if (input.nodeId !== undefined || input.confirmation !== undefined || Object.keys(parameters).length) {
+            throw new RpcError('NODE_LIFECYCLE_INVALID_REQUEST', 'Provider inspection accepts providerId only.');
+          }
+          const provider = await providers.inspectProvider(requireBoundedString(input.providerId, 'providerId', 64), { signal: rpcContext.signal });
+          const safe = normalizeLifecycleResult({ provider });
+          if (isolated && safe.provider) safe.provider.lifecycle = safe.provider.lifecycle.filter(action => action === 'inspect');
+          return { result: safe };
+        }
         if (input.providerId !== undefined) {
           throw new RpcError('NODE_LIFECYCLE_INVALID_REQUEST', `${action} resolves the provider from nodeId and does not accept providerId.`);
         }

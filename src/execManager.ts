@@ -13,6 +13,8 @@ import {
   type ProgrammaticExecResult,
   type StartPersistentExecOptions,
 } from '../packages/shared/dist/persistentExec';
+import { nodeProviderRegistry } from './nodes/providers';
+import type { ExecBackend } from '../packages/shared/dist/execBackend';
 import { nativeProcessOperations, type ProcessOperations } from '../packages/shared/dist/processOperations';
 
 const RUNNING_EXEC_FILE = path.join(STATE_DIR, 'running-exec.json');
@@ -32,6 +34,7 @@ export interface ExecRuntimeOptions {
   nodeId?: string;
   completionDispatcher?: ExecCompletionDispatcher;
   processOperations?: ProcessOperations;
+  resolveBackend?: (providerId: string, nodeId: string) => ExecBackend;
 }
 
 export interface ExecRuntime {
@@ -61,6 +64,7 @@ export function createExecRuntime(options: ExecRuntimeOptions): ExecRuntime {
     nodeId,
     logger,
     completionDispatcher: async (entry, status, message) => completionDispatcher(entry, status, message),
+    resolveBackend: options.resolveBackend,
     processOperations: options.processOperations || nativeProcessOperations,
   });
 
@@ -92,6 +96,7 @@ const defaultCompletionDispatcher: ExecCompletionDispatcher = async (entry, _sta
 };
 
 const defaultRuntime = createExecRuntime({
+  resolveBackend: (providerId, nodeId) => nodeProviderRegistry.execBackend(providerId, nodeId),
   getDefaultCwd: (agentName: string) => getAgentDir(agentName),
   getExecTempDir: (agentName: string) => path.join(getAgentDir(agentName), '.temp', 'exec'),
   getAgentDir,

@@ -275,10 +275,6 @@ export class NativeExecBackend {
     }
   }
 
-  async getResolvedExecCwd(entry: RunningExecEntry): Promise<string> {
-    return await this.readExecCwd(entry.cwdPath) || entry.initialCwd;
-  }
-
   private async readExecStatus(statusPath: string): Promise<ExecStatus | null> {
     try {
       const raw = await fs.readJson(statusPath);
@@ -295,24 +291,24 @@ export class NativeExecBackend {
   }
 
   async poll(entry: RunningExecEntry): Promise<ExecStatus | null> {
-    const existing = await this.readExecStatus(entry.statusPath);
+    const existing = await this.readExecStatus(entry.statusPath!);
     if (existing) return existing;
-    if (await this.processOperations.isRunning(entry.pid)) return null;
+    if (await this.processOperations.isRunning(entry.pid!)) return null;
     if (Date.now() - entry.startedAt < MISSING_STATUS_GRACE_MS) return null;
     const fallback: ExecStatus = { exitCode: null, finishedAt: new Date().toISOString(), error: MISSING_STATUS_ERROR };
-    await fs.ensureDir(path.dirname(entry.statusPath));
+    await fs.ensureDir(path.dirname(entry.statusPath!));
     const tempPath = `${entry.statusPath}.tmp.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
     await fs.writeJson(tempPath, fallback);
-    await fs.rename(tempPath, entry.statusPath);
+    await fs.rename(tempPath, entry.statusPath!);
     return fallback;
   }
 
 
   async readFinishedWorkingDirectory(entry: RunningExecEntry): Promise<string | null> {
-    return this.readExecCwd(entry.cwdPath);
+    return this.readExecCwd(entry.cwdPath!);
   }
   async readLiveWorkingDirectory(entry: RunningExecEntry): Promise<string | null> {
-    return this.processOperations.readWorkingDirectory(entry.pid);
+    return this.processOperations.readWorkingDirectory(entry.pid!);
   }
   async inspectSnapshot() {
     return (this.options.processSnapshotProvider || (() => this.processOperations.inspectSnapshot()))();

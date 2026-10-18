@@ -6,9 +6,11 @@ Main-owned generic Node discovery/provider resolution plus authenticated remote-
 
 ## Units
 
+- [External Linux SSH reference](../units/example-linux-ssh-provider.md) — optional independently runnable executable adapter; not a Core backend or sandbox.
+
 - [Shell HTTP Node](../units/src-nodes-shell-http.md) — POSIX sh/curl exec-only transport, bounded output, and existing scoped background completion.
 
-- [src-node-providers](../units/src-node-providers.md) — generic safe descriptors/registry, optional provider lifecycle, master and authenticated-remote adapters, and startup-configured executable sandbox providers.
+- [src-node-providers](../units/src-node-providers.md) — generic safe descriptors/registry, optional provider lifecycle, master and authenticated-remote adapters, and startup-configured executable providers.
 - [src-nodes-manager](../units/src-nodes-manager.md) — connected-node map, model-tool dispatch, backend-service request/command/event routing, and session access checks.
 - [src-nodes-external-exec-ownership](../units/src-nodes-external-exec-ownership.md) — ephemeral Main authority for external CLI command IDs, signed receipts and scoped results.
 - [src-node-execution](../units/src-node-execution.md) — fixed versioned Main RPC boundary for generic non-master Node capability execution, topology, selection, provider lifecycle, and compound copy.
@@ -29,7 +31,7 @@ Client implementations are separate modules: [CLI node](./cli-node.md) and [brow
 - Approved-node list/authenticate/remove/move operations.
 - `nodesManager` — registration, model-tool dispatch, backend-service dispatch, runtime disconnect, and access checks.
 - `nodeProviderRegistry` — production registry for fixed master/authenticated-remote providers plus normalized startup executable providers.
-- `foxwarm-node-provider@1` — one-shot bounded JSON stdin/stdout contract for trusted executable sandbox providers exposing filesystem primitives, optional complete exec, and optional create/ensure/inspect/destroy operations; see `docs/executable-node-provider-protocol.md`.
+- `foxwarm-node-provider` — one-shot bounded JSON stdin/stdout contract for trusted executable providers exposing describe/list, filesystem primitives, optional process start/poll, and optional create/ensure/inspect/destroy operations; see `docs/executable-node-provider-protocol.md`.
 - `executeNodeTool()` — placement-neutral service caller for direct and dynamic non-master Node capability execution.
 - `readNodeFile()` — source-fenced complete non-master file reader behind ToolScript source loading; it retains canonical read authorization and provider availability rather than using displayed tool text.
 
@@ -60,8 +62,8 @@ The operator-facing deployment/configuration workflow is documented by the singl
 - Agent isolation is an agent-level permission boundary. Selecting a session `currentNode` routes execution but does not create isolation or an exclusive lease.
 - Backend services are versioned fixed protocols and do not pass through model-tool approval.
 - Generic Node capability execution resolves the exact non-master provider in Main; unsupported capabilities never fall back to master.
-- Executable providers are startup-only trusted configuration and advertise sandbox-kind Nodes through fixed filesystem (`read` or `read-write`) and optional exec backends. Core derives canonical file tools over parent/stat/ranged-read/readdir/whole-write/mkdir/remove primitives; provider path and restriction semantics remain authoritative. Authenticated remote Nodes retain their resident complete-tool adapter internally.
-- Node lifecycle is a provider-neutral Main-owned control plane through the existing `node` builtin. Create/ensure route by exact configured provider ID; inspect/destroy resolve the exact existing Node owner. Provider effect and data-retention text remains descriptive rather than a generic deletion or security guarantee.
+- Executable providers are startup-only trusted configuration and advertise remote- or sandbox-kind Nodes through fixed filesystem (`read` or `read-write`) and optional process start/poll backends. Exec requires readable same-Node logs; the existing Core exec manager owns waiting, output and completion. Core derives canonical file tools over parent/stat/ranged-read/readdir/whole-write/mkdir/remove primitives; provider path and restriction semantics remain authoritative. Authenticated remote Nodes retain their resident complete-tool adapter internally.
+- Node lifecycle is a provider-neutral Main-owned control plane through the existing `node` builtin. Structured provider inspection advertises operations, parameter schemas and retention. Create/ensure route by exact configured provider ID; Node inspect/destroy resolve the exact existing Node owner. Provider effect and data-retention text remains descriptive rather than a generic deletion or security guarantee.
 
 ## Compatibility
 

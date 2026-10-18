@@ -1,3 +1,8 @@
+import { listApprovedNodes } from './registry';
+import type { ExecRuntime } from '../execManager';
+import type { ExecBackend, ExecStarted, ExecSnapshot } from '../../packages/shared/dist/execBackend';
+import { resolveExecTimeoutSeconds } from '../../packages/shared/dist/persistentExec';
+import { createProviderExecBackend } from './providerExecBackend';
 import path from 'node:path';
 import { decodeNodeTransferFile } from '../nodeFileTransfer';
 import { readWholeFile } from '../../packages/shared/dist/fileOperations';
@@ -33,6 +38,7 @@ export type NodeDescriptor = {
   kind: NodeKind;
   provider: string;
   type: string;
+  label?: string;
   availability: NodeAvailability;
   tools: NodeCapabilityDescriptor[];
   /** Internal provider execution boundary. Omitted by complete-tool authenticated runtimes. */
@@ -100,7 +106,18 @@ export type NodeFilesystemRequest = {
   context: Extract<NodeToolRequest, { sourceSessionId: string }>['context'];
 };
 
-export type NodeExecRequest = Omit<Extract<NodeToolRequest, { sourceSessionId: string }>, 'toolName'>;
+export type NodeExecStartRequest = { nodeId: string; command: string; cwd?: string };
+export type NodeExecPollRequest = { nodeId: string; ref: string };
+
+export type NodeProviderDescription = {
+  label: string;
+  description: string;
+  lifecycle: NodeLifecycleAction[];
+  createParameters?: unknown;
+  ensureParameters?: unknown;
+  lifecycleDescription?: string;
+  dataRetention?: string;
+};
 
 export type NodeLifecycleAction = 'create' | 'ensure' | 'inspect' | 'destroy';
 
@@ -120,6 +137,7 @@ export type NodeLifecycleNodeRequest = NodeLifecycleProviderRequest & {
 };
 
 export type NodeLifecycleResult = {
+  provider?: NodeProviderDescription & { id: string };
   node?: NodeProviderDescriptor;
   nodeId?: string;
   effect?: string;
@@ -127,9 +145,10 @@ export type NodeLifecycleResult = {
   details?: unknown;
 };
 
-export type NodeLifecycleProviderSummary = {
+export type NodeProviderSummary = {
   id: string;
-  actions: NodeLifecycleAction[];
+  label: string;
+  lifecycle: NodeLifecycleAction[];
 };
 
 export interface NodeProvider {
@@ -147,7 +166,9 @@ export interface NodeProvider {
   invokeFilesystem?(request: NodeFilesystemRequest, options?: NodeProviderCallOptions): Promise<unknown>;
   /** Complete internal file bytes, not a formatted or truncated model result. */
   readFile?(request: Extract<NodeToolRequest, { sourceSessionId: string }> & { toolName: 'read' }, options?: NodeProviderCallOptions): Promise<Buffer>;
-  invokeExec?(request: NodeExecRequest, options?: NodeProviderCallOptions): Promise<unknown>;
+  describe?(options?: NodeProviderCallOptions): Promise<NodeProviderDescription>;
+  startExec?(request: NodeExecStartRequest, options?: NodeProviderCallOptions): Promise<ExecStarted>;
+  pollExec?(request: NodeExecPollRequest): Promise<ExecSnapshot>;
   getDefaultCwd?(request: NodeDefaultCwdRequest, options?: NodeProviderCallOptions): Promise<string | undefined>;
   createNode?(request: NodeLifecycleProviderRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult>;
   ensureNode?(request: NodeLifecycleProviderRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult>;
@@ -174,7 +195,7 @@ export class NodeProviderRegistry {
   private shutdownPromise?: Promise<void>;
   private shutDown = false;
 
-  constructor(providers: readonly NodeProvider[]) {
+  constructor(providers: readonly NodeProvider[], private readonly options: { getExecRuntime?: () => ExecRuntime } = {}) {
     const ids = new Set<string>();
     for (const provider of providers) {
       if (!provider.id || ids.has(provider.id)) {
@@ -305,7 +326,7 @@ export class NodeProviderRegistry {
     const resolved = await this.resolveAvailableTool(request, options);
     if (options?.foregroundToolCancellation) {
       throwIfToolStopped(options.signal);
-      options = { ...options, signal: request.toolName === 'exec' && resolved.provider.supportsExecWaitCancellation
+      options = { ...options, signal: request.toolName === 'exec' && (resolved.provider.supportsExecWaitCancellation || resolved.descriptor.primitiveBackends?.exec)
         ? options.signal : options.hardCancellationSignal };
     }
     if (resolved.descriptor.primitiveBackends) {
@@ -355,7 +376,7 @@ export class NodeProviderRegistry {
     if (provider && descriptor.primitiveBackends.filesystem && !provider.invokeFilesystem) {
       throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Primitive Node \`${descriptor.id}\` advertises filesystem support without a filesystem backend.`);
     }
-    if (provider && descriptor.primitiveBackends.exec && !provider.invokeExec) {
+    if (provider && descriptor.primitiveBackends.exec && (!provider.startExec || !provider.pollExec || !descriptor.primitiveBackends.filesystem)) {
       throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Primitive Node \`${descriptor.id}\` advertises exec support without an exec backend.`);
     }
     const names = new Set<string>();
@@ -376,13 +397,12 @@ export class NodeProviderRegistry {
     request: Extract<NodeToolRequest, { sourceSessionId: string }>,
     options?: NodeProviderCallOptions,
   ): Promise<unknown> {
-    const source = { sourceSessionId: request.sourceSessionId };
     if (request.toolName === 'exec') {
       rejectUnsupportedAgentPathVariable(request.args.cwd);
-      if (!descriptor.primitiveBackends?.exec || !provider.invokeExec) {
+      if (!descriptor.primitiveBackends?.exec || !provider.startExec || !provider.pollExec) {
         throw new NodeProviderError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`exec\` not available on node \`${request.nodeId}\`.`);
       }
-      return provider.invokeExec({ ...source, nodeId: request.nodeId, args: request.args, context: request.context } as NodeExecRequest, options);
+      return this.invokePrimitiveExec(provider, request, options);
     }
     const access = descriptor.primitiveBackends?.filesystem;
     const mutation = request.toolName === 'write' || request.toolName === 'edit' || request.toolName === 'apply_patch';
@@ -408,6 +428,45 @@ export class NodeProviderRegistry {
     return tool(request.args, context);
   }
 
+  /** Reattach only to the exact configured provider, not to another current owner of the Node ID. */
+  execBackend(providerId: string, nodeId: string): ExecBackend {
+    const provider = this.providers.find(candidate => candidate.id === providerId);
+    if (!provider?.startExec || !provider.pollExec || !provider.invokeFilesystem) throw new Error('Configured Node provider exec backend is unavailable.');
+    const { operations } = this.filesystemBackend(provider, {
+      sourceSessionId: '', nodeId, toolName: 'read', args: {}, context: { agent: '' },
+    });
+    return createProviderExecBackend(provider, nodeId, operations);
+  }
+
+  private async invokePrimitiveExec(provider: NodeProvider, request: Extract<NodeToolRequest, { sourceSessionId: string }>, options?: NodeProviderCallOptions): Promise<unknown> {
+    const runtime = this.options.getExecRuntime?.();
+    if (!runtime) throw new Error('Node provider exec runtime is unavailable.');
+    const command = request.args.command;
+    if (typeof command !== 'string' || !command.trim()) throw new Error('exec requires command');
+    const timeout = resolveExecTimeoutSeconds(request.args.timeout);
+    await runtime.initialize();
+    const entry = await runtime.startPersistentExec({
+      backend: { providerId: provider.id }, nodeId: request.nodeId,
+      command, cwd: request.args.cwd, sessionCwd: request.context.currentNode === request.nodeId ? request.context.cwd : undefined,
+      sessionId: request.sourceSessionId, agentName: request.context.agent,
+      onBeforeProcessLaunch: () => throwIfToolStopped(options?.signal),
+      hardCancellationSignal: options?.hardCancellationSignal,
+    });
+    const status = await runtime.waitForExecCompletion(entry.id, timeout.effectiveSeconds * 1000, options?.signal);
+    if (!status) await runtime.markExecForBackgroundNotification(entry.id);
+    try {
+      const output = status
+        ? await runtime.buildForegroundExecResult(entry, status, timeout.warning)
+        : await runtime.buildBackgroundTimeoutResult(entry, timeout.effectiveSeconds, timeout.warning, options?.signal?.aborted ? 'Stop or Run queued' : undefined);
+      const nextCwd = status ? await runtime.readFinishedExecWorkingDirectory(entry) : await runtime.readLiveExecWorkingDirectory(entry);
+      const result = request.context.programmatic ? await runtime.buildProgrammaticExecResult(entry, status, output) : { output };
+      return nextCwd && request.context.currentNode === request.nodeId
+        ? { ...result, __execBatchCwdSync: { nextCwd, nodeId: request.nodeId } } : result;
+    } finally {
+      if (status) await runtime.finalizeForegroundExec(entry.id);
+    }
+  }
+
   private filesystemBackend(provider: NodeProvider, request: Extract<NodeToolRequest, { sourceSessionId: string }>, options?: NodeProviderCallOptions) {
     const call = async (operation: NodeFilesystemOperation, fields: Partial<NodeFilesystemRequest>) => {
       return provider.invokeFilesystem!({
@@ -419,7 +478,7 @@ export class NodeProviderRegistry {
         ...(fields.count === undefined ? {} : { count: fields.count }),
         ...(fields.contentBase64 === undefined ? {} : { contentBase64: fields.contentBase64 }),
         ...(fields.flag === undefined ? {} : { flag: fields.flag }),
-        context: request.context,
+        context: { ...request.context, cwd: request.context.currentNode === request.nodeId ? request.context.cwd : undefined },
       }, options);
     };
     const operations: FileOperations = {
@@ -463,15 +522,24 @@ export class NodeProviderRegistry {
     return { kind: value.kind, size: value.size, modifiedAtMs: value.modifiedAtMs };
   }
 
-  listLifecycleProviders(): NodeLifecycleProviderSummary[] {
-    return this.providers.flatMap(provider => {
-      const actions: NodeLifecycleAction[] = [];
-      if (provider.createNode) actions.push('create');
-      if (provider.ensureNode) actions.push('ensure');
-      if (provider.inspectNode) actions.push('inspect');
-      if (provider.destroyNode) actions.push('destroy');
-      return actions.length > 0 ? [{ id: provider.id, actions }] : [];
-    });
+  async inspectProvider(providerId: string, options?: NodeProviderCallOptions): Promise<NodeProviderDescription & { id: string }> {
+    const provider = this.providers.find(candidate => candidate.id === providerId);
+    if (!provider) throw new NodeProviderError('NODE_LIFECYCLE_PROVIDER_NOT_FOUND', `Node provider \`${providerId}\` is not configured.`);
+    const actions: NodeLifecycleAction[] = [];
+    if (provider.createNode) actions.push('create');
+    if (provider.ensureNode) actions.push('ensure');
+    if (provider.inspectNode) actions.push('inspect');
+    if (provider.destroyNode) actions.push('destroy');
+    return { ...(provider.describe ? await provider.describe(options) : {
+      label: provider.id, description: 'Execution environments exposed by this provider.', lifecycle: actions,
+    }), id: provider.id };
+  }
+
+  async listProviders(options?: NodeProviderCallOptions): Promise<NodeProviderSummary[]> {
+    return Promise.all(this.providers.map(async provider => {
+      const description = await this.inspectProvider(provider.id, options);
+      return { id: description.id, label: description.label, lifecycle: description.lifecycle };
+    }));
   }
 
   async createNode(providerId: string, request: NodeLifecycleProviderRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult> {
@@ -531,7 +599,7 @@ export class NodeProviderRegistry {
       throw new NodeProviderError('NODE_LIFECYCLE_PROVIDER_NOT_FOUND', `Node provider \`${providerId}\` is not configured.`);
     }
     const method = action === 'create' ? provider.createNode : provider.ensureNode;
-    if (!method) {
+    if (!method || (provider.describe && !(await provider.describe(options)).lifecycle.includes(action))) {
       throw new NodeProviderError('NODE_LIFECYCLE_OPERATION_UNSUPPORTED', `Node provider \`${providerId}\` does not support \`${action}\`.`);
     }
     if (request.nodeId) {
@@ -575,7 +643,7 @@ export class NodeProviderRegistry {
       throw new NodeProviderError('NODE_EXECUTION_NODE_UNAVAILABLE', `Node \`${request.nodeId}\` is not available.`, true);
     }
     const method = action === 'inspect' ? resolved.provider.inspectNode : resolved.provider.destroyNode;
-    if (!method) {
+    if (!method || (resolved.provider.describe && !(await resolved.provider.describe(options)).lifecycle.includes(action))) {
       throw new NodeProviderError(
         'NODE_LIFECYCLE_OPERATION_UNSUPPORTED',
         `Node provider \`${resolved.provider.id}\` does not support \`${action}\` for Node \`${request.nodeId}\`.`,
@@ -690,6 +758,9 @@ function masterTools(): NodeCapabilityDescriptor[] {
 
 export class MasterNodeProvider implements NodeProvider {
   readonly id = 'master';
+  async describe(): Promise<NodeProviderDescription> {
+    return { label: 'Main host', description: 'The colocated Main execution environment.', lifecycle: [] };
+  }
 
   private descriptor(): NodeDescriptor {
     const lastActivity = nodesManager.listNodes().find(node => node.id === 'master')?.lastActivity;
@@ -723,6 +794,9 @@ export class MasterNodeProvider implements NodeProvider {
 export class AuthenticatedRemoteNodeProvider implements NodeProvider {
   readonly supportsExecWaitCancellation = true;
   readonly id = 'authenticated-remote';
+  async describe(): Promise<NodeProviderDescription> {
+    return { label: 'Authenticated Nodes', description: 'Resident Nodes connected through authenticated CLI, HTTP or WebSocket transports. Pairing and revocation are managed separately.', lifecycle: [] };
+  }
 
   private descriptorForRuntimeNode(nodeId: string): NodeDescriptor | undefined {
     const node: any = nodesManager.getNode(nodeId);
@@ -762,7 +836,7 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
     };
   }
 
-  listNodes(): NodeDescriptor[] {
+  async listNodes(): Promise<NodeDescriptor[]> {
     const activity = new Map(nodesManager.listNodes().map(node => [node.id, node.lastActivity]));
     const described: NodeDescriptor[] = nodesManager.listNodesWithTools()
       .filter(node => node.id !== 'master')
@@ -773,6 +847,7 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
         type: node.type,
         availability: 'ready' as const,
         tools: node.tools,
+        ...(this.descriptorForRuntimeNode(node.id)?.protocolCompatibility ? { protocolCompatibility: this.descriptorForRuntimeNode(node.id)!.protocolCompatibility } : {}),
         ...(typeof activity.get(node.id) === 'number' ? { lastActivity: activity.get(node.id) } : {}),
       }));
     const known = new Set(described.map(node => node.id));
@@ -781,11 +856,18 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
       const descriptor = this.descriptorForRuntimeNode(node.id);
       if (descriptor) described.push(descriptor);
     }
+    for (const approved of await listApprovedNodes()) {
+      if (described.some(node => node.id === approved.nodeId)) continue;
+      described.push({ id: approved.nodeId, kind: 'remote', provider: this.id, type: approved.nodeType,
+        availability: 'offline', tools: [], label: approved.displayName || approved.requestedName || approved.nodeId,
+        ...(approved.protocolCompatibility ? { protocolCompatibility: approved.protocolCompatibility } : {}),
+      });
+    }
     return described;
   }
 
-  getNode(nodeId: string): NodeDescriptor | undefined {
-    return this.descriptorForRuntimeNode(nodeId);
+  async getNode(nodeId: string): Promise<NodeDescriptor | undefined> {
+    return this.descriptorForRuntimeNode(nodeId) || (await this.listNodes()).find(node => node.id === nodeId);
   }
 
   async invokeTool(request: NodeToolRequest, options?: NodeProviderCallOptions): Promise<unknown> {
