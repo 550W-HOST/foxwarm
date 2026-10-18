@@ -833,11 +833,14 @@ public sealed class MainLocalToolsTests
             state.AuthorityEnvelope["cwd"] = "/target/cwd";
             state.AuthorityEnvelope["persistentMemorySnapshot"] = "target-only memory";
         });
-        await ForkClearLifecycleTests.AppendAsync(target, new JsonObject
-        {
-            ["role"] = "user",
-            ["parts"] = new JsonArray(new JsonObject { ["text"] = "target-only history" }),
-        });
+        await ForkClearLifecycleTests.AppendAsync(
+            target,
+            new JsonObject
+            {
+                ["role"] = "user",
+                ["parts"] = new JsonArray(new JsonObject { ["text"] = "target-only history" }),
+            }
+        );
         var before = f.Manager.Owners().Count();
         var status = await f.Call(
             "session",

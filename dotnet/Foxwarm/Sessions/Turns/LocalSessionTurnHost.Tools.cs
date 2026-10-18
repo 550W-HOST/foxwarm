@@ -269,6 +269,9 @@ public sealed partial class LocalSessionTurnHost
         {
             return new(UnsupportedTurnToolExecutor.ToolError("tool_error", exception.Message));
         }
-        finally { entry.ToolProgress?.Invoke(call, false); }
+        finally
+        {
+            entry.ToolProgress?.Invoke(call, false);
+        }
     }
 }

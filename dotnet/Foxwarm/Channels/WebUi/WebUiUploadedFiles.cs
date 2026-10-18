@@ -197,7 +197,10 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                 await StageAsync(owner, "after-copy");
                 scoped?.Require(owner.Id);
                 parts.Add(
-                    new JsonObject { ["text"] = ChannelFileNames.Descriptor(filename, destination, mime, node) }
+                    new JsonObject
+                    {
+                        ["text"] = ChannelFileNames.Descriptor(filename, destination, mime, node),
+                    }
                 );
                 if (mime.StartsWith("image/", StringComparison.Ordinal))
                 {

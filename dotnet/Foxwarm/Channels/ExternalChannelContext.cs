@@ -17,5 +17,9 @@ internal sealed record ExternalChannelContext(
 
 internal sealed record ExternalChannelMessage(IReadOnlyList<JsonObject> Parts)
 {
-    internal string Text => string.Join("\n", Parts.Select(part => Foxwarm.Sessions.SessionWait.Text(part["text"]) ?? ""));
+    internal string Text =>
+        string.Join(
+            "\n",
+            Parts.Select(part => Foxwarm.Sessions.SessionWait.Text(part["text"]) ?? "")
+        );
 }

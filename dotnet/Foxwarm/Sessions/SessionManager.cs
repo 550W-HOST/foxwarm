@@ -422,7 +422,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         owner.Entry.ToolProgress = (call, start) => ChannelToolProgress(owner, call, start);
         owner.Entry.TurnStopped = () => ChannelStoppedAsync(owner);
         owner.Entry.AssistantCommitted = message => ChannelAssistantCommittedAsync(owner, message);
-        owner.Entry.RetryPresented = (retry, initial, same) => ChannelRetryAsync(owner, retry, initial, same);
+        owner.Entry.RetryPresented = (retry, initial, same) =>
+            ChannelRetryAsync(owner, retry, initial, same);
     }
 
     public string DataRoot => root;
@@ -576,7 +577,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             await MaybeRefreshStaleAsync(hosted);
         };
         registry.OnTurnCompleted = (_, result) => hosted.Compactor.AutoAfterTurnAsync(result);
-        registry.OnProcessorFinalizing = (_, error, interrupted) => FinishChannelTurnAsync(hosted, error, interrupted);
+        registry.OnProcessorFinalizing = (_, error, interrupted) =>
+            FinishChannelTurnAsync(hosted, error, interrupted);
         registry.OnBeforeContinuation = (_, result, consume, token) =>
             hosted.Compactor.BeforeContinuationAsync(result, consume, token);
         registry.OnSafePoint = _ => hosted.Compactor.SafePointAsync();

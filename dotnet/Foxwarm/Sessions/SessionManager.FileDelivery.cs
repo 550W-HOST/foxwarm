@@ -135,34 +135,54 @@ internal sealed partial class SessionManager
             {
                 owner.Entry.RequireIdentityAuthority();
                 if (!IsCurrentOwner(owner))
-                    throw new InvalidOperationException("File source Session is no longer current.");
+                    throw new InvalidOperationException(
+                        "File source Session is no longer current."
+                    );
                 var conversation = destination[(colon + 1)..];
                 if (destination[..colon] == "webui")
                 {
                     var bound = SessionCatalog.Text(bindings[destination]?["sessionId"]);
                     _ = FileSession(bound ?? conversation);
-                    var handler = Volatile.Read(ref webUiFileDelivery)
-                        ?? throw new InvalidOperationException("WebUI file delivery is unavailable.");
+                    var handler =
+                        Volatile.Read(ref webUiFileDelivery)
+                        ?? throw new InvalidOperationException(
+                            "WebUI file delivery is unavailable."
+                        );
                     handler(conversation, path, caption.Length > 0 ? caption : null);
                 }
                 else
                 {
-                    var channel = ChannelRegistry.Get(destination[..colon])
-                        ?? throw new InvalidOperationException("Channel instance is unavailable: " + destination[..colon]);
+                    var channel =
+                        ChannelRegistry.Get(destination[..colon])
+                        ?? throw new InvalidOperationException(
+                            "Channel instance is unavailable: " + destination[..colon]
+                        );
                     if (channel.SendFile is null)
                     {
-                        if (direct.Length > 0) throw new InvalidOperationException("Channel does not support file delivery.");
+                        if (direct.Length > 0)
+                            throw new InvalidOperationException(
+                                "Channel does not support file delivery."
+                            );
                         skipped.Add($"`{destination}` (no file support)");
                         continue;
                     }
                     var mime = SessionWait.Text(artifact["mimeType"]);
-                    await channel.SendFile(conversation,
-                        new Foxwarm.Channels.ChannelFile(path, name, mime, mime?.StartsWith("image/", StringComparison.Ordinal) == true),
-                        caption.Length > 0 ? caption : null, token);
+                    await channel.SendFile(
+                        conversation,
+                        new Foxwarm.Channels.ChannelFile(
+                            path,
+                            name,
+                            mime,
+                            mime?.StartsWith("image/", StringComparison.Ordinal) == true
+                        ),
+                        caption.Length > 0 ? caption : null,
+                        token
+                    );
                 }
                 delivered.Add(destination);
             }
-            catch (Exception error) when (error is not OperationCanceledException || !token.IsCancellationRequested)
+            catch (Exception error)
+                when (error is not OperationCanceledException || !token.IsCancellationRequested)
             {
                 if (direct.Length > 0)
                     throw;

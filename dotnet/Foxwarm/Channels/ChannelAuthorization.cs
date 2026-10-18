@@ -30,17 +30,28 @@ internal sealed record ChannelAuthorization(
                 $"- authorized: `{(Authorized ? "yes" : "no")}`",
                 $"- directAllowlistMatch: `{(Direct ? "yes" : "no")}`",
                 $"- dangerouslyAllowAllUsers: `{(Override ? "yes" : "no")}`",
-                "- configuredAllowlist: " + string.Join(", ", Allowed.Select(value => "`" + value + "`")),
+                "- configuredAllowlist: "
+                    + string.Join(", ", Allowed.Select(value => "`" + value + "`")),
             ]);
         if (EffectiveId.Length > 0)
-            lines.AddRange(["", "Authorize this user by adding it to config.yaml:", "```yaml", "channels:",
+            lines.AddRange([
+                "",
+                "Authorize this user by adding it to config.yaml:",
+                "```yaml",
+                "channels:",
                 "  " + System.Text.Json.JsonSerializer.Serialize(source.Instance) + ":",
-                "    allowedUsers:", "      - " + System.Text.Json.JsonSerializer.Serialize(EffectiveId), "```"]);
+                "    allowedUsers:",
+                "      - " + System.Text.Json.JsonSerializer.Serialize(EffectiveId),
+                "```",
+            ]);
         return string.Join("\n", lines);
     }
 }
 
-internal sealed class ChannelAuthorizationOwner(ModelConfiguration configuration, SessionManager sessions)
+internal sealed class ChannelAuthorizationOwner(
+    ModelConfiguration configuration,
+    SessionManager sessions
+)
 {
     private readonly HashSet<string> startup = Capture(configuration);
 
@@ -63,22 +74,41 @@ internal sealed class ChannelAuthorizationOwner(ModelConfiguration configuration
     private static string[] Users(string type, JsonObject config) =>
         (config["allowedUsers"] as JsonArray ?? [])
             .Select(SessionWait.Text)
-            .Append(type == "telegram" ? SessionWait.Text(config["mainAttachUser"])
-                : type == "matrix" ? SessionWait.Text(config["botUserId"]) : null)
-            .Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!.Trim())
-            .Distinct(StringComparer.Ordinal).ToArray();
+            .Append(
+                type == "telegram" ? SessionWait.Text(config["mainAttachUser"])
+                : type == "matrix" ? SessionWait.Text(config["botUserId"])
+                : null
+            )
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
 
     internal ChannelAuthorization Inspect(ExternalChannelContext source)
     {
-        var config = configuration.CurrentChannels()[source.Instance] as JsonObject ?? new JsonObject();
+        var config =
+            configuration.CurrentChannels()[source.Instance] as JsonObject ?? new JsonObject();
         var id = (string.IsNullOrEmpty(source.Sender) ? source.Conversation : source.Sender).Trim();
         var allowed = Users(source.Type, config);
-        var wildcard = startup.Contains(source.Instance + ":*") || startup.Contains(source.Type + ":*")
-            || source.Type is not ("telegram" or "matrix" or "wework") && SessionCatalog.Flag(config["allowAllUsers"]);
-        var direct = startup.Contains(source.Instance + ":" + id) || startup.Contains(source.Type + ":" + id)
+        var wildcard =
+            startup.Contains(source.Instance + ":*")
+            || startup.Contains(source.Type + ":*")
+            || source.Type is not ("telegram" or "matrix" or "wework")
+                && SessionCatalog.Flag(config["allowAllUsers"]);
+        var direct =
+            startup.Contains(source.Instance + ":" + id)
+            || startup.Contains(source.Type + ":" + id)
             || allowed.Contains(id, StringComparer.Ordinal);
-        var channelOverride = SessionCatalog.Flag(sessions.ChannelBinding(source.Target)?["dangerouslyAllowAllUsers"]);
-        return new(id, direct || wildcard || channelOverride || source.Type is "webui" or "tui" or "internal",
-            direct, wildcard, channelOverride, allowed);
+        var channelOverride = SessionCatalog.Flag(
+            sessions.ChannelBinding(source.Target)?["dangerouslyAllowAllUsers"]
+        );
+        return new(
+            id,
+            direct || wildcard || channelOverride || source.Type is "webui" or "tui" or "internal",
+            direct,
+            wildcard,
+            channelOverride,
+            allowed
+        );
     }
 }

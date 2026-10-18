@@ -42,9 +42,16 @@ internal sealed class SessionDeletionChannels(string root)
     }
 
     internal JsonObject? Binding(string destination) =>
-        ReadForDelivery()["channels"]?[destination] is JsonObject binding ? (JsonObject)binding.DeepClone() : null;
+        ReadForDelivery()["channels"]?[destination] is JsonObject binding
+            ? (JsonObject)binding.DeepClone()
+            : null;
 
-    internal void Bind(string destination, string id, JsonObject? updates = null, bool durable = true)
+    internal void Bind(
+        string destination,
+        string id,
+        JsonObject? updates = null,
+        bool durable = true
+    )
     {
         lock (gate)
         {
@@ -55,7 +62,10 @@ internal sealed class SessionDeletionChannels(string root)
                 foreach (var (key, value) in updates)
                     config[key] = value?.DeepClone();
             payload["channels"]![destination] = config;
-            try { PersistMutation(payload, durable); }
+            try
+            {
+                PersistMutation(payload, durable);
+            }
             catch
             {
                 // Critical binding restores the prior live map even if replacement already happened.
@@ -76,8 +86,11 @@ internal sealed class SessionDeletionChannels(string root)
                 channels.Remove(destination);
             else
             {
-                var config = channels[destination] as JsonObject
-                    ?? throw new InvalidOperationException("Channel " + destination + " not attached");
+                var config =
+                    channels[destination] as JsonObject
+                    ?? throw new InvalidOperationException(
+                        "Channel " + destination + " not attached"
+                    );
                 if (value is null)
                     config.Remove(field);
                 else
@@ -93,11 +106,20 @@ internal sealed class SessionDeletionChannels(string root)
         {
             var config = node!.AsObject();
             config.Remove("dangerouslyAllowAllGroupMembers");
-            foreach (var key in config.Select(pair => pair.Key).Where(key => key is not ("sessionId" or "mode" or "dangerouslyAllowAllUsers")).ToArray())
+            foreach (
+                var key in config
+                    .Select(pair => pair.Key)
+                    .Where(key => key is not ("sessionId" or "mode" or "dangerouslyAllowAllUsers"))
+                    .ToArray()
+            )
                 config.Remove(key);
         }
-        try { Write(payload); }
-        catch (Exception error) when (!durable && error is IOException or UnauthorizedAccessException)
+        try
+        {
+            Write(payload);
+        }
+        catch (Exception error)
+            when (!durable && error is IOException or UnauthorizedAccessException)
         {
             pendingOrdinary = payload;
             Console.Error.WriteLine("Channel attachment save failed: " + error.Message);
@@ -165,8 +187,12 @@ internal sealed class SessionDeletionChannels(string root)
             var colon = key.IndexOf(':');
             if (colon <= 0 || colon == key.Length - 1)
                 throw new InvalidDataException("Channel authority contains an invalid binding.");
-            if (value is JsonValue && legacyId is { Length: > 0 }) continue;
-            if (value is not JsonObject config || SessionCatalog.Text(config["sessionId"]) is not { Length: > 0 })
+            if (value is JsonValue && legacyId is { Length: > 0 })
+                continue;
+            if (
+                value is not JsonObject config
+                || SessionCatalog.Text(config["sessionId"]) is not { Length: > 0 }
+            )
                 throw new InvalidDataException("Channel authority contains an invalid binding.");
             if (
                 config["mode"] is not null
@@ -238,7 +264,10 @@ internal sealed class SessionDeletionChannels(string root)
                     channels[key] = to;
                     changed = true;
                 }
-                else if (value is JsonObject config && SessionCatalog.Text(config["sessionId"]) == from)
+                else if (
+                    value is JsonObject config
+                    && SessionCatalog.Text(config["sessionId"]) == from
+                )
                 {
                     config["sessionId"] = to;
                     changed = true;

@@ -294,7 +294,11 @@ public sealed class SessionTurnRunner
                     if (claimed && !interrupted)
                         await hosts.For(entry).ReleaseBusyAsync().ConfigureAwait(false);
                 }
-                catch (Exception error) { escapingError = error; throw; }
+                catch (Exception error)
+                {
+                    escapingError = error;
+                    throw;
+                }
                 finally
                 {
                     if (registry.OnProcessorFinalizing is { } finalizing)

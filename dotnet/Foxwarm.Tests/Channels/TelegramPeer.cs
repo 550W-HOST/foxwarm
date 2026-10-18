@@ -9,7 +9,12 @@ using Microsoft.Extensions.Logging;
 
 namespace Foxwarm.Tests;
 
-internal sealed record TelegramPeerCall(string Bot, string Method, JsonObject Body, byte[]? Bytes = null);
+internal sealed record TelegramPeerCall(
+    string Bot,
+    string Method,
+    JsonObject Body,
+    byte[]? Bytes = null
+);
 
 // An actual local Bot API HTTP peer; no vendor credentials or production endpoint setting.
 internal sealed class TelegramPeer : IAsyncDisposable
@@ -32,32 +37,55 @@ internal sealed class TelegramPeer : IAsyncDisposable
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         var peer = new TelegramPeer(builder.Build());
         peer.app.MapPost("/bot{bot}/{method}", peer.HandleAsync);
-        peer.app.MapGet("/file/bot{bot}/{**path}", (string path) =>
-            peer.Files.TryGetValue(path, out var bytes) ? Results.Bytes(bytes) : Results.NotFound());
+        peer.app.MapGet(
+            "/file/bot{bot}/{**path}",
+            (string path) =>
+                peer.Files.TryGetValue(path, out var bytes)
+                    ? Results.Bytes(bytes)
+                    : Results.NotFound()
+        );
         await peer.app.StartAsync();
         peer.Address = new Uri(peer.app.Urls.Single() + "/");
         return peer;
     }
 
-    internal Foxwarm.Channels.ChannelTransportDependencies Dependencies => new(
-        TelegramApi: token => new Uri(Address, "bot" + token + "/"),
-        TelegramFiles: token => new Uri(Address, "file/bot" + token + "/"),
-        Delay: (duration, token) => { token.ThrowIfCancellationRequested(); Delays.Enqueue(duration); return Task.CompletedTask; }
-    );
+    internal Foxwarm.Channels.ChannelTransportDependencies Dependencies =>
+        new(
+            TelegramApi: token => new Uri(Address, "bot" + token + "/"),
+            TelegramFiles: token => new Uri(Address, "file/bot" + token + "/"),
+            Delay: (duration, token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                Delays.Enqueue(duration);
+                return Task.CompletedTask;
+            }
+        );
 
-    private Channel<JsonObject> Queue(string bot) => updates.GetOrAdd(bot, _ => Channel.CreateUnbounded<JsonObject>());
+    private Channel<JsonObject> Queue(string bot) =>
+        updates.GetOrAdd(bot, _ => Channel.CreateUnbounded<JsonObject>());
 
-    internal void Push(string bot, JsonObject message) => Queue(bot).Writer.TryWrite(new JsonObject
-    {
-        ["update_id"] = Interlocked.Increment(ref update), ["message"] = message.DeepClone(),
-    });
+    internal void Push(string bot, JsonObject message) =>
+        Queue(bot)
+            .Writer.TryWrite(
+                new JsonObject
+                {
+                    ["update_id"] = Interlocked.Increment(ref update),
+                    ["message"] = message.DeepClone(),
+                }
+            );
 
-    internal static JsonObject Text(string chat, string sender, string text, bool bot = false) => new()
-    {
-        ["chat"] = new JsonObject { ["id"] = long.Parse(chat) },
-        ["from"] = new JsonObject { ["id"] = long.Parse(sender), ["username"] = "peer", ["is_bot"] = bot },
-        ["text"] = text,
-    };
+    internal static JsonObject Text(string chat, string sender, string text, bool bot = false) =>
+        new()
+        {
+            ["chat"] = new JsonObject { ["id"] = long.Parse(chat) },
+            ["from"] = new JsonObject
+            {
+                ["id"] = long.Parse(sender),
+                ["username"] = "peer",
+                ["is_bot"] = bot,
+            },
+            ["text"] = text,
+        };
 
     internal IEnumerable<TelegramPeerCall> Sent(string bot, string method = "sendMessage") =>
         Calls.Where(call => call.Bot == bot && call.Method == method);
@@ -70,7 +98,8 @@ internal sealed class TelegramPeer : IAsyncDisposable
         {
             var form = await request.ReadFormAsync(request.HttpContext.RequestAborted);
             body = new JsonObject();
-            foreach (var (name, value) in form) body[name] = value.ToString();
+            foreach (var (name, value) in form)
+                body[name] = value.ToString();
             if (form.Files.FirstOrDefault() is { } file)
             {
                 body["uploadField"] = file.Name;
@@ -81,24 +110,48 @@ internal sealed class TelegramPeer : IAsyncDisposable
                 upload = buffer.ToArray();
             }
         }
-        else body = (await request.ReadFromJsonAsync<JsonObject>())!;
+        else
+            body = (await request.ReadFromJsonAsync<JsonObject>())!;
         var call = new TelegramPeerCall(bot, method, body, upload);
         Calls.Enqueue(call);
         if (Fail?.Invoke(call) is { } failure)
-            return Results.Json(new { ok = false, error_code = failure.Code, description = failure.Error }, statusCode: failure.Code);
+            return Results.Json(
+                new
+                {
+                    ok = false,
+                    error_code = failure.Code,
+                    description = failure.Error,
+                },
+                statusCode: failure.Code
+            );
         object? result = true;
         switch (method)
         {
-            case "getMe": result = new { id = 500, is_bot = true, username = "owned_bot" }; break;
-            case "getFile": result = new { file_path = body["file_id"]!.GetValue<string>() }; break;
+            case "getMe":
+                result = new
+                {
+                    id = 500,
+                    is_bot = true,
+                    username = "owned_bot",
+                };
+                break;
+            case "getFile":
+                result = new { file_path = body["file_id"]!.GetValue<string>() };
+                break;
             case "getUpdates":
                 var rows = new JsonArray();
-                if (body["limit"] is not null) { result = rows; break; }
+                if (body["limit"] is not null)
+                {
+                    result = rows;
+                    break;
+                }
                 try
                 {
-                    var next = await Queue(bot).Reader.ReadAsync(request.HttpContext.RequestAborted);
+                    var next = await Queue(bot)
+                        .Reader.ReadAsync(request.HttpContext.RequestAborted);
                     rows.Add(next);
-                    while (Queue(bot).Reader.TryRead(out next)) rows.Add(next);
+                    while (Queue(bot).Reader.TryRead(out next))
+                        rows.Add(next);
                 }
                 catch (OperationCanceledException) { }
                 result = rows;

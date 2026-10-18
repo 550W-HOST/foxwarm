@@ -33,18 +33,43 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
                 return new(404, new { error = "Session not found" });
             return HandlePresentationCommand(context with { SessionId = canonical }, message.Text);
         }
-        if (runtime.Manager.ChannelAuthorization is not null && context.Platform is "webui" or "tui")
+        if (
+            runtime.Manager.ChannelAuthorization is not null
+            && context.Platform is "webui" or "tui"
+        )
         {
-            var shared = System.Text.RegularExpressions.Regex.Match(message.Text,
-                @"^(/(?:whoami|channel|attach|help|session))(?:\s+([\s\S]*))?$");
-            if (shared.Success && (shared.Groups[1].Value != "/session"
-                || System.Text.RegularExpressions.Regex.IsMatch(shared.Groups[2].Value, @"^(?:new|create|fork)(?:\s|$)")))
+            var shared = System.Text.RegularExpressions.Regex.Match(
+                message.Text,
+                @"^(/(?:whoami|channel|attach|help|session))(?:\s+([\s\S]*))?$"
+            );
+            if (
+                shared.Success
+                && (
+                    shared.Groups[1].Value != "/session"
+                    || System.Text.RegularExpressions.Regex.IsMatch(
+                        shared.Groups[2].Value,
+                        @"^(?:new|create|fork)(?:\s|$)"
+                    )
+                )
+            )
             {
-                var source = new Foxwarm.Channels.ExternalChannelContext(context.Platform, context.Platform,
-                    context.SessionId, null, null,
-                    text => { runtime.ReplyToCommand(context.SessionId, text); return Task.CompletedTask; });
-                await HandleExternalCommandAsync(source, shared.Groups[1].Value,
-                    shared.Groups[2].Success ? shared.Groups[2].Value : null);
+                var source = new Foxwarm.Channels.ExternalChannelContext(
+                    context.Platform,
+                    context.Platform,
+                    context.SessionId,
+                    null,
+                    null,
+                    text =>
+                    {
+                        runtime.ReplyToCommand(context.SessionId, text);
+                        return Task.CompletedTask;
+                    }
+                );
+                await HandleExternalCommandAsync(
+                    source,
+                    shared.Groups[1].Value,
+                    shared.Groups[2].Success ? shared.Groups[2].Value : null
+                );
                 return new(200, new { success = true });
             }
         }

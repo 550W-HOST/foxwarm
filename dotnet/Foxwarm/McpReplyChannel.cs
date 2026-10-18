@@ -39,7 +39,13 @@ internal sealed class McpReplyChannel(
             Require();
             if (!registered)
             {
-                registry.Register(name, new RegisteredChannel("mcp", (conversation, text, _, token) => SendAsync(conversation, text, token)));
+                registry.Register(
+                    name,
+                    new RegisteredChannel(
+                        "mcp",
+                        (conversation, text, _, token) => SendAsync(conversation, text, token)
+                    )
+                );
                 registered = true;
             }
             pending++;

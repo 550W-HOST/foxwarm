@@ -107,26 +107,63 @@ internal static class SessionBoundary
     }
 
     internal static IReadOnlyList<JsonObject> ExternalChannelInput(
-        IReadOnlyList<JsonObject> parts, Foxwarm.Channels.ExternalChannelContext source, bool sendOnly)
+        IReadOnlyList<JsonObject> parts,
+        Foxwarm.Channels.ExternalChannelContext source,
+        bool sendOnly
+    )
     {
         static string Attribute(string value) => LocalSessionTurnHost.EscapeFoxwarmAttribute(value);
-        var hint = sendOnly ? "direct user message via channel"
+        var hint = sendOnly
+            ? "direct user message via channel"
             : "direct user message via channel; This channel is in normal mode. Assistant text from this session is automatically delivered to this channel, so you do not need to call send_to_channel to reply here.";
-        var opening = "<foxwarm-message type=\"channel\" channelInstanceId=\"" + Attribute(source.Instance)
-            + "\" channelType=\"" + Attribute(source.Type) + "\" conversationId=\"" + Attribute(source.Conversation)
-            + "\" channelTargetId=\"" + Attribute(source.Target) + "\""
+        var opening =
+            "<foxwarm-message type=\"channel\" channelInstanceId=\""
+            + Attribute(source.Instance)
+            + "\" channelType=\""
+            + Attribute(source.Type)
+            + "\" conversationId=\""
+            + Attribute(source.Conversation)
+            + "\" channelTargetId=\""
+            + Attribute(source.Target)
+            + "\""
             + (source.Username is null ? "" : " sender=\"" + Attribute(source.Username) + "\"")
-            + " time=\"" + Attribute(LocalTime()) + "\" hint=\"" + Attribute(hint) + "\">";
+            + " time=\""
+            + Attribute(LocalTime())
+            + "\" hint=\""
+            + Attribute(hint)
+            + "\">";
         var result = new List<JsonObject>();
         if (sendOnly)
         {
-            var notice = "Channel is in send-only mode. If you need to reply, call send_to_channel({channelTargetId: \""
-                + source.Target + "\", message: \"...\"}).";
-            result.Add(new JsonObject { ["system"] = "<foxwarm-system kind=\"channel-mode\" time=\"" + Attribute(LocalTime())
-                + "\" mode=\"send-only\" channelTargetId=\"" + Attribute(source.Target) + "\" hint=\"" + Attribute(notice) + "\" />" });
+            var notice =
+                "Channel is in send-only mode. If you need to reply, call send_to_channel({channelTargetId: \""
+                + source.Target
+                + "\", message: \"...\"}).";
+            result.Add(
+                new JsonObject
+                {
+                    ["system"] =
+                        "<foxwarm-system kind=\"channel-mode\" time=\""
+                        + Attribute(LocalTime())
+                        + "\" mode=\"send-only\" channelTargetId=\""
+                        + Attribute(source.Target)
+                        + "\" hint=\""
+                        + Attribute(notice)
+                        + "\" />",
+                }
+            );
         }
         if (parts.All(part => part.Count == 1 && SessionWait.Text(part["text"]) is not null))
-            result.Add(new JsonObject { ["system"] = opening + "\n" + string.Join("\n", parts.Select(part => part["text"]!.GetValue<string>())) + "\n</foxwarm-message>" });
+            result.Add(
+                new JsonObject
+                {
+                    ["system"] =
+                        opening
+                        + "\n"
+                        + string.Join("\n", parts.Select(part => part["text"]!.GetValue<string>()))
+                        + "\n</foxwarm-message>",
+                }
+            );
         else
         {
             result.Add(new JsonObject { ["system"] = opening });

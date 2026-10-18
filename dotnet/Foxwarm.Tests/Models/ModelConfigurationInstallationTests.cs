@@ -15,7 +15,9 @@ public sealed class ModelConfigurationInstallationTests
         {
             ["alpha"] = new JsonObject
             {
-                ["type"] = "telegram", ["allowedUsers"] = new JsonArray("11"), ["mainAttachUser"] = "42",
+                ["type"] = "telegram",
+                ["allowedUsers"] = new JsonArray("11"),
+                ["mainAttachUser"] = "42",
                 ["channelProgress"] = new JsonObject { ["intervalMs"] = 30000 },
             },
         };
@@ -23,7 +25,10 @@ public sealed class ModelConfigurationInstallationTests
         var block = ConfigurationYaml.Parse(configuration.ReadCurrentAppRaw(), "config");
         Assert.Equal("11", block["channels"]!["alpha"]!["allowedUsers"]![0]!.GetValue<string>());
         Assert.Equal("42", block["channels"]!["alpha"]!["mainAttachUser"]!.GetValue<string>());
-        Assert.Equal(30000d, block["channels"]!["alpha"]!["channelProgress"]!["intervalMs"]!.GetValue<double>());
+        Assert.Equal(
+            30000d,
+            block["channels"]!["alpha"]!["channelProgress"]!["intervalMs"]!.GetValue<double>()
+        );
         await configuration.SaveAppAsync("{\"channels\":{},\"unrelated\":{\"retained\":true}}");
         await configuration.SaveChannelsAsync(channels);
         var json = JsonNode.Parse(configuration.ReadCurrentAppRaw())!;

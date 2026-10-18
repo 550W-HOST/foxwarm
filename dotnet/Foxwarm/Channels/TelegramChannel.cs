@@ -11,9 +11,12 @@ internal sealed class TelegramApiException(int code, string description, double?
 {
     internal int Code { get; } = code;
     internal double? RetryAfter { get; } = retryAfter;
-    internal bool Payload => Code == 400 || Message.Contains("400: Bad Request", StringComparison.Ordinal)
+    internal bool Payload =>
+        Code == 400
+        || Message.Contains("400: Bad Request", StringComparison.Ordinal)
         || Message.Contains("can't parse entities", StringComparison.Ordinal);
-    internal bool PlainFallback => Code == 400 || Message.Contains("can't parse entities", StringComparison.Ordinal);
+    internal bool PlainFallback =>
+        Code == 400 || Message.Contains("can't parse entities", StringComparison.Ordinal);
 }
 
 internal sealed class TelegramChannel : IAsyncDisposable
@@ -33,27 +36,51 @@ internal sealed class TelegramChannel : IAsyncDisposable
     private string username = "";
     private long offset;
 
-    internal TelegramChannel(string id, JsonObject config, SessionManager sessions, MessageRouter router,
-        ChannelTransportDependencies? dependencies, Action<Exception> log)
+    internal TelegramChannel(
+        string id,
+        JsonObject config,
+        SessionManager sessions,
+        MessageRouter router,
+        ChannelTransportDependencies? dependencies,
+        Action<Exception> log
+    )
     {
         this.id = id;
         this.sessions = sessions;
         this.router = router;
         this.log = log;
         var token = SessionWait.Text(config["botToken"])?.Trim();
-        if (string.IsNullOrEmpty(token)) throw new InvalidDataException("Telegram botToken is missing for channel " + id);
+        if (string.IsNullOrEmpty(token))
+            throw new InvalidDataException("Telegram botToken is missing for channel " + id);
         http = dependencies?.CreateHttp?.Invoke() ?? DefaultHttp;
-        api = dependencies?.TelegramApi?.Invoke(token) ?? new Uri("https://api.telegram.org/bot" + token + "/");
-        files = dependencies?.TelegramFiles?.Invoke(token) ?? new Uri("https://api.telegram.org/file/bot" + token + "/");
+        api =
+            dependencies?.TelegramApi?.Invoke(token)
+            ?? new Uri("https://api.telegram.org/bot" + token + "/");
+        files =
+            dependencies?.TelegramFiles?.Invoke(token)
+            ?? new Uri("https://api.telegram.org/file/bot" + token + "/");
         delay = dependencies?.Delay ?? Task.Delay;
     }
 
-    internal RegisteredChannel Transport => new("telegram", (conversation, text, _, token) => SendAsync(conversation, text, token), SendFileAsync, TypingAsync);
+    internal RegisteredChannel Transport =>
+        new(
+            "telegram",
+            (conversation, text, _, token) => SendAsync(conversation, text, token),
+            SendFileAsync,
+            TypingAsync
+        );
 
     internal async Task StartAsync()
     {
-        await ApiAsync("setMyCommands", new JsonObject { ["commands"] = ExternalCommands.TelegramCommands() }, stopping.Token);
-        username = SessionWait.Text((await ApiAsync("getMe", new JsonObject(), stopping.Token))?["username"]) ?? "";
+        await ApiAsync(
+            "setMyCommands",
+            new JsonObject { ["commands"] = ExternalCommands.TelegramCommands() },
+            stopping.Token
+        );
+        username =
+            SessionWait.Text(
+                (await ApiAsync("getMe", new JsonObject(), stopping.Token))?["username"]
+            ) ?? "";
         // Telegraf 4.16.3 initializes identity, removes the webhook without dropping pending updates,
         // then polls at offset zero. Its launch callback alone is not polling readiness.
         await ApiAsync("deleteWebhook", new JsonObject(), stopping.Token);
@@ -64,7 +91,8 @@ internal sealed class TelegramChannel : IAsyncDisposable
     {
         stopping.Cancel();
         // A bot command may stop its own polling loop; Telegraf stop aborts without joining that handler.
-        if (polling is not null && !insideCommand.Value) await polling;
+        if (polling is not null && !insideCommand.Value)
+            await polling;
     }
 
     public async ValueTask DisposeAsync()
@@ -72,7 +100,8 @@ internal sealed class TelegramChannel : IAsyncDisposable
         await StopAsync();
         if (polling is { IsCompleted: false } active && insideCommand.Value)
             _ = active.ContinueWith(_ => stopping.Dispose(), TaskScheduler.Default);
-        else stopping.Dispose();
+        else
+            stopping.Dispose();
     }
 
     private async Task PollAsync()
@@ -85,17 +114,35 @@ internal sealed class TelegramChannel : IAsyncDisposable
                 JsonArray updates;
                 try
                 {
-                    updates = (await ApiAsync("getUpdates", new JsonObject
-                    {
-                        ["timeout"] = 50, ["offset"] = offset, ["allowed_updates"] = new JsonArray(),
-                    }, stopping.Token)) as JsonArray ?? new JsonArray();
+                    updates =
+                        (
+                            await ApiAsync(
+                                "getUpdates",
+                                new JsonObject
+                                {
+                                    ["timeout"] = 50,
+                                    ["offset"] = offset,
+                                    ["allowed_updates"] = new JsonArray(),
+                                },
+                                stopping.Token
+                            )
+                        ) as JsonArray
+                        ?? new JsonArray();
                 }
-                catch (OperationCanceledException) when (stopping.IsCancellationRequested) { break; }
-                catch (Exception error) when (error is HttpRequestException or OperationCanceledException
-                    || error is TelegramApiException { Code: 429 or >= 500 })
+                catch (OperationCanceledException) when (stopping.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception error)
+                    when (error is HttpRequestException or OperationCanceledException
+                        || error is TelegramApiException { Code: 429 or >= 500 }
+                    )
                 {
                     log(error);
-                    await delay(TimeSpan.FromSeconds((error as TelegramApiException)?.RetryAfter ?? 5), stopping.Token);
+                    await delay(
+                        TimeSpan.FromSeconds((error as TelegramApiException)?.RetryAfter ?? 5),
+                        stopping.Token
+                    );
                     continue;
                 }
                 catch (TelegramApiException error) when (error.Code is 401 or 409)
@@ -103,19 +150,32 @@ internal sealed class TelegramChannel : IAsyncDisposable
                     skipSync = true;
                     throw;
                 }
-                if (updates.LastOrDefault() is JsonObject last && SessionWait.Number(last["update_id"]) is { } updateId)
+                if (
+                    updates.LastOrDefault() is JsonObject last
+                    && SessionWait.Number(last["update_id"]) is { } updateId
+                )
                     offset = checked((long)updateId + 1);
                 await Task.WhenAll(updates.OfType<JsonObject>().Select(HandleUpdateSafeAsync));
             }
         }
         catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
-        catch (Exception error) { log(error); }
+        catch (Exception error)
+        {
+            log(error);
+        }
         finally
         {
             if (!skipSync)
             {
                 using var sync = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                try { await ApiAsync("getUpdates", new JsonObject { ["offset"] = offset, ["limit"] = 1 }, sync.Token); }
+                try
+                {
+                    await ApiAsync(
+                        "getUpdates",
+                        new JsonObject { ["offset"] = offset, ["limit"] = 1 },
+                        sync.Token
+                    );
+                }
                 catch { }
             }
         }
@@ -123,78 +183,156 @@ internal sealed class TelegramChannel : IAsyncDisposable
 
     private async Task HandleUpdateSafeAsync(JsonObject update)
     {
-        try { await HandleUpdateAsync(update); }
+        try
+        {
+            await HandleUpdateAsync(update);
+        }
         catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
-        catch (Exception error) { log(error); }
+        catch (Exception error)
+        {
+            log(error);
+        }
     }
 
     private async Task HandleUpdateAsync(JsonObject update)
     {
-        if (update["message"] is not JsonObject message || message["chat"]?["id"] is not JsonValue chatId) return;
+        if (
+            update["message"] is not JsonObject message
+            || message["chat"]?["id"] is not JsonValue chatId
+        )
+            return;
         var chat = Identity(chatId);
         var from = message["from"] as JsonObject;
         var sender = from?["id"] is JsonValue senderId ? Identity(senderId) : null;
-        var context = new ExternalChannelContext(id, "telegram", chat, sender, SessionWait.Text(from?["username"]), text =>
-        {
-            // Source request-context replies schedule work. Explicit tools instead await SendAsync.
-            _ = ObserveAsync(SendAsync(chat, text, CancellationToken.None));
-            return Task.CompletedTask;
-        });
+        var context = new ExternalChannelContext(
+            id,
+            "telegram",
+            chat,
+            sender,
+            SessionWait.Text(from?["username"]),
+            text =>
+            {
+                // Source request-context replies schedule work. Explicit tools instead await SendAsync.
+                _ = ObserveAsync(SendAsync(chat, text, CancellationToken.None));
+                return Task.CompletedTask;
+            }
+        );
         var bot = SessionCatalog.Flag(from?["is_bot"]);
         if (SessionWait.Text(message["text"]) is { } text)
         {
-            if (bot) return;
+            if (bot)
+                return;
             if (text.StartsWith('/'))
             {
                 var commandToken = text.Split(' ')[0];
                 var at = commandToken.IndexOf('@');
-                if (at >= 0 && username.Length > 0 && commandToken[(at + 1)..].Equals(username, StringComparison.OrdinalIgnoreCase))
+                if (
+                    at >= 0
+                    && username.Length > 0
+                    && commandToken[(at + 1)..].Equals(username, StringComparison.OrdinalIgnoreCase)
+                )
                     text = commandToken[..at] + text[commandToken.Length..];
                 var command = Regex.Match(text, @"^(\S+)(?:\s+([\s\S]*))?$");
-                if (command.Success && await CommandAsync(context, command.Groups[1].Value,
-                    command.Groups[2].Success ? command.Groups[2].Value : null)) return;
+                if (
+                    command.Success
+                    && await CommandAsync(
+                        context,
+                        command.Groups[1].Value,
+                        command.Groups[2].Success ? command.Groups[2].Value : null
+                    )
+                )
+                    return;
             }
-            _ = ObserveAsync(router.HandleExternalMessageAsync(context, new([new JsonObject { ["text"] = text }])));
+            _ = ObserveAsync(
+                router.HandleExternalMessageAsync(
+                    context,
+                    new([new JsonObject { ["text"] = text }])
+                )
+            );
             return;
         }
         var photo = (message["photo"] as JsonArray)?.LastOrDefault() as JsonObject;
         var document = message["document"] as JsonObject;
-        if (photo is null && document is null || photo is not null && bot) return;
+        if (photo is null && document is null || photo is not null && bot)
+            return;
         var media = photo ?? document!;
-        var fileId = SessionWait.Text(media["file_id"]) ?? throw new InvalidDataException("Telegram media has no file_id.");
-        var file = await ApiAsync("getFile", new JsonObject { ["file_id"] = fileId }, stopping.Token);
-        var filePath = SessionWait.Text(file?["file_path"]) ?? throw new InvalidDataException("Telegram file has no download path.");
+        var fileId =
+            SessionWait.Text(media["file_id"])
+            ?? throw new InvalidDataException("Telegram media has no file_id.");
+        var file = await ApiAsync(
+            "getFile",
+            new JsonObject { ["file_id"] = fileId },
+            stopping.Token
+        );
+        var filePath =
+            SessionWait.Text(file?["file_path"])
+            ?? throw new InvalidDataException("Telegram file has no download path.");
         var bytes = await http.GetByteArrayAsync(new Uri(files, filePath), stopping.Token);
         var unique = SessionWait.Text(media["file_unique_id"]) ?? fileId;
-        var name = photo is not null ? "telegram-photo-" + unique + ".jpg"
+        var name = photo is not null
+            ? "telegram-photo-" + unique + ".jpg"
             : SessionWait.Text(media["file_name"]) ?? "telegram-document-" + unique;
-        var mime = photo is not null ? "image/jpeg" : SessionWait.Text(media["mime_type"]) ?? "application/octet-stream";
+        var mime = photo is not null
+            ? "image/jpeg"
+            : SessionWait.Text(media["mime_type"]) ?? "application/octet-stream";
         // Deliberately preserve Source eager storage before Router authorization, using the adapter TYPE.
         // Named instances therefore retain Source's type-keyed helper limitation in this phase.
-        var parts = await sessions.SaveInboundChannelFileAsync("telegram", chat, bytes, name, mime,
-            SessionWait.Text(message["caption"]) ?? "", stopping.Token);
+        var parts = await sessions.SaveInboundChannelFileAsync(
+            "telegram",
+            chat,
+            bytes,
+            name,
+            mime,
+            SessionWait.Text(message["caption"]) ?? "",
+            stopping.Token
+        );
         _ = ObserveAsync(router.HandleExternalMessageAsync(context, new(parts)));
     }
 
-    private async Task<bool> CommandAsync(ExternalChannelContext context, string command, string? rawArgs)
+    private async Task<bool> CommandAsync(
+        ExternalChannelContext context,
+        string command,
+        string? rawArgs
+    )
     {
         insideCommand.Value = true;
-        try { return await router.HandleExternalCommandAsync(context, command, rawArgs); }
-        finally { insideCommand.Value = false; }
+        try
+        {
+            return await router.HandleExternalCommandAsync(context, command, rawArgs);
+        }
+        finally
+        {
+            insideCommand.Value = false;
+        }
     }
 
     private async Task ObserveAsync(Task task)
     {
-        try { await task; }
-        catch (Exception error) { log(error); }
+        try
+        {
+            await task;
+        }
+        catch (Exception error)
+        {
+            log(error);
+        }
     }
 
-    private static string Identity(JsonValue value) => SessionWait.Text(value) ?? value.ToJsonString();
+    private static string Identity(JsonValue value) =>
+        SessionWait.Text(value) ?? value.ToJsonString();
 
     internal async Task SendAsync(string conversation, string text, CancellationToken token)
     {
-        var body = new JsonObject { ["chat_id"] = Chat(conversation), ["text"] = text, ["parse_mode"] = "Markdown" };
-        try { await RetryAsync(() => ApiAsync("sendMessage", body, token), token); }
+        var body = new JsonObject
+        {
+            ["chat_id"] = Chat(conversation),
+            ["text"] = text,
+            ["parse_mode"] = "Markdown",
+        };
+        try
+        {
+            await RetryAsync(() => ApiAsync("sendMessage", body, token), token);
+        }
         catch (TelegramApiException error) when (error.PlainFallback)
         {
             body.Remove("parse_mode");
@@ -205,42 +343,76 @@ internal sealed class TelegramChannel : IAsyncDisposable
     private static JsonNode Chat(string conversation)
     {
         var match = Regex.Match(conversation.TrimStart(), @"^[+-]?\d+");
-        return match.Success && long.TryParse(match.Value, out var value) ? JsonValue.Create(value)!
+        return match.Success && long.TryParse(match.Value, out var value)
+            ? JsonValue.Create(value)!
             : throw new InvalidDataException("Telegram target is not a numeric chat ID.");
     }
 
-    internal async Task SendFileAsync(string conversation, ChannelFile file, string? caption, CancellationToken token)
+    internal async Task SendFileAsync(
+        string conversation,
+        ChannelFile file,
+        string? caption,
+        CancellationToken token
+    )
     {
         caption = string.IsNullOrWhiteSpace(caption) ? null : caption;
         async Task Send(string? parseMode)
         {
-            await RetryAsync(async () =>
-            {
-                using var body = new MultipartFormDataContent();
-                body.Add(new StringContent(Chat(conversation).ToJsonString()), "chat_id");
-                if (caption is not null) body.Add(new StringContent(caption), "caption");
-                if (parseMode is not null) body.Add(new StringContent(parseMode), "parse_mode");
-                var stream = new StreamContent(File.OpenRead(file.Path));
-                stream.Headers.ContentType = new MediaTypeHeaderValue(file.MimeType ?? "application/octet-stream");
-                body.Add(stream, file.IsImage ? "photo" : "document", file.Name);
-                return await ApiContentAsync(file.IsImage ? "sendPhoto" : "sendDocument", body, token);
-            }, token);
+            await RetryAsync(
+                async () =>
+                {
+                    using var body = new MultipartFormDataContent();
+                    body.Add(new StringContent(Chat(conversation).ToJsonString()), "chat_id");
+                    if (caption is not null)
+                        body.Add(new StringContent(caption), "caption");
+                    if (parseMode is not null)
+                        body.Add(new StringContent(parseMode), "parse_mode");
+                    var stream = new StreamContent(File.OpenRead(file.Path));
+                    stream.Headers.ContentType = new MediaTypeHeaderValue(
+                        file.MimeType ?? "application/octet-stream"
+                    );
+                    body.Add(stream, file.IsImage ? "photo" : "document", file.Name);
+                    return await ApiContentAsync(
+                        file.IsImage ? "sendPhoto" : "sendDocument",
+                        body,
+                        token
+                    );
+                },
+                token
+            );
         }
-        try { await Send(caption is null ? null : "Markdown"); }
-        catch (TelegramApiException error) when (caption is not null && error.PlainFallback) { await Send(null); }
+        try
+        {
+            await Send(caption is null ? null : "Markdown");
+        }
+        catch (TelegramApiException error) when (caption is not null && error.PlainFallback)
+        {
+            await Send(null);
+        }
     }
 
     internal async Task TypingAsync(string conversation, CancellationToken token) =>
-        await ApiAsync("sendChatAction", new JsonObject { ["chat_id"] = Chat(conversation), ["action"] = "typing" }, token);
+        await ApiAsync(
+            "sendChatAction",
+            new JsonObject { ["chat_id"] = Chat(conversation), ["action"] = "typing" },
+            token
+        );
 
     private async Task<JsonNode?> RetryAsync(Func<Task<JsonNode?>> send, CancellationToken token)
     {
         for (var attempt = 0; ; attempt++)
         {
-            try { return await send(); }
-            catch (Exception error) when (error is not OperationCanceledException && error is not TelegramApiException { Payload: true })
+            try
             {
-                if (attempt >= 3) throw;
+                return await send();
+            }
+            catch (Exception error)
+                when (error is not OperationCanceledException
+                    && error is not TelegramApiException { Payload: true }
+                )
+            {
+                if (attempt >= 3)
+                    throw;
                 log(error);
                 await delay(TimeSpan.FromSeconds(attempt == 0 ? 5 : 10), token);
             }
@@ -249,18 +421,33 @@ internal sealed class TelegramChannel : IAsyncDisposable
 
     private async Task<JsonNode?> ApiAsync(string method, JsonObject body, CancellationToken token)
     {
-        using var content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
+        using var content = new StringContent(
+            body.ToJsonString(),
+            Encoding.UTF8,
+            "application/json"
+        );
         return await ApiContentAsync(method, content, token);
     }
 
-    private async Task<JsonNode?> ApiContentAsync(string method, HttpContent content, CancellationToken token)
+    private async Task<JsonNode?> ApiContentAsync(
+        string method,
+        HttpContent content,
+        CancellationToken token
+    )
     {
         using var response = await http.PostAsync(new Uri(api, method), content, token);
-        var body = await JsonNode.ParseAsync(await response.Content.ReadAsStreamAsync(token), cancellationToken: token) as JsonObject
+        var body =
+            await JsonNode.ParseAsync(
+                await response.Content.ReadAsStreamAsync(token),
+                cancellationToken: token
+            ) as JsonObject
             ?? throw new IOException("Telegram returned an invalid response.");
         if (!response.IsSuccessStatusCode || !SessionCatalog.Flag(body["ok"]))
-            throw new TelegramApiException((int)(SessionWait.Number(body["error_code"]) ?? (int)response.StatusCode),
-                SessionWait.Text(body["description"]) ?? "Telegram API call failed.", SessionWait.Number(body["parameters"]?["retry_after"]));
+            throw new TelegramApiException(
+                (int)(SessionWait.Number(body["error_code"]) ?? (int)response.StatusCode),
+                SessionWait.Text(body["description"]) ?? "Telegram API call failed.",
+                SessionWait.Number(body["parameters"]?["retry_after"])
+            );
         return body["result"]?.DeepClone();
     }
 }

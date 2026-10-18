@@ -38,16 +38,21 @@ internal sealed partial class ModelConfiguration
         ChannelsYamlForObject(current["channels"] as JsonObject ?? new JsonObject());
 
     internal static string ChannelsYamlForObject(JsonObject channels) =>
-        new SerializerBuilder().WithQuotingNecessaryStrings().Build().Serialize(JsonNodeToObject(channels));
+        new SerializerBuilder()
+            .WithQuotingNecessaryStrings()
+            .Build()
+            .Serialize(JsonNodeToObject(channels));
 
     internal Foxwarm.Channels.ManagedChannels? ManagedChannels { get; set; }
 
     internal JsonObject CurrentChannels() =>
-        ConfigurationYaml.Parse(ReadCurrentAppRaw(), "app config")["channels"] as JsonObject ?? new JsonObject();
+        ConfigurationYaml.Parse(ReadCurrentAppRaw(), "app config")["channels"] as JsonObject
+        ?? new JsonObject();
 
     internal JsonArray ChannelDiagnostics(bool webUiRunning)
     {
-        if (ManagedChannels is { } runtime) return runtime.Statuses(webUiRunning);
+        if (ManagedChannels is { } runtime)
+            return runtime.Statuses(webUiRunning);
         var current = ConfigurationYaml.Parse(ReadCurrentAppRaw(), "app config");
         var channels = current["channels"] as JsonObject ?? new JsonObject();
         var result = new JsonArray();

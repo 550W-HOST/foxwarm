@@ -43,7 +43,8 @@ internal sealed class ModelRetryNotice(SessionOwner hosted)
             if (update)
                 hosted.Emit(SessionEventKind.MessageCommitted, state.Committed);
             hosted.PublishStateChanged();
-            if (hosted.Entry.RetryPresented is { } present) await present(value, initial, same);
+            if (hosted.Entry.RetryPresented is { } present)
+                await present(value, initial, same);
             return value.Final && (update || state.NotificationSucceeded);
         }
         catch (Exception error)
