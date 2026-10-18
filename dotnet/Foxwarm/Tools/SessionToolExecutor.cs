@@ -280,24 +280,41 @@ internal sealed partial class SessionToolExecutor(
             result["invocationName"] = resolved.InvocationName;
         if (resolved.Server is not null)
             result["server"] = resolved.Server;
-        if (resolved.Source == "builtin" && resolved.Name == "node" && SessionWait.Text(resolved.Args["action"]) is { } action)
+        if (
+            resolved.Source == "builtin"
+            && resolved.Name == "node"
+            && SessionWait.Text(resolved.Args["action"]) is { } action
+        )
             result["action"] = SessionOwner.Bound(action, 64);
-        if (resolved.Source == "node" && resolved.Name == "read" && SessionWait.Text(resolved.Args["filePath"]) is { } file)
+        if (
+            resolved.Source == "node"
+            && resolved.Name == "read"
+            && SessionWait.Text(resolved.Args["filePath"]) is { } file
+        )
             result["target"] = SessionOwner.Bound(file.Split(['/', '\\']).Last(), 160);
         return result;
     }
 
     internal static string ToolArgsPreview(string name, JsonObject args)
     {
-        static string Text(JsonNode? value) => SessionWait.Text(value) ?? (value is null ? "null" : EcmaJson.Stringify(value));
+        static string Text(JsonNode? value) =>
+            SessionWait.Text(value) ?? (value is null ? "null" : EcmaJson.Stringify(value));
         var preview = name switch
         {
             "exec" => Text(args["command"]),
-            "edit" or "write" or "edit_memory" or "write_memory" or "delete_memory" => Text(args["filePath"]),
+            "edit" or "write" or "edit_memory" or "write_memory" or "delete_memory" => Text(
+                args["filePath"]
+            ),
             "apply_patch" or "apply_patch_memory" => SessionWait.Text(args["input"]) ?? "",
-            "read" or "read_memory" => (SessionWait.Text(args["filePath"]) ?? "") +
-                (SessionWait.Number(args["startLine"]) is > 0 ? $" (lines {Text(args["startLine"])}-{Text(args["endLine"])})" : ""),
-            _ => args.Count == 1 ? Text(args.First().Value) : string.Join('\n', args.Select(pair => pair.Key + ": " + Text(pair.Value))),
+            "read" or "read_memory" => (SessionWait.Text(args["filePath"]) ?? "")
+                + (
+                    SessionWait.Number(args["startLine"]) is > 0
+                        ? $" (lines {Text(args["startLine"])}-{Text(args["endLine"])})"
+                        : ""
+                ),
+            _ => args.Count == 1
+                ? Text(args.First().Value)
+                : string.Join('\n', args.Select(pair => pair.Key + ": " + Text(pair.Value))),
         };
         return preview.Length > 200 ? preview[..197] + "..." : preview;
     }
@@ -584,14 +601,16 @@ internal sealed partial class SessionToolExecutor(
             cancellationToken,
             (target, body) =>
             {
-                if (invocation.Value is not { } current) return;
+                if (invocation.Value is not { } current)
+                    return;
                 var delivery = new JsonObject
                 {
                     ["id"] = current.CallId,
                     ["targetSessionId"] = target,
                     ["message"] = SessionOwner.Bound(body, 32768),
                 };
-                if (body.Length > 32768) delivery["truncated"] = true;
+                if (body.Length > 32768)
+                    delivery["truncated"] = true;
                 current.SessionMessages = new JsonArray(delivery);
             }
         );

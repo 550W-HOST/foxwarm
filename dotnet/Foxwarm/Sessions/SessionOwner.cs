@@ -221,6 +221,4 @@ internal sealed partial class SessionOwner
     }
 
     public void PublishStateChanged() => Emit(SessionEventKind.StateChanged);
-
-
 }

@@ -267,7 +267,10 @@ internal sealed partial class WebUIChannel(
                 if (input.ContainsKey("clientMessageId") && clientId is null)
                     return Results.BadRequest(new { error = "Invalid clientMessageId" });
                 var controlId = SessionWait.Text(input["controlRequestId"]);
-                if (input.ContainsKey("controlRequestId") && (controlId is null || controlId.Length is < 1 or > 128))
+                if (
+                    input.ContainsKey("controlRequestId")
+                    && (controlId is null || controlId.Length is < 1 or > 128)
+                )
                     return Results.BadRequest(new { error = "Invalid controlRequestId" });
                 IReadOnlyList<JsonObject> savedFiles = [];
                 try

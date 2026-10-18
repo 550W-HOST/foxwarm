@@ -73,7 +73,11 @@ public sealed class SessionTurnRunner
         }
     }
 
-    public async Task ProcessQueueAsync(string sessionId, bool retry = false, Action? admitted = null)
+    public async Task ProcessQueueAsync(
+        string sessionId,
+        bool retry = false,
+        Action? admitted = null
+    )
     {
         var entry = registry.GetRequired(sessionId);
         if (closing)

@@ -37,8 +37,11 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
             ?? await runtime.GetOwnerAsync(context.SessionId)
             ?? throw new InvalidDataException("Session not found.");
         var command = message.Text.Trim();
-        if (context.Platform == "webui" && message.ControlRequestId is { } requestId
-            && ControlAction(command) is { } action)
+        if (
+            context.Platform == "webui"
+            && message.ControlRequestId is { } requestId
+            && ControlAction(command) is { } action
+        )
             return await HandleControlAsync(owner, command, requestId, action);
         if (command == "/node" || command.StartsWith("/node ", StringComparison.Ordinal))
             return await HandleNodeCommandAsync(command, owner);

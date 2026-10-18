@@ -434,7 +434,10 @@ internal sealed partial class SessionCompactor
                     if (await SafePointAsync(propagateFailure: true) == true)
                         return;
                 }
-                finally { hosted.EndCompactPhase(phaseLease); }
+                finally
+                {
+                    hosted.EndCompactPhase(phaseLease);
+                }
             }
             throw new ModelPreparationException(
                 $"Context compaction did not complete, so this turn stopped before another provider request (previous usage {UsageTotal(result)}, limit {limit})."
@@ -614,7 +617,13 @@ internal sealed partial class SessionCompactor
         catch (Exception error)
         {
             Report(error);
-            await hosted.PresentFailureAsync(error, durable: ReferenceEquals(run.Failure, error), source: "compaction", operationId: run.OperationId, applying: run.Failure is null);
+            await hosted.PresentFailureAsync(
+                error,
+                durable: ReferenceEquals(run.Failure, error),
+                source: "compaction",
+                operationId: run.OperationId,
+                applying: run.Failure is null
+            );
             if (propagateFailure)
                 throw;
         }
@@ -654,17 +663,39 @@ internal sealed partial class SessionCompactor
 
     private async Task PlanAndApplyAwaitedAsync(CompactRun run, string? guidance)
     {
-        try { await PreparePlanAsync(run, guidance); }
-        catch (Exception error) when (error is not OperationCanceledException and not CompactionSnapshotIncompatibleException and not SessionTurnShutdownException)
+        try
+        {
+            await PreparePlanAsync(run, guidance);
+        }
+        catch (Exception error)
+            when (error
+                    is not OperationCanceledException
+                        and not CompactionSnapshotIncompatibleException
+                        and not SessionTurnShutdownException
+            )
         {
             await hosted.PresentFailureAsync(error, true, "compaction", run.OperationId);
             throw;
         }
         if (run.Plan is not null)
-            try { await ApplyAsync(run); }
-            catch (Exception error) when (error is not OperationCanceledException and not CompactionSnapshotIncompatibleException and not SessionTurnShutdownException)
+            try
             {
-                await hosted.PresentFailureAsync(error, false, "compaction", run.OperationId, applying: true);
+                await ApplyAsync(run);
+            }
+            catch (Exception error)
+                when (error
+                        is not OperationCanceledException
+                            and not CompactionSnapshotIncompatibleException
+                            and not SessionTurnShutdownException
+                )
+            {
+                await hosted.PresentFailureAsync(
+                    error,
+                    false,
+                    "compaction",
+                    run.OperationId,
+                    applying: true
+                );
                 throw;
             }
     }

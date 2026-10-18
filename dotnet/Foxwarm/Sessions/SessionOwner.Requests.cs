@@ -339,7 +339,10 @@ internal sealed partial class SessionOwner
         Interlocked.Increment(ref activeTools);
         lock (runtimeGate)
             foregroundRuntime = projection;
-        try { PublishStateChanged(); }
+        try
+        {
+            PublishStateChanged();
+        }
         catch
         {
             EndTool(projection);
@@ -356,7 +359,6 @@ internal sealed partial class SessionOwner
                 foregroundRuntime = null;
         PublishStateChanged();
     }
-
 }
 
 internal sealed class RequestChatService(IChatService inner, SessionOwner hosted)

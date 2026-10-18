@@ -9,8 +9,13 @@ public sealed class RuntimePresentationTests
 {
     private static SessionOwner Owner(ISessionAuthorityStore store, string id = "s")
     {
-        var models = HostModels.ForTest(new ResponsesClientOptions(new Uri("http://localhost"), "m", "a/m", "", "", 50));
-        var owner = new SessionOwner(id, "main", models) { Registry = new SessionRegistry(store, new NoChat()) };
+        var models = HostModels.ForTest(
+            new ResponsesClientOptions(new Uri("http://localhost"), "m", "a/m", "", "", 50)
+        );
+        var owner = new SessionOwner(id, "main", models)
+        {
+            Registry = new SessionRegistry(store, new NoChat()),
+        };
         owner.Registry.Add(id);
         owner.EnableCommittedNotifications();
         return owner;
@@ -20,25 +25,46 @@ public sealed class RuntimePresentationTests
     public void Foreground_and_compact_cleanup_cannot_erase_successors_and_retry_clears_at_actual_attempt()
     {
         var owner = Owner(new InMemorySessionAuthorityStore());
-        owner.Entry.WithState(state => { state.Busy = true; state.BusyStartedAt = 10; });
-        var oldTool = owner.BeginTool(new JsonObject { ["name"] = "exec", ["index"] = 0, ["total"] = 2 });
+        owner.Entry.WithState(state =>
+        {
+            state.Busy = true;
+            state.BusyStartedAt = 10;
+        });
+        var oldTool = owner.BeginTool(
+            new JsonObject
+            {
+                ["name"] = "exec",
+                ["index"] = 0,
+                ["total"] = 2,
+            }
+        );
         owner.SetCompactRuntime("old", "planning", true, null);
         var compactWait = owner.BeginCompactPhase();
         Assert.Equal("compaction", owner.RuntimeSnapshot()["active"]!["phase"]!.GetValue<string>());
         owner.BeginModelAttempt();
         owner.EndTool(oldTool);
         owner.EndCompactPhase(compactWait);
-        Assert.Equal("normal-turn", owner.RuntimeSnapshot()["active"]!["phase"]!.GetValue<string>());
-        owner.SetModelRetry(new ModelRetryEvent(1, 6, "http", new string('x', 2000), "a/m", null, DelayMs: 5000));
+        Assert.Equal(
+            "normal-turn",
+            owner.RuntimeSnapshot()["active"]!["phase"]!.GetValue<string>()
+        );
+        owner.SetModelRetry(
+            new ModelRetryEvent(1, 6, "http", new string('x', 2000), "a/m", null, DelayMs: 5000)
+        );
         var retry = owner.RuntimeSnapshot()["retry"]!;
         Assert.Equal(2, retry["nextAttempt"]!.GetValue<int>());
         Assert.Equal(1024, retry["reason"]!.GetValue<string>().Length);
-        Assert.True(retry["retryAt"]!.GetValue<long>() >= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        Assert.True(
+            retry["retryAt"]!.GetValue<long>() >= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+        );
         owner.BeginModelAttempt();
         Assert.Null(owner.RuntimeSnapshot()["retry"]);
         owner.SetCompactRuntime("new", "ready", true, null);
         owner.ClearCompactRuntime("old");
-        Assert.Equal("new", owner.RuntimeSnapshot()["compaction"]!["operationId"]!.GetValue<string>());
+        Assert.Equal(
+            "new",
+            owner.RuntimeSnapshot()["compaction"]!["operationId"]!.GetValue<string>()
+        );
         owner.Entry.WithState(state => state.Stopping = true);
         Assert.True(owner.RuntimeSnapshot()["stopping"]!.GetValue<bool>());
         owner.Entry.WithState(state => state.Busy = false);
@@ -64,7 +90,10 @@ public sealed class RuntimePresentationTests
         Assert.Equal("system-event", row["__meta"]!["noticeType"]!.GetValue<string>());
         Assert.Equal(1, row["__meta"]!["sessionNotice"]!["version"]!.GetValue<int>());
         Assert.Empty(ConcreteRequestHistory.Prepare([row], "m"));
-        Assert.Equal(row.ToJsonString(), (await store.LoadAsync("s"))!.History[0].ToJson().ToJsonString());
+        Assert.Equal(
+            row.ToJsonString(),
+            (await store.LoadAsync("s"))!.History[0].ToJson().ToJsonString()
+        );
         Assert.Equal(1, store.Archive.ReadMessageBySeq(1)!.Seq);
         var other = Owner(new InMemorySessionAuthorityStore(), "other");
         await other.PresentFailureAsync(error, true);
@@ -79,42 +108,87 @@ public sealed class RuntimePresentationTests
     {
         using var temp = new TempDirectory();
         var attempts = 0;
-        var store = new PersistentSessionAuthorityStore(temp.Path, "s", authorityStageHook: stage =>
-        {
-            if (stage == AtomicJsonWriteStage.BeforeRename)
+        var store = new PersistentSessionAuthorityStore(
+            temp.Path,
+            "s",
+            authorityStageHook: stage =>
             {
-                attempts++;
-                throw new IOException("authority unavailable");
+                if (stage == AtomicJsonWriteStage.BeforeRename)
+                {
+                    attempts++;
+                    throw new IOException("authority unavailable");
+                }
             }
-        });
+        );
         var owner = Owner(store);
         var events = new List<SessionRuntimeEvent>();
         owner.Changed += events.Add;
-        var error = await Assert.ThrowsAsync<IOException>(() => owner.Entry.SaveLane.SaveStrictAsync());
-        await owner.PresentFailureAsync(new ModelPreparationException("could not prepare", error), true);
+        var error = await Assert.ThrowsAsync<IOException>(() =>
+            owner.Entry.SaveLane.SaveStrictAsync()
+        );
+        await owner.PresentFailureAsync(
+            new ModelPreparationException("could not prepare", error),
+            true
+        );
         Assert.Equal(1, attempts);
         Assert.Empty(owner.History());
-        var notice = Assert.Single(events, item => item.Kind == SessionEventKind.MessageCommitted).Data!;
+        var notice = Assert
+            .Single(events, item => item.Kind == SessionEventKind.MessageCommitted)
+            .Data!;
         Assert.True(notice["__meta"]!["temporary"]!.GetValue<bool>());
         Assert.Equal("system-event", notice["__meta"]!["noticeType"]!.GetValue<string>());
         var retryOwner = Owner(new InMemorySessionAuthorityStore());
         var retry = new ModelRetryNotice(retryOwner);
-        await retry.NotifyAsync(new ModelRetryEvent(6, 6, "http", "terminal", "a/m", null, Final: true));
-        await retryOwner.PresentFailureAsync(new InvalidOperationException("terminal wrapper"), true);
+        await retry.NotifyAsync(
+            new ModelRetryEvent(6, 6, "http", "terminal", "a/m", null, Final: true)
+        );
+        await retryOwner.PresentFailureAsync(
+            new InvalidOperationException("terminal wrapper"),
+            true
+        );
         Assert.Single(retryOwner.History());
-        Assert.Equal("llm-retry", retryOwner.History()[0]["__meta"]!["noticeType"]!.GetValue<string>());
+        Assert.Equal(
+            "llm-retry",
+            retryOwner.History()[0]["__meta"]!["noticeType"]!.GetValue<string>()
+        );
     }
 
     [Fact]
     public void Argument_previews_follow_resolved_arguments_and_remain_bounded()
     {
-        Assert.Equal("printf actual", SessionToolExecutor.ToolArgsPreview("exec", new JsonObject { ["command"] = "printf actual", ["timeout"] = 10 }));
-        Assert.Equal("a.txt (lines 2-4)", SessionToolExecutor.ToolArgsPreview("read", new JsonObject { ["filePath"] = "a.txt", ["startLine"] = 2, ["endLine"] = 4 }));
-        Assert.Equal(200, SessionToolExecutor.ToolArgsPreview("exec", new JsonObject { ["command"] = new string('x', 1000) }).Length);
+        Assert.Equal(
+            "printf actual",
+            SessionToolExecutor.ToolArgsPreview(
+                "exec",
+                new JsonObject { ["command"] = "printf actual", ["timeout"] = 10 }
+            )
+        );
+        Assert.Equal(
+            "a.txt (lines 2-4)",
+            SessionToolExecutor.ToolArgsPreview(
+                "read",
+                new JsonObject
+                {
+                    ["filePath"] = "a.txt",
+                    ["startLine"] = 2,
+                    ["endLine"] = 4,
+                }
+            )
+        );
+        Assert.Equal(
+            200,
+            SessionToolExecutor
+                .ToolArgsPreview("exec", new JsonObject { ["command"] = new string('x', 1000) })
+                .Length
+        );
     }
 
     private sealed class NoChat : IChatService
     {
-        public Task<ChatResult> ChatAsync(string id, IReadOnlyList<JsonObject> history, CancellationToken token) => throw new NotSupportedException();
+        public Task<ChatResult> ChatAsync(
+            string id,
+            IReadOnlyList<JsonObject> history,
+            CancellationToken token
+        ) => throw new NotSupportedException();
     }
 }

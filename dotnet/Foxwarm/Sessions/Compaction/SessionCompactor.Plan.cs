@@ -77,7 +77,8 @@ internal sealed partial class SessionCompactor
                         {
                             if (run is not null)
                             {
-                                lock (gate) run.Retry = SessionOwner.RetryProjection(value);
+                                lock (gate)
+                                    run.Retry = SessionOwner.RetryProjection(value);
                                 PublishRuntime(run);
                             }
                             return Task.FromResult(false);
@@ -86,7 +87,8 @@ internal sealed partial class SessionCompactor
                         {
                             if (run is not null)
                             {
-                                lock (gate) run.Retry = null;
+                                lock (gate)
+                                    run.Retry = null;
                                 PublishRuntime(run);
                             }
                         },

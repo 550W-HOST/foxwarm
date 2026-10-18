@@ -24,8 +24,15 @@ internal static class WebUiContract
         var effectiveEffort =
             rawEffort is not null && allowed.Contains(rawEffort) ? rawEffort : defaultEffort;
         var queueLength = snapshot.Queue.Count(SessionCompactor.Ordinary);
-        var runtime = SessionRuntimeState.Build(snapshot.Busy, snapshot.Stopping, snapshot.BusyStartedAt,
-            queueLength, SessionRuntimeState.WaitProjection(snapshot.Meta), toolActive, compacting);
+        var runtime = SessionRuntimeState.Build(
+            snapshot.Busy,
+            snapshot.Stopping,
+            snapshot.BusyStartedAt,
+            queueLength,
+            SessionRuntimeState.WaitProjection(snapshot.Meta),
+            toolActive,
+            compacting
+        );
         var result = new JsonObject
         {
             ["id"] = snapshot.Id,
@@ -154,7 +161,14 @@ internal static class WebUiContract
         }
         var result = new JsonObject
         {
-            ["session"] = Session(snapshot, models, toolActive, compacting, executionNode, runtimeState),
+            ["session"] = Session(
+                snapshot,
+                models,
+                toolActive,
+                compacting,
+                executionNode,
+                runtimeState
+            ),
             ["messages"] = new JsonArray(
                 selected.Select(message => (JsonNode?)message.ToJson()).ToArray()
             ),

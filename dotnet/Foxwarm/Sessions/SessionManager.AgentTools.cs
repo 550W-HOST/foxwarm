@@ -288,8 +288,14 @@ internal sealed partial class SessionManager
                         requested,
                         RequiredString(args, "message")
                     );
-                    try { sessionMessageDelivered?.Invoke(target, RequiredString(args, "message")); }
-                    catch (Exception error) { source.Entry.RecordBestEffortFailure(error); }
+                    try
+                    {
+                        sessionMessageDelivered?.Invoke(target, RequiredString(args, "message"));
+                    }
+                    catch (Exception error)
+                    {
+                        source.Entry.RecordBestEffortFailure(error);
+                    }
                     return (
                         Output(
                             target == requested

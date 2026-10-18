@@ -42,12 +42,36 @@ internal static class SessionRuntimeState
         return view;
     }
 
-    internal static JsonObject Build(SessionMetadata meta, bool toolActive, bool compacting,
-        JsonObject? foreground = null, JsonObject? compaction = null)
-        => Build(meta.Busy, meta.Stopping, meta.BusyStartedAt, meta.QueueLength, meta.Wait, toolActive, compacting, foreground, compaction);
+    internal static JsonObject Build(
+        SessionMetadata meta,
+        bool toolActive,
+        bool compacting,
+        JsonObject? foreground = null,
+        JsonObject? compaction = null
+    ) =>
+        Build(
+            meta.Busy,
+            meta.Stopping,
+            meta.BusyStartedAt,
+            meta.QueueLength,
+            meta.Wait,
+            toolActive,
+            compacting,
+            foreground,
+            compaction
+        );
 
-    internal static JsonObject Build(bool busy, bool stopping, long? busyStartedAt, int queueLength,
-        JsonObject? wait, bool toolActive, bool compacting, JsonObject? foreground = null, JsonObject? compaction = null)
+    internal static JsonObject Build(
+        bool busy,
+        bool stopping,
+        long? busyStartedAt,
+        int queueLength,
+        JsonObject? wait,
+        bool toolActive,
+        bool compacting,
+        JsonObject? foreground = null,
+        JsonObject? compaction = null
+    )
     {
         var state = new JsonObject
         {
@@ -74,7 +98,10 @@ internal static class SessionRuntimeState
                 state["since"] = since;
             if (foreground is null)
             {
-                state["active"] = new JsonObject { ["phase"] = compacting ? "compaction" : "unknown" };
+                state["active"] = new JsonObject
+                {
+                    ["phase"] = compacting ? "compaction" : "unknown",
+                };
                 if (!compacting)
                     state["note"] = "Session is busy, but exact runtime phase is not available.";
             }
@@ -140,7 +167,13 @@ internal sealed partial class SessionOwner
     {
         meta ??= Metadata();
         lock (runtimeGate)
-            return SessionRuntimeState.Build(meta, ToolActive, Compacting, foregroundRuntime, compactRuntime);
+            return SessionRuntimeState.Build(
+                meta,
+                ToolActive,
+                Compacting,
+                foregroundRuntime,
+                compactRuntime
+            );
     }
 
     internal void BeginModelAttempt()
@@ -155,17 +188,24 @@ internal sealed partial class SessionOwner
         PublishStateChanged();
     }
 
-    internal static JsonObject RetryProjection(Foxwarm.Models.ModelRetryEvent value) => new()
-    {
-        ["attempt"] = Math.Max(1, value.Attempt),
-        ["maxAttempts"] = Math.Max(1, value.MaxRetries),
-        ["final"] = value.Final ? true : null,
-        ["nextAttempt"] = value.Final ? null : value.Attempt + 1,
-        ["retryAt"] = value.DelayMs is { } delay ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + Math.Max(0, delay) : null,
-        ["reason"] = Bound(System.Text.RegularExpressions.Regex.Replace(value.Reason, @"\s+", " ").Trim(), 1024),
-    };
+    internal static JsonObject RetryProjection(Foxwarm.Models.ModelRetryEvent value) =>
+        new()
+        {
+            ["attempt"] = Math.Max(1, value.Attempt),
+            ["maxAttempts"] = Math.Max(1, value.MaxRetries),
+            ["final"] = value.Final ? true : null,
+            ["nextAttempt"] = value.Final ? null : value.Attempt + 1,
+            ["retryAt"] = value.DelayMs is { } delay
+                ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + Math.Max(0, delay)
+                : null,
+            ["reason"] = Bound(
+                System.Text.RegularExpressions.Regex.Replace(value.Reason, @"\s+", " ").Trim(),
+                1024
+            ),
+        };
 
-    internal static string Bound(string value, int max) => value.Length > max ? value[..max] : value;
+    internal static string Bound(string value, int max) =>
+        value.Length > max ? value[..max] : value;
 
     internal void SetModelRetry(Foxwarm.Models.ModelRetryEvent value)
     {
@@ -175,12 +215,19 @@ internal sealed partial class SessionOwner
         PublishStateChanged();
     }
 
-    internal void SetCompactRuntime(string operationId, string phase, bool background, JsonObject? retry)
+    internal void SetCompactRuntime(
+        string operationId,
+        string phase,
+        bool background,
+        JsonObject? retry
+    )
     {
         lock (runtimeGate)
             compactRuntime = new JsonObject
             {
-                ["operationId"] = operationId, ["phase"] = phase, ["background"] = background,
+                ["operationId"] = operationId,
+                ["phase"] = phase,
+                ["background"] = background,
                 ["retry"] = retry?.DeepClone(),
             };
         PublishStateChanged();

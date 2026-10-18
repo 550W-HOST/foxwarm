@@ -73,7 +73,10 @@ internal sealed partial class MainToolScript
                         };
                         result = await context.CallTool(wrapper, budget, run.Token);
                     }
-                    finally { context.SessionMessageDelivered = previousDeliveryCapture; }
+                    finally
+                    {
+                        context.SessionMessageDelivered = previousDeliveryCapture;
+                    }
                     budget.JsonValue(result);
                     (
                         record["executedTools"] as JsonArray
