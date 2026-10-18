@@ -45,7 +45,7 @@ test('second-process provider uses canonical results, raw bytes, nonzero exits, 
     assert.deepEqual(started.request, { nodeId: 'process-fixture', command: "printf '  héllo\\n'; exit 7", cwd: 'fixture://cwd' });
     const queried = recorded.find(call => call.operation === 'exec-poll');
     assert.deepEqual(Object.keys(queried.request).sort(), ['nodeId', 'ref']);
-    assert.equal(result.output.includes(queried.request.ref), false, 'opaque references never become model-visible IDs');
+    assert.equal(JSON.stringify(result).includes(queried.request.ref), false, 'opaque references never become model-visible result fields or log locators');
     assert.equal((await runtime.listRunningExecs()).length, 0);
   } finally { await runtime.shutdown(); }
 }));

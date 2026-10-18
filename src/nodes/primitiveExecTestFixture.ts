@@ -43,7 +43,7 @@ async function main() {
         fs.writeFileSync(path.join(root, 'start-ready'), ref);
         if (mode === 'drop-start') return;
         if (mode === 'slow-start') await new Promise(resolve => setTimeout(resolve, 500));
-        reply.result = { ref, outputPath: `fixture://${ref}/output`, cwd: request.cwd || 'fixture://cwd' };
+        reply.result = { ref: `private:${ref}`, outputPath: `fixture://${ref}/output`, cwd: request.cwd || 'fixture://cwd' };
         break;
       }
       case 'exec-poll': {
@@ -52,7 +52,7 @@ async function main() {
           fs.writeFileSync(path.join(root, 'failed-once'), '1');
           throw Object.assign(new Error('Temporary query failure'), { code: 'TransientFailure' });
         }
-        const directory = path.join(root, request.ref);
+        const directory = path.join(root, request.ref.slice('private:'.length));
         const status = path.join(directory, 'status');
         if (mode === 'lost' || !fs.existsSync(directory)) reply.result = { state: 'lost', reason: 'Fixture execution records removed.' };
         else if (fs.existsSync(status)) reply.result = { state: 'finished', exitCode: Number(fs.readFileSync(status, 'utf8')), cwd: fs.readFileSync(path.join(directory, 'cwd'), 'utf8').replace(/\n$/, ''), finishedAt: new Date().toISOString() };

@@ -131,11 +131,14 @@ def start(request, cwd, state_dir):
                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     started = timestamp()
     atomic_json(directory / "process.json", {"pid": process.pid, "identity": identity(process.pid)})
-    return {"ref": ref, "outputPath": str(directory / "output.log"), "cwd": cwd, "startedAt": started, "pid": process.pid}
+    return {"ref": "process:" + ref, "outputPath": str(directory / "output.log"), "cwd": cwd, "startedAt": started, "pid": process.pid}
 
 
 def poll(request, state_dir):
-    ref = request["ref"]
+    reference = request["ref"]
+    if not isinstance(reference, str) or not reference.startswith("process:"):
+        raise ValueError("Invalid execution reference.")
+    ref = reference[len("process:"):]
     try:
         if str(uuid.UUID(ref)) != ref:
             raise ValueError()
