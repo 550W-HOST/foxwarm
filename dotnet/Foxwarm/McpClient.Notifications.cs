@@ -108,11 +108,16 @@ internal sealed partial class McpClient
                             );
                         PoolEntry entry;
                         lock (poolGate)
+                        {
                             entry =
                                 pool.GetValueOrDefault(new(server, owner, generation, null))
                                 ?? throw new InvalidOperationException(
                                     "MCP connection is unavailable."
                                 );
+                            entry.NotificationStarts++;
+                        }
+                        try
+                        {
                         await entry.Receiver.Ready.WaitAsync(TimeSpan.FromSeconds(60), request);
                         await authorize(request);
                         check();
@@ -132,6 +137,12 @@ internal sealed partial class McpClient
                             }
                             return Status(server, entry);
                         }
+                        }
+                        finally
+                        {
+                            lock (poolGate)
+                                entry.NotificationStarts--;
+                        }
                     }
                 );
             },
@@ -143,7 +154,7 @@ internal sealed partial class McpClient
         {
             ["server"] = server,
             ["state"] =
-                entry?.Reception is null ? "stopped"
+                entry is null || entry.Reception is null && entry.NotificationStarts == 0 ? "stopped"
                 : entry.Invalid ? "unavailable"
                 : entry.Receiver.Receiving ? "receiving"
                 : "disconnected",

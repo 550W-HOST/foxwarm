@@ -62,6 +62,7 @@ internal sealed partial class McpClient
         );
         internal readonly ReceiveTransport Receiver = new();
         internal Reception? Reception;
+        internal int NotificationStarts;
         internal int Active;
         internal bool Invalid;
         internal bool Retiring;

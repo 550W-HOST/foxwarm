@@ -241,6 +241,7 @@ public sealed partial class McpNotificationTests
         await get.Task.WaitAsync(TimeSpan.FromSeconds(10));
         var starting = Notifications(f, "start");
         Assert.False(starting.IsCompleted);
+        Assert.Equal("disconnected", State(await Notifications(f, "status")));
         release.TrySetResult();
         Assert.Equal("receiving", State(await starting.WaitAsync(TimeSpan.FromSeconds(10))));
         var target = Target(
