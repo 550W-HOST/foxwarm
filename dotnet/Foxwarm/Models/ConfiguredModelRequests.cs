@@ -166,12 +166,18 @@ internal static class ConfiguredModelRequests
                 "Unsupported providerType: " + model.ProviderType + "."
             );
         return options.HardTimeoutMs is > 0
-            ? new AttemptTimeoutService(service, options.HardTimeoutMs.Value) : service;
+            ? new AttemptTimeoutService(service, options.HardTimeoutMs.Value)
+            : service;
     }
 
-    private sealed class AttemptTimeoutService(IChatService service, double timeoutMs) : IChatService
+    private sealed class AttemptTimeoutService(IChatService service, double timeoutMs)
+        : IChatService
     {
-        public async Task<ChatResult> ChatAsync(string sessionId, IReadOnlyList<JsonObject> history, CancellationToken token)
+        public async Task<ChatResult> ChatAsync(
+            string sessionId,
+            IReadOnlyList<JsonObject> history,
+            CancellationToken token
+        )
         {
             using var attempt = CancellationTokenSource.CreateLinkedTokenSource(token);
             attempt.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs));

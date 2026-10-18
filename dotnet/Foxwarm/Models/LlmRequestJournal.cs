@@ -451,7 +451,11 @@ public sealed class LlmRequestJournalStore : IDisposable, IAsyncDisposable
         return result;
     }
 
-    public async Task<bool> MigrateLegacyAsync(string sourcePath, CancellationToken token = default, bool moveSource = true)
+    public async Task<bool> MigrateLegacyAsync(
+        string sourcePath,
+        CancellationToken token = default,
+        bool moveSource = true
+    )
     {
         var fullPath = Path.GetFullPath(sourcePath);
         CheckOpen();

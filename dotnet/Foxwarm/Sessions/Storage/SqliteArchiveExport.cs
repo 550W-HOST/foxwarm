@@ -8,7 +8,10 @@ public sealed partial class SqliteArchiveMessageStore
 {
     internal sealed record ExportCounts(long Files, long Records);
 
-    internal static async Task<ExportCounts> ExportJsonlAsync(string databasePath, string outputRoot)
+    internal static async Task<ExportCounts> ExportJsonlAsync(
+        string databasePath,
+        string outputRoot
+    )
     {
         InitializeDatabase(databasePath);
         outputRoot = Path.GetFullPath(outputRoot);
@@ -21,10 +24,14 @@ public sealed partial class SqliteArchiveMessageStore
         long records = 0;
         try
         {
-            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-            {
-                DataSource = databasePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false,
-            }.ToString());
+            using var connection = new SqliteConnection(
+                new SqliteConnectionStringBuilder
+                {
+                    DataSource = databasePath,
+                    Mode = SqliteOpenMode.ReadOnly,
+                    Pooling = false,
+                }.ToString()
+            );
             connection.Open();
             using var snapshot = connection.BeginTransaction(deferred: true);
             using var branches = connection.CreateCommand();
@@ -38,10 +45,22 @@ public sealed partial class SqliteArchiveMessageStore
                 {
                     var relative = id + (blocks ? ".blocks.jsonl" : ".jsonl");
                     var path = Path.GetFullPath(relative, temporary);
-                    if (!path.StartsWith(temporary + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-                        throw new InvalidDataException("Unsafe session ID in archive export path: " + relative);
+                    if (
+                        !path.StartsWith(
+                            temporary + Path.DirectorySeparatorChar,
+                            StringComparison.Ordinal
+                        )
+                    )
+                        throw new InvalidDataException(
+                            "Unsafe session ID in archive export path: " + relative
+                        );
                     Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                    using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                    using var stream = new FileStream(
+                        path,
+                        FileMode.CreateNew,
+                        FileAccess.Write,
+                        FileShare.None
+                    );
                     if (!OperatingSystem.IsWindows())
                         File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
                     using var writer = new StreamWriter(stream, new UTF8Encoding(false));
@@ -55,13 +74,21 @@ public sealed partial class SqliteArchiveMessageStore
                     long count = 0;
                     while (rows.Read())
                     {
-                        var record = blocks ? ExportBlock(id, rows) : new JsonObject
-                        {
-                            ["v"] = 1, ["kind"] = "message", ["sessionId"] = id,
-                            ["agent"] = rows.GetString(0) is { Length: > 0 } agent ? agent : "main",
-                            ["seq"] = rows.GetInt64(1), ["timestamp"] = rows.GetDouble(2),
-                            ["role"] = rows.GetString(3), ["message"] = JsonNode.Parse(rows.GetString(4)),
-                        };
+                        var record = blocks
+                            ? ExportBlock(id, rows)
+                            : new JsonObject
+                            {
+                                ["v"] = 1,
+                                ["kind"] = "message",
+                                ["sessionId"] = id,
+                                ["agent"] = rows.GetString(0) is { Length: > 0 } agent
+                                    ? agent
+                                    : "main",
+                                ["seq"] = rows.GetInt64(1),
+                                ["timestamp"] = rows.GetDouble(2),
+                                ["role"] = rows.GetString(3),
+                                ["message"] = JsonNode.Parse(rows.GetString(4)),
+                            };
                         await writer.WriteLineAsync(EcmaJson.Stringify(record));
                         count++;
                     }
@@ -108,21 +135,37 @@ public sealed partial class SqliteArchiveMessageStore
     {
         var result = new JsonObject
         {
-            ["v"] = 1, ["kind"] = "block", ["sessionId"] = id,
+            ["v"] = 1,
+            ["kind"] = "block",
+            ["sessionId"] = id,
             ["agent"] = row.GetString(0) is { Length: > 0 } agent ? agent : "main",
-            ["id"] = row.GetInt64(1), ["level"] = row.GetInt64(2), ["sourceKind"] = row.GetString(3),
-            ["sourceStart"] = row.GetInt64(4), ["sourceEnd"] = row.GetInt64(5),
+            ["id"] = row.GetInt64(1),
+            ["level"] = row.GetInt64(2),
+            ["sourceKind"] = row.GetString(3),
+            ["sourceStart"] = row.GetInt64(4),
+            ["sourceEnd"] = row.GetInt64(5),
         };
-        if (LegacyArchiveRecords.SourceBlockIds(row.IsDBNull(6) ? null : row.GetString(6)) is { } ids)
+        if (
+            LegacyArchiveRecords.SourceBlockIds(row.IsDBNull(6) ? null : row.GetString(6)) is
+            { } ids
+        )
             result["sourceBlockIds"] = ids;
         result["rawStartSeq"] = row.GetInt64(7);
         result["rawEndSeq"] = row.GetInt64(8);
-        if (!row.IsDBNull(9)) result["rawStartTimestamp"] = row.GetDouble(9);
-        if (!row.IsDBNull(10)) result["rawEndTimestamp"] = row.GetDouble(10);
+        if (!row.IsDBNull(9))
+            result["rawStartTimestamp"] = row.GetDouble(9);
+        if (!row.IsDBNull(10))
+            result["rawEndTimestamp"] = row.GetDouble(10);
         result["summary"] = row.GetString(11);
-        if (LegacyArchiveRecords.MemoryFacts(row.IsDBNull(12) ? null : row.GetString(12)) is { } facts)
+        if (
+            LegacyArchiveRecords.MemoryFacts(row.IsDBNull(12) ? null : row.GetString(12)) is
+            { } facts
+        )
             result["memoryFacts"] = facts;
-        if (!row.IsDBNull(13) && LegacyArchiveRecords.Friction(JsonValue.Create(row.GetDouble(13))) is { } score)
+        if (
+            !row.IsDBNull(13)
+            && LegacyArchiveRecords.Friction(JsonValue.Create(row.GetDouble(13))) is { } score
+        )
             result["frictionScore"] = score;
         result["createdAt"] = row.GetDouble(14);
         return result;

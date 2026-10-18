@@ -11,7 +11,10 @@
     <SelfContained>false</SelfContained>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../Foxwarm/Foxwarm.csproj" AdditionalProperties="FoxwarmConsoleEntry=false" />
+    <ProjectReference
+      Include="../Foxwarm/Foxwarm.csproj"
+      AdditionalProperties="FoxwarmConsoleEntry=false"
+    />
     <PackageReference
       Include="Microsoft.Web.WebView2"
       Version="1.0.4258.31"

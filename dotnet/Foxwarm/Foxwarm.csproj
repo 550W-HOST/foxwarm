@@ -29,8 +29,12 @@
       Version="4.153.1"
       Condition="('$(RuntimeIdentifier)' == '' and '$(OS)' != 'Windows_NT') or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-'))"
     />
-    <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="4.153.1" GeneratePathProperty="true"
-      Condition="'$(RuntimeIdentifier)' == 'win-x64' or ('$(RuntimeIdentifier)' == '' and '$(OS)' == 'Windows_NT')" />
+    <PackageReference
+      Include="SkiaSharp.NativeAssets.Win32"
+      Version="4.153.1"
+      GeneratePathProperty="true"
+      Condition="'$(RuntimeIdentifier)' == 'win-x64' or ('$(RuntimeIdentifier)' == '' and '$(OS)' == 'Windows_NT')"
+    />
     <PackageReference Include="LanceDB" Version="[2.5.0]" />
     <PackageReference Include="Apache.Arrow" Version="[22.1.0]" />
     <Content
