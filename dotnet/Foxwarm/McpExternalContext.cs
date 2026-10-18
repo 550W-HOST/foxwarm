@@ -36,6 +36,7 @@ internal sealed class McpExternalContext(McpExternalPrincipal principal)
     internal string Id { get; } = Guid.NewGuid().ToString();
     internal string ExternalId => principal.Id;
     private bool disposed;
+    internal McpReplyChannel? ReplyChannel { get; set; }
     private string node = "master";
     private string? cwd;
     private long generation;
@@ -101,6 +102,7 @@ internal sealed class McpExternalContext(McpExternalPrincipal principal)
             nodes = usedNodes.ToArray();
             usedNodes.Clear();
         }
+        ReplyChannel?.Stop();
         Lifetime.Cancel();
         return nodes;
     }

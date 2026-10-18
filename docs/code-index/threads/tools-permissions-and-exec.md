@@ -35,7 +35,7 @@ The [outbound MCP client](../units/mcp.md) receives an actual trusted Session ow
 
 ## Ordinary external MCP entry
 
-[Inbound MCP](../units/dotnet-inbound-mcp.md) uses verified Main-owned external contexts and concrete external-default-deny facts, not the internal Session executor or result formatter. Its five wrappers resolve real outbound MCP, bounded Session operations, existing pairing and compatible CLI external-owner effects. Strict external Session admission remains separate from ordinary best-effort WebUI input. Notifications/reply channels are not advertised in this phase.
+[Inbound MCP](../units/dotnet-inbound-mcp.md) uses verified Main-owned external contexts and concrete external-default-deny facts, not the internal Session executor or result formatter. Its five wrappers resolve real outbound MCP, bounded Session operations, existing pairing and compatible CLI external-owner effects. Strict external Session admission remains separate from ordinary best-effort WebUI input. [Explicit Session notifications/replies](../units/dotnet-mcp-notifications.md) add a separately enabled receiver and registered temporary text-only destination, without changing the external wrappers or CLI authority.
 
 ## Canonical units and tests
 

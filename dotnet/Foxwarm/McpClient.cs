@@ -294,6 +294,7 @@ internal sealed partial class McpClient : IAsyncDisposable
                         ownerGeneration,
                         async (client, config, requestToken) =>
                         {
+                            await PreflightReplyAsync(client, name, args, requestToken);
                             using var callBudget = CancellationTokenSource.CreateLinkedTokenSource(
                                 requestToken
                             );
@@ -474,6 +475,7 @@ internal sealed partial class McpClient : IAsyncDisposable
     {
         lock (lifecycle)
             closed = true;
+        StopNotificationProducer();
         configuration.Close();
         shutdown.Cancel();
     }

@@ -19,6 +19,8 @@ Definition discovery is not authorization: execution calls `ToolAuthorizationEva
 
 `ToolRegistry.ExecuteAsync` returns the natural directory listing string only for a programmatic Main-local `node`/`master`/`read` result with its directory-only output shape. Ordinary model display remains wrapped; file data/metadata, images, remote Node values and unrelated builtin/MCP JSON are not unwrapped.
 
+The discoverable hidden `mcp_notifications` and default-injected `send_to_channel` use the real Session owner, concrete authorization and the existing direct/unified/native ToolScript execution paths; their reception and text delivery lifetimes are owned by [Session notifications and text channels](./dotnet-mcp-notifications.md). Successful channel sends use ordinary tool/subcall presentation, not Session handoff receipts.
+
 The discoverable hidden `node_remove` builtin shares the existing credential revocation/disconnection owner without Provider or environment effects; the [external Node unit](./external-nodes.md) owns its commit/failure contract. ToolScript starter resolution uses its root `node` only as file-source/authorization selection, not VM placement or nested execution placement. Live-context message offsets and archived `msg#N` sequences remain distinct in observation/recall tool guidance.
 
 The discoverable hidden `node_create_auth_token` builtin always resolves to Main and returns only Node ID/file path. Its file/registry ordering and private-path boundary are owned by [the external Node unit](./external-nodes.md).

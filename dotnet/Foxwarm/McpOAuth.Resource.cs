@@ -181,7 +181,7 @@ internal sealed partial class McpOAuthService
         catch { }
     }
 
-    internal HttpClient ResourceClient(string name, JsonObject config)
+    internal HttpClient ResourceClient(string name, JsonObject config, Func<HttpMessageHandler, HttpMessageHandler>? wrap = null)
     {
         long epoch;
         lock (gate)
@@ -189,7 +189,8 @@ internal sealed partial class McpOAuthService
             epoch = Epoch(name);
             Current(name, config, epoch);
         }
-        return new HttpClient(new ResourceHandler(this, name, Copy(config), epoch))
+        HttpMessageHandler handler = new ResourceHandler(this, name, Copy(config), epoch);
+        return new HttpClient(wrap is null ? handler : wrap(handler))
         {
             Timeout = Timeout.InfiniteTimeSpan,
         };

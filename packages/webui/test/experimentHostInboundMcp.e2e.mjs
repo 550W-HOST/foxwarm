@@ -93,7 +93,7 @@ try {
   await install(app(identities))
   const alpha = await connect(), beta = await connect(betaToken), sameIdentityOtherContext = await connect()
   assert.equal((await alpha.client.listTools()).tools.length, 5)
-  assert.equal(alpha.client.getServerCapabilities().experimental, undefined, 'ordinary stage does not advertise notifications/replies')
+  assert.equal(alpha.client.getServerCapabilities().experimental['foxwarm/session-notifications'].version, 1)
   const discovery = value(await call(alpha, 'foxwarm_discover', { limit: 50 }))
   assert(discovery.tools.some(tool => tool.toolId === 'builtin:node_pair_approve'))
   assert(discovery.tools.some(tool => tool.toolId === 'mcp:peer/probe'))

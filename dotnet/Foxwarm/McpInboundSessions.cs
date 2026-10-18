@@ -160,10 +160,9 @@ internal sealed class McpInboundSessions(
             new JsonObject { ["sessionId"] = id, ["message"] = message }
         );
         await authorization.RequireAsync(context, permission, token);
-        if (allowReply)
-            throw new McpInboundSafeException(
-                "A Foxwarm notification receiver is required for replies."
-            );
+        using var reply = allowReply
+            ? (context.ReplyChannel ?? throw new McpInboundSafeException("A Foxwarm notification receiver is required for replies.")).Acquire()
+            : null;
         var owner =
             await runtime.GetOwnerAsync(id, token)
             ?? throw new McpInboundSafeException("Session is unavailable.");
@@ -171,6 +170,8 @@ internal sealed class McpInboundSessions(
         {
             token.ThrowIfCancellationRequested();
             authorization.Require(context, permission);
+            if (allowReply)
+                context.ReplyChannel!.Require();
             if (
                 Exact(requested) != id
                 || owner.Id != id
@@ -186,7 +187,10 @@ internal sealed class McpInboundSessions(
             + SecurityElement.Escape(context.Id)
             + "\" time=\""
             + DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz")
-            + "\" hint=\"Message from an external MCP client.\">";
+            + (allowReply ? "\" channelTargetId=\"" + SecurityElement.Escape(context.ReplyChannel!.TargetId) : "")
+            + "\" hint=\"Message from an external MCP client."
+            + (allowReply ? " For an explicit reply, use send_to_channel with the channelTargetId shown here. Ordinary assistant replies are not sent to this connection." : "")
+            + "\">";
         var item = new QueueItem(
             QueueItemType.User,
             [
@@ -210,12 +214,21 @@ internal sealed class McpInboundSessions(
         {
             throw;
         }
+        catch (AuthorityCommittedException)
+        {
+            reply?.Commit();
+            throw new McpInboundSafeException("Session admission failed; its outcome may be unknown. Do not retry automatically.");
+        }
         catch
         {
             throw new McpInboundSafeException(
                 "Session admission failed; its outcome may be unknown. Do not retry automatically."
             );
         }
-        return new JsonObject { ["accepted"] = true, ["sessionId"] = id };
+        reply?.Commit();
+        var result = new JsonObject { ["accepted"] = true, ["sessionId"] = id };
+        if (allowReply)
+            result["channelTargetId"] = context.ReplyChannel!.TargetId;
+        return result;
     }
 }

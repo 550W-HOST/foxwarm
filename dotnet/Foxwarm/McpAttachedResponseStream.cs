@@ -12,6 +12,15 @@ internal sealed class McpAttachedResponseStream : Stream
     private TaskCompletionSource allDrained = CompletedSignal();
     public TaskCompletionSource Ready { get; } = NewSignal();
 
+    internal bool Active
+    {
+        get
+        {
+            lock (gate)
+                return !stopped && current is { Active: true };
+        }
+    }
+
     public Attachment? Attach(Stream body)
     {
         lock (gate)

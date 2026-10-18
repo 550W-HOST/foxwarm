@@ -28,6 +28,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     };
     private readonly Foxwarm.McpClient mcp;
     internal Foxwarm.McpClient OutboundMcp => mcp;
+    internal Foxwarm.Channels.TextChannels TextChannels { get; } = new();
     internal Foxwarm.Nodes.NodeConnectionHub Nodes { get; }
     internal Foxwarm.Nodes.NodeBootstrap? Bootstrap { get; set; }
     private readonly ModelRouting modelRouting = new();
@@ -612,6 +613,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     public void BeginShutdown()
     {
+        mcp.StopNotificationProducer();
         timers.StopFuture();
         lock (lifecycle)
         {

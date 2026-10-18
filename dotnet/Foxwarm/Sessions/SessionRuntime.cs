@@ -119,7 +119,10 @@ internal sealed class SessionRuntime(SessionManager manager)
     )
     {
         await manager.WaitForIdentityMutationAsync(owner.Id);
-        manager.RequireFileIngressOwner(owner);
+        // Text-only external admission has no attachment/Node materialization dependency.
+        owner.Entry.RequireIdentityAuthority();
+        if (!ReferenceEquals(manager.Find(owner.Id), owner))
+            throw new InvalidOperationException("External input Session owner is no longer current.");
         await owner.Registry.Ingress.EnqueueExternalAsync(owner.Id, item, beforeAdmission);
     }
 

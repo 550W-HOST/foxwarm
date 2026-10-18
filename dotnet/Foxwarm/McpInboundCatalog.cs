@@ -10,6 +10,7 @@ namespace Foxwarm;
 internal sealed class McpInboundCatalog
 {
     private readonly McpClient mcp;
+    internal Foxwarm.Channels.TextChannels TextChannels { get; }
     private readonly NodeConnectionHub nodes;
     private readonly McpExternalAuthorization authorization;
     private readonly McpInboundSessions sessions;
@@ -19,6 +20,7 @@ internal sealed class McpInboundCatalog
     internal McpInboundCatalog(SessionManager manager)
     {
         mcp = manager.OutboundMcp;
+        TextChannels = manager.TextChannels;
         nodes = manager.Nodes;
         authorization = new(manager.Authorization, manager.ToolWorkspace);
         sessions = new(new SessionRuntime(manager), authorization);

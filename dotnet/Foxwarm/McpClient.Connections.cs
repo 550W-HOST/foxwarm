@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
 using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
 using SdkClient = ModelContextProtocol.Client.McpClient;
 
 namespace Foxwarm;
@@ -59,6 +60,8 @@ internal sealed partial class McpClient
         internal readonly TaskCompletionSource<Connection> Connected = new(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        internal readonly ReceiveTransport Receiver = new();
+        internal Reception? Reception;
         internal int Active;
         internal bool Invalid;
         internal bool Retiring;
@@ -208,7 +211,7 @@ internal sealed partial class McpClient
                 {
                     if (cancelled && entry.Key.Process is null)
                         InvalidateEntry(entry);
-                    else if (entry.Key.Process is not null || entry.Key.External is not null)
+                    else if (entry.Reception is null)
                     {
                         var idle = new CancellationTokenSource();
                         entry.Idle = idle;
@@ -228,7 +231,7 @@ internal sealed partial class McpClient
             // that error to any waiter; GuardAsync then clears this bounded inventory.
             var connection = await OAuth.GuardAsync(
                 entry.Config,
-                () => ConnectAsync(entry.Key.Server, entry.Config, entry.Token)
+                () => ConnectAsync(entry.Key.Server, entry.Config, entry.Token, entry)
             );
             lock (poolGate)
             {
@@ -268,19 +271,20 @@ internal sealed partial class McpClient
 
     // Called under poolGate. Cancellation fences initialization and removes the binding
     // before a subsequent acquisition; SDK disposal owns any HTTP DELETE.
-    private void InvalidateEntry(PoolEntry entry, bool preserveActiveStdio = false)
+    private void InvalidateEntry(PoolEntry entry, bool preserveActiveStdio = false, bool drainActive = false)
     {
         if (entry.Invalid)
             return;
         entry.Invalid = true;
+        entry.Reception = null;
         entry.Idle?.Cancel();
         if (pool.GetValueOrDefault(entry.Key) == entry)
             pool.Remove(entry.Key);
-        // A captured, established stdio process may finish admitted requests after a
-        // process-key change. It cannot be acquired again or published from late init.
+        // Process-key changes preserve admitted stdio work. Terminal notification
+        // fencing also lets already-admitted ordinary leases settle before close.
+        // Neither binding can be acquired again or published from late initialization.
         if (
-            preserveActiveStdio
-            && entry.Key.Process is not null
+            (drainActive || preserveActiveStdio && entry.Key.Process is not null)
             && entry.Active > 0
             && entry.Connected.Task.IsCompletedSuccessfully
         )
@@ -397,11 +401,11 @@ internal sealed partial class McpClient
         try
         {
             await Task.Delay(
-                entry.Key.External is null ? TimeSpan.FromSeconds(60) : TimeSpan.FromMinutes(15),
+                entry.Key.Process is not null ? TimeSpan.FromSeconds(60) : TimeSpan.FromMinutes(15),
                 idle.Token
             );
             lock (poolGate)
-                if (entry.Active == 0 && entry.Idle == idle && !entry.Invalid)
+                if (entry.Active == 0 && entry.Reception is null && entry.Idle == idle && !entry.Invalid)
                     InvalidateEntry(entry);
         }
         catch (OperationCanceledException) { }
@@ -414,7 +418,8 @@ internal sealed partial class McpClient
     private async Task<Connection> ConnectAsync(
         string server,
         JsonObject config,
-        CancellationToken token
+        CancellationToken token,
+        PoolEntry? entry = null
     )
     {
         IClientTransport transport;
@@ -475,19 +480,33 @@ internal sealed partial class McpClient
                     _ => HttpTransportMode.AutoDetect,
                 },
             };
-            transport = config["oauth"] is not null
-                ? new HttpClientTransport(
-                    options,
-                    OAuth.ResourceClient(server, config),
-                    ownsHttpClient: true
-                )
-                : new HttpClientTransport(options);
+            HttpMessageHandler Observe(HttpMessageHandler inner) => entry is null ? inner
+                : new ReceiveTransport.Handler(entry.Receiver, () =>
+                {
+                    lock (poolGate)
+                        InvalidateEntry(entry);
+                }, inner, config["oauth"] is not null, OAuth.Credentials);
+            var http = config["oauth"] is not null
+                ? OAuth.ResourceClient(server, config, Observe)
+                : new HttpClient(Observe(new HttpClientHandler())) { Timeout = Timeout.InfiniteTimeSpan };
+            transport = new HttpClientTransport(options, http, ownsHttpClient: true);
         }
         try
         {
             var client = await SdkClient.CreateAsync(
                 transport,
-                new McpClientOptions { InitializationTimeout = TimeSpan.FromSeconds(60) },
+                new McpClientOptions
+                {
+                    InitializationTimeout = TimeSpan.FromSeconds(60),
+                    Capabilities = new() { Experimental = entry?.Key.Owner is not null ? NotificationCapability() : null },
+                    Handlers = new()
+                    {
+                        NotificationHandlers = entry?.Key.Owner is not null
+                            ? [new KeyValuePair<string, Func<JsonRpcNotification, CancellationToken, ValueTask>>(
+                                SessionMessageMethod, (message, notificationToken) => ReceiveNotificationAsync(entry, message, notificationToken))]
+                            : [],
+                    },
+                },
                 cancellationToken: token
             );
             return new(client, transport);

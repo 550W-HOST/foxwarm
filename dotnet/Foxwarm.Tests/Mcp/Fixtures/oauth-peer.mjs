@@ -73,6 +73,10 @@ fixture.app.get('/fixture/state', (_req, res) => res.json({
   slowEntered, refreshEntered, metadataEntered, initialize401Entered, initializeResultEntered, initializeCredential,
   accessTokens: [...fixture.tokens.keys()], refreshTokens: [...fixture.refreshTokens.keys()],
 }))
+fixture.app.post('/fixture/notify', async (req, res) => {
+  await fixture.notify(req.body.message, req.body.endpoint)
+  res.json({ attempted: true })
+})
 fixture.app.post('/fixture/state', (req, res) => {
   for (const [key, value] of Object.entries(req.body)) {
     if (!['registration', 'force401', 'requiredScope', 'mismatchIssuer', 'mismatchResource', 'pkce', 'invalidRefresh',

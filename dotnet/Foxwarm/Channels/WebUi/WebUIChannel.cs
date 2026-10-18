@@ -24,6 +24,13 @@ internal sealed partial class WebUIChannel(
 
     public void Register(WebApplication app)
     {
+        sessions.TextChannels.Register("webui", (conversation, message, token) =>
+        {
+            token.ThrowIfCancellationRequested();
+            sessions.PresentChannelText(conversation, message);
+            return Task.CompletedTask;
+        });
+        app.Lifetime.ApplicationStopped.Register(() => sessions.TextChannels.Unregister("webui"));
         var models = sessions.Models;
         app.Lifetime.ApplicationStopped.Register(() =>
             terminalRouter.DisposeAsync().AsTask().GetAwaiter().GetResult()

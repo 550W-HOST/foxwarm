@@ -104,6 +104,31 @@ internal static class UnifiedToolDefinitions
     "strict": false
   },
   {
+    "name": "mcp_notifications",
+    "description": "Start, stop, or inspect message notifications from a configured MCP server for the current Session. Requires Streamable HTTP and Foxwarm notification support. Calls to the server share this Session's connection. Incoming messages enter this Session's normal queue only while reception is enabled; disconnected messages are not replayed. See the mcp-management skill for setup and explicit replies between instances.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "enum": ["start", "stop", "status"], "description": "Operation to perform." },
+        "server": { "type": "string", "description": "Configured MCP server name." }
+      },
+      "required": ["action", "server"]
+    }
+  },
+  {
+    "name": "send_to_channel",
+    "defaultInject": true,
+    "description": "Send a message to a specific channel destination. The destination does not need a Session attachment. For a normal-mode channel attached to this session, reply directly instead: your assistant text is delivered automatically. Use this tool for send-only channels or when the task requires delivery to a different destination.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "channelTargetId": { "type": "string", "description": "Destination in the form <channel-instance-id>:<conversation-id>." },
+        "message": { "type": "string", "description": "Message to deliver." }
+      },
+      "required": ["channelTargetId", "message"]
+    }
+  },
+  {
     "name": "mcp_config",
     "description": "Add or update an MCP server connection. Successful changes apply to subsequent calls without restarting Foxwarm; use enable=false to disable a server. Load the mcp-management skill before changing connections. Use this tool rather than editing the configuration file when the change must apply immediately.",
     "parameters": {

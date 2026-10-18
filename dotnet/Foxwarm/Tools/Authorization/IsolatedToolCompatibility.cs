@@ -31,6 +31,7 @@ internal static class IsolatedToolCompatibility
         "recall",
         "session",
         "send_to_session",
+        "send_to_channel",
         "wait",
         "submit_compact_plan",
         "search_tools",

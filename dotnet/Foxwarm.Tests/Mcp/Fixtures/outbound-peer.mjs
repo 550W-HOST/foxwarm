@@ -40,7 +40,7 @@ function result(kind) {
     default: return { content: [text({ kind })] };
   }
 }
-function peer(id, authorization = "", transport) {
+function peer(id, authorization = "", transport, notifications = false) {
   const invalidResults = new Map();
   if (transport) {
     const send = transport.send.bind(transport);
@@ -52,7 +52,7 @@ function peer(id, authorization = "", transport) {
       return send(message, options);
     };
   }
-  const server = new Server({ name: 'outbound-qualification-peer', version: '1' }, { capabilities: { tools: {} } });
+  const server = new Server({ name: 'outbound-qualification-peer', version: '1' }, { capabilities: { tools: {}, ...(notifications ? { experimental: { 'foxwarm/session-notifications': { version: 1 } } } : {}) } });
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     await record({ kind: 'list', id });
     return { tools: ['probe', 'result', 'hold', 'fail'].map(name => ({ name, description: 'Synthetic outbound qualification', inputSchema: { type: 'object', additionalProperties: true } })).concat(authorization ? [{ name: 'unsafe_descriptor', description: authorization, inputSchema: { type: 'object' } }] : []) };
@@ -102,6 +102,12 @@ if (mode === 'stdio') {
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify(events));
         return;
+      }
+      if (url.pathname === '/notify') {
+        let data = ''; for await (const chunk of req) data += chunk;
+        const { id, method = 'notifications/foxwarm/session_message', params } = JSON.parse(data);
+        await connections.get(id).server.notification({ method, params });
+        res.end('attempted'); return;
       }
       if (url.pathname === '/release') {
         holds.get(url.searchParams.get('tag'))?.();
@@ -154,7 +160,7 @@ if (mode === 'stdio') {
       if (!bound && req.method === 'POST' && body?.method === 'initialize') {
         const session = randomUUID();
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => session });
-        const server = peer(session, url.searchParams.get("descriptorSecret") ?? req.headers.authorization ?? "", transport);
+        const server = peer(session, url.searchParams.get("descriptorSecret") ?? req.headers.authorization ?? "", transport, url.searchParams.has('notifications'));
         bound = { transport, server };
         connections.set(session, bound);
         await server.connect(transport);

@@ -68,7 +68,7 @@ internal sealed class InboundMcpFixture : IAsyncDisposable
         return app;
     }
 
-    internal static async Task<InboundMcpFixture> CreateAsync(bool allow = true)
+    internal static async Task<InboundMcpFixture> CreateAsync(bool allow = true, Action<WebApplication>? configure = null)
     {
         var f = new InboundMcpFixture();
         try
@@ -95,6 +95,7 @@ internal sealed class InboundMcpFixture : IAsyncDisposable
             f.Target.Registry.TriggerOverride = _ => Task.CompletedTask;
             f.Terminals = new(f.Data, default);
             f.Server = new([], 0, Admin, null, f.Manager, f.Terminals, webUiEnabled: false);
+            configure?.Invoke(f.Server.App);
             await f.Server.App.StartAsync();
             f.Url =
                 f.Server.App.Services.GetRequiredService<IServer>()
@@ -116,7 +117,7 @@ internal sealed class InboundMcpFixture : IAsyncDisposable
     internal Task PolicyAsync(string yaml) =>
         Manager.Authorization.InstallAsync(Encoding.UTF8.GetBytes(yaml), default);
 
-    internal async Task<SdkClient> ClientAsync(string token = Alpha, bool standaloneGet = true)
+    internal async Task<SdkClient> ClientAsync(string token = Alpha, bool standaloneGet = true, McpClientOptions? options = null)
     {
         var transport = new HttpClientTransport(
             new HttpClientTransportOptions
@@ -133,7 +134,7 @@ internal sealed class InboundMcpFixture : IAsyncDisposable
         );
         return await SdkClient.CreateAsync(
             transport,
-            new McpClientOptions { ProtocolVersion = "2025-11-25" }
+            options ?? new McpClientOptions { ProtocolVersion = "2025-11-25" }
         );
     }
 

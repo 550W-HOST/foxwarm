@@ -789,6 +789,8 @@ internal sealed partial class SessionToolExecutor(
             );
         handlers["call_tool"] = (_, _, _) =>
             throw new InvalidDataException("call_tool is a dispatcher, not a concrete target.");
+        handlers["mcp_notifications"] = (owner, args, token) => owner.Manager.ManageMcpNotificationsAsync(owner.Hosted, args, token);
+        handlers["send_to_channel"] = (owner, args, token) => owner.Manager.SendToChannelAsync(owner.Hosted, args, token);
         handlers["mcp_config"] = (_, args, token) => mcp.ConfigureAsync(args, token);
         handlers["list_mcp_servers"] = (_, args, token) =>
         {
@@ -807,6 +809,7 @@ internal sealed partial class SessionToolExecutor(
                 name
                     is not (
                         "mcp_config"
+                        or "mcp_notifications"
                         or "set_agent_isolated"
                         or "node_create_auth_token"
                         or "node_remove"
