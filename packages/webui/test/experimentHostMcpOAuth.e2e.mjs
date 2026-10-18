@@ -63,7 +63,7 @@ async function pageApi(page, path, body, method = 'POST', headers = {}) {
 async function login(page) {
   await page.goto(url, { waitUntil: 'networkidle0' })
   await page.waitForSelector('#token'); await page.type('#token', token)
-  await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('#loginForm button')])
+  await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('#loginForm button[type="submit"]')])
   await waitForWebUiReady(page)
   await page.evaluate(() => { location.hash = '#setup' })
   await page.waitForSelector('#setup-tab-models')
@@ -129,7 +129,7 @@ try {
     try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
       const body = JSON.parse(Buffer.concat(chunks).toString()); assert.equal(req.headers.authorization, 'Bearer ' + providerToken)
-      const key = body.input.filter(item => item.role === 'user').flatMap(item => item.content || []).map(item => item.text || '').findLast(text => text.startsWith('OAUTH-TURN-'))
+      const key = body.input.filter(item => item.role === 'user').flatMap(item => item.content || []).map(item => item.text || '').findLast(text => text.includes('OAUTH-TURN-'))?.match(/OAUTH-TURN-\d+/)?.[0]
       const calls = scripts.get(key); assert(calls)
       const completed = calls.every(call => body.input.some(item => item.type === 'function_call_output' && item.call_id === call.call_id))
       const output = completed ? [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'DONE-' + key }] }] : calls
