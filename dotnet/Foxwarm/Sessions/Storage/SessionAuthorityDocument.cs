@@ -89,7 +89,7 @@ public sealed class SessionAuthorityDocument
             }
         );
 
-    internal static void ValidateMessage(JsonObject message, long? expectedSeq, string label)
+    internal static string ValidateMessageContent(JsonObject message, string label)
     {
         var role = RequiredString(message, "role", label);
         if (role is not ("user" or "model" or "tool"))
@@ -117,6 +117,12 @@ public sealed class SessionAuthorityDocument
                 );
         }
 
+        return role;
+    }
+
+    internal static void ValidateMessage(JsonObject message, long? expectedSeq, string label)
+    {
+        var role = ValidateMessageContent(message, label);
         var meta =
             message["__meta"] as JsonObject
             ?? throw new InvalidDataException($"{label}.__meta must be an object.");

@@ -6,7 +6,7 @@ using Microsoft.Data.Sqlite;
 
 namespace Foxwarm.Tests;
 
-public sealed class CliArchiveMigrationTests
+public sealed partial class CliArchiveMigrationTests
 {
     private static string Repository =>
         Path.GetFullPath("../../../../../", AppContext.BaseDirectory);

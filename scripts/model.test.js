@@ -173,3 +173,43 @@ test('real public model caller uses only Core, captured settings, one-shot reque
   assert.equal(manifests.length, 7);
   for (const row of manifests) { assert.equal(row.purpose, 'cli'); assert.equal(row.iteration, 0); assert.equal(row.sessionId, undefined); }
 });
+
+test('terminating the public frontend stops the one-shot provider process after prompt EOF', { timeout: 20000 }, async t => {
+  const assembly = path.join(__dirname, '../dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll');
+  if (!fs.existsSync(assembly)) { t.skip('requires npm run build'); return; }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-cli-lifetime-'));
+  fs.mkdirSync(path.join(root, 'state'));
+  const server = http.createServer();
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  fs.writeFileSync(path.join(root, 'state/models.yaml'), `default: peer\nproviders:\n  peer:\n    providerType: openai\n    baseUrl: http://127.0.0.1:${server.address().port}\n    models: [wire]\n`);
+  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); fs.rmSync(root, { recursive: true, force: true }); });
+  for (const signal of ['SIGKILL', 'SIGTERM']) {
+    let requests = 0;
+    let disconnected;
+    const first = new Promise(resolve => server.on('request', (request, response) => {
+      request.resume();
+      requests++;
+      disconnected = new Promise(resolveClose => response.once('close', resolveClose));
+      resolve(); // Leave this real provider attempt pending until frontend termination.
+    }));
+    const child = spawn(process.execPath, [path.join(__dirname, 'foxwarm.js'), 'model', '-p', signal, '-t', '1'], {
+      env: { ...process.env, FOXWARM_APP_ROOT: root, FOXWARM_DATA_DIR: root,
+        FOXWARM_CONFIG_PATH: path.join(root, 'config.yaml'), CONFIG_PATH: '',
+        FOXWARM_EXPERIMENT_DATA_ROOT: '', FOXWARM_EXPERIMENT_TOOL_ROOT: '' },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const closed = new Promise(resolve => child.once('close', resolve));
+    child.stdin.end(); // Normal prompt EOF must not stop the request.
+    try {
+      await first;
+      child.kill(signal);
+      await Promise.race([disconnected, new Promise((_, reject) => setTimeout(() => reject(Error('orphan provider connection')), 2000))]);
+      await closed; // Child inherited stdout/stderr must close too.
+      await new Promise(resolve => setTimeout(resolve, 3300)); // Beyond the first retry boundary.
+      assert.equal(requests, 1);
+    } finally {
+      child.kill('SIGKILL');
+      server.removeAllListeners('request');
+    }
+  }
+});

@@ -1,6 +1,6 @@
 # Unit: Core delivery resources and public one-shot CLI
 
-Files: `dotnet/Directory.Build.props`, `dotnet/Foxwarm/Delivery.targets`, `dotnet/Foxwarm/CliCommands.cs`, `dotnet/Foxwarm/ProductVersion.cs`, `scripts/core-cli.js`
+Files: `dotnet/Directory.Build.props`, `dotnet/Foxwarm/Delivery.targets`, `dotnet/Foxwarm/CliCommands.cs`, `dotnet/Foxwarm/CliFrontendLifetime.cs`, `dotnet/Foxwarm/ProductVersion.cs`, `scripts/core-cli.js`
 
 Secondary/integration references: the [public CLI frontends](./model-cli.md), `package.json`, `dotnet/Foxwarm/Foxwarm.csproj`, `dotnet/Foxwarm.Desktop/Foxwarm.Desktop.csproj`, `dotnet/scripts/publish-desktop.sh`.
 
@@ -9,6 +9,7 @@ Secondary/integration references: the [public CLI frontends](./model-cli.md), `p
 - Root `foxwarm` remains a JavaScript command dispatcher: no arguments/help show usage, version reads the package version, and only `model` and `archive` select operations. It does not start Main. Independent Multica remains a JavaScript HTTP/JSONL client.
 - `parseArgs` in each public frontend is the only flag parser. `runCoreCli` launches the published Core apphost (or `dotnet Foxwarm.dll` when no apphost exists), or the explicit source Debug Core output. Missing builds/runtime fail without a TypeScript backend fallback. One parsed-options JSON header and optional raw prompt stdin feed the child; this is not a Main controller/RPC service.
 - `CliCommands.RunAsync` handles the private one-shot entry before ordinary Main construction, but after private Vector/native-helper dispatch. `ModelAsync` uses `ModelConfiguration`, `HostModels`, `ModelRequestOwner`, provider transports, routing and the journal. `ArchiveAsync` uses the fixed [Archive migration/export owners](./archive-message-store.md#legacy-migration-and-jsonl-export).
+- `CliFrontendLifetime.ConnectAsync` connects to the frontend's local lifetime pipe before consuming input or starting work. The frontend keeps this pipe open independently of prompt stdin. Frontend termination, including a hard kill by an outer consumer timeout, closes it and exits the one-shot child; prompt EOF does not. This does not change independent exec lifetimes or Main's process-tree policy.
 - `Directory.Build.props` reads the product version from root `package.json`; assembly identification, Core `--version`, MCP server information and ordinary provider user agents use `ProductVersion.Value`. Protocol versions and native dependency pins are independent.
 
 ## CLI behavior
@@ -27,4 +28,4 @@ Build prerequisites remain .NET 10 SDK, restored pinned NuGet packages, Node/npm
 
 ## Tests
 
-`scripts/model.test.js` drives the real public child against controlled Responses and nonstream Anthropic providers, including settings precedence, stdin/system/default/virtual/list behavior, per-attempt timeout/retry, clean stdout/exit distinctions, tool-free journal export and no TypeScript backend loading. `CliArchiveMigrationTests.cs` and `dotnet/cli-archive-fixture-ts.mjs` use real Source-produced storage and real Source export consumers. `packages/webui/test/publishedCore.e2e.mjs` accepts an explicitly owned publish directory and exercises original login/no-model Setup, packaged templates/global skill/resource, Node source archive/bundled client, extension consumers and ordinary native ToolScript with disabled Vector.
+`scripts/model.test.js` drives the real public child against controlled Responses and nonstream Anthropic providers, including settings precedence, stdin/system/default/virtual/list behavior, per-attempt timeout/retry, frontend hard/ordinary termination, clean stdout/exit distinctions, tool-free journal export and no TypeScript backend loading. `CliArchiveMigrationTests.cs` and `dotnet/cli-archive-fixture-ts.mjs` use real Source-produced storage and real Source export consumers. `packages/webui/test/publishedCore.e2e.mjs` accepts an explicitly owned publish directory and exercises original login/no-model Setup, packaged templates/global skill/resource, Node source archive/bundled client, extension consumers and ordinary native ToolScript with disabled Vector.

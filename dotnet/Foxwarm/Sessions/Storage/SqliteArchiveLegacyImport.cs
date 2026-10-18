@@ -108,11 +108,20 @@ public sealed partial class SqliteArchiveMessageStore
                 .Concat(LegacyBranchIds(connection))
                 .ToHashSet(StringComparer.Ordinal);
             var uncertain = new HashSet<string>(StringComparer.Ordinal);
+            var pending = new SessionIdentityMoveJournal(root).Read();
             foreach (var candidate in candidates)
             {
                 var exists = LegacyBranchExists(connection, candidate.Id);
                 foreach (var alias in candidate.Aliases.Reverse())
                     identities.AddLegacyMapping(connection, mappings, alias, candidate.Id);
+                // The established directional recovery owner will move this
+                // existing branch back/forward. Metadata alone must not invent
+                // an empty competing destination before it can do so.
+                if (pending is not null && !exists
+                    && candidate.Id == (pending.Phase == "rolling-back" ? pending.OldId : pending.NewId)
+                    && LegacyBranchExists(connection, pending.Phase == "rolling-back" ? pending.NewId : pending.OldId)
+                    && !sources.Any(source => source.SessionId == candidate.Id))
+                    continue;
                 if (!exists)
                 {
                     string? last = null;

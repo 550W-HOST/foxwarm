@@ -26,14 +26,33 @@ public sealed partial class SqliteArchiveMessageStore
                     ?? []
             );
         }
-        var primary = Path.Combine(root, "state", "sessions.json");
         var loaded = false;
+        // An accepted C# catalog is presentation evidence, not Source bootstrap
+        // authority. Reuse its exact-first, unique alias proof even if old
+        // metadata backups remain alongside it.
+        if (File.Exists(Path.Combine(root, "state", "catalog.sqlite")))
+        {
+            using var catalog = new SessionCatalog(root);
+            foreach (var row in catalog.List())
+            {
+                var id = row["id"]!.GetValue<string>();
+                Add(id, row);
+                result[id] = result[id] with
+                {
+                    Aliases = CommittedArchiveIdentity.ProvenCatalogAliases(catalog, row).ToArray(),
+                };
+            }
+            loaded = true;
+        }
+        var primary = Path.Combine(root, "state", "sessions.json");
         foreach (
             var candidate in new[] { primary }
                 .Concat(Enumerable.Range(1, 5).Select(index => primary + "." + index + ".bak"))
                 .Append(primary + ".bak")
         )
         {
+            if (loaded)
+                break;
             if (!File.Exists(candidate))
                 continue;
             try
@@ -48,15 +67,6 @@ public sealed partial class SqliteArchiveMessageStore
             }
             catch (Exception error)
                 when (error is JsonException or IOException or UnauthorizedAccessException) { }
-        }
-        // Already-catalogued C# data may no longer retain sessions.json. Use the
-        // current catalog owner without importing/recovering any Session lifetime.
-        if (!loaded && File.Exists(Path.Combine(root, "state", "catalog.sqlite")))
-        {
-            using var catalog = new SessionCatalog(root);
-            foreach (var row in catalog.List())
-                Add(row["id"]!.GetValue<string>(), row);
-            loaded = true;
         }
         var histories = Path.Combine(root, "state", "sessions");
         if (!loaded && Directory.Exists(histories))

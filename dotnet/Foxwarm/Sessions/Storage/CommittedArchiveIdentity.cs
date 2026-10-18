@@ -53,17 +53,8 @@ internal sealed partial class CommittedArchiveIdentity(string root)
             foreach (var row in catalog.List())
             {
                 var canonical = SessionCatalog.Text(row["id"])!;
-                foreach (
-                    var alias in (row["aliases"] as JsonArray)
-                        ?.Select(SessionCatalog.Text)
-                        .OfType<string>()
-                        .Reverse()
-                        ?? []
-                )
+                foreach (var alias in ProvenCatalogAliases(catalog, row).Reverse())
                 {
-                    // Presentation claims are proof only when Main's exact-first resolution uniquely selects this owner.
-                    if (SessionCatalog.Text(catalog.Resolve(alias)["sessionId"]) != canonical)
-                        continue;
                     if (mappings.TryGetValue(alias, out _))
                     {
                         if (Resolve(mappings, alias) != canonical)
@@ -88,6 +79,16 @@ internal sealed partial class CommittedArchiveIdentity(string root)
         {
             initialization.Release();
         }
+    }
+
+    internal static IEnumerable<string> ProvenCatalogAliases(SessionCatalog catalog, JsonObject row)
+    {
+        var canonical = SessionCatalog.Text(row["id"]);
+        // Presentation claims are proof only when Main's exact-first resolution uniquely selects this owner.
+        return (row["aliases"] as JsonArray ?? [])
+            .Select(SessionCatalog.Text)
+            .OfType<string>()
+            .Where(alias => SessionCatalog.Text(catalog.Resolve(alias)["sessionId"]) == canonical);
     }
 
     private Dictionary<string, string> ReadLedger(out bool rewrite)

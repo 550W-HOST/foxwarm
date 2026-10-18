@@ -4,7 +4,7 @@ import path from 'node:path'
 import assert from 'node:assert/strict'
 import { pathToFileURL } from 'node:url'
 const [mode, root, artifacts] = process.argv.slice(2)
-if (!['seed', 'verify', 'migrate'].includes(mode) || !root) throw Error('usage: cli-archive-fixture-ts.mjs seed|verify|migrate ROOT [EXPORT]')
+if (!['seed', 'verify', 'migrate', 'read-legacy'].includes(mode) || !root) throw Error('usage: cli-archive-fixture-ts.mjs seed|verify|migrate|read-legacy ROOT [EXPORT]')
 process.env.FOXWARM_DATA_DIR = root
 process.env.FOXWARM_CONFIG_PATH = path.join(root, 'state/config.yaml')
 process.env.FOXWARM_NO_CONSOLE_LOG = '1'
@@ -52,6 +52,11 @@ if (mode === 'seed') {
   await fs.copyFile(path.join(root, 'state/models.yaml'), path.join(legacy, 'state/models.yaml'))
   await fs.writeFile(path.join(legacy, 'fixture.json'), JSON.stringify({ parentId: parent.id, childId, requestId: request.requestId }))
   console.log(JSON.stringify({ legacy, parentId: parent.id, childId, requestId: request.requestId, expected, messages: expected.records - 1 }))
+} else if (mode === 'read-legacy') {
+  const { runSqliteOnlyArchivesMigration } = await load('migrations/index.js')
+  await runSqliteOnlyArchivesMigration()
+  const archive = await load('session/archiveStore.js')
+  console.log(JSON.stringify({ messages: await archive.readLocalArchiveMessages('legacy') }))
 } else {
   const fixture = JSON.parse(await fs.readFile(path.join(root, 'fixture.json'), 'utf8'))
   if (mode === 'verify') {

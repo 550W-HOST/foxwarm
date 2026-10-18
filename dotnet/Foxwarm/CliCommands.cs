@@ -18,6 +18,7 @@ internal static class CliCommands
     {
         try
         {
+            await using var lifetime = await CliFrontendLifetime.ConnectAsync();
             Console.InputEncoding = new UTF8Encoding(false);
             Console.OutputEncoding = new UTF8Encoding(false);
             var input =

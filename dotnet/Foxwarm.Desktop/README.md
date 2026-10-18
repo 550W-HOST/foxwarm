@@ -82,11 +82,12 @@ The exact official Monty 0.0.19 standalone worker is cached only under `obj`
 and copied with its notices into output; no native binary is tracked. Git is
 an optional external tool for Code SCM, not a bundled dependency.
 
-Prepare the shared delivery assets first (`npm ci`, `npm --prefix packages/webui ci`,
-`npm run build:assets`), then use the .NET 10 SDK:
+Install the repository's npm dependencies (`npm ci`, `npm --prefix packages/webui ci`)
+and the .NET 10 SDK, then run the delivery helper from the repository root. It builds
+the shared assets, publishes Desktop, and removes console-only entry files:
 
 ```sh
-dotnet publish dotnet/Foxwarm.Desktop -c Release -r win-x64 --self-contained false -p:EnableWindowsTargeting=true -p:DebugType=None -p:DebugSymbols=false -o desktop-publish
+bash dotnet/scripts/publish-desktop.sh desktop-publish
 ```
 
 The Core project supplies the same WebUI, public skills, templates, Node bootstrap

@@ -72,7 +72,7 @@ public sealed class SessionIdentityRecoveryTests
         );
         journal.Write(new(phase, "old", "new", "main", [], false, null, 1000, version));
         await using var recovered = Manager(data, work);
-        await recovered.LoadAsync();
+        await recovered.LoadMainHostAsync();
         var ownerAfter = await recovered.RequiredAsync("old");
         Assert.Equal(phase == "finishing" ? "new" : "old", ownerAfter.Id);
         Assert.Equal(
@@ -98,6 +98,33 @@ public sealed class SessionIdentityRecoveryTests
             await Assert.ThrowsAsync<InvalidDataException>(() =>
                 recovered.CreateNamedAsync("main", "old", null, null)
             );
+    }
+
+    [Fact]
+    public async Task First_ordinary_startup_preserves_pending_rollback_with_an_existing_exact_catalog_binding()
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        var work = Path.Combine(temp.Path, "work");
+        await using (var seed = Manager(data, work))
+        {
+            await seed.LoadAsync();
+            var owner = await seed.CreateNamedAsync("main", "old", null, null);
+            await ForkClearLifecycleTests.AppendAsync(owner, Text("Pending rollback audit"));
+        }
+        var journal = new SessionIdentityMoveJournal(data);
+        var database = Path.Combine(data, "state/archive-store.sqlite");
+        journal.MoveArtifacts("old", "new");
+        SqliteArchiveIdentityMove.Rename(database, "old", "new");
+        journal.Write(new("rolling-back", "old", "new", "main", [], false, null, 1000));
+        await using var recovered = Manager(data, work);
+        await recovered.LoadMainHostAsync();
+        var ownerAfter = await recovered.RequiredAsync("old");
+        Assert.Equal("old", ownerAfter.Id);
+        Assert.Equal("old", ownerAfter.Archive.ReadMessages().Single().SessionId);
+        Assert.Equal("Pending rollback audit", ownerAfter.Archive.ReadMessages().Single().Message["parts"]![0]!["text"]!.GetValue<string>());
+        Assert.Null(new SqliteArchiveMessageStore(database, "new").ReadBranch());
+        Assert.False(File.Exists(journal.FilePath));
     }
 
     [Theory]
