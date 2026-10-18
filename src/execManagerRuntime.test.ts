@@ -105,33 +105,6 @@ test('native exec creates Agent tmp before cwd validation and exports fresh vars
   }
 });
 
-test('ownerless exec never inherits reserved Agent variables from its host', async t => {
-  if (process.platform === 'win32') return t.skip('requires bash');
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-unowned-env-'));
-  const prior = process.env.fw_tmp;
-  process.env.fw_tmp = '/host-only/not-an-agent';
-  const runtime = createExecRuntime({
-    getDefaultCwd: () => root, getExecTempDir: () => path.join(root, '.temp', 'exec'),
-    getExternalDefaultCwd: () => root, getExternalExecTempDir: () => path.join(root, 'external'),
-    registryPath: path.join(root, 'running.json'),
-  });
-  try {
-    const entry = await runtime.startPersistentExec({ command: `bash -c 'test -z "$fw_tmp" && test -z "$fw_agentdir" && printf cleared'`,
-      externalOwner: { kind: 'external', externalId: 'example', contextId: '00000000-0000-4000-8000-000000000001' },
-    });
-    const status = await runtime.waitForExecCompletion(entry.id, 5000);
-    assert.equal(status?.exitCode, 0);
-    assert.match(await runtime.buildForegroundExecResult(entry, status!), /cleared/);
-    await runtime.finalizeForegroundExec(entry.id);
-    await assert.rejects(() => runtime.startPersistentExec({ command: 'true',
-      externalOwner: { kind: 'external', externalId: 'example', contextId: '00000000-0000-4000-8000-000000000001' }, cwd: '$fw_tmp' }), /unavailable in this execution environment/);
-  } finally {
-    await runtime.shutdown();
-    if (prior === undefined) delete process.env.fw_tmp; else process.env.fw_tmp = prior;
-    await fs.remove(root);
-  }
-});
-
 test('exec runtime recovery uses a late dispatcher exactly once without a stop lifecycle', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-exec-recovery-'));
   const registryPath = path.join(root, 'running.json');

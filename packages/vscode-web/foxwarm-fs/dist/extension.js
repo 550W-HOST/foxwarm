@@ -410,20 +410,27 @@ var FoxwarmFileSystemProvider = class _FoxwarmFileSystemProvider {
 var vscode2 = __toESM(require("vscode"));
 
 // ../../shared/src/configSchemas.ts
-var KNOWN_PROVIDER_TYPES = [
+var CONCRETE_PROVIDER_TYPES = [
   "openai-completions",
   "openai-responses",
+  "openai-ws",
   "openai",
-  "anthropic",
+  "anthropic"
+];
+var VIRTUAL_PROVIDER_TYPES = [
   "session-hash",
   "failover"
+];
+var KNOWN_PROVIDER_TYPES = [
+  ...CONCRETE_PROVIDER_TYPES,
+  ...VIRTUAL_PROVIDER_TYPES
 ];
 var knownProviderType = {
   anyOf: [
     { enum: KNOWN_PROVIDER_TYPES },
-    { type: "string" }
+    { const: "" }
   ],
-  description: "Provider protocol or virtual routing strategy. Known Foxwarm values are suggested; custom provider types remain valid."
+  description: "Provider protocol or virtual routing strategy. Omit or leave empty to use the OpenAI protocol."
 };
 var effectiveProviderTypeIs = (providerType) => ({
   anyOf: [
@@ -474,6 +481,28 @@ var openaiWebSearchConfig = {
   ],
   description: "Opt-in OpenAI Responses hosted web search settings. Use true/false for defaults or an object for tuning. Ignored by non-Responses providers."
 };
+var openaiImageGenerationOptions = {
+  type: "object",
+  additionalProperties: true,
+  description: "Opt-in OpenAI Responses hosted image generation settings. Ignored by non-Responses providers.",
+  properties: {
+    enabled: { type: "boolean", description: "Enable the hosted image_generation tool for eligible Responses requests." },
+    model: { type: "string", minLength: 1, description: "Optional hosted image model override. Omitted uses the provider default." },
+    action: { enum: ["auto", "generate", "edit"], description: "Hosted image action. Defaults to auto." },
+    size: { type: "string", minLength: 1, description: "Requested output size for the hosted image model." },
+    quality: { enum: ["auto", "low", "medium", "high", "xhigh", "max"], description: "Requested output quality." },
+    background: { enum: ["auto", "opaque", "transparent"], description: "Requested output background." },
+    outputFormat: { enum: ["png", "jpeg", "webp"], description: "Requested output image format." },
+    outputCompression: { type: "integer", minimum: 0, maximum: 100, description: "Output compression percentage where the provider supports it." }
+  }
+};
+var openaiImageGenerationConfig = {
+  oneOf: [
+    { type: "boolean" },
+    openaiImageGenerationOptions
+  ],
+  description: "Opt-in OpenAI Responses hosted image generation settings. Use true/false for defaults or an object for tuning. Ignored by non-Responses providers."
+};
 var modelEffortConfig = {
   type: "object",
   additionalProperties: true,
@@ -492,16 +521,24 @@ var modelEffortConfig = {
     }
   }
 };
+var modelDefaultProperties = {
+  contextLimit: { ...positiveInteger, description: "Context limit in tokens." },
+  maxOutput: { ...positiveInteger, description: "Maximum output tokens requested from the provider. Provider-specific extraFields may override this value." },
+  providerImageOutputFormat: { enum: ["webp", "jpeg"], description: "Format used for optimized input images: webp, or jpeg with PNG for transparent images." }
+};
 var modelOverrideProperties = {
-  contextLimit: { type: "integer", minimum: 1, description: "Context window size in tokens." },
+  ...modelDefaultProperties,
+  streamContentInactivityTimeoutMs: { type: "integer", minimum: 1, maximum: 2147483647, default: 6e4, description: "Streaming output inactivity timeout in milliseconds. Model overrides provider; default 60000. First-output timeout and explicit caller deadline remain independent. Safety buffering uses at least 600000." },
   effort: modelEffortConfig,
   historyReasoningField: {
     enum: ["reasoning_content", "reasoning"],
     description: "Assistant-history reasoning field used by this Chat Completions provider/model. Defaults to reasoning_content."
   },
+  keepReasoningOnError: { type: "boolean", description: "Override the provider default for retaining completed encrypted reasoning after a failed normal Responses stream. False disables retention; this does not resume provider execution." },
   extraFields: { type: "object", additionalProperties: true, description: "Provider-specific request fields." },
   extraHeaders: { type: "object", additionalProperties: true, description: "Provider-specific HTTP headers. Values are passed through to the canonical backend loader." },
-  webSearch: openaiWebSearchConfig
+  webSearch: openaiWebSearchConfig,
+  imageGeneration: openaiImageGenerationConfig
 };
 var modelItem = {
   anyOf: [
@@ -541,14 +578,18 @@ var providerObjectEntry = {
         { type: "array", items: modelItem }
       ]
     },
-    contextLimit: modelOverrideProperties.contextLimit,
+    ...modelDefaultProperties,
+    streamContentInactivityTimeoutMs: modelOverrideProperties.streamContentInactivityTimeoutMs,
     effort: modelEffortConfig,
     historyReasoningField: modelOverrideProperties.historyReasoningField,
     asyncCompact: { type: "boolean", description: "Whether background compaction may use this provider." },
     requestCompression: { enum: ["gzip", "br"], description: "Optional request-body compression." },
+    disallowEmptyResponse: { type: "boolean", description: "Treat a completed response with no content and no tool calls as a retryable failure. Default false accepts it as a normal turn end." },
+    keepReasoningOnError: { type: "boolean", default: false, description: "Provider default for retaining completed encrypted reasoning after a failed normal Responses stream. Model entries may override it; this does not resume provider execution." },
     extraFields: modelOverrideProperties.extraFields,
     extraHeaders: modelOverrideProperties.extraHeaders,
     webSearch: modelOverrideProperties.webSearch,
+    imageGeneration: modelOverrideProperties.imageGeneration,
     targets: { type: "array", items: { type: "string", minLength: 1 }, uniqueItems: true, description: "Concrete model keys used by a virtual provider." },
     failureThreshold: { ...positiveInteger, description: "Consecutive failures before a non-final failover target cools down." },
     cooldownMs: { ...positiveInteger, description: "Failover cooldown duration in milliseconds." }
@@ -559,7 +600,7 @@ var providerObjectEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "contextLimit", "effort", "historyReasoningField", "asyncCompact", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
       }
     },
     {
@@ -567,7 +608,7 @@ var providerObjectEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "contextLimit", "effort", "historyReasoningField", "asyncCompact"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError"].map((field) => ({ required: [field] })) }
       }
     },
     {
@@ -608,6 +649,12 @@ var MODELS_CONFIG_SCHEMA = {
   additionalProperties: true,
   properties: {
     default: { type: "string", minLength: 1, description: "Default concrete or virtual model key." },
+    defaults: {
+      type: "object",
+      additionalProperties: false,
+      description: "Default model settings. Concrete providers and model entries may override these values.",
+      properties: modelDefaultProperties
+    },
     providers: {
       type: "object",
       minProperties: 1,
@@ -635,57 +682,49 @@ var guestAgent = {
     node: { type: "string" }
   }
 };
-var channelEntry = {
-  type: "object",
-  additionalProperties: true,
-  properties: {
-    type: {
-      anyOf: [
-        { enum: ["telegram", "matrix", "wework", "weixin", "qqbot"] },
-        { type: "string" }
-      ],
-      description: "Known managed channel type or a custom channel type."
-    },
-    enabled: { type: "boolean" },
-    appId: { type: "string" },
-    clientSecret: { type: "string" },
-    requireMention: { type: "boolean", description: "Require @mention in QQ groups; defaults to true." },
-    groupContextLimit: { type: "integer", minimum: 0, maximum: 50, description: "Prior QQ group messages retained as untrusted context; defaults to 10." },
-    groupBatchWindowMs: {
-      anyOf: [
-        { const: 0 },
-        { type: "integer", minimum: 250, maximum: 3e4 }
-      ],
-      description: "Fixed non-sliding ordinary QQ group batch window in milliseconds; defaults to 5000 and 0 disables batching."
-    },
-    media: {
-      type: "object",
-      additionalProperties: true,
-      properties: {
-        imageMaxBytes: { type: "integer", minimum: 1, maximum: 20971520, description: "Safe inline-image threshold; larger images fall back to generic files." },
-        fileMaxBytes: { type: "integer", minimum: 1, maximum: 209715200, description: "Bounded inbound/fallback generic-file cap; local QQ sends are additionally capped at 100 MiB." },
-        maxTotalBytes: { type: "integer", minimum: 1, maximum: 209715200 },
-        maxAttachments: { type: "integer", minimum: 1, maximum: 16 }
+var channelCommonProperties = {
+  type: {
+    anyOf: [
+      { enum: ["telegram", "matrix", "wework", "weixin", "qqbot"] },
+      { type: "string" }
+    ],
+    description: "Known managed channel type or a custom channel type."
+  },
+  enabled: { type: "boolean" },
+  channelProgress: {
+    oneOf: [
+      { const: false },
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["intervalMs"],
+        properties: {
+          intervalMs: { type: "integer", minimum: 3e4, maximum: 18e5 }
+        }
       }
-    },
-    allowedUsers: { type: "array", items: { type: "string" } },
-    guestAgent,
+    ],
+    description: "Best-effort ordinary-text tool progress. Omission or false disables it."
+  },
+  allowedUsers: { type: "array", items: { type: "string" } },
+  guestAgent
+};
+var channelPropertiesByType = {
+  telegram: {
     botToken: { type: "string" },
-    mainAttachUser: { type: "string" },
+    mainAttachUser: { type: "string" }
+  },
+  matrix: {
     homeserver: { type: "string" },
     accessToken: { type: "string" },
-    botUserId: { type: "string" },
+    botUserId: { type: "string" }
+  },
+  wework: {
     webhookUrl: { type: "string" },
     token: { type: "string" },
     encodingAESKey: { type: "string" },
     listenPort: { type: "integer", minimum: 1, maximum: 65535 },
     listenPath: { type: "string" },
     selfName: { type: "string" },
-    baseUrl: { type: "string" },
-    routeTag: { type: "string" },
-    allowAllUsers: { type: "boolean" },
-    longPollTimeoutMs: { type: "integer", minimum: 1 },
-    loginBotType: { type: "string" },
     aibot: {
       type: "object",
       additionalProperties: true,
@@ -706,8 +745,70 @@ var channelEntry = {
         }
       }
     }
+  },
+  weixin: {
+    baseUrl: { type: "string" },
+    token: { type: "string" },
+    routeTag: { type: "string" },
+    allowAllUsers: { type: "boolean" },
+    longPollTimeoutMs: { type: "integer", minimum: 1 },
+    loginBotType: { type: "string" }
+  },
+  qqbot: {
+    appId: { type: "string" },
+    clientSecret: { type: "string" },
+    requireMention: { type: "boolean", description: "Require @mention in QQ groups; defaults to true." },
+    groupContextLimit: { type: "integer", minimum: 0, maximum: 50, description: "Prior QQ group messages retained as untrusted context; defaults to 10." },
+    groupBatchWindowMs: {
+      anyOf: [
+        { const: 0 },
+        { type: "integer", minimum: 250, maximum: 3e4 }
+      ],
+      description: "Fixed non-sliding ordinary QQ group batch window in milliseconds; defaults to 5000 and 0 disables batching."
+    },
+    allowAllUsers: { type: "boolean" },
+    media: {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        imageMaxBytes: { type: "integer", minimum: 1, maximum: 20971520, description: "Safe inline-image threshold; larger images fall back to generic files." },
+        fileMaxBytes: { type: "integer", minimum: 1, maximum: 209715200, description: "Bounded inbound/fallback generic-file cap; local QQ sends are additionally capped at 100 MiB." },
+        maxTotalBytes: { type: "integer", minimum: 1, maximum: 209715200 },
+        maxAttachments: { type: "integer", minimum: 1, maximum: 16 }
+      }
+    }
   }
 };
+var channelTypeCondition = (channelType) => ({
+  required: ["type"],
+  properties: {
+    type: { type: "string", pattern: `^\\s*${channelType}\\s*$` }
+  }
+});
+var channelEntry = {
+  type: "object",
+  additionalProperties: true,
+  properties: channelCommonProperties,
+  allOf: Object.keys(channelPropertiesByType).map((channelType) => ({
+    if: channelTypeCondition(channelType),
+    then: { properties: channelPropertiesByType[channelType] }
+  }))
+};
+var channelEntryWithKeyFallback = (channelType) => ({
+  ...channelEntry,
+  allOf: [
+    ...channelEntry.allOf,
+    {
+      if: {
+        anyOf: [
+          { not: { required: ["type"] } },
+          { required: ["type"], properties: { type: { type: "string", pattern: "^\\s*$" } } }
+        ]
+      },
+      then: { properties: channelPropertiesByType[channelType] }
+    }
+  ]
+});
 var APP_CONFIG_SCHEMA = {
   $id: "https://foxwarm.dev/schemas/app-config.json",
   $schema: "http://json-schema.org/draft-07/schema#",
@@ -715,41 +816,56 @@ var APP_CONFIG_SCHEMA = {
   type: "object",
   additionalProperties: true,
   properties: {
+    url: { type: "string", pattern: "^https?://", description: "Public HTTP(S) base URL used in Node setup instructions. May include a deployment path; requires restart." },
+    access: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        identities: {
+          type: "object",
+          maxProperties: 64,
+          propertyNames: { pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+          additionalProperties: {
+            type: "object",
+            additionalProperties: false,
+            required: ["token", "surfaces"],
+            properties: {
+              token: { type: "string", minLength: 1, maxLength: 4096, pattern: "^[A-Za-z0-9._~+/-]+={0,2}$" },
+              surfaces: {
+                type: "object",
+                additionalProperties: false,
+                minProperties: 1,
+                properties: {
+                  webui: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["sessions"],
+                    properties: {
+                      sessions: { type: "array", minItems: 1, maxItems: 256, uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 512 } }
+                    }
+                  },
+                  mcp: { type: "object", additionalProperties: false, maxProperties: 0 }
+                }
+              }
+            }
+          }
+        }
+      },
+      description: "Startup-only shared WebUI and inbound MCP identities. Declare each surface explicitly and restart after changes."
+    },
     nodeProviders: {
       type: "object",
       propertyNames: { pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
       additionalProperties: {
-        oneOf: [
-          {
-            type: "object",
-            additionalProperties: false,
-            required: ["type", "command"],
-            properties: {
-              type: { const: "executable", description: "Trusted one-shot executable Node provider adapter." },
-              command: { type: "string", minLength: 1, maxLength: 4096, pattern: "^\\S(?:.*\\S)?$" },
-              args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4096 } },
-              timeoutSeconds: { type: "integer", minimum: 1, maximum: 300, default: 90 }
-            }
-          },
-          {
-            type: "object",
-            additionalProperties: false,
-            required: ["type", "command", "image", "allowedWorktreeRoots"],
-            properties: {
-              type: { const: "docker-worktree", description: "Trusted resident Linux Docker provider for one existing Git worktree." },
-              command: { type: "string", minLength: 1, maxLength: 4096, pattern: "^\\S(?:.*\\S)?$", description: "Fixed Docker launcher command, for example docker or sudo." },
-              args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4096 }, description: 'Fixed launcher arguments, for example ["-n", "docker"].' },
-              image: { type: "string", minLength: 1, maxLength: 4096 },
-              allowedWorktreeRoots: { type: "array", minItems: 1, maxItems: 64, items: { type: "string", minLength: 1, maxLength: 4096 } },
-              networkModes: { type: "array", minItems: 1, uniqueItems: true, items: { enum: ["none", "bridge"] }, default: ["none"] },
-              stateDir: { type: "string", minLength: 1, maxLength: 4096 },
-              memory: { type: "string", pattern: "^[1-9]\\d*[kKmMgG]$", default: "2g" },
-              cpus: { type: "number", exclusiveMinimum: 0, maximum: 64, default: 2 },
-              pidsLimit: { type: "integer", minimum: 16, maximum: 65536, default: 256 },
-              tmpfsSize: { type: "string", pattern: "^[1-9]\\d*[kKmMgG]$", default: "256m" }
-            }
-          }
-        ]
+        type: "object",
+        additionalProperties: false,
+        required: ["type", "command"],
+        properties: {
+          type: { const: "executable", description: "Trusted one-shot executable Node provider adapter." },
+          command: { type: "string", minLength: 1, maxLength: 4096, pattern: "^\\S(?:.*\\S)?$" },
+          args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4096 } },
+          timeoutSeconds: { type: "integer", minimum: 1, maximum: 300, default: 90 }
+        }
       },
       description: "Startup-only trusted Node providers. Requires restart."
     },
@@ -787,6 +903,11 @@ var APP_CONFIG_SCHEMA = {
       type: "boolean",
       description: "Run the LanceDB/vector owner in a child process. Defaults to true and requires restart."
     },
+    handoffConfirmation: {
+      type: "boolean",
+      default: false,
+      description: "Require structured handoff recall and confirmation for send_to_session and create_child_session. Defaults to false and requires restart."
+    },
     vectorMaintenance: {
       oneOf: [
         { type: "boolean" },
@@ -817,7 +938,7 @@ var APP_CONFIG_SCHEMA = {
       additionalProperties: true,
       properties: {
         ollamaBaseUrl: { type: "string", description: "Legacy vector endpoint root. Prefer top-level vector.baseUrl." },
-        contextLimit: { type: "integer", minimum: 1 },
+        contextLimit: { ...modelDefaultProperties.contextLimit, deprecated: true, description: "Legacy fallback. Prefer defaults in models.yaml." },
         compactKeepPercent: { type: "number", exclusiveMinimum: 0, maximum: 1, default: 0.3 },
         compactThresholdPercent: { type: "number", exclusiveMinimum: 0, maximum: 1, default: 0.85 },
         compactBlockLevelMinTokens: { type: "integer", minimum: 1 },
@@ -825,7 +946,8 @@ var APP_CONFIG_SCHEMA = {
         compactBlockCandidateFraction: { type: "number", minimum: 0, maximum: 1 },
         compactBlockForceCompactFraction: { type: "number", minimum: 0, maximum: 1 },
         compactMessageForceCompactFraction: { type: "number", minimum: 0, maximum: 1 },
-        maxOutput: { type: "integer", minimum: 1, default: 32768, description: "Maximum provider output tokens. Defaults to 32768." },
+        maxOutput: { ...modelDefaultProperties.maxOutput, default: 32768, deprecated: true, description: "Legacy fallback. Prefer defaults in models.yaml." },
+        providerImageOutputFormat: { ...modelDefaultProperties.providerImageOutputFormat, default: "webp", deprecated: true, description: "Legacy fallback. Prefer defaults in models.yaml." },
         openaiBaseUrl: { type: "string" },
         openaiApiKey: { type: "string" },
         anthropicBaseUrl: { type: "string" },
@@ -843,6 +965,12 @@ var APP_CONFIG_SCHEMA = {
     },
     channels: {
       type: "object",
+      patternProperties: Object.fromEntries(
+        Object.keys(channelPropertiesByType).map((channelType) => [
+          `^${channelType}$`,
+          channelEntryWithKeyFallback(channelType)
+        ])
+      ),
       additionalProperties: channelEntry
     },
     asrService: {

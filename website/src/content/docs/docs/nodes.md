@@ -59,16 +59,12 @@ Tools that use the Session's current Node will execute there. A tool with an exp
 
 A Node provider is configured in `state/config.yaml` under `nodeProviders`. Restart Foxwarm after changing provider configuration.
 
-The first-party `docker-worktree` provider creates a container for an **existing Git worktree**. It supplies file and shell tools, preserves the worktree when the Node is destroyed, and defaults to no network access. It does not create or commit the Git worktree for you.
-
-This is different from the Docker bootstrap above: a bootstrap starts a client that pairs with Foxwarm, while the worktree provider manages a container from the master. Follow the [Docker-worktree setup guide](https://github.com/550W-HOST/foxwarm/blob/main/docs/docker-worktree-node-provider.md) for the helper image, allowed roots, and lifecycle calls. The bundled `isolated-worker` Skill can guide a temporary worker setup after the provider is configured.
-
-Custom executable providers have a separate [provider protocol](https://github.com/550W-HOST/foxwarm/blob/main/docs/executable-node-provider-protocol.md). Their capabilities depend on the adapter; do not assume every provider supplies browser tools, terminals, or lifecycle operations.
+Executable providers use the [provider protocol](https://github.com/550W-HOST/foxwarm/blob/main/docs/executable-node-provider-protocol.md). Their capabilities depend on the adapter; do not assume every provider supplies browser tools, terminals, or lifecycle operations.
 
 ## Access and trust
 
 Node authentication identifies a client. Tool rules decide which callers may use it. Neither replaces the host's file permissions or network controls.
 
-Grant shell access only to environments suitable for the task. Docker-worktree restrictions help prevent accidental interference, but they are not a guarantee against deliberately malicious commands.
+Grant shell access only to environments suitable for the task.
 
 External MCP clients have a narrower Node surface than internal Sessions. See [MCP execution environments](/docs/mcp-inbound/#supported-execution-environments) before configuring external access.

@@ -9,7 +9,7 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 ## Key Exports
 
 - `createExecRuntime(options)` — constructs one isolated application exec runtime around exactly one `PersistentExecManager`
-- `ExecRuntime` / `ExecRuntimeOptions` — closed runtime lifecycle and configurable registry/default-cwd/temp-root providers, including disjoint external-owner default-cwd/artifact callbacks for resident Docker, process operations, entry-aware liveness/cwd, one-shot reconcile, and shutdown
+- `ExecRuntime` / `ExecRuntimeOptions` — closed runtime lifecycle and configurable registry/default-cwd/temp-root providers, process operations, one-shot reconcile, and shutdown
 - `getDefaultExecRuntime()` — read-only access to the factory-built process-default runtime; callers cannot replace or stop it
 - `initializeExecManager(options?)` — bootstraps the persistent exec manager
 - `startPersistentExec(options)` — launches a new tracked shell execution
@@ -50,12 +50,12 @@ Provides a thin application-level wrapper around `PersistentExecManager` (from t
 - `../packages/shared/dist/processOperations` — native and injectable process primitives passed to the shared manager
 - `./tools` (test only) — `definitions`, `exec`, `read`
 
-- Main and Session-worker runtimes supply their actual `getAgentDir` callback to persistent exec; the Docker-worktree runtime intentionally omits it. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch-node-execution.md#d-dispatch-native-agent-paths-and-code-targets).
+- Main and Session-worker runtimes supply their actual `getAgentDir` callback to persistent exec. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch-node-execution.md#d-dispatch-native-agent-paths-and-code-targets).
 
 ## Behavior
 
 - The process-default runtime is itself created by `createExecRuntime`, configured with the unchanged project paths (agent directories, temp dirs, registry file at `STATE_DIR/running-exec.json`) and `master` node default. Every existing exported wrapper delegates to that real factory-built default.
-- Each factory call owns independent manager, dispatcher closure, registry, temp-root providers, process backend, and initialization/reconcile state. The native backend is default. `reconcileNow()` performs an awaited pass and `shutdown()` idempotently clears the timer and drains reconcile/registry work without deleting persisted active entries, allowing resident provider generations to retire without timer growth and Core to close all runtimes orderly.
+- Each factory call owns independent manager, dispatcher closure, registry, temp-root providers, process backend, and initialization/reconcile state. The native backend is default. `reconcileNow()` performs an awaited pass and `shutdown()` idempotently clears the timer and drains reconcile/registry work without deleting persisted active entries, allowing Core to close runtimes orderly.
 - The default completion dispatcher sends a system event to the session associated with the exec entry; this can be overridden at initialization.
 - The shared manager removes a `notifyOnCompletion` background tracking record before process inspection or notification when its age from `startedAt` is strictly greater than 24 hours. It does not kill the process or delete artifacts; restart recovery marks recovered records for background notification before reconciliation applies the TTL.
 - All public functions are thin async delegates to the underlying manager instance, adding only the default `nodeId: 'master'`.

@@ -5,9 +5,6 @@ import { issueExternalExecCompletionCapability, verifyExternalExecCompletionCapa
 type ExternalExecState = 'reserved' | 'running' | 'unknown' | 'completed';
 export type ExternalExecRecord = {
   nodeId: string;
-  /** An opaque resident Docker generation, bound before its exec effect; absent for CLI Nodes. */
-  dockerGeneration?: string;
-  dockerProvider?: true;
   owner: ExternalNodeOwner;
   execId: string;
   args: Record<string, unknown>;
