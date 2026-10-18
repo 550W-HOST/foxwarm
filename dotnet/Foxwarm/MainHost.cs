@@ -30,6 +30,7 @@ internal sealed class MainHost : IAsyncDisposable
         string? distRoot
     )
     {
+        configuration.Access.ReserveInstanceToken(http.Token);
         var options = new ResponsesClientOptions(
             new Uri("http://127.0.0.1:1/v1"),
             "",

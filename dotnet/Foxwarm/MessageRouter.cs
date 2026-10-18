@@ -20,7 +20,8 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
     public async Task<MessageRouteResult> HandleMessageAsync(
         ChannelContext context,
         ChannelMessage message,
-        SessionOwner? attachmentOwner = null
+        SessionOwner? attachmentOwner = null,
+        Action? beforeAdmission = null
     )
     {
         if (IsPresentationCommand(message.Text))
@@ -192,7 +193,7 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
         if (attachmentOwner is null)
             await runtime.SubmitAndRunAsync(context.SessionId, item);
         else
-            await runtime.SubmitAndRunAsync(attachmentOwner, item);
+            await runtime.SubmitAndRunAsync(attachmentOwner, item, beforeAdmission);
         return new(
             202,
             new

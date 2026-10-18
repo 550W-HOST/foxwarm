@@ -28,7 +28,7 @@ internal static class AppConfigurationRules
             app["llm"] is JsonObject llm ? llm["ollamaBaseUrl"] : null
         );
         VectorMaintenance(app["vectorMaintenance"], app.ContainsKey("vectorMaintenance"));
-        McpInbound(app["mcpInbound"], app.ContainsKey("mcpInbound"));
+        AccessConfiguration.Normalize(app["access"], app.ContainsKey("access"));
         Boolean(
             app["handoffConfirmation"],
             "app config `handoffConfirmation`",
@@ -329,59 +329,6 @@ internal static class AppConfigurationRules
             );
     }
 
-    private static void McpInbound(JsonNode? value, bool present)
-    {
-        if (!present)
-            return;
-        if (value is not JsonObject mcp)
-            throw new InvalidDataException("mcpInbound must be a YAML object.");
-        if (mcp.Any(pair => pair.Key is not ("enabled" or "identities")))
-            throw new InvalidDataException("mcpInbound contains an unsupported field.");
-        Boolean(mcp["enabled"], "mcpInbound.enabled", mcp.ContainsKey("enabled"));
-        if (!mcp.ContainsKey("identities"))
-        {
-            if (
-                mcp["enabled"] is JsonValue enabled
-                && enabled.TryGetValue<bool>(out var active)
-                && active
-            )
-                throw new InvalidDataException(
-                    "Enabled mcpInbound requires at least one identity."
-                );
-            return;
-        }
-        if (mcp["identities"] is not JsonObject identities)
-            throw new InvalidDataException("mcpInbound.identities must be a YAML object.");
-        if (identities.Count > 64)
-            throw new InvalidDataException("mcpInbound.identities exceeds 64 entries.");
-        if (
-            mcp["enabled"] is JsonValue enabledValue
-            && enabledValue.TryGetValue<bool>(out var enabledInbound)
-            && enabledInbound
-            && identities.Count == 0
-        )
-            throw new InvalidDataException("Enabled mcpInbound requires at least one identity.");
-        var tokens = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var (id, raw) in identities)
-        {
-            if (
-                !Regex.IsMatch(id, "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-                || raw is not JsonObject identity
-                || identity.Any(pair => pair.Key != "token")
-            )
-                throw new InvalidDataException("mcpInbound identity is invalid.");
-            var token = Text(identity["token"]);
-            if (
-                token is null
-                || token.Length == 0
-                || token.Length > 4096
-                || !Regex.IsMatch(token, "^[A-Za-z0-9._~+/-]+={0,2}$")
-            )
-                throw new InvalidDataException("mcpInbound identity token is invalid.");
-            if (!tokens.Add(token))
-                throw new InvalidDataException("mcpInbound identities must use distinct tokens.");
-        }
-    }
 
     private static void Boolean(JsonNode? value, string label, bool present)
     {

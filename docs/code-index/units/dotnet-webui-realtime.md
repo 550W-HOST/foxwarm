@@ -14,6 +14,8 @@ Publishes authenticated Session/message/tool/task/list/presentation/terminal eve
 
 Realtime is a notification/projection boundary, not Session authority. A stream delta or task event may arrive before a later durable JSON/catalog publication; event revision/ack and bounded replay let the browser reconcile rather than treating every event as committed history. Subscriber failure is isolated from the owner/save lane.
 
+Scoped clients retain role-safe state/message projections and current exact/Agent bindings across initial snapshots and queued sends. Catalog/log subscriptions are rejected; affected credential/scope changes and stale canonical moves close only those connections. The [shared access unit](./dotnet-access-identities.md) owns the authority and revocation contract.
+
 ## Tests
 
-`WebUiRealtimeRevisionTests.cs`; `WebUiRealtimeRevisionTests.cs`; stream/list/task/terminal event tests.
+`WebUiRealtimeRevisionTests.cs`; `WebUiAccessTests.cs`; stream/list/task/terminal event tests.

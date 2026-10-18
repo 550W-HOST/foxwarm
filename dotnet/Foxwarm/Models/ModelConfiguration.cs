@@ -16,6 +16,7 @@ internal sealed partial class ModelConfiguration
     public string TemplatePath { get; }
     public string AppPath { get; }
     public string AppRaw { get; }
+    internal AccessConfiguration Access { get; }
 
     internal JsonObject ConfigDiagnostics()
     {
@@ -143,6 +144,7 @@ internal sealed partial class ModelConfiguration
         AppRaw = File.Exists(AppPath) ? File.ReadAllText(AppPath, Encoding.UTF8) : "";
         app = ConfigurationYaml.Parse(AppRaw, "app config");
         AppConfigurationRules.Validate(app);
+        Access = new(app);
         HandoffConfirmationEnabled = Foxwarm.Tools.HandoffConfirmation.Enabled(app);
         var llm = app["llm"] as JsonObject;
         MaxOutput = HostModels.PositiveSetting(llm?["maxOutput"], 32768, "llm.maxOutput");

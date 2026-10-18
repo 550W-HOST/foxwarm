@@ -4,6 +4,7 @@ The .NET HTTP/WebSocket surface consumed by the React WebUI. `HttpServer` owns a
 
 ## Units
 
+- [Shared access identities and scoped WebUI](../units/dotnet-access-identities.md)
 - [WebUI channel registration and shared DTO contract](../units/dotnet-webui-core.md)
 - [WebUI history, Session list, and bounded replay routes](../units/dotnet-webui-history-list.md)
 - [WebUI files, images, and uploads](../units/dotnet-webui-files-images.md)

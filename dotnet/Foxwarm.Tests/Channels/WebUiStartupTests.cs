@@ -185,9 +185,9 @@ public sealed class WebUiStartupTests
         Assert.True(config["success"]!.GetValue<bool>());
         Assert.True(config["saved"]!.GetValue<bool>());
         Assert.Equal("config", config["target"]!.GetValue<string>());
-        Assert.Empty(config["applied"]!.AsArray());
+        Assert.Equal("access.identities", Assert.Single(config["applied"]!.AsArray())!.GetValue<string>());
         Assert.Equal(
-            new[] { "access.identities", "channels" },
+            new[] { "channels" },
             config["notApplied"]!.AsArray().Select(v => v!.GetValue<string>())
         );
         Assert.Contains(
@@ -213,9 +213,9 @@ public sealed class WebUiStartupTests
         Assert.True(channels["success"]!.GetValue<bool>());
         Assert.True(channels["saved"]!.GetValue<bool>());
         Assert.Equal("config", channels["target"]!.GetValue<string>());
-        Assert.Empty(channels["applied"]!.AsArray());
+        Assert.Equal("access.identities", Assert.Single(channels["applied"]!.AsArray())!.GetValue<string>());
         Assert.Equal(
-            new[] { "access.identities", "channels" },
+            new[] { "channels" },
             channels["notApplied"]!.AsArray().Select(v => v!.GetValue<string>())
         );
         Assert.Contains(

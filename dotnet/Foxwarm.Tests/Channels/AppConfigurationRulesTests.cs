@@ -29,11 +29,11 @@ public sealed class AppConfigurationRulesTests
                 pidsLimit: 256
                 tmpfsSize: 256m
             vector: false
-            mcpInbound:
-              enabled: false
+            access:
               identities:
                 external:
                   token: opaque-token
+                  surfaces: { mcp: {} }
             """,
             "app config"
         );
@@ -49,9 +49,9 @@ public sealed class AppConfigurationRulesTests
             "sessionWorkers: { idleSeconds: null }",
             "vectorMaintenance: { retentionHours: null }",
             "nodeProviders: { p: { type: executable, command: /bin/echo, timeoutSeconds: null } }",
-            "mcpInbound: { enabled: true }",
-            "mcpInbound: { identities: { " + new string('a', 129) + ": { token: x } } }",
-            "mcpInbound: { identities: { a: { token: same }, b: { token: same } } }",
+            "access: { identities: { a: { token: x, surfaces: {} } } }",
+            "access: { identities: { " + new string('a', 129) + ": { token: x, surfaces: {mcp: {}} } } }",
+            "access: { identities: { a: { token: same, surfaces: {mcp: {}} }, b: { token: same, surfaces: {mcp: {}} } } }",
         };
 
         foreach (var yaml in invalid)

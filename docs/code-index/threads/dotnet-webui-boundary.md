@@ -19,7 +19,7 @@ Browser WebUI fetch/WebSocket/PTY/Code request
 
 ## Auth and route order
 
-Static WebUI and state-changing routes are served only after normal host auth; `POST /api/auth` is the token exchange. Authenticated `GET /api/auth/session` returns `{ role: 'admin' }` for the current full-access instance-token host. Only marked path/global-blob GET/HEAD resource endpoints additionally accept a verified download capability; issuance and unrelated APIs stay protected. See [file/image routes](../units/dotnet-webui-files-images.md). Prefix/base-path handling is deployment-relative. Route handlers validate request IDs/limits before invoking manager/runtime services and translate committed/accepted/partial failures into explicit HTTP payloads.
+Static WebUI and state-changing routes are served only after normal host auth; `POST /api/auth` is the token exchange. Authenticated `GET /api/auth/session` returns the administrator or verified scoped WebUI role and feature projection. The instance token retains full selected-Session authority; scoped identities use the explicit browser allowlist and live catalog scope in [shared access](../units/dotnet-access-identities.md). Marked path/global/Session-blob GET/HEAD endpoints additionally accept an independent verified download capability; issuance and unrelated APIs stay protected. See [file/image routes](../units/dotnet-webui-files-images.md). Prefix/base-path handling is deployment-relative. Route handlers validate request IDs/limits before invoking manager/runtime services and translate committed/accepted/partial failures into explicit HTTP payloads.
 
 ## Realtime and history
 
@@ -29,9 +29,9 @@ Static WebUI and state-changing routes are served only after normal host auth; `
 
 The .NET channel has real routes for current tasks/terminal/files/images/history and connected external Node onboarding, ordinary tools, exec/completion, file consumers, Code/PTY and exec-only Shell HTTP. The connected Node contract belongs to [Remote Node compatibility](./remote-node-compatibility.md#net-external-node-integration); excluded hosting/lifecycle platforms are listed in [delivery scope](../overview.md#d-dotnet-delivery-scope). Vector-backed history/admission remains `VECTOR_DISABLED`. Root package start/build still targets TypeScript Main even though this .NET host is the active replacement architecture.
 
-The current React entry point requests `GET /api/auth/session` before mounting any normal, popup, or embedded root. It expects `{ role: 'admin' }` for the administrator app or a verified scoped WebUI identity response for the restricted root. The .NET host implements the authenticated administrator response, so successful instance-token login allows the merged client to mount the administrator app. Restricted WebUI identities remain explicitly deferred and are not accepted or represented as supported.
+The current React entry point requests `GET /api/auth/session` before mounting any normal, popup, or embedded root. It expects `{ role: 'admin' }` for the administrator app or a verified scoped WebUI identity response for the restricted root. The .NET host supplies both role responses: instance-token login mounts the administrator App and configured WebUI identities mount the original restricted chat root. The complete shared map is validated, but declared inbound MCP remains unavailable; [the access unit](../units/dotnet-access-identities.md) owns the staged installation and revocation boundaries.
 
-The merged React Node picker now uses real authenticated `GET /api/sessions/{id}/nodes` and `POST /api/sessions/{id}/node` handlers. Directory reads use catalog/topology; selection uses the exact owner/save lane with cwd retention. History/realtime/composer DTOs expose committed Node/cwd, and the original App is qualified with owned official Node clients. The [WebUI contract unit](../units/dotnet-webui-core.md) maps these consumers. The current Setup omits Authorizations; the browser callback and implemented [instance-shared outbound MCP OAuth](../units/dotnet-mcp-oauth.md) administrator routes/grant lifecycle remain supported; inbound MCP and restricted identities remain deferred.
+The merged React Node picker now uses real authenticated `GET /api/sessions/{id}/nodes` and `POST /api/sessions/{id}/node` handlers. Directory reads use catalog/topology; selection uses the exact owner/save lane with cwd retention. History/realtime/composer DTOs expose committed Node/cwd, and the original App is qualified with owned official Node clients. The [WebUI contract unit](../units/dotnet-webui-core.md) maps these consumers. The current Setup omits Authorizations; the browser callback and implemented [instance-shared outbound MCP OAuth](../units/dotnet-mcp-oauth.md) administrator routes/grant lifecycle remain supported; inbound MCP remains unavailable; scoped WebUI identities use the shared live access snapshot.
 
 ### Runtime, controls, notices, and communications
 
@@ -63,6 +63,7 @@ The minimal [desktop host](../units/host-runtime.md#desktop-boundary) embeds the
 
 ## Canonical units and tests
 
+- [Shared access identities and scoped WebUI](../units/dotnet-access-identities.md)
 - [Host runtime](../units/host-runtime.md)
 - [WebUI channel registration](../units/dotnet-webui-core.md)
 - [WebUI history/list](../units/dotnet-webui-history-list.md)

@@ -22,5 +22,6 @@ parent.aliases = ['continuous-alias']
 await sm.saveSession(parent)
 const child = await sm.forkSession(parent.id, 'fork')
 await sm.appendSessionMessage(parent, { role: 'user', parts: [{ text: 'PARENT-AFTER-FORK-MUST-NOT-LEAK' }] })
-console.log('CONTINUOUS_FIXTURE:' + JSON.stringify({ parent: parent.id, child, image }))
+const unreferenced = process.argv[4] ? await putImageBlob({ buffer: await fs.readFile(process.argv[4]), mimeType: 'image/png', imageId: 'unreferenced' }) : undefined
+console.log('CONTINUOUS_FIXTURE:' + JSON.stringify({ parent: parent.id, child, image, ...(unreferenced ? { unreferenced } : {}) }))
 process.exit(0)

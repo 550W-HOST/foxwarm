@@ -101,6 +101,8 @@ internal sealed partial class ModelConfiguration
                 throw new InvalidDataException("Unknown configuration target.");
             var config = ConfigurationYaml.Parse(raw, "app config");
             AppConfigurationRules.Validate(config);
+            var access = AccessConfiguration.Normalize(config["access"], config.ContainsKey("access"));
+            Access.Validate(access);
             var restart = app.Select(pair => pair.Key)
                 .Concat(config.Select(pair => pair.Key))
                 .Distinct(StringComparer.Ordinal)
@@ -112,13 +114,21 @@ internal sealed partial class ModelConfiguration
             if (!JsonNode.DeepEquals(app["channels"]?["webui"], config["channels"]?["webui"]))
                 restart.Add("channels.webui");
             var notApplied = new List<string>();
-            if (config.ContainsKey("access") || app.ContainsKey("access"))
-                notApplied.Add("access.identities");
+            if (access.Values.Any(identity => identity.Mcp))
+                notApplied.Add("access.surfaces.mcp");
             if (config.ContainsKey("channels") || app.ContainsKey("channels"))
                 notApplied.Add("channels");
             await ReplaceRawAsync(AppPath, bytes, token);
-            // Main app settings are startup snapshots; unsupported modules are never claimed as applied.
-            return Installed(target, [], notApplied, restart);
+            try
+            {
+                await Access.ApplyAsync(access);
+            }
+            catch (IOException)
+            {
+                notApplied.Add("access.connections");
+            }
+            // Other Main app settings remain startup snapshots.
+            return Installed(target, ["access.identities"], notApplied, restart);
         }
         finally
         {

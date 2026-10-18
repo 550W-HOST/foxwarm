@@ -95,11 +95,12 @@ internal sealed class SessionRuntime(SessionManager manager)
         await owner.Registry.Ingress.EnqueueAsync(owner.Id, item);
     }
 
-    internal async Task SubmitAndRunAsync(SessionOwner owner, QueueItem item)
+    internal async Task SubmitAndRunAsync(SessionOwner owner, QueueItem item, Action? beforeAdmission = null)
     {
         await manager.WaitForIdentityMutationAsync(owner.Id);
         manager.RequireFileIngressOwner(owner);
-        await owner.Registry.Ingress.EnqueueAsync(owner.Id, item);
+        if (beforeAdmission is null) await owner.Registry.Ingress.EnqueueAsync(owner.Id, item);
+        else await owner.Registry.Ingress.EnqueueCheckedAsync(owner.Id, item, beforeAdmission);
     }
 
     public async Task<JsonObject> UpdateSettingsAsync(string id, JsonObject settings) =>

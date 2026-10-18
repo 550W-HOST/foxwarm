@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Channels.WebUi;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Sockets;
 using Microsoft.Extensions.FileProviders;
 
@@ -31,6 +32,10 @@ internal sealed class HttpServer
     {
         var address = publicAddress ?? PublicWebAddress.Capture(port);
         Downloads = new(apiToken);
+        var accessConfiguration = sessions.Models.ConfigurationOwner?.Access ?? new AccessConfiguration(new JsonObject());
+        accessConfiguration.ReserveInstanceToken(apiToken);
+        var access = new WebUiAccess(new SessionRuntime(sessions), accessConfiguration);
+        access.Start();
         WebUiEnabled =
             webUiEnabled ?? HttpServerSettings.Enabled(sessions.Models.ConfigurationOwner);
         var browserCookie = Convert
@@ -76,6 +81,7 @@ internal sealed class HttpServer
             options.MultipartBodyLengthLimit = 51L * 1024 * 1024
         );
         var app = builder.Build();
+        app.Lifetime.ApplicationStopped.Register(access.Dispose);
         var code = WebUiEnabled
             ? new Foxwarm.Code.CodeWorkbench(
                 sessions,
@@ -155,7 +161,9 @@ internal sealed class HttpServer
                     await next();
                     return;
                 }
-                var valid = Authorized(context.Request, apiToken, browserCookie);
+                var admin = Authorized(context.Request, apiToken, browserCookie);
+                var scoped = !admin && WebUiEnabled ? access.Authenticate(context) : null;
+                var valid = admin || scoped is not null;
                 var staticEntry =
                     WebUiEnabled
                     && distRoot is not null
@@ -172,10 +180,33 @@ internal sealed class HttpServer
                     await context.Response.SendFileAsync(loginFile, context.RequestAborted);
                     return;
                 }
-                if (!valid && !(WebUiEnabled && Downloads.Authorizes(context)))
+                var resource = WebUiEnabled && Downloads.Authorizes(context);
+                if (!valid && !resource)
                 {
                     context.Response.StatusCode = 401;
                     await context.Response.WriteAsJsonAsync(new { error = "Unauthorized" });
+                    return;
+                }
+                if (scoped is not null && !resource)
+                {
+                    if (!WebUiAccess.BrowserRoute(context))
+                    {
+                        context.Response.StatusCode = 403;
+                        await context.Response.WriteAsJsonAsync(new { error = "Forbidden" });
+                        return;
+                    }
+                    try
+                    {
+                        if (WebUIChannel.RouteIdentity(context.Request) is { } requested) scoped.Bind(requested);
+                        using var tracked = access.Track(context, scoped);
+                        scoped.Require();
+                        await next();
+                    }
+                    catch (WebUiAccessException) when (!context.Response.HasStarted)
+                    {
+                        context.Response.StatusCode = 403;
+                        await context.Response.WriteAsJsonAsync(new { error = "WebUI identity session binding changed.", code = "WEBUI_SESSION_NOT_ALLOWED" });
+                    }
                     return;
                 }
                 await next();
@@ -230,12 +261,12 @@ internal sealed class HttpServer
                         || body.Count != 1
                         || body["token"] is not JsonValue value
                         || !value.TryGetValue<string>(out var submitted)
-                        || !Equal(submitted, apiToken)
+                        || (!Equal(submitted, apiToken) && accessConfiguration.Authenticate(submitted) is null)
                     )
                         return Results.Unauthorized();
                     context.Response.Cookies.Append(
                         "foxwarm_token",
-                        browserCookie,
+                        Equal(submitted, apiToken) ? browserCookie : submitted,
                         new CookieOptions
                         {
                             HttpOnly = true,
@@ -248,7 +279,7 @@ internal sealed class HttpServer
                     return Results.Ok(new { success = true });
                 }
             );
-            app.MapGet("/api/auth/session", () => Results.Ok(new { role = "admin" }));
+            app.MapGet("/api/auth/session", (HttpContext context) => Results.Ok(WebUiAccess.Request(context)?.AuthPayload() ?? new JsonObject { ["role"] = "admin", ["features"] = WebUiAccess.Features(true) }));
             code!.Register(app);
         }
         app.MapGet("/health", () => Results.Ok(new { status = "ready" }));

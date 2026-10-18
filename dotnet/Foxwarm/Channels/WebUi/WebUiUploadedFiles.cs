@@ -131,7 +131,8 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
     internal async Task<PreparedUploadedParts> PrepareAsync(
         JsonObject input,
         SessionOwner? owner,
-        CancellationToken token
+        CancellationToken token,
+        WebUiRequest? scoped = null
     )
     {
         var parts =
@@ -161,6 +162,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                     SessionWait.Text(entry)
                     ?? SessionWait.Text((entry as JsonObject)?["path"])
                     ?? throw new ImageInputException("Uploaded file has no staging path.");
+                scoped?.RequireUpload(owner.Id, path);
                 var suppliedName = SessionWait.Text((entry as JsonObject)?["filename"]);
                 var filename = !string.IsNullOrEmpty(SessionGoal.Trim(suppliedName ?? ""))
                     ? SessionGoal.Trim(suppliedName!)
@@ -170,6 +172,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                 await StageAsync(owner, "before-copy");
                 await sessions.WaitForIdentityMutationAsync(owner.Id, token);
                 sessions.RequireFileIngressOwner(owner);
+                scoped?.RequireUpload(owner.Id, path);
                 var node = sessions.FileIngressNode(owner);
                 var timestamp = DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH-mm-ss-fffZ");
                 var storage = StorageName(
@@ -231,6 +234,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                     var created = false;
                     try
                     {
+                        scoped?.Require(owner.Id);
                         await using (
                             var output = new FileStream(
                                 temp,
@@ -247,6 +251,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                             await output.FlushAsync(token);
                             output.Flush(true);
                         }
+                        scoped?.Require(owner.Id);
                         File.Move(temp, destination, overwrite: false);
                         created = false;
                         saved.Add(
@@ -268,6 +273,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                     }
                 }
                 await StageAsync(owner, "after-copy");
+                scoped?.Require(owner.Id);
                 parts.Add(
                     new JsonObject { ["text"] = Descriptor(filename, destination, mime, node) }
                 );
@@ -291,7 +297,8 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                         }
                     );
                 }
-                // No receipt: authenticated callers may still use other existing staging files.
+                scoped?.ConsumeUpload(path);
+                // Administrator callers may still use other existing staging files.
                 File.Delete(path);
             }
             return new(parts, saved);

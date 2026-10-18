@@ -36,14 +36,15 @@ public sealed partial class SessionSaveLane
     }
 
     // All wait/queue mutations share the existing ordered save lane. Stop retains its immediate state/CTS path.
-    internal Task<bool> AdmitAsync(QueueItem item, SaveKind kind) =>
-        AdmitWithReceiptAsync(item, null, kind);
+    internal Task<bool> AdmitAsync(QueueItem item, SaveKind kind, Action? beforeAdmission = null) =>
+        AdmitWithReceiptAsync(item, null, kind, beforeAdmission: beforeAdmission);
 
     private async Task<bool> AdmitWithReceiptAsync(
         QueueItem item,
         string? receipt,
         SaveKind kind = SaveKind.Strict,
-        bool timer = false
+        bool timer = false,
+        Action? beforeAdmission = null
     )
     {
         using var accepted = entry.AdmitMutation();
@@ -75,6 +76,7 @@ public sealed partial class SessionSaveLane
                     };
                 }
             }
+            beforeAdmission?.Invoke();
             var prepared = entry.WithState(state =>
             {
                 var snapshot = state.Snapshot();

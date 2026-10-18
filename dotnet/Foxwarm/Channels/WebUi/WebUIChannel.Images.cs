@@ -17,6 +17,7 @@ internal sealed partial class WebUIChannel
 
     private void RegisterUploadAndImageRoutes(WebApplication app)
     {
+        RegisterSessionImageRoutes(app);
         app.MapPost(
             "/api/upload",
             async (HttpContext context) =>
@@ -30,7 +31,14 @@ internal sealed partial class WebUIChannel
                     return Results.BadRequest(new { error = "A multipart file is required." });
                 try
                 {
+                    var scoped = WebUiAccess.Request(context);
                     var form = await context.Request.ReadFormAsync(context.RequestAborted);
+                    var uploadSession = form["sessionId"].Count == 1 ? form["sessionId"].ToString().Trim() : "";
+                    if (scoped is not null)
+                    {
+                        if (uploadSession.Length == 0) return Results.BadRequest(new { error = "WebUI identity upload requires a bound sessionId." });
+                        scoped.Bind(uploadSession);
+                    }
                     if (form.Files.Count != 1 || form.Files[0].Name != "file")
                         return Results.BadRequest(new { error = "One file is required." });
                     var file = form.Files[0];
@@ -64,6 +72,8 @@ internal sealed partial class WebUIChannel
                             await output.FlushAsync(context.RequestAborted);
                             output.Flush(true);
                         }
+                        scoped?.Require(uploadSession);
+                        scoped?.RegisterUpload(uploadSession, path);
                         LinuxAtomicJsonFile.LinuxDirectorySync.Sync(UploadRoot);
                     }
                     catch
@@ -124,6 +134,13 @@ internal sealed partial class WebUIChannel
                 ["GET", "HEAD"],
                 async (string blobId, HttpContext context) =>
                 {
+                    return await BlobResultAsync(blobId, context);
+                }
+            )
+            .WithMetadata(new WebUiDownloadResource("blob"));
+    }
+    private async Task<IResult> BlobResultAsync(string blobId, HttpContext context)
+    {
                     try
                     {
                         var path = sessions.Images.ResolveBlob(blobId);
@@ -138,6 +155,7 @@ internal sealed partial class WebUIChannel
                             reference,
                             context.RequestAborted
                         );
+                        if (!downloads.Authorizes(context)) WebUiAccess.Request(context)?.Require();
                         var etag = '"' + blobId[..64] + '"';
                         context.Response.Headers.ETag = etag;
                         context.Response.Headers.CacheControl =
@@ -167,8 +185,6 @@ internal sealed partial class WebUIChannel
                             new { error = "Image is unavailable or invalid." }
                         );
                     }
-                }
-            )
-            .WithMetadata(new WebUiDownloadResource("blob"));
     }
+
 }

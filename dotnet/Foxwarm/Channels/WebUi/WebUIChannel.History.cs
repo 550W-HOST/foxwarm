@@ -148,6 +148,13 @@ internal sealed partial class WebUIChannel
                 result["session"]!["childPolicyChain"] = hosted
                     .BuildDto()["childPolicyChain"]
                     ?.DeepClone();
+                if (WebUiAccess.Request(request) is { } scoped)
+                {
+                    scoped.Require(hosted.Id);
+                    result["persistentMemorySnapshot"] = null;
+                    result["session"] = scoped.Session(result["session"]!.AsObject());
+                    WebUiSessionImages.Project(result, hosted.Id, archive: false);
+                }
                 return Results.Ok(result);
             }
         );
@@ -194,6 +201,11 @@ internal sealed partial class WebUIChannel
                         new { error = "Session binding changed." },
                         statusCode: 403
                     );
+                if (WebUiAccess.Request(request) is { } scoped)
+                {
+                    scoped.Require(canonicalId);
+                    WebUiSessionImages.Project(page, canonicalId, archive: true);
+                }
                 return Results.Ok(page);
             }
         );

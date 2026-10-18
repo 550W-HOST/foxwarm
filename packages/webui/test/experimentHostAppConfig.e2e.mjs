@@ -2,9 +2,10 @@ import assert from 'node:assert/strict'
 import { readFile, writeFile } from 'node:fs/promises'
 import puppeteer from 'puppeteer-core'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const fixture = await createHostFixture('app-config')
-const initialRaw = (origin, prefix = '/preview') => `# preserve this comment\nurl: ${origin}${prefix}\nbot:\n  enableWebUI: true\n  customBotField: retained\nllm:\n  maxOutput: 713\n  compactKeepPercent: 0.3\n  compactThresholdPercent: 0.85\nnodeProviders:\n  retained:\n    type: executable\n    command: /bin/echo\n  docker:\n    type: docker-worktree\n    command: /bin/echo\n    image: alpine:3\n    allowedWorktreeRoots:\n      - /tmp\n    networkModes:\n      - none\n    stateDir: /tmp/foxwarm-state\n    memory: 2g\n    cpus: 2\n    pidsLimit: 256\n    tmpfsSize: 256m\nvector: false\nmcpInbound:\n  enabled: false\nchannels:\n  webui:\n    type: webui\n    enabled: true\n  weixin:\n    type: weixin\n    enabled: true\n    token: saved-token\n    customChannelField: keep-me\n  mystery:\n    type: future-chat\n    enabled: true\n`
+const initialRaw = (origin, prefix = '/preview') => `# preserve this comment\nurl: ${origin}${prefix}\nbot:\n  enableWebUI: true\n  customBotField: retained\nllm:\n  maxOutput: 713\n  compactKeepPercent: 0.3\n  compactThresholdPercent: 0.85\nnodeProviders:\n  retained:\n    type: executable\n    command: /bin/echo\n  docker:\n    type: docker-worktree\n    command: /bin/echo\n    image: alpine:3\n    allowedWorktreeRoots:\n      - /tmp\n    networkModes:\n      - none\n    stateDir: /tmp/foxwarm-state\n    memory: 2g\n    cpus: 2\n    pidsLimit: 256\n    tmpfsSize: 256m\nvector: false\naccess:\n  identities: {}\nchannels:\n  webui:\n    type: webui\n    enabled: true\n  weixin:\n    type: weixin\n    enabled: true\n    token: saved-token\n    customChannelField: keep-me\n  mystery:\n    type: future-chat\n    enabled: true\n`
 
 let page
 let browser
@@ -34,8 +35,8 @@ try {
     raw.replace('compactKeepPercent: 0.3', 'compactKeepPercent: 2'),
     raw.replace('command: /bin/echo', 'command: null'),
     raw.replace('command: /bin/echo', 'timeoutSeconds: null\n    command: /bin/echo'),
-    raw.replace('mcpInbound:\n  enabled: false', 'mcpInbound:\n  enabled: true'),
-    raw.replace('mcpInbound:\n  enabled: false', 'mcpInbound:\n  enabled: false\n  identities:\n    first:\n      token: duplicate\n    second:\n      token: duplicate'),
+    raw.replace('access:\n  identities: {}', 'access:\n  identities: { a: { token: synthetic, surfaces: {} } }'),
+    raw.replace('access:\n  identities: {}', 'access:\n  identities: { a: { token: duplicate, surfaces: {mcp: {}} }, b: { token: duplicate, surfaces: {mcp: {}} } }'),
     raw.replace('vector: false', 'vector: null'),
     raw.replace(`${fixture.origin}/preview`, 'http://bad\\host/preview'),
   ]
@@ -69,7 +70,7 @@ try {
   assert.equal(saved.status, 200, JSON.stringify(saved))
   assert.equal(saved.body.saved, true)
   assert.equal(saved.body.target, 'config')
-  assert.deepEqual(saved.body.applied, [])
+  assert.deepEqual(saved.body.applied, ['access.identities'])
   assert.deepEqual(saved.body.notApplied, ['channels'])
   assert(saved.body.restartRequired.includes('bot'))
   assert.equal(saved.body.reload.available, false)
@@ -88,7 +89,7 @@ try {
   assert.equal(channelSave.status, 200, JSON.stringify(channelSave))
   assert.equal(channelSave.body.saved, true)
   assert.equal(channelSave.body.target, 'config')
-  assert.deepEqual(channelSave.body.applied, [])
+  assert.deepEqual(channelSave.body.applied, ['access.identities'])
   assert.deepEqual(channelSave.body.notApplied, ['channels'])
   assert(Array.isArray(channelSave.body.restartRequired))
   const channelRaw = await readFile(`${fixture.data}/state/config.yaml`, 'utf8')
@@ -125,23 +126,18 @@ try {
   await page.type('input[type="password"]', fixture.token)
   await page.click('button[type="submit"]')
   await page.waitForSelector('.foxwarm-chat-root')
+  await waitForWebUiReady(page)
   await page.evaluate(() => { location.hash = 'setup' })
   await page.waitForSelector('#setup-tab-config')
   await page.click('#setup-tab-config')
+  const editor = '[aria-label="Application config YAML editor"] [role="textbox"]'
+  await page.waitForSelector(editor, { visible: true })
   assert.match(await page.evaluate(() => document.body.innerText), /External chat channels are unavailable on this server\./)
   assert.equal(await page.$eval('body', body => body.innerText.includes('Start Weixin login')), false)
-  const editor = '[aria-label="Application config YAML editor"] [role="textbox"]'
-  await page.waitForSelector(editor)
   const uiRaw = channelRaw.replace('unknown: retained', 'unknown: ui-edited')
-  await page.evaluate(({ value }) => {
-    const moduleUrl = performance.getEntriesByType('resource').map(entry => entry.name).find(name => /(?:\/|^)monaco-editor(?:-[^/]+)?\.js(?:\?|$)/.test(new URL(name).pathname))
-    return import(moduleUrl).then(imported => {
-      const monaco = imported.a ?? imported.default ?? imported
-      const model = monaco.editor.getEditors().find(candidate => candidate.getModel()?.uri.toString() === 'inmemory://foxwarm/setup/foxwarm-config.yaml')?.getModel()
-      if (!model) throw new Error('Monaco app-config model not found')
-      model.setValue(value)
-    })
-  }, { value: uiRaw })
+  await page.focus(editor)
+  await page.keyboard.down('Control'); await page.keyboard.press('A'); await page.keyboard.up('Control')
+  await page.keyboard.sendCharacter(uiRaw.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n'))
   await new Promise(resolve => setTimeout(resolve, 500))
   await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Save config')?.click())
   await until(async () => Boolean(await page.$eval('[data-save-feedback="config"]', node => node.getAttribute('role') === 'status' && node.textContent?.trim()).catch(() => false)), 'UI config save', 10000).catch(async error => {
