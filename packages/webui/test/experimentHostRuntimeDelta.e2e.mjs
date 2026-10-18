@@ -187,7 +187,12 @@ try {
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), source); await waitForWebUiReady(page)
   // Build sizeable ordinary history, then plan while a foreground request remains held.
   for (let index = 0; index < 5; index++) await turn(source, 'seed-' + index, undefined, ('ordered-' + index + '-').repeat(600))
-  await send(source, 'CASE:hold'); await until(() => held.has('hold'), 'held foreground before compact')
+  await send(source, 'CASE:hold'); await until(() => held.has('hold'), 'held foreground before queued control')
+  assert.equal((await send(source, 'CASE:queued-control')).status, 202)
+  await until(async () => (await history(source)).session.queueLength === 1, 'ordinary queued input before Dequeue')
+  await control(source, '/dequeue', 'accepted', 'dequeue')
+  await until(async () => { const value = await history(source); return !value.session.busy && value.session.queueLength === 0 && value.messages.some(row => row.parts.some(part => part.text === 'DONE-queued-control')) }, 'Dequeue admission and actual safe-point settlement')
+  held.delete('hold'); await send(source, 'CASE:hold'); await until(() => held.has('hold'), 'held foreground before compact')
   held.delete('plan'); await control(source, '/compact', 'accepted', 'compact')
   const compactRetry = await until(async () => (await history(source)).session.runtimeState.compaction?.retry, 'independent compact physical backoff')
   await projections(source, state => { assert.equal(state.active.phase, 'normal-turn'); assert.equal(state.compaction.retry.attempt, 1); assert.equal(state.compaction.retry.retryAt, compactRetry.retryAt); assert.equal(state.retry, undefined) })
