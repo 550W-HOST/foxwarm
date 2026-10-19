@@ -359,7 +359,8 @@ internal static partial class CodeGitOperations
             {
                 stat = CodeFileOperations.StatFile(full);
             }
-            catch (CodeServiceException error) when (error.Code is not ("FileNotFound" or "FileNotADirectory" or "Unavailable"))
+            catch (CodeServiceException error)
+                when (error.Code is not ("FileNotFound" or "FileNotADirectory" or "Unavailable"))
             {
                 // Git uses raw stat errors in Source, not filesystem-service permission codes.
                 throw new CodeServiceException("Unknown", error.Message, inner: error);

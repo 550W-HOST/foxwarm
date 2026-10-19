@@ -164,32 +164,56 @@ public sealed class CodeRoutesTests
             + "&path=working.txt&side=working&ref=not-an-immutable-ref";
         var rejected = await f.Client.GetAsync(url);
         Assert.Equal(HttpStatusCode.UnprocessableEntity, rejected.StatusCode);
-        Assert.Equal("InvalidCommit", JsonNode.Parse(await rejected.Content.ReadAsStringAsync())!["code"]!.ToString());
+        Assert.Equal(
+            "InvalidCommit",
+            JsonNode.Parse(await rejected.Content.ReadAsStringAsync())!["code"]!.ToString()
+        );
         var working = url.Replace("&ref=not-an-immutable-ref", "");
         foreach (var reference in new[] { "", "&ref=HEAD", "&ref=" + new string('a', 40) })
-            Assert.Equal("working without a repository", await f.Client.GetStringAsync(working + reference));
+            Assert.Equal(
+                "working without a repository",
+                await f.Client.GetStringAsync(working + reference)
+            );
         using var anonymous = new HttpClient { BaseAddress = f.Client.BaseAddress };
         Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync(working)).StatusCode);
-        var invalidPath = await f.Client.GetAsync(url.Replace("path=working.txt", "path=../escape"));
+        var invalidPath = await f.Client.GetAsync(
+            url.Replace("path=working.txt", "path=../escape")
+        );
         Assert.Equal(HttpStatusCode.BadRequest, invalidPath.StatusCode);
-        Assert.Equal("InvalidPath", JsonNode.Parse(await invalidPath.Content.ReadAsStringAsync())!["code"]!.ToString());
+        Assert.Equal(
+            "InvalidPath",
+            JsonNode.Parse(await invalidPath.Content.ReadAsStringAsync())!["code"]!.ToString()
+        );
         var invalidSide = await f.Client.GetAsync(url.Replace("side=working", "side=invalid"));
         Assert.Equal(HttpStatusCode.UnprocessableEntity, invalidSide.StatusCode);
-        Assert.Equal("InvalidCommit", JsonNode.Parse(await invalidSide.Content.ReadAsStringAsync())!["code"]!.ToString());
+        Assert.Equal(
+            "InvalidCommit",
+            JsonNode.Parse(await invalidSide.Content.ReadAsStringAsync())!["code"]!.ToString()
+        );
         await File.WriteAllTextAsync(Path.Combine(f.Work, "..literal"), "literal bytes");
         foreach (var side in new[] { "base", "working" })
         foreach (var reference in new[] { "HEAD", "not-an-immutable-ref" })
         {
-            var literal = await f.Client.GetAsync(url.Replace("path=working.txt", "path=..literal").Replace("side=working", "side=" + side).Replace("ref=not-an-immutable-ref", "ref=" + reference));
+            var literal = await f.Client.GetAsync(
+                url.Replace("path=working.txt", "path=..literal")
+                    .Replace("side=working", "side=" + side)
+                    .Replace("ref=not-an-immutable-ref", "ref=" + reference)
+            );
             Assert.Equal(HttpStatusCode.BadRequest, literal.StatusCode);
-            Assert.Equal("InvalidPath", JsonNode.Parse(await literal.Content.ReadAsStringAsync())!["code"]!.ToString());
+            Assert.Equal(
+                "InvalidPath",
+                JsonNode.Parse(await literal.Content.ReadAsStringAsync())!["code"]!.ToString()
+            );
         }
         var previous = Environment.GetEnvironmentVariable("PATH");
         try
         {
             Environment.SetEnvironmentVariable("PATH", Path.Combine(f.Temp.Path, "no-git"));
             Assert.Equal("working without a repository", await f.Client.GetStringAsync(working));
-            Assert.Equal(HttpStatusCode.UnprocessableEntity, (await f.Client.GetAsync(url)).StatusCode);
+            Assert.Equal(
+                HttpStatusCode.UnprocessableEntity,
+                (await f.Client.GetAsync(url)).StatusCode
+            );
             var status = await f.Client.GetAsync(
                 "/api/vscode-web/git/status?workspace=" + Uri.EscapeDataString(f.Work)
             );
