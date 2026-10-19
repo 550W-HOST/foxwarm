@@ -53,7 +53,7 @@ async function groupProcesses(mode){
   const pids=(await readFile('/sys/fs/cgroup'+group+'/cgroup.procs','utf8')).trim().split(/\s+/)
   const snapshot=[], owned=new Set()
   for(const pid of pids)try{
-    const env=await readFile(`/proc/${pid}/environ`,'utf8')
+    const env=await readFile(`/proc/${pid}/environ`,'utf8').catch(()=> '')
     const command=(await readFile(`/proc/${pid}/cmdline`,'utf8')).replaceAll('\0',' ').trim()
     const parent=Number(/^PPid:\s+(\d+)/m.exec(await readFile(`/proc/${pid}/status`,'utf8'))?.[1])
     snapshot.push({pid:Number(pid),parent,command})
@@ -113,7 +113,7 @@ async function corpus(mode){
   await writeFile(join(root,mode+'-processes.json'),JSON.stringify({active:evidence[mode].activeGroupProcesses,afterLastTab:processes},null,2))
   assert(evidence[mode].activeGroupProcesses.some(p=>/chromium.*--type=renderer/.test(p.command)),'real browser renderer process while a tab is open')
   const exited=once(item.child,'exit');item.child.kill('SIGTERM');await exited
-  if(mode==='candidate')await until(async()=>!(await groupProcesses(mode)).some(p=>/chromium/.test(p.command)),'process-owned browser disposal')
+  if(mode==='candidate')await until(async()=>!(await groupProcesses(mode)).some(p=>p.command.includes('--user-data-dir=')),'process-owned browser disposal')
   console.log(JSON.stringify({mode,operations:rows.length,allElevenActions:true,ariaSingleAndQueryAll:true,pngAndMetadata:true,reconnect:true,native:!!process.env.FOXWARM_CLI_EXECUTABLE && mode==='candidate',noClr:!/libcoreclr|libhostfxr/.test(maps),browser:execFileSync(process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium',['--version'],{encoding:'utf8'}).trim(),processes:processes.map(p=>({pid:p.pid,kind:p.command.match(/--type=([^ ]+)/)?.[1] || (p.command.includes('chromium')?'browser':'cli')}))}))
 }
 try { for(const mode of modes) await corpus(mode) }
