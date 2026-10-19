@@ -105,7 +105,21 @@ internal static class ToolAuthorizationYaml
             var allowed = shape switch
             {
                 Shape.Root => new[] { "version", "defaultAction", "rules" },
-                Shape.Rule => ["id", "enabled", "match", "action", "reason", "agent", "session", "externalId", "tool", "node", "args", "path"],
+                Shape.Rule =>
+                [
+                    "id",
+                    "enabled",
+                    "match",
+                    "action",
+                    "reason",
+                    "agent",
+                    "session",
+                    "externalId",
+                    "tool",
+                    "node",
+                    "args",
+                    "path",
+                ],
                 Shape.Match =>
                 [
                     "agent",

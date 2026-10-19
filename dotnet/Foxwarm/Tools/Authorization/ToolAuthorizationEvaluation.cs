@@ -98,7 +98,10 @@ internal static class ToolAuthorizationEvaluation
                 && Scalar(match["agent"], AuthorizationFact.Of(request.Agent))
         )
         && Optional(match, "session", AuthorizationFact.Of(request.Session))
-        && (!match.ContainsKey("sessionPattern") || Pattern(match["sessionPattern"]!, request.Session))
+        && (
+            !match.ContainsKey("sessionPattern")
+            || Pattern(match["sessionPattern"]!, request.Session)
+        )
         && (
             !match.ContainsKey("externalId")
             || request.Principal == "external"
@@ -109,19 +112,28 @@ internal static class ToolAuthorizationEvaluation
             || ToolMatches(match["tool"], request.Source, request.Name, request.Server)
         )
         && (unknownNode || Optional(match, "targetNode", AuthorizationFact.Of(request.TargetNode)))
-        && (unknownNodeTargets || !match.ContainsKey("node") || NodeTargets(match["node"]!, request, deny));
+        && (
+            unknownNodeTargets
+            || !match.ContainsKey("node")
+            || NodeTargets(match["node"]!, request, deny)
+        );
 
     private static bool Pattern(JsonNode pattern, string? actual)
     {
         if (actual is null)
             return false;
-        var patterns = pattern is JsonArray list ? list.Select(SessionWait.Text) : new[] { SessionWait.Text(pattern) };
+        var patterns = pattern is JsonArray list
+            ? list.Select(SessionWait.Text)
+            : new[] { SessionWait.Text(pattern) };
         return patterns.Any(item =>
         {
             var parts = item!.Split('*');
             if (parts.Length == 1)
                 return actual == item;
-            if (!actual.StartsWith(parts[0], StringComparison.Ordinal) || !actual.EndsWith(parts[^1], StringComparison.Ordinal))
+            if (
+                !actual.StartsWith(parts[0], StringComparison.Ordinal)
+                || !actual.EndsWith(parts[^1], StringComparison.Ordinal)
+            )
                 return false;
             var offset = parts[0].Length;
             var end = actual.Length - parts[^1].Length;
@@ -145,9 +157,14 @@ internal static class ToolAuthorizationEvaluation
             if (matcher is not JsonObject map)
                 return Pattern(matcher, node);
             if (map.ContainsKey("current"))
-                return request.Principal == "internal" && request.CurrentNode is not null && request.CurrentNode == node;
+                return request.Principal == "internal"
+                    && request.CurrentNode is not null
+                    && request.CurrentNode == node;
             var slash = node.IndexOf('/');
-            var provider = slash > 0 ? node[..slash] : node == "master" ? "master" : "authenticated-remote";
+            var provider =
+                slash > 0 ? node[..slash]
+                : node == "master" ? "master"
+                : "authenticated-remote";
             return Pattern(map["provider"]!, provider);
         }
         return deny ? targets.Any(Matches) : targets.All(Matches);
@@ -208,9 +225,11 @@ internal static class ToolAuthorizationEvaluation
         || match.All(pair =>
             pair.Value is JsonObject wrapper && wrapper["session"] is JsonObject session
                 ? SessionMatch(session, request)
-                : pair.Value is JsonObject task && task.ContainsKey("task")
-                    ? request.Principal == "internal" && request.TaskOwnerSession is not null && request.TaskOwnerSession == request.Session
-                    : Scalar(pair.Value, Argument(request.Args, pair.Key))
+            : pair.Value is JsonObject task && task.ContainsKey("task")
+                ? request.Principal == "internal"
+                    && request.TaskOwnerSession is not null
+                    && request.TaskOwnerSession == request.Session
+            : Scalar(pair.Value, Argument(request.Args, pair.Key))
         );
 
     internal static bool Within(string? path, string root)
@@ -312,7 +331,16 @@ internal static class ToolAuthorizationEvaluation
         foreach (var rule in policy.Value["rules"]!.AsArray().OfType<JsonObject>())
         {
             var match = rule["match"]!.AsObject();
-            if (!rule["enabled"]!.GetValue<bool>() || !Identity(match, request, unknownNode, unknownNodeTargets, SessionWait.Text(rule["action"]) == "deny"))
+            if (
+                !rule["enabled"]!.GetValue<bool>()
+                || !Identity(
+                    match,
+                    request,
+                    unknownNode,
+                    unknownNodeTargets,
+                    SessionWait.Text(rule["action"]) == "deny"
+                )
+            )
                 continue;
             var conditional =
                 match.ContainsKey("path")
@@ -329,13 +357,26 @@ internal static class ToolAuthorizationEvaluation
             && SessionWait.Text(policy.Value["defaultAction"]) == "allow";
     }
 
-    internal static bool NeedsTaskTarget(ToolAuthorizationPolicy policy, ToolAuthorizationRequest request) =>
-        request.Source == "builtin" && request.Name == "task"
-        && policy.Value["rules"]!.AsArray().OfType<JsonObject>().Any(rule =>
-            rule["enabled"]!.GetValue<bool>()
-            && Identity(rule["match"]!.AsObject(), request, deny: SessionWait.Text(rule["action"]) == "deny")
-            && (rule["match"]?["args"] as JsonObject ?? new()).Any(pair =>
-                pair.Value is JsonObject map && map.ContainsKey("task")));
+    internal static bool NeedsTaskTarget(
+        ToolAuthorizationPolicy policy,
+        ToolAuthorizationRequest request
+    ) =>
+        request.Source == "builtin"
+        && request.Name == "task"
+        && policy.Value["rules"]!
+            .AsArray()
+            .OfType<JsonObject>()
+            .Any(rule =>
+                rule["enabled"]!.GetValue<bool>()
+                && Identity(
+                    rule["match"]!.AsObject(),
+                    request,
+                    deny: SessionWait.Text(rule["action"]) == "deny"
+                )
+                && (rule["match"]?["args"] as JsonObject ?? new()).Any(pair =>
+                    pair.Value is JsonObject map && map.ContainsKey("task")
+                )
+            );
 
     internal static bool NeedsTarget(
         ToolAuthorizationPolicy policy,
@@ -346,7 +387,11 @@ internal static class ToolAuthorizationEvaluation
             .OfType<JsonObject>()
             .Any(rule =>
                 rule["enabled"]!.GetValue<bool>()
-                && Identity(rule["match"]!.AsObject(), request, deny: SessionWait.Text(rule["action"]) == "deny")
+                && Identity(
+                    rule["match"]!.AsObject(),
+                    request,
+                    deny: SessionWait.Text(rule["action"]) == "deny"
+                )
                 && (rule["match"]?["args"] as JsonObject ?? new()).Any(pair =>
                     pair.Value is JsonObject map && map.ContainsKey("session")
                 )
@@ -408,10 +453,20 @@ internal static class AuthorizationPaths
 
 internal static class ToolAuthorizationNodeEffects
 {
-    private static bool Valid(string? id) => id is not null
-        && System.Text.RegularExpressions.Regex.IsMatch(id, @"^(?:[A-Za-z0-9._:-]{1,128}|[A-Za-z0-9][A-Za-z0-9._:-]{0,63}/[A-Za-z0-9][A-Za-z0-9._:-]{0,127})$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    private static bool Valid(string? id) =>
+        id is not null
+        && System.Text.RegularExpressions.Regex.IsMatch(
+            id,
+            @"^(?:[A-Za-z0-9._:-]{1,128}|[A-Za-z0-9][A-Za-z0-9._:-]{0,63}/[A-Za-z0-9][A-Za-z0-9._:-]{0,127})$",
+            System.Text.RegularExpressions.RegexOptions.CultureInvariant
+        );
 
-    internal static IReadOnlyList<string>? Resolve(string source, string name, string? targetNode, JsonObject args)
+    internal static IReadOnlyList<string>? Resolve(
+        string source,
+        string name,
+        string? targetNode,
+        JsonObject args
+    )
     {
         if (source == "node" || source == "builtin" && name is "send_file" or "image_write_to_file")
             return Valid(targetNode) ? [targetNode!] : null;
@@ -419,11 +474,20 @@ internal static class ToolAuthorizationNodeEffects
             return null;
         if (name == "copy_between_nodes")
         {
-            var endpoints = new[] { SessionWait.Text(args["sourceNode"])?.Trim(), SessionWait.Text(args["targetNode"])?.Trim() };
+            var endpoints = new[]
+            {
+                SessionWait.Text(args["sourceNode"])?.Trim(),
+                SessionWait.Text(args["targetNode"])?.Trim(),
+            };
             return endpoints.All(Valid) ? endpoints.Select(value => value!).ToArray() : null;
         }
-        if (name == "node" && SessionWait.Text(args["action"])?.Trim().ToLowerInvariant() is "select" or "inspect"
-            && !args.ContainsKey("providerId") && SessionWait.Text(args["nodeId"])?.Trim() is string node && Valid(node))
+        if (
+            name == "node"
+            && SessionWait.Text(args["action"])?.Trim().ToLowerInvariant() is "select" or "inspect"
+            && !args.ContainsKey("providerId")
+            && SessionWait.Text(args["nodeId"])?.Trim() is string node
+            && Valid(node)
+        )
             return [node];
         return null;
     }

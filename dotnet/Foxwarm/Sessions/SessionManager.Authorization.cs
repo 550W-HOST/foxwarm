@@ -60,7 +60,12 @@ internal sealed partial class SessionManager
             toolWorkspace,
             agents.AgentDirectory(owner.Agent),
             agents.MemoryDirectory(owner.Agent),
-            NodeTargets: ToolAuthorizationNodeEffects.Resolve(source, name, effectNode ?? node, args),
+            NodeTargets: ToolAuthorizationNodeEffects.Resolve(
+                source,
+                name,
+                effectNode ?? node,
+                args
+            ),
             CurrentNode: CurrentNode(owner)
         );
 
@@ -226,13 +231,20 @@ internal sealed partial class SessionManager
         }
         else if (ToolAuthorizationEvaluation.NeedsTarget(policy, request))
             request = PopulateAuthorizationTargets(request, owner);
-        if (ToolAuthorizationEvaluation.NeedsTaskTarget(policy, request)
-            && SessionWait.Text(request.Args["taskId"]) is string taskId)
+        if (
+            ToolAuthorizationEvaluation.NeedsTaskTarget(policy, request)
+            && SessionWait.Text(request.Args["taskId"]) is string taskId
+        )
         {
             if (taskId.Length > 128 || string.IsNullOrWhiteSpace(taskId))
                 throw new InvalidDataException("Task authorization requires a bounded taskId.");
             var taskOwner = Tasks.OwnerSessionId(taskId.Trim());
-            request = request with { TaskOwnerSession = taskOwner is null ? null : SessionWait.Text(Catalog.Resolve(taskOwner)["sessionId"]) };
+            request = request with
+            {
+                TaskOwnerSession = taskOwner is null
+                    ? null
+                    : SessionWait.Text(Catalog.Resolve(taskOwner)["sessionId"]),
+            };
         }
         var decision = ToolAuthorizationEvaluation.Evaluate(policy, request);
         if (!decision.Allowed)
@@ -258,7 +270,14 @@ internal sealed partial class SessionManager
     {
         if (name == "call_tool" && source == "builtin")
             return true;
-        if (source == "builtin" && name is "run_script" or "start_toolscript_run" or "send_file" or "image_write_to_file")
+        if (
+            source == "builtin"
+            && name
+                is "run_script"
+                    or "start_toolscript_run"
+                    or "send_file"
+                    or "image_write_to_file"
+        )
             unknownNode = true;
         var targetNode =
             node
@@ -275,8 +294,15 @@ internal sealed partial class SessionManager
         )
             return false;
         var request = AuthorizationRequest(owner, source, name, server, new(), [], targetNode);
-        var unknownNodeTargets = source == "builtin" && name is "send_file" or "image_write_to_file" or "copy_between_nodes" or "node";
-        return ToolAuthorizationEvaluation.Visible(authorization.Load(), request, unknownNode, unknownNodeTargets)
+        var unknownNodeTargets =
+            source == "builtin"
+            && name is "send_file" or "image_write_to_file" or "copy_between_nodes" or "node";
+        return ToolAuthorizationEvaluation.Visible(
+                authorization.Load(),
+                request,
+                unknownNode,
+                unknownNodeTargets
+            )
             && IsolatedToolCompatibility.Visible(
                 Isolation(owner.Agent),
                 source,

@@ -467,7 +467,8 @@ internal sealed class TaskStore : IDisposable
             if (scoped is not null)
             {
                 var placeholders = string.Join(',', scoped.Select((_, i) => "$scope" + i));
-                where += scoped.Length == 0 ? " AND 0"
+                where +=
+                    scoped.Length == 0 ? " AND 0"
                     : Text(args["scope"]) == "owned" ? $" AND ownerSessionId IN ({placeholders})"
                     : $" AND (createdBySessionId IN ({placeholders}) OR ownerSessionId IN ({placeholders}))";
             }

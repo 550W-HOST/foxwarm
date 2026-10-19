@@ -44,8 +44,15 @@ public sealed partial class ToolAuthorizationSourceTests
             source["externalId"]?.GetValue<string>(),
             source["taskTarget"]?["ownerSessionId"]?.GetValue<string>(),
             source["resolveEffects"]?.GetValue<bool>() == true
-                ? ToolAuthorizationNodeEffects.Resolve(tool["source"]!.GetValue<string>(), tool["name"]!.GetValue<string>(), source["targetNode"]?.GetValue<string>(), source["args"]!.AsObject())
-                : (source["nodeTargets"] as JsonArray)?.Select(value => value!.GetValue<string>()).ToArray(),
+                ? ToolAuthorizationNodeEffects.Resolve(
+                    tool["source"]!.GetValue<string>(),
+                    tool["name"]!.GetValue<string>(),
+                    source["targetNode"]?.GetValue<string>(),
+                    source["args"]!.AsObject()
+                )
+                : (source["nodeTargets"] as JsonArray)
+                    ?.Select(value => value!.GetValue<string>())
+                    .ToArray(),
             source["currentNode"]?.GetValue<string>()
         );
     }
@@ -498,7 +505,10 @@ public sealed partial class ToolAuthorizationSourceTests
                     check["needsTarget"]!.GetValue<bool>(),
                     ToolAuthorizationEvaluation.NeedsTarget(policy, request)
                 );
-                Assert.Equal(check["needsTaskTarget"]!.GetValue<bool>(), ToolAuthorizationEvaluation.NeedsTaskTarget(policy, request));
+                Assert.Equal(
+                    check["needsTaskTarget"]!.GetValue<bool>(),
+                    ToolAuthorizationEvaluation.NeedsTaskTarget(policy, request)
+                );
             }
         }
     }

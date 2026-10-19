@@ -167,14 +167,13 @@ internal sealed class TaskService : IDisposable
                     "The current Session Agent could not be resolved for this task list scope.",
                     404
                 );
-            scopeIds =
-                scope is "current-session" or "owned"
-                    ? new[] { actor }
-                    : manager
-                        .Catalog.List()
-                        .Where(row => Text(row["agent"]) == agent)
-                        .Select(row => Text(row["id"])!)
-                        .ToArray();
+            scopeIds = scope is "current-session" or "owned"
+                ? new[] { actor }
+                : manager
+                    .Catalog.List()
+                    .Where(row => Text(row["agent"]) == agent)
+                    .Select(row => Text(row["id"])!)
+                    .ToArray();
         }
         var result = store.Execute(
             normalizedArgs,
