@@ -155,9 +155,11 @@ public sealed class SessionAuthorityDocument
                 || kind == "block"
                     && (
                         level <= 1
-                        || (block.ContainsKey("sourceBlockIds")
-                            ? block["sourceBlockIds"] is not JsonArray { Count: > 0 }
-                            : start > end)
+                        || (
+                            block.ContainsKey("sourceBlockIds")
+                                ? block["sourceBlockIds"] is not JsonArray { Count: > 0 }
+                                : start > end
+                        )
                     )
             )
                 throw new InvalidDataException($"{label} context block shape is invalid.");
