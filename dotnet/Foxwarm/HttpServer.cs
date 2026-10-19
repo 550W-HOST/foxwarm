@@ -288,18 +288,6 @@ internal sealed class HttpServer
                         )
                     )
                         return Results.Unauthorized();
-                    context.Response.Cookies.Append(
-                        "foxwarm_token",
-                        Equal(submitted, apiToken) ? browserCookie : submitted,
-                        new CookieOptions
-                        {
-                            HttpOnly = true,
-                            SameSite = SameSiteMode.Strict,
-                            Secure = address.Secure,
-                            Path = address.CookiePath,
-                            MaxAge = TimeSpan.FromHours(8),
-                        }
-                    );
                     return Results.Ok(new { success = true });
                 }
             );

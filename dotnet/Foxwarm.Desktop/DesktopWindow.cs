@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Net;
 using System.Net.Http.Json;
 using Foxwarm.Models;
 using Microsoft.Extensions.Hosting;
@@ -189,29 +188,25 @@ internal sealed class DesktopWindow : Form
 
     private async Task AuthenticateAsync(CoreWebView2 core, string token)
     {
-        var cookies = new CookieContainer();
         using var handler = new HttpClientHandler
         {
-            CookieContainer = cookies,
+            UseCookies = false,
             AllowAutoRedirect = false,
             UseProxy = false,
         };
         using var client = new HttpClient(handler) { BaseAddress = endpoint };
         using var response = await client.PostAsJsonAsync("api/auth", new { token });
         response.EnsureSuccessStatusCode();
-        var authenticated =
-            cookies.GetCookies(endpoint!)["foxwarm_token"]
-            ?? throw new InvalidOperationException("Foxwarm sign-in did not complete.");
         var cookie = core.CookieManager.CreateCookie(
-            authenticated.Name,
-            authenticated.Value,
+            "foxwarm_token",
+            Uri.EscapeDataString(token),
             endpoint!.Host,
-            authenticated.Path
+            endpoint.AbsolutePath
         );
         cookie.IsHttpOnly = true;
-        cookie.IsSecure = false;
+        cookie.IsSecure = endpoint.Scheme == Uri.UriSchemeHttps;
         cookie.SameSite = CoreWebView2CookieSameSiteKind.Strict;
-        cookie.Expires = authenticated.Expires.ToUniversalTime();
+        cookie.Expires = DateTime.UtcNow.AddDays(365);
         core.CookieManager.AddOrUpdateCookie(cookie);
     }
 

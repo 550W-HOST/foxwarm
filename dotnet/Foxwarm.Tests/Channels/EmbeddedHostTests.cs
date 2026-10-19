@@ -147,9 +147,14 @@ public sealed class EmbeddedHostTests
                 HttpStatusCode.Unauthorized,
                 (await client.PostAsJsonAsync("api/auth", new { token = "wrong" })).StatusCode
             );
-            Assert.True(
-                (await client.PostAsJsonAsync("api/auth", new { token })).IsSuccessStatusCode
-            );
+            var authenticated = await client.PostAsJsonAsync("api/auth", new { token });
+            authenticated.EnsureSuccessStatusCode();
+            Assert.False(authenticated.Headers.Contains("Set-Cookie"));
+            Assert.Empty(handler.CookieContainer.GetCookies(endpoint));
+            // Desktop now supplies its own native cookie after this validation, rather
+            // than transferring a cookie issued by the ordinary HTTP endpoint.
+            handler.CookieContainer.Add(endpoint, new Cookie("foxwarm_token", Uri.EscapeDataString(token), endpoint.AbsolutePath));
+
             Assert.Equal(
                 "admin",
                 (await client.GetFromJsonAsync<JsonObject>("api/auth/session"))![

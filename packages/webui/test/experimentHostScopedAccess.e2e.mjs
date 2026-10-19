@@ -110,9 +110,9 @@ try {
   await host.start()
   assert.equal((await admin('POST', '/api/sessions', { agentId: 'main', sessionId: 'chat' })).status, 200)
   const adminCookie = await fetch(host.origin + '/nested/app/api/auth', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: host.token }) })
-  assert(adminCookie.headers.get('set-cookie').toLowerCase().includes('httponly')); assert(!adminCookie.headers.get('set-cookie').includes(host.token))
+  assert.equal(adminCookie.headers.get('set-cookie'), null)
   const scopedCookie = await fetch(host.origin + '/nested/app/api/auth', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: aliceToken }) })
-  assert(scopedCookie.headers.get('set-cookie').toLowerCase().includes('httponly'))
+  assert.equal(scopedCookie.headers.get('set-cookie'), null)
   const introspection = await alice('GET', '/api/auth/session'); assert.equal(introspection.body.role, 'webui'); assert.deepEqual(new Set(introspection.body.sessionIds), new Set([seed.parent, 'chat'])); assert.equal(introspection.body.features.commands, false)
   assert((await bob('GET', '/api/auth/session')).body.sessionIds.includes('chat'), 'Agent scope includes unprefixed main identity')
   for (const [method, path, body] of [['GET', '/api/setup/status'], ['GET', '/api/models'], ['GET', route('chat') + '/state'], ['GET', route('chat') + '/debug-file'], ['GET', '/api/nodes'], ['POST', '/api/download/sign', { path: join(host.work, 'reference.png') }], ['POST', '/api/sessions', { sessionId: 'forbidden' }], ['GET', route('chat') + '/nodes'], ['POST', route('chat') + '/node', { nodeId: 'master' }], ['GET', '/vscode-web'], ['GET', '/api/vscode-web/fs/workspace-roots'], ['GET', '/api/vscode-web/git/status']]) {
