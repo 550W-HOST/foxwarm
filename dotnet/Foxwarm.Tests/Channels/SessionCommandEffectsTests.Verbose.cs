@@ -8,9 +8,14 @@ namespace Foxwarm.Tests;
 
 public sealed partial class SessionCommandEffectsTests
 {
-    [Fact]
-    public async Task Verbose_real_turn_starts_only_authorized_unskipped_tools_without_history_or_delivery_ACK_dependency()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Verbose_real_turn_displays_authorized_and_malformed_attempts_without_history_or_delivery_ACK_dependency(
+        bool longRawArguments
+    )
     {
+        var rawArguments = "{broken" + (longRawArguments ? new string('x', 240) : "");
         await using var peer = new ConcurrentPeer(
             2,
             async (index, stream, _) =>
@@ -44,7 +49,7 @@ public sealed partial class SessionCommandEffectsTests
                 output[2]!["call_id"] = "cancelled";
                 var invalid = ProviderCall("write", new JsonObject());
                 invalid["call_id"] = "malformed";
-                invalid["arguments"] = "{broken";
+                invalid["arguments"] = rawArguments;
                 output.Add(invalid);
                 await LoopbackResponsesServer.WriteResponseAsync(
                     stream,
@@ -107,11 +112,16 @@ public sealed partial class SessionCommandEffectsTests
                 QueueItem.UserText("run tools")
             );
             await f.Owner.StartProcessing().WaitAsync(TimeSpan.FromSeconds(10));
-            var verbose = Assert.Single(delivered, item => item.Text.StartsWith("🛠"));
+            var starts = delivered.Where(item => item.Text.StartsWith("🛠")).ToArray();
+            Assert.Equal(2, starts.Length);
+            var verbose = Assert.Single(starts, item => item.Text.Contains("allowed.txt"));
+            var malformed = Assert.Single(starts, item => item.Text.Contains("{broken"));
             Assert.Equal("normal:c", verbose.Target);
-            Assert.Contains("allowed.txt", verbose.Text);
+            Assert.Equal("normal:c", malformed.Target);
             Assert.Null(verbose.Options.ParseMode);
             Assert.False(verbose.Options.TurnFinal);
+            Assert.Null(malformed.Options.ParseMode);
+            Assert.False(malformed.Options.TurnFinal);
             Assert.DoesNotContain(
                 delivered,
                 item => item.Target.StartsWith("push:") || item.Target.StartsWith("webui:")
@@ -134,8 +144,43 @@ public sealed partial class SessionCommandEffectsTests
                 "parts"
             ]!.AsArray();
             Assert.Equal(4, responses.Count);
-            Assert.Contains("tool_authorization_denied", responses.ToJsonString());
-            Assert.Contains("cancel", responses.ToJsonString());
+            var calls = f.Owner.History().Single(row =>
+                row["role"]?.ToString() == "model"
+                && row["parts"]!.AsArray().Any(part => part?["functionCall"] is not null)
+            )["parts"]!.AsArray();
+            Assert.Equal(4, calls.Count);
+            JsonNode ResponseFor(string id) => Assert.Single(responses, item =>
+                item?["functionResponse"]?["tool_use_id"]?.ToString() == id
+            )!["functionResponse"]!;
+            foreach (var part in calls)
+            {
+                var call = part!["functionCall"]!;
+                var response = ResponseFor(call["id"]!.ToString());
+                Assert.Equal(call["name"]!.ToString(), response["name"]!.ToString());
+            }
+            Assert.Equal(
+                "tool_authorization_denied",
+                ResponseFor("denied")["response"]?["error"]?["type"]?.ToString()
+            );
+            Assert.True(ResponseFor("cancelled")["response"]?["canceled"]?.GetValue<bool>());
+            var malformedCall = calls.Single(item =>
+                item?["functionCall"]?["id"]?.ToString() == "malformed"
+            )!["functionCall"]!;
+            var malformedResponse = ResponseFor("malformed");
+            Assert.Equal(rawArguments, malformedCall["rawArgsText"]?.ToString());
+            Assert.Equal(
+                "invalid_tool_arguments",
+                malformedResponse["response"]?["error"]?["type"]?.ToString()
+            );
+            Assert.Equal(
+                malformedCall["argsParseError"]?.ToString(),
+                malformedResponse["response"]?["error"]?["message"]?.ToString()
+            );
+            Assert.Null(malformedResponse["executionTiming"]);
+            Assert.Equal(
+                new[] { "allowed.txt" },
+                Directory.GetFiles(f.Manager.AgentDirectory("main")).Select(Path.GetFileName).ToArray()
+            );
             Assert.DoesNotContain("🛠", peer.Requests.Last()["input"]!.ToJsonString());
             var preview = await SourceAsync(
                 new JsonObject
@@ -153,6 +198,18 @@ public sealed partial class SessionCommandEffectsTests
                 }
             );
             Assert.Equal("🛠 *[write]*: `" + preview["preview"] + "`", verbose.Text);
+            var malformedPreview = await SourceAsync(
+                new JsonObject
+                {
+                    ["operation"] = "preview",
+                    ["call"] = malformedCall.DeepClone(),
+                }
+            );
+            Assert.Equal("🛠 *[write]*: `" + malformedPreview["preview"] + "`", malformed.Text);
+            Assert.Equal(
+                longRawArguments ? 200 : rawArguments.Length,
+                malformedPreview["preview"]!.GetValue<string>().Length
+            );
             delivered.Clear();
             await CommandAsync(f, "/verbose off");
             await CommandAsync(f, "/verbose");

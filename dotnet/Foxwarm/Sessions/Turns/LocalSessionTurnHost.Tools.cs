@@ -242,7 +242,11 @@ public sealed partial class LocalSessionTurnHost
             && parse.TryGetValue<string>(out var error)
             && error.Length > 0
         )
+        {
+            if (tools is SessionToolExecutor malformed)
+                malformed.BroadcastVerboseToolStart(call);
             return new(UnsupportedTurnToolExecutor.ToolError("invalid_tool_arguments", error));
+        }
         if (prepared is not null && tools is SessionToolExecutor executor)
             return executor.PreparedFailure(prepared);
         entry.ToolProgress?.Invoke(call, true);

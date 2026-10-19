@@ -295,27 +295,48 @@ internal sealed partial class SessionToolExecutor(
         return result;
     }
 
-    internal static string ToolArgsPreview(string name, JsonObject args)
+    internal void BroadcastVerboseToolStart(JsonObject call)
+    {
+        if (
+            Programmatic
+            || !hosted.Entry.WithState(state =>
+                SessionCatalog.Flag(state.AuthorityEnvelope["verbose"])
+            )
+        )
+            return;
+        var name = SessionWait.Text(call["name"]) ?? "";
+        var raw = SessionWait.Text(call["argsParseError"]) is { Length: > 0 }
+            ? SessionWait.Text(call["rawArgsText"])
+            : null;
+        sessions.BroadcastTransientText(
+            hosted,
+            $"🛠 *[{name}]*: `{ToolArgsPreview(name, call["args"] as JsonObject ?? new JsonObject(), raw)}`"
+        );
+    }
+
+    internal static string ToolArgsPreview(string name, JsonObject args, string? rawArgsText = null)
     {
         static string Text(JsonNode? value) =>
             SessionWait.Text(value) ?? (value is null ? "null" : EcmaJson.Stringify(value));
-        var preview = name switch
-        {
-            "exec" => Text(args["command"]),
-            "edit" or "write" or "edit_memory" or "write_memory" or "delete_memory" => Text(
-                args["filePath"]
-            ),
-            "apply_patch" or "apply_patch_memory" => SessionWait.Text(args["input"]) ?? "",
-            "read" or "read_memory" => (SessionWait.Text(args["filePath"]) ?? "")
-                + (
-                    SessionWait.Number(args["startLine"]) is > 0
-                        ? $" (lines {Text(args["startLine"])}-{Text(args["endLine"])})"
-                        : ""
+        var preview = rawArgsText ?? (
+            name switch
+            {
+                "exec" => Text(args["command"]),
+                "edit" or "write" or "edit_memory" or "write_memory" or "delete_memory" => Text(
+                    args["filePath"]
                 ),
-            _ => args.Count == 1
-                ? Text(args.First().Value)
-                : string.Join('\n', args.Select(pair => pair.Key + ": " + Text(pair.Value))),
-        };
+                "apply_patch" or "apply_patch_memory" => SessionWait.Text(args["input"]) ?? "",
+                "read" or "read_memory" => (SessionWait.Text(args["filePath"]) ?? "")
+                    + (
+                        SessionWait.Number(args["startLine"]) is > 0
+                            ? $" (lines {Text(args["startLine"])}-{Text(args["endLine"])})"
+                            : ""
+                    ),
+                _ => args.Count == 1
+                    ? Text(args.First().Value)
+                    : string.Join('\n', args.Select(pair => pair.Key + ": " + Text(pair.Value))),
+            }
+        );
         return preview.Length > 200 ? preview[..197] + "..." : preview;
     }
 
@@ -380,16 +401,7 @@ internal sealed partial class SessionToolExecutor(
             }
             cancellationToken.ThrowIfCancellationRequested();
             hosted.Registry.Runner.AssertCanContinue();
-            if (
-                !Programmatic
-                && hosted.Entry.WithState(state =>
-                    SessionCatalog.Flag(state.AuthorityEnvelope["verbose"])
-                )
-            )
-                sessions.BroadcastTransientText(
-                    hosted,
-                    $"🛠 *[{name}]*: `{ToolArgsPreview(name, args)}`"
-                );
+            BroadcastVerboseToolStart(functionCall);
             dispatched = true;
             var runtimeLease = Programmatic ? null : hosted.BeginTool(ToolRuntime(resolved));
             var startedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
