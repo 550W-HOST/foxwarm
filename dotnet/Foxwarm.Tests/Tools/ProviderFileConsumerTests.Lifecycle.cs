@@ -399,5 +399,18 @@ public sealed partial class ProviderFileConsumerTests
             ExecutableNodeProviderTests.Configuration(root)
         );
         await Assert.ThrowsAsync<NodeProviderException>(() => fresh.DescribeAsync(default));
+
+        // Full Main inspection allows a scalar inside a container at its deepest
+        // supported nesting level; schemas remain plain data at that boundary too.
+        await using var f = await Fixture.Create();
+        JsonObject schema = new() { ["leaf"] = true };
+        for (var index = 0; index < 10; index++)
+            schema = new JsonObject { ["nested"] = schema };
+        description["createParameters"] = schema;
+        await File.WriteAllTextAsync(
+            Path.Combine(f.Target, "description.json"),
+            description.ToJsonString()
+        );
+        Success(await f.Call("node", Lifecycle("inspect", provider: "fixture")));
     }
 }

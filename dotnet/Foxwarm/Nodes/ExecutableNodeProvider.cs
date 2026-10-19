@@ -189,11 +189,11 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
         int maxBytes,
         int maxDepth = 32,
         int maxCount = 10_000,
-        bool boundKeys = false
+        bool serviceBudget = false
     )
     {
         if (value is not null)
-            ValidateJson(value, maxDepth, maxCount, boundKeys);
+            ValidateJson(value, maxDepth, maxCount, serviceBudget);
         if (Encoding.UTF8.GetByteCount(value?.ToJsonString(JsonEncoding) ?? "null") > maxBytes)
             throw Invalid("Provider JSON exceeds its byte budget.");
     }
@@ -350,18 +350,23 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
         JsonNode node,
         int maxDepth,
         int maxCount,
-        bool boundKeys = false
+        bool serviceBudget = false
     )
     {
         var count = 0;
         void Visit(JsonNode? item, int depth)
         {
-            if (depth > maxDepth || ++count > maxCount)
+            // The Main service budget limits container nesting; protocol/schema budgets
+            // count every JSON value, including a scalar at the deepest level.
+            if (
+                depth > maxDepth && (!serviceBudget || item is JsonObject or JsonArray)
+                || ++count > maxCount
+            )
                 throw Invalid("Provider JSON is too complex.");
             if (item is JsonObject obj)
                 foreach (var pair in obj)
                 {
-                    if (boundKeys && pair.Key.Length > 256)
+                    if (serviceBudget && pair.Key.Length > 256)
                         throw Invalid("Provider JSON key is too long.");
                     Visit(pair.Value, depth + 1);
                 }
