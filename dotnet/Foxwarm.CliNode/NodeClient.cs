@@ -8,7 +8,9 @@ internal sealed record NodeClientOptions(
     string? NodeId,
     string? PairingToken,
     string? AuthToken,
-    string? CredentialsFile
+    string? CredentialsFile,
+    bool LocalTrigger = true,
+    double LocalTriggerPort = 0
 );
 
 internal sealed partial class NodeClient
@@ -53,10 +55,12 @@ internal sealed partial class NodeClient
     {
         try
         {
+            await StartLocalTriggerServer();
             await RunConnections(stop);
         }
         finally
         {
+            await StopLocalTriggerServer();
             await DrainExec();
             if (pty is not null)
                 await pty.DisposeAsync();
@@ -102,6 +106,9 @@ internal sealed partial class NodeClient
                         + (proxy is null ? "" : " proxy=" + MasterProxy.Safe(proxy))
                 );
                 await connection.Socket.ConnectAsync(address, stop);
+                currentConnection = connection;
+                try
+                {
                 await connection.Send(
                     new JsonObject
                     {
@@ -112,12 +119,12 @@ internal sealed partial class NodeClient
                         ["requestedName"] = Authenticated ? null : requestedName,
                     }
                 );
-                try
-                {
                     await Receive(connection, stop);
                 }
                 finally
                 {
+                    if (ReferenceEquals(currentConnection, connection))
+                        currentConnection = null;
                     if (ReferenceEquals(registeredConnection, connection))
                         registeredConnection = null;
                     pty?.Disconnect(connection);
@@ -229,6 +236,7 @@ internal sealed partial class NodeClient
                             initialCredentialsPending = false;
                         }
                         nodeId = registeredId;
+                        await WriteLocalTriggerArtifacts();
                         Log("registered", "nodeId=" + nodeId);
                         if (Authenticated)
                         {
@@ -268,6 +276,7 @@ internal sealed partial class NodeClient
                         if (nodeId is null || authToken is null)
                             throw new InvalidDataException("Invalid pairing approval");
                         await SaveCredentials(nodeId, authToken);
+                        await WriteLocalTriggerArtifacts();
                         Log("pair_approved", "nodeId=" + nodeId);
                         immediateReconnect = true;
                         await connection.Socket.CloseOutputAsync(
@@ -602,7 +611,7 @@ internal sealed partial class NodeClient
             TaskCompletionSource<JsonObject>
         > requests = new();
 
-        internal async Task Request(JsonObject frame)
+        internal async Task<JsonNode?> Request(JsonObject frame, int timeoutSeconds = 15)
         {
             var id =
                 "cli_"
@@ -616,8 +625,20 @@ internal sealed partial class NodeClient
             frame["requestId"] = id;
             try
             {
-                await Send(frame, requireOpen: true);
-                await completion.Task.WaitAsync(TimeSpan.FromSeconds(15));
+                async Task<JsonObject> TransmitAndWait()
+                {
+                    await Send(frame, requireOpen: true);
+                    return await completion.Task;
+                }
+                try
+                {
+                    var response = await TransmitAndWait().WaitAsync(TimeSpan.FromSeconds(timeoutSeconds));
+                    return response["result"]?.DeepClone();
+                }
+                catch (TimeoutException)
+                {
+                    throw new IOException("cli-node request " + Text(frame, "type") + " timed out");
+                }
             }
             finally
             {
@@ -633,7 +654,7 @@ internal sealed partial class NodeClient
                 Text(frame, "type") == "error"
                 || frame["ok"] is JsonValue value && value.TryGetValue<bool>(out var ok) && !ok
             )
-                pending.TrySetException(new IOException("Session event was rejected by master"));
+                pending.TrySetException(new IOException(Text(frame, "error") is { Length: > 0 } error ? error : "cli-node request failed"));
             else
                 pending.TrySetResult(frame);
         }
@@ -643,7 +664,12 @@ internal sealed partial class NodeClient
             foreach (var request in requests.ToArray())
                 if (requests.TryRemove(request.Key, out var pending))
                     pending.TrySetException(
-                        new IOException("Remote node is not connected to master")
+                        new IOException(
+                            "Remote node connection closed before master acknowledged the request ("
+                            + (Socket.CloseStatus is { } code ? (int)code : 1006)
+                            + (string.IsNullOrEmpty(Socket.CloseStatusDescription) ? "" : ": " + Socket.CloseStatusDescription)
+                            + ")"
+                        )
                     );
         }
 

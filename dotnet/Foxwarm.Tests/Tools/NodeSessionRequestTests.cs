@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json.Nodes;
+using Foxwarm.CliNode;
 using Foxwarm.Models;
 using Foxwarm.Nodes;
 using Foxwarm.Sessions;
@@ -19,6 +20,21 @@ public sealed class NodeSessionRequestTests
         internal SessionManager Manager = null!;
         private WebApplication app = null!;
         private JsonObject credential = null!;
+        private readonly CancellationTokenSource cliStop = new();
+        private Task? cliRunning;
+
+        internal async Task<NodeClient> Cli()
+        {
+            var client = new NodeClient(new NodeClientOptions(app.Urls.Single(), "one", null, credential["authToken"]!.ToString(), null, LocalTrigger: false), new NodePaths(temp.Path));
+            cliRunning = client.Run(cliStop.Token);
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (true)
+            {
+                try { if ((await client.ListBoundSessions()).Count > 0) return client; }
+                catch (IOException) { }
+                await Task.Delay(20, deadline.Token);
+            }
+        }
 
         internal async Task Start(bool bound = false)
         {
@@ -178,6 +194,9 @@ public sealed class NodeSessionRequestTests
 
         public async ValueTask DisposeAsync()
         {
+            cliStop.Cancel();
+            if (cliRunning is not null) await cliRunning;
+            cliStop.Dispose();
             foreach (var socket in sockets)
             {
                 socket.Abort();
@@ -192,6 +211,31 @@ public sealed class NodeSessionRequestTests
                 await Manager.DisposeAsync();
             temp.Dispose();
         }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Real_cli_API_uses_catalog_alias_history_and_ordinary_owner_ingress(bool bound)
+    {
+        await using var f = new Fixture(); await f.Start(bound);
+        var client = await f.Cli();
+        Assert.Equal("cold", (await client.ListBoundSessions())[0]!["id"]!.ToString());
+        Assert.Empty(f.Manager.Owners());
+        var history = (await client.GetSessionHistory("old-cold", 1.5))!;
+        Assert.Equal(105, history["totalMessages"]!.GetValue<int>());
+        Assert.Equal(103.5, history["messages"]![0]!["index"]!.GetValue<double>());
+        Assert.Equal(2, history["messages"]!.AsArray().Count);
+        var owner = await f.Manager.RequiredAsync("cold");
+        Assert.Empty(owner.Entry.Snapshot().Queue);
+        await client.SendSessionMessage("old-cold", "ordinary CLI input");
+        Assert.True(owner.Entry.Snapshot().Queue.Count > 0 || owner.Entry.Snapshot().History.Count > 105);
+        Assert.Contains("missing", (await Assert.ThrowsAsync<IOException>(() => client.GetSessionHistory("missing"))).Message);
+        // Selection/binding belongs to Main, not the client or the local HTTP caller.
+        if (bound) await f.Manager.SetAgentNodeAsync("main", null);
+        else await f.Manager.SelectNodeAsync(owner, "master");
+        Assert.Empty(await client.ListBoundSessions());
+        await Assert.ThrowsAsync<IOException>(() => client.SendSessionMessage("cold", "denied"));
     }
 
     [Theory]
