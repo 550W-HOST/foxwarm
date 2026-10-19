@@ -26,6 +26,7 @@ Owns the OpenAI Responses hosted `image_generation` tool declaration and convert
 
 - **Declaration**: the tool object contains only provider-supported fields (`type`, optional `model`/`action`/`size`/`quality`/`background`/`output_format`/`output_compression`, plus `partial_images: 0`). Foxwarm's own `enabled` flag is never emitted, and no default image model or size is invented.
 - **Acceptance**: the normal streaming coordinator passes one shared attempt-local budget and each segment's absolute output-index start, so splitting a response cannot reset its existing limits or fallback identities. [Canonical contract](../threads/image-blob-lifecycle.md#d-image-generated-output-replay). Only `image_generation_call` items with status `completed` and a non-empty `result` produce an image. The declared `output_format` must agree with the detected raster MIME, and the bytes must round-trip through strict base64 validation within both the per-image decoded and cumulative response limits.
+- **Format recognition**: uses the shared pure raster-signature detector, while retaining this provider's PNG/JPEG/WebP/GIF acceptance contract; BMP is not accepted as generated output.
 - **Persistence**: each accepted image becomes one canonical `MessagePart` with an `inlineDataRef` (blob id, MIME, byte length, SHA-256, and pixel dimensions when the blob probe can read them), `imageMeta.origin = "generated"`, and `providerMeta.openaiResponses.outputItem` holding only allowlisted, result-free native metadata. Provider base64 never enters canonical history.
 - **Failure handling**: a rejected image yields a bounded failure record instead of fabricated bytes and is never silently converted into a successful blank result.
 - **Placeholder**: `formatGeneratedImageModelPlaceholder` is the single bounded note used when a different concrete model or protocol cannot receive native generated-image replay.
@@ -33,6 +34,7 @@ Owns the OpenAI Responses hosted `image_generation` tool declaration and convert
 ## Dependencies
 
 - `../imageBlobs` — blob persistence, reference reads, raster probing, and MIME resolution
+- `../../packages/shared/dist/rasterImageMime` — pure byte-signature recognition without provider or decoder dependencies
 - `../common` — `logger`
 
 ## Design decisions

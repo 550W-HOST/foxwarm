@@ -19,10 +19,11 @@ import {
   IMAGE_GENERATION_MAX_DECODED_BYTES,
 } from './openaiImages';
 
-async function makeRaster(format: 'png' | 'jpeg' | 'webp', width = 3, height = 2): Promise<Buffer> {
+async function makeRaster(format: 'png' | 'jpeg' | 'webp' | 'gif', width = 3, height = 2): Promise<Buffer> {
   const image = sharp({ create: { width, height, channels: 3, background: { r: 10, g: 20, b: 30 } } });
   if (format === 'png') return image.png().toBuffer();
   if (format === 'jpeg') return image.jpeg().toBuffer();
+  if (format === 'gif') return image.gif().toBuffer();
   return image.webp().toBuffer();
 }
 
@@ -75,19 +76,21 @@ test('externalization validates bytes, persists blobs and strips binary output m
   const png = await makeRaster('png');
   const jpeg = await makeRaster('jpeg');
   const webp = await makeRaster('webp');
+  const gif = await makeRaster('gif');
   const output = [
     { type: 'image_generation_call', id: 'ig_one', status: 'completed', output_format: 'png', result: png.toString('base64'), revised_prompt: 'a cat' },
     { type: 'image_generation_call', id: 'ig_two', status: 'completed', output_format: 'jpeg', result: jpeg.toString('base64') },
     { type: 'image_generation_call', id: 'ig_three', status: 'completed', output_format: 'webp', result: webp.toString('base64') },
+    { type: 'image_generation_call', id: 'ig_four', status: 'completed', output_format: 'gif', result: gif.toString('base64') },
   ];
   const result = await externalizeGeneratedImageItems(output, { sourceModelId: 'openai/gpt-5' });
   try {
     assert.equal(result.failures.length, 0);
-    assert.equal(result.images.length, 3);
-    assert.deepEqual(result.images.map(entry => entry.index), [0, 1, 2]);
+    assert.equal(result.images.length, 4);
+    assert.deepEqual(result.images.map(entry => entry.index), [0, 1, 2, 3]);
 
     const mimes = result.images.map(entry => entry.part.inlineDataRef!.mimeType);
-    assert.deepEqual(mimes, ['image/png', 'image/jpeg', 'image/webp']);
+    assert.deepEqual(mimes, ['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
     for (const entry of result.images) {
       const ref = entry.part.inlineDataRef!;
       const blob = await readImageRef(ref);
@@ -129,15 +132,19 @@ test('externalization reports failures without fabricating images', async () => 
   }
 });
 
-test('non-raster and SVG-like payloads are rejected', async () => {
+test('non-raster and BMP payloads remain outside the generated-image format contract', async () => {
   const notAnImage = Buffer.from('<!doctype html><svg></svg>');
+  const bmp = Buffer.from('Qk06AAAAAAAAADYAAAAoAAAAAQAAAAEAAAABABgAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAD/AA==', 'base64');
   const result = await externalizeGeneratedImageItems(
-    [{ type: 'image_generation_call', id: 'ig_svg', status: 'completed', output_format: 'png', result: notAnImage.toString('base64') }],
+    [
+      { type: 'image_generation_call', id: 'ig_svg', status: 'completed', output_format: 'png', result: notAnImage.toString('base64') },
+      { type: 'image_generation_call', id: 'ig_bmp', status: 'completed', result: bmp.toString('base64') },
+    ],
     { sourceModelId: 'm' },
   );
   assert.equal(result.images.length, 0);
-  assert.equal(result.failures.length, 1);
-  assert.match(result.failures[0].reason, /recognized raster image/);
+  assert.equal(result.failures.length, 2);
+  assert.ok(result.failures.every(failure => /recognized raster image/.test(failure.reason)));
 });
 
 test('sanitizer keeps safe replay fields and drops binary fields', () => {

@@ -7,6 +7,57 @@ import { MAX_FULL_TEXT_READ_BYTES } from './boundedTextExcerpt';
 import { readFileToolPath } from './fileToolCore';
 import { nativeFileOperations, type FileOperations } from './fileOperations';
 
+const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC', 'base64');
+
+test('read classifies image bytes without relying on the filename', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-file-read-images-'));
+  const rasters = [
+    ['image/png', TINY_PNG],
+    ['image/jpeg', Buffer.from('/9j/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAABgj/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCdABykX//Z', 'base64')],
+    ['image/webp', Buffer.from('UklGRjwAAABXRUJQVlA4IDAAAADQAQCdASoBAAEAAUAmJaACdLoB+AADsAD+8ut//NgVzXPv9//S4P0uD9Lg/9KQAAA=', 'base64')],
+    ['image/gif', Buffer.from('R0lGODlhAQABAIAAAExpcf8AACH5BAUAAAAALAAAAAABAAEAAAICTAEAOw==', 'base64')],
+    ['image/bmp', Buffer.from('Qk06AAAAAAAAADYAAAAoAAAAAQAAAAEAAAABABgAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAD/AA==', 'base64')],
+  ] as const;
+  try {
+    for (const [mimeType, image] of rasters) {
+      const filePath = path.join(root, mimeType.slice('image/'.length));
+      await fs.writeFile(filePath, image);
+      const result = await readFileToolPath(filePath, filePath);
+      assert.equal(typeof result, 'object', mimeType);
+      assert.deepEqual((result as any).inlineData, { data: image.toString('base64'), mimeType });
+      assert.equal((result as any).sizeBytes, image.length);
+    }
+    for (const name of ['sample.png', '1a52ea91704fd1c2', 'misleading.jpg', 'payload.txt']) {
+      const filePath = path.join(root, name);
+      await fs.writeFile(filePath, TINY_PNG);
+      const ordinary = await readFileToolPath(filePath, name);
+      const script = await readFileToolPath(filePath, name, 2, 2, nativeFileOperations, true);
+      assert.deepEqual((ordinary as any).inlineData, { data: TINY_PNG.toString('base64'), mimeType: 'image/png' }, name);
+      assert.deepEqual(script, ordinary, 'image reads retain their shape and ignore text line ranges');
+    }
+  } finally {
+    await fs.remove(root);
+  }
+});
+
+test('image suffixes do not turn text, empty files, SVG or incomplete signatures into raster images', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-file-read-nonimages-'));
+  const filePath = path.join(root, 'text.png');
+  try {
+    await fs.writeFile(filePath, 'first\r\nsecond\n');
+    const result: any = await readFileToolPath(filePath, 'text.png', 2, 2, nativeFileOperations, true);
+    assert.equal(result.content, 'second\n');
+    assert.equal(result.startLine, 2);
+    assert.equal(result.inlineData, undefined);
+    for (const bytes of [Buffer.alloc(0), Buffer.from('<svg></svg>'), TINY_PNG.subarray(0, 7), Buffer.from('RIFFxxxxWAVE')]) {
+      await fs.writeFile(filePath, bytes);
+      assert.equal(typeof await readFileToolPath(filePath, 'text.png'), 'string');
+    }
+  } finally {
+    await fs.remove(root);
+  }
+});
+
 function recordingFileOperations(reads: Array<{ offset: number; count: number }>): FileOperations {
   return {
     ...nativeFileOperations,
@@ -28,7 +79,7 @@ test('ordinary file reads append metadata and preserve exact selected terminator
       await readFileToolPath(filePath, 'small.txt', undefined, undefined, operations),
       'one\ntwo\nthree\n---\nFile has 3 lines.\nFile size: 14 bytes.',
     );
-    assert.deepEqual(reads, [{ offset: 0, count: 14 }]);
+    assert.deepEqual(reads, [{ offset: 0, count: 12 }, { offset: 0, count: 14 }]);
     assert.equal(
       await readFileToolPath(filePath, 'small.txt', 2, 3),
       'two\nthree\n---\nSelected lines 2-3 of 3.\nFile size: 14 bytes.',
@@ -154,7 +205,7 @@ test('ordinary scanner preserves LF, CRLF, bare CR, mixed endings, and trailing-
 
 test('oversized file reads use bounded samples without full readFile and preserve valid controls', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-file-read-large-text-'));
-  const filePath = path.join(root, 'large.txt');
+  const filePath = path.join(root, 'large.png');
   const bytes = Buffer.concat([
     Buffer.from('HEAD 中文😀'), Buffer.from([0x00, 0x01, 0xc2, 0x81, 0xff]),
     Buffer.from('m'.repeat(MAX_FULL_TEXT_READ_BYTES + 128)), Buffer.from('TAIL'),
@@ -170,6 +221,7 @@ test('oversized file reads use bounded samples without full readFile and preserv
       recordingFileOperations(reads),
     ) as string;
     assert.deepEqual(reads, [
+      { offset: 0, count: 12 },
       { offset: 0, count: 5000 },
       { offset: bytes.length - 5000, count: 5000 },
     ]);
@@ -202,7 +254,8 @@ test('oversized binary file reads use hex previews and line ranges stop at a fin
     assert.ok(reads.every(read => read.count <= 64 * 1024));
     assert.equal(reads[0].offset, 0);
     assert.equal(reads.at(-1)?.offset, MAX_FULL_TEXT_READ_BYTES);
-    assert.ok(reads.every((read, index) => index === 0 || read.offset - reads[index - 1].offset === 64 * 1024));
+    assert.deepEqual(reads[0], { offset: 0, count: 12 });
+    assert.ok(reads.slice(1).every((read, index, chunks) => index === 0 || read.offset - chunks[index - 1].offset === 64 * 1024));
     assert.match(rangeResult, /selected file range middle omitted/);
     assert.doesNotMatch(rangeResult, /ignored-after-end/);
     assert.match(rangeResult, /File size: \d+ bytes\./);
@@ -283,7 +336,7 @@ test('oversized empty and out-of-range selections return truthful nonempty notic
       3.2,
       recordingFileOperations(reversedReads),
     ) as string;
-    assert.deepEqual(reversedReads, []);
+    assert.deepEqual(reversedReads, [{ offset: 0, count: 12 }]);
     assert.match(reversedResult, /^\(no content in requested line range 9-3\)\n---/);
     assert.match(reversedResult, new RegExp(`File size: ${Buffer.byteLength(source)} bytes\\.`));
   } finally {
@@ -364,7 +417,7 @@ test('directory and image reads stay target-local through file operations', asyn
   try {
     await fs.writeFile(targetPath, 'target');
     await fs.symlink(targetPath, linkedPath);
-    const image = Buffer.from('not-a-real-png-but-preserved');
+    const image = TINY_PNG;
     await fs.writeFile(imagePath, image);
     const listing = await readFileToolPath(root, 'root') as string;
     assert.match(listing, /`linked\.txt` \(symlink\)/);
@@ -372,7 +425,7 @@ test('directory and image reads stay target-local through file operations', asyn
 
     const reads: Array<{ offset: number; count: number }> = [];
     const result = await readFileToolPath(imagePath, 'tiny.png', undefined, undefined, recordingFileOperations(reads));
-    assert.deepEqual(reads, [{ offset: 0, count: image.length }]);
+    assert.deepEqual(reads, [{ offset: 0, count: 12 }, { offset: 0, count: image.length }]);
     assert.equal(typeof result, 'object');
     assert.equal((result as any).inlineData.data, image.toString('base64'));
   } finally {
@@ -401,7 +454,7 @@ test('programmatic text reads expose exact data without changing ordinary displa
     const absent: any = await readFileToolPath(file, 'data.txt', 9, 9, nativeFileOperations, true);
     assert.equal(absent.content, ''); assert.equal(absent.selectedBytes, 0); assert.equal(absent.truncated, false);
     assert.equal(await readFileToolPath(root, '.', undefined, undefined, nativeFileOperations, true), await readFileToolPath(root, '.'));
-    const image = path.join(root, 'image.png'); await fs.writeFile(image, Buffer.from([1, 2, 3]));
+    const image = path.join(root, 'image.png'); await fs.writeFile(image, TINY_PNG);
     assert.deepEqual(await readFileToolPath(image, 'image.png', undefined, undefined, nativeFileOperations, true), await readFileToolPath(image, 'image.png'));
   } finally { await fs.remove(root); }
 });

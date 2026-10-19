@@ -176,6 +176,23 @@ Nested relative file paths and `exec.cwd` values resolve from the owner session'
 
 Nested calls execute normally and appear as ToolScript activity in the UI and run diagnostics, but they are not appended as separate tool messages or included as diagnostic fields in the default execution response.
 
+### Returning images
+
+Return the image object from `read` directly to show it to the model without another model-invoked read:
+
+```python
+return call_tool("read", {"filePath": args["imagePath"]})
+```
+
+Supported raster images are recognized from their contents, even without a filename extension. Returning only a path remains ordinary data, not an image. Image promotion uses top-level `inlineData`, `inlineDataItems`, or image-bearing `parts`, not arbitrary nested objects.
+
+For multiple image reads, collect their existing inline payloads in `inlineDataItems`:
+
+```python
+images = [call_tool("read", {"filePath": path}) for path in args["imagePaths"]]
+return {"inlineDataItems": [image["inlineData"] for image in images]}
+```
+
 ### `ask_agent(...)`
 
 `ask_agent(question)` pauses the run and returns control to the owning agent:
