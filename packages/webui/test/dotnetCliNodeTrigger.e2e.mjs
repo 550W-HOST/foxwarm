@@ -70,6 +70,7 @@ async function corpus(h) {
     [{ path: '/%74rigger', auth: null }, 404, 'Not found'],
     [{ auth: null, body: 'invalid' }, 401, '{"error":"Unauthorized"}'],
     [{ auth: 'Bearer wrong', headers: { 'x-node-trigger-token': h.token } }, 401, '{"error":"Unauthorized"}'],
+    [{ auth: null, headers: { 'x-node-trigger-token': [h.token, 'other'] } }, 401, '{"error":"Unauthorized"}'],
     [{ body: null }, 400, '{"error":"sessionId and message are required"}'],
     [{ body: '{}' }, 400, '{"error":"sessionId and message are required"}'],
     [{ body: '[]' }, 400, '{"error":"sessionId and message are required"}'],
@@ -93,6 +94,7 @@ async function corpus(h) {
   const large = 'x'.repeat(31 * 1024 * 1024)
   assert.equal((await request(h, { body: JSON.stringify({ sessionId: 'session', message: large }) })).status, 200)
   assert.equal(events(h).at(-1).frame.message.length, large.length)
+  assert.equal((await request(h, { auth: ['Bearer ' + h.token, 'Bearer ignored'] })).status, 200)
   for (const [eventType, mapped, auth] of [['onboot', 'onboot', 'bearer ignored'], ['background', 'background', 'Bearer '], ['unknown', 'trigger', null], ['trigger', 'trigger', 'Bearer ' + h.token]]) {
     const result = await request(h, { path: '/trigger?query=ok', auth, headers: { 'x-node-trigger-token': h.token }, body: JSON.stringify({ sessionId: ' session ', message: "  quoted ' 雪\n\tmessage  ", eventType, eventId: 'forbidden', execId: 'forbidden', completionCapability: 'forbidden', eventTimestamp: 1, arbitrary: true }) })
     assert.equal(result.status, 200, result.text)

@@ -168,9 +168,11 @@ internal sealed partial class NodeClient
             var auth = context.Request.Headers.Authorization.FirstOrDefault();
             var bearer =
                 auth?.StartsWith("Bearer ", StringComparison.Ordinal) == true ? auth[7..] : null;
-            var provided = !string.IsNullOrEmpty(bearer)
-                ? bearer
-                : context.Request.Headers["x-node-trigger-token"].FirstOrDefault();
+            var provided =
+                !string.IsNullOrEmpty(bearer) ? bearer
+                : context.Request.Headers.TryGetValue("x-node-trigger-token", out var tokens)
+                    ? string.Join(", ", tokens.ToArray())
+                : null;
             if (provided != triggerToken)
             {
                 await TriggerJson(response, 401, new JsonObject { ["error"] = "Unauthorized" });
