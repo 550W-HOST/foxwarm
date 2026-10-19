@@ -4,6 +4,8 @@ import test from 'node:test';
 import * as llm from '../llm';
 import { MessageRouter } from '../messageRouter';
 import * as sessionManager from '../sessionManager';
+import { registerChannel, unregisterChannel } from '../channel';
+import { WeWorkWebhookChannel } from '../channels/weworkChannel';
 import { definitions } from '../tools';
 import {
   tool_create_child_session as rawToolCreateChildSession,
@@ -219,11 +221,20 @@ test('router appends every result, arms flagged activity wait despite a sibling 
   }
 });
 
-test('completed child report finishes idle without arming a wait or another LLM call', async () => {
+test('completed child report finishes idle and closes its WeWork card without another LLM call', async () => {
   const parentId = makeId('finish_parent');
   const childId = makeId('finish_child');
   const parent = await resetSession(parentId);
   const child = await resetSession(childId, parentId);
+  const channelId = makeId('finish_wework');
+  const channel = new WeWorkWebhookChannel({ name: channelId, aibot: { stream: true } });
+  channel.onMessage(async () => {});
+  const card = await (channel as any).processInboundBody({
+    msgid: channelId, msgtype: 'text', aibotid: 'test-bot', chatid: 'room',
+    from: { userid: 'test-user' }, text: { content: 'complete the task' },
+  }, { mode: 'webhook' }, true);
+  registerChannel(channelId, channel);
+  sessionManager.attachChannel(channelId, 'room', childId);
   child.childHandoffState = { boundary: 'report-required', resolved: false };
   parent.busy = true;
   await sessionManager.saveSession(childId);
@@ -247,8 +258,15 @@ test('completed child report finishes idle without arming a wait or another LLM 
     assert.equal(child.childHandoffState?.resolved, true);
     assert.equal(child.history.at(-1)?.role, 'tool');
     assert.equal(parent.queue.length, 1);
+    const refresh = await (channel as any).processInboundBody({
+      msgtype: 'stream', stream: { id: card.passiveResponse.stream.id },
+    }, { mode: 'webhook' }, true);
+    assert.equal(refresh.passiveResponse.stream.finish, true, 'a successful finish handoff closes its passive card');
+    assert.ok(refresh.passiveResponse.stream.content.split('</think>')[1]?.trim(), 'the completed card has a visible non-empty body');
   } finally {
     (llm as any).chat = originalChat;
+    sessionManager.detachChannel(channelId, 'room');
+    unregisterChannel(channelId);
     parent.busy = false;
     await sessionManager.deleteSession(childId).catch(() => false);
     await sessionManager.deleteSession(parentId).catch(() => false);

@@ -432,3 +432,108 @@ test('Show commentary off retains only the last commentary of a reply-free turn,
     assert.equal(expanded.split(body).length - 1, 1, body + ' is rendered once in expanded Activity')
   }
 })
+
+test('unmarked text folds only with actual request tools; explicit phases and tool-free live text stay authoritative', async () => {
+  const evidence = await page.evaluate(() => {
+    const tool = { functionCall: { id: 'local-call', name: 'read', args: { filePath: 'example.ts' } } }
+    const messages = [
+      { role: 'model', parts: [{ text: 'LOCAL_UNMARKED' }, { text: 'EXPLICIT_FINAL_WITH_TOOL', phase: 'final_answer' }, tool] },
+      { role: 'model', parts: [{ text: 'EXPLICIT_COMMENTARY_NO_TOOL', phase: 'commentary' }] },
+      { role: 'model', parts: [{ text: 'COMPLETE_NO_TOOL' }] },
+      { role: 'model', parts: [{ text: 'INCOMPLETE_NO_TOOL' }], __meta: { llmSegment: { outputStart: 0, outputEndExclusive: 1, complete: false } } },
+      { role: 'model', parts: [{ text: 'STREAMING_NO_TOOL' }], __meta: { streaming: true, temporary: true, synthetic: 'streamingAssistantDraft' } },
+      { role: 'model', parts: [{ text: 'HOSTED_SEARCH_TEXT' }, { providerMeta: { openaiResponses: { outputItem: { type: 'web_search_call', action: { type: 'search', query: 'fixture' } } } } }] },
+      { role: 'model', parts: [{ text: 'HOSTED_OPEN_TEXT' }, { providerMeta: { openaiResponses: { outputItem: { type: 'web_search_call', action: { type: 'open_page', url: 'https://example.com/' } } } } }] },
+      { role: 'model', parts: [{ text: 'UNKNOWN_PROVIDER_NO_TOOL' }, { providerMeta: { openaiResponses: { outputItem: { type: 'unknown_call' } } } }] },
+      { role: 'model', parts: [{ text: 'FINAL_BOUNDARY' }] },
+    ].map((message, index) => ({ ...message, __meta: { seq: index + 1, ...message.__meta } }))
+    const project = showCommentary => {
+      const rows = window.fixture.rows(messages, { showCommentary })
+      return {
+        visible: rows.filter(row => row.conversationPartIndex !== undefined).map(row => row.msg.parts[row.conversationPartIndex].text),
+        folded: rows.flatMap(row => row.activity?.messages || []).flatMap(message => message.parts).flatMap(part => part.text ? [part.text] : []),
+      }
+    }
+    return { off: project(false), on: project(true) }
+  })
+  assert.deepEqual(evidence.off.visible, ['EXPLICIT_FINAL_WITH_TOOL', 'COMPLETE_NO_TOOL', 'INCOMPLETE_NO_TOOL', 'STREAMING_NO_TOOL', 'UNKNOWN_PROVIDER_NO_TOOL', 'FINAL_BOUNDARY'])
+  assert.deepEqual(evidence.off.folded, ['LOCAL_UNMARKED', 'EXPLICIT_COMMENTARY_NO_TOOL', 'HOSTED_SEARCH_TEXT', 'HOSTED_OPEN_TEXT'])
+  assert.equal(evidence.on.visible.length, 10)
+  assert.deepEqual(evidence.on.folded, [])
+})
+
+test('unmarked classification links loaded segments without borrowing unrelated, adjacent or cross-CTX tools', async () => {
+  const evidence = await page.evaluate(() => {
+    const tool = { functionCall: { id: 'linked-call', name: 'read', args: {} } }
+    const model = (text, id, seq, parts = []) => ({ role: 'model', parts: [...(text ? [{ text }] : []), ...parts], __meta: { seq, llmRequestId: id } })
+    const prefix = model('LINKED_PREFIX', 'linked', 3)
+    prefix.__meta.llmSegment = { outputStart: 0, outputEndExclusive: 1, complete: false }
+    const suffix = model('', 'linked', 4, [tool])
+    suffix.__meta.llmSegment = { outputStart: 1, outputEndExclusive: 2, complete: true }
+    const history = [
+      model('UNRELATED_REQUEST', 'unrelated', 1),
+      model('IDLESS_BEFORE_TOOL', undefined, 2),
+      prefix, suffix,
+      model('', undefined, 5, [tool]),
+      model('BEFORE_CTX_REUSED_ID', 'reused', 6),
+      { role: 'model', parts: [{ text: '[CTX-BLOCK L1 B#70 raw#1-#2] SCOPE_BOUNDARY' }], __meta: { seq: 7, contextBlock: { id: 70, level: 1, rawStartSeq: 1, rawEndSeq: 2, sourceKind: 'message' } } },
+      model('AFTER_CTX_WITH_TOOL', 'reused', 8, [tool]),
+      model('FINAL_BOUNDARY', 'final', 9),
+    ]
+    const visible = rows => rows.filter(row => row.conversationPartIndex !== undefined).map(row => row.msg.parts[row.conversationPartIndex].text)
+    const full = window.fixture.rows(history, { showCommentary: false })
+    // The viewport may contain only the prefix; classification still uses already-loaded history.
+    const cut = window.fixture.rows([prefix], { historyMessages: history, showCommentary: false })
+    return { full: visible(full), cut: visible(cut), preview: cut[0]?.activity?.preview?.message.parts[0].text }
+  })
+  assert.deepEqual(evidence.full, ['UNRELATED_REQUEST', 'IDLESS_BEFORE_TOOL', 'BEFORE_CTX_REUSED_ID', 'FINAL_BOUNDARY'])
+  assert.deepEqual(evidence.cut, [])
+  assert.equal(evidence.preview, 'LINKED_PREFIX')
+})
+
+test('Chat folds unmarked linked commentary off/on, retaining final replies and the searchable last-readable preview', async () => {
+  await page.setViewport({ width: 1100, height: 850 })
+  await closeSearch()
+  await page.evaluate(() => {
+    window.fixture.prefs.setTimelineView('conversation')
+    window.fixture.prefs.setShowCommentary(true)
+    window.fixture.inferred = [
+      { role: 'user', parts: [{ text: 'Inspect inferred commentary.' }] },
+      { role: 'model', parts: [{ text: 'INFERRED_EARLIER' }], __meta: { llmRequestId: 'inferred', llmSegment: { outputStart: 0, outputEndExclusive: 1, complete: false } } },
+      { role: 'model', parts: [{ text: 'INFERRED_LATEST' }, { functionCall: { id: 'inferred-call', name: 'read', args: { filePath: 'example.ts' } } }], __meta: { llmRequestId: 'inferred', llmSegment: { outputStart: 1, outputEndExclusive: 3, complete: true } } },
+      { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'inferred-call', name: 'read', response: { output: 'Synthetic result' } } }] },
+    ].map((message, index) => ({ ...message, __meta: { ...message.__meta, seq: 200 + index, timestamp: 1700000200000 + index * 1000 } }))
+    window.fixture.inferredFinal = { role: 'model', parts: [{ text: 'UNMARKED_FINAL_REPLY' }], __meta: { seq: 204, timestamp: 1700000205000, llmRequestId: 'tool-free-final' } }
+    window.fixture.replace([...window.fixture.inferred, window.fixture.inferredFinal])
+  })
+  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages').textContent.includes('INFERRED_EARLIER'))
+  await search('INFERRED_EARLIER'); await hits('1/1')
+  await closeSearch()
+  await choose('Show commentary'); await closeMenu()
+  await page.waitForFunction(() => !document.querySelector('.foxwarm-chat-messages').textContent.includes('INFERRED_LATEST'))
+  assert.ok(!(await text()).includes('INFERRED_EARLIER'))
+  assert.ok((await text()).includes('UNMARKED_FINAL_REPLY'))
+  await search('INFERRED_EARLIER'); await hits('0/0')
+  await search('INFERRED_LATEST'); await hits('0/0')
+  await search('UNMARKED_FINAL_REPLY'); await hits('1/1')
+  await closeSearch()
+  await screenshot('unmarked-commentary-off-with-final')
+  await page.evaluate(() => window.fixture.replace(window.fixture.inferred))
+  await page.waitForFunction(() => document.querySelector('[data-conversation-preview]')?.textContent.includes('INFERRED_LATEST'))
+  assert.ok(!(await text()).includes('INFERRED_EARLIER'))
+  await search('INFERRED_LATEST'); await hits('1/1')
+  await page.waitForFunction(() => [...CSS.highlights].some(([name, hits]) => name.startsWith('foxwarm-chat-search-') && [...hits][0]?.toString() === 'INFERRED_LATEST'))
+  await search('INFERRED_EARLIER'); await hits('0/0')
+  await closeSearch()
+  await screenshot('unmarked-commentary-last-preview')
+  await expandActivities()
+  for (const body of ['INFERRED_EARLIER', 'INFERRED_LATEST']) {
+    assert.equal((await text()).split(body).length - 1, 1, body + ' appears once in expanded Activity')
+  }
+  await choose('Show commentary'); await closeMenu()
+  await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-conversation-reply')].some(node => node.textContent.includes('INFERRED_EARLIER')))
+  assert.equal(await page.$$eval('[data-conversation-preview]', nodes => nodes.length), 0)
+  await search('INFERRED_EARLIER'); await hits('1/1')
+  await closeSearch()
+  await screenshot('unmarked-commentary-on')
+})

@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildWeWorkStreamResponse,
+  stripWeWorkThinkTags,
   truncateUtf8,
   WeWorkStreamAggregator,
   WEWORK_STREAM_CONTENT_BYTE_LIMIT,
@@ -12,7 +13,7 @@ test('WeWorkStreamAggregator aggregates model text and tool progress into one st
   const aggregator = new WeWorkStreamAggregator();
   const first = aggregator.begin('chat-1', { mode: 'webhook', responseUrl: 'https://example.test/response' }, 'stream-1');
 
-  assert.equal(first.content, '> 🤔 thinking');
+  assert.equal(first.content, '<think>');
   assert.equal(first.finish, false);
 
   let updated = aggregator.appendByStreamId('stream-1', 'model 文本消息 1');
@@ -23,7 +24,7 @@ test('WeWorkStreamAggregator aggregates model text and tool progress into one st
       { id: 'call-2', name: 'read' },
     ],
   });
-  assert.equal(updated?.content, 'model 文本消息 1\n\n> ⌛️ exec | ⌛️ read');
+  assert.equal(updated?.content, '<think>\nmodel 文本消息 1\n\n> ⌛️ exec | ⌛️ read');
 
   updated = aggregator.applyProgressByStreamId('stream-1', {
     type: 'tool-calls-finish',
@@ -33,13 +34,13 @@ test('WeWorkStreamAggregator aggregates model text and tool progress into one st
     ],
   });
   updated = aggregator.applyProgressByStreamId('stream-1', { type: 'llm-start' });
-  assert.equal(updated?.content, 'model 文本消息 1\n\n> ☑️ exec | ☑️ read | 🤔 thinking');
+  assert.equal(updated?.content, '<think>\nmodel 文本消息 1\n\n> ☑️ exec | ☑️ read | 🤔 thinking');
 
   updated = aggregator.applyProgressByStreamId('stream-1', {
     type: 'tool-calls-start',
     calls: [{ id: 'call-3', name: 'exec' }],
   });
-  assert.equal(updated?.content, 'model 文本消息 1\n\n> ☑️ exec | ☑️ read | ⌛️ exec');
+  assert.equal(updated?.content, '<think>\nmodel 文本消息 1\n\n> ☑️ exec | ☑️ read | ⌛️ exec');
 
   updated = aggregator.applyProgressByStreamId('stream-1', {
     type: 'tool-calls-finish',
@@ -47,14 +48,14 @@ test('WeWorkStreamAggregator aggregates model text and tool progress into one st
   });
   updated = aggregator.appendByStreamId('stream-1', 'model 文本消息 2', { finish: true });
   assert.equal(updated?.finish, true);
-  assert.equal(updated?.content, 'model 文本消息 1\n\n> ☑️ exec ×2 | ☑️ read\n\nmodel 文本消息 2');
+  assert.equal(updated?.content, '<think>\nmodel 文本消息 1\n\n> ☑️ exec ×2 | ☑️ read\n</think>\nmodel 文本消息 2');
 
   assert.deepEqual(buildWeWorkStreamResponse(updated!), {
     msgtype: 'stream',
     stream: {
       id: 'stream-1',
       finish: true,
-      content: 'model 文本消息 1\n\n> ☑️ exec ×2 | ☑️ read\n\nmodel 文本消息 2',
+      content: '<think>\nmodel 文本消息 1\n\n> ☑️ exec ×2 | ☑️ read\n</think>\nmodel 文本消息 2',
     },
   });
 });
@@ -73,13 +74,13 @@ test('WeWorkStreamAggregator groups non-adjacent tool calls by name and status',
       { id: 'call-5', name: 'exec' },
     ],
   });
-  assert.equal(updated?.content, '> ⌛️ exec ×3 | ⌛️ read | ⌛️ write');
+  assert.equal(updated?.content, '<think>\n> ⌛️ exec ×3 | ⌛️ read | ⌛️ write');
 
   updated = aggregator.applyProgressByStreamId('stream-1', {
     type: 'tool-calls-start',
     calls: [{ id: 'call-5', name: 'exec' }],
   });
-  assert.equal(updated?.content, '> ⌛️ exec ×3 | ⌛️ read | ⌛️ write');
+  assert.equal(updated?.content, '<think>\n> ⌛️ exec ×3 | ⌛️ read | ⌛️ write');
 
   updated = aggregator.applyProgressByStreamId('stream-1', {
     type: 'tool-calls-finish',
@@ -89,7 +90,7 @@ test('WeWorkStreamAggregator groups non-adjacent tool calls by name and status',
       { id: 'call-3', name: 'exec', status: 'success' },
     ],
   });
-  assert.equal(updated?.content, '> ☑️ exec ×2 | ❌ read | ⌛️ write | ⌛️ exec');
+  assert.equal(updated?.content, '<think>\n> ☑️ exec ×2 | ❌ read | ⌛️ write | ⌛️ exec');
 });
 
 test('WeWorkStreamAggregator keeps tool aggregation within each text-delimited block', () => {
@@ -109,13 +110,13 @@ test('WeWorkStreamAggregator keeps tool aggregation within each text-delimited b
     text: 'model text between tool batches',
     calls: [{ id: 'call-2', name: 'exec' }],
   });
-  assert.equal(updated?.content, '> ☑️ exec\n\nmodel text between tool batches\n\n> ⌛️ exec');
+  assert.equal(updated?.content, '<think>\n> ☑️ exec\n\nmodel text between tool batches\n\n> ⌛️ exec');
 
   updated = aggregator.applyProgressByStreamId('stream-1', {
     type: 'tool-calls-finish',
     results: [{ id: 'call-2', name: 'exec', status: 'success' }],
   });
-  assert.equal(updated?.content, '> ☑️ exec\n\nmodel text between tool batches\n\n> ☑️ exec');
+  assert.equal(updated?.content, '<think>\n> ☑️ exec\n\nmodel text between tool batches\n\n> ☑️ exec');
 });
 
 test('WeWorkStreamAggregator can apply model text and running tools atomically', () => {
@@ -128,7 +129,7 @@ test('WeWorkStreamAggregator can apply model text and running tools atomically',
     calls: [{ id: 'call-1', name: 'exec' }],
   });
 
-  assert.equal(updated?.content, 'model text before tools\n\n> ⌛️ exec');
+  assert.equal(updated?.content, '<think>\nmodel text before tools\n\n> ⌛️ exec');
 });
 
 test('WeWorkStreamAggregator supersedes an old card without transient tool status', () => {
@@ -149,7 +150,7 @@ test('WeWorkStreamAggregator supersedes an old card without transient tool statu
   assert.equal(aggregator.getByStreamId('stream-1')?.content.includes('thinking'), false);
   assert.equal(aggregator.getByStreamId('stream-1')?.content.includes('read'), false);
   assert.equal(newQueued?.finish, false);
-  assert.equal(newQueued?.content, 'queued notice');
+  assert.equal(newQueued?.content, '<think>\nqueued notice');
   assert.equal(second.streamId, 'stream-2');
 });
 
@@ -185,4 +186,94 @@ test('truncateUtf8 respects multibyte UTF-8 byte limits', () => {
 
   assert.ok(Buffer.byteLength(truncated, 'utf8') <= 80);
   assert.ok(truncated.endsWith('…[内容过长，已截断]'));
+});
+
+test('WeWorkStreamAggregator closes the fold only in the final frame by default and honors a closed style', () => {
+  const aggregator = new WeWorkStreamAggregator();
+  const first = aggregator.begin('chat-1', { mode: 'webhook' }, 'stream-1');
+  assert.equal(first.content, '<think>');
+  assert.equal(first.finish, false);
+
+  const streaming = aggregator.appendByStreamId('stream-1', 'step one');
+  assert.equal(streaming?.content, '<think>\nstep one');
+  assert.equal(streaming?.finish, false);
+
+  const finished = aggregator.appendByStreamId('stream-1', 'the answer', { finish: true });
+  assert.equal(finished?.finish, true);
+  assert.equal(finished?.content, '<think>\nstep one\n</think>\nthe answer');
+
+  const closed = new WeWorkStreamAggregator({ thinkFrame: 'closed' });
+  assert.equal(closed.begin('chat-2', { mode: 'webhook' }, 'stream-2').content, '<think></think>');
+  assert.equal(closed.appendByStreamId('stream-2', 'step one')?.content, '<think>\nstep one\n</think>');
+  assert.equal(
+    closed.appendByStreamId('stream-2', 'the answer', { finish: true })?.content,
+    '<think>\nstep one\n</think>\nthe answer',
+  );
+  assert.equal(new WeWorkStreamAggregator({ thinkFrame: 'unsupported' as any }).begin('chat-3', { mode: 'webhook' }, 'stream-3').content, '<think>');
+});
+
+test('WeWorkStreamAggregator keeps a suspended card open and closes it on the later answer', () => {
+  const aggregator = new WeWorkStreamAggregator();
+  aggregator.begin('chat-1', { mode: 'webhook' }, 'stream-1');
+  aggregator.applyProgressByStreamId('stream-1', { type: 'llm-start' });
+  const parked = aggregator.appendByStreamId('stream-1', 'waiting for a child session');
+
+  // A turn that ends by waiting must not finish the card.
+  assert.equal(parked?.finish, false);
+  assert.equal(aggregator.getByConversation('chat-1')?.finish, false);
+  assert.equal(aggregator.hasActive('chat-1'), true);
+
+  // The resumed turn appends to the same fold and the answer body closes it.
+  aggregator.applyProgressByStreamId('stream-1', {
+    type: 'tool-calls-start',
+    calls: [{ id: 'call-1', name: 'session' }],
+  });
+  const resumed = aggregator.appendByStreamId('stream-1', 'the answer', { finish: true });
+  assert.equal(resumed?.finish, true);
+  assert.equal(
+    resumed?.content,
+    '<think>\nwaiting for a child session\n\n> ⌛️ session\n</think>\nthe answer',
+  );
+  assert.equal(aggregator.hasActive('chat-1'), false);
+});
+
+test('WeWorkStreamAggregator keeps the closed pair when a final frame is truncated', () => {
+  const aggregator = new WeWorkStreamAggregator({ maxContentBytes: 2000 });
+  aggregator.begin('chat-1', { mode: 'webhook' }, 'stream-1');
+  aggregator.applyProgressByStreamId('stream-1', {
+    type: 'tool-calls-start',
+    text: 'process '.repeat(500),
+    calls: [{ id: 'call-1', name: 'exec' }],
+  });
+  const finished = aggregator.appendByStreamId('stream-1', 'answer '.repeat(500), { finish: true });
+  const content = finished?.content || '';
+
+  assert.ok(Buffer.byteLength(content, 'utf8') <= 2000);
+  const closeIndex = content.indexOf('</think>');
+  assert.ok(closeIndex > 0, 'the closing think tag must survive truncation');
+  assert.ok(content.startsWith('<think>\n'));
+  assert.ok(content.slice(closeIndex + '</think>'.length).includes('answer'), 'the answer body must stay outside the fold');
+});
+
+test('WeWorkStreamAggregator keeps an ordinary answer out of an empty fold', () => {
+  const aggregator = new WeWorkStreamAggregator();
+  aggregator.begin('chat-1', { mode: 'webhook' }, 'stream-1');
+
+  const finished = aggregator.appendByStreamId('stream-1', 'direct answer', { finish: true });
+
+  assert.equal(finished?.content, 'direct answer');
+});
+
+test('WeWorkStreamAggregator refresh touches keep an unfinished card inside its TTL', () => {
+  const aggregator = new WeWorkStreamAggregator({ ttlMs: 1000 });
+  const started = aggregator.begin('chat-1', { mode: 'webhook' }, 'stream-1');
+
+  assert.equal(aggregator.touchByStreamId('stream-1', started.updatedAt + 800)?.streamId, started.streamId);
+  assert.equal(aggregator.cleanupExpired(started.updatedAt + 1700), 0, 'the refresh restarts the TTL window');
+  assert.equal(aggregator.cleanupExpired(started.updatedAt + 2100), 1);
+});
+
+test('stripWeWorkThinkTags removes fold tags from proactive content', () => {
+  assert.equal(stripWeWorkThinkTags('<think>\nstep\n</think>\nthe answer'), '\nstep\n\nthe answer');
+  assert.equal(stripWeWorkThinkTags('plain answer'), 'plain answer');
 });

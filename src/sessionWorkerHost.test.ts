@@ -574,9 +574,9 @@ test('worker keeps tool call/result adjacent while delivering text before append
   } finally { (llm as any).chat = originalChat; (toolExecutor as any).executeTools = originalExecuteTools; }
 });
 
-test('tool terminal paths never resend model text and close an active Worker WeWork stream', async t => {
+test('tool terminal paths deliver one lifecycle outcome without resending Worker model text', async t => {
   const originalChat = llm.chat; const originalExecuteTools = toolExecutor.executeTools;
-  let mode: 'wait' | 'stop' | 'stop-empty' | 'managed' | 'tool-stop' = 'wait';
+  let mode: 'wait' | 'stop' | 'stop-empty' | 'managed' | 'tool-stop' | 'finish' = 'wait';
   (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
     if (parts) await options.appendMessage({ role: 'user', parts });
     const toolCall = { id: `terminal-${mode}`, name: 'session', args: { action: 'status' } };
@@ -593,11 +593,13 @@ test('tool terminal paths never resend model text and close an active Worker WeW
     return {
       message: {
         role: 'tool', parts: [{ functionResponse: { tool_use_id: `terminal-${mode}`, name: 'session', response: { output: 'ok' } } }]
-      }, ...(mode === 'wait' ? { postActions: { waitForReply: true } } : {}), ...(mode === 'tool-stop' ? { control: { stopCurrentTurn: true } } : {})
+      }, ...(mode === 'wait' ? { postActions: { waitForReply: true } } : {}),
+      ...(mode === 'tool-stop' || mode === 'finish' ? { control: { stopCurrentTurn: true } } : {}),
+      ...(mode === 'finish' ? { postActions: { finishAfterSend: true } } : {})
     };
   };
   try {
-    for (mode of ['wait', 'stop', 'stop-empty', 'managed', 'tool-stop'] as const) {
+    for (mode of ['wait', 'stop', 'stop-empty', 'managed', 'tool-stop', 'finish'] as const) {
       await t.test(mode, async () => {
         const initial = baseSession(`worker-tool-terminal-${mode}`);
         const intermediates: string[] = []; const finals: Array<{ text: string; outcome: string }> = [];
@@ -609,9 +611,12 @@ test('tool terminal paths never resend model text and close an active Worker WeW
           });
           await host.runPending(8);
           assert.deepEqual(intermediates, mode === 'stop-empty' ? [] : [`${mode} text`]);
+          // Waiting turn endings stay suspendable; Stop and successful
+          // finish-after-send both deliver terminal empty finals.
+          const suspended = mode === 'wait' || mode === 'managed' || mode === 'tool-stop';
           assert.deepEqual(finals, mode === 'stop-empty'
             ? [{ text: '_[Execution stopped by user]_', outcome: 'response' }]
-            : [{ text: '', outcome: 'empty-final' }]);
+            : [{ text: '', outcome: suspended ? 'suspended' : 'empty-final' }]);
           assert.equal(readDurable().history.filter((message: any) => message.role === 'model').length, 1);
           assert.equal(readDurable().busy, false);
         }, true, undefined,
