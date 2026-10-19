@@ -11,11 +11,18 @@ const fixture = await createHostFixture('provider-lifecycle', options)
 options.cwd = fixture.root
 const target = join(fixture.root, 'target')
 await mkdir(target)
+const unicodeTarget = join(fixture.root, 'unicode')
+await mkdir(unicodeTarget)
+const unicodeSchema = '\u2028'.repeat(3000) + '\u2029😀\u0085\u200b'
+const unicodeBytes = Buffer.byteLength(JSON.stringify(unicodeSchema))
+assert(unicodeBytes < 16 * 1024)
+await writeFile(join(unicodeTarget, 'description.json'), JSON.stringify({ label: 'Unicode schema', description: 'Plain JSON schema data.', lifecycle: [], createParameters: unicodeSchema }))
 env.FOXWARM_BIND_ADDRESS = '127.0.0.1'
 env.FOXWARM_PUBLIC_BASE_URL = fixture.origin
 env.FOXWARM_CONFIG_PATH = join(fixture.data, 'state/config.yaml')
 await writeFile(env.FOXWARM_CONFIG_PATH, JSON.stringify({ bot: { httpPort: fixture.port }, vector: false, llm: { maxOutput: 713 }, nodeProviders: {
-  external: { type: 'executable', command: 'python3', args: [resolve('dotnet/Foxwarm.Tests/Tools/Fixtures/node-provider.py'), target, 'lifecycle'], timeoutSeconds: 3 }
+  external: { type: 'executable', command: 'python3', args: [resolve('dotnet/Foxwarm.Tests/Tools/Fixtures/node-provider.py'), target, 'lifecycle'], timeoutSeconds: 3 },
+  unicode: { type: 'executable', command: 'python3', args: [resolve('dotnet/Foxwarm.Tests/Tools/Fixtures/node-provider.py'), unicodeTarget], timeoutSeconds: 3 }
 } }))
 const failures = [], requests = [], scripts = new Map()
 const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
@@ -57,6 +64,25 @@ try {
   assert.equal(discovery.result[0].currentNode, 'master')
   assert.equal(discovery.result[0].providers.find(p => p.id === 'external').createParameters, undefined)
   assert.equal(discovery.result[1].provider.createParameters.type, 'object')
+  assert(discovery.result[0].providers.some(provider => provider.id === 'unicode'))
+  state = await turn('unicode', [call('unicode', 'node', { action: 'inspect', providerId: 'unicode' })])
+  assert.equal(result(state, 'unicode').provider.createParameters, unicodeSchema)
+  const properties = entries => Object.fromEntries(Array.from({ length: entries }, (_, index) => ['k' + index, 0]))
+  state = await turn('reject-plain', [
+    call('reject-array', 'node', { action: 'create', providerId: 'external', nodeId: 'external/rejected-array', parameters: { items: Array(2049).fill(0) } }),
+    call('reject-object', 'node', { action: 'create', providerId: 'external', nodeId: 'external/rejected-object', parameters: properties(2049) }),
+    call('reject-number', 'node', { action: 'create', providerId: 'external', nodeId: 'external/rejected-number', parametersJson: '{"huge":1e400}' })
+  ])
+  for (const id of ['reject-array', 'reject-object', 'reject-number']) assert(result(state, id).error, id)
+  await assert.rejects(readFile(join(target, 'effects.jsonl')), { code: 'ENOENT' })
+  state = await turn('plain-controls', [
+    call('control-array', 'node', { action: 'create', providerId: 'external', nodeId: 'external/array', parameters: { items: Array(2048).fill(0) } }),
+    call('control-object', 'node', { action: 'create', providerId: 'external', nodeId: 'external/object', parameters: properties(2048) }),
+    call('control-number', 'node', { action: 'create', providerId: 'external', nodeId: 'external/finite', parametersJson: '{"large":1e308,"tiny":5e-324,"negativeZero":-0}' })
+  ])
+  for (const id of ['control-array', 'control-object', 'control-number']) assert.equal(result(state, id).error, undefined, id)
+  const controlEffects = (await readFile(join(target, 'effects.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse)
+  assert.deepEqual(controlEffects.map(effect => effect.nodeId).sort(), ['array', 'finite', 'object'])
   state = await turn('create', [call('create', 'node', { action: 'create', providerId: 'external', nodeId: 'external/new', parametersJson: '{"label":"Created by model"}' })])
   assert.equal(result(state, 'create').node.id, 'external/new')
   const authority = JSON.parse(await readFile(join(fixture.data, 'state/sessions', created.body.sessionId + '.json'), 'utf8'))
@@ -72,10 +98,11 @@ try {
   assert.equal((await fixture.api('GET', '/api/nodes/master')).status, 200)
   const calls = (await readFile(join(target, 'calls.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse)
   const effects = calls.filter(row => ['create', 'destroy'].includes(row.operation))
-  assert.deepEqual(effects.map(row => row.operation), ['create', 'destroy'])
-  assert(effects.every(row => row.request.nodeId === 'new' && row.request.sourceSessionId === created.body.sessionId && row.request.context.agent === 'main'))
+  assert.deepEqual(effects.map(row => row.operation), ['create', 'create', 'create', 'create', 'destroy'])
+  assert(effects.slice(-2).every(row => row.request.nodeId === 'new'))
+  assert(effects.every(row => row.request.sourceSessionId === created.body.sessionId && row.request.context.agent === 'main'))
   await fixture.stop()
-  console.log(JSON.stringify({ result: 'Ordinary Main/model structured discovery, lifecycle, selection/exec, retention, human command admission and distinct HTTP detail passed.', mainProcesses: fixture.hostPids.length, modelRequests: requests.length }))
+  console.log(JSON.stringify({ result: 'Ordinary Main/model structured discovery, lifecycle, selection/exec, retention, human command admission and distinct HTTP detail passed.', mainProcesses: fixture.hostPids.length, modelRequests: requests.length, unicodeSchemaBytes: unicodeBytes, rejectedEffects: 0, controlEffects: controlEffects.length }))
 } finally {
   await fixture.cleanup(); model.closeAllConnections(); await new Promise(done => model.close(done))
 }

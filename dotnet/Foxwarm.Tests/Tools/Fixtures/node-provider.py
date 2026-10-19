@@ -135,6 +135,8 @@ try:
             with (root / "effects.jsonl").open("a") as effects:
                 effects.write(json.dumps({"operation": operation, "nodeId": local}) + "\n")
             result = {"nodeId": "wrong-result" if parameters.get("wrongIdentity") else local, "effect": "Removed from discovery.", "dataRetention": "Target files retained."}
+        if (root / "details.json").exists():
+            result["details"] = json.loads((root / "details.json").read_text())
     elif operation == "exec-start":
         assert set(body) <= {"nodeId", "command", "cwd"}
         assert "/" not in body["nodeId"]

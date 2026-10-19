@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -194,14 +195,49 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
     {
         if (value is not null)
             ValidateJson(value, maxDepth, maxCount, serviceBudget);
-        if (Encoding.UTF8.GetByteCount(value?.ToJsonString(JsonEncoding) ?? "null") > maxBytes)
+        if (JsonBytes(value) > maxBytes)
             throw Invalid("Provider JSON exceeds its byte budget.");
     }
 
-    private static readonly JsonSerializerOptions JsonEncoding = new()
+    // Budget the parsed data as JSON.stringify would, not the transport writer's
+    // escaping or raw numeric spelling. This does not change protocol serialization.
+    private static long JsonBytes(JsonNode? value) => value switch
     {
-        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        null => 4,
+        JsonObject obj => 2L + Math.Max(0, obj.Count - 1)
+            + obj.Sum(pair => JsonStringBytes(pair.Key) + 1 + JsonBytes(pair.Value)),
+        JsonArray array => 2L + Math.Max(0, array.Count - 1) + array.Sum(JsonBytes),
+        JsonValue scalar when scalar.TryGetValue<string>(out var text) => JsonStringBytes(text),
+        JsonValue scalar when scalar.TryGetValue<bool>(out var flag) => flag ? 4 : 5,
+        JsonValue scalar => EcmaNumber.Format(JsonNumber(scalar)).Length,
+        _ => throw Invalid("Provider value must be plain JSON."),
     };
+
+    private static double JsonNumber(JsonValue value) =>
+        SessionWait.Number(value) ?? double.Parse(value.ToJsonString(), CultureInfo.InvariantCulture);
+
+    private static long JsonStringBytes(string text)
+    {
+        long bytes = 2; // Quotation marks.
+        for (var index = 0; index < text.Length; index++)
+        {
+            var character = text[index];
+            if (character is '"' or '\\' or '\b' or '\f' or '\n' or '\r' or '\t')
+                bytes += 2;
+            else if (character < 32)
+                bytes += 6;
+            else if (char.IsHighSurrogate(character) && index + 1 < text.Length && char.IsLowSurrogate(text[index + 1]))
+            {
+                bytes += 4;
+                index++;
+            }
+            else if (char.IsSurrogate(character))
+                bytes += 6; // JSON.stringify escapes lone UTF-16 surrogates.
+            else
+                bytes += character <= 0x7f ? 1 : character <= 0x7ff ? 2 : 3;
+        }
+        return bytes;
+    }
 
     internal async Task<JsonNode?> RunAsync(
         string operation,
@@ -364,15 +400,28 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
             )
                 throw Invalid("Provider JSON is too complex.");
             if (item is JsonObject obj)
+            {
+                if (serviceBudget && obj.Count > 2048)
+                    throw Invalid("Provider JSON object has too many properties.");
                 foreach (var pair in obj)
                 {
                     if (serviceBudget && pair.Key.Length > 256)
                         throw Invalid("Provider JSON key is too long.");
                     Visit(pair.Value, depth + 1);
                 }
+            }
             else if (item is JsonArray array)
+            {
+                if (serviceBudget && array.Count > 2048)
+                    throw Invalid("Provider JSON array has too many entries.");
                 foreach (var child in array)
                     Visit(child, depth + 1);
+            }
+            else if (item is JsonValue scalar
+                && !scalar.TryGetValue<string>(out _)
+                && !scalar.TryGetValue<bool>(out _)
+                && !double.IsFinite(JsonNumber(scalar)))
+                throw Invalid("Provider JSON numbers must be finite.");
         }
         Visit(node, 0);
     }

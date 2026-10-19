@@ -355,6 +355,150 @@ public sealed partial class ProviderFileConsumerTests
     }
 
     [Fact]
+    public async Task Plain_lifecycle_parameters_reject_nonfinite_numbers_and_oversized_containers_before_effect()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        await using var f = await Fixture.Create("lifecycle");
+        var tooManyProperties = new JsonObject();
+        for (var index = 0; index < 2049; index++)
+            tooManyProperties["k" + index] = 0;
+        foreach (var parameters in new[]
+        {
+            new JsonObject { ["items"] = new JsonArray(Enumerable.Range(0, 2049).Select(_ => (JsonNode?)JsonValue.Create(0)).ToArray()) },
+            tooManyProperties,
+        })
+            Assert.NotNull((await f.Call("node", Lifecycle("create", "fixture/rejected", "fixture", (JsonObject)parameters.DeepClone())))["error"]);
+        var nonfinite = Lifecycle("create", "fixture/nonfinite", "fixture");
+        nonfinite["parametersJson"] = "{\"huge\":1e400}";
+        Assert.NotNull((await f.Call("node", nonfinite))["error"]);
+        Assert.False(File.Exists(Path.Combine(f.Target, "effects.jsonl")));
+        Assert.False(File.Exists(Path.Combine(f.Target, "calls.jsonl")));
+
+        tooManyProperties.Remove("k2048");
+        Success(await f.Call("node", Lifecycle("create", "fixture/object", "fixture", tooManyProperties)));
+        Success(await f.Call("node", Lifecycle("create", "fixture/array", "fixture", new JsonObject
+        {
+            ["items"] = new JsonArray(Enumerable.Range(0, 2048).Select(_ => (JsonNode?)JsonValue.Create(0)).ToArray()),
+        })));
+        var finite = Lifecycle("create", "fixture/finite", "fixture");
+        finite["parametersJson"] = "{\"large\":1e308,\"tiny\":5e-324,\"negativeZero\":-0}";
+        Success(await f.Call("node", finite));
+        Assert.Equal(3, (await File.ReadAllLinesAsync(Path.Combine(f.Target, "effects.jsonl"))).Length);
+    }
+
+    [Fact]
+    public async Task Full_inspection_preserves_distinct_protocol_and_service_container_limits()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        foreach (var entries in new[] { 2049, 2048 })
+        {
+            await using var f = await Fixture.Create("lifecycle");
+            var description = new JsonObject
+            {
+                ["label"] = "Fixture",
+                ["description"] = "Plain schema data.",
+                ["lifecycle"] = new JsonArray("inspect"),
+                ["createParameters"] = new JsonArray(Enumerable.Range(0, entries).Select(_ => (JsonNode?)JsonValue.Create(0)).ToArray()),
+            };
+            await File.WriteAllTextAsync(Path.Combine(f.Target, "description.json"), description.ToJsonString());
+            var protocol = new ExecutableNodeProvider("fixture", ExecutableNodeProviderTests.Configuration(f.Target));
+            Assert.Equal(entries, (await protocol.DescribeAsync(default))["createParameters"]!.AsArray().Count);
+            var inspected = await f.Call("node", Lifecycle("inspect", provider: "fixture"));
+            if (entries == 2048)
+                Success(inspected);
+            else
+                Assert.NotNull(inspected["error"]);
+        }
+    }
+
+    [Fact]
+    public async Task Unicode_schema_inspection_uses_the_inclusive_serialized_byte_boundary()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        foreach (var extra in new[] { "xxx", "xx" })
+        {
+            await using var f = await Fixture.Create();
+            var schema = new string('\u2028', 5460) + extra;
+            var description = new JsonObject
+            {
+                ["label"] = "Fixture",
+                ["description"] = "Plain schema data.",
+                ["lifecycle"] = new JsonArray(),
+                ["createParameters"] = schema,
+            };
+            await File.WriteAllTextAsync(Path.Combine(f.Target, "description.json"), description.ToJsonString());
+            Assert.Equal(extra.Length == 2 ? 16384 : 16385, System.Text.Encoding.UTF8.GetByteCount(schema) + 2);
+            var inspected = await f.Call("node", Lifecycle("inspect", provider: "fixture"));
+            if (extra.Length == 2)
+            {
+                Success(inspected);
+                Assert.Equal(schema, inspected["provider"]!["createParameters"]!.GetValue<string>());
+            }
+            else
+                Assert.NotNull(inspected["error"]);
+        }
+    }
+
+    [Fact]
+    public async Task Parameter_byte_limit_is_checked_before_effect_and_full_lifecycle_result_keeps_service_bounds()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        await using var f = await Fixture.Create("lifecycle");
+        // Keep response details small to observe the parameter budget independently.
+        await File.WriteAllTextAsync(Path.Combine(f.Target, "details.json"), "{}");
+        var parameters = new JsonObject { ["padding"] = new string('x', 65523) };
+        Assert.Equal(65537, System.Text.Encoding.UTF8.GetByteCount(parameters.ToJsonString()));
+        Assert.NotNull((await f.Call("node", Lifecycle("create", "fixture/over", "fixture", (JsonObject)parameters.DeepClone())))["error"]);
+        Assert.False(File.Exists(Path.Combine(f.Target, "effects.jsonl")));
+        parameters["padding"] = new string('x', 65522);
+        Assert.Equal(65536, System.Text.Encoding.UTF8.GetByteCount(parameters.ToJsonString()));
+        Success(await f.Call("node", Lifecycle("create", "fixture/boundary", "fixture", parameters)));
+        foreach (var entries in new[] { 2049, 2048 })
+        {
+            await File.WriteAllTextAsync(Path.Combine(f.Target, "details.json"), new JsonArray(Enumerable.Range(0, entries).Select(_ => (JsonNode?)JsonValue.Create(0)).ToArray()).ToJsonString());
+            var created = await f.Call("node", Lifecycle("create", "fixture/result" + entries, "fixture"));
+            if (entries == 2048)
+                Success(created);
+            else
+                Assert.NotNull(created["error"]);
+        }
+        // Result rejection is post-effect and must not replay or undo the adapter's action.
+        Assert.Equal(3, (await File.ReadAllLinesAsync(Path.Combine(f.Target, "effects.jsonl"))).Length);
+    }
+
+    [Fact]
+    public void Plain_json_byte_budgets_use_stringify_strings_and_binary64_numbers_at_inclusive_boundaries()
+    {
+        // JSON.stringify bytes: quotes, literal separators/non-BMP, controls, literal escapes,
+        // and fixed/scientific number thresholds. Archive-only integer exactness is not a rule here.
+        foreach (var (json, bytes) in new[]
+        {
+            ("\"" + new string('\u2028', 3000) + "\"", 9002),
+            ("\"\u2029😀\"", 9),
+            ("\"\\\\u2028\"", 9),
+            ("\"\\u0000\\n\\t\\\"\\\\\"", 16),
+            ("1e-6", 8), ("1e20", 21), ("1e21", 5), ("-0", 1),
+            ("9007199254740993", 16),
+        })
+        {
+            var value = JsonNode.Parse(json)!;
+            ExecutableNodeProvider.BoundedJson(value, bytes);
+            Assert.Throws<NodeProviderException>(() => ExecutableNodeProvider.BoundedJson(value, bytes - 1));
+        }
+        foreach (var budget in new[] { 16 * 1024, 64 * 1024 })
+        {
+            ExecutableNodeProvider.BoundedJson(JsonValue.Create(new string('x', budget - 2)), budget);
+            Assert.Throws<NodeProviderException>(() => ExecutableNodeProvider.BoundedJson(JsonValue.Create(new string('x', budget - 1)), budget));
+        }
+        foreach (var service in new[] { false, true })
+            Assert.Throws<NodeProviderException>(() => ExecutableNodeProvider.BoundedJson(JsonNode.Parse("1e400"), 1024, serviceBudget: service));
+    }
+
+    [Fact]
     public async Task Full_inspection_copies_bounded_plain_schema_data_without_business_schema_validation()
     {
         if (!OperatingSystem.IsLinux())
