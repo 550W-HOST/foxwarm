@@ -22,9 +22,16 @@ internal sealed partial class SessionManager
         return node.Length > 0 ? node : boundNode ?? "master";
     }
 
-    internal Task<JsonObject> UpdateProviderExecCwdAsync(SessionOwner owner, string node, string cwd) =>
-        owner.UpdateCwdAsync(cwd, preserveWhitespace: true,
-            condition: () => IsCurrentOwner(owner) && CurrentNode(owner) == node);
+    internal Task<JsonObject> UpdateProviderExecCwdAsync(
+        SessionOwner owner,
+        string node,
+        string cwd
+    ) =>
+        owner.UpdateCwdAsync(
+            cwd,
+            preserveWhitespace: true,
+            condition: () => IsCurrentOwner(owner) && CurrentNode(owner) == node
+        );
 
     internal string CurrentNode(SessionOwner owner) => ExecutionPlacement(owner).Node;
 

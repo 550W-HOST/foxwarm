@@ -569,12 +569,17 @@ internal sealed partial class SessionToolExecutor(
         return observed == initial ? response : await ApplyCwdAsync(response, observed);
     }
 
-    internal async Task<JsonObject> ExecuteProviderExecAsync(ResolvedTool resolved, CancellationToken token)
+    internal async Task<JsonObject> ExecuteProviderExecAsync(
+        ResolvedTool resolved,
+        CancellationToken token
+    )
     {
         var backend = await registry.Providers!.AdmitExecAsync(resolved.ExecutionNode, token);
         string? observed = null;
         var response = await hosted.Executor.ExecuteAsync(
-            hosted.Id, resolved.Args, token,
+            hosted.Id,
+            resolved.Args,
+            token,
             observeCwd: (_, end) => observed = end,
             programmatic: ScriptBudget,
             cancellationSource: () => hosted.Entry.ToolCancellationSource,
@@ -585,7 +590,8 @@ internal sealed partial class SessionToolExecutor(
                 hosted.Entry.RequireIdentityAuthority();
                 hosted.Registry.Runner.AssertCanContinue();
             },
-            hardCancellation: hosted.Entry.IdentityLossToken);
+            hardCancellation: hosted.Entry.IdentityLossToken
+        );
         if (observed is null)
             return response;
         if (execSnapshot.Value is not null)
@@ -608,7 +614,11 @@ internal sealed partial class SessionToolExecutor(
         {
             return execution with
             {
-                Response = await ApplyCwdAsync(execution.Response!.AsObject(), cwd, execution.DeferredCwdNode),
+                Response = await ApplyCwdAsync(
+                    execution.Response!.AsObject(),
+                    cwd,
+                    execution.DeferredCwdNode
+                ),
                 DeferredCwd = null,
                 DeferredCwdNode = null,
             };
@@ -626,7 +636,11 @@ internal sealed partial class SessionToolExecutor(
         }
     }
 
-    private async Task<JsonObject> ApplyCwdAsync(JsonObject response, string cwd, string? providerNode = null)
+    private async Task<JsonObject> ApplyCwdAsync(
+        JsonObject response,
+        string cwd,
+        string? providerNode = null
+    )
     {
         var change = providerNode is null
             ? await hosted.UpdateCwdAsync(cwd)

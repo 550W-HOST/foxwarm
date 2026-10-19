@@ -91,7 +91,11 @@ public sealed partial class ProviderFileConsumerTests
             return f;
         }
 
-        internal async Task<JsonObject> Call(string name, JsonObject args, CancellationToken token = default) =>
+        internal async Task<JsonObject> Call(
+            string name,
+            JsonObject args,
+            CancellationToken token = default
+        ) =>
             (
                 await Tools.ExecuteAsync(
                     new JsonObject

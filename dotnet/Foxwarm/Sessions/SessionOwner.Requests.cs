@@ -42,7 +42,11 @@ internal sealed partial class SessionOwner
         PublishStateChanged();
     }
 
-    internal async Task<JsonObject> UpdateCwdAsync(string? value, bool preserveWhitespace = false, Func<bool>? condition = null)
+    internal async Task<JsonObject> UpdateCwdAsync(
+        string? value,
+        bool preserveWhitespace = false,
+        Func<bool>? condition = null
+    )
     {
         var change = await Entry.SaveLane.CommitCwdAsync(value, preserveWhitespace, condition);
         return new JsonObject

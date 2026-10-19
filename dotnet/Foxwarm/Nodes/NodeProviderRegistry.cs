@@ -207,8 +207,12 @@ internal sealed class NodeProviderRegistry
             return [];
         var definitions = ProviderDefinitions();
         if (SessionWait.Text(descriptor["filesystem"]) == "read")
-            definitions = new JsonArray(definitions.Where(value => SessionWait.Text(value?["name"]) == "read")
-                .Select(value => value!.DeepClone()).ToArray());
+            definitions = new JsonArray(
+                definitions
+                    .Where(value => SessionWait.Text(value?["name"]) == "read")
+                    .Select(value => value!.DeepClone())
+                    .ToArray()
+            );
         if (descriptor["exec"]?.GetValue<bool>() == true)
             definitions.Add(LocalExecManager.Definitions()[0]!.DeepClone());
         return definitions;
@@ -217,8 +221,11 @@ internal sealed class NodeProviderRegistry
     internal async Task<ProviderExecBackend> AdmitExecAsync(string node, CancellationToken token)
     {
         var descriptor = await ResolveAsync(node, token);
-        if (descriptor is null || SessionWait.Text(descriptor["availability"]) != "ready"
-            || descriptor["exec"]?.GetValue<bool>() != true)
+        if (
+            descriptor is null
+            || SessionWait.Text(descriptor["availability"]) != "ready"
+            || descriptor["exec"]?.GetValue<bool>() != true
+        )
             throw new InvalidOperationException("Node exec capability is unavailable: " + node);
         return ResolveExecBackend(node[..node.IndexOf('/')], node);
     }
@@ -227,9 +234,13 @@ internal sealed class NodeProviderRegistry
     internal ProviderExecBackend ResolveExecBackend(string providerId, string node)
     {
         ValidateId(node);
-        if (!node.StartsWith(providerId + "/", StringComparison.Ordinal)
-            || !providers.TryGetValue(providerId, out var provider))
-            throw new InvalidOperationException("Execution provider is not configured: " + providerId);
+        if (
+            !node.StartsWith(providerId + "/", StringComparison.Ordinal)
+            || !providers.TryGetValue(providerId, out var provider)
+        )
+            throw new InvalidOperationException(
+                "Execution provider is not configured: " + providerId
+            );
         return new(provider, node);
     }
 

@@ -188,7 +188,7 @@ internal sealed class ToolRegistry(
                     generation
                 )
             : resolved is { Source: "node", Name: "exec" }
-                && providers?.IsProviderNode(resolved.ExecutionNode) == true
+            && providers?.IsProviderNode(resolved.ExecutionNode) == true
                 ? await owner.ExecuteProviderExecAsync(resolved, cancellationToken)
             : resolved.Source == "node" && resolved.ExecutionNode != "master"
                 ? await ExecuteNodeAsync(

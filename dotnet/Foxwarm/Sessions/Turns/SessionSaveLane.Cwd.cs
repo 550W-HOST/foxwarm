@@ -10,7 +10,10 @@ public sealed partial class SessionSaveLane
         Func<bool>? condition = null
     )
     {
-        var normalized = value is null ? "" : preserveWhitespace ? value : SessionGoal.Trim(value);
+        var normalized =
+            value is null ? ""
+            : preserveWhitespace ? value
+            : SessionGoal.Trim(value);
         var next = normalized.Length == 0 ? null : normalized;
         (bool Changed, string? Previous, string? Current) result = default;
         await EnqueueOperationAsync(async () =>

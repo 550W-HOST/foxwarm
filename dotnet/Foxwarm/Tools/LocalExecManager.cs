@@ -5,9 +5,9 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Foxwarm.Sessions;
-using Foxwarm.Nodes;
 using System.Text.Json.Serialization;
+using Foxwarm.Nodes;
+using Foxwarm.Sessions;
 
 namespace Foxwarm.Tools;
 
@@ -98,8 +98,10 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
     internal Func<string, string, ProviderExecBackend>? ResolveProviderBackend { get; set; }
 
     private ProviderExecBackend ProviderBackend(ExecRecord record) =>
-        (ResolveProviderBackend ?? throw new InvalidOperationException("Execution provider is unavailable."))
-            (record.ProviderId!, record.NodeId!);
+        (
+            ResolveProviderBackend
+            ?? throw new InvalidOperationException("Execution provider is unavailable.")
+        )(record.ProviderId!, record.NodeId!);
 
     internal LocalExecManager(
         string dataRoot,
@@ -237,8 +239,21 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 : "";
         var waitSeconds = Math.Min(seconds, 60);
         if (backend is not null)
-            return await ExecuteProviderAsync(sessionId, command, args, waitSeconds, warning, backend,
-                providerCwd, ct, beforeLaunch, hardCancellation, observeCwd, programmatic, cancellationSource);
+            return await ExecuteProviderAsync(
+                sessionId,
+                command,
+                args,
+                waitSeconds,
+                warning,
+                backend,
+                providerCwd,
+                ct,
+                beforeLaunch,
+                hardCancellation,
+                observeCwd,
+                programmatic,
+                cancellationSource
+            );
         paths ??= MainNativePaths.Default(workspaceForSession(sessionId));
         ct.ThrowIfCancellationRequested();
         Directory.CreateDirectory(Path.Combine(paths.AgentDirectory, "tmp"));
@@ -359,7 +374,11 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         }
     }
 
-    internal async Task<JsonObject> ReadAsync(string sessionId, JsonObject? args, CancellationToken token = default)
+    internal async Task<JsonObject> ReadAsync(
+        string sessionId,
+        JsonObject? args,
+        CancellationToken token = default
+    )
     {
         if (
             args is null
@@ -400,7 +419,9 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         try
         {
             var loaded = await ReadRecordAsync(path);
-            var record = pending.TryGetValue(Key(loaded.SessionId, loaded.Id), out var active) ? active : loaded;
+            var record = pending.TryGetValue(Key(loaded.SessionId, loaded.Id), out var active)
+                ? active
+                : loaded;
             if (record.Id != id || resolveLifetime(record.SessionId) != sessionId)
                 return Error("exec_not_found", "Execution was not found in this Session.");
             return await PageAsync(record, offset, PageBytes, token);
@@ -490,23 +511,29 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             if (reserved)
             {
                 var allocated = new ExecRecord(
-                        sessionId,
-                        id,
-                        command,
-                        cwd,
-                        0,
-                        DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                        path,
-                        false
-                    );
+                    sessionId,
+                    id,
+                    command,
+                    cwd,
+                    0,
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    path,
+                    false
+                );
                 return backend is null
                     ? await LaunchAsync(allocated, agentDirectory, ct)
-                    : await LaunchProviderAsync(allocated, backend, providerCwd, () =>
-                    {
-                        ct.ThrowIfCancellationRequested();
-                        beforeLaunch?.Invoke();
-                        hardCancellation.ThrowIfCancellationRequested();
-                    }, hardCancellation);
+                    : await LaunchProviderAsync(
+                        allocated,
+                        backend,
+                        providerCwd,
+                        () =>
+                        {
+                            ct.ThrowIfCancellationRequested();
+                            beforeLaunch?.Invoke();
+                            hardCancellation.ThrowIfCancellationRequested();
+                        },
+                        hardCancellation
+                    );
             }
         }
         throw new IOException("Persistent exec ID allocation exhausted.");
@@ -678,11 +705,19 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             JsonSerializer.Deserialize<ExecRecord>(
                 await File.ReadAllTextAsync(Path.Combine(path, "meta.json"))
             ) ?? throw new InvalidDataException("Invalid exec metadata.");
-        if (record.ProviderId is not null || record.Reference is not null || record.LogPath is not null)
+        if (
+            record.ProviderId is not null
+            || record.Reference is not null
+            || record.LogPath is not null
+        )
         {
-            if (string.IsNullOrEmpty(record.ProviderId) || string.IsNullOrEmpty(record.NodeId)
+            if (
+                string.IsNullOrEmpty(record.ProviderId)
+                || string.IsNullOrEmpty(record.NodeId)
                 || !record.NodeId.StartsWith(record.ProviderId + "/", StringComparison.Ordinal)
-                || string.IsNullOrEmpty(record.Reference) || string.IsNullOrEmpty(record.LogPath))
+                || string.IsNullOrEmpty(record.Reference)
+                || string.IsNullOrEmpty(record.LogPath)
+            )
                 throw new InvalidDataException("Invalid provider exec metadata.");
             NodeProviderRegistry.ValidateId(record.NodeId);
         }
@@ -699,7 +734,11 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
 
     private static string CompletedDuration(ExecRecord record, JsonObject status)
     {
-        if (SessionWait.Number(status["durationMs"]) is double measured && double.IsFinite(measured) && measured >= 0)
+        if (
+            SessionWait.Number(status["durationMs"]) is double measured
+            && double.IsFinite(measured)
+            && measured >= 0
+        )
             return ExecDuration.Format(measured) ?? "unknown";
         if (
             status["finishedAtIsEstimated"]?.GetValue<bool>() == true
@@ -806,7 +845,12 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         }
     }
 
-    private async Task<JsonObject> PageAsync(ExecRecord record, long offset, int byteCount, CancellationToken token = default)
+    private async Task<JsonObject> PageAsync(
+        ExecRecord record,
+        long offset,
+        int byteCount,
+        CancellationToken token = default
+    )
     {
         if (record.ProviderId is not null)
             return await ProviderPageAsync(record, offset, byteCount, token);
@@ -926,22 +970,30 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
     {
         try
         {
-            var expired = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - record.StartedAt
+            var expired =
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - record.StartedAt
                 > TimeSpan.FromHours(24).TotalMilliseconds;
             // Never hold an owner's completion gate across external observation.
             var status = expired ? null : await ReadStatusAsync(record);
             if (!expired && status is null)
                 return;
-            var completion = completionGates.GetOrAdd(resolveLifetime(record.SessionId), _ => new(1, 1));
+            var completion = completionGates.GetOrAdd(
+                resolveLifetime(record.SessionId),
+                _ => new(1, 1)
+            );
             await completion.WaitAsync(ct);
             try
             {
-                if (closing || !pending.TryGetValue(Key(record.SessionId, record.Id), out var current)
-                    || !ReferenceEquals(current, record))
+                if (
+                    closing
+                    || !pending.TryGetValue(Key(record.SessionId, record.Id), out var current)
+                    || !ReferenceEquals(current, record)
+                )
                     return;
                 if (!expired)
                 {
-                    var message = $"Background Process Finished\nexecId: {record.Id}\nExit code: {ExitCode(status!)}\nDuration: {CompletedDuration(record, status!)}"
+                    var message =
+                        $"Background Process Finished\nexecId: {record.Id}\nExit code: {ExitCode(status!)}\nDuration: {CompletedDuration(record, status!)}"
                         + (SessionWait.Text(status!["error"]) is string error ? "\n" + error : "")
                         + $"\nCommand output available with read_exec({{execId: \"{record.Id}\"}})";
                     await notify(record.SessionId, record.Id, message);
@@ -956,10 +1008,12 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             }
         }
         catch (Exception)
-        { /* Query/admission errors retain tracking for a later observation. */ }
+        { /* Query/admission errors retain tracking for a later observation. */
+        }
     }
 
-    private static string ExitCode(JsonObject status) => status["exitCode"]?.ToJsonString() ?? "unknown";
+    private static string ExitCode(JsonObject status) =>
+        status["exitCode"]?.ToJsonString() ?? "unknown";
 
     public async ValueTask DisposeAsync()
     {
