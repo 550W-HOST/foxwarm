@@ -190,7 +190,7 @@ internal static partial class CodeGitOperations
             if (
                 change["submodule"] is JsonObject sub
                 && await ReadHeadAsync(
-                    WorkspaceChild(top, RelativePath(top, change["path"]!.GetValue<string>())),
+                    WorkspaceChild(top, RelativePath(change["path"]!.GetValue<string>())),
                     token
                 )
                     is string oid
@@ -242,7 +242,7 @@ internal static partial class CodeGitOperations
         string reference;
         try
         {
-            reference = RelativePath(git, symbolic.Groups[1].Value);
+            reference = RelativePath(symbolic.Groups[1].Value);
         }
         catch (Exception error) when (error is CodeServiceException or ArgumentException)
         {
@@ -270,7 +270,7 @@ internal static partial class CodeGitOperations
         return null;
     }
 
-    private static string ContentRef(JsonNode? node)
+    internal static string ContentRef(JsonNode? node)
     {
         var value = node is JsonValue json && json.TryGetValue<string>(out var text) ? text : null;
         if (node is null || value is "" or "HEAD")
@@ -286,7 +286,7 @@ internal static partial class CodeGitOperations
         return value.ToLowerInvariant();
     }
 
-    internal static string RelativePath(string workspace, string? value)
+    internal static string RelativePath(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
             throw new CodeServiceException("InvalidPath", "path is required.");
@@ -316,11 +316,10 @@ internal static partial class CodeGitOperations
                 "InvalidPath",
                 "path must be relative to the repository."
             );
-        _ = WorkspaceChild(workspace, normalized);
         return normalized;
     }
 
-    private static string WorkspaceChild(string workspace, string relative)
+    internal static string WorkspaceChild(string workspace, string relative)
     {
         var full = Path.GetFullPath(relative, workspace);
         var back = Path.GetRelativePath(workspace, full);
@@ -337,8 +336,7 @@ internal static partial class CodeGitOperations
         CancellationToken token
     )
     {
-        var normalized = RelativePath(workspace, relative);
-        var full = WorkspaceChild(workspace, normalized);
+        var normalized = RelativePath(relative);
         if (side == "base")
         {
             var chosen = ContentRef(reference);
@@ -353,9 +351,19 @@ internal static partial class CodeGitOperations
         }
         if (side != "working")
             throw new CodeServiceException("InvalidPath", "side must be `base` or `working`.");
+        var full = WorkspaceChild(workspace, normalized);
         try
         {
-            var stat = CodeFileOperations.StatFile(full);
+            JsonObject stat;
+            try
+            {
+                stat = CodeFileOperations.StatFile(full);
+            }
+            catch (CodeServiceException error) when (error.Code is not ("FileNotFound" or "FileNotADirectory" or "Unavailable"))
+            {
+                // Git uses raw stat errors in Source, not filesystem-service permission codes.
+                throw new CodeServiceException("Unknown", error.Message, inner: error);
+            }
             if ((stat["type"]!.GetValue<int>() & 1) == 0)
                 return [];
             if (stat["size"]!.GetValue<ulong>() > MaxOutput)

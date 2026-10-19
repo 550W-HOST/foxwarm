@@ -55,6 +55,40 @@ function normalized(value, cwd) {
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([key]) => !['requestId', 'ctime', 'mtime'].includes(key)).map(([key, item]) => [key, normalized(item, cwd)]))
   return typeof value === 'string' ? value.replaceAll(cwd, '<root>') : value
 }
+async function gitContentBoundary(handle) {
+  const workspace = join(handle.cwd, 'git-content-boundary'); await mkdir(workspace)
+  const git = (...args) => execFileSync('git', ['-C', workspace, ...args], { encoding: 'utf8' }).trim()
+  git('init', '-q'); git('config', 'user.name', 'Code Fixture'); git('config', 'user.email', 'fixture@example.invalid')
+  await writeFile(join(workspace, '..literal'), 'committed literal\n'); await writeFile(join(workspace, 'ordinary'), 'base\n')
+  git('add', '.'); git('commit', '-qm', 'content boundary'); const oid = git('rev-parse', 'HEAD')
+  await writeFile(join(workspace, 'ordinary'), 'working\n'); await mkdir(join(workspace, 'directory'))
+  const denied = join(workspace, 'denied'); await mkdir(denied); await writeFile(join(denied, 'file'), 'not readable'); await chmod(denied, 0)
+  const rows = []
+  const cases = [
+    { path: '..literal', side: 'base' },
+    { path: './..literal', side: 'base', ref: oid },
+    { path: '..literal', side: 'working' },
+    { path: '..literal', side: 'base', ref: 'invalid' },
+    { path: '..literal', side: 'invalid', ref: 'invalid' },
+    { path: '../escape', side: 'base', ref: 'invalid' },
+    { path: 'denied/file', side: 'working' },
+    { path: 'ordinary/child', side: 'working' },
+    { path: 'missing', side: 'working' },
+    { path: 'directory', side: 'working' },
+    { path: 'ordinary', side: 'working', ref: 'ignored-invalid-ref' },
+    { path: 'ordinary', side: 'base', ref: oid },
+  ]
+  try {
+    for (const args of cases) {
+      const reply = await request(handle, 'vscode-git', 'content', { workspace, ...args })
+      rows.push(reply.error ? { code: reply.error.code, statusCode: reply.error.statusCode } : good(reply))
+    }
+    const fs = await request(handle, 'vscode-fs', 'stat', { path: join(denied, 'file') })
+    rows.push({ code: fs.error.code, statusCode: fs.error.statusCode })
+  } finally { await chmod(denied, 0o755) }
+  assert.equal(git('rev-parse', 'HEAD'), oid)
+  return rows
+}
 async function corpus(handle) {
   const { cwd } = handle, rows = [], workspace = join(cwd, 'repo')
   const fs = (operation, args = {}) => take('vscode-fs', operation, args)
@@ -160,28 +194,48 @@ try {
   const source = await launch('source', true), cli = await launch('cli')
   assert.deepEqual(registrations.get('cli').capabilities.services, { 'vscode-fs': 1, 'vscode-git': 2 })
   assert.equal(registrations.get('source').capabilities.services['vscode-fs'], 1); assert.equal(registrations.get('source').capabilities.services['vscode-git'], 2)
-  const expected = await corpus(source), actual = await corpus(cli)
-  assert.deepEqual(actual, expected);
-  const sameFile = join(cli.cwd, 'exact-stat'); await writeFile(sameFile, 'stat'); await chmod(sameFile, 0o444)
-  const sourceStat = good(await request(source, 'vscode-fs', 'stat', { path: sameFile })), cliStat = good(await request(cli, 'vscode-fs', 'stat', { path: sameFile }))
-  for (const field of ['type', 'size', 'permissions']) assert.equal(cliStat[field], sourceStat[field]); for (const field of ['ctime', 'mtime']) assert(Math.abs(cliStat[field] - sourceStat[field]) < 0.002)
-  await chmod(sameFile, 0o644); assert.equal((await request(cli, 'vscode-pty', 'create', { cwd: cli.cwd })).error.statusCode, 500); console.log(JSON.stringify({ serviceParityRows: actual.length, fiftyMiBAndGitLimits: true, linksFlagsAndPartialRename: true }))
-  // One-way commands preserve the fixed framing and emit only a correlated service error event.
-  cli.socket.send(JSON.stringify({ type: 'node_service_command', service: 'vscode-fs', operation: 'stat', args: { path: 'relative', terminalId: 'echo-only' } }))
-  const event = await until(() => frames.find(row => row.id === 'cli' && row.value.type === 'node_service_event')?.value, 'command error event')
-  assert.equal(event.service, 'vscode-fs'); assert.equal(event.event.operation, 'stat'); assert.equal(event.event.terminalId, 'echo-only'); assert.equal(event.event.error.code, 'InvalidPath')
-  // A blocked service effect completes once; a replacement connection never receives its old reply.
-  if (process.platform === 'linux') {
-    const fifo = join(cli.cwd, 'blocked'); execFileSync('mkfifo', [fifo]); const old = cli.socket, before = generations.get('cli')
-    old.send(JSON.stringify({ type: 'node_service_request', requestId: 'old-code-effect', service: 'vscode-fs', operation: 'write-file', args: { path: fifo, overwrite: true, contentBase64: 'b25jZQ==' } }))
-    await sleep(200); old.terminate(); await until(() => generations.get('cli') > before, 'service replacement connection', 12000)
-    assert.equal(await readFile(fifo, 'utf8'), 'once'); await sleep(200); assert(!frames.some(row => row.value.requestId === 'old-code-effect')); cli.socket = connected.get('cli')
+  const expectedBoundary = await gitContentBoundary(source), actualBoundary = await gitContentBoundary(cli)
+  console.log(JSON.stringify({ gitContentBoundary: { source: expectedBoundary, cli: actualBoundary } }))
+  assert.deepEqual(expectedBoundary, [
+    { contentBase64: Buffer.from('committed literal\n').toString('base64') },
+    { contentBase64: Buffer.from('committed literal\n').toString('base64') },
+    { code: 'InvalidPath', statusCode: 400 },
+    { code: 'InvalidCommit', statusCode: 422 },
+    { code: 'InvalidPath', statusCode: 400 },
+    { code: 'InvalidPath', statusCode: 400 },
+    { code: 'Unknown', statusCode: 500 },
+    { contentBase64: '' }, { contentBase64: '' }, { contentBase64: '' },
+    { contentBase64: Buffer.from('working\n').toString('base64') },
+    { contentBase64: Buffer.from('base\n').toString('base64') },
+    { code: 'NoPermissions', statusCode: 403 },
+  ])
+  assert.deepEqual(actualBoundary, expectedBoundary)
+  if (process.argv.includes('--git-content-only')) {
+    console.log('PASS 13 actual Source/CLI Git content boundary and filesystem permission controls')
+  } else {
+    const expected = await corpus(source), actual = await corpus(cli)
+    assert.deepEqual(actual, expected);
+    const sameFile = join(cli.cwd, 'exact-stat'); await writeFile(sameFile, 'stat'); await chmod(sameFile, 0o444)
+    const sourceStat = good(await request(source, 'vscode-fs', 'stat', { path: sameFile })), cliStat = good(await request(cli, 'vscode-fs', 'stat', { path: sameFile }))
+    for (const field of ['type', 'size', 'permissions']) assert.equal(cliStat[field], sourceStat[field]); for (const field of ['ctime', 'mtime']) assert(Math.abs(cliStat[field] - sourceStat[field]) < 0.002)
+    await chmod(sameFile, 0o644); assert.equal((await request(cli, 'vscode-pty', 'create', { cwd: cli.cwd })).error.statusCode, 500); console.log(JSON.stringify({ serviceParityRows: actual.length, fiftyMiBAndGitLimits: true, linksFlagsAndPartialRename: true }))
+    // One-way commands preserve the fixed framing and emit only a correlated service error event.
+    cli.socket.send(JSON.stringify({ type: 'node_service_command', service: 'vscode-fs', operation: 'stat', args: { path: 'relative', terminalId: 'echo-only' } }))
+    const event = await until(() => frames.find(row => row.id === 'cli' && row.value.type === 'node_service_event')?.value, 'command error event')
+    assert.equal(event.service, 'vscode-fs'); assert.equal(event.event.operation, 'stat'); assert.equal(event.event.terminalId, 'echo-only'); assert.equal(event.event.error.code, 'InvalidPath')
+    // A blocked service effect completes once; a replacement connection never receives its old reply.
+    if (process.platform === 'linux') {
+      const fifo = join(cli.cwd, 'blocked'); execFileSync('mkfifo', [fifo]); const old = cli.socket, before = generations.get('cli')
+      old.send(JSON.stringify({ type: 'node_service_request', requestId: 'old-code-effect', service: 'vscode-fs', operation: 'write-file', args: { path: fifo, overwrite: true, contentBase64: 'b25jZQ==' } }))
+      await sleep(200); old.terminate(); await until(() => generations.get('cli') > before, 'service replacement connection', 12000)
+      assert.equal(await readFile(fifo, 'utf8'), 'once'); await sleep(200); assert(!frames.some(row => row.value.requestId === 'old-code-effect')); cli.socket = connected.get('cli')
+    }
+    // Missing optional Git is the actual executable error, not a shell fallback.
+    const noGit = await launch('no-git', false, { PATH: '/definitely-no-git' })
+    const missing = await request(noGit, 'vscode-git', 'status', { workspace: noGit.cwd }); assert.equal(missing.error.code, 'GitError'); assert.equal(missing.error.statusCode, 422)
+    assert.deepEqual(good(await request(noGit, 'vscode-git', 'content', { workspace: noGit.cwd, path: 'missing', side: 'base' })), { contentBase64: '' })
+    console.log('PASS actual Source/CLI fixed service boundary, limits/effects, command framing, original connection and optional Git')
   }
-  // Missing optional Git is the actual executable error, not a shell fallback.
-  const noGit = await launch('no-git', false, { PATH: '/definitely-no-git' })
-  const missing = await request(noGit, 'vscode-git', 'status', { workspace: noGit.cwd }); assert.equal(missing.error.code, 'GitError'); assert.equal(missing.error.statusCode, 422)
-  assert.deepEqual(good(await request(noGit, 'vscode-git', 'content', { workspace: noGit.cwd, path: 'missing', side: 'base' })), { contentBase64: '' })
-  console.log('PASS actual Source/CLI fixed service boundary, limits/effects, command framing, original connection and optional Git')
 } catch (error) { console.error(clients.map(client => client.id + ': ' + client.output).join('\n')); throw error }
 finally {
   for (const client of clients) await stop(client)

@@ -45,16 +45,22 @@ internal static class CodeGitService
         string? side,
         string? reference,
         CancellationToken token
-    ) =>
-        Local(() =>
+    )
+    {
+        workspace = CodeNativePaths.Native(workspace);
+        var normalized = CodeGitOperations.RelativePath(relative);
+        _ = CodeGitOperations.WorkspaceChild(workspace, normalized);
+        var chosen = CodeGitOperations.ContentRef(JsonValue.Create(reference));
+        return Local(() =>
             CodeGitOperations.ContentAsync(
-                CodeNativePaths.Native(workspace),
-                relative,
+                workspace,
+                normalized,
                 side ?? "base",
-                JsonValue.Create(reference),
+                JsonValue.Create(chosen),
                 token
             )
         );
+    }
 
     private static async Task<T> Local<T>(Func<Task<T>> operation)
     {
