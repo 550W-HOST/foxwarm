@@ -105,6 +105,9 @@ for (const runtime of ['source', 'dotnet']) {
     const blobId = screenshot.inlineDataRef.blobId, blob = await fetch(fixture.origin + '/api/blobs/' + blobId, { headers: { authorization: 'Bearer ' + fixture.token } })
     assert.equal(blob.status, 200)
     const png = Buffer.from(await blob.arrayBuffer()), exported = await readFile(join(fixture.root, 'cli/agents/main/exported.png'))
+    const delivered = good(state, 'delivery').fileDelivery
+    assert.equal(delivered.sourceNodeId, 'browser-cli'); assert.equal(delivered.downloadNodeId, 'master'); assert.equal(delivered.mimeType, 'image/png')
+    assert.deepEqual(await readFile(delivered.downloadPath), png, 'actual Main-owned delivery payload')
     assert.deepEqual(exported, png); const meta = await sharp(png).metadata(); assert.equal(meta.width, 800); assert.equal(meta.height, 600)
     const history = await fixture.api('GET', route(id) + '/history')
     assert(!JSON.stringify(history.body).includes(png.toString('base64')))

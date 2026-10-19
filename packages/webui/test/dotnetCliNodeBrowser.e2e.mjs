@@ -51,12 +51,19 @@ async function launch(mode){
 async function groupProcesses(mode){
   const group=(await readFile('/proc/self/cgroup','utf8')).trim().split(':').at(-1)
   const pids=(await readFile('/sys/fs/cgroup'+group+'/cgroup.procs','utf8')).trim().split(/\s+/)
-  const result=[]
+  const snapshot=[], owned=new Set()
   for(const pid of pids)try{
     const env=await readFile(`/proc/${pid}/environ`,'utf8')
-    if(env.split('\0').includes('XDG_CONFIG_HOME='+join(root,mode,'config')))result.push({pid:Number(pid),command:(await readFile(`/proc/${pid}/cmdline`,'utf8')).replaceAll('\0',' ').trim()})
+    const command=(await readFile(`/proc/${pid}/cmdline`,'utf8')).replaceAll('\0',' ').trim()
+    const parent=Number(/^PPid:\s+(\d+)/m.exec(await readFile(`/proc/${pid}/status`,'utf8'))?.[1])
+    snapshot.push({pid:Number(pid),parent,command})
+    if(env.split('\0').includes('XDG_CONFIG_HOME='+join(root,mode,'config')))owned.add(Number(pid))
   }catch{}
-  return result
+  // Chromium subprocesses can sanitize their environment; follow actual parentage
+  // from the owned launcher as well as detached processes with our explicit HOME.
+  let added=true
+  while(added){added=false;for(const process of snapshot)if(owned.has(process.parent)&&!owned.has(process.pid)){owned.add(process.pid);added=true}}
+  return snapshot.filter(process=>owned.has(process.pid))
 }
 async function corpus(mode){
   const rows=[], item=await launch(mode);evidence[mode].rows=rows
@@ -102,9 +109,9 @@ async function corpus(mode){
   const maps=await readFile(`/proc/${item.child.pid}/maps`,'utf8')
   if(mode==='candidate' && process.env.FOXWARM_CLI_EXECUTABLE)assert(!/libcoreclr|libhostfxr/.test(maps),'actual native process has no CLR mapping')
   const processes=await groupProcesses(mode)
-  assert(evidence[mode].activeGroupProcesses.some(p=>/chromium.*--type=renderer/.test(p.command)),'real browser renderer process while a tab is open')
   await writeFile(join(root,mode+'-maps.txt'),maps)
   await writeFile(join(root,mode+'-processes.json'),JSON.stringify({active:evidence[mode].activeGroupProcesses,afterLastTab:processes},null,2))
+  assert(evidence[mode].activeGroupProcesses.some(p=>/chromium.*--type=renderer/.test(p.command)),'real browser renderer process while a tab is open')
   const exited=once(item.child,'exit');item.child.kill('SIGTERM');await exited
   if(mode==='candidate')await until(async()=>!(await groupProcesses(mode)).some(p=>/chromium/.test(p.command)),'process-owned browser disposal')
   console.log(JSON.stringify({mode,operations:rows.length,allElevenActions:true,ariaSingleAndQueryAll:true,pngAndMetadata:true,reconnect:true,native:!!process.env.FOXWARM_CLI_EXECUTABLE && mode==='candidate',noClr:!/libcoreclr|libhostfxr/.test(maps),browser:execFileSync(process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium',['--version'],{encoding:'utf8'}).trim(),processes:processes.map(p=>({pid:p.pid,kind:p.command.match(/--type=([^ ]+)/)?.[1] || (p.command.includes('chromium')?'browser':'cli')}))}))
