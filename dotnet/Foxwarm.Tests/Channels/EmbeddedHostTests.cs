@@ -153,7 +153,10 @@ public sealed class EmbeddedHostTests
             Assert.Empty(handler.CookieContainer.GetCookies(endpoint));
             // Desktop now supplies its own native cookie after this validation, rather
             // than transferring a cookie issued by the ordinary HTTP endpoint.
-            handler.CookieContainer.Add(endpoint, new Cookie("foxwarm_token", Uri.EscapeDataString(token), endpoint.AbsolutePath));
+            handler.CookieContainer.Add(
+                endpoint,
+                new Cookie("foxwarm_token", Uri.EscapeDataString(token), endpoint.AbsolutePath)
+            );
 
             Assert.Equal(
                 "admin",

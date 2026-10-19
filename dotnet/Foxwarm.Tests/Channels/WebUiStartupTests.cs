@@ -385,7 +385,10 @@ public sealed class WebUiStartupTests
         );
         foreach (var prefix in new[] { "", "/public/main" })
         {
-            var login = await h.Client.PostAsJsonAsync(prefix + "/api/auth", new { token = h.Token });
+            var login = await h.Client.PostAsJsonAsync(
+                prefix + "/api/auth",
+                new { token = h.Token }
+            );
             Assert.True(login.IsSuccessStatusCode);
             Assert.False(login.Headers.Contains("Set-Cookie"));
         }
@@ -521,7 +524,14 @@ public sealed class WebUiStartupTests
             (await h.Client.GetAsync("/api/sessions")).StatusCode
         );
         h.Client.DefaultRequestHeaders.Add("Cookie", "foxwarm_token=old-http-only-cookie");
-        foreach (var referrer in new[] { "https://proxy.example/nested/login.html", "http://127.0.0.1/", "https://foreign.invalid/login.html" })
+        foreach (
+            var referrer in new[]
+            {
+                "https://proxy.example/nested/login.html",
+                "http://127.0.0.1/",
+                "https://foreign.invalid/login.html",
+            }
+        )
         {
             h.Client.DefaultRequestHeaders.Referrer = new Uri(referrer);
             var login = await h.Client.PostAsJsonAsync("/api/auth", new { token = h.Token });
@@ -534,7 +544,10 @@ public sealed class WebUiStartupTests
         h.Client.DefaultRequestHeaders.Remove("Origin");
         h.Client.DefaultRequestHeaders.Add("Origin", "https://foreign.invalid");
         h.Client.DefaultRequestHeaders.Remove("Cookie");
-        h.Client.DefaultRequestHeaders.Add("Cookie", "foxwarm_token=" + Uri.EscapeDataString(h.Token));
+        h.Client.DefaultRequestHeaders.Add(
+            "Cookie",
+            "foxwarm_token=" + Uri.EscapeDataString(h.Token)
+        );
         Assert.True((await h.Client.GetAsync("/api/sessions")).IsSuccessStatusCode);
         h.Client.DefaultRequestHeaders.Authorization = new("Bearer", h.Token);
         await h.Stop();
