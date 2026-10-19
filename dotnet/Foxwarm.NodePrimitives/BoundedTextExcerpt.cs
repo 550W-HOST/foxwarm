@@ -106,7 +106,12 @@ internal static class BoundedTextExcerpt
     {
         var first = Analyze(head, false, true);
         var last = Analyze(tail, true, false);
-        return new(first.Suspicious + last.Suspicious > (head.Length + tail.Length) * 0.1, first.Text, last.Text, first.Escaped + last.Escaped);
+        return new(
+            first.Suspicious + last.Suspicious > (head.Length + tail.Length) * 0.1,
+            first.Text,
+            last.Text,
+            first.Escaped + last.Escaped
+        );
     }
 
     internal static string BinaryPreview(byte[] head, byte[] tail, long bytes, string subject) =>

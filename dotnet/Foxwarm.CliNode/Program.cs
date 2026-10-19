@@ -6,7 +6,8 @@ internal static class Program
 {
     internal static async Task<int> Main(string[] args)
     {
-        if (ExecNative.Helper(args) is int helperExit) return helperExit;
+        if (ExecNative.Helper(args) is int helperExit)
+            return helperExit;
         using var stop = new CancellationTokenSource();
         Console.CancelKeyPress += (_, signal) =>
         {

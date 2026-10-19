@@ -6,7 +6,13 @@ namespace Foxwarm.Tools;
 internal static class NativeProcessFacts
 {
     [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "access", SetLastError = true)]
-    internal static extern int Access([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPUTF8Str)] string path, int mode);
+    internal static extern int Access(
+        [System.Runtime.InteropServices.MarshalAs(
+            System.Runtime.InteropServices.UnmanagedType.LPUTF8Str
+        )]
+            string path,
+        int mode
+    );
 
     internal static (string? Ticks, char State) ReadIdentity(int pid)
     {
@@ -52,5 +58,4 @@ internal static class NativeProcessFacts
             return (null, '?');
         }
     }
-
 }
