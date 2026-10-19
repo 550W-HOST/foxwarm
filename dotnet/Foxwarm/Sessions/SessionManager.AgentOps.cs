@@ -21,6 +21,8 @@ internal sealed class CommittedSessionCreationException(
 
 internal sealed partial class SessionManager
 {
+    internal JsonObject AgentMetadata => agents.MetadataSnapshot();
+
     public string[] Agents() => agents.List();
 
     public string AgentDirectory(string name) => agents.AgentDirectory(name);
@@ -30,7 +32,8 @@ internal sealed partial class SessionManager
         bool createMainSession = true,
         string? initialMemory = null,
         string? inherit = null,
-        string? isolatedNode = null
+        string? isolatedNode = null,
+        string? initialSoul = null
     )
     {
         await EnsureIdentityStartupAsync();
@@ -48,7 +51,7 @@ internal sealed partial class SessionManager
         {
             try
             {
-                await agents.CreateAsync(agentName, initialMemory, inherit);
+                await agents.CreateAsync(agentName, initialMemory, inherit, initialSoul);
             }
             catch (AuthorityCommittedException error)
             {
@@ -94,7 +97,9 @@ internal sealed partial class SessionManager
         string sessionName,
         string? displayName,
         JsonObject? forceModel,
-        string? initialNode = null
+        string? initialNode = null,
+        (string? Model, string? Effort)? inherited = null,
+        IReadOnlyList<string>? selectedFiles = null
     )
     {
         using var operation = TrackCreation();
@@ -107,8 +112,9 @@ internal sealed partial class SessionManager
                 sessionName,
                 null,
                 displayName,
-                null,
+                inherited,
                 forceModel,
+                selectedFiles: selectedFiles,
                 initialNode: initialNode
             );
         }

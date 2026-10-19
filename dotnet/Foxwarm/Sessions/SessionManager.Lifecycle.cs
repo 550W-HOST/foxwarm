@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 
 namespace Foxwarm.Sessions;
 
-internal sealed record ClearHistoryResult(bool Cleared, bool RequiresRetry, bool AbortedInFlight);
+internal sealed record ClearHistoryResult(bool Cleared, bool RequiresRetry, bool AbortedInFlight, int DroppedQueueItems = 0);
 
 internal sealed partial class SessionManager
 {
@@ -20,7 +20,7 @@ internal sealed partial class SessionManager
             {
                 await owner.Entry.SaveLane.DropCapturedQueueAsync(captured);
                 var stop = await owner.Registry.Control.StopAsync(owner.Id);
-                return new(false, true, stop.AbortedInFlight);
+                return new(false, true, stop.AbortedInFlight, captured.Length);
             }
             await owner.Compactor.StopAsync();
             await owner.Entry.SaveLane.ClearHistoryAsync(

@@ -176,44 +176,7 @@ internal sealed partial class WebUIChannel(
                 Results.Ok(
                     new
                     {
-                        commands = new[]
-                        {
-                            new
-                            {
-                                name = "stop",
-                                description = "Stop current run, or use `/stop compact` to cancel compaction only",
-                                usage = "/stop [compact]",
-                                requiresSession = true,
-                            },
-                            new
-                            {
-                                name = "continue",
-                                description = "Continue an interrupted turn without adding a new message",
-                                usage = "/continue",
-                                requiresSession = true,
-                            },
-                            new
-                            {
-                                name = "fork",
-                                description = "Fork current session",
-                                usage = "/fork [suffix] [message]",
-                                requiresSession = true,
-                            },
-                            new
-                            {
-                                name = "session",
-                                description = "Clear the current session history",
-                                usage = "/session clear",
-                                requiresSession = true,
-                            },
-                            new
-                            {
-                                name = "compact",
-                                description = "Compact history.",
-                                usage = "/compact",
-                                requiresSession = true,
-                            },
-                        },
+                        commands = Foxwarm.Channels.ExternalCommands.WebUiCommands(),
                     }
                 )
         );

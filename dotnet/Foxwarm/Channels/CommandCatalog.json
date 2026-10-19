@@ -1,0 +1,947 @@
+[
+  {
+    "name": "/whoami",
+    "description": "Show your user ID and current channel target",
+    "usage": null,
+    "requiresSession": false,
+    "showInTelegram": true,
+    "autocomplete": null
+  },
+  {
+    "name": "/help",
+    "description": "Show help",
+    "usage": null,
+    "requiresSession": false,
+    "showInTelegram": true,
+    "autocomplete": null
+  },
+  {
+    "name": "/compact",
+    "description": "Compact the current session's history. Optional argument: [keep%].",
+    "usage": null,
+    "requiresSession": true,
+    "showInTelegram": true,
+    "autocomplete": {
+      "children": [
+        {
+          "value": "[keep%]",
+          "kind": "placeholder",
+          "description": "Optional keep percentage, e.g. 20 or 50"
+        }
+      ]
+    }
+  },
+  {
+    "name": "/timer",
+    "description": "Manage session timers: help, list, create, delete",
+    "usage": null,
+    "requiresSession": true,
+    "showInTelegram": true,
+    "autocomplete": {
+      "children": [
+        {
+          "value": "list",
+          "kind": "literal",
+          "description": "List timers for the current session"
+        },
+        {
+          "value": "delete",
+          "kind": "literal",
+          "description": "Delete a timer by id",
+          "usage": "/timer delete <id>",
+          "children": [
+            {
+              "value": "<id>",
+              "kind": "placeholder",
+              "description": "Timer identifier"
+            }
+          ]
+        },
+        {
+          "value": "after",
+          "kind": "literal",
+          "description": "Create a one-time timer after N seconds",
+          "usage": "/timer after <seconds> [--new-session] [--prefix <prefix>] [--agent <agent>] [--] <message>",
+          "children": [
+            {
+              "value": "<seconds>",
+              "kind": "placeholder",
+              "description": "Delay in seconds"
+            }
+          ]
+        },
+        {
+          "value": "at",
+          "kind": "literal",
+          "description": "Create a one-time timer at an absolute time",
+          "usage": "/timer at <ISO-time> [--new-session] [--prefix <prefix>] [--agent <agent>] [--] <message>",
+          "children": [
+            {
+              "value": "<ISO-time>",
+              "kind": "placeholder",
+              "description": "Absolute time like 2026-03-13T12:00:00Z"
+            }
+          ]
+        },
+        {
+          "value": "cron",
+          "kind": "literal",
+          "description": "Create a recurring cron timer",
+          "usage": "/timer cron <expr> [--new-session] [--prefix <prefix>] [--agent <agent>] -- <message>",
+          "children": [
+            {
+              "value": "<expr>",
+              "kind": "placeholder",
+              "description": "Cron expression (5 or 6 fields)"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "/status",
+    "description": "Show current session status",
+    "usage": null,
+    "requiresSession": true,
+    "showInTelegram": true,
+    "autocomplete": null
+  },
+  {
+    "name": "/session",
+    "description": "Manage sessions: list, fork, move, parent/unparent, archive",
+    "usage": null,
+    "requiresSession": false,
+    "showInTelegram": true,
+    "autocomplete": {
+      "children": [
+        {
+          "value": "list",
+          "kind": "literal",
+          "description": "List all sessions",
+          "usage": "/session list [page]",
+          "children": [
+            {
+              "value": "[page]",
+              "kind": "placeholder",
+              "description": "Optional page number"
+            }
+          ]
+        },
+        {
+          "value": "new",
+          "kind": "literal",
+          "description": "Create a new ad-hoc session"
+        },
+        {
+          "value": "create",
+          "kind": "literal",
+          "description": "Create a session under an existing agent",
+          "usage": "/session create <agent> <session> [--model <model>] [--effort <level>] [--system-prompt-file <path>]...",
+          "children": [
+            {
+              "value": "<agent>",
+              "kind": "placeholder",
+              "description": "Existing agent name",
+              "children": [
+                {
+                  "value": "<session>",
+                  "kind": "placeholder",
+                  "description": "New session name",
+                  "children": [
+                    {
+                      "value": "--model",
+                      "kind": "literal",
+                      "description": "Explicit model for the new session",
+                      "children": [
+                        {
+                          "value": "<model>",
+                          "kind": "placeholder",
+                          "description": "Model key or partial model name"
+                        }
+                      ]
+                    },
+                    {
+                      "value": "--effort",
+                      "kind": "literal",
+                      "description": "Explicit effort for the new session",
+                      "children": [
+                        {
+                          "value": "<level>",
+                          "kind": "placeholder",
+                          "description": "none, low, medium, high, xhigh, or max"
+                        }
+                      ]
+                    },
+                    {
+                      "value": "--system-prompt-file",
+                      "kind": "literal",
+                      "description": "Add one file to the new session memory-source list",
+                      "children": [
+                        {
+                          "value": "<path>",
+                          "kind": "placeholder",
+                          "description": "Agent-relative, absolute, or ~/ file path"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "value": "child-model",
+          "kind": "literal",
+          "description": "Get/set child model and effort defaults",
+          "usage": "/session child-model [model|default] [--effort <level|default|unset>]",
+          "children": [
+            {
+              "value": "default",
+              "kind": "literal",
+              "description": "Follow the current session model again"
+            },
+            {
+              "value": "clear",
+              "kind": "literal",
+              "description": "Alias of default"
+            },
+            {
+              "value": "unset",
+              "kind": "literal",
+              "description": "Alias of default"
+            },
+            {
+              "value": "[model]",
+              "kind": "placeholder",
+              "description": "Model key or partial model name"
+            },
+            {
+              "value": "--effort",
+              "kind": "literal",
+              "description": "Set or clear child effort default",
+              "children": [
+                {
+                  "value": "<level|default|unset>",
+                  "kind": "placeholder",
+                  "description": "Canonical effort or default"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "value": "fork",
+          "kind": "literal",
+          "description": "Fork the current session"
+        },
+        {
+          "value": "delete",
+          "kind": "literal",
+          "description": "Delete a session",
+          "usage": "/session delete <sessionId>",
+          "children": [
+            {
+              "value": "<sessionId>",
+              "kind": "placeholder",
+              "description": "Target session id"
+            }
+          ]
+        },
+        {
+          "value": "clear",
+          "kind": "literal",
+          "description": "Clear the current session history"
+        },
+        {
+          "value": "rename",
+          "kind": "literal",
+          "description": "Set a session display name",
+          "usage": "/session rename <name>",
+          "children": [
+            {
+              "value": "<name>",
+              "kind": "placeholder",
+              "description": "New display name"
+            }
+          ]
+        },
+        {
+          "value": "refresh-snapshot",
+          "kind": "literal",
+          "description": "Refresh session prompt snapshot now",
+          "usage": "/session refresh-snapshot [session-id]",
+          "children": [
+            {
+              "value": "[session-id]",
+              "kind": "placeholder",
+              "description": "Defaults to the current session"
+            }
+          ]
+        },
+        {
+          "value": "compact-threshold",
+          "kind": "literal",
+          "description": "Get/set the auto-compact threshold override for the current session",
+          "usage": "/session compact-threshold [tokens|Nk|clear|unset]",
+          "children": [
+            {
+              "value": "[tokens|Nk]",
+              "kind": "placeholder",
+              "description": "Examples: 8000, 8k"
+            },
+            {
+              "value": "clear",
+              "kind": "literal",
+              "description": "Clear the session override and inherit the default threshold"
+            },
+            {
+              "value": "unset",
+              "kind": "literal",
+              "description": "Alias of clear"
+            }
+          ]
+        },
+        {
+          "value": "index",
+          "kind": "literal",
+          "description": "Force archive indexing for the current session"
+        },
+        {
+          "value": "move",
+          "kind": "literal",
+          "description": "Rename the current session or move it to an existing agent",
+          "usage": "/session move <new-session-id>|<existing-agent>/<new-session-id> [--parent <parent-session-id>]",
+          "children": [
+            {
+              "value": "<new-session-id|agent/session>",
+              "kind": "placeholder",
+              "description": "Rename target or existing-agent/new-session-id",
+              "children": [
+                {
+                  "value": "--parent",
+                  "kind": "literal",
+                  "description": "Assign an existing parent after moving",
+                  "children": [
+                    {
+                      "value": "<parent-session-id>",
+                      "kind": "placeholder",
+                      "description": "Existing parent session ID"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "value": "parent",
+          "kind": "literal",
+          "description": "Set a parent session",
+          "usage": "/session parent <parent-session-id> [child-session-id]",
+          "children": [
+            {
+              "value": "<parent-session-id>",
+              "kind": "placeholder",
+              "description": "Parent session id",
+              "children": [
+                {
+                  "value": "[child-session-id]",
+                  "kind": "placeholder",
+                  "description": "Defaults to the current session"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "value": "unparent",
+          "kind": "literal",
+          "description": "Remove a parent session",
+          "usage": "/session unparent [child-session-id]",
+          "children": [
+            {
+              "value": "[child-session-id]",
+              "kind": "placeholder",
+              "description": "Defaults to the current session"
+            }
+          ]
+        },
+        {
+          "value": "archive",
+          "kind": "literal",
+          "description": "Archive a session",
+          "usage": "/session archive [session-id]",
+          "children": [
+            {
+              "value": "[session-id]",
+              "kind": "placeholder",
+              "description": "Defaults to the current session"
+            }
+          ]
+        },
+        {
+          "value": "unarchive",
+          "kind": "literal",
+          "description": "Unarchive a session",
+          "usage": "/session unarchive [session-id]",
+          "children": [
+            {
+              "value": "[session-id]",
+              "kind": "placeholder",
+              "description": "Defaults to the current session"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "/fork",
+    "description": "Fork current session. `args: [suffix] [message]`",
+    "usage": null,
+    "requiresSession": true,
+    "showInTelegram": true,
+    "autocomplete": null
+  },
+  {
+    "name": "/attach",
+    "description": "Attach to session. `args: <sessionId>`",
+    "usage": null,
+    "requiresSession": false,
+    "showInTelegram": true,
+    "autocomplete": {
+      "children": [
+        {
+          "value": "<sessionId>",
+          "kind": "placeholder",
+          "description": "Existing session id"
+        }
+      ]
+    }
+  },
+  {
+    "name": "/agent",
+    "description": "Manage agents",
+    "usage": null,
+    "requiresSession": false,
+    "showInTelegram": true,
+    "autocomplete": {
+      "children": [
+        {
+          "value": "list",
+          "kind": "literal",
+          "description": "List all agents"
+        },
+        {
+          "value": "create",
+          "kind": "literal",
+          "description": "Create a new agent",
+          "usage": "/agent create <name> [--no-main] [--isolated <node-id>]",
+          "children": [
+            {
+              "value": "<name>",
+              "kind": "placeholder",
+              "description": "New agent name",
+              "children": [
+                {
+                  "value": "--no-main",
+                  "kind": "literal",
+                  "description": "Create the agent without a main session"
+                },
+                {
+                  "value": "--isolated",
+                  "kind": "literal",
+                  "description": "Create the agent in isolated mode bound to a node",
+                  "children": [
+                    {
+                      "value": "<node-id>",
+                      "kind": "placeholder",
+                      "description": "Bound non-master node id"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "value": "isolated",
+          "kind": "literal",
+          "description": "Set or clear agent-level isolation",
+          "usage": "/agent isolated <agent> <node-id|off>",
+          "children": [
+            {
+              "value": "<agent>",
+              "kind": "placeholder",
+              "description": "Agent name",
+              "children": [
+                {
+                  "value": "<node-id|off>",
+                  "kind": "placeholder",
+                  "description": "Bind to node id or disable isolation with off"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "value": "inherit",
+          "kind": "literal",
+          "description": "Set or clear shared-memory inheritance",
+          "usage": "/agent inherit <agent> <parent-agent|none>",
+          "children": [
+            {
+              "value": "<agent>",
+              "kind": "placeholder",
+              "description": "Agent to update",
+              "children": [
+                {
+                  "value": "<parent-agent|none>",
+                  "kind": "placeholder",
+                  "description": "Parent agent name or none"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "/skill",
+    "description": "Manage skills: list visible skills or show full skill documents",
+    "usage": null,
+    "requiresSession": false,
+    "showInTelegram": true,
+    "autocomplete": {
+      "children": [
+        {
+          "value": "list",
+          "kind": "literal",
+          "description": "List available skills"
+        },
+        {
+          "value": "show",
+          "kind": "literal",
+          "description": "Show skill documents",
+          "usage": "/skill show <skill>",
+          "children": [
+            {
+              "value": "<skill>",
+              "kind": "placeholder",
+              "description": "Skill name"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "/stop",
+    "description": "Stop current run, or use `/stop compact` to cancel compaction only",
+    "usage": "[compact]",
+    "requiresSession": true,
+    "showInTelegram": true,
+    "autocomplete": {
+      "children": [
+        {
+          "value": "compact",
+          "kind": "literal",
+          "description": "Cancel active or pending compaction without stopping the current run",
+          "usage": "/stop compact"
+        }
+      ]
+    }
+  },
+  {
+    "name": "/dequeue",
+    "description": "Run queued items, stopping the current run first if needed",
+    "usage": null,
+    "requiresSession": true,
+    "showInTelegram": true,
+    "autocomplete": null
+  },
+  {
+    "name": "/continue",
+    "description": "Continue an interrupted turn without adding a new message",
+    "usage": null,
+    "requiresSession": true,
+    "showInTelegram": true,
+    "autocomplete": null
+  },
+  {
+    "name": "/node",
+    "description": "Manage nodes: list, create, approve/reject pairings, remove/move approved nodes, pair-help, or switch with `/node <node-id>`.",
+    "usage": null,
+    "requiresSession": true,
+    "showInTelegram": true,
+    "autocomplete": {
+      "children": [
+        {
+          "value": "list",
+          "kind": "literal",
+          "description": "List approved nodes, pending approvals, and current node status"
+        },
+        {
+          "value": "create",
+          "kind": "literal",
+          "description": "Create a Node credential before starting the Node",
+          "usage": "/node create <node-id>",
+          "children": [
+            {
+              "value": "<node-id>",
+              "kind": "placeholder",
+              "description": "New Node ID"
+            }
+          ]
+        },
+        {
+          "value": "approve",
+          "kind": "literal",
+          "description": "Approve a pending node pairing request",
+          "usage": "/node approve <pending-id> [node-id]",
+          "children": [
+            {
+              "value": "<pending-id>",
+              "kind": "placeholder",
+              "description": "Pending pairing id",
+              "children": [
+                {
+                  "value": "[node-id]",
+                  "kind": "placeholder",
+                  "description": "Optional final node id"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "value": "reject",
+          "kind": "literal",
+          "description": "Reject a pending node pairing request",
+          "usage": "/node reject <pending-id>",
+          "children": [
+            {
+              "value": "<pending-id>",
+              "kind": "placeholder",
+              "description": "Pending pairing id"
+            }
+          ]
+        },
+        {
+          "value": "remove",
+          "kind": "literal",
+          "description": "Remove an approved node and invalidate its credentials",
+          "usage": "/node remove <node-id>",
+          "children": [
+            {
+              "value": "<node-id>",
+              "kind": "placeholder",
+              "description": "Approved node id to remove"
+            }
+          ]
+        },
+        {
+          "value": "move",
+          "kind": "literal",
+          "description": "Rename an approved node id while preserving its auth hash and metadata",
+          "usage": "/node move <old-id> <new-id>",
+          "children": [
+            {
+              "value": "<old-id>",
+              "kind": "placeholder",
+              "description": "Existing approved node id",
+              "children": [
+                {
+                  "value": "<new-id>",
+                  "kind": "placeholder",
+                  "description": "New sanitized node id"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "value": "pair-help",
+          "kind": "literal",
+          "description": "Show node pairing/bootstrap help"
+        },
+        {
+          "value": "<node-id>",
+          "kind": "placeholder",
+          "description": "Existing node id; omit it to list nodes"
+        }
+      ]
+    }
+  },
+  {
+    "name": "/search",
+    "description": "Search archived messages within your allowed memory scope",
+    "usage": null,
+    "requiresSession": true,
+    "showInTelegram": true,
+    "autocomplete": {
+      "children": [
+        {
+          "value": "--session",
+          "kind": "literal",
+          "description": "Restrict search to one session in your allowed scope",
+          "children": [
+            {
+              "value": "<session-id>",
+              "kind": "placeholder",
+              "description": "Session id within your allowed scope"
+            }
+          ]
+        },
+        {
+          "value": "--agent",
+          "kind": "literal",
+          "description": "Restrict search to your current agent",
+          "children": [
+            {
+              "value": "<agent-name>",
+              "kind": "placeholder",
+              "description": "Current agent only"
+            }
+          ]
+        },
+        {
+          "value": "--limit",
+          "kind": "literal",
+          "description": "Maximum number of matches",
+          "children": [
+            {
+              "value": "<n>",
+              "kind": "placeholder",
+              "description": "Result limit, default 5"
+            }
+          ]
+        },
+        {
+          "value": "<query>",
+          "kind": "placeholder",
+          "description": "Search query text"
+        }
+      ]
+    }
+  },
+  {
+    "name": "/messages",
+    "description": "Show message previews. `args: <num> | <start> <end>`",
+    "usage": null,
+    "requiresSession": true,
+    "showInTelegram": false,
+    "autocomplete": {
+      "children": [
+        {
+          "value": "<num>",
+          "kind": "placeholder",
+          "description": "Positive = oldest messages, negative = newest",
+          "children": [
+            {
+              "value": "[end]",
+              "kind": "placeholder",
+              "description": "Optional end index for a range"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "/model",
+    "description": "Inspect or switch model and effort. `args: [name|default] [--effort <level|default|unset>]`",
+    "usage": null,
+    "requiresSession": true,
+    "showInTelegram": true,
+    "autocomplete": {
+      "children": [
+        {
+          "value": "default",
+          "kind": "literal",
+          "description": "Reset to the default model",
+          "children": [
+            {
+              "value": "--effort",
+              "kind": "literal",
+              "description": "Set or clear effort",
+              "children": [
+                {
+                  "value": "<level|default|unset>",
+                  "kind": "placeholder",
+                  "description": "Canonical effort or default"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "value": "--effort",
+          "kind": "literal",
+          "description": "Set or clear effort without changing model",
+          "children": [
+            {
+              "value": "<level|default|unset>",
+              "kind": "placeholder",
+              "description": "none, low, medium, high, xhigh, max, default, or unset"
+            }
+          ]
+        },
+        {
+          "value": "<name>",
+          "kind": "placeholder",
+          "description": "Model name or partial model name",
+          "children": [
+            {
+              "value": "--effort",
+              "kind": "literal",
+              "description": "Set effort atomically",
+              "children": [
+                {
+                  "value": "<level|default|unset>",
+                  "kind": "placeholder",
+                  "description": "Canonical effort or default"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "/channel",
+    "description": "Manage channel settings and runtime, including Weixin login. `args: info|auth|status|start|stop|restart|mode|weixin ...`",
+    "usage": null,
+    "requiresSession": false,
+    "showInTelegram": true,
+    "autocomplete": {
+      "children": [
+        {
+          "value": "weixin",
+          "kind": "literal",
+          "description": "Manage Weixin login and status",
+          "children": [
+            {
+              "value": "status",
+              "kind": "literal",
+              "description": "Show Weixin channel status"
+            },
+            {
+              "value": "login",
+              "kind": "literal",
+              "description": "Start Weixin QR login"
+            },
+            {
+              "value": "wait",
+              "kind": "literal",
+              "description": "Wait for Weixin QR login",
+              "children": [
+                {
+                  "value": "<sessionKey>",
+                  "kind": "placeholder",
+                  "description": "Login session key"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "value": "info",
+          "kind": "literal",
+          "description": "Show current channel identifiers and attachment state"
+        },
+        {
+          "value": "auth",
+          "kind": "literal",
+          "description": "Show current channel authorization diagnostics"
+        },
+        {
+          "value": "status",
+          "kind": "literal",
+          "description": "Show runtime channel status",
+          "children": [
+            {
+              "value": "[channel-id-or-type]",
+              "kind": "placeholder",
+              "description": "Optional channel id (preferred) or type, e.g. weixin"
+            }
+          ]
+        },
+        {
+          "value": "start",
+          "kind": "literal",
+          "description": "Start a managed channel without restarting foxwarm",
+          "children": [
+            {
+              "value": "<channel-id>",
+              "kind": "placeholder",
+              "description": "Managed channel id, e.g. weixin or mainbot"
+            }
+          ]
+        },
+        {
+          "value": "stop",
+          "kind": "literal",
+          "description": "Stop a managed channel",
+          "children": [
+            {
+              "value": "<channel-id>",
+              "kind": "placeholder",
+              "description": "Managed channel id, e.g. weixin or mainbot"
+            }
+          ]
+        },
+        {
+          "value": "restart",
+          "kind": "literal",
+          "description": "Restart a managed channel",
+          "children": [
+            {
+              "value": "<channel-id>",
+              "kind": "placeholder",
+              "description": "Managed channel id, e.g. weixin or mainbot"
+            }
+          ]
+        },
+        {
+          "value": "mode",
+          "kind": "literal",
+          "description": "Set channel mode",
+          "children": [
+            {
+              "value": "send-only",
+              "kind": "literal",
+              "description": "Only allow direct sending via explicit tools, not normal session reply broadcasts"
+            },
+            {
+              "value": "normal",
+              "kind": "literal",
+              "description": "Normal interactive mode"
+            }
+          ]
+        },
+        {
+          "value": "dangerously-allow-all-users",
+          "kind": "literal",
+          "description": "Allow all users in this attached conversation to send normal messages",
+          "children": [
+            {
+              "value": "yes",
+              "kind": "literal",
+              "description": "Enable allow-all mode"
+            },
+            {
+              "value": "no",
+              "kind": "literal",
+              "description": "Disable allow-all mode"
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

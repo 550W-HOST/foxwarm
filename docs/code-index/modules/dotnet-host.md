@@ -12,6 +12,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Host startup, configuration, and HTTP ingress](../units/host-runtime.md)
 - [Shared access identities and scoped WebUI](../units/dotnet-access-identities.md)
 - [Message routing and presentation commands](../units/message-routing.md)
+- [Public command administration](../units/dotnet-command-administration.md)
 - [Shared external channels and managed adapters](../units/dotnet-external-channels.md)
 - [Matrix, Weixin and QR login](../units/dotnet-matrix-weixin.md)
 - [WeWork callback, WebSocket, streams and media](../units/dotnet-wework.md)

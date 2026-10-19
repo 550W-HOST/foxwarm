@@ -4,33 +4,34 @@ namespace Foxwarm.Channels;
 
 internal static class ExternalCommands
 {
-    // Registration lists only the implemented shared entry points, not the full reference command catalog.
-    internal static readonly IReadOnlyDictionary<string, string> Descriptions = new Dictionary<
-        string,
-        string
-    >
-    {
-        ["whoami"] = "Show your user ID and current channel target",
-        ["help"] = "Show help",
-        ["attach"] = "Attach to session. `args: <sessionId>`",
-        ["channel"] =
-            "View channel status and access, manage channel settings, and sign in to Weixin.",
-        ["session"] = "Create or fork sessions and manage the current session.",
-        ["fork"] = "Fork current session. `args: [suffix] [message]`",
-        ["stop"] = "Stop current run, or use `/stop compact` to cancel compaction only",
-        ["continue"] = "Continue an interrupted turn without adding a new message",
-        ["compact"] = "Compact the current session's history.",
-        ["dequeue"] = "Run queued items, stopping the current run first if needed",
-        ["status"] = "Show current session status",
-    };
+    private static readonly JsonObject[] Entries = Read();
 
-    internal static JsonArray TelegramCommands() =>
-        new(
-            Descriptions
-                .Select(pair =>
-                    (JsonNode)
-                        new JsonObject { ["command"] = pair.Key, ["description"] = pair.Value }
-                )
-                .ToArray()
-        );
+    private static JsonObject[] Read()
+    {
+        using var stream = typeof(ExternalCommands).Assembly.GetManifestResourceStream(
+            "Foxwarm.Channels.CommandCatalog.json"
+        )!;
+        return JsonNode.Parse(stream)!.AsArray().OfType<JsonObject>().ToArray();
+    }
+
+    internal static JsonObject? Find(string name) =>
+        Entries.FirstOrDefault(row => row["name"]!.GetValue<string>() == name);
+
+    internal static string Help() =>
+        "📖 *Commands*\n\n" + string.Join("\n", Entries
+            .Where(row => row["showInTelegram"]!.GetValue<bool>())
+            .Select(row => $"`{row["name"]}` - {row["description"]}"
+                + (row["usage"] is null ? "" : " " + row["usage"])));
+
+    internal static JsonArray WebUiCommands() => new(Entries
+        .OrderBy(row => row["name"]!.GetValue<string>(), StringComparer.Ordinal)
+        .Select(row => row.DeepClone()).ToArray());
+
+    internal static JsonArray TelegramCommands() => new(Entries
+        .Where(row => row["showInTelegram"]!.GetValue<bool>())
+        .Select(row => (JsonNode)new JsonObject
+        {
+            ["command"] = row["name"]!.GetValue<string>().TrimStart('/'),
+            ["description"] = row["description"]!.DeepClone(),
+        }).ToArray());
 }

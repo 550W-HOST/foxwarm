@@ -4,6 +4,8 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionManager
 {
+    internal Skills SkillCatalog => skills;
+
     internal string? AgentInherit(string name) => agents.Inherit(name);
 
     internal string[] AgentChain(string name) => agents.InheritanceChain(name);

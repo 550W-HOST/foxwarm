@@ -8,6 +8,7 @@
   <ItemGroup>
     <EmbeddedResource Include="Code/workbench.html" />
     <EmbeddedResource Include="McpInboundTools.json" />
+    <EmbeddedResource Include="Channels/CommandCatalog.json" />
     <PackageReference Include="ModelContextProtocol.Core" Version="2.2.0" />
     <PackageReference Include="Google.Protobuf" Version="3.35.1" />
     <PackageReference Include="Grpc.Tools" Version="2.84.0" PrivateAssets="all" />

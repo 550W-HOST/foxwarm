@@ -12,33 +12,28 @@ internal sealed partial class MessageRouter
     private async Task<MessageRouteResult> HandleIdentityMoveCommandAsync(
         ChannelContext context,
         string text,
-        SessionOwner owner
+        SessionOwner owner,
+        bool publishReply = true
     )
     {
         var tokens = Regex.Split(SessionCatalog.Trim(text), @"\s+").Skip(2).ToArray();
         var args = new JsonObject { ["sessionId"] = context.SessionId };
-        var remaining = new List<string>();
         string? parent = null;
         try
         {
-            for (var index = 0; index < tokens.Length; index++)
+            if (tokens.Length == 0)
+                throw new InvalidDataException("Missing move target.");
+            for (var index = 1; index < tokens.Length; index++)
             {
                 if (tokens[index] != "--parent")
-                {
-                    remaining.Add(tokens[index]);
-                    continue;
-                }
-                if (parent is not null || ++index == tokens.Length)
-                    throw new InvalidDataException(
-                        "Provide one --parent followed by an existing Session ID."
-                    );
+                    throw new InvalidDataException("Unknown /session move option: " + tokens[index]);
+                if (parent is not null)
+                    throw new InvalidDataException("--parent may be specified only once.");
+                if (++index == tokens.Length)
+                    throw new InvalidDataException("Missing parent session ID after --parent.");
                 parent = tokens[index];
             }
-            if (remaining.Count != 1)
-                throw new InvalidDataException(
-                    "Usage: /session move <new-session-id>|<existing-agent>/<new-session-id> [--parent <parent-session-id>]"
-                );
-            var target = remaining[0].Split('/');
+            var target = tokens[0].Split('/');
             if (target.Length is < 1 or > 2 || target.Any(string.IsNullOrEmpty))
                 throw new InvalidDataException(
                     "Provide a new Session name or an existing Agent and Session name."
@@ -49,11 +44,17 @@ internal sealed partial class MessageRouter
             if (parent is not null)
                 args["parentSessionId"] = parent;
             var result = await runtime.MoveIdentityAsync(owner, args);
-            var reply =
-                $"Session `{context.SessionId}` moved to `{SessionCatalog.Text(result["targetSessionId"])}`.";
+            var reply = $"✅ Session `{context.SessionId}` moved to `{SessionCatalog.Text(result["targetSessionId"])}`.";
+            if (result["aliases"] is JsonArray aliases && aliases.Count > 0)
+                reply += "\nAliases: " + string.Join(", ", aliases.Select(alias => "`" + alias + "`"));
+            if (result["updatedChildren"] is JsonArray children && children.Count > 0)
+                reply += $"\nUpdated {children.Count} child session parent reference(s).";
+            reply += "\nPrevious parent: " + (SessionCatalog.Text(result["previousParentSessionId"]) is { } previous ? "`" + previous + "`" : "(none)") + ".";
+            reply += "\nResulting parent: " + (SessionCatalog.Text(result["parentSessionId"]) is { } resulting ? "`" + resulting + "`" : "(none)") + ".";
             if (SessionCatalog.Text(result["parentUpdateError"]) is { } failure)
-                reply += " The identity moved, but the requested parent update failed: " + failure;
-            runtime.ReplyToCommand(owner.Id, reply);
+                reply += "\n⚠️ Identity move committed, but the requested parent update was not confirmed: " + failure
+                    + "\nRequested parent: " + (SessionCatalog.Text(result["requestedParentSessionId"]) is { } requested ? "`" + requested + "`" : "(none)") + ".";
+            if (publishReply) runtime.ReplyToCommand(owner.Id, reply);
             return new(
                 200,
                 new
@@ -67,7 +68,7 @@ internal sealed partial class MessageRouter
         catch (SessionIdentityMoveException error)
         {
             var reply = "Move failed: " + error.Message;
-            runtime.ReplyToCommand(owner.Id, reply);
+            if (publishReply) runtime.ReplyToCommand(owner.Id, reply);
             return new(
                 500,
                 new
@@ -83,7 +84,7 @@ internal sealed partial class MessageRouter
             when (error is InvalidDataException or InvalidOperationException or IOException)
         {
             var reply = "Move failed: " + error.Message;
-            runtime.ReplyToCommand(owner.Id, reply);
+            if (publishReply) runtime.ReplyToCommand(owner.Id, reply);
             return new(
                 409,
                 new

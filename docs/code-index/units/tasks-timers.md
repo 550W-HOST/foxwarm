@@ -28,3 +28,5 @@ Model `task.list` defaults to creator-or-owner `current-session`; `owned` filter
 ## Tests
 
 `dotnet/Foxwarm.Tests/Sessions/TaskOwnedSourceTests.cs` compares owner-only/current/Agent/all scopes, user-created Tasks, claim/reassignment/release, moved aliases, terminal status and bounded list results against actual Source storage. `dotnet/Foxwarm.Tests/Sessions/TaskStoreTests.cs` covers durable cross-Session descriptions/notes, status-property rejection and terminal rejection; `MainTimerToolsTests` exercises captured versus absent placement through restored timer scheduling; `TaskChildDeliveryTests.cs`; `GoalPersistenceBoundaryTests.cs`; `CompactLifecycleTests.cs`; `dotnet/Foxwarm.Tests/Timers/*`; WebUI task route tests.
+
+[Public timer commands](./dotnet-command-administration.md) call the same timer CRUD/isolation/scheduler owner through its command entry, without converting human commands into generic model-policy calls. Model timer-tool authorization is unchanged.

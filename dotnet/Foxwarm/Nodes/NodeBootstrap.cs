@@ -73,6 +73,12 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
                     Download("run.sh") + " --dir=" + Quote(directory) + arguments + " --install",
                 ["docker"] = Download("run-docker.sh") + arguments,
                 ["interactive"] = Download("run-interactive.sh") + arguments,
+                ["manualCompose"] = "curl -fsSL " + Quote(url + "/node/docker-compose.yaml")
+                    + " -o docker-compose.yaml\numask 077\ncat > .env <<'FOXWARM_NODE_ENV'\n"
+                    + "NODE_HOST='" + url.Replace("'", "\\'") + "'\n"
+                    + "NODE_SOURCE_URL='" + (url + "/node/source.tar.gz").Replace("'", "\\'") + "'\n"
+                    + "NODE_PAIRING_TOKEN='" + hub.Registry.PairingToken + "'\nNODE_ID='" + id
+                    + "'\nNODE_DATA_DIR=./data\nFOXWARM_NODE_ENV\nchmod 600 .env\n\ndocker compose up -d --build",
                 ["windows"] =
                     "Invoke-WebRequest '"
                     + (url + "/node/run.ps1").Replace("'", "''")

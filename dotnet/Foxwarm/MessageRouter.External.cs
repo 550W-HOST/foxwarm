@@ -121,7 +121,8 @@ internal sealed partial class MessageRouter
     internal async Task<bool> HandleExternalCommandAsync(
         ExternalChannelContext source,
         string command,
-        string? rawArgs
+        string? rawArgs,
+        SessionOwner? selectedOwner = null
     )
     {
         if (!runtime.Manager.Accepting)
@@ -143,91 +144,139 @@ internal sealed partial class MessageRouter
             }
             return true;
         }
-        var auth = Authorization(source);
-        if (!auth.Authorized)
+        var auth = runtime.Manager.ChannelAuthorization?.Inspect(source);
+        if (selectedOwner is null && auth is null)
+            throw new InvalidOperationException("External channel ingress is not initialized.");
+        if (auth is { Authorized: false })
         {
             await source.Reply(auth.Describe(source, unauthorized: true));
             return true;
         }
-        // Telegram's direct command hook enters the same Source CommandHandler before Router command detection.
-        if (!ExternalCommands.Descriptions.ContainsKey(command.TrimStart('/')))
+        // Telegram enters here before the generic Router's override-only gate.
+        var definition = ExternalCommands.Find(command);
+        if (definition is null)
             return false;
         var args = string.IsNullOrWhiteSpace(rawArgs) ? [] : Regex.Split(rawArgs.Trim(), @"\s+");
         try
         {
+            SessionOwner? owner = selectedOwner;
+            if (definition["requiresSession"]!.GetValue<bool>() && owner is null)
+            {
+                var id = SessionWait.Text(runtime.Manager.ChannelBinding(source.Target)?["sessionId"]);
+                if (id is null)
+                {
+                    await source.Reply("No active session found.");
+                    return true;
+                }
+                owner = await runtime.GetOwnerAsync(id);
+                if (owner is null)
+                {
+                    await source.Reply("No active session found.");
+                    return true;
+                }
+            }
             switch (command)
             {
                 case "/help":
-                    await source.Reply(
-                        string.Join(
-                            "\n",
-                            ExternalCommands.Descriptions.Select(pair =>
-                                "/" + pair.Key + ": " + pair.Value
-                            )
-                        )
-                    );
-                    return true;
+                    await source.Reply(ExternalCommands.Help());
+                    break;
                 case "/attach":
                     if (args.Length == 0)
                     {
                         await source.Reply("Usage: /attach <sessionId>");
-                        return true;
+                        break;
                     }
                     var target = await runtime.GetOwnerAsync(args[0]);
                     if (target is null)
                     {
                         await source.Reply("❌ Session `" + args[0] + "` not found.");
-                        return true;
+                        break;
                     }
-                    // Source detaches first. A failed durable attach does not promise to recover the former binding.
                     runtime.Manager.DetachChannel(source.Target);
                     runtime.Manager.AttachChannel(source.Target, target);
-                    await source.Reply("✅ Attached to session `" + target.Id + "`");
-                    return true;
+                    await source.Reply("✅ Attached to session `" + target.Id + "`"
+                        + (target.Metadata().DisplayName is { } display ? " (" + display + ")" : ""));
+                    break;
                 case "/channel":
                     await HandleChannelCommandAsync(source, args);
-                    return true;
+                    break;
                 case "/session":
-                    if (await HandleExternalSessionCommandAsync(source, args))
-                        return true;
+                    await HandleSessionAdministrationAsync(source, args, selectedOwner);
+                    break;
+                case "/agent":
+                    await HandleAgentCommandAsync(source, args);
+                    break;
+                case "/skill":
+                    // Generic commands with requiresSession:false receive no attached owner.
+                    await HandleSkillCommandAsync(source, args, selectedOwner?.Agent ?? "main");
+                    break;
+                case "/timer":
+                    await HandleTimerCommandAsync(source, args, owner!);
+                    break;
+                case "/model":
+                    await HandleModelCommandAsync(source, args, owner!, child: false);
+                    break;
+                case "/search":
+                    await HandleSearchCommandAsync(source, args, owner!);
+                    break;
+                case "/messages":
+                    await HandleMessagesCommandAsync(source, args, owner!);
                     break;
                 case "/status":
-                    var bound = SessionWait.Text(
-                        runtime.Manager.ChannelBinding(source.Target)?["sessionId"]
-                    );
-                    var active = bound is null ? null : await runtime.GetOwnerAsync(bound);
-                    await source.Reply(
-                        active is null
-                            ? "No active session found."
-                            : JsonSerializer.Serialize(active.State())
-                    );
-                    return true;
+                    await source.Reply(SessionWait.Text((await runtime.Manager.ObserveAsync(owner!, "session", new()))["output"])!);
+                    break;
+                case "/node":
+                    await ReplyRouteAsync(source, await HandleNodeCommandAsync("/node " + (rawArgs ?? ""), owner!));
+                    break;
+                case "/fork":
+                    await HandleForkCommandAsync(source, rawArgs, owner!);
+                    break;
+                default:
+                    await HandleTextControlAsync(source, command, args, owner!);
+                    break;
             }
-            var sessionId = SessionWait.Text(
-                runtime.Manager.ChannelBinding(source.Target)?["sessionId"]
-            );
-            if (sessionId is null)
-            {
-                await source.Reply("No active session found.");
-                return true;
-            }
-            var text = command + (rawArgs is null ? "" : " " + rawArgs);
-            var result = await HandleMessageAsync(new(sessionId, source.Type), new(text, null));
-            await source.Reply(JsonSerializer.Serialize(result.Value));
         }
         catch (Exception error)
         {
-            var safe =
-                runtime.Manager.Models.ConfigurationOwner?.SafeAppError(error) ?? error.Message;
-            await source.Reply("Command error: " + safe);
+            var prefix = command switch
+            {
+                "/search" => "❌ Search failed: ",
+                "/skill" => "❌ Skill show failed: ",
+                "/timer" => "❌ Timer creation failed: ",
+                "/agent" => args.FirstOrDefault() switch
+                {
+                    "create" => "❌ Failed to create agent: ",
+                    "isolated" => "❌ Failed to update agent isolation: ",
+                    "inherit" => "❌ Failed to update inherit: ",
+                    _ => "Command error: ",
+                },
+                "/session" => args.FirstOrDefault() switch
+                {
+                    "create" => "❌ Session create failed: ",
+                    "refresh-snapshot" => "❌ Snapshot refresh failed: ",
+                    "rename" => "❌ Rename failed: ",
+                    "compact-threshold" => "❌ Compact threshold update failed: ",
+                    _ => "❌ ",
+                },
+                _ => "❌ ",
+            };
+            await source.Reply(error.Message.StartsWith("❌", StringComparison.Ordinal) ? error.Message : prefix + error.Message);
         }
         return true;
+    }
+
+    private static Task ReplyRouteAsync(ExternalChannelContext source, MessageRouteResult result)
+    {
+        var value = JsonSerializer.SerializeToNode(result.Value)!.AsObject();
+        return source.Reply(SessionWait.Text(value["commandResponse"])
+            ?? SessionWait.Text(value["error"]) ?? "Command completed.");
     }
 
     private async Task HandleChannelCommandAsync(ExternalChannelContext source, string[] args)
     {
         var sub = args.FirstOrDefault()?.ToLowerInvariant() ?? "";
         var value = args.ElementAtOrDefault(1);
+        if (sub is "mode" or "dangerously-allow-all-users" or "dangerously-allow-all-group-members") value = value?.ToLowerInvariant();
         var manager = runtime.Manager;
         switch (sub)
         {
@@ -236,25 +285,18 @@ internal sealed partial class MessageRouter
                 return;
             case "info":
                 await source.Reply(
-                    $"channelId: `{source.Instance}`\nchannelType: `{source.Type}`\nconversationId: `{source.Conversation}`\nchannelTargetId: `{source.Target}`"
+                    $"*Channel info*\n- channelId: `{source.Instance}`\n- channelType: `{source.Type}`\n- conversationId: `{source.Conversation}`\n- channelTargetId: `{source.Target}`\n- senderId: `{source.Sender ?? "(none)"}`"
+                    + (source.Username is null ? "" : $"\n- username: `{source.Username}`")
+                    + $"\n- attachedSession: `{SessionWait.Text(manager.ChannelBinding(source.Target)?["sessionId"]) ?? "(none)"}`"
+                    + $"\n- mode: `{SessionWait.Text(manager.ChannelBinding(source.Target)?["mode"]) ?? "normal"}`"
+                    + $"\n- dangerouslyAllowAllUsers: `{(SessionCatalog.Flag(manager.ChannelBinding(source.Target)?["dangerouslyAllowAllUsers"]) ? "yes" : "no")}`"
                 );
                 return;
             case "auth":
                 await source.Reply(Authorization(source).Describe(source));
                 return;
             case "status":
-                var statuses = manager.ManagedChannels?.Statuses() ?? new JsonArray();
-                await source.Reply(
-                    value is null
-                        ? statuses.ToJsonString()
-                        : new JsonArray(
-                            statuses
-                                .OfType<JsonObject>()
-                                .Where(status => SessionWait.Text(status["channelId"]) == value)
-                                .Select(status => status.DeepClone())
-                                .ToArray()
-                        ).ToJsonString()
-                );
+                await source.Reply(FormatChannelStatus(value));
                 return;
             case "start" or "stop" or "restart":
                 if (value is null)
@@ -262,8 +304,12 @@ internal sealed partial class MessageRouter
                     await source.Reply("Usage: /channel " + sub + " <channel-id>");
                     return;
                 }
-                await manager.ManagedChannels!.ChangeAsync(sub, value);
-                await source.Reply("✅ Channel `" + value + "` " + sub + " completed.");
+                var wasRunning = manager.ManagedChannels!.Statuses().OfType<JsonObject>()
+                    .Any(row => SessionWait.Text(row["channelId"]) == value && SessionCatalog.Flag(row["running"]));
+                await manager.ManagedChannels.ChangeAsync(sub, value);
+                var verb = sub == "restart" ? "restarted" : sub == "start" ? wasRunning ? "was already running" : "started"
+                    : wasRunning ? "stopped" : "was already stopped";
+                await source.Reply($"✅ Channel `{value}` {verb}.\n" + FormatChannelStatus(value));
                 return;
             case "mode":
                 if (value is null)
@@ -326,55 +372,19 @@ internal sealed partial class MessageRouter
         );
     }
 
-    private async Task<bool> HandleExternalSessionCommandAsync(
-        ExternalChannelContext source,
-        string[] args
-    )
+
+    private string FormatChannelStatus(string? filter)
     {
-        var sub = args.FirstOrDefault();
-        SessionOwner created;
-        switch (sub)
-        {
-            case "new":
-                created = await runtime.Manager.CreateAsync();
-                break;
-            case "create":
-                if (args.Length < 3)
-                {
-                    await source.Reply("Usage: /session create <agent> <session>");
-                    return true;
-                }
-                if (args.Length > 3)
-                    throw new InvalidDataException(
-                        "Session create flags are not implemented on this server."
-                    );
-                created = await runtime.Manager.CreateNamedAsync(args[1], args[2], null, null);
-                break;
-            case "fork":
-                var id = SessionWait.Text(
-                    runtime.Manager.ChannelBinding(source.Target)?["sessionId"]
-                );
-                if (id is null)
-                {
-                    await source.Reply("❌ No active session to fork.");
-                    return true;
-                }
-                created = await runtime.ForkAsync(id, args.ElementAtOrDefault(1));
-                break;
-            case null or "list":
-                await source.Reply(
-                    string.Join(
-                        "\n",
-                        runtime.ListSessions().Select(row => SessionWait.Text(row["id"]))
-                    )
-                );
-                return true;
-            default:
-                return false;
-        }
-        runtime.Manager.DetachChannel(source.Target);
-        runtime.Manager.AttachChannel(source.Target, created);
-        await source.Reply("✅ Created and attached to session `" + created.Id + "`");
-        return true;
+        var rows = (runtime.Manager.ManagedChannels?.Statuses() ?? new JsonArray()).OfType<JsonObject>().ToArray();
+        if (filter is not null)
+            rows = rows.Any(row => SessionWait.Text(row["channelId"]) == filter)
+                ? rows.Where(row => SessionWait.Text(row["channelId"]) == filter).ToArray()
+                : rows.Where(row => SessionWait.Text(row["type"]) == filter).ToArray();
+        static string Flag(JsonNode? value) => SessionCatalog.Flag(value) ? "yes" : "no";
+        return rows.Length == 0 ? "No known channel runtime status found."
+            : "*Channel runtime status*\n" + string.Join("\n", rows.Select(row =>
+                $"- `{row["channelId"]}` (type=`{row["type"]}`): running=`{Flag(row["running"])}`, managed=`{Flag(row["managed"])}`, configured=`{Flag(row["configured"])}`, enabled=`{Flag(row["enabled"])}`"
+                + (row["details"] is JsonArray details && details.Count > 0 ? "; " + string.Join("; ", details.Select(SessionWait.Text)) : "")
+                + (SessionWait.Text(row["lastError"]) is { } error ? "; lastError=" + error : "")));
     }
 }

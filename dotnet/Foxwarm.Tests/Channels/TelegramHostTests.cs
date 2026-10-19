@@ -179,15 +179,14 @@ public sealed class TelegramHostTests
                 (row?["parts"] as JsonArray ?? []).Any(part => part?["inlineDataRef"] is not null)
         );
         // Self-restart is an actual bot command, not a call made outside the polling handler.
+        var previousReplies = peer.Sent("a").Count();
         peer.Push("a", TelegramPeer.Text("-100", "11", "/channel restart alpha"));
         await TelegramChannelTests.Until(() =>
             peer.Calls.Count(call => call.Bot == "a" && call.Method == "setMyCommands") == 2
         );
         await TelegramChannelTests.Until(() =>
-            peer.Sent("a")
-                .Any(call =>
-                    (SessionWait.Text(call.Body["text"]) ?? "").Contains("restart completed")
-                )
+            peer.Sent("a").Skip(previousReplies)
+                .Any(call => (SessionWait.Text(call.Body["text"]) ?? "").Contains("alpha"))
         );
         var setup = await http.PostAsJsonAsync(
             "api/setup/channels",

@@ -15,7 +15,8 @@ internal sealed partial class MessageRouter
     private async Task<MessageRouteResult> HandleDeleteCommandAsync(
         ChannelContext context,
         string text,
-        SessionOwner source
+        SessionOwner? source,
+        bool publishReply = true
     )
     {
         var words = Regex.Split(SessionCatalog.Trim(text), CommandSpace + "+");
@@ -52,7 +53,7 @@ internal sealed partial class MessageRouter
         catch (SessionDeletionException error)
         {
             reply = "❌ " + error.Message;
-            runtime.ReplyToCommand(context.SessionId, reply);
+            if (publishReply) runtime.ReplyToCommand(context.SessionId, reply);
             var outcome = (JsonObject)error.Details.DeepClone();
             outcome["error"] = error.Message;
             outcome["code"] = error.Code;
@@ -70,7 +71,7 @@ internal sealed partial class MessageRouter
         {
             reply = "❌ " + error.Message;
         }
-        runtime.ReplyToCommand(context.SessionId, reply);
+        if (publishReply) runtime.ReplyToCommand(context.SessionId, reply);
         return new(
             200,
             new

@@ -19,8 +19,9 @@ internal sealed partial class MessageRouter
                 + "|$)"
         );
 
-    private MessageRouteResult HandlePresentationCommand(ChannelContext context, string text)
+    private MessageRouteResult HandlePresentationCommand(ChannelContext context, string text, bool publishReply = true)
     {
+        void Reply(string id, string value) { if (publishReply) runtime.ReplyToCommand(id, value); }
         var words = Regex.Split(SessionCatalog.Trim(text), CommandSpace + "+");
         var action = words[1];
         var args = words.Skip(2).ToArray();
@@ -82,7 +83,7 @@ internal sealed partial class MessageRouter
         }
         catch (PresentationCommittedException error)
         {
-            runtime.ReplyToCommand(
+            Reply(
                 context.SessionId,
                 "Command change committed, but its notification failed."
             );
@@ -92,6 +93,7 @@ internal sealed partial class MessageRouter
                 {
                     error = error.Message,
                     committed = true,
+                    commandResponse = "Command change committed, but its notification failed.",
                     result = error.Change.Result,
                 }
             );
@@ -99,7 +101,7 @@ internal sealed partial class MessageRouter
         catch (Exception error)
         {
             reply = $"Command error: {error.Message}";
-            runtime.ReplyToCommand(context.SessionId, reply);
+            Reply(context.SessionId, reply);
             return new(
                 500,
                 new
@@ -110,7 +112,7 @@ internal sealed partial class MessageRouter
                 }
             );
         }
-        runtime.ReplyToCommand(context.SessionId, reply);
+        Reply(context.SessionId, reply);
         return new(
             200,
             new

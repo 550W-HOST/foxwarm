@@ -59,7 +59,8 @@ internal sealed partial class MessageRouter
         {
             if (
                 command
-                is not ("/stop" or "/continue" or "/dequeue" or "/compact" or "/stop compact")
+                is not ("/stop" or "/continue" or "/dequeue" or "/stop compact")
+                && !System.Text.RegularExpressions.Regex.IsMatch(command, @"^/compact(?:\s|$)")
             )
                 return Reply(
                     "error",
@@ -110,6 +111,7 @@ internal sealed partial class MessageRouter
                         ? Reply("noop", "No queued messages")
                         : Reply("accepted", "Queued messages requested");
                 case "compact":
+                    var keep = CommandArguments.CompactKeep(command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Skip(1).ToArray());
                     if (owner.Entry.HistoryMutation)
                         return Reply(
                             "error",
@@ -118,7 +120,7 @@ internal sealed partial class MessageRouter
                         );
                     if (owner.Entry.WithState(state => state.History.Count == 0))
                         return Reply("noop", "History is empty");
-                    var compact = await owner.Compactor.StartManualAsync();
+                    var compact = await owner.Compactor.StartManualAsync(keepPercent: keep);
                     return compact.AlreadyPending ? Reply("noop", "Compaction is already pending")
                         : compact.Started
                             ? Reply("accepted", "Compaction requested", httpStatus: 202)

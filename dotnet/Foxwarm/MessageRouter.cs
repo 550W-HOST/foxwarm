@@ -26,70 +26,41 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
     {
         if (IsPresentationCommand(message.Text))
         {
-            var canonical = SessionCatalog.Text(
-                runtime.Catalog.Resolve(context.SessionId)["sessionId"]
-            );
+            var canonical = SessionCatalog.Text(runtime.Catalog.Resolve(context.SessionId)["sessionId"]);
             if (canonical is null)
                 return new(404, new { error = "Session not found" });
             return HandlePresentationCommand(context with { SessionId = canonical }, message.Text);
-        }
-        if (
-            runtime.Manager.ChannelAuthorization is not null
-            && context.Platform is "webui" or "tui"
-        )
-        {
-            var shared = System.Text.RegularExpressions.Regex.Match(
-                message.Text,
-                @"^(/(?:whoami|channel|attach|help|session))(?:\s+([\s\S]*))?$"
-            );
-            if (
-                shared.Success
-                && (
-                    shared.Groups[1].Value != "/session"
-                    || System.Text.RegularExpressions.Regex.IsMatch(
-                        shared.Groups[2].Value,
-                        @"^(?:new|create|fork)(?:\s|$)"
-                    )
-                )
-            )
-            {
-                var source = new Foxwarm.Channels.ExternalChannelContext(
-                    context.Platform,
-                    context.Platform,
-                    context.SessionId,
-                    null,
-                    null,
-                    text =>
-                    {
-                        runtime.ReplyToCommand(context.SessionId, text);
-                        return Task.CompletedTask;
-                    }
-                );
-                await HandleExternalCommandAsync(
-                    source,
-                    shared.Groups[1].Value,
-                    shared.Groups[2].Success ? shared.Groups[2].Value : null
-                );
-                return new(200, new { success = true });
-            }
         }
         var owner =
             attachmentOwner
             ?? await runtime.GetOwnerAsync(context.SessionId)
             ?? throw new InvalidDataException("Session not found.");
         var command = message.Text.Trim();
+        if (IsDeleteCommand(message.Text))
+            return await HandleDeleteCommandAsync(context, message.Text, owner);
+        if (IsIdentityMoveCommand(message.Text))
+            return await HandleIdentityMoveCommandAsync(context, message.Text, owner);
         if (
             context.Platform == "webui"
             && message.ControlRequestId is { } requestId
             && ControlAction(command) is { } action
         )
             return await HandleControlAsync(owner, command, requestId, action);
+        if (context.Platform == "webui")
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(message.Text,
+                @"^(/[a-zA-Z_\-.]+)(?:\s+([\s\S]*))?$");
+            if (match.Success && Foxwarm.Channels.ExternalCommands.Find(match.Groups[1].Value) is not null)
+            {
+                var source = new Foxwarm.Channels.ExternalChannelContext("webui", "webui", context.SessionId,
+                    null, null, text => { runtime.ReplyToCommand(context.SessionId, text); return Task.CompletedTask; });
+                await HandleExternalCommandAsync(source, match.Groups[1].Value,
+                    match.Groups[2].Success ? match.Groups[2].Value : null, owner);
+                return new(200, new { success = true });
+            }
+        }
         if (command == "/node" || command.StartsWith("/node ", StringComparison.Ordinal))
             return await HandleNodeCommandAsync(command, owner);
-        if (IsIdentityMoveCommand(message.Text))
-            return await HandleIdentityMoveCommandAsync(context, message.Text, owner);
-        if (IsDeleteCommand(message.Text))
-            return await HandleDeleteCommandAsync(context, message.Text, owner);
         if (message.Text.TrimStart().StartsWith("/", StringComparison.Ordinal))
         {
             if (command == "/session index")
@@ -191,11 +162,12 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
                     return new(409, new { error = error.Message });
                 }
             }
-            if (command == "/compact")
+            if (System.Text.RegularExpressions.Regex.IsMatch(command, @"^/compact(?:\s|$)"))
             {
                 if (owner.Entry.HistoryMutation)
                     return new(409, new { error = "Session history change is in progress." });
-                var result = await owner.Compactor.StartManualAsync();
+                var keep = CommandArguments.CompactKeep(command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Skip(1).ToArray());
+                var result = await owner.Compactor.StartManualAsync(keepPercent: keep);
                 return result.Started || result.AlreadyPending
                     ? new(
                         202,

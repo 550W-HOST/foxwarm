@@ -289,6 +289,13 @@ internal sealed partial class SessionManager
             SessionWait.Text(state.AuthorityEnvelope["currentNode"]) ?? "master"
         );
         var isolated = AgentIsolated(statusTarget.Agent);
+        var usage = summary.Usage;
+        var cached = SessionWait.Number(usage?["cachedTokens"]) ?? 0;
+        var input = SessionWait.Number(usage?["inputTokens"]) ?? 0;
+        var output = SessionWait.Number(usage?["outputTokens"]) ?? 0;
+        var usageText = usage is null ? "none" : $"cached={cached:N0}, input={input:N0}, output={output:N0}"
+            + (SessionWait.Number(usage["reasoningTokens"]) is { } reasoning ? $" (reasoning={reasoning:N0})" : "")
+            + $", total={cached + input + output:N0}";
         return Output(
             "📊 *Session Status*\n\n"
                 + $"- session id: `{meta.Id}`\n- name: {meta.DisplayName ?? "unset"}\n- agent id/name: `{statusTarget.Agent}`\n- current node: `{currentNode}` (connected={(Nodes.Connected(currentNode) ? "true" : "false")}, type={(currentNode == "master" ? "master" : NodeSummaries().OfType<JsonObject>().FirstOrDefault(node => SessionWait.Text(node["id"]) == currentNode)?["type"]?.GetValue<string>() ?? "unknown")}){(isolated ? " (isolated)" : "")}\n- agent directory: `{agents.AgentDirectory(statusTarget.Agent)}`\n- current cwd: {(currentCwd is string cwd && SessionGoal.Trim(cwd).Length > 0 ? $"`{SessionGoal.Trim(cwd)}`" : $"not set (defaults to current node agent directory; master: `{agents.AgentDirectory(statusTarget.Agent)}`)")}\n"
@@ -299,9 +306,12 @@ internal sealed partial class SessionManager
                 )
                 + (meta.Archived ? "- 📦 archived\n" : "")
                 + $"- model: `{leaf?.Key ?? catalog.DefaultKey}`\n- effort: raw={meta.Effort ?? "unset"}, effective={(SessionWait.Text(dto["effectiveEffort"]) ?? "per-leaf default")}, allowed={string.Join('|', leaf?.AllowedEfforts ?? HostModels.Efforts)}, default={(leaf is null ? "high" : leaf.DefaultEffort)}\n"
-                + $"- messages: {meta.MessageCount}\n- token estimate: ~{summary.Estimate} / {leaf?.ContextLimit ?? catalog.PresentationContextLimit}\n- images: {summary.Images}\n- last usage: {(summary.Usage is null ? "none" : EcmaJson.Stringify(summary.Usage))}\n- last message: {SessionStatus.Date(meta.LastMessageTime)}\n- auto-compact threshold: ~{dto["effectiveCompactThresholdTokens"]} tokens ({(summary.Threshold is > 0 ? "override" : "model default")})\n"
+                + $"- messages: {meta.MessageCount}\n- token estimate: ~{summary.Estimate} / {leaf?.ContextLimit ?? catalog.PresentationContextLimit}\n- images: {summary.Images}\n- last usage: {usageText}\n- last message: {SessionStatus.Date(meta.LastMessageTime)}\n- auto-compact threshold: ~{dto["effectiveCompactThresholdTokens"]} tokens ({(summary.Threshold is > 0 ? "override" : "model default")})\n"
                 + $"- child model: raw={meta.ChildModel ?? "follow current"}, effective={dto["effectiveChildModelKey"]}; child effort: raw={meta.ChildEffort ?? "unset"}, effective={dto["effectiveChildEffort"]}\n"
-                + $"- runtime state: {SessionStatus.Runtime(dto["runtimeState"]!.AsObject())}\n\nRecent child sessions (max 10):"
+                + $"- runtime state: {SessionStatus.Runtime(dto["runtimeState"]!.AsObject())}\n"
+                + (meta.Busy ? "- busy: yes\n" : "")
+                + (meta.QueueLength > 0 ? $"- queue: {meta.QueueLength}\n" : "")
+                + "\nRecent child sessions (max 10):"
                 + (
                     children.Length == 0
                         ? " none\n"

@@ -46,7 +46,7 @@ public sealed partial class TelegramChannelTests
                 new[] { "setMyCommands", "getMe", "deleteWebhook" },
                 peer.Calls.Where(call => call.Bot == bot).Take(3).Select(call => call.Method)
             );
-            Assert.DoesNotContain(
+            Assert.Contains(
                 peer
                     .Calls.Where(call => call.Bot == bot && call.Method == "setMyCommands")
                     .Single()
@@ -183,19 +183,8 @@ public sealed partial class TelegramChannelTests
         await f.Manager.ManagedChannels!.ReloadAsync();
         var initial = "first line\n  second line\nthird";
         peer.Push("a", TelegramPeer.Text("42", "11", "/fork@owned_bot child " + initial));
-        await Until(() =>
-            peer.Sent("a")
-                .Any(call =>
-                    (SessionWait.Text(call.Body["text"]) ?? "").Contains(
-                        "newSessionId",
-                        StringComparison.Ordinal
-                    )
-                )
-        );
-        var reply = peer.Sent("a")
-            .Select(call => SessionWait.Text(call.Body["text"]) ?? "")
-            .Single(text => text.Contains("newSessionId", StringComparison.Ordinal));
-        var id = SessionWait.Text(JsonNode.Parse(reply)!["newSessionId"])!;
+        var id = f.Owner.Id + "_child";
+        await Until(() => peer.Sent("a").Any(call => (SessionWait.Text(call.Body["text"]) ?? "").Contains(id, StringComparison.Ordinal)));
         var child = await f.Manager.RequiredAsync(id);
         Assert.Equal(f.Owner.Id, child.Metadata().ParentSessionId);
         Assert.Contains(

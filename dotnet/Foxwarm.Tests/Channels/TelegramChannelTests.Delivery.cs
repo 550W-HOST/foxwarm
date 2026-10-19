@@ -168,7 +168,7 @@ public sealed partial class TelegramChannelTests
             ["broken"] = ExternalChannelFixture.Channel("bad"),
             ["later"] = new JsonObject
             {
-                ["type"] = "wework",
+                ["type"] = "fixture-unsupported",
                 ["webhookUrl"] = "http://127.0.0.1:1/fixture",
             },
         };

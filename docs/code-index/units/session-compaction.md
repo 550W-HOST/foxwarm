@@ -1,6 +1,6 @@
 # Unit: Compaction planning, active history replacement, and Archive recall
 
-Files: `dotnet/Foxwarm/ContextPreviewRenderer.Message.cs`, `dotnet/Foxwarm/ContextPreviewRenderer.cs`, `dotnet/Foxwarm/Sessions/Compaction/ArchiveContextReader.cs`, `dotnet/Foxwarm/Sessions/Compaction/ArchiveControlTools.cs`, `dotnet/Foxwarm/Sessions/Compaction/ArchiveRecallTool.cs`, `dotnet/Foxwarm/Sessions/Compaction/CompactCandidates.cs`, `dotnet/Foxwarm/Sessions/Compaction/CompactPlan.cs`, `dotnet/Foxwarm/Sessions/Compaction/CompactPlanRepairFile.cs`, `dotnet/Foxwarm/Sessions/Compaction/CompactPrompt.Build.cs`, `dotnet/Foxwarm/Sessions/Compaction/CompactPrompt.cs`, `dotnet/Foxwarm/Sessions/Compaction/ContextBlockExpansion.cs`, `dotnet/Foxwarm/Sessions/Compaction/SessionCompactor.Commit.cs`, `dotnet/Foxwarm/Sessions/Compaction/SessionCompactor.Plan.cs`, `dotnet/Foxwarm/Sessions/Compaction/SessionCompactor.Prune.cs`, `dotnet/Foxwarm/Sessions/Compaction/SessionCompactor.cs`
+Files: `dotnet/Foxwarm/ContextPreviewRenderer.Message.cs`, `dotnet/Foxwarm/ContextPreviewRenderer.cs`, `dotnet/Foxwarm/ContextPreviewRenderer.Commands.cs`, `dotnet/Foxwarm/Sessions/Compaction/ArchiveContextReader.cs`, `dotnet/Foxwarm/Sessions/Compaction/ArchiveControlTools.cs`, `dotnet/Foxwarm/Sessions/Compaction/ArchiveRecallTool.cs`, `dotnet/Foxwarm/Sessions/Compaction/CompactCandidates.cs`, `dotnet/Foxwarm/Sessions/Compaction/CompactPlan.cs`, `dotnet/Foxwarm/Sessions/Compaction/CompactPlanRepairFile.cs`, `dotnet/Foxwarm/Sessions/Compaction/CompactPrompt.Build.cs`, `dotnet/Foxwarm/Sessions/Compaction/CompactPrompt.cs`, `dotnet/Foxwarm/Sessions/Compaction/ContextBlockExpansion.cs`, `dotnet/Foxwarm/Sessions/Compaction/SessionCompactor.Commit.cs`, `dotnet/Foxwarm/Sessions/Compaction/SessionCompactor.Plan.cs`, `dotnet/Foxwarm/Sessions/Compaction/SessionCompactor.Prune.cs`, `dotnet/Foxwarm/Sessions/Compaction/SessionCompactor.cs`
 
 ## Purpose
 
@@ -44,3 +44,5 @@ Plan operations may carry an integer `frictionScore` from 0 through 100. Missing
 ## Tests
 
 `dotnet/Foxwarm.Tests/Sessions/CompactLifecycleTests.cs`; `CompactContinuationTests.cs` (real required-wait cancellation and closure-before-wait); `dotnet/scripts/qualify-shutdown-recovery.mjs` (owned host restart); `CompactRetentionTests.cs`; `CompactPruningTests.cs`; `CommittedArchiveBoundaryTests.cs`; `CommittedArchiveIdentityTests.cs`; `SelectedPromptTests.cs`; `dotnet/Foxwarm.Tests/Storage/ArchiveLineageTests.cs`.
+
+`ContextPreviewRenderer.Commands` supplies the active-offset, per-message bounded `/messages` presentation used by [public command administration](./dotnet-command-administration.md), separately from recall page budgets and Archive seqs.

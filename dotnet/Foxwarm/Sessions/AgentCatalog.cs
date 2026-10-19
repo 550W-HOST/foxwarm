@@ -157,7 +157,7 @@ internal sealed partial class AgentCatalog
     public string MainFallbackSystemPath =>
         Path.Combine(SourceDirectory("main"), "memory", "00_SYSTEM.md");
 
-    public async Task CreateAsync(string name, string? initialMemory = null, string? inherit = null)
+    public async Task CreateAsync(string name, string? initialMemory = null, string? inherit = null, string? initialSoul = null)
     {
         ValidateName(name);
         if (name == "main")
@@ -181,6 +181,8 @@ internal sealed partial class AgentCatalog
                     Path.Combine(directory, "memory", "MEMORY.md"),
                     initialMemory
                 );
+            if (initialSoul is not null)
+                await File.WriteAllTextAsync(Path.Combine(directory, "memory", "SOUL.md"), initialSoul);
             var next = List()
                 .Where(existing => existing != "main")
                 .Append(name)
