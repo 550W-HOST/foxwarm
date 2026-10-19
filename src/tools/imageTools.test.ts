@@ -14,7 +14,6 @@ import { nodesManager } from '../nodes/manager';
 import type { Session } from '../types';
 import * as fileDelivery from '../fileDelivery';
 import { getImageWriteHandoffRoot } from '../imageWriteHandoff';
-import { getAgentDir } from '../config';
 
 async function makePngBase64(width: number, height: number, rgb: { r: number; g: number; b: number } = { r: 32, g: 96, b: 192 }): Promise<string> {
   const buffer = await sharp({

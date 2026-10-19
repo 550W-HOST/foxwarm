@@ -1,7 +1,7 @@
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { readFile, readdir } from 'node:fs/promises'
+import { mkdir, readFile, readdir } from 'node:fs/promises'
 import { build } from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 import { fileURLToPath } from 'node:url'
@@ -286,6 +286,7 @@ async function fixtureStartupStage(name, operation) {
 }
 
 before(async () => {
+  if (process.env.FOXWARM_E2E_SCREENSHOT_DIR) await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR, { recursive: true })
   const bundle = await fixtureStartupStage('esbuild-bundle', buildFixtureBundle)
   const assets = new URL('../dist/assets/', import.meta.url)
   const cssAsset = (await readdir(assets)).find(name => /^index-.*\.css$/.test(name))
