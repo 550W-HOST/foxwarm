@@ -24,6 +24,7 @@ Durable JSON semantics are canonical in [src-utils](../units/src-utils.md#d-disk
 - `nodeTools`, `CLI_NODE_CAPABILITIES`.
 - `CURRENT_NODE_PROTOCOL_RANGE`, `resolveAdvertisedNodeProtocol()`, and `negotiateNodeProtocol()`.
 - shared low-level native file/process backends, file read/write/patch semantic core, and node transfer/path helpers.
+- `detectRasterImageMimeType` and its bounded header size — pure raster-signature recognition, with [content-based read classification](../units/shared-node-tools.md#d-file-read-raster-classification).
 - patch parsing/content-application functions plus per-operation change-count summaries; `applyExactReplacement` from `exactReplacement`.
 - `isSessionTurnIncomplete`, `isCompactCompletionMaintenanceMessage`, and their structural history input types from `sessionContinuation`.
 - `PersistentExecManager` and shared timeout/cwd resolution.

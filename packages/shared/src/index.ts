@@ -6,6 +6,7 @@ export * from './persistentExec';
 export * from './tokenCount';
 export * from './fileToolCore';
 export * from './fileOperations';
+export * from './rasterImageMime';
 export * from './processOperations';
 export * from './nodeTools';
 export * from './webuiToolRendering';

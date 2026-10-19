@@ -1,6 +1,6 @@
 # Unit: shared-node-tools
 
-Files: packages/shared/src/nodeIdentity.ts, packages/shared/src/exactReplacement.ts, packages/shared/src/exactReplacement.test.ts, packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/agentPathVariables.ts, packages/shared/src/agentPathVariables.test.ts, packages/shared/src/resolvedPathMetadata.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/nodeFileTransfer.test.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/toolResponseFormatting.test.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
+Files: packages/shared/src/nodeIdentity.ts, packages/shared/src/exactReplacement.ts, packages/shared/src/exactReplacement.test.ts, packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/rasterImageMime.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/agentPathVariables.ts, packages/shared/src/agentPathVariables.test.ts, packages/shared/src/resolvedPathMetadata.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/nodeFileTransfer.test.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/toolResponseFormatting.test.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
 Secondary files: packages/shared/src/outputTruncation.ts, packages/shared/src/outputTruncation.test.ts
 
 Trusted foreground exec signals enter the shared wait and launch fence, not process termination. Interruption uses the existing background-registration and completion path under [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
@@ -16,6 +16,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 - `nodeTools` — aggregated object of all node tool functions (read, write, edit, apply_patch, exec, get_default_cwd, browse_*)
 - `read`, `write`, `edit`, `apply_patch`, `exec`, `get_default_cwd` — file and shell tool functions
 - `readFileToolPath`, `writeFileToolPath`, `applyPatchOperations`, `readDirectoryListing`, `findWriteParentIssue`, `formatWriteParentIssueMessage` — shared file read/write/patch core used by Main and Node wrappers
+- `detectRasterImageMimeType`, `RASTER_IMAGE_HEADER_BYTES`, `RasterImageMimeType` — pure raster-signature recognition shared by file reads and provider image acceptance; recognition does not decode or validate an image
 - `applyExactReplacement` — pure exact single-match text replacement used directly by Main, Node, and compact repair
 - `requireToolFilePath` — shared required-path validation called by Main and Node read/edit wrappers before path resolution
 - `FileOperations`, `nativeFileOperations`, `readWholeFile`, `fileOperationPathExists` — low-level target-local stat/ranged-read/list/write/mkdir/remove contract, native implementation, and composition helpers
@@ -53,7 +54,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 | `requireToolFilePath(filePath, toolName)` (fileToolCore) | required-path validation | Rejects missing or blank read/edit paths before wrapper path resolution without trimming valid paths |
 | `normalizeOptionalLineBound(value)` (fileToolCore) | ~35 | Treats omitted/null/non-finite/0 line bounds as absent |
 | `readDirectoryListing(fullPath, displayPath, startLine, endLine)` (fileToolCore) | ~65 | Reads and paginates a directory listing |
-| `getInlineImageMimeType(filePath)` (fileToolCore) | ~120 | Detects image MIME types supported for inline read results |
+| `detectRasterImageMimeType(buffer)` (rasterImageMime) | pure signature recognition | Recognizes PNG, JPEG, WebP, GIF and BMP bytes from at most 12 header bytes |
 | `ExactLineScanner` / `scanFileLineRange(...)` (fileToolCore) | shared scanner | Scans byte-level LF/CRLF/bare-CR boundaries and records selected terminators, counts, endings, and EOF metadata |
 | `readFileToolPath(fullPath, displayPath, startLine, endLine)` (fileToolCore) | canonical read | Reads file/directory/image; formats exact line selections, metadata footers, and bounded large-file output |
 | `findWriteParentIssue(fullPath)` (fileToolCore) | ~158 | Returns the first missing/non-directory parent for write targets, following symlinked directories |
@@ -127,6 +128,10 @@ Provides shared file system tools, shell execution, browser automation, and util
 - Shared cached-write retry formatting emits the executable `write({ ... })` call for the failing path, states that the scoped ref may use another independently authorized `filePath`, explicitly prohibits including `content` alongside `contentRef`, and directs intentional replacements to omit `contentRef` and submit only the new content plus the desired path and required flags; the canonical guidance contract is [D-tools-write-contentref-retry-guidance](./src-tools.md#d-tools-write-contentref-retry-guidance).
 
 ## Design Decisions
+
+### D-file-read-raster-classification
+
+[2026-10-19] Canonical file reads classify PNG, JPEG, WebP, GIF and BMP by their byte signatures rather than filename suffixes. After stat/directory handling, read at most 12 bytes through the same target-local `FileOperations` before choosing the existing whole-image or text path. Missing or misleading suffixes cannot suppress or change a recognized image's MIME; text with an image suffix retains ordinary text, line-range and bounded oversized-file behavior. Recognized images retain the existing inline payload and whole-image read, independent of text line bounds. This is type recognition, not full image validation or transcoding; image promotion, Blob validation and provider format acceptance remain with their existing owners. `rasterImageMime` is pure shared code with no image-decoder dependency.
 
 ### D-bounded-file-read-excerpts
 
