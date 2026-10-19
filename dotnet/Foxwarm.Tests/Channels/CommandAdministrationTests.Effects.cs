@@ -11,25 +11,29 @@ public sealed partial class CommandAdministrationTests
     [InlineData("local", "local", "local")]
     [InlineData("local/wire", "local/wire", "local/wire")]
     public async Task Model_inspection_preserves_catalog_selection_and_uses_leaf_effort_capabilities(
-        string selection, string displayed, string? stored
+        string selection,
+        string displayed,
+        string? stored
     )
     {
         await using var f = await ExternalChannelFixture.CreateAsync(
             new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
         );
-        await f.Configuration.SaveAsync(new JsonObject
-        {
-            ["yaml"] = """
-            default: local
-            providers:
-              local:
-                providerType: openai-responses
-                baseUrl: http://127.0.0.1:1/v1
-                models:
-                  - id: wire
-                    effort: {allowed: [none, low], default: low}
-            """
-        });
+        await f.Configuration.SaveAsync(
+            new JsonObject
+            {
+                ["yaml"] = """
+                default: local
+                providers:
+                  local:
+                    providerType: openai-responses
+                    baseUrl: http://127.0.0.1:1/v1
+                    models:
+                      - id: wire
+                        effort: {allowed: [none, low], default: low}
+                """,
+            }
+        );
         var replies = new List<string>();
         var source = Source(replies);
         f.Manager.AttachChannel(source.Target, f.Owner);

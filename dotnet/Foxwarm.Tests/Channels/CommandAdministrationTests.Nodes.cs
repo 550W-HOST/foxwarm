@@ -17,9 +17,15 @@ public sealed partial class CommandAdministrationTests
         await using var f = await ExternalChannelFixture.CreateAsync(
             new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
         );
-        f.Manager.Bootstrap = new(f.Manager.Nodes, new PublicWebAddress(
-            "https://example.invalid/nested/app", "/nested/app", "/nested/app/", true
-        ));
+        f.Manager.Bootstrap = new(
+            f.Manager.Nodes,
+            new PublicWebAddress(
+                "https://example.invalid/nested/app",
+                "/nested/app",
+                "/nested/app/",
+                true
+            )
+        );
         var replies = new List<string>();
         var source = Source(replies);
         f.Manager.AttachChannel(source.Target, f.Owner);
@@ -41,7 +47,10 @@ public sealed partial class CommandAdministrationTests
         Assert.False(f.Manager.Nodes.Registry.Authenticate("my-node", token));
         var explicitCommands = f.Manager.Bootstrap.Commands(id: "explicit-shell")["commands"]!;
         Assert.Contains("--node-id='explicit-shell'", SessionWait.Text(explicitCommands["shell"]));
-        Assert.Contains("--node-id='explicit-shell'", SessionWait.Text(explicitCommands["bareMetal"]));
+        Assert.Contains(
+            "--node-id='explicit-shell'",
+            SessionWait.Text(explicitCommands["bareMetal"])
+        );
     }
 
     [Fact]
@@ -135,9 +144,17 @@ public sealed partial class CommandAdministrationTests
                 replies.Clear();
                 await f.Router.HandleExternalMessageAsync(source, Message("/node inspect " + id));
                 var reply = replies.Single();
-                var json = reply[(reply.IndexOf("```json\n", StringComparison.Ordinal) + 8)..reply.LastIndexOf("\n```", StringComparison.Ordinal)];
+                var json = reply[
+                    (reply.IndexOf("```json\n", StringComparison.Ordinal) + 8)..reply.LastIndexOf(
+                        "\n```",
+                        StringComparison.Ordinal
+                    )
+                ];
                 var inspected = JsonNode.Parse(json)!.AsObject();
-                var summary = f.Manager.NodeSummaries().OfType<JsonObject>().Single(node => SessionWait.Text(node["id"]) == id);
+                var summary = f
+                    .Manager.NodeSummaries()
+                    .OfType<JsonObject>()
+                    .Single(node => SessionWait.Text(node["id"]) == id);
                 Assert.Equal(id, SessionWait.Text(inspected["id"]));
                 Assert.True(SessionCatalog.Flag(inspected["connected"]));
                 Assert.True(SessionCatalog.Flag(inspected["executable"]));
@@ -146,8 +163,16 @@ public sealed partial class CommandAdministrationTests
                 if (id != "master")
                 {
                     Assert.NotEmpty(inspected["tools"]!.AsArray());
-                    Assert.Equal("compatible", SessionWait.Text(inspected["protocolCompatibility"]?["status"]));
-                    Assert.True(JsonNode.DeepEquals(summary["protocolCompatibility"], inspected["protocolCompatibility"]));
+                    Assert.Equal(
+                        "compatible",
+                        SessionWait.Text(inspected["protocolCompatibility"]?["status"])
+                    );
+                    Assert.True(
+                        JsonNode.DeepEquals(
+                            summary["protocolCompatibility"],
+                            inspected["protocolCompatibility"]
+                        )
+                    );
                     Assert.True(JsonNode.DeepEquals(summary["tools"], inspected["tools"]));
                 }
             }

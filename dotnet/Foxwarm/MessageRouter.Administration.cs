@@ -77,7 +77,8 @@ internal sealed partial class MessageRouter
         var dto = owner.BuildDto();
         var models = runtime.Manager.Models.Capture();
         var rawModel = owner.Metadata().Model;
-        var currentKey = rawModel is not null && models.Contains(rawModel) ? rawModel : models.DefaultKey;
+        var currentKey =
+            rawModel is not null && models.Contains(rawModel) ? rawModel : models.DefaultKey;
         var current = models.All.Count == 0 ? null : models.Resolve(currentKey);
         var lines = child
             ? new List<string>

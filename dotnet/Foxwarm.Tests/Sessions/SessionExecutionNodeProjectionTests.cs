@@ -223,7 +223,11 @@ public sealed class SessionExecutionNodeProjectionTests
         Assert.Equal(expected, stateEvent["session"]!["currentNode"]!.GetValue<string>());
         var replies = new List<string>();
         var source = new Foxwarm.Channels.ExternalChannelContext(
-            "webui", "webui", owner.Id, null, null,
+            "webui",
+            "webui",
+            owner.Id,
+            null,
+            null,
             text =>
             {
                 replies.Add(text);
@@ -231,7 +235,10 @@ public sealed class SessionExecutionNodeProjectionTests
             }
         );
         await new MessageRouter(new SessionRuntime(manager)).HandleExternalCommandAsync(
-            source, "/status", null, owner
+            source,
+            "/status",
+            null,
+            owner
         );
         Assert.Contains($"current node: `{expected}`", replies.Single());
         Assert.Contains("connected=" + (expected == "master" ? "true" : "false"), replies.Single());

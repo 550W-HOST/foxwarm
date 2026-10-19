@@ -195,10 +195,7 @@ internal sealed partial class MessageRouter
                 await HandleModelCommandAsync(source, rest, owner, child: true);
                 return;
             case "fork":
-                var child = await runtime.ForkAsync(
-                    owner.Id,
-                    rest.FirstOrDefault()
-                );
+                var child = await runtime.ForkAsync(owner.Id, rest.FirstOrDefault());
                 Bind(child);
                 await source.Reply(
                     $"✅ Forked child session `{owner.Id}` → `{child.Id}`\nMessages: {owner.Metadata().MessageCount}"

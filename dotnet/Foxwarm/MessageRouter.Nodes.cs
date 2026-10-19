@@ -129,12 +129,14 @@ internal sealed partial class MessageRouter
             }
             else if (args.Length == 2 && args[0] == "inspect")
             {
-                var summary = manager
+                var summary =
+                    manager
                         .NodeSummaries()
                         .OfType<JsonObject>()
                         .FirstOrDefault(node => SessionWait.Text(node["id"]) == args[1])
-                        ?? throw new InvalidDataException("Node not found.");
-                reply = $"Node inspection: `{args[1]}`\n```json\n"
+                    ?? throw new InvalidDataException("Node not found.");
+                reply =
+                    $"Node inspection: `{args[1]}`\n```json\n"
                     + summary.ToJsonString(new JsonSerializerOptions { WriteIndented = true })
                     + "\n```";
             }

@@ -262,7 +262,10 @@ public sealed partial class CommandAdministrationTests
             replies.Clear();
             await f.Router.HandleExternalMessageAsync(source, Message("/session fork"));
             var expected = f.Owner.Id + "_fork" + (number == 1 ? "" : "_" + number);
-            Assert.Equal(expected, SessionWait.Text(f.Manager.ChannelBinding(source.Target)?["sessionId"]));
+            Assert.Equal(
+                expected,
+                SessionWait.Text(f.Manager.ChannelBinding(source.Target)?["sessionId"])
+            );
             Assert.NotNull(f.Manager.Catalog.Get(expected));
             Assert.Contains(expected, replies.Single());
         }
@@ -273,18 +276,32 @@ public sealed partial class CommandAdministrationTests
             events.Clear();
             await f.Router.HandleMessageAsync(new(f.Owner.Id, "webui"), new("/session fork", null));
             var expected = f.Owner.Id + "_fork_" + number;
-            Assert.Equal(expected, SessionWait.Text(f.Manager.ChannelBinding("webui:" + f.Owner.Id)?["sessionId"]));
+            Assert.Equal(
+                expected,
+                SessionWait.Text(f.Manager.ChannelBinding("webui:" + f.Owner.Id)?["sessionId"])
+            );
             Assert.NotNull(f.Manager.Catalog.Get(expected));
             Assert.Single(events.Where(e => e.Kind == SessionEventKind.CommandReply));
         }
         f.Manager.DetachChannel(source.Target);
         f.Manager.AttachChannel(source.Target, f.Owner);
         Assert.Empty(f.Owner.History());
-        var before = f.Manager.Catalog.List().Select(row => SessionWait.Text(row["id"])).ToHashSet();
+        var before = f
+            .Manager.Catalog.List()
+            .Select(row => SessionWait.Text(row["id"]))
+            .ToHashSet();
         await f.Router.HandleExternalMessageAsync(source, Message("/fork"));
-        var generated = f.Manager.Catalog.List().Single(row => !before.Contains(SessionWait.Text(row["id"])));
-        Assert.Matches("^" + System.Text.RegularExpressions.Regex.Escape(f.Owner.Id) + "_s_[a-f0-9]{32}$", SessionWait.Text(generated["id"])!);
-        Assert.Equal(f.Owner.Id, SessionWait.Text(f.Manager.ChannelBinding(source.Target)?["sessionId"]));
+        var generated = f
+            .Manager.Catalog.List()
+            .Single(row => !before.Contains(SessionWait.Text(row["id"])));
+        Assert.Matches(
+            "^" + System.Text.RegularExpressions.Regex.Escape(f.Owner.Id) + "_s_[a-f0-9]{32}$",
+            SessionWait.Text(generated["id"])!
+        );
+        Assert.Equal(
+            f.Owner.Id,
+            SessionWait.Text(f.Manager.ChannelBinding(source.Target)?["sessionId"])
+        );
     }
 
     [Fact]
