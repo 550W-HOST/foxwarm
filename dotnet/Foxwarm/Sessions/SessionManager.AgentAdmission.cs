@@ -5,7 +5,9 @@ internal sealed partial class SessionManager
     // Membership-changing operations join only their affected Agents. Removal closes
     // new admission, then waits for already accepted work before taking its snapshot.
     private readonly HashSet<string> removingAgents = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, HashSet<TaskCompletionSource>> agentAdmissions = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, HashSet<TaskCompletionSource>> agentAdmissions = new(
+        StringComparer.Ordinal
+    );
     private readonly AsyncLocal<AgentAdmission?> agentAdmissionContext = new();
 
     private sealed class AgentAdmission(
@@ -47,9 +49,13 @@ internal sealed partial class SessionManager
         lock (lifecycle)
         {
             foreach (var name in names)
-                if (removingAgents.Contains(name)
-                    && agentAdmissionContext.Value?.AlreadyAccepted(name) != true)
-                    throw new InvalidOperationException("Agent deletion is in progress. Retry after it finishes.");
+                if (
+                    removingAgents.Contains(name)
+                    && agentAdmissionContext.Value?.AlreadyAccepted(name) != true
+                )
+                    throw new InvalidOperationException(
+                        "Agent deletion is in progress. Retry after it finishes."
+                    );
             foreach (var name in names)
             {
                 if (!agentAdmissions.TryGetValue(name, out var pending))

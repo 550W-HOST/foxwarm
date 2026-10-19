@@ -13,8 +13,10 @@ public sealed partial class AgentDeletionTests
         Directory.CreateDirectory(Path.Combine(data, "state"));
         foreach (var name in new[] { "target", "other" })
             Directory.CreateDirectory(Path.Combine(data, "agents", name));
-        await File.WriteAllTextAsync(Path.Combine(data, "state", "agents.json"),
-            "{\"target\":{\"extension\":42},\"orphan\":{\"inherit\":\"target\",\"opaque\":true},\"other\":{\"opaque\":17}}");
+        await File.WriteAllTextAsync(
+            Path.Combine(data, "state", "agents.json"),
+            "{\"target\":{\"extension\":42},\"orphan\":{\"inherit\":\"target\",\"opaque\":true},\"other\":{\"opaque\":17}}"
+        );
         await using var manager = Manager(temp.Path);
         await manager.LoadAsync();
         var target = await manager.CreateNamedAsync("target", "member", null, null);
@@ -22,26 +24,37 @@ public sealed partial class AgentDeletionTests
         var (child, _) = await manager.CreateChildAsync(target, "child", "other", null, null, null);
         var (grand, _) = await manager.CreateChildAsync(child, "grand", null, null, null, null);
         var childJson = await File.ReadAllTextAsync(Authority(temp.Path, child.Id));
-        var inherited = await Assert.ThrowsAsync<InvalidOperationException>(() => manager.DeleteAgentAsync("target"));
+        var inherited = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            manager.DeleteAgentAsync("target")
+        );
         Assert.Contains("inherited by: orphan", inherited.Message);
         Assert.False(Directory.Exists(Path.Combine(data, "agents", "orphan")));
         Assert.NotNull(manager.Catalog.Get(target.Id));
         Directory.CreateDirectory(Path.Combine(data, "agents", "orphan"));
         await manager.SetAgentInheritAsync("orphan", null);
         manager.AttachChannel("telegram:fixture", target);
-        var attached = await Assert.ThrowsAsync<InvalidOperationException>(() => manager.DeleteAgentAsync("target"));
+        var attached = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            manager.DeleteAgentAsync("target")
+        );
         Assert.Contains("non-WebUI", attached.Message);
         Assert.False(target.Entry.Retired);
         Assert.False(second.Entry.Retired);
         manager.DetachChannel("telegram:fixture");
         manager.AttachChannel("webui:fixture", target);
         target.Registry.TriggerOverride = _ => Task.CompletedTask;
-        await target.Entry.SaveLane.AdmitAsync(QueueItem.UserText("queued idle input"), SaveKind.Strict);
+        await target.Entry.SaveLane.AdmitAsync(
+            QueueItem.UserText("queued idle input"),
+            SaveKind.Strict
+        );
         Assert.Single(target.Entry.Snapshot().Queue);
         Assert.False(target.Metadata().Busy);
         var topology = 0;
         manager.TopologyChanged += () => topology++;
-        var expected = manager.Catalog.List().Where(row => row["agent"]!.ToString() == "target").Select(row => row["id"]!.ToString()).ToArray();
+        var expected = manager
+            .Catalog.List()
+            .Where(row => row["agent"]!.ToString() == "target")
+            .Select(row => row["id"]!.ToString())
+            .ToArray();
         Assert.Equal(expected, await manager.DeleteAgentAsync("target"));
         Assert.True(topology > 0);
         Assert.Empty(target.Entry.Snapshot().Queue);
@@ -77,17 +90,25 @@ public sealed partial class AgentDeletionTests
         };
         try
         {
-            var error = await Assert.ThrowsAsync<SessionDeletionException>(() => manager.DeleteAgentFromCommandAsync("target"));
+            var error = await Assert.ThrowsAsync<SessionDeletionException>(() =>
+                manager.DeleteAgentFromCommandAsync("target")
+            );
             Assert.Equal("SESSION_TREE_DELETE_PARTIAL", error.Code);
             Assert.Equal("json-unlink", error.Details["failedStage"]!.ToString());
             Assert.Null(manager.Catalog.Get(ids[0]));
             Assert.NotNull(manager.Catalog.Get(ids[1]));
             Assert.True(old.Entry.Retired);
             Assert.True(Directory.Exists(manager.AgentDirectory("target")));
-            await Assert.ThrowsAnyAsync<InvalidOperationException>(() => old.Entry.SaveLane.SaveStrictAsync());
-            var wrongCaller = await Assert.ThrowsAsync<SessionDeletionException>(() => manager.DeleteAsync(ids[1]));
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(() =>
+                old.Entry.SaveLane.SaveStrictAsync()
+            );
+            var wrongCaller = await Assert.ThrowsAsync<SessionDeletionException>(() =>
+                manager.DeleteAsync(ids[1])
+            );
             Assert.Equal("SESSION_DELETE_RETRY_MISMATCH", wrongCaller.Code);
-            await Assert.ThrowsAnyAsync<InvalidDataException>(() => manager.CreateNamedAsync("target", ids[1].Split('/')[1], null, null));
+            await Assert.ThrowsAnyAsync<InvalidDataException>(() =>
+                manager.CreateNamedAsync("target", ids[1].Split('/')[1], null, null)
+            );
         }
         finally
         {
@@ -106,7 +127,9 @@ public sealed partial class AgentDeletionTests
     [Theory]
     [InlineData("directory")]
     [InlineData("metadata")]
-    public async Task Final_cleanup_failures_leave_actual_earlier_effects_and_release_only_the_Agent_admission(string stage)
+    public async Task Final_cleanup_failures_leave_actual_earlier_effects_and_release_only_the_Agent_admission(
+        string stage
+    )
     {
         using var temp = new TempDirectory();
         await using var manager = Manager(temp.Path);

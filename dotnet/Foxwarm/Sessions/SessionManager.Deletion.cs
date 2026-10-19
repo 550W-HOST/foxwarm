@@ -207,12 +207,13 @@ internal sealed partial class SessionManager
                 if (!agentCommand)
                     RequireSameSelection(operation);
                 if (
-                    !agentCommand && attachments
-                        .Blockers(
-                            attachments.Read(operation.Selection.Root),
-                            operation.Selection.Targets
-                        )
-                        .Count > 0
+                    !agentCommand
+                        && attachments
+                            .Blockers(
+                                attachments.Read(operation.Selection.Root),
+                                operation.Selection.Targets
+                            )
+                            .Count > 0
                     || operation.Owners.Values.Any(owner =>
                         owner.Metadata().Busy
                         || owner.Processing

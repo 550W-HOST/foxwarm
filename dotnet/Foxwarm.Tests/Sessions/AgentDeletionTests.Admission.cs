@@ -40,12 +40,24 @@ public sealed partial class AgentDeletionTests
             deletion = manager.DeleteAgentFromCommandAsync("target");
             await claimed.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.False(deletion.IsCompleted);
-            await Assert.ThrowsAnyAsync<InvalidOperationException>(() => manager.CreateNamedAsync("target", "late", null, null));
-            await Assert.ThrowsAnyAsync<InvalidOperationException>(() => manager.CreateChildAsync(other, "late", "target", null, null, null));
-            await Assert.ThrowsAnyAsync<InvalidOperationException>(() => manager.ForkAsync(target, "late"));
-            await Assert.ThrowsAnyAsync<InvalidOperationException>(() => manager.MoveIdentityAsync(other,
-                new() { ["newAgentName"] = "target", ["newSessionId"] = "late" }));
-            var unrelated = await manager.CreateNamedAsync("other", "unrelated", null, null).WaitAsync(TimeSpan.FromSeconds(5));
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(() =>
+                manager.CreateNamedAsync("target", "late", null, null)
+            );
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(() =>
+                manager.CreateChildAsync(other, "late", "target", null, null, null)
+            );
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(() =>
+                manager.ForkAsync(target, "late")
+            );
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(() =>
+                manager.MoveIdentityAsync(
+                    other,
+                    new() { ["newAgentName"] = "target", ["newSessionId"] = "late" }
+                )
+            );
+            var unrelated = await manager
+                .CreateNamedAsync("other", "unrelated", null, null)
+                .WaitAsync(TimeSpan.FromSeconds(5));
             Assert.NotNull(manager.Catalog.Get(unrelated.Id));
             release.TrySetResult();
             var captured = await accepted.WaitAsync(TimeSpan.FromSeconds(5));
@@ -94,13 +106,22 @@ public sealed partial class AgentDeletionTests
                 claimed.TrySetResult();
             if (stage != "directory")
                 return;
-            await Assert.ThrowsAnyAsync<InvalidOperationException>(() => manager.CreateNamedAsync("target", "late", null, null));
-            await Assert.ThrowsAnyAsync<InvalidOperationException>(() => manager.MoveIdentityAsync(other,
-                new() { ["newAgentName"] = "target", ["newSessionId"] = "late" }));
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(() =>
+                manager.CreateNamedAsync("target", "late", null, null)
+            );
+            await Assert.ThrowsAnyAsync<InvalidOperationException>(() =>
+                manager.MoveIdentityAsync(
+                    other,
+                    new() { ["newAgentName"] = "target", ["newSessionId"] = "late" }
+                )
+            );
             await manager.CreateNamedAsync("other", "final-unrelated", null, null);
             finalChecked = true;
         };
-        var move = manager.MoveIdentityAsync(moving, new() { ["newAgentName"] = "target", ["newSessionId"] = "incoming" });
+        var move = manager.MoveIdentityAsync(
+            moving,
+            new() { ["newAgentName"] = "target", ["newSessionId"] = "incoming" }
+        );
         Task<string[]>? deletion = null;
         try
         {
@@ -110,7 +131,10 @@ public sealed partial class AgentDeletionTests
             Assert.False(deletion.IsCompleted);
             release.TrySetResult();
             await move.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.Equal(new[] { "target/incoming" }, await deletion.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal(
+                new[] { "target/incoming" },
+                await deletion.WaitAsync(TimeSpan.FromSeconds(5))
+            );
             Assert.True(finalChecked);
             Assert.NotNull(manager.Catalog.Get("other/main"));
             Assert.NotNull(manager.Catalog.Get("other/final-unrelated"));
@@ -135,10 +159,16 @@ public sealed partial class AgentDeletionTests
             await manager.LoadAsync();
             await manager.CreateAgentAsync("target");
             var second = await manager.CreateNamedAsync("target", "cold", null, null);
-            await ForkClearLifecycleTests.AppendAsync(second, new JsonObject
-            {
-                ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["text"] = "archived cold evidence" })
-            });
+            await ForkClearLifecycleTests.AppendAsync(
+                second,
+                new JsonObject
+                {
+                    ["role"] = "user",
+                    ["parts"] = new JsonArray(
+                        new JsonObject { ["text"] = "archived cold evidence" }
+                    ),
+                }
+            );
             manager.ChangePresentation(catalog => catalog.Archive(second.Id, true));
             Assert.True(manager.Catalog.Get(second.Id)!["archived"]!.GetValue<bool>());
             expected = manager.Catalog.List().Select(row => row["id"]!.ToString()).ToArray();
@@ -153,9 +183,14 @@ public sealed partial class AgentDeletionTests
         await reopened.LoadAsync();
         Assert.Empty(reopened.Owners());
         Assert.Empty(reopened.Catalog.List());
-        Assert.Contains("archived cold evidence", reopened.ArchiveReader("target/cold").ReadMessages().Single().Message.ToJsonString());
+        Assert.Contains(
+            "archived cold evidence",
+            reopened.ArchiveReader("target/cold").ReadMessages().Single().Message.ToJsonString()
+        );
         await reopened.CreateAgentAsync("target", createMainSession: false);
-        await Assert.ThrowsAnyAsync<InvalidDataException>(() => reopened.CreateNamedAsync("target", "cold", null, null));
+        await Assert.ThrowsAnyAsync<InvalidDataException>(() =>
+            reopened.CreateNamedAsync("target", "cold", null, null)
+        );
         Assert.False(File.Exists(Authority(temp.Path, "target/cold")));
     }
 }

@@ -158,10 +158,12 @@ internal sealed partial class SessionManager
                     deletionClaims.TryGetValue(id, out var claim)
                     && claim != owning
                     && mutationContext.Value?.AlreadyAccepted(id) != true
-                    && !(claim.AgentCommand
+                    && !(
+                        claim.AgentCommand
                         && sessions.TryGetValue(id, out var settling)
                         && settling.Entry.CanSettleDuringShutdown
-                        && !IsRetiring(id))
+                        && !IsRetiring(id)
+                    )
                 )
                     throw new SessionDeletionException(
                         $"Session '{id}' is being deleted. Retry after the operation finishes.",

@@ -167,13 +167,17 @@ internal sealed partial class MessageRouter
                 try
                 {
                     var deleted = await manager.DeleteAgentFromCommandAsync(deleteName);
-                    await source.Reply($"✅ Agent \"{deleteName}\" deleted successfully.\n\nDeleted {deleted.Length} session(s).");
+                    await source.Reply(
+                        $"✅ Agent \"{deleteName}\" deleted successfully.\n\nDeleted {deleted.Length} session(s)."
+                    );
                 }
                 catch (Exception error)
                 {
-                    await source.Reply(error.Message == $"Agent \"{deleteName}\" not found."
-                        ? $"❌ Agent \"{deleteName}\" not found."
-                        : "❌ Failed to delete agent: " + error.Message);
+                    await source.Reply(
+                        error.Message == $"Agent \"{deleteName}\" not found."
+                            ? $"❌ Agent \"{deleteName}\" not found."
+                            : "❌ Failed to delete agent: " + error.Message
+                    );
                 }
                 return;
             case "isolated":

@@ -18,7 +18,11 @@ internal sealed partial class AgentCatalog
             throw new InvalidDataException($"Agent \"{name}\" not found.");
     }
 
-    internal async Task RemoveDeletedAsync(string name, bool retainMetadata, Func<string, string, Task>? beforeStage)
+    internal async Task RemoveDeletedAsync(
+        string name,
+        bool retainMetadata,
+        Func<string, string, Task>? beforeStage
+    )
     {
         await createGate.WaitAsync();
         try
