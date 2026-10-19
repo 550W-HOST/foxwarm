@@ -25,6 +25,9 @@ internal sealed partial class NodeExecManager(
     private Task? reconciliation;
     private readonly CancellationTokenSource shutdown = new();
     internal Func<long> Now { get; init; } = () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    internal bool ExternalNamespace { get; init; }
+    internal Action? TrackingExpired { get; init; }
+    internal Action? RegistryIdle { get; init; }
     internal Action? BeforeLaunch { get; init; }
     internal Func<ProcessStartInfo, int> Launch { get; init; } =
         start =>
@@ -78,7 +81,11 @@ internal sealed partial class NodeExecManager(
                         id is null
                         || !SupportedId(id)
                         || raw.ContainsKey("backend")
-                        || raw.ContainsKey("externalOwner")
+                        || (raw.ContainsKey("externalOwner") && (!ExternalNamespace
+                            || raw["externalOwner"] is not JsonObject owner
+                            || Text(owner, "kind") != "external"
+                            || string.IsNullOrEmpty(Text(owner, "externalId"))
+                            || string.IsNullOrEmpty(Text(owner, "contextId"))))
                         || Text(raw, "logPath") is null
                         || Text(raw, "statusPath") is null
                         || !double.IsFinite(Number(raw["startedAt"]))
@@ -86,9 +93,12 @@ internal sealed partial class NodeExecManager(
                     )
                         continue;
                     var entry = (JsonObject)raw.DeepClone();
-                    entry["agentName"] = string.IsNullOrWhiteSpace(Text(entry, "agentName"))
-                        ? "main"
-                        : Text(entry, "agentName");
+                    if (entry["externalOwner"] is not null)
+                        entry.Remove("agentName");
+                    else
+                        entry["agentName"] = string.IsNullOrWhiteSpace(Text(entry, "agentName"))
+                            ? "main"
+                            : Text(entry, "agentName");
                     entry["initialCwd"] = string.IsNullOrWhiteSpace(Text(entry, "initialCwd"))
                         ? paths.StartupDirectory
                         : Text(entry, "initialCwd");
@@ -167,7 +177,7 @@ internal sealed partial class NodeExecManager(
 
     internal async Task<JsonObject> Start(
         JsonObject frame,
-        string agent,
+        string? agent,
         string node,
         CancellationToken stop,
         Action started
@@ -223,7 +233,8 @@ internal sealed partial class NodeExecManager(
         }
         try
         {
-            Directory.CreateDirectory(Path.Combine(paths.AgentDirectory(agent), "tmp"));
+            if (agent is not null)
+                Directory.CreateDirectory(Path.Combine(paths.AgentDirectory(agent), "tmp"));
             var (cwd, raw, source) = paths.ExecCwd(
                 args["cwd"],
                 Text(frame, "sessionCwd"),
@@ -232,7 +243,7 @@ internal sealed partial class NodeExecManager(
             );
             var date = DateTime.Now;
             var directory = Path.Combine(
-                Path.GetDirectoryName(registryPath)!,
+                agent is null ? Path.Combine(Path.GetDirectoryName(registryPath)!, "logs") : Path.GetDirectoryName(registryPath)!,
                 date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
             );
             Directory.CreateDirectory(directory);
@@ -261,8 +272,11 @@ internal sealed partial class NodeExecManager(
             foreach (var key in launch.Environment.Keys.ToArray())
                 if ((windows ? key.ToLowerInvariant() : key) is "fw_agentdir" or "fw_tmp")
                     launch.Environment.Remove(key);
-            launch.Environment["fw_agentdir"] = paths.AgentDirectory(agent);
-            launch.Environment["fw_tmp"] = Path.Combine(paths.AgentDirectory(agent), "tmp");
+            if (agent is not null)
+            {
+                launch.Environment["fw_agentdir"] = paths.AgentDirectory(agent);
+                launch.Environment["fw_tmp"] = Path.Combine(paths.AgentDirectory(agent), "tmp");
+            }
             launch.Environment["TERM"] = "xterm-256color";
             launch.Environment["FOXWARM_EXEC_LOG_DIR"] = directory;
             launch.Environment["FOXWARM_EXEC_TIME_TOKEN"] = token;
@@ -283,8 +297,6 @@ internal sealed partial class NodeExecManager(
             {
                 ["id"] = id,
                 ["pid"] = pid,
-                ["sessionId"] = Text(frame, "sessionId") ?? Text(args, "sessionId") ?? "node",
-                ["agentName"] = agent,
                 ["nodeId"] = node,
                 ["command"] = command,
                 ["initialCwd"] = cwd,
@@ -295,6 +307,13 @@ internal sealed partial class NodeExecManager(
                 ["startedAt"] = time,
                 ["notifyOnCompletion"] = false,
             };
+            if (agent is null)
+                entry["externalOwner"] = frame["owner"]!.DeepClone();
+            else
+            {
+                entry["sessionId"] = Text(frame, "sessionId") ?? Text(args, "sessionId") ?? "node";
+                entry["agentName"] = agent;
+            }
             if (raw is not null)
                 entry["cwdRaw"] = raw;
             if (Text(frame, "completionCapability") is { } capability)
@@ -419,8 +438,9 @@ internal sealed partial class NodeExecManager(
             entries[Text(entry, "id")!] = clone;
         });
 
-    internal Task Remove(JsonObject entry) =>
-        Mutate(() =>
+    internal async Task Remove(JsonObject entry)
+    {
+        await Mutate(() =>
         {
             var id = Text(entry, "id")!;
             entries.TryRemove(id, out _);
@@ -429,6 +449,9 @@ internal sealed partial class NodeExecManager(
             if (recent.Count > 1024)
                 recent.RemoveRange(0, recent.Count - 1024);
         });
+        if (entries.IsEmpty)
+            RegistryIdle?.Invoke();
+    }
 
     internal async Task Reconcile()
     {
@@ -441,6 +464,7 @@ internal sealed partial class NodeExecManager(
                 {
                     if (Now() - Number(entry["startedAt"]) > RetentionMilliseconds)
                     {
+                        TrackingExpired?.Invoke();
                         await Remove(entry);
                         return;
                     }
@@ -469,7 +493,14 @@ internal sealed partial class NodeExecManager(
         catch (OperationCanceledException) when (shutdown.IsCancellationRequested) { }
     }
 
-    public async ValueTask DisposeAsync()
+    private Task? disposal;
+
+    public ValueTask DisposeAsync()
+    {
+        lock (initializationGate) return new ValueTask(disposal ??= DisposeOnce());
+    }
+
+    private async Task DisposeOnce()
     {
         shutdown.Cancel();
         if (initialization is not null)

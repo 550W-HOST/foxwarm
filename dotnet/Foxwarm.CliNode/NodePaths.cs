@@ -30,7 +30,7 @@ internal sealed class NodePaths(string startupDirectory)
         );
     }
 
-    internal string Resolve(string? raw, string agent, string? cwd = null)
+    internal string Resolve(string? raw, string? agent, string? cwd = null)
     {
         if (string.IsNullOrEmpty(raw))
             throw new InvalidDataException("filePath is required");
@@ -46,8 +46,9 @@ internal sealed class NodePaths(string startupDirectory)
             var name = path[1..(slash < 0 ? path.Length : slash)];
             var root = name switch
             {
-                "fw_agentdir" => AgentDirectory(agent),
-                "fw_tmp" => Path.Combine(AgentDirectory(agent), "tmp"),
+                "fw_agentdir" when agent is not null => AgentDirectory(agent),
+                "fw_tmp" when agent is not null => Path.Combine(AgentDirectory(agent), "tmp"),
+                "fw_agentdir" or "fw_tmp" => throw new InvalidDataException($"Agent path variable ${name} is unavailable in this execution environment."),
                 _ => throw new InvalidDataException("Unknown Agent path variable: $" + name),
             };
             path =
@@ -59,24 +60,24 @@ internal sealed class NodePaths(string startupDirectory)
                     );
         }
         path = Home(path);
-        var basis = !string.IsNullOrWhiteSpace(cwd)
-            ? FullPath(Home(cwd.Trim()), StartupDirectory)
-            : AgentDirectory(agent);
+        var basis = agent is null
+            ? FullPath(string.IsNullOrEmpty(cwd) ? StartupDirectory : cwd, StartupDirectory)
+            : !string.IsNullOrWhiteSpace(cwd)
+                ? FullPath(Home(cwd.Trim()), StartupDirectory)
+                : AgentDirectory(agent);
         return FullPath(path, basis);
     }
 
     internal (string Cwd, string? Raw, string Source) ExecCwd(
         JsonNode? argument,
         string? sessionCwd,
-        string agent,
+        string? agent,
         string node
     )
     {
         string? Expand(string? value)
         {
-            value = value?.Trim(
-                "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff".ToCharArray()
-            );
+            value = value is null ? null : TrimSpace(value);
             if (string.IsNullOrEmpty(value))
                 return null;
             return value.StartsWith('$') ? Resolve(value, agent, StartupDirectory) : value;
@@ -113,6 +114,10 @@ internal sealed class NodePaths(string startupDirectory)
             throw new InvalidDataException(Invalid("directory is not accessible: EACCES"));
         return (cwd, raw, source);
     }
+
+    internal static string TrimSpace(string value) => value.Trim(
+                "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff".ToCharArray()
+            );
 
     internal IEnumerable<string> RecoveryDirectories()
     {

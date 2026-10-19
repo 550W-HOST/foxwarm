@@ -195,7 +195,7 @@ internal sealed partial class NodeClient
                     case "registered":
                         try
                         {
-                            ValidateProtocol(frame);
+                            connection.Protocol = ValidateProtocol(frame);
                         }
                         catch (InvalidDataException error)
                         {
@@ -261,6 +261,12 @@ internal sealed partial class NodeClient
                             "Pairing was rejected; automatic reconnect is disabled"
                         );
                         break;
+                    case "external_exec_release":
+                        ReleaseExternal(connection, frame["owner"] as JsonObject);
+                        break;
+                    case "external_exec_result_request":
+                        ScheduleExternalQuery(connection, frame);
+                        break;
                     case "tool_call":
                     case "file_read_request":
                     case "file_write_request":
@@ -315,12 +321,9 @@ internal sealed partial class NodeClient
             JsonObject response;
             if (type == "tool_call")
             {
-                if (frame.ContainsKey("owner"))
-                    throw new InvalidDataException(
-                        "External tool owners are unavailable on this Node."
-                    );
-                var result =
-                    Text(frame, "tool") == "exec"
+                var result = frame.ContainsKey("owner")
+                    ? await ExecuteExternal(connection, frame, () => execStarted = true)
+                    : Text(frame, "tool") == "exec"
                         ? await ExecuteCommand(
                             connection,
                             frame,
@@ -556,6 +559,7 @@ internal sealed partial class NodeClient
     private sealed class Connection : IDisposable
     {
         internal ClientWebSocket Socket { get; } = new();
+        internal int Protocol { get; set; } = 1;
         private readonly SemaphoreSlim send = new(1, 1);
         private readonly System.Collections.Concurrent.ConcurrentDictionary<
             string,

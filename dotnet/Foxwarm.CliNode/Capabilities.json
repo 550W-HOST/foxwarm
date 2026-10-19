@@ -133,6 +133,7 @@
   "features": {
     "programmaticToolData": true,
     "execWaitCancellation": true,
-    "remoteExecBackgroundRegistration": true
+    "remoteExecBackgroundRegistration": true,
+    "externalToolOwner": 1
   }
 }

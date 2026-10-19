@@ -70,7 +70,7 @@ try {
   const source = await launch('source', true), cli = await launch('cli')
   const caps = registrations.find(row => row.capabilities.tools.length === 6).capabilities
   assert(caps.features.execWaitCancellation && caps.features.remoteExecBackgroundRegistration)
-  assert.equal(caps.features.externalToolOwner, undefined)
+  assert.equal(caps.features.externalToolOwner, 1)
   // These are the first execs for genuinely absent Agent roots, before the corpus prepares tmp.
   for (const handle of [source, cli]) {
     for (const [agent, args, metadata, suffix] of [

@@ -13,7 +13,7 @@ internal sealed partial class NodeClient
         string,
         (Connection Connection, CancellationTokenSource Stop)
     > foreground = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<long, Task> dispatches = new();
+    private readonly ConcurrentDictionary<long, (Task Task, bool Drain)> dispatches = new();
     private long dispatchSequence;
     private Connection? registeredConnection;
     private Task? recovery;
@@ -83,7 +83,7 @@ internal sealed partial class NodeClient
     {
         var call = Text(frame, "callId") ?? "";
         CancellationTokenSource? cancellation = null;
-        if (Text(frame, "type") == "tool_call" && Text(frame, "tool") == "exec")
+        if (Text(frame, "type") == "tool_call" && Text(frame, "tool") == "exec" && !frame.ContainsKey("owner"))
         {
             cancellation = new();
             foreground[call] = (connection, cancellation);
@@ -110,7 +110,8 @@ internal sealed partial class NodeClient
                 }
             }
         });
-        dispatches[sequence] = task;
+        // Source external shutdown drains manager observers/persistence, not a foreground call's wait.
+        dispatches[sequence] = (task, !frame.ContainsKey("owner") || Text(frame, "tool") != "exec");
         _ = task.ContinueWith(
             _ =>
             {
@@ -190,10 +191,19 @@ internal sealed partial class NodeClient
         registeredConnection = null;
         foreach (var call in foreground.Values)
             CancelWait(call.Stop);
-        await Task.WhenAll(dispatches.Values);
+        await Task.WhenAll(dispatches.Values.Where(call => call.Drain).Select(call => call.Task));
         if (recovery is not null)
             await recovery;
         foreach (var manager in execManagers.Values)
             await manager.DisposeAsync();
+        ExternalRuntime[] external;
+        lock (externalGate) external = externalExecRuntimes.Values.ToArray();
+        foreach (var runtime in external)
+            await runtime.Manager.DisposeAsync();
+        lock (externalGate)
+        {
+            foreach (var timer in releasedExternalOwners.Values) timer.Dispose();
+            releasedExternalOwners.Clear();
+        }
     }
 }

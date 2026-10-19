@@ -11,13 +11,15 @@ internal sealed class NodeFileTools(NodePaths paths)
     internal async Task<JsonObject> Execute(
         string tool,
         JsonObject? args,
-        string agent,
+        string? agent,
         string? cwd,
         bool programmatic
     )
     {
         if (tool == "get_default_cwd")
             return new JsonObject { ["output"] = paths.StartupDirectory };
+        // External Source contexts do not request programmatic capture or resolved-path sidecars.
+        programmatic &= agent is not null;
         args ??= new JsonObject();
         var resolved = new JsonArray();
         string? activePath = null;
@@ -228,7 +230,7 @@ internal sealed class NodeFileTools(NodePaths paths)
                 default:
                     throw new InvalidDataException($"Tool `{tool}` not found");
             }
-            if (resolved.Count > 0)
+            if (agent is not null && resolved.Count > 0)
                 result["__foxwarmResolvedToolPaths"] = resolved;
             return result;
         }

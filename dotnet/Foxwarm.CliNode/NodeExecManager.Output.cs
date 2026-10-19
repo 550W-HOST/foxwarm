@@ -231,6 +231,17 @@ internal sealed partial class NodeExecManager
             + string.Join('\n', lines);
     }
 
+    internal static async Task<string> ResolvedCwd(JsonObject entry)
+    {
+        try
+        {
+            var cwd = NodePaths.TrimSpace(await File.ReadAllTextAsync(Text(entry, "cwdPath")!));
+            return cwd.Length > 0 ? cwd : Text(entry, "initialCwd")!;
+        }
+        catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
+        { return Text(entry, "initialCwd")!; }
+    }
+
     internal static async Task<JsonObject> Result(
         JsonObject entry,
         JsonObject? status,
