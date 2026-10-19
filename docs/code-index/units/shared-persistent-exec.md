@@ -89,6 +89,6 @@ Preserve captured output whitespace exactly in foreground and timeout previews. 
 
 ## Integration and tests
 
-Main's `createExecRuntime` supplies persistence and exact-owner completion dispatch. CLI tools continue using their existing native managers and external-owner namespace contracts. `src/nodes/providerExecBackend.ts` is the Core-only bridge for optional external process primitives, not an adapter SDK import.
+Main's `createExecRuntime` supplies persistence and exact-owner completion dispatch. TypeScript CLI tools continue using their existing native managers and external-owner namespace contracts. The [.NET CLI adapter](./dotnet-cli-node.md#persistent-session-exec) preserves the Session-owned native registry and acknowledged lifecycle without importing Main’s different manager or Provider registry. `src/nodes/providerExecBackend.ts` is the Core-only bridge for optional external process primitives, not an adapter SDK import.
 
 `persistentExec.test.ts` covers native launch, cwd, output, Stop, registry/recovery, expiration, identity allocation, mutation ordering and notifications. Process-separated provider uncertainty, loss, query bounds, restart and raw-output tests belong to [src-node-providers](./src-node-providers.md). Foreground cancellation semantics remain canonical in [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).

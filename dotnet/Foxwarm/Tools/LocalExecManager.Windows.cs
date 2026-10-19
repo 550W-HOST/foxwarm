@@ -94,7 +94,7 @@ internal sealed partial class LocalExecManager
             StartedAt = new DateTimeOffset(
                 process.StartTime.ToUniversalTime()
             ).ToUnixTimeMilliseconds(),
-            ProcessStartTicks = ReadProcessIdentity(process.Id).Ticks,
+            ProcessStartTicks = NativeProcessFacts.ReadIdentity(process.Id).Ticks,
         };
         await AtomicWriteAsync(
             Path.Combine(record.Directory, "meta.json"),

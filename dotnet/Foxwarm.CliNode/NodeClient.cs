@@ -11,8 +11,9 @@ internal sealed record NodeClientOptions(
     string? CredentialsFile
 );
 
-internal sealed class NodeClient
+internal sealed partial class NodeClient
 {
+    private readonly NodePaths paths;
     private readonly NodeClientOptions options;
     private readonly NodeFileTools tools;
     private readonly NodeFileTransfer transfers;
@@ -27,6 +28,7 @@ internal sealed class NodeClient
     internal NodeClient(NodeClientOptions options, NodePaths paths)
     {
         this.options = options;
+        this.paths = paths;
         tools = new NodeFileTools(paths);
         transfers = new NodeFileTransfer(paths);
         requestedName = string.IsNullOrEmpty(options.NodeId)
@@ -41,6 +43,12 @@ internal sealed class NodeClient
     private bool Authenticated => !string.IsNullOrEmpty(nodeId) && !string.IsNullOrEmpty(authToken);
 
     internal async Task Run(CancellationToken stop)
+    {
+        try { await RunConnections(stop); }
+        finally { await DrainExec(); }
+    }
+
+    private async Task RunConnections(CancellationToken stop)
     {
         await LoadCredentials();
         if (!Authenticated && string.IsNullOrEmpty(options.PairingToken))
@@ -89,7 +97,12 @@ internal sealed class NodeClient
                         ["requestedName"] = Authenticated ? null : requestedName,
                     }
                 );
-                await Receive(connection, stop);
+                try { await Receive(connection, stop); }
+                finally
+                {
+                    if (ReferenceEquals(registeredConnection, connection)) registeredConnection = null;
+                    connection.RejectPending();
+                }
                 if (
                     connection.Socket.CloseStatus == WebSocketCloseStatus.PolicyViolation
                     && connection.Socket.CloseStatusDescription?.Contains(
@@ -197,6 +210,11 @@ internal sealed class NodeClient
                         }
                         nodeId = registeredId;
                         Log("registered", "nodeId=" + nodeId);
+                        if (Authenticated)
+                        {
+                            registeredConnection = connection;
+                            recovery ??= Recover();
+                        }
                         break;
                     case "node_incompatible":
                         incompatible = true;
@@ -237,10 +255,18 @@ internal sealed class NodeClient
                     case "file_read_request":
                     case "file_write_request":
                         // Effects outlive a lost reply, but can only reply on their originating connection.
-                        _ = Task.Run(() => Dispatch(connection, frame));
+                        ScheduleDispatch(connection, frame);
+                        break;
+                    case "tool_call_cancel":
+                        if (Text(frame, "callId") is { } cancelled && foreground.TryGetValue(cancelled, out var call) && ReferenceEquals(call.Connection, connection)) CancelWait(call.Stop);
+                        break;
+                    case "session_event_accepted":
+                    case "cli_response":
+                        connection.Accept(frame);
                         break;
                     case "error":
-                        Log("master_error", Text(frame, "error") ?? "Unknown error");
+                        if (Text(frame, "requestId") is not null) connection.Accept(frame);
+                        else Log("master_error", Text(frame, "error") ?? "Unknown error");
                         break;
                 }
             }
@@ -255,9 +281,10 @@ internal sealed class NodeClient
         }
     }
 
-    private async Task Dispatch(Connection connection, JsonObject frame)
+    private async Task Dispatch(Connection connection, JsonObject frame, CancellationTokenSource? cancellation)
     {
         var type = Text(frame, "type");
+        var execStarted = false;
         try
         {
             var agent =
@@ -271,13 +298,15 @@ internal sealed class NodeClient
                     throw new InvalidDataException(
                         "External tool owners are unavailable on this Node."
                     );
-                var result = await tools.Execute(
-                    Text(frame, "tool") ?? "",
-                    frame["args"] as JsonObject,
-                    agent,
-                    Text(frame, "sessionCwd"),
-                    NodeFileTools.Flag(frame, "programmatic")
-                );
+                var result = Text(frame, "tool") == "exec"
+                    ? await ExecuteCommand(connection, frame, agent, cancellation?.Token ?? CancellationToken.None, () => execStarted = true)
+                    : await tools.Execute(
+                        Text(frame, "tool") ?? "",
+                        frame["args"] as JsonObject,
+                        agent,
+                        Text(frame, "sessionCwd"),
+                        NodeFileTools.Flag(frame, "programmatic")
+                    );
                 response = new JsonObject
                 {
                     ["type"] = "tool_call_response",
@@ -328,6 +357,7 @@ internal sealed class NodeClient
                         ["transferId"] = frame["transferId"]?.DeepClone(),
                         ["error"] = detail["message"]?.DeepClone(),
                     };
+            if (type == "tool_call" && Text(frame, "tool") == "exec") response["execStarted"] = execStarted;
             await connection.Send(response);
         }
     }
@@ -337,6 +367,7 @@ internal sealed class NodeClient
         string? code = error switch
         {
             NodeFileException native => native.Code,
+            ExecCollisionException => "PERSISTENT_EXEC_ID_COLLISION",
             FileNotFoundException or DirectoryNotFoundException => "ENOENT",
             UnauthorizedAccessException => "EACCES",
             IOException when error is not InvalidDataException => (error.HResult & 0xffff) switch
@@ -355,7 +386,7 @@ internal sealed class NodeClient
         {
             ["message"] =
                 (
-                    code is null || error.Message.StartsWith(code + ":", StringComparison.Ordinal)
+                    code is null || error is ExecCollisionException || error.Message.StartsWith(code + ":", StringComparison.Ordinal)
                         ? ""
                         : code + ": "
                 ) + error.Message,
@@ -422,7 +453,16 @@ internal sealed class NodeClient
         using var stream = typeof(NodeClient).Assembly.GetManifestResourceStream(
             "Foxwarm.CliNode.Capabilities.json"
         )!;
-        return (JsonObject)JsonNode.Parse(stream)!;
+        var capabilities = (JsonObject)JsonNode.Parse(stream)!;
+        if (!ExecNative.Supported)
+        {
+            var definitions = capabilities["tools"]!.AsArray();
+            var exec = definitions.FirstOrDefault(tool => NodeFileTools.Text(tool?["name"]) == "exec");
+            if (exec is not null) definitions.Remove(exec);
+            capabilities["features"]!.AsObject().Remove("execWaitCancellation");
+            capabilities["features"]!.AsObject().Remove("remoteExecBackgroundRegistration");
+        }
+        return capabilities;
     }
 
     internal static int ValidateProtocol(JsonObject frame)
@@ -483,12 +523,42 @@ internal sealed class NodeClient
     {
         internal ClientWebSocket Socket { get; } = new();
         private readonly SemaphoreSlim send = new(1, 1);
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource<JsonObject>> requests = new();
 
-        internal async Task Send(JsonObject frame)
+        internal async Task Request(JsonObject frame)
+        {
+            var id = "cli_" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "_" + Guid.NewGuid().ToString("N")[..8];
+            var completion = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+            requests[id] = completion;
+            frame["requestId"] = id;
+            try
+            {
+                await Send(frame, requireOpen: true);
+                await completion.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+            finally { requests.TryRemove(id, out _); }
+        }
+
+        internal void Accept(JsonObject frame)
+        {
+            if (Text(frame, "requestId") is not { } id || !requests.TryRemove(id, out var pending)) return;
+            if (Text(frame, "type") == "error" || frame["ok"] is JsonValue value && value.TryGetValue<bool>(out var ok) && !ok)
+                pending.TrySetException(new IOException("Session event was rejected by master"));
+            else pending.TrySetResult(frame);
+        }
+
+        internal void RejectPending()
+        {
+            foreach (var request in requests.ToArray())
+                if (requests.TryRemove(request.Key, out var pending)) pending.TrySetException(new IOException("Remote node is not connected to master"));
+        }
+
+        internal async Task Send(JsonObject frame, bool requireOpen = false)
         {
             await send.WaitAsync();
             try
             {
+                if (requireOpen && Socket.State != WebSocketState.Open) throw new IOException("Remote node is not connected to master");
                 if (Socket.State == WebSocketState.Open)
                     await Socket.SendAsync(
                         System.Text.Encoding.UTF8.GetBytes(frame.ToJsonString()).AsMemory(),
@@ -502,13 +572,13 @@ internal sealed class NodeClient
                         is WebSocketException
                             or ObjectDisposedException
                             or OperationCanceledException
-                ) { }
+                ) { if (requireOpen) throw new IOException("Remote node is not connected to master"); }
             finally
             {
                 send.Release();
             }
         }
 
-        public void Dispose() => Socket.Dispose();
+        public void Dispose() { RejectPending(); Socket.Dispose(); }
     }
 }

@@ -1,12 +1,12 @@
-# Unit: Shared .NET native file primitives
+# Unit: Shared .NET native primitives
 
-Files: `dotnet/Foxwarm.NodePrimitives/Foxwarm.NodePrimitives.csproj`, `dotnet/Foxwarm.NodePrimitives/AssemblyInfo.cs`, `dotnet/Foxwarm.NodePrimitives/BoundedTextExcerpt.cs`, `dotnet/Foxwarm.NodePrimitives/ExactReplacement.cs`, `dotnet/Foxwarm.NodePrimitives/FileToolCore.cs`, `dotnet/Foxwarm.NodePrimitives/FileToolCore.Scanner.cs`, `dotnet/Foxwarm.NodePrimitives/JsonStringQuoting.cs`, `dotnet/Foxwarm.NodePrimitives/NativeFileKind.cs`, `dotnet/Foxwarm.NodePrimitives/RasterImageMime.cs`, `dotnet/Foxwarm.NodePrimitives/TargetFileStat.cs`, `dotnet/Foxwarm.NodePrimitives/WorkspacePatch.cs`
+Files: `dotnet/Foxwarm.NodePrimitives/Foxwarm.NodePrimitives.csproj`, `dotnet/Foxwarm.NodePrimitives/AssemblyInfo.cs`, `dotnet/Foxwarm.NodePrimitives/BoundedTextExcerpt.cs`, `dotnet/Foxwarm.NodePrimitives/ExecDuration.cs`, `dotnet/Foxwarm.NodePrimitives/ExecPetnames.cs`, `dotnet/Foxwarm.NodePrimitives/NativeProcessFacts.cs`, `dotnet/Foxwarm.NodePrimitives/ExactReplacement.cs`, `dotnet/Foxwarm.NodePrimitives/FileToolCore.cs`, `dotnet/Foxwarm.NodePrimitives/FileToolCore.Scanner.cs`, `dotnet/Foxwarm.NodePrimitives/JsonStringQuoting.cs`, `dotnet/Foxwarm.NodePrimitives/NativeFileKind.cs`, `dotnet/Foxwarm.NodePrimitives/RasterImageMime.cs`, `dotnet/Foxwarm.NodePrimitives/TargetFileStat.cs`, `dotnet/Foxwarm.NodePrimitives/WorkspacePatch.cs`
 
 ## Purpose and consumers
 
 A small BCL-only .NET 10 class library owns mechanisms actually used by Main and the [headless CLI Node](./dotnet-cli-node.md). Main and CLI both reference this library. Internal friend assemblies retain a narrow first-party boundary; this is not a public plugin/NuGet API or a split of Main's full runtime.
 
-Main keeps authorization, Session/cwd policy, cached-write references, interpreter budgets, native atomic writes, Provider adaptation and caller-specific filesystem effects. CLI keeps startup roots, credential/connection ownership and its Source-native effect/publication wrapper. No exec manager, provider registry, Session runtime, Code/PTY service or image decoder is moved into this library.
+Main keeps authorization, Session/cwd policy, cached-write references, interpreter budgets, native atomic writes, Provider adaptation and caller-specific filesystem effects. CLI keeps startup roots, credential/connection ownership and its Source-native effect/publication wrapper. No exec manager, provider registry, Session runtime, Code/PTY service or image decoder is moved into this library. The agreed native process/access facts, duration formatting and petname vocabulary are shared; Main/CLI launch, environment, registry, ownership and output policies remain separate.
 
 ## Stable symbols
 
@@ -14,7 +14,9 @@ Main keeps authorization, Session/cwd policy, cached-write references, interpret
 |---|---|
 | `FileToolCore.Read`, `ReadContent`, `FormatDirectory`, `NativeSize` | Native/target text and directory reads, target-following native size inspection before opening, bounded materialization and programmatic data publication. |
 | `FileToolCore.Scanner`, range collector | Exact byte/line endings and bounded selected-range samples. |
-| `BoundedTextExcerpt.Format` | Bounded head/tail rendering, binary preview and byte-conversion disclosure. |
+| `BoundedTextExcerpt.Format`, `AnalyzeSamples`, `BinaryPreview` | Shared bounded sample classification/rendering, with caller-specific file/exec metadata. |
+| `ExecDuration.Format`, `Shell`; `ExecPetnames` | Source-compatible process duration and public identity vocabulary, without allocation/retention policy. |
+| `NativeProcessFacts.ReadIdentity`, `Access` | Native process identity and directory readability/searchability syscalls, without Session or launch policy. |
 | `ExactReplacement.Apply` | Ordinal nonoverlapping match counting and literal unique replacement; callers retain replacement-string and error policies. |
 | `WorkspacePatch.Parse`, `Update` | Source envelope/action parsing, matching/anchor/EOF semantics, line-ending restoration and bounded failed-hunk diagnostics, without effects. |
 | `JsonStringQuoting.Append`, `Quote` | JSON.stringify-compatible string quoting, including lone surrogates; also consumed by Main journal/download identity code. |

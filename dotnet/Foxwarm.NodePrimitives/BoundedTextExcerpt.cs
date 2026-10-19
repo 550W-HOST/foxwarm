@@ -100,6 +100,18 @@ internal static class BoundedTextExcerpt
         return (text.ToString(), suspicious, escaped);
     }
 
+    internal sealed record Samples(bool Binary, string Head, string Tail, int Escaped);
+
+    internal static Samples AnalyzeSamples(byte[] head, byte[] tail)
+    {
+        var first = Analyze(head, false, true);
+        var last = Analyze(tail, true, false);
+        return new(first.Suspicious + last.Suspicious > (head.Length + tail.Length) * 0.1, first.Text, last.Text, first.Escaped + last.Escaped);
+    }
+
+    internal static string BinaryPreview(byte[] head, byte[] tail, long bytes, string subject) =>
+        $"[foxwarm: {subject} appears binary; showing hexadecimal previews from a {bytes}-byte file]\nHead ({Math.Min(head.Length, 64)} bytes): {Convert.ToHexStringLower(head.AsSpan(0, Math.Min(head.Length, 64)))}\nTail ({Math.Min(tail.Length, 64)} bytes): {Convert.ToHexStringLower(tail.AsSpan(0, Math.Min(tail.Length, 64)))}\n[foxwarm: raw binary content omitted; source file remains unchanged]";
+
     internal static string Format(
         byte[] head,
         byte[] tail,
@@ -111,15 +123,14 @@ internal static class BoundedTextExcerpt
         string separator = "\n"
     )
     {
-        var first = Analyze(head, false, true);
-        var last = Analyze(tail, true, false);
-        var binary = first.Suspicious + last.Suspicious > (head.Length + tail.Length) * 0.1;
-        var escaped = first.Escaped + last.Escaped;
+        var sample = AnalyzeSamples(head, tail);
+        var binary = sample.Binary;
+        var escaped = sample.Escaped;
         var body = binary
             ? $"[foxwarm: {label} appears binary; showing hexadecimal previews from a {selectedBytes}-byte {(label == "selected file range" ? "selected range" : "file")}]\nHead ({Math.Min(head.Length, 64)} bytes): {Convert.ToHexStringLower(head.AsSpan(0, Math.Min(head.Length, 64)))}\nTail ({Math.Min(tail.Length, 64)} bytes): {Convert.ToHexStringLower(tail.AsSpan(0, Math.Min(tail.Length, 64)))}\n[foxwarm: raw binary content omitted; source file remains unchanged]"
-            : first.Text
+            : sample.Head
                 + $"\n[foxwarm: {label} middle omitted; showing bounded head and tail samples from {selectedBytes}-byte selected content{(escaped > 0 ? $"; escaped {escaped} byte(s)" : "")}]\n"
-                + last.Text;
+                + sample.Tail;
         var lines = new List<string> { "File content was shortened for inline display." };
         if (metadata is not null)
             lines.AddRange(metadata);

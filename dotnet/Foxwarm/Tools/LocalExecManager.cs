@@ -591,7 +591,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             StartedAt = new DateTimeOffset(
                 process.StartTime.ToUniversalTime()
             ).ToUnixTimeMilliseconds(),
-            ProcessStartTicks = ReadProcessIdentity(process.Id).Ticks,
+            ProcessStartTicks = NativeProcessFacts.ReadIdentity(process.Id).Ticks,
         };
         await AtomicWriteAsync(
             Path.Combine(record.Directory, "meta.json"),
@@ -611,14 +611,11 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             throw new ArgumentException(
                 $"Cannot start exec: working directory is invalid (not an accessible directory). Resolved cwd: `{path}`."
             );
-        if (!OperatingSystem.IsWindows() && Access(path, 5) != 0)
+        if (!OperatingSystem.IsWindows() && NativeProcessFacts.Access(path, 5) != 0)
             throw new UnauthorizedAccessException(
                 $"Cannot start exec: working directory is not readable/searchable: `{path}`."
             );
     }
-
-    [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "access", SetLastError = true)]
-    private static extern int Access(string path, int mode);
 
     private static async Task<string?> ReadFinishedCwdAsync(ExecRecord record)
     {
@@ -637,7 +634,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             return record.KnownCwd;
         if (OperatingSystem.IsWindows())
             return null; // Windows does not expose another process's live shell location.
-        var identity = ReadProcessIdentity(record.Pid);
+        var identity = NativeProcessFacts.ReadIdentity(record.Pid);
         if (
             identity.Ticks is null
             || record.ProcessStartTicks is not null && identity.Ticks != record.ProcessStartTicks
@@ -764,7 +761,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             return JsonNode.Parse(await File.ReadAllTextAsync(path)) as JsonObject;
         if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - record.StartedAt < 3000)
             return null;
-        var observed = ReadProcessIdentity(record.Pid);
+        var observed = NativeProcessFacts.ReadIdentity(record.Pid);
         if (
             observed.Ticks is not null
             && (record.ProcessStartTicks is null || observed.Ticks == record.ProcessStartTicks)
@@ -798,51 +795,6 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 File.Delete(temporary);
         }
         return JsonNode.Parse(await File.ReadAllTextAsync(path)) as JsonObject;
-    }
-
-    private static (string? Ticks, char State) ReadProcessIdentity(int pid)
-    {
-        try
-        {
-            if (OperatingSystem.IsWindows())
-            {
-                using var process = Process.GetProcessById(pid);
-                return process.HasExited
-                    ? (null, '?')
-                    : (
-                        process
-                            .StartTime.ToUniversalTime()
-                            .Ticks.ToString(CultureInfo.InvariantCulture),
-                        'R'
-                    );
-            }
-            var raw = File.ReadAllText($"/proc/{pid}/stat");
-            var close = raw.LastIndexOf(')');
-            if (close < 0 || close + 2 >= raw.Length)
-                return (null, '?');
-            var fields = raw[(close + 2)..].Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            return fields.Length > 19 ? (fields[19], fields[0][0]) : (null, '?');
-        }
-        catch (ArgumentException)
-        {
-            return (null, '?');
-        }
-        catch (InvalidOperationException)
-        {
-            return (null, '?');
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-            return (null, '?');
-        }
-        catch (IOException)
-        {
-            return (null, '?');
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return (null, '?');
-        }
     }
 
     private async Task<JsonObject> PageAsync(
