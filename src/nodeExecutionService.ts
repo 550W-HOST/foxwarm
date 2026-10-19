@@ -6,7 +6,6 @@ import {
   RpcServiceHandler,
 } from './rpc';
 import * as sessionManager from './sessionManager';
-import { nodesManager } from './nodes/manager';
 import {
   NodeLifecycleAction,
   type NodeProviderSummary,
