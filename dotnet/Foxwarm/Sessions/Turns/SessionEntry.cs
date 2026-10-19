@@ -33,10 +33,26 @@ public sealed class SessionEntry
 
     internal bool IdentityAvailable => Volatile.Read(ref identityUnavailable) is null;
 
-    internal void MarkIdentityUnavailable(Exception error) =>
-        Volatile.Write(ref identityUnavailable, error);
+    private readonly CancellationTokenSource identityLoss = new();
+    internal CancellationToken IdentityLossToken => identityLoss.Token;
 
-    internal bool Retired { get; set; }
+    internal void MarkIdentityUnavailable(Exception error)
+    {
+        Volatile.Write(ref identityUnavailable, error);
+        identityLoss.Cancel();
+    }
+
+    private bool retired;
+    internal bool Retired
+    {
+        get => Volatile.Read(ref retired);
+        set
+        {
+            Volatile.Write(ref retired, value);
+            if (value)
+                identityLoss.Cancel();
+        }
+    }
     internal Action<JsonObject, bool>? ToolProgress { get; set; }
     internal Action<Foxwarm.Channels.ChannelTurnProgress>? StructuredProgress { get; set; }
     internal Func<Task>? TurnStopped { get; set; }

@@ -5,15 +5,19 @@ namespace Foxwarm.Sessions;
 public sealed partial class SessionSaveLane
 {
     internal async Task<(bool Changed, string? Previous, string? Current)> CommitCwdAsync(
-        string? value
+        string? value,
+        bool preserveWhitespace = false,
+        Func<bool>? condition = null
     )
     {
-        var normalized = value is null ? "" : SessionGoal.Trim(value);
+        var normalized = value is null ? "" : preserveWhitespace ? value : SessionGoal.Trim(value);
         var next = normalized.Length == 0 ? null : normalized;
         (bool Changed, string? Previous, string? Current) result = default;
         await EnqueueOperationAsync(async () =>
         {
             using var admission = entry.AdmitMutation();
+            if (condition?.Invoke() == false)
+                return;
             var operation = entry.WithState(state =>
             {
                 var snapshot = state.Snapshot();

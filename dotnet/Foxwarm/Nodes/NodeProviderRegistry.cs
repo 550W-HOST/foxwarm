@@ -151,15 +151,7 @@ internal sealed class NodeProviderRegistry
             return native.DiscoveredDefinitions(id);
         if (!Online(id) || !discovered.TryGetValue(id, out var descriptor))
             return [];
-        var definitions = ProviderDefinitions();
-        if (SessionWait.Text(descriptor["filesystem"]) == "read")
-            return new(
-                definitions
-                    .Where(value => SessionWait.Text(value?["name"]) == "read")
-                    .Select(value => value!.DeepClone())
-                    .ToArray()
-            );
-        return definitions;
+        return DefinitionsFor(descriptor);
     }
 
     private static JsonArray ProviderDefinitions()
@@ -214,14 +206,31 @@ internal sealed class NodeProviderRegistry
         if (SessionWait.Text(descriptor["availability"]) != "ready")
             return [];
         var definitions = ProviderDefinitions();
-        return SessionWait.Text(descriptor["filesystem"]) == "read"
-            ? new JsonArray(
-                definitions
-                    .Where(value => SessionWait.Text(value?["name"]) == "read")
-                    .Select(value => value!.DeepClone())
-                    .ToArray()
-            )
-            : definitions;
+        if (SessionWait.Text(descriptor["filesystem"]) == "read")
+            definitions = new JsonArray(definitions.Where(value => SessionWait.Text(value?["name"]) == "read")
+                .Select(value => value!.DeepClone()).ToArray());
+        if (descriptor["exec"]?.GetValue<bool>() == true)
+            definitions.Add(LocalExecManager.Definitions()[0]!.DeepClone());
+        return definitions;
+    }
+
+    internal async Task<ProviderExecBackend> AdmitExecAsync(string node, CancellationToken token)
+    {
+        var descriptor = await ResolveAsync(node, token);
+        if (descriptor is null || SessionWait.Text(descriptor["availability"]) != "ready"
+            || descriptor["exec"]?.GetValue<bool>() != true)
+            throw new InvalidOperationException("Node exec capability is unavailable: " + node);
+        return ResolveExecBackend(node[..node.IndexOf('/')], node);
+    }
+
+    // An admitted persistent reference belongs to the exact configured backend, not live discovery.
+    internal ProviderExecBackend ResolveExecBackend(string providerId, string node)
+    {
+        ValidateId(node);
+        if (!node.StartsWith(providerId + "/", StringComparison.Ordinal)
+            || !providers.TryGetValue(providerId, out var provider))
+            throw new InvalidOperationException("Execution provider is not configured: " + providerId);
+        return new(provider, node);
     }
 
     private async Task<ITargetFileOperations> FileOperationsAsync(

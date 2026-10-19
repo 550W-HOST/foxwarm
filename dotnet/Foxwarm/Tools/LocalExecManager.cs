@@ -6,10 +6,12 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Nodes;
+using System.Text.Json.Serialization;
 
 namespace Foxwarm.Tools;
 
-/// <summary>Trusted single-host native exec with owned on-disk artifacts. Cwd is not an OS sandbox.</summary>
+/// <summary>Persistent native and primitive-provider exec owner. Cwd is not an OS sandbox.</summary>
 internal sealed partial class LocalExecManager : IAsyncDisposable
 {
     internal static bool IsSupported => OperatingSystem.IsLinux() || OperatingSystem.IsWindows();
@@ -68,8 +70,36 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         long StartedAt,
         string Directory,
         bool Notify,
-        string? ProcessStartTicks = null
-    );
+        string? ProcessStartTicks = null,
+        string? ProviderId = null,
+        string? NodeId = null,
+        string? Reference = null,
+        string? LogPath = null,
+        long? ProviderPid = null
+    )
+    {
+        [JsonIgnore]
+        internal ExecObservation Observation { get; } = new();
+        public string? KnownCwd
+        {
+            get => Observation.Cwd;
+            set => Observation.Cwd = value;
+        }
+    }
+
+    private sealed class ExecObservation
+    {
+        internal string? Cwd;
+        internal Task<JsonObject?>? Poll;
+        internal Task? Reconciliation;
+        internal JsonObject? Status;
+    }
+
+    internal Func<string, string, ProviderExecBackend>? ResolveProviderBackend { get; set; }
+
+    private ProviderExecBackend ProviderBackend(ExecRecord record) =>
+        (ResolveProviderBackend ?? throw new InvalidOperationException("Execution provider is unavailable."))
+            (record.ProviderId!, record.NodeId!);
 
     internal LocalExecManager(
         string dataRoot,
@@ -163,7 +193,11 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         MainNativePaths? paths = null,
         Action<string, string>? observeCwd = null,
         Foxwarm.ToolScript.ToolScriptDataBudget? programmatic = null,
-        Func<string>? cancellationSource = null
+        Func<string>? cancellationSource = null,
+        ProviderExecBackend? backend = null,
+        string? providerCwd = null,
+        Action? beforeLaunch = null,
+        CancellationToken hardCancellation = default
     )
     {
         if (!IsSupported)
@@ -202,6 +236,9 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 ? $"WARNING: Requested timeout {seconds.ToString(CultureInfo.InvariantCulture)}s exceeds the 60s maximum; using 60s.\n"
                 : "";
         var waitSeconds = Math.Min(seconds, 60);
+        if (backend is not null)
+            return await ExecuteProviderAsync(sessionId, command, args, waitSeconds, warning, backend,
+                providerCwd, ct, beforeLaunch, hardCancellation, observeCwd, programmatic, cancellationSource);
         paths ??= MainNativePaths.Default(workspaceForSession(sessionId));
         ct.ThrowIfCancellationRequested();
         Directory.CreateDirectory(Path.Combine(paths.AgentDirectory, "tmp"));
@@ -322,7 +359,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         }
     }
 
-    internal async Task<JsonObject> ReadAsync(string sessionId, JsonObject? args)
+    internal async Task<JsonObject> ReadAsync(string sessionId, JsonObject? args, CancellationToken token = default)
     {
         if (
             args is null
@@ -362,10 +399,11 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             return Error("exec_not_found", "Execution was not found in this Session.");
         try
         {
-            var record = await ReadRecordAsync(path);
+            var loaded = await ReadRecordAsync(path);
+            var record = pending.TryGetValue(Key(loaded.SessionId, loaded.Id), out var active) ? active : loaded;
             if (record.Id != id || resolveLifetime(record.SessionId) != sessionId)
                 return Error("exec_not_found", "Execution was not found in this Session.");
-            return await PageAsync(record, offset, PageBytes);
+            return await PageAsync(record, offset, PageBytes, token);
         }
         catch (IOException)
         {
@@ -386,7 +424,11 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         string command,
         string cwd,
         string agentDirectory,
-        CancellationToken ct
+        CancellationToken ct,
+        ProviderExecBackend? backend = null,
+        string? providerCwd = null,
+        Action? beforeLaunch = null,
+        CancellationToken hardCancellation = default
     )
     {
         var sessionDir = Path.Combine(directory, SessionIdentity.ExecDirectorySegment(sessionId));
@@ -446,8 +488,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 continue;
             }
             if (reserved)
-                return await LaunchAsync(
-                    new ExecRecord(
+            {
+                var allocated = new ExecRecord(
                         sessionId,
                         id,
                         command,
@@ -456,10 +498,16 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                         DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                         path,
                         false
-                    ),
-                    agentDirectory,
-                    ct
-                );
+                    );
+                return backend is null
+                    ? await LaunchAsync(allocated, agentDirectory, ct)
+                    : await LaunchProviderAsync(allocated, backend, providerCwd, () =>
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        beforeLaunch?.Invoke();
+                        hardCancellation.ThrowIfCancellationRequested();
+                    }, hardCancellation);
+            }
         }
         throw new IOException("Persistent exec ID allocation exhausted.");
     }
@@ -547,6 +595,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
 
     private static async Task<string?> ReadFinishedCwdAsync(ExecRecord record)
     {
+        if (record.ProviderId is not null)
+            return record.KnownCwd;
         var path = Path.Combine(record.Directory, "cwd.txt");
         if (!File.Exists(path))
             return null;
@@ -556,6 +606,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
 
     private static string? ReadLiveCwd(ExecRecord record)
     {
+        if (record.ProviderId is not null)
+            return record.KnownCwd;
         if (OperatingSystem.IsWindows())
             return null; // Windows does not expose another process's live shell location.
         var identity = ReadProcessIdentity(record.Pid);
@@ -626,6 +678,14 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             JsonSerializer.Deserialize<ExecRecord>(
                 await File.ReadAllTextAsync(Path.Combine(path, "meta.json"))
             ) ?? throw new InvalidDataException("Invalid exec metadata.");
+        if (record.ProviderId is not null || record.Reference is not null || record.LogPath is not null)
+        {
+            if (string.IsNullOrEmpty(record.ProviderId) || string.IsNullOrEmpty(record.NodeId)
+                || !record.NodeId.StartsWith(record.ProviderId + "/", StringComparison.Ordinal)
+                || string.IsNullOrEmpty(record.Reference) || string.IsNullOrEmpty(record.LogPath))
+                throw new InvalidDataException("Invalid provider exec metadata.");
+            NodeProviderRegistry.ValidateId(record.NodeId);
+        }
         var trackingPath = Path.Combine(path, "tracking.json");
         var state = File.Exists(trackingPath)
             ? JsonNode.Parse(await File.ReadAllTextAsync(trackingPath)) as JsonObject
@@ -639,6 +699,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
 
     private static string CompletedDuration(ExecRecord record, JsonObject status)
     {
+        if (SessionWait.Number(status["durationMs"]) is double measured && double.IsFinite(measured) && measured >= 0)
+            return ExecDuration.Format(measured) ?? "unknown";
         if (
             status["finishedAtIsEstimated"]?.GetValue<bool>() == true
             || SessionWait.Text(status["error"]) == "Process exited but no status file was written."
@@ -654,8 +716,10 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             : "unknown";
     }
 
-    private static async Task<JsonObject?> ReadStatusAsync(ExecRecord record)
+    private async Task<JsonObject?> ReadStatusAsync(ExecRecord record)
     {
+        if (record.ProviderId is not null)
+            return await ProviderStatusAsync(record);
         var path = Path.Combine(record.Directory, "status.json");
         if (File.Exists(path))
             return JsonNode.Parse(await File.ReadAllTextAsync(path)) as JsonObject;
@@ -742,8 +806,10 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         }
     }
 
-    private async Task<JsonObject> PageAsync(ExecRecord record, long offset, int byteCount)
+    private async Task<JsonObject> PageAsync(ExecRecord record, long offset, int byteCount, CancellationToken token = default)
     {
+        if (record.ProviderId is not null)
+            return await ProviderPageAsync(record, offset, byteCount, token);
         var path = Path.Combine(record.Directory, "output.log");
         var status = await ReadStatusAsync(record);
         long size = 0;
@@ -765,16 +831,9 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 stream.Position = offset;
                 var bytes = new byte[(int)Math.Min(byteCount, size - offset)];
                 var read = await stream.ReadAsync(bytes);
-                var index = 0;
-                while (index < read)
-                {
-                    var next = Render(bytes.AsSpan(index, read - index), out var used);
-                    if (output.Length + next.Length > DisplayChars)
-                        break;
-                    output.Append(next);
-                    index += used;
-                }
-                consumed = index;
+                var rendered = RenderBytes(bytes.AsSpan(0, read), DisplayChars);
+                output.Append(rendered.Text);
+                consumed = rendered.Consumed;
             }
         }
         return new JsonObject
@@ -786,6 +845,21 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             ["nextOffset"] = offset + consumed < size ? offset + consumed : null,
             ["totalBytes"] = size,
         };
+    }
+
+    private static (string Text, int Consumed) RenderBytes(ReadOnlySpan<byte> bytes, int limit)
+    {
+        var text = new StringBuilder();
+        var index = 0;
+        while (index < bytes.Length)
+        {
+            var next = Render(bytes[index..], out var used);
+            if (text.Length + next.Length > limit)
+                break;
+            text.Append(next);
+            index += used;
+        }
+        return (text.ToString(), index);
     }
 
     private static string Render(ReadOnlySpan<byte> data, out int used)
@@ -823,64 +897,69 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
     private async Task ReconcileAsync(CancellationToken ct)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(300));
+        var observations = new HashSet<Task>();
         try
         {
             while (await timer.WaitForNextTickAsync(ct))
             {
                 if (closing)
                     continue;
+                observations.RemoveWhere(task => task.IsCompleted);
                 foreach (var record in pending.Values.Where(value => value.Notify))
                 {
-                    var completion = completionGates.GetOrAdd(
-                        resolveLifetime(record.SessionId),
-                        _ => new(1, 1)
-                    );
-                    await completion.WaitAsync(ct);
-                    try
-                    {
-                        if (
-                            !pending.TryGetValue(Key(record.SessionId, record.Id), out var current)
-                            || !ReferenceEquals(current, record)
-                        )
-                            continue;
-                        if (
-                            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - record.StartedAt
-                            > TimeSpan.FromHours(24).TotalMilliseconds
-                        )
-                        {
-                            if (File.Exists(Path.Combine(record.Directory, "tracking.json")))
-                                File.Delete(Path.Combine(record.Directory, "tracking.json"));
-                            pending.TryRemove(Key(record.SessionId, record.Id), out _);
-                            continue;
-                        }
-                        var status = await ReadStatusAsync(record);
-                        if (status is null)
-                            continue;
-                        var code =
-                            status["exitCode"]
-                                ?.GetValue<int?>()
-                                ?.ToString(CultureInfo.InvariantCulture)
-                            ?? "unknown";
-                        var message =
-                            $"Background Process Finished\nexecId: {record.Id}\nExit code: {code}\nDuration: {CompletedDuration(record, status)}\nCommand output available with read_exec({{execId: \"{record.Id}\"}})";
-                        await notify(record.SessionId, record.Id, message);
-                        // A strict Session authority receipt now owns this event; remove only the active tracking flag.
-                        if (File.Exists(Path.Combine(record.Directory, "tracking.json")))
-                            File.Delete(Path.Combine(record.Directory, "tracking.json"));
-                        pending.TryRemove(Key(record.SessionId, record.Id), out _);
-                    }
-                    catch (Exception)
-                    { /* Keep tracking and retry after transient authority/host errors. */
-                    }
-                    finally
-                    {
-                        completion.Release();
-                    }
+                    if (record.Observation.Reconciliation is { IsCompleted: false })
+                        continue;
+                    var observation = ReconcileRecordAsync(record, ct);
+                    record.Observation.Reconciliation = observation;
+                    observations.Add(observation);
                 }
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        finally
+        {
+            await Task.WhenAll(observations);
+        }
     }
+
+    private async Task ReconcileRecordAsync(ExecRecord record, CancellationToken ct)
+    {
+        try
+        {
+            var expired = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - record.StartedAt
+                > TimeSpan.FromHours(24).TotalMilliseconds;
+            // Never hold an owner's completion gate across external observation.
+            var status = expired ? null : await ReadStatusAsync(record);
+            if (!expired && status is null)
+                return;
+            var completion = completionGates.GetOrAdd(resolveLifetime(record.SessionId), _ => new(1, 1));
+            await completion.WaitAsync(ct);
+            try
+            {
+                if (closing || !pending.TryGetValue(Key(record.SessionId, record.Id), out var current)
+                    || !ReferenceEquals(current, record))
+                    return;
+                if (!expired)
+                {
+                    var message = $"Background Process Finished\nexecId: {record.Id}\nExit code: {ExitCode(status!)}\nDuration: {CompletedDuration(record, status!)}"
+                        + (SessionWait.Text(status!["error"]) is string error ? "\n" + error : "")
+                        + $"\nCommand output available with read_exec({{execId: \"{record.Id}\"}})";
+                    await notify(record.SessionId, record.Id, message);
+                }
+                // Removal follows the strict exact-owner completion receipt, or ordinary expiry.
+                File.Delete(Path.Combine(record.Directory, "tracking.json"));
+                pending.TryRemove(Key(record.SessionId, record.Id), out _);
+            }
+            finally
+            {
+                completion.Release();
+            }
+        }
+        catch (Exception)
+        { /* Query/admission errors retain tracking for a later observation. */ }
+    }
+
+    private static string ExitCode(JsonObject status) => status["exitCode"]?.ToJsonString() ?? "unknown";
 
     public async ValueTask DisposeAsync()
     {

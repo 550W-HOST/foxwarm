@@ -1,12 +1,12 @@
 # Module: Nodes and executable providers
 
-Main-owned generic registry, executable-provider file primitives, Session placement, persistent administrator-approved trust, credential-authenticated WebSocket and exec-only Shell HTTP connections, ordinary native remote tools, exec and authenticated Session events.
+Main-owned generic registry, executable-provider file/process primitives, Session placement, persistent administrator-approved trust, credential-authenticated WebSocket and exec-only Shell HTTP connections, ordinary native remote tools, exec and authenticated Session events.
 
 ## Boundaries
 
 This module connects existing CLI/browser/Android Node protocol clients to the .NET host. It does not create environments or grant OS isolation. Fixed Code/PTY services use advertised authenticated capabilities, not model-tool dispatch. Whole-file consumers use the generic registry, retaining the existing CLI transfer protocol for resident Nodes. Remote exec authority is transient and bounded; the client owns its process and pending replay. [Remote Node integration](../threads/remote-node-compatibility.md#net-external-node-integration) owns the canonical connected contract and remaining phase boundaries.
 
-Executable registry/files are connected; provider exec and optional lifecycle remain later checkpoints. Session Worker hosting and managed controllers remain excluded; see [delivery scope](../overview.md#d-dotnet-delivery-scope).
+Executable registry/files and persistent provider exec are connected; optional lifecycle remains a later checkpoint. Session Worker hosting and managed controllers remain excluded; see [delivery scope](../overview.md#d-dotnet-delivery-scope).
 
 ## Units
 

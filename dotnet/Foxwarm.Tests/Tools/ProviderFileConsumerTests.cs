@@ -74,6 +74,7 @@ public sealed partial class ProviderFileConsumerTests
                 var item in FileDeliveryDefinitions
                     .Definitions()
                     .Concat(NodeToolDefinitions.All())
+                    .Concat(LocalExecManager.Definitions())
                     .Concat(ToolScriptToolDefinitions.Definitions())
                     .Concat(UnifiedToolDefinitions.All())
             )
@@ -90,7 +91,7 @@ public sealed partial class ProviderFileConsumerTests
             return f;
         }
 
-        internal async Task<JsonObject> Call(string name, JsonObject args) =>
+        internal async Task<JsonObject> Call(string name, JsonObject args, CancellationToken token = default) =>
             (
                 await Tools.ExecuteAsync(
                     new JsonObject
@@ -99,7 +100,7 @@ public sealed partial class ProviderFileConsumerTests
                         ["name"] = name,
                         ["args"] = args.DeepClone(),
                     },
-                    default
+                    token
                 )
             )!.AsObject();
 

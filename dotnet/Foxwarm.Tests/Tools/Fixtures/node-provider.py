@@ -12,6 +12,7 @@ import stat as file_stat
 import subprocess
 import sys
 import time
+import uuid
 
 root = pathlib.Path(sys.argv[1])
 mode = sys.argv[2] if len(sys.argv) > 2 else "normal"
@@ -79,6 +80,8 @@ try:
     if operation == "describe":
         result = {"label": "Fixture environments", "description": "Independent executable fixture.", "lifecycle": []}
     elif operation == "list":
+        if (root / "list-unavailable").exists():
+            raise OSError(errno.EIO, "Directory temporarily unavailable")
         local_id = (root / "node-id").read_text() if (root / "node-id").exists() else "target"
         nodes = [{"id": local_id, "type": "fixture", "availability": "ready", "filesystem": "read-write", "exec": True, "defaultCwd": "opaque://root"},
                  {"id": "readonly", "type": "fixture", "availability": "ready", "filesystem": "read"},
@@ -86,6 +89,43 @@ try:
         if mode == "duplicate":
             nodes.append(nodes[0])
         result = {"nodes": nodes}
+    elif operation == "exec-start":
+        assert set(body) <= {"nodeId", "command", "cwd"}
+        assert "/" not in body["nodeId"]
+        reference = uuid.uuid4().hex
+        job = root / "exec" / reference
+        job.mkdir(parents=True)
+        cwd = body.get("cwd", "opaque://root")
+        started = time.time()
+        metadata = {"command": body["command"], "cwd": cwd, "startedAt": started}
+        (job / "request.json").write_text(json.dumps(metadata))
+        child = subprocess.Popen([sys.executable, str(pathlib.Path(__file__).with_name("provider-exec-job.py")), str(root), reference],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        (job / "pid").write_text(str(child.pid))
+        if mode == "lost-start":
+            print("{}\n{}", flush=True)
+            sys.exit(0)
+        if mode == "slow-start":
+            time.sleep(2)
+        if mode == "hang-start":
+            time.sleep(20)
+        result = {"ref": reference, "outputPath": "opaque://logs/" + reference + ".log", "cwd": cwd,
+                  "startedAt": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(started)) + (".%03dZ" % (int(started * 1000) % 1000)), "pid": child.pid}
+    elif operation == "exec-poll":
+        assert set(body) == {"nodeId", "ref"}
+        assert "/" not in body["nodeId"]
+        reference = body["ref"]
+        job = root / "exec" / reference
+        delays = json.loads((root / "poll-delay").read_text()) if (root / "poll-delay").exists() else {}
+        time.sleep(delays.get(reference, delays.get("*", 0)))
+        if (root / "poll-error").exists():
+            raise OSError(errno.EIO, "Temporary query failure")
+        if (root / "poll-lost").exists() or not job.exists():
+            result = {"state": "lost", "reason": "Fixture execution records lost"}
+        elif (job / "status.json").exists():
+            result = json.loads((job / "status.json").read_text())
+        else:
+            result = {"state": "running"}
     elif operation == "filesystem":
         assert set(body) <= {"nodeId", "operation", "path", "context", "offset", "count", "contentBase64", "flag"}
         assert set(body["context"]) <= {"cwd"}
@@ -95,6 +135,10 @@ try:
         if "denied" in path:
             raise PermissionError(errno.EACCES, "Target boundary denied")
         actual = physical(path)
+        if path.startswith("opaque://logs/") and (root / "missing-output").exists():
+            raise FileNotFoundError(errno.ENOENT, "Fixture log unavailable")
+        if path.startswith("opaque://logs/") and (root / "slow-output").exists():
+            time.sleep(20)
         if action == "parent":
             if len(path) > 1 and path[1] == ":":
                 parent = ntpath.dirname(path)

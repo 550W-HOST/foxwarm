@@ -29,6 +29,7 @@ internal sealed class ToolRegistry(
     private readonly Dictionary<string, RegisteredTool> entries = new(StringComparer.Ordinal);
     internal Foxwarm.McpClient Mcp => mcp;
     internal Foxwarm.Nodes.NodeConnectionHub? Nodes => nodes;
+    internal Foxwarm.Nodes.NodeProviderRegistry? Providers => providers;
     internal IEnumerable<RegisteredTool> Entries => entries.Values;
 
     internal void Register(
@@ -186,6 +187,9 @@ internal sealed class ToolRegistry(
                     owner.Hosted,
                     generation
                 )
+            : resolved is { Source: "node", Name: "exec" }
+                && providers?.IsProviderNode(resolved.ExecutionNode) == true
+                ? await owner.ExecuteProviderExecAsync(resolved, cancellationToken)
             : resolved.Source == "node" && resolved.ExecutionNode != "master"
                 ? await ExecuteNodeAsync(
                     resolved.ExecutionNode,

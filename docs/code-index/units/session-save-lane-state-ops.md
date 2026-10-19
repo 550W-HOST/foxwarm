@@ -15,6 +15,8 @@ Provides narrow save-lane operations for fields that are still part of active Se
 - `PublishCompactWakeAsync`, `RemoveCompactWakeAsync`, and `ReleaseStandaloneCompactAsync` keep ready/standalone compact markers ordered with ordinary saves.
 - `CommitCwdAsync`, `CommitRetryNoticeAsync`, and `CommitSettingsAsync` each stage a narrow authority envelope change and publish only after the store result. `SessionSaveLane` invokes the TaskService legacy-Goal migration hook for staged owner saves, including best-effort queue admission and strict identity pre-save; invalid truthy Goal values block the write, while valid migration removes the legacy field after the task transaction commits.
 
+- `CommitCwdAsync` also accepts the provider exec caller's opaque-whitespace mode and exact-owner/Node condition, checked inside the ordered lane. Native/settings cwd normalization is unchanged; [provider exec](./tools-local-io.md#provider-exec) owns that caller contract.
+
 - `CommitVectorIndexPositionAsync` publishes legacy index-position compatibility fields only after explicit force indexing succeeds; it uses the same ordered authority commit and does not make the derived index an authority.
 
 Callers: SessionManager settings/goal/timer operations, SessionOwner retry/compaction hooks, and the model request preparation path.

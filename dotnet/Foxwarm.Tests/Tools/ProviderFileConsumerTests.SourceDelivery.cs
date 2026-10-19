@@ -319,6 +319,15 @@ public sealed partial class ProviderFileConsumerTests
             new JsonObject { ["toolId"] = "node:master/read", ["args"] = Args("source") }
         );
         Assert.NotNull(explicitMain["error"]);
+        Success(await f.Call("exec", Exec("printf allowed")));
+        var deniedExec = await f.Call("call_tool", new JsonObject
+        {
+            ["toolId"] = "node:other/target/exec",
+            ["args"] = Exec("printf forbidden"),
+        });
+        Assert.NotNull(deniedExec["error"]);
+        var otherRequests = await File.ReadAllLinesAsync(Path.Combine(f.OtherTarget, "calls.jsonl"));
+        Assert.DoesNotContain(otherRequests, line => JsonNode.Parse(line)!["operation"]!.GetValue<string>() == "exec-start");
     }
 
     [Fact]

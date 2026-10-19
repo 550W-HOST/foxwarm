@@ -205,7 +205,8 @@ internal sealed partial class SessionToolExecutor(
                 current.DeferredCwd,
                 current.ToolScriptSubCalls,
                 current.Receipt,
-                current.SessionMessages
+                current.SessionMessages,
+                current.DeferredCwdNode
             );
         }
         finally
@@ -568,6 +569,37 @@ internal sealed partial class SessionToolExecutor(
         return observed == initial ? response : await ApplyCwdAsync(response, observed);
     }
 
+    internal async Task<JsonObject> ExecuteProviderExecAsync(ResolvedTool resolved, CancellationToken token)
+    {
+        var backend = await registry.Providers!.AdmitExecAsync(resolved.ExecutionNode, token);
+        string? observed = null;
+        var response = await hosted.Executor.ExecuteAsync(
+            hosted.Id, resolved.Args, token,
+            observeCwd: (_, end) => observed = end,
+            programmatic: ScriptBudget,
+            cancellationSource: () => hosted.Entry.ToolCancellationSource,
+            backend: backend,
+            providerCwd: ExecutionNode == resolved.ExecutionNode ? ExecutionCwd : null,
+            beforeLaunch: () =>
+            {
+                hosted.Entry.RequireIdentityAuthority();
+                hosted.Registry.Runner.AssertCanContinue();
+            },
+            hardCancellation: hosted.Entry.IdentityLossToken);
+        if (observed is null)
+            return response;
+        if (execSnapshot.Value is not null)
+        {
+            if (invocation.Value is { } current)
+            {
+                current.DeferredCwd = observed;
+                current.DeferredCwdNode = resolved.ExecutionNode;
+            }
+            return response;
+        }
+        return await ApplyCwdAsync(response, observed, resolved.ExecutionNode);
+    }
+
     internal async Task<TurnToolExecution> ReplayCwdAsync(TurnToolExecution execution)
     {
         if (execution.DeferredCwd is not string cwd)
@@ -576,8 +608,9 @@ internal sealed partial class SessionToolExecutor(
         {
             return execution with
             {
-                Response = await ApplyCwdAsync(execution.Response!.AsObject(), cwd),
+                Response = await ApplyCwdAsync(execution.Response!.AsObject(), cwd, execution.DeferredCwdNode),
                 DeferredCwd = null,
+                DeferredCwdNode = null,
             };
         }
         catch (Exception error)
@@ -587,14 +620,17 @@ internal sealed partial class SessionToolExecutor(
             {
                 Response = UnsupportedTurnToolExecutor.ToolError("tool_error", error.Message),
                 DeferredCwd = null,
+                DeferredCwdNode = null,
                 ResolvedPaths = null,
             };
         }
     }
 
-    private async Task<JsonObject> ApplyCwdAsync(JsonObject response, string cwd)
+    private async Task<JsonObject> ApplyCwdAsync(JsonObject response, string cwd, string? providerNode = null)
     {
-        var change = await hosted.UpdateCwdAsync(cwd);
+        var change = providerNode is null
+            ? await hosted.UpdateCwdAsync(cwd)
+            : await sessions.UpdateProviderExecCwdAsync(hosted, providerNode, cwd);
         if (change["changed"]?.GetValue<bool>() != true)
             return response;
         var copy = (JsonObject)response.DeepClone();
@@ -700,8 +736,8 @@ internal sealed partial class SessionToolExecutor(
         foreach (var name in new[] { "read", "write", "edit", "apply_patch" })
             handlers[name] = (owner, args, token) => owner.ExecuteWorkspaceAsync(name, args, token);
         handlers["exec"] = (owner, args, token) => owner.ExecuteExecAsync(args, token);
-        handlers["read_exec"] = (owner, args, _) =>
-            owner.Hosted.Executor.ReadAsync(owner.Hosted.Id, args);
+        handlers["read_exec"] = (owner, args, token) =>
+            owner.Hosted.Executor.ReadAsync(owner.Hosted.Id, args, token);
         handlers["recall"] = (owner, args, token) =>
             ArchiveRecallTool.ExecuteAsync(owner.Manager, owner.Hosted, args, token);
         handlers["get_archived_messages"] = (owner, args, token) =>
@@ -892,7 +928,8 @@ internal sealed record TurnToolExecution(
     string? DeferredCwd = null,
     JsonArray? ToolScriptSubCalls = null,
     TurnToolReceipt? Receipt = null,
-    JsonArray? SessionMessages = null
+    JsonArray? SessionMessages = null,
+    string? DeferredCwdNode = null
 );
 
 internal sealed record TurnToolReceipt(
@@ -916,6 +953,7 @@ internal sealed class TurnToolInvocation(string callId)
     internal JsonObject? Timing { get; set; }
     internal JsonArray? ResolvedPaths { get; set; }
     internal string? DeferredCwd { get; set; }
+    internal string? DeferredCwdNode { get; set; }
     internal JsonArray? ToolScriptSubCalls { get; set; }
     internal TurnToolReceipt? Receipt { get; set; }
     internal JsonArray? SessionMessages { get; set; }
