@@ -47,6 +47,15 @@ test('turn delivery broadcasts without source targeting and sends empty finals o
       allowEmptyBroadcast: true, channelProgressTurnId: 'turn-1', turnFinal: true,
     } }]);
 
+    lifecycles.length = 0;
+    assert.deepEqual(await client.call('deliverCommittedFinal', { sourceSessionId: 'owner', turnId: 'turn-2', outcome: 'suspended', text: '' }), { attempted: 1, delivered: 1 });
+    assert.deepEqual(lifecycles, [{ id: 'wework', conversationId: 'stream-room', options: {
+      allowEmptyBroadcast: true, channelProgressTurnId: 'turn-2', turnSuspended: true,
+    } }], 'a waiting ending reaches the adapter without any terminal marker');
+    await assert.rejects(() => client.call('deliverCommittedFinal', {
+      sourceSessionId: 'owner', outcome: 'suspended', text: 'must be empty',
+    }), { code: 'SESSION_TURN_DELIVERY_INVALID' });
+
     sent.length = 0;
     assert.deepEqual(await client.call('deliverCommittedFinal', { sourceSessionId: 'owner', outcome: 'error', text: 'failed turn' }), { attempted: 3, delivered: 2 });
     assert.equal(sent.some(item => item.id === 'webui'), false, 'WebUI receives the typed history event rather than a duplicate plain-text final');

@@ -833,7 +833,7 @@ export class SessionTurnRunner {
     iterationTextHandled: boolean,
   ): Promise<void> {
     if (iterationTextHandled) {
-      await this.finishTurnAfterIntermediate(session, broadcast, turnId);
+      await this.finishTurnAfterIntermediate(session, broadcast, turnId, 'empty-final');
     } else {
       await this.deliverProviderResultText(session, '_[Execution stopped by user]_', false, broadcast, turnId);
     }
@@ -965,12 +965,16 @@ export class SessionTurnRunner {
     session: Session,
     broadcast: Session['broadcast'] | undefined,
     turnId: string,
+    outcome: 'suspended' | 'empty-final' = 'suspended',
   ): Promise<void> {
     if (this.host.deliverCommittedFinal) {
-      await this.host.deliverCommittedFinal(session, '', 'empty-final', turnId);
+      // A turn that ends because it is waiting is not a terminal answer: passive
+      // cards may keep their in-progress presentation across the wait, while a
+      // stop or an exhausted retry still closes with an ordinary empty final.
+      await this.host.deliverCommittedFinal(session, '', outcome, turnId);
       return;
     }
-    this.sendEmptyTurnFinal(broadcast);
+    this.sendEmptyTurnFinal(broadcast, outcome === 'suspended');
   }
 
   private async sendSessionError(session: Session, error: any, broadcast: Session['broadcast'] | undefined = undefined): Promise<void> {
@@ -980,12 +984,11 @@ export class SessionTurnRunner {
     else if (this.host.hasBroadcast(session)) this.host.broadcast(session, text, { turnFinal: true, excludePlatforms: ['webui'] });
   }
 
-  private sendEmptyTurnFinal(broadcast: Session['broadcast'] | undefined): void {
+  private sendEmptyTurnFinal(broadcast: Session['broadcast'] | undefined, suspended = false): void {
     if (!broadcast) return;
-    broadcast('', {
-      turnFinal: true,
-      allowEmptyBroadcast: true,
-    });
+    broadcast('', suspended
+      ? { turnSuspended: true, allowEmptyBroadcast: true }
+      : { turnFinal: true, allowEmptyBroadcast: true });
   }
 
 
@@ -1308,7 +1311,7 @@ export class SessionTurnRunner {
           // no non-empty model text to handle. This flag is iteration-local;
           // it never participates in ordinary final-response suppression.
           if (iterationTextHandled) {
-            await this.finishTurnAfterIntermediate(session, broadcast, turnId);
+            await this.finishTurnAfterIntermediate(session, broadcast, turnId, 'empty-final');
           } else {
             await this.deliverProviderResultText(
               session, '_[Execution stopped by user]_', false, broadcast, turnId,
@@ -1319,7 +1322,9 @@ export class SessionTurnRunner {
 
         if (toolResult.control?.stopCurrentTurn) {
           logger.info({ sessionId: session.id, iteration }, 'Tool requested immediate turn stop');
-          await this.finishTurnAfterIntermediate(session, broadcast, turnId);
+          await this.finishTurnAfterIntermediate(
+            session, broadcast, turnId, toolResult.postActions?.finishAfterSend ? 'empty-final' : 'suspended',
+          );
           turnCompleted = true;
           break;
         }
@@ -1342,7 +1347,7 @@ export class SessionTurnRunner {
           stoppedByUser = true;
           await this.host.saveSession(session);
           if (iterationTextHandled) {
-            await this.finishTurnAfterIntermediate(session, broadcast, turnId);
+            await this.finishTurnAfterIntermediate(session, broadcast, turnId, 'empty-final');
           } else {
             await this.deliverProviderResultText(
               session, '_[Execution stopped by user]_', false, broadcast, turnId,

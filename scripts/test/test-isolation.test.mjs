@@ -50,7 +50,7 @@ test('direct backend tests isolate inherited and module-relative installation co
   // Run the actual formerly unsafe writers, including the former backup/restore
   // tests. No repository runner or preload is involved in these entry points.
   const directSelection = await execFileAsync(process.execPath,
-    ['--test', 'lib/channels/webuiAccess.test.js', 'lib/configHotApply.test.js'], {
+    ['--test', '--test-reporter=tap', 'lib/channels/webuiAccess.test.js', 'lib/configHotApply.test.js'], {
       cwd: fixture.root, env: fixture.env, timeout: 60_000, maxBuffer: 8 * 1024 * 1024,
     })
   assert.match(directSelection.stdout, /# fail 0/)
@@ -59,7 +59,7 @@ test('direct backend tests isolate inherited and module-relative installation co
   await fixture.unchanged()
   const files = ['lib/channels/webuiSetup.test.js', 'lib/configSectionSaves.test.js',
     'lib/session/channels.test.js', 'lib/sessionEffectiveSelection.test.js']
-  const result = await execFileAsync(process.execPath, ['--test', '--test-concurrency=2', ...files], {
+  const result = await execFileAsync(process.execPath, ['--test', '--test-reporter=tap', '--test-concurrency=2', ...files], {
     cwd: fixture.root, env: fixture.env, timeout: 120_000, maxBuffer: 8 * 1024 * 1024,
   })
   assert.match(result.stdout, /# fail 0/);

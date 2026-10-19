@@ -6,7 +6,12 @@ import { sendFileToSession } from './sessionManager';
 import { defineRpcService, rpcMethod, RpcClient, RpcError, type RpcServiceHandler, type RpcTransport } from './rpc';
 import type { ChannelTurnProgress, InlineDataRef, QueueSource } from './types';
 
-export type SessionTurnFinalKind = 'response' | 'error' | 'empty-final';
+/**
+ * `suspended` carries the same empty payload as `empty-final` but marks a turn
+ * that ended because it is waiting, not because the answer is complete. Passive
+ * transports may keep in-progress presentation open across it.
+ */
+export type SessionTurnFinalKind = 'response' | 'error' | 'empty-final' | 'suspended';
 export type SessionTurnDeliveryRequest = { sourceSessionId: string; turnId?: string; outcome: SessionTurnFinalKind; text: string };
 export type SessionTurnIntermediateDeliveryRequest = { sourceSessionId: string; turnId?: string; text: string };
 export type SessionTurnProgressRequest = { sourceSessionId: string; turnId: string; progress: ChannelTurnProgress };
@@ -14,7 +19,7 @@ export type SessionTurnProgressFinishRequest = { sourceSessionId: string; turnId
 export type SessionTurnGeneratedImagesRequest = { sourceSessionId: string; images: InlineDataRef[] };
 export type SessionTurnDeliveryAck = { attempted: number; delivered: number };
 
-export const sessionTurnDeliveryServiceDescriptor = defineRpcService('session-turn-delivery', 4, {
+export const sessionTurnDeliveryServiceDescriptor = defineRpcService('session-turn-delivery', 5, {
   deliverCommittedFinal: rpcMethod<SessionTurnDeliveryRequest, SessionTurnDeliveryAck>(),
   deliverIntermediateText: rpcMethod<SessionTurnIntermediateDeliveryRequest, SessionTurnDeliveryAck>(),
   reportProgress: rpcMethod<SessionTurnProgressRequest, void>(),
@@ -76,11 +81,13 @@ export function snapshotQueueSource(ctx: ChannelContext): QueueSource {
 }
 
 function finalOptions(outcome: SessionTurnFinalKind, turnId?: string): any {
+  const suspended = outcome === 'suspended';
   return {
     ...((outcome === 'response' || outcome === 'error') ? { excludePlatforms: ['webui'] } : {}),
-    ...(outcome === 'empty-final' ? { allowEmptyBroadcast: true } : {}),
+    ...(outcome === 'empty-final' || suspended ? { allowEmptyBroadcast: true } : {}),
+    ...(suspended ? { turnSuspended: true } : {}),
     ...(turnId ? { channelProgressTurnId: turnId } : {}),
-    turnFinal: true,
+    ...(suspended ? {} : { turnFinal: true }),
   };
 }
 
@@ -136,10 +143,11 @@ export function createSessionTurnDeliveryServiceHandler(options: {
       plain(input, 'request'); exactKeys(input, ['sourceSessionId', 'turnId', 'outcome', 'text'], 'request');
       const sourceSessionId = text(input.sourceSessionId, 'sourceSessionId', 256);
       if (sourceSessionId !== options.expectedSourceSessionId) throw new RpcError('SESSION_TURN_DELIVERY_SOURCE_MISMATCH', 'Committed-final source session mismatch.');
-      if (!['response', 'error', 'empty-final'].includes(input.outcome)) throw new RpcError('SESSION_TURN_DELIVERY_INVALID', 'outcome is invalid.');
+      if (!['response', 'error', 'empty-final', 'suspended'].includes(input.outcome)) throw new RpcError('SESSION_TURN_DELIVERY_INVALID', 'outcome is invalid.');
       const outcome = input.outcome as SessionTurnFinalKind;
-      const finalText = text(input.text, 'text', 1024 * 1024, outcome === 'empty-final');
-      if (outcome === 'empty-final' && finalText !== '') throw new RpcError('SESSION_TURN_DELIVERY_INVALID', 'empty-final text must be empty.');
+      const emptyOutcome = outcome === 'empty-final' || outcome === 'suspended';
+      const finalText = text(input.text, 'text', 1024 * 1024, emptyOutcome);
+      if (emptyOutcome && finalText !== '') throw new RpcError('SESSION_TURN_DELIVERY_INVALID', `${outcome} text must be empty.`);
       const turnId = input.turnId === undefined ? undefined : text(input.turnId, 'turnId', 128);
       return deliverAttachments(sourceSessionId, finalText, finalOptions(outcome, turnId));
     },

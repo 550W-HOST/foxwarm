@@ -27,7 +27,7 @@ for (const file of ['orderedResponsesDraft.e2e.mjs', 'authorizations.e2e.mjs']) 
       }
       for (const [name, text] of Object.entries(canaries)) await fs.writeFile(path.join(state, name), text)
       const before = (await fs.readdir(installation, { recursive: true })).sort()
-      const { stdout } = await execFileAsync(process.execPath, ['--test', `packages/webui/test/${file}`], {
+      const { stdout } = await execFileAsync(process.execPath, ['--test', '--test-reporter=tap', `packages/webui/test/${file}`], {
         cwd: repo,
         env: {
           ...process.env,
