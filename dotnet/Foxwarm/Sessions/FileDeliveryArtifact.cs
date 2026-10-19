@@ -21,7 +21,7 @@ internal static class FileDeliveryArtifact
                 (targetId, 512),
                 (name, 512),
                 (path, 4096),
-                (sourceNode, 128),
+                (sourceNode, 193),
             }
         )
             if (value.Length == 0 || value.Length > maximum || value.Contains('\0'))

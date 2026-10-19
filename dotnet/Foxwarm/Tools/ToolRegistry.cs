@@ -22,7 +22,8 @@ internal sealed record RegisteredTool(
 internal sealed class ToolRegistry(
     Foxwarm.McpClient mcp,
     Func<SessionOwner, string> workspace,
-    Foxwarm.Nodes.NodeConnectionHub? nodes = null
+    Foxwarm.Nodes.NodeConnectionHub? nodes = null,
+    Foxwarm.Nodes.NodeProviderRegistry? providers = null
 )
 {
     private readonly Dictionary<string, RegisteredTool> entries = new(StringComparer.Ordinal);
@@ -60,8 +61,7 @@ internal sealed class ToolRegistry(
                 if (
                     currentNode != "master"
                     && nodes is not null
-                    && nodes
-                        .Definitions(currentNode)
+                    && Definitions(currentNode)
                         .Any(value => SessionWait.Text(value?["name"]) == invocation)
                 )
                     return new(
@@ -105,7 +105,7 @@ internal sealed class ToolRegistry(
             {
                 source = id[..id.IndexOf(':')];
                 var rest = id[(source.Length + 1)..];
-                var slash = rest.IndexOf('/');
+                var slash = source == "node" ? rest.LastIndexOf('/') : rest.IndexOf('/');
                 if (slash <= 0 || slash == rest.Length - 1)
                     throw new InvalidDataException("Invalid toolId: " + id);
                 name = rest[(slash + 1)..];
@@ -137,8 +137,7 @@ internal sealed class ToolRegistry(
         {
             if (
                 nodes is null
-                || !nodes
-                    .Definitions(targetNode)
+                || !Definitions(targetNode)
                     .Any(value => SessionWait.Text(value?["name"]) == name)
             )
                 throw new InvalidDataException("Tool is not advertised by Node: " + name);
@@ -189,9 +188,7 @@ internal sealed class ToolRegistry(
                     generation
                 )
             : resolved.Source == "node" && resolved.ExecutionNode != "master"
-                ? await (
-                    nodes ?? throw new InvalidOperationException("Remote Nodes are unavailable.")
-                ).ExecuteAsync(
+                ? await ExecuteNodeAsync(
                     resolved.ExecutionNode,
                     resolved.Name,
                     resolved.Args,
@@ -202,7 +199,8 @@ internal sealed class ToolRegistry(
                     owner.Programmatic,
                     cancellationToken,
                     owner.Hosted,
-                    owner.RemoteCodePaths(resolved)
+                    owner.RemoteCodePaths(resolved),
+                    owner.ScriptBudget
                 )
             : await entries[resolved.Name].Execute(owner, resolved.Args, cancellationToken);
         if (owner.Programmatic)
@@ -251,9 +249,34 @@ internal sealed class ToolRegistry(
                     .Select(entry => (JsonNode?)entry.Definition.DeepClone())
                     .ToArray()
             )
-            : (
-                nodes ?? throw new InvalidDataException("Remote Nodes are unavailable.")
-            ).Definitions(id);
+            : Definitions(id);
+
+    private JsonArray Definitions(string id) => providers?.Definitions(id)
+        ?? (nodes ?? throw new InvalidDataException("Remote Nodes are unavailable.")).Definitions(id);
+
+    internal Task RefreshNodeAsync(string id, CancellationToken token) => providers?.RefreshAsync(id, token) ?? Task.CompletedTask;
+
+    internal async Task<ResolvedTool> ResolveAsync(string invocation, JsonObject args, string currentNode, CancellationToken token)
+    {
+        var target = currentNode;
+        var toolId = Text(args, "toolId");
+        var nodeCapability = invocation == "call_tool"
+            ? toolId is { Length: > 0 } ? toolId.StartsWith("node:", StringComparison.Ordinal) : Text(args, "source")?.Trim() == "node"
+            : !entries.TryGetValue(invocation, out var direct) || direct.Source == "node";
+        if (invocation == "call_tool")
+        {
+            target = TargetNode(Text(args, "nodeId"), currentNode);
+            if (Text(args, "toolId") is string id && id.StartsWith("node:", StringComparison.Ordinal) && id.LastIndexOf('/') > 5)
+                target = id[5..id.LastIndexOf('/')];
+        }
+        if (nodeCapability && target != "master") await RefreshNodeAsync(target, token);
+        return Resolve(invocation, args, currentNode);
+    }
+
+    private Task<JsonNode?> ExecuteNodeAsync(string node, string name, JsonObject args, string sessionId, string agent,
+        string currentNode, string? cwd, bool programmatic, CancellationToken token, SessionOwner owner, Action<JsonNode?>? metadata, Foxwarm.ToolScript.ToolScriptDataBudget? budget) =>
+        providers is not null ? providers.ExecuteAsync(node, name, args, sessionId, agent, currentNode, cwd, programmatic, token, owner, metadata, budget)
+            : (nodes ?? throw new InvalidOperationException("Remote Nodes are unavailable.")).ExecuteAsync(node, name, args, sessionId, agent, currentNode, cwd, programmatic, token, owner, metadata);
 
     internal static void LocalNode(string? node)
     {

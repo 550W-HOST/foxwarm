@@ -13,6 +13,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
     internal Foxwarm.ToolScript.ToolScriptDataBudget? ScriptBudget { get; set; }
     private const int MaxBytes = 1024 * 1024;
     private readonly string root;
+    private readonly ITargetFileOperations? targetFiles;
     private readonly PendingWriteRefs pending = new();
     private readonly string sessionId = "standalone";
     private readonly string agent = "main";
@@ -115,7 +116,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
     internal Action<JsonArray>? ResolvedPaths { get; set; }
 
     private void ReportPaths(params (string Raw, string Path)[] paths) =>
-        ResolvedPaths?.Invoke(
+        (targetFiles is null ? ResolvedPaths : null)?.Invoke(
             new JsonArray(
                 paths
                     .Select(pair =>
@@ -158,6 +159,16 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
         this.agent = agent;
         this.lifetime = lifetime;
         Paths = MainNativePaths.Default(this.root, cwd);
+    }
+
+    internal WorkspaceTools(ITargetFileOperations operations, PendingWriteRefs pending, string sessionId, string agent, object? lifetime = null)
+    {
+        root = "";
+        targetFiles = operations;
+        this.pending = pending;
+        this.sessionId = sessionId;
+        this.agent = agent;
+        this.lifetime = lifetime;
     }
 
     async Task<JsonNode?> ITurnToolExecutor.ExecuteAsync(
@@ -203,7 +214,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                 var first = Bound("startLine");
                 var last = Bound("endLine");
                 var path = ResolveReadWrite(pathText, read: true);
-                if (!Directory.Exists(path) && !RegularFile(path))
+                if (!await DirectoryExistsAsync(path, cancellationToken) && !await RegularFileAsync(path, cancellationToken))
                 {
                     if (Programmatic)
                         throw new FileNotFoundException(
@@ -224,12 +235,12 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                 JsonObject? data = null;
                 if (ScriptBudget is not null)
                     ScriptBudget.Charge(
-                        mime is not null && !Directory.Exists(path)
-                            ? checked(12L * new FileInfo(path).Length)
+                        mime is not null && !await DirectoryExistsAsync(path, cancellationToken)
+                            ? checked(12L * await SizeAsync(path, cancellationToken))
                             : 32L * MaxBytes
                     );
                 var result =
-                    mime is not null && !Directory.Exists(path)
+                    mime is not null && !await DirectoryExistsAsync(path, cancellationToken)
                         ? new JsonObject
                         {
                             ["output"] = "[Image loaded: " + pathText + "]",
@@ -238,13 +249,13 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                             {
                                 ["mimeType"] = mime,
                                 ["data"] = Convert.ToBase64String(
-                                    await File.ReadAllBytesAsync(path, cancellationToken)
+                                    await ReadBytesAsync(path, cancellationToken)
                                 ),
                             },
                         }
                         : new JsonObject
                         {
-                            ["output"] = await FileToolCore.Read(
+                            ["output"] = await ReadFormattedAsync(
                                 path,
                                 pathText,
                                 first,
@@ -299,46 +310,54 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                         + (parents ? "createDirs=true." : "overwrite=true.");
                 return $" The attempted content is cached. Retry write({{ filePath: {System.Text.Json.JsonSerializer.Serialize(pathText)}, contentRef: {System.Text.Json.JsonSerializer.Serialize(id)}, overwrite: true{(parents ? ", createDirs: true" : "")} }}). Use contentRef without content, or supply new content to replace it. The same cached text may be written to another permitted path in this session and agent. The contentRef expires in 15 minutes.";
             }
-            var parent = Path.GetDirectoryName(destination)!;
-            if (!Directory.Exists(parent))
+            if (targetFiles is not null)
             {
-                var current = parent;
-                while (!Directory.Exists(current))
-                {
-                    if (File.Exists(current))
-                        return Error(
-                            "not_directory",
-                            $"Parent path is not a directory: {current}."
-                        );
-                    current =
-                        Path.GetDirectoryName(current)
-                        ?? throw new IOException("Missing filesystem root.");
-                }
-                if (!createDirs)
-                    return Error(
-                        "missing_parent",
-                        $"Parent directory does not exist: {parent}. write does not create parent directories by default. Retry with createDirs=true."
-                            + Hint(true)
-                    );
-                Directory.CreateDirectory(parent);
+                var failed = await WriteTargetAsync(destination, pathText, content, overwrite, createDirs, Hint, cancellationToken);
+                if (failed is not null) return failed;
             }
-            if (Directory.Exists(destination) || File.Exists(destination) && !overwrite)
-                return Error(
-                    "file_exists",
-                    $"File already exists: {pathText}. Use overwrite=true to overwrite, or use edit to modify it."
-                        + Hint(false)
+            else
+            {
+                var parent = Path.GetDirectoryName(destination)!;
+                if (!Directory.Exists(parent))
+                {
+                    var current = parent;
+                    while (!Directory.Exists(current))
+                    {
+                        if (File.Exists(current))
+                            return Error(
+                                "not_directory",
+                                $"Parent path is not a directory: {current}."
+                            );
+                        current =
+                            Path.GetDirectoryName(current)
+                            ?? throw new IOException("Missing filesystem root.");
+                    }
+                    if (!createDirs)
+                        return Error(
+                            "missing_parent",
+                            $"Parent directory does not exist: {parent}. write does not create parent directories by default. Retry with createDirs=true."
+                                + Hint(true)
+                        );
+                    Directory.CreateDirectory(parent);
+                }
+                if (Directory.Exists(destination) || File.Exists(destination) && !overwrite)
+                    return Error(
+                        "file_exists",
+                        $"File already exists: {pathText}. Use overwrite=true to overwrite, or use edit to modify it."
+                            + Hint(false)
+                    );
+                if (File.Exists(destination) && !RegularFile(destination))
+                    return Error("not_file", "Write target must be a regular file.");
+                var written = await FileToolCore.WriteAtomic(
+                    destination,
+                    content,
+                    overwrite,
+                    () => _ = ResolveReadWrite(pathText, read: false),
+                    cancellationToken
                 );
-            if (File.Exists(destination) && !RegularFile(destination))
-                return Error("not_file", "Write target must be a regular file.");
-            var written = await FileToolCore.WriteAtomic(
-                destination,
-                content,
-                overwrite,
-                () => _ = ResolveReadWrite(pathText, read: false),
-                cancellationToken
-            );
-            if (!written)
-                return Error("file_exists", $"File already exists: {pathText}." + Hint(false));
+                if (!written)
+                    return Error("file_exists", $"File already exists: {pathText}." + Hint(false));
+            }
             if (reference.Length > 0)
                 pending.Consume(reference);
             ReportPaths((pathText, destination));
@@ -374,7 +393,12 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
         }
     }
 
-    private string ResolveReadWrite(string path, bool read) => Paths.FilePath(path);
+    private string ResolveReadWrite(string path, bool read)
+    {
+        if (targetFiles is null) return Paths.FilePath(path);
+        TargetFileContent.RequirePath(path);
+        return path;
+    }
 
     internal static bool RegularFile(string path)
     {

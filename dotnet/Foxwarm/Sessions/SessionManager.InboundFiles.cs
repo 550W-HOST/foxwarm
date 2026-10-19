@@ -14,7 +14,8 @@ internal sealed partial class SessionManager
     {
         owner.Entry.RequireIdentityAuthority();
         var bound = FileIngressNode(owner);
-        if (bound != "master" && !Nodes.Online(bound))
+        // Executable availability is resolved asynchronously by the actual transfer, not a stale projection.
+        if (bound != "master" && !NodeProviders.IsProviderNode(bound) && !Nodes.Online(bound))
             throw new InvalidOperationException(
                 "Attachment Node is offline or incompatible: " + bound
             );

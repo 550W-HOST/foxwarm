@@ -54,7 +54,7 @@ Current CLI/browser writers use structured image result fields; any old source-s
 
 ## Current gaps
 
-Session Worker hosting and Node Provider environment lifecycle are intentional .NET delivery exclusions, not migration milestones; see [delivery scope](../overview.md#d-dotnet-delivery-scope). Connected ordinary tools, exec/completion, whole-file consumers and fixed Code/PTY services remain supported without those platforms. Root package start/build still targets TypeScript Main (`lib/index.js`); `.NET Program.cs` is an experiment/host entry with explicit environment requirements, not a switched root launcher. Vector admission/search is not a current .NET capability.
+Session Worker hosting remains excluded; generic executable provider registry/files are now connected separately from resident protocols, while provider exec/lifecycle remain later checkpoints. See [delivery scope](../overview.md#d-dotnet-delivery-scope) and [.NET providers](../units/dotnet-node-providers.md). Connected ordinary tools, exec/completion, whole-file consumers and fixed Code/PTY services remain supported without those platforms. Root package start/build still targets TypeScript Main (`lib/index.js`); `.NET Program.cs` is an experiment/host entry with explicit environment requirements, not a switched root launcher. Vector admission/search is not a current .NET capability.
 
 ## Canonical units and tests
 

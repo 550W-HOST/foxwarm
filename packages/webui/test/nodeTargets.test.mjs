@@ -66,3 +66,17 @@ test('generic provider Nodes retain canonical IDs and status without inventing C
   assert.deepEqual(getNodeTargetAvailability(node, 'vscode-fs'), { available: false, reason: 'filesystem unavailable' })
   assert.deepEqual(getNodeTargetAvailability(node, 'vscode-pty'), { available: false, reason: 'terminal unavailable' })
 })
+
+test('qualified executable identities survive the real directory parser at the Core bound', () => {
+  const maximum = 'p'.repeat(64) + '/' + 'n'.repeat(128)
+  const nodes = parseWebUiNodeTargets({ nodes: [
+    { id: 'external/target', online: true, availability: 'ready', services: {} },
+    { id: maximum, online: false, availability: 'offline', services: {} },
+    { id: maximum + 'n', online: true },
+    { id: 'external/target/extra', online: true },
+  ] })
+  assert.deepEqual(nodes.map(node => node.id), ['master', 'external/target', maximum])
+  assert.deepEqual(getNodeTargetAvailability(nodes[1], 'vscode-fs'), { available: false, reason: 'filesystem unavailable' })
+  assert.deepEqual(getNodeTargetAvailability(nodes[1], 'vscode-pty'), { available: false, reason: 'terminal unavailable' })
+  assert.equal(nodes[2].availability, 'offline')
+})

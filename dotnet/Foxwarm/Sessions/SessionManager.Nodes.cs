@@ -32,7 +32,7 @@ internal sealed partial class SessionManager
                 Node: ResolveExecutionNode(snapshot.AuthorityEnvelope, BoundNode(owner.Agent)),
                 Cwd: SessionWait.Text(snapshot.AuthorityEnvelope["cwd"])
             );
-        return $"--- EXECUTION ENVIRONMENT ---\n- Current Node: {placement.Node}\n- Connected: {Nodes.Connected(placement.Node).ToString().ToLowerInvariant()}\n- Working directory: {placement.Cwd ?? "not set; use the Node's default directory"}\n- Agent memory and Session history remain on Main. The agent_folder above is this Agent's directory on Main, not its directory on another Node.";
+        return $"--- EXECUTION ENVIRONMENT ---\n- Current Node: {placement.Node}\n- Connected: {NodeProviders.Connected(placement.Node).ToString().ToLowerInvariant()}\n- Working directory: {placement.Cwd ?? "not set; use the Node's default directory"}\n- Agent memory and Session history remain on Main. The agent_folder above is this Agent's directory on Main, not its directory on another Node.";
     }
 
     internal JsonArray NodeSummaries(bool hasPty = false)
@@ -61,7 +61,14 @@ internal sealed partial class SessionManager
                     : new JsonObject { ["vscode-fs"] = 1, ["vscode-git"] = 2 },
             }
         );
+        foreach (var node in NodeProviders.Snapshot()) nodes.Add(node?.DeepClone());
         return nodes;
+    }
+
+    internal async Task<JsonArray> NodeSummariesAsync(bool hasPty = false, CancellationToken token = default)
+    {
+        await NodeProviders.ListAsync(token);
+        return NodeSummaries(hasPty);
     }
 
     internal void RequireNodeBoundary(SessionOwner owner, string node)
@@ -86,17 +93,19 @@ internal sealed partial class SessionManager
             throw new InvalidOperationException("Session owner changed before Node selection.");
         id = id.Trim();
         if (id != "master")
-            Foxwarm.Nodes.ApprovedNodeRegistry.ValidateId(id);
+            Foxwarm.Nodes.NodeProviderRegistry.ValidateId(id);
         RequireNodeBoundary(owner, id);
-        if (!Nodes.Online(id))
+        await NodeProviders.RefreshAsync(id, token);
+        if (!NodeProviders.Online(id))
             throw new InvalidOperationException("Node is offline or incompatible: " + id);
         token.ThrowIfCancellationRequested();
         var defaultCwd =
             id == "master"
                 ? agents.AgentDirectory(owner.Agent)
-                : Nodes.ShellDefaultCwd(id) ?? "unknown";
+                : NodeProviders.DefaultCwd(id) ?? "unknown";
         if (
             id != "master"
+            && !NodeProviders.IsProviderNode(id)
             && Nodes
                 .Definitions(id)
                 .Any(value => SessionWait.Text(value?["name"]) == "get_default_cwd")
@@ -135,7 +144,7 @@ internal sealed partial class SessionManager
                     || error is OperationCanceledException && !token.IsCancellationRequested
                 ) { }
         }
-        if (!Nodes.Online(id))
+        if (!NodeProviders.Online(id))
             throw new InvalidOperationException("Node disconnected before selection: " + id);
         token.ThrowIfCancellationRequested();
         if (!IsCurrentOwner(owner))
@@ -170,7 +179,7 @@ internal sealed partial class SessionManager
         if (action == "list")
         {
             ToolRegistry.Keys(args, ["action"]);
-            var values = NodeSummaries();
+            var values = await NodeSummariesAsync(token: token);
             if (AgentIsolated(owner.Agent))
                 values = new JsonArray(
                     values
@@ -212,7 +221,7 @@ internal sealed partial class SessionManager
         {
             RequireNodeBoundary(owner, id);
             var value =
-                NodeSummaries()
+                (await NodeSummariesAsync(token: token))
                     .OfType<JsonObject>()
                     .FirstOrDefault(value => SessionWait.Text(value["id"]) == id)
                 ?? throw new InvalidDataException("Node not found.");
@@ -263,13 +272,13 @@ internal sealed partial class SessionManager
         return new() { ["output"] = result.ToJsonString() };
     }
 
-    internal void RequireApprovedAgentNode(string node)
+    internal async Task RequireAgentNodeAsync(string node)
     {
         if (node == "master")
             throw new InvalidDataException("Use null to remove a Node binding.");
-        Foxwarm.Nodes.ApprovedNodeRegistry.ValidateId(node);
-        if (!Nodes.List().Any(value => SessionWait.Text(value?["id"]) == node))
-            throw new InvalidDataException("Approved Node not found.");
+        Foxwarm.Nodes.NodeProviderRegistry.ValidateId(node);
+        if (await NodeProviders.ResolveAsync(node, default) is null)
+            throw new InvalidDataException("Node not found.");
     }
 
     internal Task SetAgentNodeAsync(string agent, string? node) =>
@@ -286,7 +295,7 @@ internal sealed partial class SessionManager
             throw new InvalidDataException("Agent not found.");
         node = string.IsNullOrWhiteSpace(node) ? null : node.Trim();
         if (updateNode && node is not null)
-            RequireApprovedAgentNode(node);
+            await RequireAgentNodeAsync(node);
         await agents.SetIsolationAsync(agent, node, updateNode, rules);
         if (updateNode && node is not null)
             foreach (

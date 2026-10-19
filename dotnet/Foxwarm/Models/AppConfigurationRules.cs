@@ -121,26 +121,11 @@ internal static class AppConfigurationRules
                     $"app config `nodeProviders.{id}` must be an object."
                 );
             var type = Text(provider["type"]);
-            if (type is not ("executable" or "docker-worktree"))
+            if (type != "executable")
                 throw new InvalidDataException(
-                    $"app config `nodeProviders.{id}.type` must be `executable` or `docker-worktree`."
+                    $"app config `nodeProviders.{id}.type` must be `executable`."
                 );
-            var allowed =
-                type == "docker-worktree"
-                    ? new HashSet<string>([
-                        "type",
-                        "command",
-                        "args",
-                        "image",
-                        "allowedWorktreeRoots",
-                        "networkModes",
-                        "stateDir",
-                        "memory",
-                        "cpus",
-                        "pidsLimit",
-                        "tmpfsSize",
-                    ])
-                    : new HashSet<string>(["type", "command", "args", "timeoutSeconds"]);
+            var allowed = new HashSet<string>(["type", "command", "args", "timeoutSeconds"]);
             var unknown = provider
                 .Select(pair => pair.Key)
                 .FirstOrDefault(key => !allowed.Contains(key));
@@ -171,82 +156,9 @@ internal static class AppConfigurationRules
                 throw new InvalidDataException(
                     $"app config `nodeProviders.{id}.args` must contain at most {MaxNodeProviderArgs} bounded strings."
                 );
-            if (type == "executable")
-            {
-                var timeout = provider.ContainsKey("timeoutSeconds")
-                    ? Number(provider["timeoutSeconds"])
-                    : 90;
-                if (
-                    timeout is null
-                    || timeout < 1
-                    || timeout > MaxNodeProviderTimeoutSeconds
-                    || Math.Truncate(timeout.Value) != timeout
-                )
-                    throw new InvalidDataException(
-                        $"app config `nodeProviders.{id}.timeoutSeconds` must be an integer between 1 and {MaxNodeProviderTimeoutSeconds}."
-                    );
-            }
-            else
-            {
-                ExactText(
-                    provider["image"],
-                    $"app config `nodeProviders.{id}.image`",
-                    MaxNodeProviderValueLength
-                );
-                if (
-                    provider["allowedWorktreeRoots"] is not JsonArray roots
-                    || roots.Count == 0
-                    || roots.Count > MaxNodeProviderArgs
-                    || roots.Any(item =>
-                        Text(item) is null
-                        || Text(item)!.Length == 0
-                        || Text(item)!.Length > MaxNodeProviderValueLength
-                        || Text(item) != Text(item)!.Trim()
-                    )
-                )
-                    throw new InvalidDataException(
-                        $"app config `nodeProviders.{id}.allowedWorktreeRoots` must be a non-empty array of paths."
-                    );
-                if (
-                    provider.ContainsKey("networkModes")
-                    && (
-                        provider["networkModes"] is not JsonArray networkModes
-                        || networkModes.Count == 0
-                        || networkModes.Any(item => Text(item) is not ("none" or "bridge"))
-                    )
-                )
-                    throw new InvalidDataException(
-                        $"app config `nodeProviders.{id}.networkModes` must contain only `none` or `bridge`."
-                    );
-                if (provider.ContainsKey("stateDir"))
-                    ExactText(
-                        provider["stateDir"],
-                        $"app config `nodeProviders.{id}.stateDir`",
-                        MaxNodeProviderValueLength
-                    );
-                var memory = provider.ContainsKey("memory") ? Text(provider["memory"]) : "2g";
-                var tmpfs = provider.ContainsKey("tmpfsSize")
-                    ? Text(provider["tmpfsSize"])
-                    : "256m";
-                if (memory is null || !Regex.IsMatch(memory, "^[1-9]\\d*[kKmMgG]$"))
-                    throw new InvalidDataException(
-                        $"app config `nodeProviders.{id}.memory` is invalid."
-                    );
-                if (tmpfs is null || !Regex.IsMatch(tmpfs, "^[1-9]\\d*[kKmMgG]$"))
-                    throw new InvalidDataException(
-                        $"app config `nodeProviders.{id}.tmpfsSize` is invalid."
-                    );
-                var cpus = provider.ContainsKey("cpus") ? Number(provider["cpus"]) : 2;
-                var pids = provider.ContainsKey("pidsLimit") ? Number(provider["pidsLimit"]) : 256;
-                if (cpus is null || !double.IsFinite(cpus.Value) || cpus <= 0 || cpus > 64)
-                    throw new InvalidDataException(
-                        $"app config `nodeProviders.{id}.cpus` must be between 0 and 64."
-                    );
-                if (pids is null || Math.Truncate(pids.Value) != pids || pids < 16 || pids > 65_536)
-                    throw new InvalidDataException(
-                        $"app config `nodeProviders.{id}.pidsLimit` must be an integer between 16 and 65536."
-                    );
-            }
+            var timeout = provider.ContainsKey("timeoutSeconds") ? Number(provider["timeoutSeconds"]) : 90;
+            if (timeout is null || timeout < 1 || timeout > MaxNodeProviderTimeoutSeconds || Math.Truncate(timeout.Value) != timeout)
+                throw new InvalidDataException($"app config `nodeProviders.{id}.timeoutSeconds` must be an integer between 1 and {MaxNodeProviderTimeoutSeconds}.");
         }
     }
 

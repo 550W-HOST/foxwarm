@@ -116,11 +116,7 @@ internal sealed partial class SessionToolExecutor(
             var args =
                 call["args"] as JsonObject
                 ?? throw new InvalidDataException("Tool arguments must be an object.");
-            var resolved = registry.Resolve(
-                "exec",
-                args,
-                execSnapshot.Value?.Node ?? sessions.CurrentNode(hosted)
-            );
+            var resolved = await registry.ResolveAsync("exec", args, execSnapshot.Value?.Node ?? sessions.CurrentNode(hosted), token);
             await AuthorizeAsync(resolved, token);
             return null;
         }
@@ -361,7 +357,7 @@ internal sealed partial class SessionToolExecutor(
             var args =
                 functionCall["args"] as JsonObject
                 ?? throw new InvalidDataException("Tool arguments must be an object.");
-            var resolved = registry.Resolve(name, args, ExecutionNode);
+            var resolved = await registry.ResolveAsync(name, args, ExecutionNode, cancellationToken);
             if (
                 resolved.Name is "run_script" or "start_toolscript_run"
                 && invocation.Value is { } scriptCall
@@ -676,10 +672,11 @@ internal sealed partial class SessionToolExecutor(
         JsonArray definitions,
         Foxwarm.McpClient mcp,
         Func<SessionOwner, string> path,
-        Foxwarm.Nodes.NodeConnectionHub? nodes = null
+        Foxwarm.Nodes.NodeConnectionHub? nodes = null,
+        Foxwarm.Nodes.NodeProviderRegistry? providers = null
     )
     {
-        var registry = new ToolRegistry(mcp, path, nodes);
+        var registry = new ToolRegistry(mcp, path, nodes, providers);
         var handlers = new Dictionary<
             string,
             Func<SessionToolExecutor, JsonObject, CancellationToken, Task<JsonObject>>

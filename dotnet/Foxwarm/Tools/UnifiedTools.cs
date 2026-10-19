@@ -103,6 +103,7 @@ internal static partial class UnifiedTools
                         : SessionWait.Text(owner.Entry.Snapshot().AuthorityEnvelope["currentNode"])
                             ?? "master"
                 );
+                await registry.RefreshNodeAsync(nodeId, token);
                 foreach (var definition in registry.NodeDefinitions(nodeId).OfType<JsonObject>())
                 {
                     var name = SessionWait.Text(definition["name"])!;
@@ -125,7 +126,7 @@ internal static partial class UnifiedTools
                 }
             }
             catch (Exception error)
-                when (error is InvalidDataException or InvalidOperationException)
+                when (error is InvalidDataException or InvalidOperationException or IOException)
             {
                 warnings.Add(error.Message);
             }

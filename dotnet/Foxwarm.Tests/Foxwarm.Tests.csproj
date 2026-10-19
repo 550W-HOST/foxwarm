@@ -12,6 +12,7 @@
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <Using Include="Xunit" />
+    <None Update="Tools/Fixtures/*.py" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Mcp/Fixtures/*.mjs" CopyToOutputDirectory="PreserveNewest" />
     <None Update="ToolScript/Fixtures/*.json" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../Foxwarm/Foxwarm.csproj" />

@@ -43,7 +43,7 @@ internal sealed partial class SessionManager
         RequireAgentCreation(agentName);
         isolatedNode = string.IsNullOrWhiteSpace(isolatedNode) ? null : isolatedNode.Trim();
         if (isolatedNode is not null)
-            RequireApprovedAgentNode(isolatedNode);
+            await RequireAgentNodeAsync(isolatedNode);
         inherit = string.IsNullOrWhiteSpace(inherit) ? null : inherit.Trim();
         using var operation = TrackCreation();
         var gate = CreationKey(SessionIdentity.Build(agentName, "main"));

@@ -35,8 +35,8 @@ Current integration boundaries:
   Optional Vector indexing/search uses one local or supervised child derived owner;
   ordinary external Node tools, remote exec/completion, whole-file consumers and fixed
   Code/PTY services and exec-only Shell HTTP connect through .NET trust/transport/dispatch;
-  Session Worker hosting, managed ToolScript/controllers and Node Provider environment
-  lifecycle are excluded from this .NET delivery (see delivery scope below).
+  Session Worker hosting and managed ToolScript/controllers remain excluded. Executable
+  Node registry/files are connected; provider exec/lifecycle remain later checkpoints (see delivery scope below).
 
 Optional remote and compatibility components:
   CLI Node, browser extension, Android Node, sandbox runtime, VS Code Web assets,
@@ -69,7 +69,7 @@ Optional remote and compatibility components:
 | [Code and terminal](./modules/dotnet-code-terminal.md) | Code workbench/file/Git services, Code helper IPC, and native/managed terminal sessions. |
 | [Tasks and timers](./modules/dotnet-tasks-timers.md) | Task authority/service, cron parsing, timer persistence, and scheduling. |
 | [Images](./modules/dotnet-images.md) | Blob storage, codecs, transport conversion, provider deduplication, and token estimates. |
-| [External Nodes](./modules/dotnet-nodes.md) | Persistent trust, authenticated WebSocket negotiation, placement and ordinary remote tools. |
+| [Nodes and executable providers](./modules/dotnet-nodes.md) | Generic executable registry/files, placement, persistent trust, authenticated WebSocket negotiation and ordinary native remote tools. |
 | [External channels](./units/dotnet-external-channels.md) | Shared authorization/routing/attachments/delivery and managed Telegram, Matrix, Weixin, WeWork and [QQ Bot](./units/dotnet-qqbot.md) transports; Main TUI, remaining administration and final entry/service cutover remain later work. |
 | [MCP](./modules/dotnet-mcp.md) | Inbound external contexts/catalog, explicit Session notifications/replies, and official outbound SDK configuration, pooling and calls. |
 
@@ -107,4 +107,4 @@ Optional remote and compatibility components:
 
 ## D-dotnet-delivery-scope
 
-[2026-10-18] This .NET Main delivery will not implement Session Worker hosting, managed ToolScript/controller execution, or Node Provider environment lifecycle. These are intentional exclusions, not deferred milestones. Existing external Node connection and execution remain supported. The TypeScript compatibility implementations, shared protocols and their documentation remain in the repository; excluding a platform from .NET does not retire those components.
+[2026-10-19] Session Worker hosting and managed ToolScript/controller execution remain intentional .NET delivery exclusions. Generic executable Node Provider implementation is now in scope: the current checkpoint connects registry/discovery, qualified placement, file primitives and their consumers; persistent provider exec and optional lifecycle follow later checkpoints and are not yet advertised as working. Existing authenticated external Node connection, execution and credentials remain supported. The TypeScript compatibility implementations and shared protocols remain real reference/external boundaries. Current implementation ownership is mapped in [Nodes and executable providers](./modules/dotnet-nodes.md).

@@ -342,7 +342,7 @@ internal sealed partial class SessionManager
             .ToList();
         foreach (
             var definition in (
-                node == "master" ? tools.NodeDefinitions(node) : Nodes.DiscoveredDefinitions(node)
+                node == "master" ? tools.NodeDefinitions(node) : NodeProviders.Definitions(node)
             ).OfType<JsonObject>()
         )
         {

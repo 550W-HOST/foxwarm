@@ -6,7 +6,7 @@ namespace Foxwarm.Tests;
 public sealed class AppConfigurationRulesTests
 {
     [Fact]
-    public void AcceptsSourceValidUnsupportedBlocksWithoutStartingThem()
+    public void AcceptsExecutableProviderConfiguration()
     {
         var app = ConfigurationYaml.Parse(
             """
@@ -16,18 +16,11 @@ public sealed class AppConfigurationRulesTests
               compactThresholdPercent: 0.85
               ollamaBaseUrl: 42
             nodeProviders:
-              docker:
-                type: docker-worktree
+              external:
+                type: executable
                 command: /bin/echo
                 args: []
-                image: alpine:3
-                allowedWorktreeRoots: [/tmp]
-                networkModes: [none]
-                stateDir: /tmp/state
-                memory: 2g
-                cpus: 2
-                pidsLimit: 256
-                tmpfsSize: 256m
+                timeoutSeconds: 90
             vector: false
             access:
               identities:
@@ -47,6 +40,7 @@ public sealed class AppConfigurationRulesTests
         var invalid = new[]
         {
             "sessionWorkers: { idleSeconds: null }",
+            "nodeProviders: { p: { type: docker-worktree, command: /bin/echo } }",
             "vectorMaintenance: { retentionHours: null }",
             "nodeProviders: { p: { type: executable, command: /bin/echo, timeoutSeconds: null } }",
             "access: { identities: { a: { token: x, surfaces: {} } } }",

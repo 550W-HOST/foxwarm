@@ -1,14 +1,16 @@
-# Module: External Nodes
+# Module: Nodes and executable providers
 
-Persistent administrator-approved trust, credential-authenticated WebSocket and exec-only Shell HTTP connections, compatible capability discovery, Session placement and ordinary external tools, exec and authenticated Session events.
+Main-owned generic registry, executable-provider file primitives, Session placement, persistent administrator-approved trust, credential-authenticated WebSocket and exec-only Shell HTTP connections, ordinary native remote tools, exec and authenticated Session events.
 
 ## Boundaries
 
-This module connects existing CLI/browser/Android Node protocol clients to the .NET host. It does not create environments or grant OS isolation. Fixed Code/PTY services use advertised authenticated capabilities, not model-tool dispatch. Whole-file consumers connect through the existing CLI transfer protocol. Remote exec authority is transient and bounded; the client owns its process and pending replay. [Remote Node integration](../threads/remote-node-compatibility.md#net-external-node-integration) owns the canonical connected contract and remaining phase boundaries.
+This module connects existing CLI/browser/Android Node protocol clients to the .NET host. It does not create environments or grant OS isolation. Fixed Code/PTY services use advertised authenticated capabilities, not model-tool dispatch. Whole-file consumers use the generic registry, retaining the existing CLI transfer protocol for resident Nodes. Remote exec authority is transient and bounded; the client owns its process and pending replay. [Remote Node integration](../threads/remote-node-compatibility.md#net-external-node-integration) owns the canonical connected contract and remaining phase boundaries.
 
-Session Worker hosting and Node Provider environment lifecycle are excluded from this delivery; see [delivery scope](../overview.md#d-dotnet-delivery-scope).
+Executable registry/files are connected; provider exec and optional lifecycle remain later checkpoints. Session Worker hosting and managed controllers remain excluded; see [delivery scope](../overview.md#d-dotnet-delivery-scope).
 
 ## Units
+
+- [.NET executable Node registry and files](../units/dotnet-node-providers.md)
 
 - [External Shell HTTP exec transport](../units/external-shell-http.md)
 - [External Node trust and ordinary tools](../units/external-nodes.md)

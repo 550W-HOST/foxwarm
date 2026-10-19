@@ -15,13 +15,11 @@ internal static class NodeRoutes
         var hub = sessions.Nodes;
         app.MapGet(
             "/api/nodes",
-            () =>
+            async (CancellationToken token) =>
                 Results.Json(
                     new
                     {
-                        nodes = sessions.NodeSummaries(
-                            Foxwarm.Terminal.TerminalRegistry.IsSupported
-                        ),
+                        nodes = await sessions.NodeSummariesAsync(Foxwarm.Terminal.TerminalRegistry.IsSupported, token),
                     }
                 )
         );
@@ -156,10 +154,9 @@ internal static class NodeRoutes
         );
         app.MapGet(
             "/api/nodes/{nodeId}",
-            (string nodeId) =>
+            async (string nodeId, HttpContext context) =>
             {
-                var node = sessions
-                    .NodeSummaries()
+                var node = (await sessions.NodeSummariesAsync(token: context.RequestAborted))
                     .OfType<JsonObject>()
                     .FirstOrDefault(value => value["id"]!.GetValue<string>() == nodeId);
                 return node is null

@@ -79,7 +79,7 @@ internal sealed partial class SessionManager
     )
     {
         if (node != "master")
-            return await Nodes.ReadFileAsync(node, raw, owner, false, token, beforeMaterialize);
+            return await NodeProviders.ReadFileAsync(node, raw, owner, false, token, beforeMaterialize);
         var path = files.Paths.FilePath(raw);
         if (!WorkspaceTools.RegularFile(path))
             throw new InvalidDataException("Not a regular file: " + raw);
@@ -122,7 +122,7 @@ internal sealed partial class SessionManager
             throw new InvalidDataException("File exceeds the 50 MiB transfer limit.");
         if (node != "master")
         {
-            var result = await Nodes.WriteFileAsync(
+            var result = await NodeProviders.WriteFileAsync(
                 node,
                 raw,
                 bytes,

@@ -26,7 +26,7 @@ internal sealed partial class MessageRouter
                             : $"🔒 Runtime is bound by agent isolation to `{bound}`.\n"
                     )
                     + "\n**Nodes**\n";
-                foreach (var node in manager.NodeSummaries().OfType<JsonObject>())
+                foreach (var node in (await manager.NodeSummariesAsync()).OfType<JsonObject>())
                     reply += NodeRow(node) + "\n";
                 var pending = manager.Nodes.ListPending();
                 reply += "\n**Pending Approvals**\n";
@@ -130,8 +130,7 @@ internal sealed partial class MessageRouter
             else if (args.Length == 2 && args[0] == "inspect")
             {
                 var summary =
-                    manager
-                        .NodeSummaries()
+                    (await manager.NodeSummariesAsync())
                         .OfType<JsonObject>()
                         .FirstOrDefault(node => SessionWait.Text(node["id"]) == args[1])
                     ?? throw new InvalidDataException("Node not found.");

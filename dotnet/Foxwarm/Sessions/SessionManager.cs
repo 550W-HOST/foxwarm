@@ -31,6 +31,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     internal Foxwarm.McpClient OutboundMcp => mcp;
     internal Foxwarm.Channels.ChannelRegistry ChannelRegistry { get; } = new();
     internal Foxwarm.Nodes.NodeConnectionHub Nodes { get; }
+    internal Foxwarm.Nodes.NodeProviderRegistry NodeProviders { get; }
     internal Foxwarm.Nodes.NodeBootstrap? Bootstrap { get; set; }
     private readonly ModelRouting modelRouting = new();
     internal LlmRequestJournalStore Journal { get; }
@@ -65,6 +66,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         HandoffConfirmationEnabled = models.HandoffConfirmationEnabled;
         this.root = Path.GetFullPath(root);
         Nodes = new(this.root);
+        NodeProviders = new(Nodes, models.ConfigurationOwner?.AppConfiguration["nodeProviders"] as JsonObject, pendingWrites);
         Nodes.Changed += () => TopologyChanged?.Invoke();
         var workspaceRoot = Path.GetFullPath(workspace);
         toolWorkspace = workspaceRoot;
@@ -219,7 +221,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             definitions,
             mcp,
             owner => agents.AgentDirectory(owner.Agent),
-            Nodes
+            Nodes,
+            NodeProviders
         );
         clientOptions = options with { Tools = tools.ModelDefinitions() };
         this.models = models;
@@ -575,6 +578,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         registry.OnTurnStarting = async _ =>
         {
             StartChannelTurn(hosted);
+            try { await NodeProviders.RefreshAsync(CurrentNode(hosted), admissionStop.Token); }
+            catch (Exception error) when (error is IOException or InvalidOperationException) { }
             await MaybeRefreshStaleAsync(hosted);
         };
         registry.OnTurnCompleted = (_, result) => hosted.Compactor.AutoAfterTurnAsync(result);

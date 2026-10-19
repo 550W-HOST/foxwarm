@@ -78,11 +78,11 @@ public sealed partial class WorkspaceTools
                     var path = ResolvePatchPath(operation.Path, operation.Action == "add");
                     if (operation.Action == "add")
                     {
-                        if (File.Exists(path) || Directory.Exists(path))
+                        if (await FileExistsAsync(path, ct) || await DirectoryExistsAsync(path, ct))
                             throw new InvalidDataException(
                                 $"Cannot add file that already exists: {operation.Path}"
                             );
-                        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                        await MakeDirectoryAsync(await ParentAsync(path, ct), ct);
                         // Parent components created in this operation must still be ordinary directories.
                         path = ResolvePatchPath(operation.Path, true);
                         await WritePatchFileAsync(
@@ -94,9 +94,9 @@ public sealed partial class WorkspaceTools
                     }
                     else if (operation.Action == "delete")
                     {
-                        if (!RegularFile(path))
+                        if (targetFiles is null && !await RegularFileAsync(path, ct))
                             throw new InvalidDataException($"Regular file not found: {path}");
-                        File.Delete(path);
+                        await RemoveFileAsync(path, ct);
                     }
                     else
                     {
@@ -182,12 +182,14 @@ public sealed partial class WorkspaceTools
         return args[key] is JsonValue scalar && scalar.TryGetValue<string>(out value!);
     }
 
-    private string ResolvePatchPath(string text, bool allowMissing) => Paths.FilePath(text);
+    private string ResolvePatchPath(string text, bool allowMissing) => ResolveReadWrite(text, false);
 
-    private static async Task<string> ReadPatchFileAsync(string path, CancellationToken ct)
+    private async Task<string> ReadPatchFileAsync(string path, CancellationToken ct)
     {
-        if (!RegularFile(path))
+        if (targetFiles is null && !await RegularFileAsync(path, ct))
             throw new InvalidDataException($"Regular file not found: {path}");
+        if (targetFiles is not null)
+            return StrictUtf8.GetString(await TargetFileContent.ReadAsync(targetFiles, path, int.MaxValue, ct));
         await using var stream = new FileStream(
             path,
             FileMode.Open,
@@ -213,6 +215,11 @@ public sealed partial class WorkspaceTools
         CancellationToken ct
     )
     {
+        if (targetFiles is not null)
+        {
+            await targetFiles.WriteAsync(path, StrictUtf8.GetBytes(content), "w", ct);
+            return;
+        }
         path = AuthorizationPaths.CanonicalPotential(path);
         var bytes = StrictUtf8.GetBytes(content);
         var temp = Path.Combine(Path.GetDirectoryName(path)!, $".foxwarm-edit-{Guid.NewGuid():N}");

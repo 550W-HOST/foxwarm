@@ -4,13 +4,13 @@ Files: `dotnet/Foxwarm/Nodes/NodeConnectionHub.Files.cs`, `dotnet/Foxwarm/Sessio
 
 ## Purpose
 
-Connects whole-file transfer to actual copy, remote ToolScript source, image export/delivery, and administrator attachment ingress. The existing Node connection owns remote filesystem effects; Session history, Archive, canonical images, the Monty interpreter, and authenticated WebUI delivery remain Main-owned.
+Connects whole-file transfer to actual copy, remote ToolScript source, image export/delivery, and administrator attachment ingress. The generic registry selects executable primitives or the existing resident Node connection for remote filesystem effects; Session history, Archive, canonical images, the Monty interpreter, and authenticated WebUI delivery remain Main-owned.
 
 ## Stable symbols and callers
 
 - `NodeConnectionHub.ReadFileAsync` and `WriteFileAsync` send the official CLI `file_read_request`/`file_write_request` envelopes with the real Session and Agent. `HandleFileReply` settles only the corresponding response type and exact authenticated connection/transfer ID; replacement, removal, disconnect and shutdown fail that connection's pending transfers.
 - `ReadNodeFileAsync`/`WriteNodeFileAsync` connect actual whole-file reads/writes to the existing Main filesystem implementation or remote transfer. Main uses regular-file/handle checks, native path resolution and atomic no-overwrite publication. Remote namespaces are never canonicalized by Main.
-- `CopyBetweenNodesAsync` implements one read followed by one write. Relative paths use the Agent directory independently on each endpoint, not Session cwd.
+- `CopyBetweenNodesAsync` implements one read followed by one write. Relative Main/resident paths use the Agent directory independently on each endpoint; executable transfer paths use the adapter default. Neither uses Session cwd.
 - `SessionToolExecutor.ToolScript` loads trimmed `filePath` from an independently selected source Node and captured cwd; the complete source is materialized under the existing source budget and strict UTF-8 decoding, not reconstructed from an ordinary read preview. Execution and continuation stay in the existing Main-owned Monty host; nested tools use their current real owner and ordinary dispatch.
 - `SessionManager.ExportImageAsync` resolves only the sender's current history or effective Archive and canonical image store, then writes the target Node once. `SendFileAsync` reads remote bytes into unique Main delivery staging and uses the existing attached-channel checks and authenticated download route. Delivery failure does not delete an exported remote image or report successful delivery.
 - `WebUiUploadedFiles.PrepareAsync` transfers staged attachments to an isolated Agent's bound Node and records the actual destination/Node in descriptors and partial saved-file results. Non-isolated uploads retain Main storage even when their Session selects a remote execution Node. Administrator ingress is not a model-tool invocation.
@@ -25,7 +25,7 @@ Whole transfers support files up to 50 MiB. The receive-frame ceiling accommodat
 
 The CLI transfer write contract creates missing parents and defaults to no overwrite. This is separate from ordinary `write.createDirs`. Cancellation, timeout, disconnect and uncertain writes are never replayed; an already-started effect may remain. Unavailable Nodes/capabilities never fall back to Main. The existing post-write image partial result retains `fileWritten` and the actual path. A successful upload or file delivery does not commit a model turn or create destination Session history.
 
-Code/PTY services, Shell HTTP, environment Providers, Worker ownership and external-owner execution are not connected by this unit.
+Executable primitive file consumers are mapped in [.NET providers](./dotnet-node-providers.md). Code/PTY services, Shell HTTP, Worker ownership and external-owner execution retain separate owners.
 
 ## Tests
 

@@ -64,7 +64,7 @@ internal sealed partial class SessionManager
         string path;
         if (node != "master")
         {
-            var result = await Nodes.WriteFileAsync(
+            var result = await NodeProviders.WriteFileAsync(
                 node,
                 relative,
                 bytes,

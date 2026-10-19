@@ -110,7 +110,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                 {
                     // Authenticated administrator ingress selects the real owner; it is not a model tool call.
                     var relative = ".temp/channel-files/webui/" + storage;
-                    var written = await sessions.Nodes.WriteFileAsync(
+                    var written = await sessions.NodeProviders.WriteFileAsync(
                         node,
                         relative,
                         bytes,
