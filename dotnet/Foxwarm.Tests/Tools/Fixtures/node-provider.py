@@ -8,6 +8,7 @@ import os
 import pathlib
 import posixpath
 import signal
+import stat as file_stat
 import subprocess
 import sys
 import time
@@ -70,7 +71,8 @@ def physical(path):
 
 def stat(path):
     info = path.stat()
-    return {"kind": "directory" if path.is_dir() else "file", "size": info.st_size, "modifiedAtMs": info.st_mtime * 1000}
+    kind = "directory" if file_stat.S_ISDIR(info.st_mode) else "file" if file_stat.S_ISREG(info.st_mode) else "other"
+    return {"kind": kind, "size": info.st_size, "modifiedAtMs": info.st_mtime * 1000}
 
 
 try:
@@ -111,7 +113,14 @@ try:
             else:
                 with actual.open("rb") as source:
                     source.seek(body["offset"])
-                    result = {"dataBase64": base64.b64encode(source.read(body["count"])).decode()}
+                    data = source.read(body["count"])
+                if mode == "premature-short" and body["offset"] == 0:
+                    data = data[:-1]
+                if mode == "snapshot-append" and body["offset"] + len(data) == actual.stat().st_size and not (root / "appended").exists():
+                    with actual.open("ab") as output:
+                        output.write(b"# appended after snapshot\n")
+                    (root / "appended").touch()
+                result = {"dataBase64": base64.b64encode(data).decode()}
         elif action == "mkdir":
             actual.mkdir(parents=True, exist_ok=True)
             result = None
@@ -125,7 +134,10 @@ try:
                 sys.exit(0)
             result = None
         elif action == "remove":
-            actual.unlink()
+            try:
+                actual.unlink()
+            except FileNotFoundError:
+                pass
             result = None
         else:
             raise ValueError("Unsupported filesystem operation")

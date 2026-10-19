@@ -8,20 +8,20 @@ internal static class FileDeliveryDefinitions
         new(
             Definition(
                 "copy_between_nodes",
-                "Copy a file between two Nodes, including master. Both paths are checked against the applicable permissions. Relative paths use this agent's directory on each Node, not the session working directory.",
+                "Copy a file between Nodes, including master. Both paths are checked against the applicable permissions. Relative paths use the Agent directory on Main and CLI Nodes, or the environment's default directory on other Nodes, not the Session working directory.",
                 new JsonObject
                 {
                     ["sourceNode"] = String(
                         "Node containing the source file. Use master for the Main host."
                     ),
                     ["sourcePath"] = String(
-                        "Source path on sourceNode. Absolute paths, ~/ paths, and paths relative to the agent directory are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
+                        "Source file path on sourceNode. Relative paths use the Agent directory on Main and CLI Nodes, or the environment's default directory on other Nodes. On Main and CLI Nodes, ~/ paths are accepted and a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
                     ),
                     ["targetNode"] = String(
                         "Node that will receive the file. Use master for the Main host."
                     ),
                     ["targetPath"] = String(
-                        "Destination path on targetNode. Absolute paths, ~/ paths, and paths relative to the agent directory are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
+                        "Destination file path on targetNode. Relative paths use the Agent directory on Main and CLI Nodes, or the environment's default directory on other Nodes. On Main and CLI Nodes, ~/ paths are accepted and a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
                     ),
                     ["overwrite"] = new JsonObject
                     {
@@ -47,7 +47,7 @@ internal static class FileDeliveryDefinitions
                         "Session whose attached channels should receive the file. Defaults to the current session; do not combine with channelTargetId."
                     ),
                     ["filePath"] = String(
-                        "Path on the selected Node. On master, relative paths use the current session working directory or, if unset, its agent directory. On other Nodes, they use that Node's agent directory. Absolute paths and ~/ paths are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
+                        "File path on the selected Node. On master, relative paths use the current Session working directory or its Agent directory if unset. On CLI Nodes they use the Agent directory; other Nodes use their environment's default directory. On Main and CLI Nodes, ~/ paths are accepted and a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
                     ),
                     ["node"] = String("Node containing the file. Defaults to the current Node."),
                     ["caption"] = String(
@@ -64,7 +64,7 @@ internal static class FileDeliveryDefinitions
                 {
                     ["id"] = String("Image ID shown in this session."),
                     ["filePath"] = String(
-                        "Destination path. On master, relative paths use the session working directory or, if unset, the agent directory. On other Nodes, they use that Node's agent directory. Absolute paths and ~/ paths are also accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
+                        "File path on the selected Node. On master, relative paths use the current Session working directory or its Agent directory if unset. On CLI Nodes they use the Agent directory; other Nodes use their environment's default directory. On Main and CLI Nodes, ~/ paths are accepted and a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
                     ),
                     ["overwrite"] = new JsonObject
                     {

@@ -313,8 +313,25 @@ internal sealed class NodeProviderRegistry
             beforeMaterialize,
             requireRegular: true
         );
-        return new(bytes, path, NodeConnectionHub.RemoteFileName(path));
+        var name = NodeConnectionHub.RemoteFileName(path);
+        return new(bytes, path, name, PrimitiveTransferMime(name));
     }
+
+    private static string PrimitiveTransferMime(string name) =>
+        Path.GetExtension(name).ToLowerInvariant() switch
+        {
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            ".bmp" => "image/bmp",
+            ".svg" => "image/svg+xml",
+            ".json" => "application/json",
+            ".txt" or ".ts" or ".js" or ".sh" => "text/plain",
+            ".md" => "text/markdown",
+            ".yaml" or ".yml" => "application/yaml",
+            _ => "application/octet-stream",
+        };
 
     internal async Task<byte[]> ReadSourceAsync(
         string node,

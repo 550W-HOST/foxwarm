@@ -58,20 +58,18 @@ internal static class TargetFileContent
             throw new IOException("File exceeds the materialization limit.");
         beforeMaterialize?.Invoke(stat.Size);
         var bytes = new byte[(int)stat.Size];
-        for (var offset = 0; offset < bytes.Length; )
+        var offset = 0;
+        while (true)
         {
-            var chunk = await operations.ReadAsync(
-                path,
-                offset,
-                Math.Min(chunkSize, bytes.Length - offset),
-                token
-            );
-            if (chunk.Length == 0)
+            var chunk = await operations.ReadAsync(path, offset, chunkSize, token);
+            if (chunk.Length > bytes.Length - offset)
                 throw new IOException("Source file changed or returned incomplete data.");
             chunk.CopyTo(bytes, offset);
             offset += chunk.Length;
+            if (chunk.Length < chunkSize)
+                break;
         }
-        if ((await operations.ReadAsync(path, stat.Size, 1, token)).Length != 0)
+        if (offset != bytes.Length)
             throw new IOException("Source file changed or returned incomplete data.");
         return bytes;
     }

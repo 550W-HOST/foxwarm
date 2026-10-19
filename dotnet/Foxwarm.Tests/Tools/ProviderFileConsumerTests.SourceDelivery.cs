@@ -54,6 +54,55 @@ public sealed partial class ProviderFileConsumerTests
         Assert.NotNull(sourceRead);
     }
 
+    [Theory]
+    [InlineData("snapshot-append", 65535, true, 1)]
+    [InlineData("snapshot-append", 65536, false, 2)]
+    [InlineData("normal", 65536, true, 2)]
+    [InlineData("premature-short", 65536, false, 1)]
+    public async Task Complete_source_uses_fixed_chunks_short_read_termination_and_initial_stat_equality(
+        string mode, int size, bool complete, int readCount)
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        await using var f = await Fixture.Create(mode);
+        const string ending = "\nreturn 713\n";
+        await f.Seed("source.py", Encoding.UTF8.GetBytes("#" + new string('x', size - ending.Length - 1) + ending));
+        var result = await f.Call("run_script", new JsonObject { ["filePath"] = "source.py", ["node"] = f.Node });
+        Assert.Equal(complete, SessionWait.Text(result["status"]) == "completed");
+        if (complete)
+            Assert.Equal(713, result["result"]!.GetValue<int>());
+        var reads = (await f.Requests()).Where(call => call["request"]?["operation"]?.GetValue<string>() == "read").ToArray();
+        Assert.Equal(readCount, reads.Length);
+        Assert.All(reads, call => Assert.Equal(65536, call["request"]!["count"]!.GetValue<int>()));
+        if (mode == "snapshot-append")
+            Assert.True(new FileInfo(f.FilePath("source.py")).Length > size);
+    }
+
+    [Fact]
+    public async Task Provider_yaml_delivery_keeps_transfer_MIME_and_stages_original_bytes_on_Main()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        await using var f = await Fixture.Create();
+        var bytes = Encoding.UTF8.GetBytes("name: provider\n");
+        await f.Seed("settings.yaml", bytes);
+        f.Manager.AttachWebUi(f.Owner.Id, f.Owner);
+        var deliveries = 0;
+        f.Manager.RegisterWebUiFileDelivery((conversation, path, _) =>
+        {
+            Assert.Equal(f.Owner.Id, conversation);
+            Assert.True(Path.IsPathFullyQualified(path));
+            Assert.Equal(bytes, File.ReadAllBytes(path));
+            deliveries++;
+        });
+        var result = await f.Call("send_file", new JsonObject { ["filePath"] = "settings.yaml", ["node"] = f.Node });
+        Success(result);
+        Assert.Equal(1, deliveries);
+        Assert.Equal("application/yaml", SessionWait.Text(result["fileDelivery"]?["mimeType"]));
+        Assert.Equal(f.Node, SessionWait.Text(result["fileDelivery"]?["sourceNodeId"]));
+        Assert.Equal("master", SessionWait.Text(result["fileDelivery"]?["downloadNodeId"]));
+    }
+
     [Fact]
     public async Task Explicit_provider_source_is_separate_from_nested_live_Main_placement()
     {

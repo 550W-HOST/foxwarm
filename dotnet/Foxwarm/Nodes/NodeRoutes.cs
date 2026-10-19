@@ -159,6 +159,7 @@ internal static class NodeRoutes
             "/api/nodes/{nodeId}",
             async (string nodeId, HttpContext context) =>
             {
+                nodeId = Uri.UnescapeDataString(nodeId);
                 var node = (await sessions.NodeSummariesAsync(token: context.RequestAborted))
                     .OfType<JsonObject>()
                     .FirstOrDefault(value => value["id"]!.GetValue<string>() == nodeId);

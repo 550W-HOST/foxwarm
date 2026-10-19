@@ -96,6 +96,8 @@ public sealed partial class WorkspaceTools
                     {
                         if (targetFiles is null && !await RegularFileAsync(path, ct))
                             throw new InvalidDataException($"Regular file not found: {path}");
+                        if (targetFiles is not null && await TargetStatAsync(path, ct) is null)
+                            throw new InvalidDataException($"Cannot delete missing file: {operation.Path}");
                         await RemoveFileAsync(path, ct);
                     }
                     else

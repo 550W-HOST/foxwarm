@@ -228,7 +228,7 @@ internal static partial class FileToolCore
             var kind =
                 link ? "symlink"
                 : directory ? "dir"
-                : "file";
+                : entry.Kind;
             var size = kind == "file" ? $", {entry.Size} B" : "";
             lines.Add(
                 $"{start + index}. `{entry.Name}{(directory ? "/" : "")}` ({kind}{size}) - {DateTimeOffset.FromUnixTimeMilliseconds((long)entry.ModifiedAtMs):yyyy-MM-ddTHH:mm:ss.fffZ}"
