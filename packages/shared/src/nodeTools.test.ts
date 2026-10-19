@@ -84,6 +84,44 @@ test('read and edit report a missing or blank filePath before path resolution', 
   }
 });
 
+test('CLI and primitive Node read compose content-based image detection in the target filesystem', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-node-read-image-'));
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC', 'base64');
+  try {
+    await fs.writeFile(path.join(root, 'opaque'), png);
+    const native: any = await read({ filePath: 'opaque' }, { session: { cwd: root } });
+    assert.deepEqual(native.inlineData, { data: png.toString('base64'), mimeType: 'image/png' });
+
+    const reads: Array<{ filePath: string; offset: number; count: number }> = [];
+    const files = new Map([['urn:opaque', png], ['urn:text.png', Buffer.from('one\r\ntwo\n')]]);
+    const operations: FileOperations = {
+      ...nativeFileOperations,
+      async stat(filePath) {
+        const value = files.get(filePath)!;
+        assert.ok(value, 'stat must use the opaque target path');
+        return { kind: 'file', size: value.length, modifiedAtMs: 0 };
+      },
+      async read(filePath, offset, count) {
+        reads.push({ filePath, offset, count });
+        return files.get(filePath)!.subarray(offset, offset + count);
+      },
+    };
+    const ctx = { resolveFilePath: (filePath: string) => `urn:${filePath}`, fileOperations: operations, programmatic: true as const };
+    const primitive: any = await read({ filePath: 'opaque' }, ctx);
+    assert.deepEqual(primitive.inlineData, native.inlineData);
+    assert.deepEqual(reads, [
+      { filePath: 'urn:opaque', offset: 0, count: 12 },
+      { filePath: 'urn:opaque', offset: 0, count: png.length },
+    ]);
+    const text: any = await read({ filePath: 'text.png', startLine: 2, endLine: 2 }, ctx);
+    assert.equal(text.content, 'two\n');
+    assert.equal(text.inlineData, undefined);
+    assert.equal(text.filePath, 'urn:text.png');
+  } finally {
+    await fs.remove(root);
+  }
+});
+
 test('shared exec timeout resolution clamps only oversized finite values', () => {
   assert.deepEqual(resolveExecTimeoutSeconds(undefined), { requestedSeconds: 15, effectiveSeconds: 15 });
   assert.deepEqual(resolveExecTimeoutSeconds(60), { requestedSeconds: 60, effectiveSeconds: 60 });

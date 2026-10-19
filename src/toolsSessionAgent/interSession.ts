@@ -182,6 +182,10 @@ export async function tool_wait(args: ToolArgs, ctx?: ToolContext) {
         }
       }
     }
+    if (ctx.deferSessionWait) {
+      ctx.deferSessionWait(args);
+      return buildEndTurnResult(typeof reason === 'string' ? reason : undefined);
+    }
     const waitOptions = {
       reason: typeof reason === 'string' ? reason : undefined,
       timeoutSeconds,

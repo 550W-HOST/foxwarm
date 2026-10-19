@@ -1,4 +1,5 @@
 import path from 'path';
+import { detectRasterImageMimeType, RASTER_IMAGE_HEADER_BYTES } from './rasterImageMime';
 import { applyUpdatePatch, buildAddedFileContent, formatApplyPatchOperationSummary, parseApplyPatchInput } from './applyPatch';
 import {
   MAX_FULL_TEXT_READ_BYTES,
@@ -71,15 +72,6 @@ export function formatWriteContentRefRetryHint(filePath: string, contentRef: str
   return ` The attempted content is already cached. Do not include or pass the \`content\` argument when using \`contentRef\`; it is unnecessary. To ${action}, call write({ ${params} }). The cached payload may instead be written to another authorized \`filePath\` in the same session/agent. If you intentionally want to correct or replace the attempted content instead, omit \`contentRef\` and call \`write\` with the new \`content\` plus ${replacementRequirements}. Never pass \`content\` and \`contentRef\` together.`;
 }
 
-const INLINE_IMAGE_MIME: Record<string, string> = {
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.png': 'image/png',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.bmp': 'image/bmp',
-};
-
 export function normalizeOptionalLineBound(value: number | undefined): number | undefined {
   if (value === undefined || value === null) return undefined;
   const numeric = Number(value);
@@ -141,10 +133,6 @@ export async function readDirectoryListing(
   lines.push(footer.join(' '));
 
   return lines.join('\n');
-}
-
-export function getInlineImageMimeType(filePath: string): string | undefined {
-  return INLINE_IMAGE_MIME[path.extname(filePath).toLowerCase()];
 }
 
 class RangeByteCollector {
@@ -409,7 +397,8 @@ export async function readFileToolPath(
     return readDirectoryListing(fullPath, displayPath, startLine, endLine, operations);
   }
 
-  const mimeType = getInlineImageMimeType(fullPath);
+  const header = await operations.read(fullPath, 0, Math.min(RASTER_IMAGE_HEADER_BYTES, stats.size));
+  const mimeType = detectRasterImageMimeType(header);
   if (mimeType) {
     const buffer = await operations.read(fullPath, 0, stats.size);
     return {

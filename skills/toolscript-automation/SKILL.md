@@ -176,6 +176,39 @@ Nested relative file paths and `exec.cwd` values resolve from the owner session'
 
 Nested calls execute normally and appear as ToolScript activity in the UI and run diagnostics, but they are not appended as separate tool messages or included as diagnostic fields in the default execution response.
 
+### Returning images
+
+Return the image object from `read` directly to show it to the model without another model-invoked read:
+
+```python
+return call_tool("read", {"filePath": args["imagePath"]})
+```
+
+Supported raster images are recognized from their contents, even without a filename extension. Returning only a path remains ordinary data, not an image. Image promotion uses top-level `inlineData`, `inlineDataItems`, or image-bearing `parts`, not arbitrary nested objects.
+
+For multiple image reads, collect their existing inline payloads in `inlineDataItems`:
+
+```python
+images = [call_tool("read", {"filePath": path}) for path in args["imagePaths"]]
+return {"inlineDataItems": [image["inlineData"] for image in images]}
+```
+
+### Ending the caller turn with `wait`
+
+A nested `call_tool("wait", ...)` pauses the calling Session only if it remains the last host call when the script completes normally. Finish other tool calls first. Computation, `print` and an ordinary `return` may follow; another host call, including a nested script or a failed call, invalidates the pending wait. Return the data you want to keep, not a special control object: lookalike dictionaries are ordinary result data.
+
+For example, return an image while waiting for a command that is still running in the background:
+
+```python
+image = call_tool("read", {"filePath": args["imagePath"]})
+job = call_tool("exec", {"command": args["command"], "timeout": 1})
+if job["status"] == "running":
+    call_tool("wait", {"waitExecIds": [job["execId"]]})
+return image
+```
+
+Use the real `execId` returned by an owned background exec, or another supported wait source. The usual wait validation and fallback rules apply. A failed script or a script paused at `ask_agent` or a safe timeout checkpoint does not arm a caller wait. Continue paused scripts normally; a timeout checkpoint preserves an outstanding final-wait intent, but it takes effect only if the continuation completes normally without a later host call. Agent-input pauses invalidate preceding waits.
+
 ### `ask_agent(...)`
 
 `ask_agent(question)` pauses the run and returns control to the owning agent:

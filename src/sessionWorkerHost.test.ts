@@ -1939,3 +1939,41 @@ test('maximum qualified Node selection persists and publishes through Worker Hos
     await fs.remove(root);
   }
 });
+
+test('Worker final ToolScript wait persists only its exact owner and stops the real runner', async () => {
+  const initial = baseSession(`worker-script-wait-${Date.now()}`);
+  const originals = { chat: llm.chat, get: sessionManager.getSession, save: sessionManager.saveSession };
+  let requests = 0;
+  (sessionManager as any).getSession = async () => { throw new Error('child-global Session lookup forbidden'); };
+  (sessionManager as any).saveSession = async () => { throw new Error('child-global Session save forbidden'); };
+  (llm as any).chat = async (_parts: any, _owner: Session, _iteration: number, options: any) => {
+    requests++;
+    assert.equal(requests, 1, 'Worker must stop before another provider iteration');
+    const call = { id: 'worker-terminal-script', name: 'call_tool', args: { toolId: 'builtin:run_script', args: {
+      code: 'return call_tool("run_script", {"code": args["childCode"]})',
+      args: { childCode: 'call_tool("builtin:wait", {"waitForInput": True})\nreturn "inner result"' },
+    } } };
+    await options.appendMessage({ role: 'model', parts: [{ functionCall: call }] });
+    return { text: '', toolCalls: [call] };
+  };
+  try {
+    await withLocalHost(initial, async ({ host, store, session, readDurable }) => {
+      store.enqueueIntent(initial.id, 'script-wait', 'enqueue', { type: 'background', parts: [{ text: 'wait for input' }] });
+      await host.runPending(10);
+      assert.equal(requests, 1);
+      assert.equal(session.busy, false);
+      assert.equal(session.meta.wait?.waitForInput, true);
+      const durable = readDurable();
+      assert.equal(durable.meta.wait.id, session.meta.wait.id);
+      assert.deepEqual(durable.history.map((message: any) => message.role), ['user', 'model', 'tool']);
+      const result = durable.history.at(-1).parts[0].functionResponse.response;
+      assert.equal(result.status, 'completed');
+      assert.equal(result.result.result, 'inner result');
+    }, true);
+  } finally {
+    (llm as any).chat = originals.chat;
+    (sessionManager as any).getSession = originals.get;
+    (sessionManager as any).saveSession = originals.save;
+    await (await import('./toolscript')).shutdownToolScriptRuntime();
+  }
+});

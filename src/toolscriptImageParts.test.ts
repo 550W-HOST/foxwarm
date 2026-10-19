@@ -12,7 +12,7 @@ import * as llm from './llm';
 import * as sessionManager from './sessionManager';
 import * as tools from './tools';
 import { getAgentDir } from './config';
-import { hydrateMessagesForProvider, putImageBlob, resolveImageBlobPath } from './imageBlobs';
+import { externalizeMessageImages, hydrateMessagesForProvider, putImageBlob, resolveImageBlobPath } from './imageBlobs';
 import { normalizeToolResultImages } from './toolImages';
 import { resetToolScriptRunsForTests, tool_run_script } from './toolscript';
 import type { InlineDataRef, MessagePart } from './types';
@@ -122,6 +122,57 @@ test('request_model_without_context keeps the text result and exposes canonical 
     await resetToolScriptRunsForTests();
     await sessionManager.deleteSession(sessionId).catch(() => false);
     await fs.remove(path.join(getAgentDir('main'), scriptName)).catch(() => false);
+  }
+});
+
+test('returning a nested read of a no-extension image reaches the outer result and provider without another read', async () => {
+  await resetToolScriptRunsForTests();
+  const sessionId = makeId('toolscript_read_image');
+  const session = await sessionManager.getSession(sessionId);
+  const imagePath = path.join(getAgentDir(session.agent), makeId('opaque'));
+  const png = await makePng(8, 6, { r: 42, g: 112, b: 192 });
+  let ref: InlineDataRef | undefined;
+  await fs.ensureDir(path.dirname(imagePath));
+  await fs.writeFile(imagePath, png);
+  try {
+    const pathOnly = await executeTools([
+      { id: 'call_path_only', name: 'run_script', args: { code: 'return {"filePath": args["imagePath"]}', args: { imagePath } } },
+    ], { sessionId, session }, session);
+    assert.equal(responseParts(pathOnly).result.filePath, imagePath);
+    assert.equal(pathOnly.message.parts.some(part => part.inlineData || part.inlineDataRef), false);
+
+    const toolMessage = await executeTools([
+      { id: 'call_read_image', name: 'run_script', args: {
+        code: 'return call_tool("read", {"filePath": args["imagePath"]})',
+        args: { imagePath },
+      } },
+    ], { sessionId, session }, session);
+    const response = responseParts(toolMessage);
+    assert.equal(response.status, 'completed', response.error);
+    assert.equal(response.result.inlineData, '[image promoted, mimeType=image/png]');
+    assert.equal(JSON.stringify(response).includes(png.toString('base64')), false);
+    const images = toolMessage.message.parts.filter(part => part.inlineData);
+    assert.equal(images.length, 1);
+    assert.equal(images[0].toolUseId, 'call_read_image');
+    assert.equal(images[0].imageMeta?.imageId, 'call_read_image#1');
+    assert.equal(images[0].imageMeta?.width, 8);
+    assert.equal(images[0].imageMeta?.height, 6);
+    assert.deepEqual(Buffer.from(images[0].inlineData!.data, 'base64'), png);
+
+    const persisted = await externalizeMessageImages(toolMessage.message);
+    ref = persisted.message.parts.find(part => part.inlineDataRef)?.inlineDataRef;
+    assert.ok(ref?.blobId);
+    assert.equal(JSON.stringify(persisted.message).includes(png.toString('base64')), false);
+    await fs.remove(imagePath);
+    const hydrated = await hydrateMessagesForProvider([persisted.message]);
+    const hydratedImage = hydrated[0].parts.find(part => part.inlineData)?.inlineData;
+    assert.equal(hydratedImage?.mimeType, 'image/png');
+    assert.deepEqual(Buffer.from(hydratedImage!.data, 'base64'), png);
+  } finally {
+    await resetToolScriptRunsForTests();
+    await sessionManager.deleteSession(sessionId).catch(() => false);
+    await fs.remove(imagePath);
+    if (ref?.blobId) await fs.remove(resolveImageBlobPath(ref.blobId));
   }
 });
 
