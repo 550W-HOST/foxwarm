@@ -60,18 +60,30 @@ public sealed partial class ProviderFileConsumerTests
     [InlineData("normal", 65536, true, 2)]
     [InlineData("premature-short", 65536, false, 1)]
     public async Task Complete_source_uses_fixed_chunks_short_read_termination_and_initial_stat_equality(
-        string mode, int size, bool complete, int readCount)
+        string mode,
+        int size,
+        bool complete,
+        int readCount
+    )
     {
         if (!OperatingSystem.IsLinux())
             return;
         await using var f = await Fixture.Create(mode);
         const string ending = "\nreturn 713\n";
-        await f.Seed("source.py", Encoding.UTF8.GetBytes("#" + new string('x', size - ending.Length - 1) + ending));
-        var result = await f.Call("run_script", new JsonObject { ["filePath"] = "source.py", ["node"] = f.Node });
+        await f.Seed(
+            "source.py",
+            Encoding.UTF8.GetBytes("#" + new string('x', size - ending.Length - 1) + ending)
+        );
+        var result = await f.Call(
+            "run_script",
+            new JsonObject { ["filePath"] = "source.py", ["node"] = f.Node }
+        );
         Assert.Equal(complete, SessionWait.Text(result["status"]) == "completed");
         if (complete)
             Assert.Equal(713, result["result"]!.GetValue<int>());
-        var reads = (await f.Requests()).Where(call => call["request"]?["operation"]?.GetValue<string>() == "read").ToArray();
+        var reads = (await f.Requests())
+            .Where(call => call["request"]?["operation"]?.GetValue<string>() == "read")
+            .ToArray();
         Assert.Equal(readCount, reads.Length);
         Assert.All(reads, call => Assert.Equal(65536, call["request"]!["count"]!.GetValue<int>()));
         if (mode == "snapshot-append")
@@ -88,14 +100,19 @@ public sealed partial class ProviderFileConsumerTests
         await f.Seed("settings.yaml", bytes);
         f.Manager.AttachWebUi(f.Owner.Id, f.Owner);
         var deliveries = 0;
-        f.Manager.RegisterWebUiFileDelivery((conversation, path, _) =>
-        {
-            Assert.Equal(f.Owner.Id, conversation);
-            Assert.True(Path.IsPathFullyQualified(path));
-            Assert.Equal(bytes, File.ReadAllBytes(path));
-            deliveries++;
-        });
-        var result = await f.Call("send_file", new JsonObject { ["filePath"] = "settings.yaml", ["node"] = f.Node });
+        f.Manager.RegisterWebUiFileDelivery(
+            (conversation, path, _) =>
+            {
+                Assert.Equal(f.Owner.Id, conversation);
+                Assert.True(Path.IsPathFullyQualified(path));
+                Assert.Equal(bytes, File.ReadAllBytes(path));
+                deliveries++;
+            }
+        );
+        var result = await f.Call(
+            "send_file",
+            new JsonObject { ["filePath"] = "settings.yaml", ["node"] = f.Node }
+        );
         Success(result);
         Assert.Equal(1, deliveries);
         Assert.Equal("application/yaml", SessionWait.Text(result["fileDelivery"]?["mimeType"]));

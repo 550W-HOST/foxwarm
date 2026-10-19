@@ -250,16 +250,20 @@ public sealed partial class ProviderFileConsumerTests
             return;
         await using var f = await Fixture.Create();
         await f.Seed("directory/plain.txt", Encoding.UTF8.GetBytes("ordinary"));
-        using (var process = System.Diagnostics.Process.Start("mkfifo", new[] { f.FilePath("directory/pipe") })!)
+        using (
+            var process = System.Diagnostics.Process.Start(
+                "mkfifo",
+                new[] { f.FilePath("directory/pipe") }
+            )!
+        )
         {
             await process.WaitForExitAsync();
             Assert.Equal(0, process.ExitCode);
         }
-        var result = await f.Call("call_tool", new JsonObject
-        {
-            ["toolId"] = "node:" + f.Node + "/read",
-            ["args"] = Args("directory"),
-        });
+        var result = await f.Call(
+            "call_tool",
+            new JsonObject { ["toolId"] = "node:" + f.Node + "/read", ["args"] = Args("directory") }
+        );
         Success(result);
         var output = result["output"]!.GetValue<string>();
         Assert.Contains("`pipe` (other)", output);
@@ -331,9 +335,12 @@ public sealed partial class ProviderFileConsumerTests
         Assert.Contains("already applied", partial.ToJsonString());
         Assert.True(File.Exists(f.FilePath("partial.txt")));
         Assert.False(File.Exists(f.FilePath("never.txt")));
-        Assert.DoesNotContain(await f.Requests(), call =>
-            call["request"]?["operation"]?.GetValue<string>() == "remove"
-            && call["request"]?["path"]?.GetValue<string>() == "absent.txt");
+        Assert.DoesNotContain(
+            await f.Requests(),
+            call =>
+                call["request"]?["operation"]?.GetValue<string>() == "remove"
+                && call["request"]?["path"]?.GetValue<string>() == "absent.txt"
+        );
         var readonlyCall = await f.Call(
             "call_tool",
             new JsonObject
