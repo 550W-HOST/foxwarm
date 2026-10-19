@@ -44,7 +44,7 @@ export default function WebUiIdentityApp({ auth }: { auth: WebUiAuth }) {
       )}
       <div className="min-h-0 flex-1 overflow-hidden">
         {sessionId
-          ? <WebUiImageSessionContext.Provider value={sessionId}><Chat key={sessionId} sessionId={sessionId} canonicalSessionId={sessionId} sessionDisplayName={current?.displayName || undefined} webUiIdentityMode sendKeyMode={preferences.sendKeyMode} timelineView={preferences.timelineView} showUsageBadge={preferences.showUsageBadge} showUserMessageMetadata={preferences.showUserMessageMetadata} /></WebUiImageSessionContext.Provider>
+          ? <WebUiImageSessionContext.Provider value={sessionId}><Chat key={sessionId} sessionId={sessionId} canonicalSessionId={sessionId} sessionDisplayName={current?.displayName || undefined} webUiIdentityMode sendKeyMode={preferences.sendKeyMode} timelineView={preferences.timelineView} showUsageBadge={preferences.showUsageBadge} showUserMessageMetadata={preferences.showUserMessageMetadata} showInterAgentMessages={preferences.showInterAgentMessages} showCommentary={preferences.showCommentary} /></WebUiImageSessionContext.Provider>
           : <div className="flex h-full items-center justify-center px-4 text-sm text-fw-text-muted">No sessions are available.</div>}
       </div>
     </div>
