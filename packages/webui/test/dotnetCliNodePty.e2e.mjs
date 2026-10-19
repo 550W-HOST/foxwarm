@@ -12,6 +12,7 @@ import { until, sleep } from './experimentHostFixture.mjs'
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
 const { processRoot: root } = initializeTestEnvironment()
+const sizesOnly = process.argv.includes('--sizes-only')
 const http = createServer(), peer = new WebSocketServer({ server: http }), frames = [], clients = [], sockets = new Set(), connected = new Map(), generations = new Map()
 http.listen(0, '127.0.0.1'); await once(http, 'listening')
 const origin = `http://127.0.0.1:${http.address().port}`
@@ -54,6 +55,54 @@ const output = (h, id) => events(h, id).filter(row => row.type === 'output').map
 const input = (h, id, data) => command(h, 'input', { terminalId: id, data })
 const exists = path => access(path).then(() => true, () => false)
 async function create(h, args = {}) { const term = good(await request(h, 'create', { cwd: h.cwd, ...args })).terminal; h.terminals.add(term.id); return term }
+// Each value starts from an independent baseline, then reaches the real native
+// create/resize/get path. Number is the Source receiver's normalization boundary.
+async function sizeCorpus(h) {
+  const cases = [91, 91.9, '91.9', ' 91 ', '+91', -1, null, true, [], [92], [[93]], 'bad', {}, 65627]
+  const integers = [
+    21n, (1n << 53n) - 1n, (1n << 53n) + 1n, (1n << 53n) + 3n,
+    (1n << 64n) - 1n, 1n << 64n, (1n << 64n) + 2049n,
+    (1n << 100n) + (1n << 47n) + 1n,
+    // Largest finite double and both sides of the round-to-infinity midpoint.
+    (1n << 1024n) - (1n << 971n),
+    (1n << 1024n) - (1n << 970n) - 1n,
+    (1n << 1024n) - (1n << 970n), 1n << 1024n,
+  ]
+  for (const [prefix, radix, invalidDigit] of [['0x', 16, 'g'], ['0b', 2, '2'], ['0o', 8, '8']]) {
+    for (const value of integers) cases.push(prefix + value.toString(radix))
+    cases.push(prefix, prefix + '+21', prefix + '-21', '+' + prefix + '21', '-' + prefix + '21', prefix + '21' + invalidDigit, prefix + ' 21', prefix + '21 ', prefix.toUpperCase() + (radix + 5).toString(radix))
+  }
+  // Original accepted-sign failures, plus ordinary decimal rounding/overflow.
+  cases.push('0b+10101', '0o+25', '9007199254740995', '1e308', '1e309')
+  const failures = []
+  const normalize = (value, fallback) => Number.isFinite(Number(value)) ? Math.max(20, Math.floor(Number(value))) : fallback
+  const t = await create(h, { cols: 91, rows: 37 })
+  try {
+    for (const cols of cases) {
+      good(await request(h, 'resize', { terminalId: t.id, cols: 91, rows: 37 }))
+      assert.equal(good(await request(h, 'get', { terminalId: t.id })).terminal.cols, 91)
+      good(await request(h, 'resize', { terminalId: t.id, cols, rows: 37 }))
+      const actual = good(await request(h, 'get', { terminalId: t.id })).terminal.cols
+      const expected = normalize(cols, 91)
+      if (actual !== expected) failures.push({ operation: 'resize', input: cols, actual, expected })
+      const created = await create(h, { cols, rows: 37 })
+      const retrieved = good(await request(h, 'get', { terminalId: created.id })).terminal
+      if (created.cols !== normalize(cols, 100) || retrieved.cols !== created.cols)
+        failures.push({ operation: 'create/get', input: cols, actual: created.cols, expected: normalize(cols, 100) })
+      good(await request(h, 'close', { terminalId: created.id })); h.terminals.delete(created.id)
+    }
+    // Record normalization must not replace the existing unsigned-short kernel conversion.
+    good(await request(h, 'attach', { terminalId: t.id }))
+    good(await request(h, 'resize', { terminalId: t.id, cols: '0x1005b', rows: 37 }))
+    assert.equal(good(await request(h, 'get', { terminalId: t.id })).terminal.cols, 65627)
+    input(h, t.id, "stty size; printf 'RADIX-KERNEL-DONE\\n'\n")
+    await until(() => output(h, t.id).includes('37 91') && output(h, t.id).includes('RADIX-KERNEL-DONE\r\n'), 'radix kernel dimensions')
+  } finally {
+    good(await request(h, 'close', { terminalId: t.id })); h.terminals.delete(t.id)
+  }
+  console.log(JSON.stringify({ sizeCorpus: h.id, cases: cases.length, createResizeGet: true, freshBaseline: 91, kernelRecord: 65627, kernelCols: 91, failures }))
+  assert.deepEqual(failures, [])
+}
 async function corpus(h) {
   const registration = frames.find(row => row.id === h.id && row.value.type === 'node_register').value
   assert.equal(registration.capabilities.services['vscode-pty'], 1)
@@ -162,24 +211,30 @@ async function corpus(h) {
   console.log(JSON.stringify({ passed: h.id, errors: errors.length + 1, nativePty: true, helperIpc: true, boundedBacklog: 200000, actualTimeout: true, reconnectSamePid: true, independentExecSurvives: true, cliShutdownKillsPty: !h.source, beforeDetached }))
 }
 try {
-  const source = await launch('source', true); await corpus(source)
-  const candidate = await launch('candidate'); await corpus(candidate)
-  // Missing optional PTY cannot remove the other advertised services or file tools.
-  const original = process.env.FOXWARM_CLI_EXECUTABLE || resolve('dotnet/Foxwarm.CliNode/bin/Debug/net10.0/Foxwarm.CliNode')
-  const optional = join(root, 'without-pty'); await mkdir(optional)
-  const files = process.env.FOXWARM_CLI_EXECUTABLE ? [original] : [original, original + '.dll', join(dirname(original), 'Foxwarm.NodePrimitives.dll'), original + '.deps.json', original + '.runtimeconfig.json']
-  for (const file of files) await cp(file, join(optional, basename(file)))
-  const absent = await launch('absent', false, join(optional, basename(original)))
-  const registration = frames.find(row => row.id === absent.id && row.value.type === 'node_register').value
-  assert.equal(registration.capabilities.services['vscode-pty'], undefined); assert.equal(registration.capabilities.services['vscode-fs'], 1); assert.equal(registration.capabilities.services['vscode-git'], 2)
-  assert.equal((await request(absent, 'create', { cwd: absent.cwd })).type, 'node_service_error')
-  async function other(frame, key) { absent.socket.send(JSON.stringify(frame)); return until(() => frames.find(row => row.id === absent.id && row.value[key] === frame[key])?.value, 'retained service ' + frame.type) }
-  const file = join(absent.cwd, 'still-working.txt')
-  good(await other({ type: 'node_service_request', requestId: 'retained-fs', service: 'vscode-fs', operation: 'write-file', args: { path: file, create: true, contentBase64: 'c3RpbGwtd29ya2luZw==' } }, 'requestId'))
-  const read = await other({ type: 'tool_call', callId: 'retained-file-tool', tool: 'read', sessionId: 'owned/main', agentName: 'main', args: { filePath: file } }, 'callId'); assert.equal(read.type, 'tool_call_response'); assert(JSON.stringify(read.result).includes('still-working'))
-  const transfer = await other({ type: 'file_read_request', transferId: 'retained-transfer', filePath: file, agentName: 'main' }, 'transferId'); assert.equal(transfer.type, 'file_read_response')
-  await stop(absent)
-  console.log(JSON.stringify({ passed: 'missing-optional-pty', otherServicesRetained: true }))
+  const source = await launch('source', true); await sizeCorpus(source)
+  if (!sizesOnly) await corpus(source)
+  else await stop(source)
+  const candidate = await launch('candidate'); await sizeCorpus(candidate)
+  if (!sizesOnly) await corpus(candidate)
+  else await stop(candidate)
+  if (!sizesOnly) {
+    // Missing optional PTY cannot remove the other advertised services or file tools.
+    const original = process.env.FOXWARM_CLI_EXECUTABLE || resolve('dotnet/Foxwarm.CliNode/bin/Debug/net10.0/Foxwarm.CliNode')
+    const optional = join(root, 'without-pty'); await mkdir(optional)
+    const files = process.env.FOXWARM_CLI_EXECUTABLE ? [original] : [original, original + '.dll', join(dirname(original), 'Foxwarm.NodePrimitives.dll'), original + '.deps.json', original + '.runtimeconfig.json']
+    for (const file of files) await cp(file, join(optional, basename(file)))
+    const absent = await launch('absent', false, join(optional, basename(original)))
+    const registration = frames.find(row => row.id === absent.id && row.value.type === 'node_register').value
+    assert.equal(registration.capabilities.services['vscode-pty'], undefined); assert.equal(registration.capabilities.services['vscode-fs'], 1); assert.equal(registration.capabilities.services['vscode-git'], 2)
+    assert.equal((await request(absent, 'create', { cwd: absent.cwd })).type, 'node_service_error')
+    async function other(frame, key) { absent.socket.send(JSON.stringify(frame)); return until(() => frames.find(row => row.id === absent.id && row.value[key] === frame[key])?.value, 'retained service ' + frame.type) }
+    const file = join(absent.cwd, 'still-working.txt')
+    good(await other({ type: 'node_service_request', requestId: 'retained-fs', service: 'vscode-fs', operation: 'write-file', args: { path: file, create: true, contentBase64: 'c3RpbGwtd29ya2luZw==' } }, 'requestId'))
+    const read = await other({ type: 'tool_call', callId: 'retained-file-tool', tool: 'read', sessionId: 'owned/main', agentName: 'main', args: { filePath: file } }, 'callId'); assert.equal(read.type, 'tool_call_response'); assert(JSON.stringify(read.result).includes('still-working'))
+    const transfer = await other({ type: 'file_read_request', transferId: 'retained-transfer', filePath: file, agentName: 'main' }, 'transferId'); assert.equal(transfer.type, 'file_read_response')
+    await stop(absent)
+    console.log(JSON.stringify({ passed: 'missing-optional-pty', otherServicesRetained: true }))
+  }
 } finally {
   for (const h of clients) {
     for (const id of h.terminals) if (h.socket?.readyState === 1) await request(h, 'close', { terminalId: id }).catch(() => {})

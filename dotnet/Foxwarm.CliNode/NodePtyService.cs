@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Terminal;
@@ -196,31 +197,31 @@ internal sealed class NodePtyService : IAsyncDisposable
                 number = 0;
             else if (
                 text.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
-                && ulong.TryParse(
-                    text[2..],
-                    NumberStyles.HexNumber,
-                    CultureInfo.InvariantCulture,
-                    out var hex
-                )
-            )
-                number = hex;
-            else if (
-                text.StartsWith("0b", StringComparison.OrdinalIgnoreCase)
+                || text.StartsWith("0b", StringComparison.OrdinalIgnoreCase)
                 || text.StartsWith("0o", StringComparison.OrdinalIgnoreCase)
             )
             {
-                try
+                var radix = char.ToLowerInvariant(text[1]) switch
                 {
-                    number = Convert.ToUInt64(
-                        text[2..],
-                        char.ToLowerInvariant(text[1]) == 'b' ? 2 : 8
-                    );
-                }
-                catch (Exception error)
-                    when (error is FormatException or OverflowException or ArgumentException)
-                {
+                    'x' => 16,
+                    'b' => 2,
+                    _ => 8,
+                };
+                if (text.Length == 2)
                     return fallback;
+                var integer = BigInteger.Zero;
+                foreach (var digit in text.AsSpan(2))
+                {
+                    var numeric = digit is >= '0' and <= '9' ? digit - '0'
+                        : digit is >= 'a' and <= 'f' ? digit - 'a' + 10
+                        : digit is >= 'A' and <= 'F' ? digit - 'A' + 10
+                        : -1;
+                    if (numeric < 0 || numeric >= radix)
+                        return fallback;
+                    integer = integer * radix + numeric;
                 }
+                // Decimal parsing rounds to binary64; .NET 10's BigInteger cast truncates.
+                number = double.Parse(integer.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
             }
             else if (
                 !double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out number)
