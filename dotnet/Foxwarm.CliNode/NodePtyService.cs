@@ -212,7 +212,8 @@ internal sealed class NodePtyService : IAsyncDisposable
                 var integer = BigInteger.Zero;
                 foreach (var digit in text.AsSpan(2))
                 {
-                    var numeric = digit is >= '0' and <= '9' ? digit - '0'
+                    var numeric =
+                        digit is >= '0' and <= '9' ? digit - '0'
                         : digit is >= 'a' and <= 'f' ? digit - 'a' + 10
                         : digit is >= 'A' and <= 'F' ? digit - 'A' + 10
                         : -1;
@@ -221,7 +222,10 @@ internal sealed class NodePtyService : IAsyncDisposable
                     integer = integer * radix + numeric;
                 }
                 // Decimal parsing rounds to binary64; .NET 10's BigInteger cast truncates.
-                number = double.Parse(integer.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
+                number = double.Parse(
+                    integer.ToString(CultureInfo.InvariantCulture),
+                    CultureInfo.InvariantCulture
+                );
             }
             else if (
                 !double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out number)
