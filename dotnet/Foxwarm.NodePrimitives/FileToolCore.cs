@@ -52,8 +52,13 @@ internal static partial class FileToolCore
         var sizeBytes = NativeSize(path);
         if (sizeBytes == 0)
             return await ReadContent(
-                path, display, sizeBytes, startLine, endLine,
-                (_, _) => Task.FromResult(Array.Empty<byte>()), data
+                path,
+                display,
+                sizeBytes,
+                startLine,
+                endLine,
+                (_, _) => Task.FromResult(Array.Empty<byte>()),
+                data
             );
         await using var stream = new FileStream(
             path,

@@ -3,7 +3,8 @@ namespace Foxwarm.CliNode;
 // CLI roots are captured at process startup, independent of the Session's cwd.
 internal sealed class NodePaths(string startupDirectory)
 {
-    internal string StartupDirectory { get; } = Path.TrimEndingDirectorySeparator(Path.GetFullPath(startupDirectory));
+    internal string StartupDirectory { get; } =
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(startupDirectory));
 
     internal static string Home(string path) =>
         path == "~" ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)

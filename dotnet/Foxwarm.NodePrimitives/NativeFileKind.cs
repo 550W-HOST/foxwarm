@@ -34,7 +34,13 @@ internal static class NativeFileKind
     }
 
     // Main's policy and opened-handle checks retain their existing flags and errno handling.
-    internal static bool TryReadLinux(int directory, string path, int flags, out string kind, out int error)
+    internal static bool TryReadLinux(
+        int directory,
+        string path,
+        int flags,
+        out string kind,
+        out int error
+    )
     {
         if (Statx(directory, path, flags, 1, out var info) != 0)
         {

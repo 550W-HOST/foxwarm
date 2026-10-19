@@ -92,7 +92,12 @@ public sealed class MainLocalToolsTests
         await File.WriteAllTextAsync(Path.Combine(directory, "plain.txt"), "ordinary");
         File.CreateSymbolicLink(Path.Combine(directory, "link"), "plain.txt");
         File.CreateSymbolicLink(Path.Combine(directory, "broken"), "absent");
-        using (var process = System.Diagnostics.Process.Start("mkfifo", new[] { Path.Combine(directory, "pipe") })!)
+        using (
+            var process = System.Diagnostics.Process.Start(
+                "mkfifo",
+                new[] { Path.Combine(directory, "pipe") }
+            )!
+        )
         {
             await process.WaitForExitAsync();
             Assert.Equal(0, process.ExitCode);
@@ -105,8 +110,24 @@ public sealed class MainLocalToolsTests
         Assert.Contains("`folder/` (dir)", output);
         Assert.Contains("`link` (symlink)", output);
         Assert.Contains("`broken` (symlink)", output);
-        Assert.Equal("not_file", Error(await f.Call("read", new JsonObject { ["filePath"] = "kinds/pipe" })));
-        Assert.Equal("not_file", Error(await f.Call("write", new JsonObject { ["filePath"] = "kinds/pipe", ["content"] = "never", ["overwrite"] = true })));
+        Assert.Equal(
+            "not_file",
+            Error(await f.Call("read", new JsonObject { ["filePath"] = "kinds/pipe" }))
+        );
+        Assert.Equal(
+            "not_file",
+            Error(
+                await f.Call(
+                    "write",
+                    new JsonObject
+                    {
+                        ["filePath"] = "kinds/pipe",
+                        ["content"] = "never",
+                        ["overwrite"] = true,
+                    }
+                )
+            )
+        );
         Assert.Null(Error(await f.Call("read", new JsonObject { ["filePath"] = "kinds/link" })));
     }
 

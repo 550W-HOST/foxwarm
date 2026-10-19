@@ -232,7 +232,10 @@ internal sealed class NodeFileTools(NodePaths paths)
                 result["__foxwarmResolvedToolPaths"] = resolved;
             return result;
         }
-        catch (IOException error) when (activePath is not null && error is FileNotFoundException or DirectoryNotFoundException)
+        catch (IOException error)
+            when (activePath is not null
+                && error is FileNotFoundException or DirectoryNotFoundException
+            )
         {
             // .NET stat/open exceptions conflate ENOENT and ENOTDIR; retain the native error code.
             for (

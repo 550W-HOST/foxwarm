@@ -304,5 +304,6 @@ public sealed partial class WorkspaceTools
                 0x1000,
                 out var kind,
                 out _
-            ) && kind == "file";
+            )
+                && kind == "file";
 }
