@@ -38,6 +38,10 @@ async function installation(t) {
     FOXWARM_AGENTS_DIR: path.join(root, 'installation-agents') }
   return { root, env, async unchanged() {
     for (const [file, text] of canaries) assert.equal(await fs.readFile(file, 'utf8'), text, file)
+    for (const dir of [root, path.join(root, 'pointer-data'), path.join(root, 'inherited-data')]) {
+      assert.deepEqual((await fs.readdir(path.join(dir, 'state'), { recursive: true })).sort(), ['config.yaml', 'models.yaml'],
+        'tests must not create logs or other state in a supplied installation')
+    }
   } }
 }
 
@@ -45,7 +49,15 @@ test('direct backend tests isolate inherited and module-relative installation co
   const fixture = await installation(t)
   // Run the actual formerly unsafe writers, including the former backup/restore
   // tests. No repository runner or preload is involved in these entry points.
-  const files = ['lib/channels/webuiSetup.test.js', 'lib/configHotApply.test.js', 'lib/configSectionSaves.test.js',
+  const directSelection = await execFileAsync(process.execPath,
+    ['--test', 'lib/channels/webuiAccess.test.js', 'lib/configHotApply.test.js'], {
+      cwd: fixture.root, env: fixture.env, timeout: 60_000, maxBuffer: 8 * 1024 * 1024,
+    })
+  assert.match(directSelection.stdout, /# fail 0/)
+  assert.match(directSelection.stdout, /# tests [1-9]/)
+  t.diagnostic(`Two-file direct invocation:\n${directSelection.stdout}${directSelection.stderr}`)
+  await fixture.unchanged()
+  const files = ['lib/channels/webuiSetup.test.js', 'lib/configSectionSaves.test.js',
     'lib/session/channels.test.js', 'lib/sessionEffectiveSelection.test.js']
   const result = await execFileAsync(process.execPath, ['--test', '--test-concurrency=2', ...files], {
     cwd: fixture.root, env: fixture.env, timeout: 120_000, maxBuffer: 8 * 1024 * 1024,
