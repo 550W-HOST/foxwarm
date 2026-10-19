@@ -284,7 +284,13 @@ internal sealed class SessionDeletionChannels(string root)
             DetachLocked(id);
     }
 
-    private void DetachLocked(string id)
+    internal void DetachForAgentCommand(string id)
+    {
+        lock (gate)
+            DetachLocked(id, agentCommand: true);
+    }
+
+    private void DetachLocked(string id, bool agentCommand = false)
     {
         var payload = ReadLocked(id);
         Barrier(id, "after-read");
@@ -293,7 +299,7 @@ internal sealed class SessionDeletionChannels(string root)
             .Where(pair => SessionCatalog.Text(pair.Value?["sessionId"]) == id)
             .Select(pair => pair.Key)
             .ToArray();
-        if (keys.Any(key => !key.StartsWith("webui:", StringComparison.Ordinal)))
+        if (!agentCommand && keys.Any(key => !key.StartsWith("webui:", StringComparison.Ordinal)))
             throw new InvalidDataException("Non-WebUI binding appeared before deletion cleanup.");
         if (keys.Length == 0)
         {

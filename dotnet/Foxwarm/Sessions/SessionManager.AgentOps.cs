@@ -39,6 +39,7 @@ internal sealed partial class SessionManager
         await EnsureIdentityStartupAsync();
         if (!accepting)
             throw new InvalidOperationException("Host is shutting down.");
+        using var membership = BeginAgentAdmission(agentName);
         RequireAgentCreation(agentName);
         isolatedNode = string.IsNullOrWhiteSpace(isolatedNode) ? null : isolatedNode.Trim();
         if (isolatedNode is not null)
@@ -143,6 +144,7 @@ internal sealed partial class SessionManager
                 "Child suffix must use only letters, numbers, hyphens and underscores."
             );
         targetAgent ??= parent.Agent;
+        using var membership = BeginAgentAdmission(parent.Agent, targetAgent);
         AgentCatalog.ValidateName(targetAgent);
         if (!agents.Exists(targetAgent))
             throw new InvalidDataException("Target Agent does not exist.");
@@ -390,6 +392,7 @@ internal sealed partial class SessionManager
         string? initialNode = null
     )
     {
+        using var membership = BeginAgentAdmission(agentName);
         if (!accepting)
             throw new InvalidOperationException("Host is shutting down.");
         if (!agents.Exists(agentName))

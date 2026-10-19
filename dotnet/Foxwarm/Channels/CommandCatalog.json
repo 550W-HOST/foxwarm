@@ -496,6 +496,12 @@
           ]
         },
         {
+          "value": "delete",
+          "kind": "literal",
+          "description": "Delete an Agent folder and matching Sessions (requires confirmation).",
+          "usage": "/agent delete <name> [--confirm]"
+        },
+        {
           "value": "isolated",
           "kind": "literal",
           "description": "Set or clear agent-level isolation",

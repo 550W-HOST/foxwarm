@@ -18,7 +18,7 @@ Stale busy recovery clears busy fields and stopping, adds one deduplicated resum
 
 Admitted owners publish bounded local list projections on owner state/message events. Agent binding clear also recaptures affected admitted owners before topology invalidation, because effective placement can change without a Session authority mutation. It does not admit cold catalog members or rewrite retained selection/cwd.
 
-`CaptureLocalProjection` carries the common transient runtime only while the owner has active/waiting/queued/compaction work. Independent background compaction therefore remains visible even with idle foreground state. Visible-signature comparison and ordinary overlay removal retain their bounded lifetime; idle runtime objects are not retained merely to differ from catalog rows. Catalog-only fallback never hydrates all Session histories.
+`CaptureLocalProjection` carries the common transient runtime only while the owner has active/waiting/queued/compaction work. Independent background compaction therefore remains visible even with idle foreground state. Visible-signature comparison and ordinary overlay removal retain their bounded lifetime; idle runtime objects are not retained merely to differ from catalog rows. Catalog-only fallback never hydrates all Session histories. Agent removal uses that complete catalog rather than `Owners()`; its bounded membership-changing admission is described in [lifecycle and identity](./session-manager-lifecycle-identity.md#agent-deletion-callers).
 
 ## Tests
 

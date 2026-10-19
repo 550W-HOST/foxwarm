@@ -4,10 +4,17 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionManager
 {
-    internal async Task<JsonObject> DeleteAsync(
+    internal Task<JsonObject> DeleteAsync(
         string requested,
         bool recursive = false,
         SessionOwner? source = null
+    ) => DeleteCoreAsync(requested, recursive, source, agentCommand: false);
+
+    private async Task<JsonObject> DeleteCoreAsync(
+        string requested,
+        bool recursive,
+        SessionOwner? source,
+        bool agentCommand
     )
     {
         if (string.IsNullOrWhiteSpace(requested))
@@ -60,18 +67,21 @@ internal sealed partial class SessionManager
                     ["status"] = "not-found",
                     ["requestedSessionId"] = requested,
                 };
-            var selection = Catalog.SelectDeletion(requested, recursive);
+            var selection = agentCommand
+                ? new DeleteSelection(requested, [requested], [], [requested])
+                : Catalog.SelectDeletion(requested, recursive);
             if (source is not null && selection.Targets.Contains(source.Id, StringComparer.Ordinal))
                 throw new SessionDeletionException(
                     "Cannot delete current session. Use /clear to clear history or switch to another session first.",
                     "SESSION_DELETE_CURRENT",
                     400
                 );
-            operation = new(selection, recursive, requested, source);
+            operation = new(selection, recursive, requested, source, agentCommand);
         }
         else if (
             !ReferenceEquals(operation.SourceOwner, source)
             || operation.Recursive != recursive
+            || operation.AgentCommand != agentCommand
         )
             throw new SessionDeletionException(
                 "Retry must use the original deletion source and recursive selection.",
@@ -112,14 +122,20 @@ internal sealed partial class SessionManager
         {
             await ClaimDeleteAsync(operation);
             AssertDeleteSource(operation);
+            if (agentCommand && !continuing && Catalog.Get(requested) is null)
+                throw new SessionDeletionException(
+                    "The selected canonical Session changed before deletion. Retry.",
+                    "SESSION_DELETE_TREE_CHANGED"
+                );
             if (!continuing)
             {
-                RequireSameSelection(operation);
+                if (!agentCommand)
+                    RequireSameSelection(operation);
                 var blockers = attachments.Blockers(
                     attachments.Read(operation.Selection.Root),
                     operation.Selection.Targets
                 );
-                if (blockers.Count > 0)
+                if (!agentCommand && blockers.Count > 0)
                     throw new SessionDeletionException(
                         "Cannot delete sessions with non-WebUI channels attached. Detach them and retry.",
                         "SESSION_DELETE_CHANNEL_BLOCKED",
@@ -173,7 +189,10 @@ internal sealed partial class SessionManager
                             aborted++;
                     }
                 }
-                if (busy.Count > 0)
+                if (agentCommand)
+                    foreach (var owner in operation.Owners.Values)
+                        await owner.DrainForegroundAsync();
+                if (busy.Count > 0 && !agentCommand)
                     return new JsonObject
                     {
                         ["status"] = "busy",
@@ -185,9 +204,10 @@ internal sealed partial class SessionManager
                             "Stop signals sent to busy targets. Retry deletion after they become idle.",
                     };
                 await DeleteStageAsync(operation, "revalidate", operation.Selection.Root);
-                RequireSameSelection(operation);
+                if (!agentCommand)
+                    RequireSameSelection(operation);
                 if (
-                    attachments
+                    !agentCommand && attachments
                         .Blockers(
                             attachments.Read(operation.Selection.Root),
                             operation.Selection.Targets
@@ -303,7 +323,10 @@ internal sealed partial class SessionManager
                 if (!operation.ChannelsCleaned.Contains(id))
                 {
                     await DeleteStageAsync(operation, "channels", id);
-                    attachments.Detach(id);
+                    if (agentCommand)
+                        attachments.DetachForAgentCommand(id);
+                    else
+                        attachments.Detach(id);
                     operation.ChannelsCleaned.Add(id);
                 }
                 if (!operation.WorkersCleaned.Contains(id))

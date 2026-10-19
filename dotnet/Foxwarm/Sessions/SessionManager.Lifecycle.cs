@@ -97,6 +97,7 @@ internal sealed partial class SessionManager
         bool userInitiated = false
     )
     {
+        using var membership = BeginAgentAdmission(parent.Agent);
         if (!Accepting)
             throw new InvalidOperationException("Host is shutting down.");
         var original = await parent.Entry.SaveLane.CaptureForkAsync(

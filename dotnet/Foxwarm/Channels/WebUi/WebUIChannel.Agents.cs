@@ -120,6 +120,28 @@ internal sealed partial class WebUIChannel
                 }
             }
         );
+        app.MapDelete(
+            "/api/agents/{agentId}",
+            async (string agentId, HttpRequest request) =>
+            {
+                try
+                {
+                    var body = await JsonNode.ParseAsync(request.Body) as JsonObject;
+                    if (SessionWait.Text(body?["confirmAgentId"]) != agentId)
+                        return Results.BadRequest(new { error = "Agent deletion requires confirmAgentId to match the target Agent." });
+                    var deleted = await sessions.DeleteAgentAsync(agentId);
+                    return Results.Ok(new { success = true, agentId, deletedSessions = deleted });
+                }
+                catch (Exception error) when (error is InvalidDataException or IOException or JsonException or InvalidOperationException or UnauthorizedAccessException)
+                {
+                    var status = System.Text.RegularExpressions.Regex.IsMatch(error.Message, "not found", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                        ? 404
+                        : System.Text.RegularExpressions.Regex.IsMatch(error.Message, "active|busy|attached|inherited by|mutation|deletion stopped", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                            ? 409 : 400;
+                    return Results.Json(new { error = error.Message }, statusCode: status);
+                }
+            }
+        );
         app.MapGet(
             "/api/agents/{agentId}/memory",
             (string agentId) =>

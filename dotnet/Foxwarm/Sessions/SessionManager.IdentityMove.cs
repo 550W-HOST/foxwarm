@@ -195,6 +195,7 @@ internal sealed partial class SessionManager
                         "newAgentName is required when creating an Agent."
                     )
                 : owner.Agent;
+        using var membership = BeginAgentAdmission(owner.Agent, targetAgent);
         if (create && string.IsNullOrEmpty(agentName))
             throw new InvalidDataException("newAgentName is required when creating an Agent.");
         if (!create && string.IsNullOrEmpty(name))

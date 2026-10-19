@@ -174,7 +174,7 @@ public sealed partial class CommandAdministrationTests
             ExternalCommands.Find("/compact")!["autocomplete"]!["children"]!.AsArray(),
             row => SessionWait.Text(row?["value"]) == "tools"
         );
-        Assert.DoesNotContain(
+        Assert.Contains(
             ExternalCommands.Find("/agent")!["autocomplete"]!["children"]!.AsArray(),
             row => SessionWait.Text(row?["value"]) == "delete"
         );

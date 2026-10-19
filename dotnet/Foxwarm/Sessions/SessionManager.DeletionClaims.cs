@@ -27,11 +27,13 @@ internal sealed partial class SessionManager
         DeleteSelection selection,
         bool recursive,
         string requested,
-        SessionOwner? source
+        SessionOwner? source,
+        bool agentCommand
     )
     {
         internal readonly DeleteSelection Selection = selection;
         internal readonly bool Recursive = recursive;
+        internal readonly bool AgentCommand = agentCommand;
         internal readonly string Requested = requested;
         internal readonly string? Source = source?.Id;
         internal readonly SessionOwner? SourceOwner = source;
@@ -156,6 +158,10 @@ internal sealed partial class SessionManager
                     deletionClaims.TryGetValue(id, out var claim)
                     && claim != owning
                     && mutationContext.Value?.AlreadyAccepted(id) != true
+                    && !(claim.AgentCommand
+                        && sessions.TryGetValue(id, out var settling)
+                        && settling.Entry.CanSettleDuringShutdown
+                        && !IsRetiring(id))
                 )
                     throw new SessionDeletionException(
                         $"Session '{id}' is being deleted. Retry after the operation finishes.",

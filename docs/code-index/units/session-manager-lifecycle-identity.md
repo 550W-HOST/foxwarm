@@ -1,6 +1,6 @@
 # Unit: Session manager lifecycle, deletion, and identity moves
 
-Files: `dotnet/Foxwarm/Sessions/SessionManager.Deletion.cs`, `dotnet/Foxwarm/Sessions/SessionManager.DeletionClaims.cs`, `dotnet/Foxwarm/Sessions/SessionManager.IdentityArtifacts.cs`, `dotnet/Foxwarm/Sessions/SessionManager.IdentityMove.cs`, `dotnet/Foxwarm/Sessions/SessionManager.IdentityRecovery.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Lifecycle.cs`
+Files: `dotnet/Foxwarm/Sessions/SessionManager.AgentAdmission.cs`, `dotnet/Foxwarm/Sessions/SessionManager.AgentDeletion.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Deletion.cs`, `dotnet/Foxwarm/Sessions/SessionManager.DeletionClaims.cs`, `dotnet/Foxwarm/Sessions/SessionManager.IdentityArtifacts.cs`, `dotnet/Foxwarm/Sessions/SessionManager.IdentityMove.cs`, `dotnet/Foxwarm/Sessions/SessionManager.IdentityRecovery.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Lifecycle.cs`
 
 ## Purpose
 
@@ -16,6 +16,14 @@ Concurrent create/delete/move/queue/busy races resolve through manager claims, n
 
 Manual `ForkAsync` and `/fork` share inherited context and exact parent lineage, but do not create a delegated completion duty. The command retains child-style name allocation and sends its initial instruction through ordinary `QueueItem.UserText` ingress before the existing passive parent notice. `CreateChildAsync` retains delegated/task completion contracts. Fork suffixes no longer append a synthetic assistant acknowledgment; copied historical rows, including old acknowledgments, remain unchanged. Fork capture, Archive caps, publication and partial-create receipts still use their original owner/save-lane paths.
 
+## Agent deletion callers
+
+`DeleteAgentFromCommandAsync` snapshots canonical catalog keys with the requested Agent's literal ID prefix, not metadata ownership, aliases or hydrated owners. It permits attached/current targets and retains incoming inheritance and raw surviving-child parents. Each selected lifetime uses the existing deletion claims, retirement/storage stages and exact same-host partial receipt. Busy command targets receive Stop and captured-queue removal, then settle in the same request before retirement; no independent process is killed. The captured turn scope can finish its own mutations while this command claim is settling, but new callers remain fenced and retirement closes that scope's authority. Ordinary `DeleteAsync` source/self, attachment, busy Stop/retry, child detach and typed partial policies are unchanged; retries cannot switch caller policy.
+
+`DeleteAgentAsync` serves the original WebUI Agent DELETE route. It protects main, checks incoming inheritance from all metadata (including orphan entries), and preflights metadata-owned catalog members for busy state and exact non-WebUI bindings without hydrating cold owners. It sequentially calls coordinated nonrecursive `DeleteAsync` with no source owner, retains the final metadata-membership check and returns the actual canonical deleted IDs. Other-Agent descendants are not expanded into either caller's selection.
+
+Removal owns only the named Agent's process-local membership admission. Create/child/fork and identity-move paths join their affected Agents before changing membership; removal closes new admission and awaits accepted relevant work before selection. It does not await foreground under the lifecycle monitor or serialize unrelated Agents. New members are not silently added to the selection. A non-main metadata-owned survivor outside the command prefix keeps its folder with a truthful failure after any earlier deletions. Canonical main's unprefixed survivors remain intentional. Folder cleanup retains Archive, branches and ID reservations, and neither caller promises rollback, cross-process exclusion or durable Agent deletion jobs.
+
 ## Tests
 
-`SessionIdentityMoveTests.cs`; `SessionIdentityRecoveryTests.cs`; `SessionDeletionTests.cs`; `ForkClearLifecycleTests.cs`; identity interleaving tests.
+`AgentDeletionTests*.cs`; `AgentDeletionHttpTests.cs`; `SessionCommandEffectsTests.AgentDeletion.cs`; `SessionIdentityMoveTests.cs`; `SessionIdentityRecoveryTests.cs`; `SessionDeletionTests.cs`; `ForkClearLifecycleTests.cs`; identity interleaving tests.

@@ -371,6 +371,7 @@ internal sealed partial class SessionManager
         Func<Task<SessionOwner>> action
     )
     {
+        using var membership = BeginAgentAdmission(SessionIdentity.Agent(id));
         if (Catalog.Get(id) is not null)
             throw new InvalidDataException($"Session ID '{id}' is already reserved.");
         IdentitySlot slot;

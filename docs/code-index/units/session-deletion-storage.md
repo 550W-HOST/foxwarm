@@ -12,7 +12,7 @@ The channel store owns the existing `channels.json` payload for normal attachmen
 
 ## Contract and side effects
 
-Deletion claims are transient coordination state. The manager must stabilize canonical IDs across concurrent creation, identity move, channel attachment, queue/retry, and busy-start races before applying actual effects. Rejected overlapping operations remain retryable and do not delete Archive audit rows merely because active JSON or catalog cleanup failed.
+Deletion claims are transient coordination state. The manager must stabilize canonical IDs across concurrent creation, identity move, channel attachment, queue/retry, and busy-start races before applying actual effects. Rejected overlapping operations remain retryable and do not delete Archive audit rows merely because active JSON or catalog cleanup failed. Coordinated Session/WebUI deletion still refuses non-WebUI attachments. The legacy Agent command has its own exact-member channel cleanup that removes all bindings after safe retirement, without relaxing the ordinary caller.
 
 ## Tests
 

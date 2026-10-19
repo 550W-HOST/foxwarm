@@ -147,6 +147,35 @@ internal sealed partial class MessageRouter
                         + (nodeId is null ? "" : $"\nIsolation: enabled on `{nodeId}`")
                 );
                 return;
+            case "delete":
+                if (args.Length < 2)
+                {
+                    await source.Reply(
+                        "Usage: /agent delete <name> [--confirm]\nExample: /agent delete my-assistant --confirm\n\nThis deletes the Agent folder and Sessions whose IDs start with `<name>/`. Archived history is retained."
+                    );
+                    return;
+                }
+                var deleteName = args[1];
+                AgentCatalog.ValidateName(deleteName);
+                if (!args.Skip(2).Contains("--confirm"))
+                {
+                    await source.Reply(
+                        $"Delete Agent \"{deleteName}\"?\n\nThis will:\n- Delete Sessions whose IDs start with `{deleteName}/`\n- Delete the Agent folder and memory\n- Keep archived history\n\nThis cannot be undone automatically.\nTo confirm, run:\n`/agent delete {deleteName} --confirm`"
+                    );
+                    return;
+                }
+                try
+                {
+                    var deleted = await manager.DeleteAgentFromCommandAsync(deleteName);
+                    await source.Reply($"✅ Agent \"{deleteName}\" deleted successfully.\n\nDeleted {deleted.Length} session(s).");
+                }
+                catch (Exception error)
+                {
+                    await source.Reply(error.Message == $"Agent \"{deleteName}\" not found."
+                        ? $"❌ Agent \"{deleteName}\" not found."
+                        : "❌ Failed to delete agent: " + error.Message);
+                }
+                return;
             case "isolated":
                 if (args.Length < 3)
                 {
