@@ -426,7 +426,7 @@ public sealed class SessionShutdownTests
 
         public bool ConsumeFinishAfterBatch() => actual.ConsumeFinishAfterBatch();
 
-        public Task<bool> CompleteBatchAsync(JsonObject message, bool stopping) =>
+        public Task<TurnBatchEnding> CompleteBatchAsync(JsonObject message, bool stopping) =>
             actual.CompleteBatchAsync(message, stopping);
 
         public async Task<JsonNode?> ExecuteAsync(JsonObject call, CancellationToken token)

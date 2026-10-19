@@ -21,7 +21,8 @@ internal sealed record ChannelSendOptions(
     string? MessageType = null,
     IReadOnlyList<string>? MentionedList = null,
     IReadOnlyList<string>? MentionedMobileList = null,
-    string? PresentationTurnId = null
+    string? PresentationTurnId = null,
+    bool TurnSuspended = false
 );
 
 internal sealed record RegisteredChannel(

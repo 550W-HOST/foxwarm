@@ -115,7 +115,7 @@ public sealed class WeWorkTurnTests
             await toolEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var snapshot = await WeWorkCallbackTests.Refresh(a, WeWorkCallbackTests.Id(first));
             Assert.Equal(
-                "I will inspect it.\n\n> ⌛️ send_to_channel | ⌛️ read ×2",
+                "<think>\nI will inspect it.\n\n> ⌛️ send_to_channel | ⌛️ read ×2",
                 WeWorkCallbackTests.Content(snapshot)
             );
             var other = await WeWorkCallbackTests.Refresh(b, WeWorkCallbackTests.Id(independent));
@@ -132,7 +132,7 @@ public sealed class WeWorkTurnTests
             Assert.Contains("steer latest", request.Body);
             var pending = await WeWorkCallbackTests.Refresh(a, WeWorkCallbackTests.Id(next));
             Assert.Equal(
-                "> ☑️ send_to_channel | ☑️ read | ❌ read | 🤔 thinking",
+                "<think>\n> ☑️ send_to_channel | ☑️ read | ❌ read | 🤔 thinking",
                 WeWorkCallbackTests.Content(pending)
             );
             var unchanged = await WeWorkCallbackTests.Refresh(
@@ -140,14 +140,14 @@ public sealed class WeWorkTurnTests
                 WeWorkCallbackTests.Id(independent)
             );
             Assert.Equal(
-                "I will inspect it.\n\n" + WeWorkCallbackTests.Content(pending),
+                "<think>\nI will inspect it.\n\n" + WeWorkCallbackTests.Content(pending)["<think>\n".Length..],
                 WeWorkCallbackTests.Content(unchanged)
             );
             releaseFinal.TrySetResult();
             await running;
             var final = await WeWorkCallbackTests.Refresh(a, WeWorkCallbackTests.Id(next));
             Assert.True(final["stream"]!["finish"]!.GetValue<bool>());
-            Assert.EndsWith("\n\ncombined final", WeWorkCallbackTests.Content(final));
+            Assert.EndsWith("</think>\ncombined final", WeWorkCallbackTests.Content(final));
             Assert.DoesNotContain("thinking", WeWorkCallbackTests.Content(final));
             Assert.DoesNotContain("Tools:", WeWorkCallbackTests.Content(final));
             await TelegramChannelTests.Until(() =>
@@ -190,7 +190,7 @@ public sealed class WeWorkTurnTests
     [InlineData("wait")]
     [InlineData("error")]
     [InlineData("stop")]
-    public async Task Native_empty_wait_error_stop_finish_one_legal_card_without_duplicate_ordinary_fallback(
+    public async Task Native_empty_error_stop_close_and_wait_retains_one_card_without_duplicate_ordinary_fallback(
         string kind
     )
     {
@@ -241,7 +241,7 @@ public sealed class WeWorkTurnTests
         release.TrySetResult();
         await running;
         var final = await WeWorkCallbackTests.Refresh(callback, WeWorkCallbackTests.Id(initial));
-        Assert.True(final["stream"]!["finish"]!.GetValue<bool>());
+        Assert.Equal(kind != "wait", final["stream"]!["finish"]!.GetValue<bool>());
         var content = WeWorkCallbackTests.Content(final);
         Assert.NotEmpty(content);
         Assert.DoesNotContain("thinking", content);
@@ -280,7 +280,7 @@ public sealed class WeWorkTurnTests
             new(),
             new("tool-calls-finish", [new("a", "exec", "success"), new("c", "exec", "success")])
         );
-        Assert.Equal("> ☑️ exec ×2 | ⌛️ read", grouped.Changed!.Content);
+        Assert.Equal("<think>\n> ☑️ exec ×2 | ⌛️ read", grouped.Changed!.Content);
         aggregator.Apply("conversation", "between", new());
         var next = aggregator.Apply(
             "conversation",
@@ -288,7 +288,7 @@ public sealed class WeWorkTurnTests
             new(),
             new("tool-calls-start", [new("d", "exec")])
         );
-        Assert.Equal("> ☑️ exec ×2 | ⌛️ read\n\nbetween\n\n> ⌛️ exec", next.Changed!.Content);
+        Assert.Equal("<think>\n> ☑️ exec ×2 | ⌛️ read\n\nbetween\n\n> ⌛️ exec", next.Changed!.Content);
         var truncated = aggregator
             .Apply("conversation", string.Concat(Enumerable.Repeat("你好🦊", 5000)), new(true))
             .Changed!;

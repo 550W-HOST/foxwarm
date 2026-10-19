@@ -24,6 +24,12 @@ Optional `controlRequestId` is a nonempty string of at most 128 UTF-16 units, va
 
 Scoped responses omit the prompt snapshot and use role-safe Session/list DTOs. The shared live identity, default-administrator routes, text-only ingress and post-await/admission boundaries are canonical in [shared access](./dotnet-access-identities.md).
 
+## Conversation request metadata
+
+The original Conversation projection is merged from the retained frontend rather than reimplemented in this host. Normal model commits preserve `llmRequestId` from the actual request journal; live drafts use the same owner request identity, and Responses parts retain recognized explicit phases. Thus the frontend can infer unmarked commentary only from actual tools in the same loaded CTX-local request, without borrowing adjacent-request tools. Explicit phase remains authoritative and tool-free live text stays visible. The frontend contract is owned by [timeline rows](./webui-timeline-rows.md).
+
 ## Tests
 
 `WebUiPromptSnapshotTests.cs` covers authenticated full/ranged history, exact text, empty snapshots, changed disk memory and captured-versus-later authority; `experimentHostPromptSnapshot.e2e.mjs` covers the original App's top card, Detailed/Grouped versus Conversation, empty state, subscription reconnect and refreshed persistence after reload. `WebUiStartupTests.cs`; `SessionExecutionNodeProjectionTests.cs` (retained absent/null selection, persisted Agent binding, explicit remote placement and read-only DTOs); route contract/serialization fixtures; all partial WebUI route tests; `experimentHostNodeConsumers.e2e.mjs` (original picker, real Node connection, binding, busy selection, save faults and cold restart); `experimentHostLegacyNodeProjection.e2e.mjs` (normal startup with file token, retained authority, original picker, reload/realtime and cold restart without selection writes or provider calls).
+
+`experimentHostCommentary.e2e.mjs` uses the original App, disposable normal Main and controlled Responses peer to verify actual committed request IDs, paired read/wait effects, default-on/off/on commentary, last-readable waiting preview, Search/disclosure and tool-free live/final visibility. It does not inject browser history/API bodies.

@@ -56,7 +56,7 @@ internal sealed partial class WeWorkChannel : IManagedChannel
             crypto = new(Text(config["token"]), Text(config["encodingAESKey"]));
         streamEnabled = SessionCatalog.Flag(config["aibot"]?["stream"]);
         var requestedBytes = SessionWait.Number(config["aibot"]?["streamMaxContentBytes"]) ?? 20000;
-        streams = new((int)Math.Clamp(requestedBytes == 0 ? 20000 : requestedBytes, 1, 20480), now);
+        streams = new((int)Math.Clamp(requestedBytes == 0 ? 20000 : requestedBytes, 1, 20480), now, Text(config["aibot"]?["streamThinkFrame"]));
         websocketConfig = config["aibot"]?["websocket"] as JsonObject ?? new();
     }
 
@@ -144,7 +144,7 @@ internal sealed partial class WeWorkChannel : IManagedChannel
         CancellationToken token
     )
     {
-        if (streams.Get(conversation) is not { Finish: false } active)
+        if (options.TurnSuspended || streams.Get(conversation) is not { Finish: false } active)
             return Task.CompletedTask;
         return AggregateAsync(
             conversation,
@@ -190,6 +190,7 @@ internal sealed partial class WeWorkChannel : IManagedChannel
                 || options.StreamId is not null
             )
                 return;
+            text = WeWorkStreamAggregator.StripThinkTags(text);
             var explicitWebhook = Nonempty(options.WebhookUrl) ? options.WebhookUrl : null;
             if (explicitWebhook is null && options.TurnFinal)
             {

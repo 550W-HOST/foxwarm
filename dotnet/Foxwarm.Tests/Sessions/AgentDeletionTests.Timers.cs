@@ -98,10 +98,10 @@ public sealed partial class AgentDeletionTests
         };
         var originalFinalizing = target.Registry.OnProcessorFinalizing;
         if (scenario == "agent-finalizing")
-            target.Registry.OnProcessorFinalizing = async (entry, error, interrupted) =>
+            target.Registry.OnProcessorFinalizing = async (entry, error, interrupted, suspended) =>
             {
                 if (originalFinalizing is not null)
-                    await originalFinalizing(entry, error, interrupted);
+                    await originalFinalizing(entry, error, interrupted, suspended);
                 finalizingReached.TrySetResult();
                 await finalizingRelease.Task;
             };

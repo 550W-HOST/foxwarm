@@ -90,6 +90,8 @@ try {
   await until(() => cards('second').some(frame => frame.body.stream.finish) && frames.some(frame => frame.cmd === 'aibot_send_msg' && frame.body.msgtype === 'image'), 'final card and generated image')
   const final = cards('second').at(-1).body.stream
   assert(final.finish)
+  assert(final.content.startsWith('<think>\n'))
+  assert(final.content.includes('</think>\nWeWork combined final'))
   assert(final.content.includes('intermediate before steering'))
   assert(final.content.includes('working with explicit tools'))
   assert(final.content.includes('☑️ run_script'))

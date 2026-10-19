@@ -62,14 +62,16 @@ public interface ITurnToolExecutor
     Task<JsonNode?> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken);
 }
 
+public enum TurnBatchEnding { Continue, Finished, Suspended }
+
 /// <summary>A successful handoff ends only after its complete paired tool batch is committed.</summary>
 public interface ITurnToolControl
 {
     void BeginTurn();
     bool PolicyUnavailable => false;
     bool ConsumeFinishAfterBatch();
-    Task<bool> CompleteBatchAsync(JsonObject toolMessage, bool stopping) =>
-        Task.FromResult(ConsumeFinishAfterBatch());
+    Task<TurnBatchEnding> CompleteBatchAsync(JsonObject toolMessage, bool stopping) =>
+        Task.FromResult(ConsumeFinishAfterBatch() ? TurnBatchEnding.Finished : TurnBatchEnding.Continue);
 }
 
 public sealed class UnsupportedTurnToolExecutor : ITurnToolExecutor
@@ -105,6 +107,7 @@ public sealed record ChatResult(
 {
     internal HistoryAppendFinalizer? HistoryAppend { get; init; }
     internal bool Terminal { get; init; }
+    internal bool Suspended { get; init; }
     internal string? TruncatedStopReason { get; init; }
 
     internal void FinalizeHistory(

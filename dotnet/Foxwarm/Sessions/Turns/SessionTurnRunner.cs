@@ -133,6 +133,7 @@ public sealed class SessionTurnRunner
         var failed = false;
         var interrupted = false;
         var turnSelected = retry;
+        var suspended = false;
         Exception? escapingError = null;
         try
         {
@@ -208,6 +209,7 @@ public sealed class SessionTurnRunner
                     )
                         await registry.OnTurnCompleted(entry, result).ConfigureAwait(false);
                     turnSelected = false;
+                    suspended = result.Suspended;
                     if (result.Terminal || closing)
                         break;
                 }
@@ -302,7 +304,7 @@ public sealed class SessionTurnRunner
                 finally
                 {
                     if (registry.OnProcessorFinalizing is { } finalizing)
-                        await finalizing(entry, escapingError, interrupted).ConfigureAwait(false);
+                        await finalizing(entry, escapingError, interrupted, suspended).ConfigureAwait(false);
                 }
             }
             catch

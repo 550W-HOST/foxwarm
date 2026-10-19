@@ -78,7 +78,7 @@ public sealed class WeWorkLifecycleTests
         );
         using var active = new HttpClient { BaseAddress = callback.BaseAddress };
         var fresh = await WeWorkCallbackTests.Post(active, WeWorkPeer.Text("fresh"));
-        Assert.Equal("> 🤔 thinking", WeWorkCallbackTests.Content(fresh));
+        Assert.Equal("<think>", WeWorkCallbackTests.Content(fresh));
         var source = WeWorkCallbackTests.Id(fresh);
         await f
             .Manager.ManagedChannels.ChangeAsync("restart", "work")

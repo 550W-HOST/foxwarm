@@ -9,8 +9,8 @@ import { join, resolve } from 'node:path';
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-wework-source-'));
 await mkdir(join(root, 'state'));
 await writeFile(join(root, 'state/config.yaml'), '{}');
-process.env.FOXWARM_DATA_DIR = root;
-process.env.FOXWARM_CONFIG_PATH = join(root, 'state/config.yaml');
+const { isolatedApplicationEnv } = await import('../scripts/test/test-process-env.cjs');
+Object.assign(process.env, isolatedApplicationEnv(root));
 const require = createRequire(import.meta.url);
 const { WeWorkWebhookChannel } = require(resolve(process.env.FOXWARM_TS_ROOT || '.', 'lib/channels/weworkChannel.js'));
 // Source has no listen-host option. Restrict this fixture's listener to its owned loopback endpoint.
@@ -64,7 +64,7 @@ try {
   assert.equal((await fetch(`${base}?timestamp=1710000000&nonce=fixture-nonce&echostr=${encodeURIComponent(echo)}&msg_signature=bad`)).status, 401);
   assert.equal(await (await fetch(`${base}?timestamp=1710000000&nonce=fixture-nonce&echostr=${encodeURIComponent(echo)}&msg_signature=${sign(echo)}`)).text(), 'verified 企业微信');
   const first = await post(text('first'));
-  assert.equal(first.stream.content, '> 🤔 thinking');
+  assert.equal(first.stream.content, '<think>');
   assert.equal((await post(text('first'))).stream.id, first.stream.id);
   assert.equal(messages.length, 1);
   await channel.sendMessage('conversation', 'substantive');
@@ -76,11 +76,13 @@ try {
   await channel.sendMessage('conversation', '', { channelTurnProgress: { type: 'tool-calls-start', text: 'model text', calls: [{ id: 'a', name: 'exec' }, { id: 'b', name: 'read' }, { id: 'c', name: 'exec' }] } });
   await channel.sendMessage('conversation', '', { channelTurnProgress: { type: 'tool-calls-finish', results: [{ id: 'a', name: 'exec', status: 'success' }, { id: 'c', name: 'exec', status: 'success' }] } });
   await channel.sendMessage('conversation', '', { channelTurnProgress: { type: 'llm-start' } });
-  assert.equal((await refresh(second.stream.id)).stream.content, 'explicit reply\n\nmodel text\n\n> ☑️ exec ×2 | ⌛️ read | 🤔 thinking');
+  assert.equal((await refresh(second.stream.id)).stream.content, '<think>\nexplicit reply\n\nmodel text\n\n> ☑️ exec ×2 | ⌛️ read | 🤔 thinking');
+  await channel.handleTurnLifecycle('conversation', { turnSuspended: true });
+  assert.equal((await refresh(second.stream.id)).stream.finish, false);
   await channel.sendMessage('conversation', 'done', { turnFinal: true });
   const final = await refresh(second.stream.id);
   assert.equal(final.stream.finish, true);
-  assert.equal(final.stream.content, 'explicit reply\n\nmodel text\n\n> ☑️ exec ×2 | ⌛️ read\n\ndone');
+  assert.equal(final.stream.content, '<think>\nexplicit reply\n\nmodel text\n\n> ☑️ exec ×2 | ⌛️ read\n</think>\ndone');
   const xml = '<xml><MsgId>xml</MsgId><From><UserId>alice</UserId><Name>XML sender</Name></From><ChatId>xml-chat</ChatId><MsgType>text</MsgType><Content><![CDATA[XML content]]></Content></xml>';
   assert.deepEqual(await post(xml, true, true), { code: 0, msg: 'success' });
   assert.equal(messages.at(-1).ctx.conversationId, 'xml-chat');

@@ -236,7 +236,7 @@ internal sealed partial class WeWorkChannel
             if (isAibot && Text(body["msgtype"]) == "stream")
             {
                 var streamId = Text(body["stream"]?["id"]);
-                return streams.Get(streamId, true)?.Payload()
+                return streams.Get(streamId, byId: true, touch: true)?.Payload()
                     ?? new JsonObject
                     {
                         ["msgtype"] = "stream",

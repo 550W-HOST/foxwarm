@@ -232,7 +232,7 @@ internal sealed partial class SessionToolExecutor(
 
     public bool ConsumeFinishAfterBatch() => Interlocked.Exchange(ref finishPending, 0) == 1;
 
-    public async Task<bool> CompleteBatchAsync(JsonObject toolMessage, bool stopping)
+    public async Task<TurnBatchEnding> CompleteBatchAsync(JsonObject toolMessage, bool stopping)
     {
         var errors = toolMessage["parts"]!
             .AsArray()
@@ -254,7 +254,9 @@ internal sealed partial class SessionToolExecutor(
         if (!stopping && handoff && hosted.WaitSnapshot() is null)
             await sessions.StartHandoffWaitAsync(hosted, handoffTargets);
         handoffTargets.Clear();
-        return finish || !stopping && (handoff || explicitStop && !errors);
+        return finish ? TurnBatchEnding.Finished
+            : !stopping && (handoff || explicitStop && !errors) ? TurnBatchEnding.Suspended
+            : TurnBatchEnding.Continue;
     }
 
     public async Task<JsonNode?> ExecuteAsync(

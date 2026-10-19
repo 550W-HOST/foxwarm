@@ -136,7 +136,7 @@ public sealed class WeWorkCallbackTests
         );
         Assert.Equal("verified 企业微信", await client.GetStringAsync(query + Sign(echo)));
         var first = await Post(client, WeWorkPeer.Text("first", "  body\n\tkept "));
-        Assert.Equal("> 🤔 thinking", Content(first));
+        Assert.Equal("<think>", Content(first));
         Assert.False(first["stream"]!["finish"]!.GetValue<bool>());
         await TelegramChannelTests.Until(() =>
             f.Manager.ChannelBinding("work:wrk-chat") is not null
@@ -159,7 +159,7 @@ public sealed class WeWorkCallbackTests
         await f
             .Manager.ChannelRegistry.Get("work")!
             .Send("wrk-chat", "explicit override", new(WebhookUrl: peer.Webhook), default);
-        Assert.Equal("> 🤔 thinking", Content(await Refresh(client, Id(first))));
+        Assert.Equal("<think>", Content(await Refresh(client, Id(first))));
         Assert.Equal(
             "explicit override",
             peer.Calls.Single().Body["markdown"]!["content"]!.GetValue<string>()
@@ -201,7 +201,7 @@ public sealed class WeWorkCallbackTests
             headerRequest.Content = JsonContent.Create(new { Encrypt = headerCipher });
             var headerResponse = await client.SendAsync(headerRequest);
             Assert.Equal(
-                "> 🤔 thinking",
+                "<think>",
                 Content(Decode((await headerResponse.Content.ReadFromJsonAsync<JsonObject>())!))
             );
         }
@@ -210,7 +210,7 @@ public sealed class WeWorkCallbackTests
             new { encrypt = Encrypt(WeWorkPeer.Text("partial-signature").ToJsonString()) }
         );
         Assert.Equal(
-            "> 🤔 thinking",
+            "<think>",
             Content((await partialSignature.Content.ReadFromJsonAsync<JsonObject>())!)
         );
         var xml =

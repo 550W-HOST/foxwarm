@@ -188,7 +188,8 @@ internal sealed partial class SessionManager
     private async Task FinishChannelTurnAsync(
         SessionOwner owner,
         Exception? error,
-        bool interrupted
+        bool interrupted,
+        bool suspended
     )
     {
         ChannelTurn? turn;
@@ -207,7 +208,8 @@ internal sealed partial class SessionManager
                         owner,
                         turn,
                         turn.Stopping ? "_[Execution stopped by user]_" : "",
-                        final: true
+                        final: !suspended || turn.Stopping || error is not null,
+                        suspended: suspended && !turn.Stopping && error is null
                     );
             }
         }
@@ -332,7 +334,8 @@ internal sealed partial class SessionManager
         ChannelTurn turn,
         string text,
         bool final,
-        bool nativeProgressText = false
+        bool nativeProgressText = false,
+        bool suspended = false
     )
     {
         turn.Finalized = final;
@@ -357,9 +360,9 @@ internal sealed partial class SessionManager
                     decorated
                 );
             }
-            else if (final && channel.Finalize is { } finish)
+            else if ((final || suspended) && channel.Finalize is { } finish)
                 _ = ChannelProgress.BestEffortAsync(
-                    _ => finish(conversation, new(true), CancellationToken.None),
+                    _ => finish(conversation, new(TurnFinal: final, TurnSuspended: suspended), CancellationToken.None),
                     ""
                 );
         }
