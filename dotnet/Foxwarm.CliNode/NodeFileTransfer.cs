@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
+using Foxwarm.Tools;
 
 namespace Foxwarm.CliNode;
 
@@ -8,14 +9,15 @@ internal sealed class NodeFileTransfer(NodePaths paths)
     internal async Task<JsonObject> Read(string raw, string agent, bool restrict)
     {
         var path = paths.Transfer(raw, agent, restrict);
-        if (Directory.Exists(path))
+        if (NativeFileKind.Read(path) != "file")
             throw new InvalidDataException("Not a file: " + raw);
         var bytes = await File.ReadAllBytesAsync(path);
-        var (mime, image) = Mime(raw);
+        var metadataPath = raw.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var (mime, image) = Mime(metadataPath);
         return new JsonObject
         {
             ["filePath"] = raw,
-            ["name"] = Path.GetFileName(raw),
+            ["name"] = Path.GetFileName(metadataPath),
             ["sizeBytes"] = bytes.LongLength,
             ["mimeType"] = mime,
             ["isImage"] = image,

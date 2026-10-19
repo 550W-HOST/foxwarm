@@ -38,7 +38,7 @@ internal sealed class NodeFileTools(NodePaths paths)
                     var raw = RequiredPath(args, tool);
                     var path = Resolve(raw);
                     string? mime = null;
-                    if (!Directory.Exists(path))
+                    if (!Directory.Exists(path) && FileToolCore.NativeSize(path) > 0)
                     {
                         await using var stream = File.OpenRead(path);
                         var header = new byte[RasterImageMime.HeaderBytes];
@@ -232,9 +232,9 @@ internal sealed class NodeFileTools(NodePaths paths)
                 result["__foxwarmResolvedToolPaths"] = resolved;
             return result;
         }
-        catch (DirectoryNotFoundException) when (activePath is not null)
+        catch (IOException error) when (activePath is not null && error is FileNotFoundException or DirectoryNotFoundException)
         {
-            // .NET maps ENOENT and ENOTDIR to the same exception; retain the native error code.
+            // .NET stat/open exceptions conflate ENOENT and ENOTDIR; retain the native error code.
             for (
                 var parent = Path.GetDirectoryName(activePath);
                 parent is not null;

@@ -3,7 +3,7 @@ namespace Foxwarm.CliNode;
 // CLI roots are captured at process startup, independent of the Session's cwd.
 internal sealed class NodePaths(string startupDirectory)
 {
-    internal string StartupDirectory { get; } = Path.GetFullPath(startupDirectory);
+    internal string StartupDirectory { get; } = Path.TrimEndingDirectorySeparator(Path.GetFullPath(startupDirectory));
 
     internal static string Home(string path) =>
         path == "~" ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
@@ -19,9 +19,9 @@ internal sealed class NodePaths(string startupDirectory)
     {
         var explicitDirectory = Environment.GetEnvironmentVariable("FOXWARM_AGENT_DIR")?.Trim();
         if (!string.IsNullOrEmpty(explicitDirectory))
-            return Path.GetFullPath(Home(explicitDirectory), StartupDirectory);
+            return FullPath(Home(explicitDirectory), StartupDirectory);
         var agents = Environment.GetEnvironmentVariable("FOXWARM_AGENTS_DIR")?.Trim();
-        return Path.GetFullPath(
+        return FullPath(
             Path.Combine(Home(string.IsNullOrEmpty(agents) ? "agents" : agents), agent),
             StartupDirectory
         );
@@ -57,10 +57,13 @@ internal sealed class NodePaths(string startupDirectory)
         }
         path = Home(path);
         var basis = !string.IsNullOrWhiteSpace(cwd)
-            ? Path.GetFullPath(Home(cwd.Trim()), StartupDirectory)
+            ? FullPath(Home(cwd.Trim()), StartupDirectory)
             : AgentDirectory(agent);
-        return Path.GetFullPath(path, basis);
+        return FullPath(path, basis);
     }
+
+    private static string FullPath(string path, string basis) =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(path, basis));
 
     internal string Transfer(string raw, string agent, bool restrict)
     {

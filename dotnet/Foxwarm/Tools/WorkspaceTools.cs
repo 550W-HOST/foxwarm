@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
@@ -428,25 +427,8 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                         | FileAttributes.ReparsePoint
                     )
                 ) == 0;
-        // Linux statx has a fixed 256-byte ABI; only the mode/type field is needed.
-        return Statx(-100, path, 0, 1, out var info) == 0 && (info.Mode & 0xf000) == 0x8000;
+        return NativeFileKind.TryReadLinux(-100, path, 0, out var kind, out _) && kind == "file";
     }
-
-    [StructLayout(LayoutKind.Explicit, Size = 256)]
-    private struct FileTypeInfo
-    {
-        [FieldOffset(28)]
-        internal ushort Mode;
-    }
-
-    [DllImport("libc", EntryPoint = "statx", SetLastError = true)]
-    private static extern int Statx(
-        int directory,
-        string path,
-        int flags,
-        uint mask,
-        out FileTypeInfo info
-    );
 
     private static JsonObject Error(string kind, string message) =>
         UnsupportedTurnToolExecutor.ToolError(kind, message);

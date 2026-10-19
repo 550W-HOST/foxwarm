@@ -81,6 +81,36 @@ public sealed class MainLocalToolsTests
     }
 
     [Fact]
+    public async Task Native_directory_classifies_special_entries_while_Main_rejects_them_as_file_targets()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        await using var f = await Fixture.Create();
+        var workspace = f.Manager.IdentityWorkspace(f.Owner)!.ToolDirectory;
+        var directory = Path.Combine(workspace, "kinds");
+        Directory.CreateDirectory(Path.Combine(directory, "folder"));
+        await File.WriteAllTextAsync(Path.Combine(directory, "plain.txt"), "ordinary");
+        File.CreateSymbolicLink(Path.Combine(directory, "link"), "plain.txt");
+        File.CreateSymbolicLink(Path.Combine(directory, "broken"), "absent");
+        using (var process = System.Diagnostics.Process.Start("mkfifo", new[] { Path.Combine(directory, "pipe") })!)
+        {
+            await process.WaitForExitAsync();
+            Assert.Equal(0, process.ExitCode);
+        }
+        var listing = await f.Call("read", new JsonObject { ["filePath"] = "kinds" });
+        Assert.Null(Error(listing));
+        var output = listing["output"]!.GetValue<string>();
+        Assert.Contains("`pipe` (other)", output);
+        Assert.Contains("`plain.txt` (file, 8 B)", output);
+        Assert.Contains("`folder/` (dir)", output);
+        Assert.Contains("`link` (symlink)", output);
+        Assert.Contains("`broken` (symlink)", output);
+        Assert.Equal("not_file", Error(await f.Call("read", new JsonObject { ["filePath"] = "kinds/pipe" })));
+        Assert.Equal("not_file", Error(await f.Call("write", new JsonObject { ["filePath"] = "kinds/pipe", ["content"] = "never", ["overwrite"] = true })));
+        Assert.Null(Error(await f.Call("read", new JsonObject { ["filePath"] = "kinds/link" })));
+    }
+
+    [Fact]
     public async Task Memory_tools_use_agent_namespace_and_actual_mutations()
     {
         await using var f = await Fixture.Create();

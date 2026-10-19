@@ -5,6 +5,12 @@ namespace Foxwarm.Tools;
 
 internal static partial class FileToolCore
 {
+    internal static long NativeSize(string path)
+    {
+        var file = new FileInfo(path);
+        return (file.ResolveLinkTarget(returnFinalTarget: true) as FileInfo ?? file).Length;
+    }
+
     private static long? Bound(double? value) =>
         value is null || !double.IsFinite(value.Value) || value == 0 ? null
         : value >= long.MaxValue ? long.MaxValue
@@ -35,9 +41,7 @@ internal static partial class FileToolCore
                 endLine,
                 entries
                     .Select(entry => new TargetFileStat(
-                        entry.LinkTarget is not null ? "symlink"
-                            : entry is DirectoryInfo ? "directory"
-                            : "file",
+                        NativeFileKind.Read(entry.FullName, followLinks: false),
                         entry.LinkTarget is null && entry is FileInfo file ? file.Length : 0,
                         new DateTimeOffset(entry.LastWriteTimeUtc).ToUnixTimeMilliseconds(),
                         entry.Name
@@ -45,6 +49,12 @@ internal static partial class FileToolCore
                     .ToArray()
             );
         }
+        var sizeBytes = NativeSize(path);
+        if (sizeBytes == 0)
+            return await ReadContent(
+                path, display, sizeBytes, startLine, endLine,
+                (_, _) => Task.FromResult(Array.Empty<byte>()), data
+            );
         await using var stream = new FileStream(
             path,
             FileMode.Open,
@@ -53,7 +63,6 @@ internal static partial class FileToolCore
             65536,
             FileOptions.Asynchronous
         );
-        var sizeBytes = stream.Length;
         return await ReadContent(path, display, sizeBytes, startLine, endLine, ReadAt, data);
 
         async Task<byte[]> ReadAt(long offset, int count)

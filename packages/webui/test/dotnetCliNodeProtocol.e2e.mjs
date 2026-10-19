@@ -64,6 +64,21 @@ async function nativeCorpus(socket, cwd) {
     else rows.push(normalize(reply, cwd)); return reply
   }
   await take('read', { filePath: 'mixed.txt' }, { programmatic: true })
+  await take('read', { filePath: 'mixed.txt///' }, { programmatic: true })
+  await take('write', { filePath: 'trailing.txt/', content: 'created' })
+  assert.equal(await readFile(join(agent, 'trailing.txt'), 'utf8'), 'created')
+  await writeFile(join(agent, 'zero.txt'), '')
+  await take('read', { filePath: 'zero.txt' }, { programmatic: true })
+  if (process.platform === 'linux') {
+    execFileSync('mkfifo', [join(agent, 'fifo')])
+    await take('read', { filePath: 'fifo' }, { programmatic: true })
+    await take('read', { filePath: '.' })
+    for (const filePath of ['/dev/null', join(agent, 'fifo')]) {
+      const refused = await request(socket, 'file_read_request', { filePath, agentName: 'main', restrictToAgentDir: false })
+      assert.equal(refused.type, 'file_transfer_error'); assert.equal(refused.error, 'Not a file: ' + filePath)
+      delete refused.transferId; rows.push(normalize(refused, cwd))
+    }
+  }
   await take('read', { filePath: 'missing.txt' })
   await take('read', { filePath: 'null\0path' })
   await take('read', { filePath: 'mixed.txt/child' })
@@ -104,6 +119,7 @@ async function nativeCorpus(socket, cwd) {
   await take('read', { filePath: 'mixed.txt' }, { sessionCwd: agent, programmatic: true })
   for (const name of ['added.txt', 'partial.txt', 'mixed.txt', 'parents/child/file']) rows.push(await readFile(join(agent, name), 'utf8'))
   await symlink(join(agent, 'mixed.txt'), join(agent, 'link.txt'))
+  await take('read', { filePath: 'link.txt/' }, { programmatic: true })
   await take('write', { filePath: 'link.txt', content: 'followed', overwrite: true })
   rows.push(await readFile(join(agent, 'mixed.txt'), 'utf8'))
   for (const entry of ['mixed.txt', 'image.bin', 'forged.png', 'invalid.txt', 'empty.txt', 'added.txt', 'partial.txt', 'large.bin']) await utimes(join(agent, entry), 1, 1)
@@ -113,6 +129,12 @@ async function nativeCorpus(socket, cwd) {
   delete transfer.transferId; rows.push(normalize(transfer, cwd)); assert.deepEqual(await readFile(join(agent, 'transfer.bin')), bytes)
   const back = await request(socket, 'file_read_request', { filePath: 'transfer.bin', agentName: 'main', restrictToAgentDir: true })
   assert.equal(back.file.dataBase64, bytes.toString('base64')); delete back.transferId; rows.push(normalize(back, cwd))
+  const trailing = await request(socket, 'file_read_request', { filePath: 'trailing.txt///', agentName: 'main', restrictToAgentDir: true })
+  assert.equal(trailing.file.name, 'trailing.txt'); assert.equal(trailing.file.mimeType, 'text/plain')
+  delete trailing.transferId; rows.push(normalize(trailing, cwd))
+  const empty = await request(socket, 'file_write_request', { filePath: 'empty-transfer.txt/', agentName: 'main', dataBase64: '', restrictToAgentDir: true })
+  assert.equal(empty.result.absolutePath, join(agent, 'empty-transfer.txt')); assert.equal((await stat(join(agent, 'empty-transfer.txt'))).size, 0)
+  delete empty.transferId; rows.push(normalize(empty, cwd))
   const refused = await request(socket, 'file_write_request', { filePath: '../outside', agentName: 'main', dataBase64: 'eA', restrictToAgentDir: true })
   delete refused.transferId; rows.push(refused)
   // Transfer overwrite replaces the final symlink rather than following it.

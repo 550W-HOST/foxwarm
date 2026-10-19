@@ -273,9 +273,9 @@ public sealed partial class WorkspaceTools
         missing = false;
         if (OperatingSystem.IsLinux())
         {
-            if (Statx(-100, path, 0, 1, out var info) == 0)
-                return (info.Mode & 0xf000) == 0x8000;
-            missing = System.Runtime.InteropServices.Marshal.GetLastPInvokeError() == 2;
+            if (NativeFileKind.TryReadLinux(-100, path, 0, out var kind, out var error))
+                return kind == "file";
+            missing = error == 2;
             return false;
         }
         try
@@ -298,12 +298,11 @@ public sealed partial class WorkspaceTools
     internal static bool RegularFileHandle(FileStream stream, string path) =>
         !OperatingSystem.IsLinux()
             ? RegularFile(path)
-            : Statx(
+            : NativeFileKind.TryReadLinux(
                 stream.SafeFileHandle.DangerousGetHandle().ToInt32(),
                 "",
                 0x1000,
-                1,
-                out var info
-            ) == 0
-                && (info.Mode & 0xf000) == 0x8000;
+                out var kind,
+                out _
+            ) && kind == "file";
 }

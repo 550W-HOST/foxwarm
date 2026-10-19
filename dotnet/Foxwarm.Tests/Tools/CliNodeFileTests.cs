@@ -7,6 +7,42 @@ namespace Foxwarm.Tests;
 public sealed class CliNodeFileTests
 {
     [Fact]
+    public async Task Native_resolution_removes_trailing_separators_without_changing_roots_or_bases()
+    {
+        using var temp = new TempDirectory();
+        var paths = new NodePaths(temp.Path + Path.DirectorySeparatorChar);
+        var cli = new NodeFileTools(paths);
+        var root = Path.GetPathRoot(temp.Path)!;
+        Assert.Equal(temp.Path, paths.StartupDirectory);
+        Assert.Equal(root, paths.Resolve(root, "main"));
+        Assert.Equal(paths.AgentDirectory("main"), paths.Resolve("$fw_agentdir/", "main"));
+        Assert.Equal(Path.Combine(paths.AgentDirectory("main"), "tmp"), paths.Resolve("$fw_tmp/", "main"));
+        var target = Path.Combine(temp.Path, "target.txt");
+        await File.WriteAllTextAsync(target, "content");
+        var read = await cli.Execute("read", new JsonObject { ["filePath"] = "target.txt///" }, "main", temp.Path + Path.DirectorySeparatorChar, true);
+        Assert.Equal("content", read["content"]!.GetValue<string>());
+        Assert.Equal(target, read["__foxwarmResolvedToolPaths"]![0]!["resolved"]!.GetValue<string>());
+        File.CreateSymbolicLink(Path.Combine(temp.Path, "link"), "target.txt");
+        var linked = await cli.Execute("read", new JsonObject { ["filePath"] = "link/" }, "main", temp.Path, true);
+        Assert.Equal(7L, linked["sizeBytes"]!.GetValue<long>());
+        Assert.Equal("content", linked["content"]!.GetValue<string>());
+        var write = await cli.Execute("write", new JsonObject { ["filePath"] = "new.txt/", ["content"] = "created" }, "main", temp.Path, false);
+        var created = Path.Combine(temp.Path, "new.txt");
+        Assert.Equal("created", await File.ReadAllTextAsync(created));
+        Assert.Equal(created, write["__foxwarmResolvedToolPaths"]![0]!["resolved"]!.GetValue<string>());
+        var transfer = new NodeFileTransfer(paths);
+        var file = await transfer.Read(target + "///", "main", false);
+        Assert.Equal("target.txt", file["name"]!.GetValue<string>());
+        Assert.Equal("text/plain", file["mimeType"]!.GetValue<string>());
+        Assert.Equal(Convert.ToBase64String("content"u8), file["dataBase64"]!.GetValue<string>());
+        var receipt = await transfer.Write(Path.Combine(temp.Path, "empty.txt") + "/", "main", "", false, false);
+        var empty = Path.Combine(temp.Path, "empty.txt");
+        Assert.Equal(empty, receipt["absolutePath"]!.GetValue<string>());
+        Assert.Empty(await File.ReadAllBytesAsync(empty));
+        Assert.Equal(0L, (await transfer.Read(empty, "main", false))["sizeBytes"]!.GetValue<long>());
+    }
+
+    [Fact]
     public async Task Cli_content_writes_follow_links_while_Main_keeps_its_own_authorized_atomic_owner()
     {
         using var temp = new TempDirectory();
