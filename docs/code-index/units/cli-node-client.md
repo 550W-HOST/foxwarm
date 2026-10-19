@@ -27,6 +27,8 @@ Implements the full remote Node.js client: pairing/authenticated WebSocket conne
 
 `listSessions()` is not the current API name. Auto-approve configuration belongs to the TUI, which implements it inside `toolCallInterceptor`.
 
+These unchanged Session methods are also qualified against .NET Main through its [existing Node Session RPC owner](./external-nodes.md#current-contracts). `experimentHostCliSessions.e2e.mjs` exercises actual client calls, normal ingress/model history, access denial, reassignment, bound Agents and restart without a browser.
+
 ## Stable sections
 
 | Section | Responsibility |

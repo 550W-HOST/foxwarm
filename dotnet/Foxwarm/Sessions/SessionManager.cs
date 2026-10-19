@@ -182,6 +182,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             Find(session) is { } owner && Nodes.ExecClaims.Has(owner, id, activeOnly: false);
         Nodes.LocalExecActive = (owner, id) => executor.IsOwnedActive(owner.Id, id);
         Nodes.SessionEvent = AdmitNodeSessionEventAsync;
+        Nodes.SessionRequest = HandleNodeSessionRequestAsync;
         Nodes.BackgroundRegistration = RegisterRemoteExecBackgroundAsync;
         var definitions = WorkspaceTools.Definitions();
         foreach (var definition in Foxwarm.Nodes.NodeToolDefinitions.All())

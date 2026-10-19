@@ -629,6 +629,11 @@ internal sealed partial class NodeConnectionHub : IDisposable
                         throw new InvalidDataException("NODE_PROTOCOL_INCOMPATIBLE");
                     if (type == "node_register")
                         continue;
+                    if (type is "session_list_request" or "session_history_request" or "session_send_message")
+                    {
+                        await HandleSessionRequestAsync(connection, message, lifetime.Token);
+                        continue;
+                    }
                     if (
                         type
                         is "file_read_response"
