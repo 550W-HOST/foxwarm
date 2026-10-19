@@ -373,7 +373,10 @@ internal sealed partial class NodeClient
                             () => execStarted = true
                         )
                     : Text(frame, "tool")?.StartsWith("browse_", StringComparison.Ordinal) == true
-                        ? await browserTools.Execute(Text(frame, "tool")!, frame["args"] as JsonObject)
+                        ? await browserTools.Execute(
+                            Text(frame, "tool")!,
+                            frame["args"] as JsonObject
+                        )
                     : await tools.Execute(
                         Text(frame, "tool") ?? "",
                         frame["args"] as JsonObject,

@@ -1,9 +1,9 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using PuppeteerSharp;
 using PuppeteerSharp.Cdp;
 using PuppeteerSharp.Cdp.Messaging;
-using PuppeteerSharp;
 
 namespace Foxwarm.CliNode;
 
@@ -12,6 +12,7 @@ internal sealed class NodeBrowserTools : IAsyncDisposable
 {
     private IBrowser? browser;
     private readonly Dictionary<string, Tab> tabs = new();
+
     private sealed class Tab(IPage page, string url, string title)
     {
         internal IPage Page = page;
@@ -26,41 +27,70 @@ internal sealed class NodeBrowserTools : IAsyncDisposable
         var executable = Environment.GetEnvironmentVariable("PUPPETEER_EXECUTABLE_PATH");
         if (string.IsNullOrEmpty(executable))
             executable = Environment.GetEnvironmentVariable("CHROME_PATH");
-        browser = await Puppeteer.LaunchAsync(new LaunchOptions
-        {
-            ExecutablePath = string.IsNullOrEmpty(executable) ? "/usr/bin/chromium-browser" : executable,
-            Headless = true,
-            Args = ["--no-sandbox", "--disable-setuid-sandbox"],
-        });
+        browser = await Puppeteer.LaunchAsync(
+            new LaunchOptions
+            {
+                ExecutablePath = string.IsNullOrEmpty(executable)
+                    ? "/usr/bin/chromium-browser"
+                    : executable,
+                Headless = true,
+                Args = ["--no-sandbox", "--disable-setuid-sandbox"],
+            }
+        );
         return browser;
     }
 
-    private static NavigationOptions Navigation(int? timeout = null) => new()
-    {
-        WaitUntil = [WaitUntilNavigation.Networkidle2],
-        Timeout = timeout,
-    };
+    private static NavigationOptions Navigation(int? timeout = null) =>
+        new() { WaitUntil = [WaitUntilNavigation.Networkidle2], Timeout = timeout };
 
-    private static string String(JsonNode? value) => value is null ? "null" : NodeFileTools.Text(value) ?? (value is JsonObject ? "[object Object]" : value.ToJsonString());
+    private static string String(JsonNode? value) =>
+        value is null
+            ? "null"
+            : NodeFileTools.Text(value)
+                ?? (value is JsonObject ? "[object Object]" : value.ToJsonString());
+
     private static string FallbackString(JsonNode? value) => Truthy(value) ? String(value) : "";
-    private static double Number(JsonNode? value) => double.TryParse(String(value), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var result) ? result : 0;
-    private static bool Truthy(JsonNode? value) => value is not null && value.ToJsonString() is not "false" and not "null" and not "0" and not "\"\"";
+
+    private static double Number(JsonNode? value) =>
+        double.TryParse(
+            String(value),
+            System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var result
+        )
+            ? result
+            : 0;
+
+    private static bool Truthy(JsonNode? value) =>
+        value is not null
+        && value.ToJsonString() is not "false" and not "null" and not "0" and not "\"\"";
 
     internal async Task<JsonNode> Execute(string tool, JsonObject? args)
     {
         args ??= new JsonObject();
         if (tool == "browse_list")
-            return new JsonArray(tabs.Select(pair => (JsonNode)Metadata(pair.Key, pair.Value)).ToArray());
+            return new JsonArray(
+                tabs.Select(pair => (JsonNode)Metadata(pair.Key, pair.Value)).ToArray()
+            );
         if (tool == "browse_open")
         {
             var active = await EnsureBrowser();
             var url = FallbackString(args["url"]);
             var page = await active.NewPageAsync();
             await page.GoToAsync(url, Navigation(30000));
-            var id = "tab_" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "_" + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(4));
+            var id =
+                "tab_"
+                + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                + "_"
+                + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(4));
             var title = await page.GetTitleAsync();
             tabs.Add(id, new Tab(page, url, title));
-            return new JsonObject { ["tabId"] = id, ["url"] = url, ["title"] = title };
+            return new JsonObject
+            {
+                ["tabId"] = id,
+                ["url"] = url,
+                ["title"] = title,
+            };
         }
         var tabId = FallbackString(args["tabId"]);
         if (!tabs.TryGetValue(tabId, out var tab))
@@ -80,15 +110,21 @@ internal sealed class NodeBrowserTools : IAsyncDisposable
                 result["content"] = await tab.Page.GetContentAsync();
             else
             {
-                var bytes = await tab.Page.ScreenshotDataAsync(new ScreenshotOptions
-                {
-                    Type = ScreenshotType.Png,
-                    FullPage = NodeFileTools.Text(args["screenshot"]) == "full",
-                });
+                var bytes = await tab.Page.ScreenshotDataAsync(
+                    new ScreenshotOptions
+                    {
+                        Type = ScreenshotType.Png,
+                        FullPage = NodeFileTools.Text(args["screenshot"]) == "full",
+                    }
+                );
                 result["output"] = "[Screenshot of " + tabId + "]";
                 result["mimeType"] = "image/png";
                 result["sizeBytes"] = bytes.Length;
-                result["inlineData"] = new JsonObject { ["data"] = Convert.ToBase64String(bytes), ["mimeType"] = "image/png" };
+                result["inlineData"] = new JsonObject
+                {
+                    ["data"] = Convert.ToBase64String(bytes),
+                    ["mimeType"] = "image/png",
+                };
             }
             return result;
         }
@@ -115,7 +151,11 @@ internal sealed class NodeBrowserTools : IAsyncDisposable
                 output = "Typed into " + selector;
                 break;
             case "fill":
-                await tab.Page.EvaluateFunctionAsync("(selector,text) => { const el=document.querySelector(selector); if(!el) throw new Error(`Selector not found: ${selector}`); el.value=text; el.dispatchEvent(new Event('input',{bubbles:true})); }", selector, NodeFileTools.Text(parameters["text"])!);
+                await tab.Page.EvaluateFunctionAsync(
+                    "(selector,text) => { const el=document.querySelector(selector); if(!el) throw new Error(`Selector not found: ${selector}`); el.value=text; el.dispatchEvent(new Event('input',{bubbles:true})); }",
+                    selector,
+                    NodeFileTools.Text(parameters["text"])!
+                );
                 output = "Filled " + selector;
                 break;
             case "press":
@@ -126,17 +166,27 @@ internal sealed class NodeBrowserTools : IAsyncDisposable
             case "scroll":
                 var y = Truthy(parameters["y"]) ? Number(parameters["y"]) : 0;
                 await tab.Page.EvaluateFunctionAsync("y => window.scrollBy(0,y)", y);
-                output = "Scrolled by " + (Truthy(parameters["y"]) ? String(parameters["y"]) : "0") + "px";
+                output =
+                    "Scrolled by "
+                    + (Truthy(parameters["y"]) ? String(parameters["y"]) : "0")
+                    + "px";
                 break;
             case "wait":
                 var timeout = Truthy(parameters["timeout"]) ? Number(parameters["timeout"]) : 5000;
-                await using (await tab.Page.WaitForSelectorAsync(selector, new WaitForSelectorOptions { Timeout = (int)timeout }))
-                {
-                }
+                await using (
+                    await tab.Page.WaitForSelectorAsync(
+                        selector,
+                        new WaitForSelectorOptions { Timeout = (int)timeout }
+                    )
+                ) { }
                 output = "Waited for: " + selector;
                 break;
             case "evaluate":
-                await using (var value = await tab.Page.EvaluateExpressionHandleAsync(NodeFileTools.Text(parameters["code"])!))
+                await using (
+                    var value = await tab.Page.EvaluateExpressionHandleAsync(
+                        NodeFileTools.Text(parameters["code"])!
+                    )
+                )
                     output = "Evaluated: " + await StringifyResult(tab.Page, value);
                 break;
             case "goto":
@@ -158,7 +208,8 @@ internal sealed class NodeBrowserTools : IAsyncDisposable
                 await tab.Page.ReloadAsync(null, [WaitUntilNavigation.Networkidle2]);
                 output = "Page reloaded";
                 break;
-            default: throw new InvalidDataException("Unknown action: " + action);
+            default:
+                throw new InvalidDataException("Unknown action: " + action);
         }
         return new JsonObject { ["output"] = output };
     }
@@ -179,16 +230,30 @@ internal sealed class NodeBrowserTools : IAsyncDisposable
         {
             cloned = await value.JsonValueAsync<JsonElement?>();
         }
-        catch (PuppeteerException error) when (error.Message.Contains("Could not serialize referenced object", StringComparison.Ordinal))
+        catch (PuppeteerException error)
+            when (error.Message.Contains(
+                    "Could not serialize referenced object",
+                    StringComparison.Ordinal
+                )
+            )
         {
             return "undefined";
         }
         if (cloned is null)
             return "null";
-        return await page.EvaluateFunctionAsync<string>("text => JSON.stringify(JSON.parse(text))", cloned.Value.GetRawText());
+        return await page.EvaluateFunctionAsync<string>(
+            "text => JSON.stringify(JSON.parse(text))",
+            cloned.Value.GetRawText()
+        );
     }
 
-    private static JsonObject Metadata(string id, Tab tab) => new() { ["id"] = id, ["url"] = tab.Url, ["title"] = tab.Title };
+    private static JsonObject Metadata(string id, Tab tab) =>
+        new()
+        {
+            ["id"] = id,
+            ["url"] = tab.Url,
+            ["title"] = tab.Title,
+        };
 
     public async ValueTask DisposeAsync()
     {
