@@ -281,7 +281,7 @@ public sealed partial class CommandAdministrationTests
                 SessionWait.Text(f.Manager.ChannelBinding("webui:" + f.Owner.Id)?["sessionId"])
             );
             Assert.NotNull(f.Manager.Catalog.Get(expected));
-            Assert.Single(events.Where(e => e.Kind == SessionEventKind.CommandReply));
+            Assert.Single(events, e => e.Kind == SessionEventKind.CommandReply);
         }
         f.Manager.DetachChannel(source.Target);
         f.Manager.AttachChannel(source.Target, f.Owner);
