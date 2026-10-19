@@ -302,73 +302,74 @@ internal sealed partial class WeWorkChannel
         }
         JsonObject? passive = null;
         ExternalChannelContext? dispatch = null;
-        WeWorkStreamSnapshot? oldPush = null, initialPush = null;
+        WeWorkStreamSnapshot? oldPush = null,
+            initialPush = null;
         // Preparation may await media; only admission/card/result mutation is atomic.
         lock (contextGate)
         {
             if (msgId.Length > 0 && processed.TryGetValue(msgId, out var duplicate))
                 return duplicate.Response?.DeepClone() as JsonObject;
-        if (parts is { Count: > 0 } && user != "unknown")
-        {
-            var conversation = chatId.Length > 0 ? chatId : user;
-            WeWorkStreamSnapshot? stream = null;
-            if (streamEnabled && messageIsAibot)
+            if (parts is { Count: > 0 } && user != "unknown")
             {
-                var started = streams.Begin(
-                    conversation,
-                    delivery.Mode == "webhook"
-                        ? delivery with
-                        {
-                            ResponseUrl = responseUrl,
-                        }
-                        : delivery
-                );
-                stream = started.Current;
-                responseUrls.Remove(conversation);
-                if (started.Old?.Delivery.Mode == "websocket")
-                    oldPush = started.Old;
-                if (stream.Delivery.Mode == "websocket")
-                    initialPush = stream;
-                else
-                    passive = stream.Payload();
-            }
-            else if (responseUrl.Length > 0)
+                var conversation = chatId.Length > 0 ? chatId : user;
+                WeWorkStreamSnapshot? stream = null;
+                if (streamEnabled && messageIsAibot)
+                {
+                    var started = streams.Begin(
+                        conversation,
+                        delivery.Mode == "webhook"
+                            ? delivery with
+                            {
+                                ResponseUrl = responseUrl,
+                            }
+                            : delivery
+                    );
+                    stream = started.Current;
+                    responseUrls.Remove(conversation);
+                    if (started.Old?.Delivery.Mode == "websocket")
+                        oldPush = started.Old;
+                    if (stream.Delivery.Mode == "websocket")
+                        initialPush = stream;
+                    else
+                        passive = stream.Payload();
+                }
+                else if (responseUrl.Length > 0)
                 {
                     responseUrls.Remove(conversation);
                     if (responseUrls.Count >= 1024)
                         responseUrls.Remove(responseUrls.Keys.First());
                     responseUrls[conversation] = responseUrl;
                 }
-            dispatch = new ExternalChannelContext(
-                id,
-                "wework",
-                conversation,
-                user,
-                username,
-                text =>
-                    stream is not null
-                        ? SendTextAsync(
+                dispatch = new ExternalChannelContext(
+                    id,
+                    "wework",
+                    conversation,
+                    user,
+                    username,
+                    text =>
+                        stream is not null
+                            ? SendTextAsync(
+                                conversation,
+                                text,
+                                new(
+                                    WebhookUrl: replyWebhook,
+                                    StreamId: stream.Id,
+                                    ChatId: chatId,
+                                    ChatType: chatType
+                                ),
+                                CancellationToken.None
+                            )
+                        : responseUrl.Length > 0
+                            ? SendResponseAsync(responseUrl, text, CancellationToken.None)
+                        : SendTextAsync(
                             conversation,
                             text,
-                            new(
-                                WebhookUrl: replyWebhook,
-                                StreamId: stream.Id,
-                                ChatId: chatId,
-                                ChatType: chatType
-                            ),
+                            new(WebhookUrl: replyWebhook, ChatId: chatId, ChatType: chatType),
                             CancellationToken.None
-                        )
-                    : responseUrl.Length > 0
-                        ? SendResponseAsync(responseUrl, text, CancellationToken.None)
-                    : SendTextAsync(
-                        conversation,
-                        text,
-                        new(WebhookUrl: replyWebhook, ChatId: chatId, ChatType: chatType),
-                        CancellationToken.None
-                    ),
-                Nonempty(Text(config["selfName"])) ? Text(config["selfName"]).Trim() : null
-            );
-        }
+                        ),
+                    Nonempty(Text(config["selfName"])) ? Text(config["selfName"]).Trim() : null
+                );
+            }
             if (msgId.Length > 0)
                 processed[msgId] = (
                     now().ToUnixTimeMilliseconds(),

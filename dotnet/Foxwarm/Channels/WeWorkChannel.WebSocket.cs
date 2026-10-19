@@ -10,13 +10,18 @@ internal sealed partial class WeWorkChannel
     private sealed class Connection
     {
         internal readonly ClientWebSocket Socket = new();
+
         // A successor never shares an old connection's blocked writer.
         internal readonly SemaphoreSlim WireSend = new(1);
         internal readonly CancellationTokenSource Ended = new();
         internal int Closing;
     }
 
-    private sealed record Pending(Connection Connection, string Command, TaskCompletionSource<JsonObject> Completion);
+    private sealed record Pending(
+        Connection Connection,
+        string Command,
+        TaskCompletionSource<JsonObject> Completion
+    );
 
     private readonly object socketGate = new();
     private Connection? socket;
@@ -32,7 +37,10 @@ internal sealed partial class WeWorkChannel
             _ = ObserveAsync(CloseOutputAsync(current));
     }
 
-    private async Task CloseOutputAsync(Connection current, WebSocketCloseStatus status = WebSocketCloseStatus.NormalClosure)
+    private async Task CloseOutputAsync(
+        Connection current,
+        WebSocketCloseStatus status = WebSocketCloseStatus.NormalClosure
+    )
     {
         if (Interlocked.Exchange(ref current.Closing, 1) != 0)
             return;
@@ -117,7 +125,10 @@ internal sealed partial class WeWorkChannel
                     } while (!frame.EndOfMessage);
                     // Decode only complete messages, including split UTF-8 scalars and binary ws payloads.
                     _ = ObserveAsync(
-                        HandleSocketMessageAsync(connection, Encoding.UTF8.GetString(message.ToArray()))
+                        HandleSocketMessageAsync(
+                            connection,
+                            Encoding.UTF8.GetString(message.ToArray())
+                        )
                     );
                 }
             }
@@ -263,13 +274,18 @@ internal sealed partial class WeWorkChannel
         };
         if (body is not null)
             payload["body"] = body.DeepClone();
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token, current.Ended.Token);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
+            token,
+            lifetime.Token,
+            current.Ended.Token
+        );
         timeout.CancelAfter(TimeSpan.FromSeconds(10));
         using var registration = timeout.Token.Register(() =>
             completion.TrySetException(
                 stopped ? new IOException("WeWork AIBot WebSocket stopped")
                 : token.IsCancellationRequested ? new OperationCanceledException(token)
-                : current.Ended.IsCancellationRequested ? new IOException("WeWork AIBot WebSocket closed")
+                : current.Ended.IsCancellationRequested
+                    ? new IOException("WeWork AIBot WebSocket closed")
                 : new IOException($"WeWork AIBot command {command} timed out waiting for ack")
             )
         );

@@ -15,7 +15,8 @@ public sealed class WeWorkBoundedSocketTests
         private readonly TcpClient client;
         internal readonly WebSocket Socket;
 
-        private Peer(TcpClient client, WebSocket socket) => (this.client, Socket) = (client, socket);
+        private Peer(TcpClient client, WebSocket socket) =>
+            (this.client, Socket) = (client, socket);
 
         internal static async Task<Peer> Accept(TcpListener listener)
         {
@@ -29,10 +30,28 @@ public sealed class WeWorkBoundedSocketTests
                 await stream.ReadExactlyAsync(one);
                 header.Append((char)one[0]);
             }
-            var key = header.ToString().Split("\r\n").Single(line => line.StartsWith("Sec-WebSocket-Key:", StringComparison.OrdinalIgnoreCase)).Split(':', 2)[1].Trim();
-            var accept = Convert.ToBase64String(SHA1.HashData(Encoding.ASCII.GetBytes(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")));
-            await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + accept + "\r\n\r\n"));
-            return new(client, WebSocket.CreateFromStream(stream, true, null, Timeout.InfiniteTimeSpan));
+            var key = header
+                .ToString()
+                .Split("\r\n")
+                .Single(line =>
+                    line.StartsWith("Sec-WebSocket-Key:", StringComparison.OrdinalIgnoreCase)
+                )
+                .Split(':', 2)[1]
+                .Trim();
+            var accept = Convert.ToBase64String(
+                SHA1.HashData(Encoding.ASCII.GetBytes(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+            );
+            await stream.WriteAsync(
+                Encoding.ASCII.GetBytes(
+                    "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "
+                        + accept
+                        + "\r\n\r\n"
+                )
+            );
+            return new(
+                client,
+                WebSocket.CreateFromStream(stream, true, null, Timeout.InfiniteTimeSpan)
+            );
         }
 
         internal async Task<JsonObject> Read()
@@ -50,12 +69,23 @@ public sealed class WeWorkBoundedSocketTests
             return JsonNode.Parse(bytes.ToArray())!.AsObject();
         }
 
-        internal async Task Send(JsonObject payload) => await Socket.SendAsync(Encoding.UTF8.GetBytes(payload.ToJsonString()), WebSocketMessageType.Text, true, CancellationToken.None);
+        internal async Task Send(JsonObject payload) =>
+            await Socket.SendAsync(
+                Encoding.UTF8.GetBytes(payload.ToJsonString()),
+                WebSocketMessageType.Text,
+                true,
+                CancellationToken.None
+            );
 
-        internal Task Ack(JsonObject command, JsonObject? body = null, int code = 0) => Send(new JsonObject
-        {
-            ["headers"] = command["headers"]!.DeepClone(), ["errcode"] = code, ["body"] = body
-        });
+        internal Task Ack(JsonObject command, JsonObject? body = null, int code = 0) =>
+            Send(
+                new JsonObject
+                {
+                    ["headers"] = command["headers"]!.DeepClone(),
+                    ["errcode"] = code,
+                    ["body"] = body,
+                }
+            );
 
         internal async Task Subscribe()
         {
@@ -64,30 +94,49 @@ public sealed class WeWorkBoundedSocketTests
             await Ack(command);
         }
 
-        public void Dispose() { Socket.Dispose(); client.Dispose(); }
+        public void Dispose()
+        {
+            Socket.Dispose();
+            client.Dispose();
+        }
     }
 
-    private static JsonObject Config(TcpListener listener) => new()
-    {
-        ["aibot"] = new JsonObject { ["websocket"] = new JsonObject
+    private static JsonObject Config(TcpListener listener) =>
+        new()
         {
-            ["enabled"] = true, ["botId"] = "fixture", ["secret"] = "fixture",
-            ["url"] = $"ws://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/",
-            ["heartbeatMs"] = 60000, ["reconnectMs"] = 100
-        }}
-    };
+            ["aibot"] = new JsonObject
+            {
+                ["websocket"] = new JsonObject
+                {
+                    ["enabled"] = true,
+                    ["botId"] = "fixture",
+                    ["secret"] = "fixture",
+                    ["url"] = $"ws://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/",
+                    ["heartbeatMs"] = 60000,
+                    ["reconnectMs"] = 100,
+                },
+            },
+        };
 
-    private static JsonObject Disconnect() => new()
-    {
-        ["cmd"] = "aibot_event_callback", ["body"] = new JsonObject { ["event"] = new JsonObject { ["eventtype"] = "disconnected_event" }}
-    };
+    private static JsonObject Disconnect() =>
+        new()
+        {
+            ["cmd"] = "aibot_event_callback",
+            ["body"] = new JsonObject
+            {
+                ["event"] = new JsonObject { ["eventtype"] = "disconnected_event" },
+            },
+        };
 
     private static async Task Healthy(WeWorkChannel channel, Peer peer)
     {
         var send = channel.Transport.Send("healthy", "after replacement", new(), default);
         var command = await peer.Read();
         Assert.Equal("aibot_send_msg", command["cmd"]!.GetValue<string>());
-        Assert.Equal("after replacement", command["body"]!["markdown"]!["content"]!.GetValue<string>());
+        Assert.Equal(
+            "after replacement",
+            command["body"]!["markdown"]!["content"]!.GetValue<string>()
+        );
         await peer.Ack(command);
         await send.WaitAsync(TimeSpan.FromSeconds(3));
     }
@@ -96,11 +145,20 @@ public sealed class WeWorkBoundedSocketTests
     [InlineData("deadline")]
     [InlineData("cancel")]
     [InlineData("stop")]
-    public async Task No_read_peer_bounds_active_and_queued_file_writes_without_replay_and_successor_is_healthy(string outcome)
+    public async Task No_read_peer_bounds_active_and_queued_file_writes_without_replay_and_successor_is_healthy(
+        string outcome
+    )
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
-        await using var channel = new WeWorkChannel("bounded", Config(listener), null!, null!, null, _ => { });
+        await using var channel = new WeWorkChannel(
+            "bounded",
+            Config(listener),
+            null!,
+            null!,
+            null,
+            _ => { }
+        );
         await channel.StartAsync();
         using var peer = await Peer.Accept(listener);
         await peer.Subscribe();
@@ -108,7 +166,17 @@ public sealed class WeWorkBoundedSocketTests
         var file = Path.Combine(temp.Path, "bounded.bin");
         await File.WriteAllBytesAsync(file, new byte[512 * 1024]);
         using var cancel = new CancellationTokenSource();
-        var sends = Enumerable.Range(0, 10).Select(i => channel.Transport.SendFile!("chat-" + i, new(file, "bounded.bin", "application/octet-stream", false), null, cancel.Token)).ToArray();
+        var sends = Enumerable
+            .Range(0, 10)
+            .Select(i =>
+                channel.Transport.SendFile!(
+                    "chat-" + i,
+                    new(file, "bounded.bin", "application/octet-stream", false),
+                    null,
+                    cancel.Token
+                )
+            )
+            .ToArray();
         var inits = new List<JsonObject>();
         for (var i = 0; i < 10; i++)
         {
@@ -122,19 +190,31 @@ public sealed class WeWorkBoundedSocketTests
         if (outcome != "deadline")
         {
             await Task.Delay(500);
-            if (outcome == "stop") await channel.StopAsync();
-            else cancel.Cancel();
+            if (outcome == "stop")
+                await channel.StopAsync();
+            else
+                cancel.Cancel();
         }
-        try { await Task.WhenAll(sends).WaitAsync(TimeSpan.FromSeconds(outcome == "deadline" ? 13 : 3)); }
+        try
+        {
+            await Task.WhenAll(sends)
+                .WaitAsync(TimeSpan.FromSeconds(outcome == "deadline" ? 13 : 3));
+        }
         catch (IOException) { }
         catch (OperationCanceledException) { }
         Assert.All(sends, send => Assert.True(send.IsCompleted && !send.IsCompletedSuccessfully));
         if (outcome == "stop")
         {
-            Assert.All(sends, send => Assert.Contains("stopped", send.Exception!.GetBaseException().Message));
+            Assert.All(
+                sends,
+                send => Assert.Contains("stopped", send.Exception!.GetBaseException().Message)
+            );
             return;
         }
-        Assert.All(sends.Where(send => send.IsFaulted), send => Assert.Matches("timed out|closed", send.Exception!.GetBaseException().Message));
+        Assert.All(
+            sends.Where(send => send.IsFaulted),
+            send => Assert.Matches("timed out|closed", send.Exception!.GetBaseException().Message)
+        );
         using var replacement = await Peer.Accept(listener);
         await replacement.Subscribe();
         await Healthy(channel, replacement);
@@ -143,11 +223,20 @@ public sealed class WeWorkBoundedSocketTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Silent_close_is_bounded_for_disconnect_and_subscription_failure(bool subscriptionFailure)
+    public async Task Silent_close_is_bounded_for_disconnect_and_subscription_failure(
+        bool subscriptionFailure
+    )
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
-        await using var channel = new WeWorkChannel("closing", Config(listener), null!, null!, null, _ => { });
+        await using var channel = new WeWorkChannel(
+            "closing",
+            Config(listener),
+            null!,
+            null!,
+            null,
+            _ => { }
+        );
         await channel.StartAsync();
         using var peer = await Peer.Accept(listener);
         var subscribe = await peer.Read();
@@ -166,13 +255,22 @@ public sealed class WeWorkBoundedSocketTests
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
-        await using var channel = new WeWorkChannel("early-close", Config(listener), null!, null!, null, _ => { });
+        await using var channel = new WeWorkChannel(
+            "early-close",
+            Config(listener),
+            null!,
+            null!,
+            null,
+            _ => { }
+        );
         await channel.StartAsync();
         using var peer = await Peer.Accept(listener);
         await peer.Subscribe();
         await peer.Send(Disconnect());
         var buffer = new byte[1024];
-        var close = await peer.Socket.ReceiveAsync(buffer, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(3));
+        var close = await peer
+            .Socket.ReceiveAsync(buffer, CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal(WebSocketMessageType.Close, close.MessageType);
         await peer.Socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "", default);
         using var replacement = await Peer.Accept(listener).WaitAsync(TimeSpan.FromSeconds(3));

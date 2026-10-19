@@ -275,36 +275,57 @@ public sealed class WeWorkCallbackTests
         f.Manager.AttachChannel("work:wrk-chat", f.Owner);
         f.Manager.AttachChannel("other:wrk-chat", f.Owner);
         using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}/") };
-        using var other = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{otherPort}/") };
+        using var other = new HttpClient
+        {
+            BaseAddress = new Uri($"http://127.0.0.1:{otherPort}/"),
+        };
         var expected = 0;
         foreach (var width in Enumerable.Repeat(2, 20).Append(32))
         {
             var msgId = "overlap-" + expected;
-            var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var requests = Enumerable.Range(0, width).Select(async _ =>
-            {
-                await start.Task;
-                return await Post(client, WeWorkPeer.Text(msgId), encrypted: false);
-            }).ToArray();
+            var start = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var requests = Enumerable
+                .Range(0, width)
+                .Select(async _ =>
+                {
+                    await start.Task;
+                    return await Post(client, WeWorkPeer.Text(msgId), encrypted: false);
+                })
+                .ToArray();
             start.SetResult();
             var responses = await Task.WhenAll(requests);
             Assert.Single(responses.Select(Id).Distinct());
             await f.Manager.ChannelRegistry.SendAsync("work:wrk-chat", "later output", default);
-            Assert.Equal(Content(responses[0]), Content(await Post(client, WeWorkPeer.Text(msgId), encrypted: false)));
+            Assert.Equal(
+                Content(responses[0]),
+                Content(await Post(client, WeWorkPeer.Text(msgId), encrypted: false))
+            );
             expected++;
-            await TelegramChannelTests.Until(() => f.Owner.Entry.WithState(state => state.Queue.Count) >= expected);
+            await TelegramChannelTests.Until(() =>
+                f.Owner.Entry.WithState(state => state.Queue.Count) >= expected
+            );
             Assert.Equal(expected, f.Owner.Entry.WithState(state => state.Queue.Count));
         }
-        var independent = await Task.WhenAll(Enumerable.Range(0, 8).Select(i => Post(client, WeWorkPeer.Text("different-" + i), encrypted: false)));
+        var independent = await Task.WhenAll(
+            Enumerable
+                .Range(0, 8)
+                .Select(i => Post(client, WeWorkPeer.Text("different-" + i), encrypted: false))
+        );
         Assert.Equal(8, independent.Select(Id).Distinct().Count());
         expected += 8;
         var perInstance = await Post(other, WeWorkPeer.Text("overlap-0"), encrypted: false);
         Assert.NotEqual(Id(independent[0]), Id(perInstance));
         expected++;
-        var withoutIds = await Task.WhenAll(Enumerable.Range(0, 2).Select(_ => Post(client, WeWorkPeer.Text(""), encrypted: false)));
+        var withoutIds = await Task.WhenAll(
+            Enumerable.Range(0, 2).Select(_ => Post(client, WeWorkPeer.Text(""), encrypted: false))
+        );
         Assert.Equal(2, withoutIds.Select(Id).Distinct().Count());
         expected += 2;
-        await TelegramChannelTests.Until(() => f.Owner.Entry.WithState(state => state.Queue.Count) >= expected);
+        await TelegramChannelTests.Until(() =>
+            f.Owner.Entry.WithState(state => state.Queue.Count) >= expected
+        );
         Assert.Equal(expected, f.Owner.Entry.WithState(state => state.Queue.Count));
     }
 
@@ -313,14 +334,18 @@ public sealed class WeWorkCallbackTests
     {
         await using var peer = await WeWorkPeer.StartAsync();
         var port = WeWorkPeer.Port();
-        await using var f = await ExternalChannelFixture.CreateAsync(new() { ["work"] = peer.Config(port) }, dependencies: peer.Dependencies);
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            new() { ["work"] = peer.Config(port) },
+            dependencies: peer.Dependencies
+        );
         await f.Manager.ManagedChannels!.ReloadAsync();
         f.Manager.AttachChannel("work:wrk-chat", f.Owner);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         peer.Respond = async call =>
         {
-            if (call.Path != "/held-media") return null;
+            if (call.Path != "/held-media")
+                return null;
             entered.TrySetResult();
             await release.Task;
             return Results.StatusCode(500);
@@ -328,23 +353,44 @@ public sealed class WeWorkCallbackTests
         using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}/") };
         var media = WeWorkPeer.Text("retry-media");
         media["msgtype"] = "file";
-        media["file"] = new JsonObject { ["url"] = new Uri(peer.Address, "held-media").ToString(), ["filename"] = "retry.txt" };
+        media["file"] = new JsonObject
+        {
+            ["url"] = new Uri(peer.Address, "held-media").ToString(),
+            ["filename"] = "retry.txt",
+        };
         var pending = client.PostAsJsonAsync("callback", media);
         try
         {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
-            await Post(client, WeWorkPeer.Text("independent"), encrypted: false).WaitAsync(TimeSpan.FromSeconds(3));
+            await Post(client, WeWorkPeer.Text("independent"), encrypted: false)
+                .WaitAsync(TimeSpan.FromSeconds(3));
             Assert.False(pending.IsCompleted);
         }
-        finally { release.TrySetResult(); }
+        finally
+        {
+            release.TrySetResult();
+        }
         using var failed = await pending;
         Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
         peer.Respond = null;
-        peer.Media["/held-media"] = Convert.FromBase64String(Encrypt("retried bytes", framed: false));
+        peer.Media["/held-media"] = Convert.FromBase64String(
+            Encrypt("retried bytes", framed: false)
+        );
         var retried = await Post(client, media, encrypted: false);
         Assert.Equal(Id(retried), Id(await Post(client, media, encrypted: false)));
-        await TelegramChannelTests.Until(() => f.Owner.Entry.WithState(state => state.Queue.Count) == 2);
-        Assert.Contains(f.Owner.Entry.WithState(state => state.Queue.ToArray()), row => row.Parts!.Any(part => (SessionWait.Text(part["text"] ?? part["system"]) ?? "").Contains("retry.txt", StringComparison.Ordinal)));
+        await TelegramChannelTests.Until(() =>
+            f.Owner.Entry.WithState(state => state.Queue.Count) == 2
+        );
+        Assert.Contains(
+            f.Owner.Entry.WithState(state => state.Queue.ToArray()),
+            row =>
+                row.Parts!.Any(part =>
+                    (SessionWait.Text(part["text"] ?? part["system"]) ?? "").Contains(
+                        "retry.txt",
+                        StringComparison.Ordinal
+                    )
+                )
+        );
     }
 
     [Fact]
