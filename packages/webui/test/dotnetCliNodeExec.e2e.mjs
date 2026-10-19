@@ -35,7 +35,7 @@ peer.on('connection', (socket, request) => {
   })
 })
 async function launch(name, source = false, environment = {}) {
-  const cwd = join(root, name); await mkdir(join(cwd, 'agents/main'), { recursive: true })
+  const cwd = join(root, name); await mkdir(cwd, { recursive: true })
   const id = name, before = generations.get(id) || 0
   const executable = !source && process.env.FOXWARM_CLI_EXECUTABLE
   const child = spawn(executable || (source ? process.execPath : join(process.env.DOTNET_ROOT, 'dotnet')), [...(executable ? [] : [resolve(source ? 'packages/cli-node/dist/client.js' : 'dotnet/Foxwarm.CliNode/bin/Debug/net10.0/Foxwarm.CliNode.dll')]), '--host', origin, '--id', id, '--auth-token', 'synthetic-' + name, '--credentials-file', join(cwd, 'credentials.json'), '--no-local-trigger'], { cwd, env: { ...isolatedApplicationEnv(join(cwd, 'data')), FOXWARM_AGENTS_DIR: 'agents', FOXWARM_NO_CONSOLE_LOG: '0', EXECTEST_INHERITED: 'inherited', fw_agentdir: 'wrong-parent', fw_tmp: 'wrong-parent', FW_AGENTDIR: 'posix-uppercase-kept', ...environment }, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -71,6 +71,37 @@ try {
   const caps = registrations.find(row => row.capabilities.tools.length === 6).capabilities
   assert(caps.features.execWaitCancellation && caps.features.remoteExecBackgroundRegistration)
   assert.equal(caps.features.externalToolOwner, undefined)
+  // These are the first execs for genuinely absent Agent roots, before the corpus prepares tmp.
+  for (const handle of [source, cli]) {
+    for (const [agent, args, metadata, suffix] of [
+      ['main', { cwd: '$fw_tmp' }, {}, '/tmp'],
+      ['fresh-root', { cwd: '$fw_agentdir' }, {}, ''],
+      ['fresh-session', {}, { sessionCwd: '$fw_tmp' }, '/tmp'],
+    ]) {
+      const agentDirectory = join(handle.cwd, 'agents', agent), cwd = agentDirectory + suffix
+      assert(!await exists(agentDirectory), 'Agent root must not exist before first exec')
+      const first = await command(handle, 'pwd; printf "once\\n" >> first-effect', args, { agentName: agent, programmatic: true, ...metadata })
+      console.log(JSON.stringify({ firstAgentExec: handle.id, agent, agentExistedBefore: false, reply: first.reply }))
+      const result = good(first)
+      assert.equal(result.status, 'completed'); assert.equal(result.exitCode, 0)
+      assert.equal(result.content, cwd + '\n')
+      assert.equal(result.execId, first.request.backgroundExecId)
+      assert.equal(await readFile(join(cwd, 'first-effect'), 'utf8'), 'once\n')
+      assert(result.logPath.startsWith(join(agentDirectory, '.temp/exec') + '/'))
+      assert.equal(await readFile(result.logPath, 'utf8'), cwd + '\n')
+      assert.equal((await readFile(result.logPath + '.cwd.txt', 'utf8')).trim(), cwd)
+      assert.equal(JSON.parse(await readFile(result.logPath + '.exit.json', 'utf8')).exitCode, 0)
+    }
+    const agent = 'fresh-missing', agentDirectory = join(handle.cwd, 'agents', agent)
+    const missing = join(handle.cwd, 'arbitrary-missing')
+    assert(!await exists(agentDirectory)); assert(!await exists(missing))
+    const rejected = await command(handle, 'printf forbidden >> must-not-run', { cwd: missing }, { agentName: agent })
+    console.log(JSON.stringify({ missingCwdControl: handle.id, reply: rejected.reply }))
+    assert.equal(rejected.reply.type, 'tool_call_error'); assert.equal(rejected.reply.execStarted, false)
+    assert.match(rejected.reply.error.message, /path does not exist/); assert.match(rejected.reply.error.message, /Source: explicit/)
+    assert(await exists(join(agentDirectory, 'tmp')), 'Source prepares Agent tmp even when arbitrary cwd is invalid')
+    assert(!await exists(missing)); assert(!await exists(join(handle.cwd, 'must-not-run')))
+  }
   const corpus = [
     'printf ""', 'printf "  \\n\\t "', 'printf "a\\r\\nb\\rc\\n"', 'printf "\\377\\376x\\n"', 'printf "x\\n"; exit 7',
     "printf '%0600d' 0", "for i in {1..5000}; do printf 'line-%s\\n' \"$i\"; done",

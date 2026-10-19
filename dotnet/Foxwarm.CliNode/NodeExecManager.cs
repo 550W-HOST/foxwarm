@@ -223,13 +223,13 @@ internal sealed partial class NodeExecManager(
         }
         try
         {
+            Directory.CreateDirectory(Path.Combine(paths.AgentDirectory(agent), "tmp"));
             var (cwd, raw, source) = paths.ExecCwd(
                 args["cwd"],
                 Text(frame, "sessionCwd"),
                 agent,
                 node
             );
-            Directory.CreateDirectory(Path.Combine(paths.AgentDirectory(agent), "tmp"));
             var date = DateTime.Now;
             var directory = Path.Combine(
                 Path.GetDirectoryName(registryPath)!,
