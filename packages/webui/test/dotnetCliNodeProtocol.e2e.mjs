@@ -155,7 +155,7 @@ try {
   const native = await launch('native', main.origin + '/deployment', ['--id', 'native', '--auth-token', 'native-only', '--credentials-file', join(root, 'native/credentials.json')])
   await until(() => connected.get('native'), 'new CLI register')
   assert.deepEqual(capabilities.get('native').tools.map(tool => tool.name), ['read', 'write', 'edit', 'apply_patch', 'exec', 'get_default_cwd'])
-  assert.deepEqual(capabilities.get('native').features, { programmaticToolData: true, execWaitCancellation: true, remoteExecBackgroundRegistration: true }); assert.equal(capabilities.get('native').services, undefined)
+  assert.deepEqual(capabilities.get('native').features, { programmaticToolData: true, execWaitCancellation: true, remoteExecBackgroundRegistration: true, externalToolOwner: 1 }); assert.deepEqual(capabilities.get('native').services, { 'vscode-fs': 1, 'vscode-git': 2 })
   assert.deepEqual(await nativeCorpus(connected.get('native'), native.cwd), await nativeCorpus(connected.get('source'), source.cwd))
   assert.equal((await stat(join(native.cwd, 'credentials.json'))).mode & 0o777, 0o600)
   await stop(source); await stop(native)

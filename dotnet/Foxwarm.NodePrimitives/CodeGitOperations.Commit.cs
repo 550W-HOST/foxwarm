@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 
 namespace Foxwarm.Code;
 
-internal static partial class CodeGitService
+internal static partial class CodeGitOperations
 {
     internal static async Task<JsonObject> CommitAsync(
         string workspace,
@@ -14,22 +14,22 @@ internal static partial class CodeGitService
         if (id is null || !Regex.IsMatch(id, "^[0-9a-f]{7,64}$", RegexOptions.IgnoreCase))
             throw new CodeServiceException(
                 "InvalidCommit",
-                "Commit id must contain 7 to 64 hexadecimal characters."
+                "commit id must contain 7 to 64 hexadecimal characters."
             );
         var top = await TopLevelAsync(workspace, token);
         if (
-            Text(await RunAsync(top, ["cat-file", "-t", id], token, 1024 * 1024)).Trim() != "commit"
+            Text(await RunAsync(top, ["cat-file", "-t", id], token, 1024 * 1024, discover: true)).Trim() != "commit"
         )
             throw new CodeServiceException(
                 "InvalidCommit",
                 "The supplied object id does not name a commit directly."
             );
-        var oid = Text(await RunAsync(top, ["rev-parse", "--verify", id], token, 1024 * 1024))
+        var oid = Text(await RunAsync(top, ["rev-parse", "--verify", id], token, 1024 * 1024, discover: true))
             .Trim()
             .ToLowerInvariant();
         if (!Regex.IsMatch(oid, "^[0-9a-f]{40}([0-9a-f]{24})?$"))
             throw new CodeServiceException(
-                "InvalidCommit",
+                "InvalidGitResponse",
                 "Git resolved an invalid commit object id."
             );
         var metadata = Text(
@@ -43,13 +43,14 @@ internal static partial class CodeGitService
                         oid,
                     ],
                     token,
-                    2 * 1024 * 1024
+                    2 * 1024 * 1024,
+                    discover: true
                 )
             )
             .Split('\0');
         if (metadata.Length < 8 || metadata[0].Trim().ToLowerInvariant() != oid)
             throw new CodeServiceException(
-                "InvalidCommit",
+                "InvalidGitResponse",
                 "Git returned invalid commit metadata."
             );
         var parents = metadata[1]
@@ -68,7 +69,8 @@ internal static partial class CodeGitService
                 .Append("--")
                 .ToArray(),
             token,
-            20 * 1024 * 1024
+            20 * 1024 * 1024,
+            discover: true
         );
         var numstat = await RunAsync(
             top,
@@ -79,7 +81,8 @@ internal static partial class CodeGitService
                 .Append("--")
                 .ToArray(),
             token,
-            20 * 1024 * 1024
+            20 * 1024 * 1024,
+            discover: true
         );
         var files = ParseCommitRaw(raw);
         var stats = ParseCommitNumstat(numstat);
@@ -102,8 +105,7 @@ internal static partial class CodeGitService
             }
         return new()
         {
-            ["nodeId"] = "master",
-            ["workspace"] = CodeNativePaths.Transport(top),
+            ["workspace"] = top,
             ["commit"] = new JsonObject
             {
                 ["oid"] = oid,
@@ -151,7 +153,7 @@ internal static partial class CodeGitService
             );
             if (!match.Success || i >= rows.Length)
                 throw new CodeServiceException(
-                    "InvalidCommit",
+                    "InvalidGitResponse",
                     "Git returned an invalid raw commit diff record."
                 );
             var status = match.Groups[5].Value.ToUpperInvariant();
@@ -159,7 +161,7 @@ internal static partial class CodeGitService
             var moved = status is "R" or "C";
             if (moved && i >= rows.Length)
                 throw new CodeServiceException(
-                    "InvalidCommit",
+                    "InvalidGitResponse",
                     "Git rename/copy record is incomplete."
                 );
             var last = moved ? rows[i++] : first;
@@ -187,7 +189,7 @@ internal static partial class CodeGitService
             };
             if (moved)
                 file["oldPath"] = first;
-            files.Add(file);
+            files.Add((JsonNode)file);
             if (files.Count > 5000)
                 throw new CodeServiceException(
                     "PayloadTooLarge",
@@ -211,7 +213,7 @@ internal static partial class CodeGitService
             var fields = row.Split('\t', 3);
             if (fields.Length != 3)
                 throw new CodeServiceException(
-                    "InvalidCommit",
+                    "InvalidGitResponse",
                     "Git returned an invalid numstat record."
                 );
             var path = fields[2];
@@ -219,7 +221,7 @@ internal static partial class CodeGitService
             {
                 if (i + 1 >= rows.Length)
                     throw new CodeServiceException(
-                        "InvalidCommit",
+                        "InvalidGitResponse",
                         "Git numstat rename record is incomplete."
                     );
                 i++;
@@ -228,7 +230,7 @@ internal static partial class CodeGitService
             var binary = fields[0] == "-" || fields[1] == "-";
             if (!binary && (!long.TryParse(fields[0], out _) || !long.TryParse(fields[1], out _)))
                 throw new CodeServiceException(
-                    "InvalidCommit",
+                    "InvalidGitResponse",
                     "Git returned invalid line counts."
                 );
             stats[path] = binary

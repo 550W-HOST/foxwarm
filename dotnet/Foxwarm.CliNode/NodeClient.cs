@@ -267,6 +267,8 @@ internal sealed partial class NodeClient
                     case "external_exec_result_request":
                         ScheduleExternalQuery(connection, frame);
                         break;
+                    case "node_service_request":
+                    case "node_service_command":
                     case "tool_call":
                     case "file_read_request":
                     case "file_write_request":
@@ -311,6 +313,11 @@ internal sealed partial class NodeClient
     )
     {
         var type = Text(frame, "type");
+        if (type is "node_service_request" or "node_service_command")
+        {
+            await DispatchService(connection, frame);
+            return;
+        }
         var execStarted = false;
         try
         {
@@ -500,6 +507,8 @@ internal sealed partial class NodeClient
             capabilities["features"]!.AsObject().Remove("execWaitCancellation");
             capabilities["features"]!.AsObject().Remove("remoteExecBackgroundRegistration");
         }
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsWindows())
+            capabilities.Remove("services");
         return capabilities;
     }
 

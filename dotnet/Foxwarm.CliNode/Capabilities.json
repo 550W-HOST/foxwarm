@@ -135,5 +135,6 @@
     "execWaitCancellation": true,
     "remoteExecBackgroundRegistration": true,
     "externalToolOwner": 1
-  }
+  },
+  "services": { "vscode-fs": 1, "vscode-git": 2 }
 }

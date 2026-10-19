@@ -77,7 +77,7 @@ internal sealed class NodeFileTransfer(NodePaths paths)
     }
 
     // Node Buffer's base64 input accepts the URL alphabet, missing padding and ignored nonalphabet bytes.
-    private static byte[] DecodeBase64(string text)
+    internal static byte[] DecodeBase64(string text)
     {
         var clean = new System.Text.StringBuilder();
         foreach (var ch in text)

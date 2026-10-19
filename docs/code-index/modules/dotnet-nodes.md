@@ -10,7 +10,7 @@ Executable registry/files, persistent provider exec and optional lifecycle are c
 
 ## Units
 
-- [.NET headless CLI Node](../units/dotnet-cli-node.md) — separate authenticated file/Session-exec worker executable.
+- [.NET headless CLI Node](../units/dotnet-cli-node.md) — separate authenticated file/exec and fixed Code filesystem/read-only Git executable.
 - [Shared native primitives](../units/dotnet-node-primitives.md) — the narrow Main/CLI algorithm library.
 
 - [.NET executable Node registry and files](../units/dotnet-node-providers.md)
