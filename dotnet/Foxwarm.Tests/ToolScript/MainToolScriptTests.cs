@@ -20,20 +20,25 @@ public sealed class MainToolScriptTests
         internal Foxwarm.McpClient Mcp => mcp;
         private Foxwarm.McpClient mcp = null!;
 
-        internal static async Task<Fixture> Create(string? skillsRoot = null, ResponsesClientOptions? suppliedOptions = null)
+        internal static async Task<Fixture> Create(
+            string? skillsRoot = null,
+            ResponsesClientOptions? suppliedOptions = null
+        )
         {
             var f = new Fixture();
             Console.WriteLine("Owned ToolScript fixture=" + f.Temp.Path);
             try
             {
-                var options = suppliedOptions ?? new ResponsesClientOptions(
-                    new Uri("http://127.0.0.1:1"),
-                    "wire",
-                    "a",
-                    "",
-                    "",
-                    713
-                );
+                var options =
+                    suppliedOptions
+                    ?? new ResponsesClientOptions(
+                        new Uri("http://127.0.0.1:1"),
+                        "wire",
+                        "a",
+                        "",
+                        "",
+                        713
+                    );
                 f.Manager = new(f.Data, f.Work, options, HostModels.ForTest(options), skillsRoot);
                 await f.Manager.LoadMainHostAsync();
                 f.Owner = await f.Manager.CreateNamedAsync("main", "script", null, null);

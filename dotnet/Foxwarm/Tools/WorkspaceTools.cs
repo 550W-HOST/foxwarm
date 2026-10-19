@@ -233,7 +233,11 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                     return Error("not_file", "Regular file or directory not found.");
                 }
                 var directory = await DirectoryExistsAsync(path, cancellationToken);
-                var mime = directory ? null : Foxwarm.Images.RasterImageMime.Detect(await ReadHeaderAsync(path, cancellationToken));
+                var mime = directory
+                    ? null
+                    : Foxwarm.Images.RasterImageMime.Detect(
+                        await ReadHeaderAsync(path, cancellationToken)
+                    );
                 JsonObject? data = null;
                 if (ScriptBudget is not null)
                     ScriptBudget.Charge(
@@ -241,31 +245,30 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                             ? checked(12L * await SizeAsync(path, cancellationToken))
                             : 32L * MaxBytes
                     );
-                var result =
-                    mime is not null
-                        ? new JsonObject
+                var result = mime is not null
+                    ? new JsonObject
+                    {
+                        ["output"] = "[Image loaded: " + pathText + "]",
+                        ["mimeType"] = mime,
+                        ["inlineData"] = new JsonObject
                         {
-                            ["output"] = "[Image loaded: " + pathText + "]",
                             ["mimeType"] = mime,
-                            ["inlineData"] = new JsonObject
-                            {
-                                ["mimeType"] = mime,
-                                ["data"] = Convert.ToBase64String(
-                                    await ReadBytesAsync(path, cancellationToken)
-                                ),
-                            },
-                        }
-                        : new JsonObject
-                        {
-                            ["output"] = await ReadFormattedAsync(
-                                path,
-                                pathText,
-                                first,
-                                last,
-                                cancellationToken,
-                                Programmatic ? value => data = value : null
+                            ["data"] = Convert.ToBase64String(
+                                await ReadBytesAsync(path, cancellationToken)
                             ),
-                        };
+                        },
+                    }
+                    : new JsonObject
+                    {
+                        ["output"] = await ReadFormattedAsync(
+                            path,
+                            pathText,
+                            first,
+                            last,
+                            cancellationToken,
+                            Programmatic ? value => data = value : null
+                        ),
+                    };
                 if (data is not null)
                     foreach (var (key, value) in data)
                         result[key] = value?.DeepClone();

@@ -241,10 +241,14 @@ internal sealed partial class MainToolScript
             output["result"] = record["lastResult"]?.DeepClone();
             if (output["result"] is JsonObject inlineResult)
             {
-                if (inlineResult["inlineData"] is JsonObject inline && Text(inline["data"]) is not null)
+                if (
+                    inlineResult["inlineData"] is JsonObject inline
+                    && Text(inline["data"]) is not null
+                )
                 {
                     output["inlineData"] = inline.DeepClone();
-                    inlineResult["inlineData"] = $"[image promoted, mimeType={Text(inline["mimeType"]) ?? "unknown"}]";
+                    inlineResult["inlineData"] =
+                        $"[image promoted, mimeType={Text(inline["mimeType"]) ?? "unknown"}]";
                 }
                 if (inlineResult["inlineDataItems"] is JsonArray { Count: > 0 } items)
                 {

@@ -22,7 +22,11 @@ internal sealed partial class SessionToolExecutor
         return cwd.TrimEnd('/', '\\') + separator + file;
     }
 
-    private sealed record ScriptScope(string LiteralOwner, ToolScriptDataBudget Budget, ToolScriptWaitScope WaitScope);
+    private sealed record ScriptScope(
+        string LiteralOwner,
+        ToolScriptDataBudget Budget,
+        ToolScriptWaitScope WaitScope
+    );
 
     private readonly AsyncLocal<ScriptScope?> scriptScope = new();
     internal bool Programmatic => scriptScope.Value is not null;
@@ -78,8 +82,11 @@ internal sealed partial class SessionToolExecutor
                             context.SessionMessageDelivered?.Invoke(delivery);
                     if (
                         execution.Receipt is not null
-                        && (resolved.Name == "task" && SessionWait.Text(resolved.Args["action"]) == "complete"
-                            || execution.Receipt.CompletedTaskId is not null)
+                        && (
+                            resolved.Name == "task"
+                                && SessionWait.Text(resolved.Args["action"]) == "complete"
+                            || execution.Receipt.CompletedTaskId is not null
+                        )
                         && rootCall is not null
                     )
                         rootCall.Receipt = execution.Receipt;
@@ -234,7 +241,10 @@ internal sealed partial class SessionToolExecutor
                     );
                 },
             rootCall?.ScriptSource?.Node
-        ) { WaitScope = waitScope };
+        )
+        {
+            WaitScope = waitScope,
+        };
         try
         {
             var result = await sessions.ToolScript.ExecuteAsync(name, args, context, token);
@@ -244,12 +254,19 @@ internal sealed partial class SessionToolExecutor
             {
                 waitScope.Pending = null;
                 // Normal builtin resolution, authorization and live source validation own the effect.
-                var armed = await ExecuteAttributedAsync(new JsonObject
-                {
-                    ["id"] = rootCall?.CallId ?? "",
-                    ["name"] = "call_tool",
-                    ["args"] = new JsonObject { ["toolId"] = "builtin:wait", ["args"] = pending },
-                }, token);
+                var armed = await ExecuteAttributedAsync(
+                    new JsonObject
+                    {
+                        ["id"] = rootCall?.CallId ?? "",
+                        ["name"] = "call_tool",
+                        ["args"] = new JsonObject
+                        {
+                            ["toolId"] = "builtin:wait",
+                            ["args"] = pending,
+                        },
+                    },
+                    token
+                );
                 if (armed.Response is JsonObject response && response["error"] is not null)
                     return response;
             }

@@ -61,12 +61,25 @@ public sealed partial class WorkspaceTools
 
     private async Task<byte[]> ReadHeaderAsync(string path, CancellationToken token)
     {
-        var count = (int)Math.Min(Foxwarm.Images.RasterImageMime.HeaderBytes, await SizeAsync(path, token));
+        var count = (int)
+            Math.Min(Foxwarm.Images.RasterImageMime.HeaderBytes, await SizeAsync(path, token));
         if (targetFiles is not null)
             return await targetFiles.ReadAsync(path, 0, count, token);
-        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 4096, FileOptions.Asynchronous);
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite,
+            4096,
+            FileOptions.Asynchronous
+        );
         var header = new byte[count];
-        var read = await stream.ReadAtLeastAsync(header, count, throwOnEndOfStream: false, cancellationToken: token);
+        var read = await stream.ReadAtLeastAsync(
+            header,
+            count,
+            throwOnEndOfStream: false,
+            cancellationToken: token
+        );
         return header[..read];
     }
 

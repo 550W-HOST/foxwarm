@@ -133,8 +133,10 @@ internal sealed partial class MainToolScript
                     throw new InvalidDataException(
                         "ToolScript persisted snapshot is not a resumable host-call snapshot."
                     );
-                context.WaitScope.Pending = record["waiting"]?["timeout"]?["pendingSessionWait"] is JsonObject intent
-                    ? (JsonObject)intent.DeepClone() : null;
+                context.WaitScope.Pending = record["waiting"]?["timeout"]?["pendingSessionWait"]
+                    is JsonObject intent
+                    ? (JsonObject)intent.DeepClone()
+                    : null;
                 record.Remove("waiting");
                 record.Remove("snapshotBase64");
                 oldSnapshot = null;
