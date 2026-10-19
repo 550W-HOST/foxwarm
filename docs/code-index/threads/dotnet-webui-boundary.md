@@ -43,7 +43,7 @@ Typed `system-event` notices are trusted display-only canonical messages. Safe o
 
 Successful builtin Session sends capture the canonical destination and bounded authored body separately from semantic handoff receipts. Direct/unified calls persist `sessionMessages`; ordinary ToolScript host calls attach `sessionMessage` only to their actual completed subcall. Nested runtimes do not replace outer slice presentation. MCP/result data and script text/stdout cannot fabricate these receipts. Incoming inter-agent envelopes, actual delivery count and afterSend/wait/finish semantics remain unchanged.
 
-The standalone generated login retains the existing packaged `public/login.html` and frontend-owned 365-day directory cookie; the validation-only endpoint and separate native Desktop cookie are owned by [host startup](../units/host-runtime.md#contract-and-side-effects). History preparation/navigation use existing active-tail and continuous-history routes; no new authentication endpoint or history transaction is introduced. Session Worker publication changes remain excluded under the [delivery scope](../overview.md#d-dotnet-delivery-scope).
+The standalone generated login retains the existing packaged `public/login.html` and [frontend cookie ownership](../units/webui-login.md#d-login-cookie-ownership); native Desktop login belongs to [host startup](../units/host-runtime.md#desktop-boundary). History preparation/navigation use existing active-tail and continuous-history routes; no new authentication endpoint or history transaction is introduced. Session Worker publication changes remain excluded under the [delivery scope](../overview.md#d-dotnet-delivery-scope).
 
 ## Merged original-App qualification
 
