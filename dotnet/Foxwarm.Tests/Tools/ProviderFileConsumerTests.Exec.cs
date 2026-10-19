@@ -326,6 +326,81 @@ public sealed partial class ProviderFileConsumerTests
         Assert.Equal("late", page["output"]!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData(0, 4096, false)]
+    [InlineData(0, 4097, true)]
+    [InlineData(0, 16384, true)]
+    [InlineData(0, 16385, true)]
+    [InlineData(255, 4097, true)]
+    [InlineData(92, 4097, true)]
+    [InlineData(65, 16384, false)]
+    [InlineData(65, 16385, true)]
+    public async Task Provider_foreground_display_is_bounded_after_byte_rendering(
+        int value,
+        int length,
+        bool shortened
+    )
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        await using var f = await Fixture.Create();
+        Success(await f.Manager.SelectNodeAsync(f.Owner, f.Node));
+        var response = await f.Call(
+            "exec",
+            Exec($"python3 -c 'import sys;sys.stdout.buffer.write(bytes([{value}])*{length})'")
+        );
+        Success(response);
+        var display = response["output"]!.GetValue<string>();
+        Assert.True(display.Length < 18000, $"Rendered display length: {display.Length}");
+        Assert.Equal(shortened, display.Contains("shortened for inline display"));
+        Assert.Contains("Exit code: 0", display);
+        Assert.Contains("does not end with a newline", display);
+        if (!shortened)
+            Assert.StartsWith(
+                string.Concat(Enumerable.Repeat(value == 0 ? "\\x00" : "A", length)),
+                display
+            );
+        var log = Assert.Single(Directory.GetFiles(Path.Combine(f.Target, "fs/logs"), "*.log"));
+        Assert.Equal(Enumerable.Repeat((byte)value, length), await File.ReadAllBytesAsync(log));
+    }
+
+    [Fact]
+    public async Task Provider_rendered_excerpt_preserves_complete_programmatic_content_and_byte_pages()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        await using var f = await Fixture.Create();
+        Success(await f.Manager.SelectNodeAsync(f.Owner, f.Node));
+        var response = await f.Call(
+            "run_script",
+            new JsonObject
+            {
+                ["code"] =
+                    "x = call_tool('exec', {'command': \"python3 -c 'import sys;sys.stdout.buffer.write(bytes([0])*4097)'\"})\n"
+                    + "return {'execId':x['execId'], 'sizeBytes':x['sizeBytes'], 'truncated':x['truncated'], 'complete':x['content'] == '\\u0000'*4097, 'displayLength':len(x['output'])}",
+            }
+        );
+        Success(response);
+        var result = response["result"]!;
+        Assert.Equal(4097, result["sizeBytes"]!.GetValue<long>());
+        Assert.False(result["truncated"]!.GetValue<bool>());
+        Assert.True(result["complete"]!.GetValue<bool>());
+        Assert.True(result["displayLength"]!.GetValue<int>() < 18000);
+        var id = result["execId"]!.GetValue<string>();
+        var first = await f.Call("read_exec", new JsonObject { ["execId"] = id });
+        Success(first);
+        Assert.Equal(16384, first["output"]!.GetValue<string>().Length);
+        Assert.Equal(4096, first["nextOffset"]!.GetValue<long>());
+        Assert.Equal(4097, first["totalBytes"]!.GetValue<long>());
+        var last = await f.Call(
+            "read_exec",
+            new JsonObject { ["execId"] = id, ["offset"] = 4096L }
+        );
+        Success(last);
+        Assert.Equal("\\x00", last["output"]!.GetValue<string>());
+        Assert.Null(last["nextOffset"]);
+    }
+
     [Fact]
     public async Task Deferred_provider_cwd_replay_checks_exact_current_Node_and_preserves_target_whitespace()
     {

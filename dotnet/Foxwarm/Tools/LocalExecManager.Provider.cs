@@ -262,17 +262,19 @@ internal sealed partial class LocalExecManager
             }
             budget?.Charge(checked(8 * stat.Size + 65536));
             var content = await Read(0, (int)stat.Size);
+            var rendered = RenderBytes(content, DisplayChars);
+            var sampleSize = Math.Min(5000, content.Length / 2);
             var display =
-                content.Length > DisplayChars
+                content.Length > DisplayChars || rendered.Consumed < content.Length
                     ? BoundedTextExcerpt.Format(
-                        content[..5000],
-                        content[^5000..],
+                        content[..sampleSize],
+                        content[^sampleSize..],
                         stat.Size,
                         stat.Size,
                         record.LogPath!,
                         "command output"
                     )
-                    : RenderProviderBytes(content);
+                    : rendered.Text;
             return new(
                 display,
                 content,
@@ -292,9 +294,6 @@ internal sealed partial class LocalExecManager
             return new("(Command output unavailable)", null, null, null);
         }
     }
-
-    private static string RenderProviderBytes(byte[] bytes) =>
-        RenderBytes(bytes, int.MaxValue).Text;
 
     private async Task<JsonObject> ProviderPageAsync(
         ExecRecord record,
