@@ -1322,7 +1322,9 @@ export class SessionTurnRunner {
 
         if (toolResult.control?.stopCurrentTurn) {
           logger.info({ sessionId: session.id, iteration }, 'Tool requested immediate turn stop');
-          await this.finishTurnAfterIntermediate(session, broadcast, turnId);
+          await this.finishTurnAfterIntermediate(
+            session, broadcast, turnId, toolResult.postActions?.finishAfterSend ? 'empty-final' : 'suspended',
+          );
           turnCompleted = true;
           break;
         }
