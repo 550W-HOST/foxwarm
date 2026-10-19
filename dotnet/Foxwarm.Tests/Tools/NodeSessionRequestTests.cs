@@ -210,14 +210,15 @@ public sealed class NodeSessionRequestTests
         Assert.Equal("cold", list["result"]!["sessions"]![0]!["id"]!.ToString());
         Assert.Empty(f.Manager.Owners());
         foreach (
-            var (count, expected) in new (JsonNode?, int)[]
+            var (count, expected, firstIndex) in new (JsonNode?, int, double)[]
             {
-                (null, 30),
-                (0, 30),
-                (-1, 1),
-                (1.5, 2),
-                (999, 100),
-                ("2", 30),
+                (null, 30, 75),
+                (0, 30, 75),
+                (-1, 1, 104),
+                (2, 2, 103),
+                (1.5, 2, 103.5),
+                (999, 100, 5),
+                ("2", 30, 75),
             }
         )
         {
@@ -227,7 +228,10 @@ public sealed class NodeSessionRequestTests
             Assert.Equal("cold", result["session"]!["id"]!.ToString());
             Assert.Equal(105, result["totalMessages"]!.GetValue<int>());
             Assert.Equal(expected, result["messages"]!.AsArray().Count);
-            Assert.Equal(105 - expected, result["messages"]![0]!["index"]!.GetValue<int>());
+            Assert.Equal(
+                Enumerable.Range(0, expected).Select(offset => firstIndex + offset),
+                result["messages"]!.AsArray().Select(row => row!["index"]!.GetValue<double>())
+            );
             Assert.Equal("message-104", result["messages"]!.AsArray().Last()!["text"]!.ToString());
         }
         var absent = await Fixture.Request(socket, "session_history_request", id: "missing");
@@ -380,7 +384,7 @@ public sealed class NodeSessionRequestTests
             )!
             .AsObject();
         var result = SessionManager.NodeHistoryMessage(message, 7);
-        Assert.Equal(7, result["index"]!.GetValue<int>());
+        Assert.Equal(7, result["index"]!.GetValue<double>());
         Assert.False(result.ContainsKey("timestamp"));
         Assert.Equal(
             "first\n[SYSTEM] notice\n[inline data: image/png]\n[tool call: read {\"1\":2,\"b\":\"<file>\"}]\n[tool response: read {\"output\":\"done\"}]\n{\"other\":true}\n0\nfalse",

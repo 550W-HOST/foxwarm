@@ -76,14 +76,14 @@ internal sealed partial class SessionManager
             var snapshot = owner.Entry.Snapshot();
             var count = SessionWait.Number(message["count"]) ?? 30;
             var safeCount = Math.Max(1, Math.Min(100, count == 0 ? 30 : count));
-            var start = (int)Math.Max(0, snapshot.History.Count - safeCount);
+            var start = Math.Max(0, snapshot.History.Count - safeCount);
             return new JsonObject
             {
                 ["session"] = NodeSessionSummary(owner.BuildDto()),
                 ["totalMessages"] = snapshot.History.Count,
                 ["messages"] = new JsonArray(
                     snapshot
-                        .History.Skip(start)
+                        .History.Skip((int)start)
                         .Select(
                             (row, offset) =>
                                 (JsonNode?)NodeHistoryMessage(row.ToJson(), start + offset)
@@ -149,7 +149,7 @@ internal sealed partial class SessionManager
             ["queueLength"] = session["queueLength"]?.DeepClone() ?? JsonValue.Create(0),
         };
 
-    internal static JsonObject NodeHistoryMessage(JsonObject message, int index)
+    internal static JsonObject NodeHistoryMessage(JsonObject message, double index)
     {
         var result = new JsonObject
         {
