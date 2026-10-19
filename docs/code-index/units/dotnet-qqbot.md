@@ -2,7 +2,7 @@
 
 Files: `dotnet/Foxwarm/Channels/QQBotChannel.cs`, `dotnet/Foxwarm/Channels/QQBotChannel.Gateway.cs`, `dotnet/Foxwarm/Channels/QQBotChannel.Inbound.cs`, `dotnet/Foxwarm/Channels/QQBotChannel.Delivery.cs`, `dotnet/Foxwarm/Channels/QQBotMedia.cs`, `dotnet/Foxwarm/Channels/QQBotRaster.cs`, `dotnet/Foxwarm/Channels/QQBotUpload.cs`
 
-Secondary/integration files: `dotnet/Foxwarm/Channels/ManagedChannels.cs`, `dotnet/Foxwarm/Channels/ExternalChannelContext.cs`, `dotnet/Foxwarm/Channels/ChannelRegistry.cs`, `dotnet/Foxwarm/MessageRouter.External.cs`, `dotnet/Foxwarm/Sessions/SessionManager.ChannelFilePaths.cs`, `dotnet/Foxwarm/Sessions/SessionManager.ChannelTurns.cs`, `dotnet/Foxwarm/Tools/FileToolCore.Write.cs`, `src/channels/qqbotChannel.ts`, `src/channels/qqbotMedia.ts`, `src/channels/qqbotMediaUpload.ts`
+Secondary/integration files: `dotnet/Foxwarm/Channels/ManagedChannels.cs`, `dotnet/Foxwarm/Channels/ExternalChannelContext.cs`, `dotnet/Foxwarm/Channels/ChannelRegistry.cs`, `dotnet/Foxwarm/MessageRouter.External.cs`, `dotnet/Foxwarm/Sessions/SessionManager.ChannelFilePaths.cs`, `dotnet/Foxwarm/Sessions/SessionManager.ChannelTurns.cs`, `dotnet/Foxwarm/Tools/FileToolWrite.cs`, `src/channels/qqbotChannel.ts`, `src/channels/qqbotMedia.ts`, `src/channels/qqbotMediaUpload.ts`
 
 ## Purpose and integration
 

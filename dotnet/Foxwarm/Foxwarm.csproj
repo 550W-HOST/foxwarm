@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../Foxwarm.NodePrimitives/Foxwarm.NodePrimitives.csproj" />
     <EmbeddedResource Include="Code/workbench.html" />
     <EmbeddedResource Include="McpInboundTools.json" />
     <EmbeddedResource Include="Channels/CommandCatalog.json" />

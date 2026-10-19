@@ -16,6 +16,7 @@
     <None Update="Mcp/Fixtures/*.mjs" CopyToOutputDirectory="PreserveNewest" />
     <None Update="ToolScript/Fixtures/*.json" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../Foxwarm/Foxwarm.csproj" />
+    <ProjectReference Include="../Foxwarm.CliNode/Foxwarm.CliNode.csproj" />
     <ProjectReference Include="../Foxwarm.DevTools/Foxwarm.DevTools.csproj" />
   </ItemGroup>
 </Project>

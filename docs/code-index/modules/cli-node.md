@@ -4,6 +4,8 @@
 
 The CLI node is the full remote worker client. It connects to the master over WebSocket, pairs or authenticates, executes shared node tools, transfers files, advertises versioned Code services, optionally hosts node-local PTYs, exposes a localhost session-event trigger, and provides an Ink/React approval TUI.
 
+The separate [.NET headless CLI Node](../units/dotnet-cli-node.md) currently implements connection/authentication and file tools only. This page otherwise maps the retained full TypeScript client; its bootstrap and interactive entry are unchanged.
+
 ## Units
 
 - [cli-node-client](../units/cli-node-client.md) — connection, pairing/auth, tool/service dispatch, file transfer, heartbeat, trigger server, and PTY host.

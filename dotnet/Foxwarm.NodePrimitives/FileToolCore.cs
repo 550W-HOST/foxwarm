@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text;
-using System.Text.Json;
 
 namespace Foxwarm.Tools;
 
@@ -240,7 +239,7 @@ internal static partial class FileToolCore
             $"Showing items {(page.Length > 0 ? start : 0)}-{(page.Length > 0 ? next - 1 : 0)} of {entries.Count}."
                 + (
                     next <= entries.Count
-                        ? $" Next page: read({{ filePath: {JsonSerializer.Serialize(display)}, startLine: {next}, endLine: {Math.Min(entries.Count, next + 49)} }})"
+                        ? $" Next page: read({{ filePath: {JsonStringQuoting.Quote(display)}, startLine: {next}, endLine: {Math.Min(entries.Count, next + 49)} }})"
                         : ""
                 )
         );

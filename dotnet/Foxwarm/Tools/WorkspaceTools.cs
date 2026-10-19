@@ -362,7 +362,7 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                     );
                 if (File.Exists(destination) && !RegularFile(destination))
                     return Error("not_file", "Write target must be a regular file.");
-                var written = await FileToolCore.WriteAtomic(
+                var written = await FileToolWrite.WriteAtomic(
                     destination,
                     content,
                     overwrite,

@@ -60,7 +60,7 @@ internal sealed partial class SessionManager
             name
         );
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        if (!await FileToolCore.CopyPathAtomic(source, path, false, () => { }, token))
+        if (!await FileToolWrite.CopyPathAtomic(source, path, false, () => { }, token))
             throw new IOException("Inbound file already exists.");
         var parts = new List<JsonObject>
         {

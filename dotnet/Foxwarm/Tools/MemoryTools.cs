@@ -162,7 +162,7 @@ internal static class MemoryTools
         EnsureParents(parent);
         Directory.CreateDirectory(parent);
         EnsureParents(parent);
-        await FileToolCore.WriteAtomic(path, content, false, () => EnsureParents(parent), token);
+        await FileToolWrite.WriteAtomic(path, content, false, () => EnsureParents(parent), token);
         return new JsonObject
         {
             ["output"] = "Memory file created: " + Display(manager, agent, path),
@@ -312,7 +312,7 @@ internal static class MemoryTools
 
     private static async Task WriteAtomic(string path, string content, CancellationToken token)
     {
-        await FileToolCore.WriteAtomic(
+        await FileToolWrite.WriteAtomic(
             path,
             content,
             true,

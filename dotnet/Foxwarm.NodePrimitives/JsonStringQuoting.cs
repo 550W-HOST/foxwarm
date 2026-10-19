@@ -6,6 +6,13 @@ namespace Foxwarm;
 // JSON.stringify string quoting shared by journal identity and download capability bytes.
 internal static class JsonStringQuoting
 {
+    internal static string Quote(string value)
+    {
+        var builder = new StringBuilder();
+        Append(builder, value);
+        return builder.ToString();
+    }
+
     internal static void Append(StringBuilder builder, string value)
     {
         builder.Append('"');

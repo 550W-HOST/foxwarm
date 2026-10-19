@@ -47,7 +47,8 @@ export async function createHostFixture(name, options = {}) {
     if (options.normalStartup) { delete startup.FOXWARM_EXPERIMENT_PORT; delete startup.FOXWARM_EXPERIMENT_API_TOKEN }
     else { startup.FOXWARM_EXPERIMENT_PORT = String(port); startup.FOXWARM_EXPERIMENT_API_TOKEN = token }
     ownedListener = false
-    const child = spawn(join(process.env.DOTNET_ROOT, 'dotnet'), [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
+    const source = options.runtime === 'source'
+    const child = spawn(source ? process.execPath : join(process.env.DOTNET_ROOT, 'dotnet'), [resolve(source ? 'lib/index.js' : 'dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
       stdio: ['ignore', 'pipe', 'pipe'], ...(options.cwd ? { cwd: options.cwd } : {}), env: startup
     })
     let output = ''
@@ -59,14 +60,15 @@ export async function createHostFixture(name, options = {}) {
       child.once('exit', exited); child.once('error', finish)
       child.stdout.on('data', bytes => {
         output = (output + bytes).slice(-20000)
-        const bound = /^Main HTTP listening: (.+)$/m.exec(output)?.[1]
+        const bound = source && output.includes('HTTP server started') ? origin : /^Main HTTP listening: (.+)$/m.exec(output)?.[1]
         if (bound) {
           if (bound !== origin || child.exitCode !== null || child.signalCode !== null) finish(new Error('Owned listener address does not match fixture: ' + bound))
           else { ownedListener = true; finish() }
         }
       }); child.stderr.on('data', bytes => { output = (output + bytes).slice(-20000) })
     })
-    const health = await api('GET', '/health'); assert.equal(health.status, 200); assert.equal(health.body?.status, 'ready')
+    if (source) await until(async () => (await api('GET', '/api/nodes')).status === 200, 'Source routes ready')
+    else { const health = await api('GET', '/health'); assert.equal(health.status, 200); assert.equal(health.body?.status, 'ready') }
   }
   async function openApp() {
     browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', ...(options.chromeArgs || [])], userDataDir: join(root, 'browser') })
@@ -93,7 +95,8 @@ export async function createHostFixture(name, options = {}) {
     host.child.kill('SIGTERM')
   }
   async function stop(afterAdmission) {
-    assert.equal((await api('POST', '/admin/shutdown')).status, 202)
+    if (options.runtime === 'source') signalStop()
+    else assert.equal((await api('POST', '/admin/shutdown')).status, 202)
     await afterAdmission?.()
     assert.deepEqual(await waitForExit(), { code: 0, signal: null }, host.output)
   }

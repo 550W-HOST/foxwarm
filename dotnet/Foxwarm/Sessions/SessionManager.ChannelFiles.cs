@@ -82,7 +82,7 @@ internal sealed partial class SessionManager
         {
             path = Path.Combine(AgentDirectory(agent), relative);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            if (!await FileToolCore.WriteBytesAtomic(path, bytes, false, () => { }, token))
+            if (!await FileToolWrite.WriteBytesAtomic(path, bytes, false, () => { }, token))
                 throw new IOException("Inbound file already exists.");
         }
         var descriptor = ChannelFileNames.Descriptor(filename, path, mime, node, isImage);

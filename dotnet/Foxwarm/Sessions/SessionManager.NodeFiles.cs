@@ -156,7 +156,7 @@ internal sealed partial class SessionManager
         owner.Entry.RequireIdentityAuthority();
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         if (
-            !await FileToolCore.WriteBytesAtomic(
+            !await FileToolWrite.WriteBytesAtomic(
                 path,
                 bytes,
                 overwrite,

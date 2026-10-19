@@ -1,6 +1,8 @@
 # Unit: Local file, exec, delivery, and workspace tools
 
-Files: `dotnet/Foxwarm/Tools/TargetFileOperations.cs`, `dotnet/Foxwarm/Tools/WorkspaceTools.Target.cs`, `dotnet/Foxwarm/Tools/ExactReplacement.cs`, `dotnet/Foxwarm/Tools/ExecDuration.cs`, `dotnet/Foxwarm/Tools/WorkspaceTools.NodeCredentials.cs`, `dotnet/Foxwarm/Tools/ExecPetnames.cs`, `dotnet/Foxwarm/Tools/FileDeliveryDefinitions.cs`, `dotnet/Foxwarm/Tools/FileToolCore.Scanner.cs`, `dotnet/Foxwarm/Tools/FileToolCore.Write.cs`, `dotnet/Foxwarm/Tools/FileToolCore.cs`, `dotnet/Foxwarm/Tools/HandoffConfirmation.cs`, `dotnet/Foxwarm/Tools/LocalExecManager.Definitions.cs`, `dotnet/Foxwarm/Tools/LocalExecManager.cs`, `dotnet/Foxwarm/Tools/LocalExecManager.Provider.cs`, `dotnet/Foxwarm/Tools/LocalExecManager.Windows.cs`, `dotnet/Foxwarm/Tools/MainLocalToolDefinitions.cs`, `dotnet/Foxwarm/Tools/MainNativePaths.cs`, `dotnet/Foxwarm/Tools/PendingWriteRefs.cs`, `dotnet/Foxwarm/Tools/WorkspacePatch.cs`, `dotnet/Foxwarm/Tools/WorkspaceTools.Definitions.cs`, `dotnet/Foxwarm/Tools/WorkspaceTools.EditPatch.cs`, `dotnet/Foxwarm/Tools/WorkspaceTools.cs`
+Files: `dotnet/Foxwarm/Tools/TargetFileOperations.cs`, `dotnet/Foxwarm/Tools/WorkspaceTools.Target.cs`, `dotnet/Foxwarm/Tools/ExecDuration.cs`, `dotnet/Foxwarm/Tools/WorkspaceTools.NodeCredentials.cs`, `dotnet/Foxwarm/Tools/ExecPetnames.cs`, `dotnet/Foxwarm/Tools/FileDeliveryDefinitions.cs`, `dotnet/Foxwarm/Tools/FileToolWrite.cs`, `dotnet/Foxwarm/Tools/HandoffConfirmation.cs`, `dotnet/Foxwarm/Tools/LocalExecManager.Definitions.cs`, `dotnet/Foxwarm/Tools/LocalExecManager.cs`, `dotnet/Foxwarm/Tools/LocalExecManager.Provider.cs`, `dotnet/Foxwarm/Tools/LocalExecManager.Windows.cs`, `dotnet/Foxwarm/Tools/MainLocalToolDefinitions.cs`, `dotnet/Foxwarm/Tools/MainNativePaths.cs`, `dotnet/Foxwarm/Tools/PendingWriteRefs.cs`, `dotnet/Foxwarm/Tools/WorkspaceTools.Definitions.cs`, `dotnet/Foxwarm/Tools/WorkspaceTools.EditPatch.cs`, `dotnet/Foxwarm/Tools/WorkspaceTools.cs`
+
+Shared algorithm ownership: [native file primitives](./dotnet-node-primitives.md). The Main wrappers retain policy and effects.
 
 ## Purpose
 
@@ -8,7 +10,7 @@ Implements shared canonical file reads/writes/patches over native or target prim
 
 ## Stable methods and callers
 
-- `MainNativePaths` resolves native file/exec defaults from the actual Agent directory and explicit Session cwd; the separate generic policy and isolated-Agent checks authorize physical destinations; `FileToolCore` scans/reads/writes with byte/line/output limits and `PendingWriteRefs` tracks retryable write artifacts.
+- `MainNativePaths` resolves native file/exec defaults from the actual Agent directory and explicit Session cwd; the separate generic policy and isolated-Agent checks authorize physical destinations; `FileToolCore` scans/reads through the [shared native primitives](./dotnet-node-primitives.md); Main-owned `FileToolWrite` publishes authorized atomic writes and `PendingWriteRefs` tracks retryable write artifacts.
 - `ITargetFileOperations` supplies opaque target primitives. `WorkspaceTools.Target` connects the existing workflow to those primitives without a second parser; `FileToolCore.ReadContent` and `FormatDirectory` share the scanner/formatting with native files. `TargetFileContent` composes bounded full reads and chunked transfer writes; [.NET providers](./dotnet-node-providers.md) maps actual generic consumers and target authority.
 - `ExactReplacement.Apply` owns the pure ordinal, nonoverlapping unique-match calculation and literal text replacement shared by ordinary edit and operation-owned compact repair; each caller retains its own paths, authorization, effects and errors.
 - `WorkspaceTools.Target.ReadHeaderAsync` reads at most twelve bytes through the native stream or existing target primitive. `WorkspaceTools` chooses image versus text from the shared raster signature classifier, never the filename extension; directories bypass image reads. Full image reads, text budgets, provider snapshots and canonical authorization retain their existing owners.
@@ -26,7 +28,7 @@ Path/cwd checks are security and data-loss boundaries, not convenience validatio
 
 `dotnet/Foxwarm.Tests/Tools/MainExecCwdTests.cs`; `WindowsLocalToolsTests.cs` (Windows-only native shell/PTY paths); `MainFileDeliveryTests.cs`; `FileRetryLifetimeTests.cs`; `ExecParallelTests.cs`; `MainNativePathTests.cs`; `ExecDurationTests.cs` (real foreground/background/recovered process clocks); `NodePrivateCredentialTests.cs`; `MainLocalToolsTests.cs`; `WorkspacePatchTests.cs`; `ExactReplacementTests.cs`; `CompactLifecycleTests.cs` (paired failed-hunk feedback during repair).
 
-`FileToolCore.CopyPathAtomic` shares the existing same-directory temporary-file/rename owner with byte/text writes. It streams a prepared local spool without a whole-file buffer; QQ Main-hosted inbound media is its channel-file caller. This does not change write overwrite, path-validation or file-publication guarantees.
+`FileToolWrite.CopyPathAtomic` shares the existing same-directory temporary-file/rename owner with byte/text writes. It streams a prepared local spool without a whole-file buffer; QQ Main-hosted inbound media is its channel-file caller. This does not change write overwrite, path-validation or file-publication guarantees.
 
 ## Provider exec
 

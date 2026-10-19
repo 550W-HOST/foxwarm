@@ -13,7 +13,7 @@ Foxwarm is an AI agent system with a .NET Main host, browser WebUI, model adapte
 
 ## .NET solution
 
-`dotnet/Foxwarm.sln` contains three projects: `Foxwarm` (the host executable), `Foxwarm.DevTools` (developer-facing request/journal probes), and `Foxwarm.Tests` (xUnit coverage of the host contracts). The optional `dotnet/Foxwarm.Desktop` project hosts the same Main and WebUI in Windows WinForms/WebView2 outside the cross-platform solution. The host targets .NET 10 and embeds/serves selected WebUI and VS Code Web assets through its project file.
+`dotnet/Foxwarm.sln` contains five projects: `Foxwarm` (the host executable), `Foxwarm.DevTools` (developer-facing request/journal probes), `Foxwarm.Tests` (xUnit coverage), `Foxwarm.CliNode` (the [headless file-capable client](./units/dotnet-cli-node.md)), and `Foxwarm.NodePrimitives` (the [small Main/CLI algorithm library](./units/dotnet-node-primitives.md)). The optional `dotnet/Foxwarm.Desktop` project hosts the same Main and WebUI in Windows WinForms/WebView2 outside the cross-platform solution. The host targets .NET 10 and embeds/serves selected WebUI and VS Code Web assets through its project file.
 
 ## Runtime shape
 

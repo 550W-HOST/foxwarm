@@ -74,4 +74,34 @@ public sealed class WorkspacePatchTests
         Assert.DoesNotContain("actual-ending", error.Message);
         Assert.True(error.Message.Length <= 1600);
     }
+    [Fact]
+    public async Task Ordinary_Main_patch_uses_Source_repeated_anchor_and_eof_context_without_partial_hunks()
+    {
+        using var temp = new TempDirectory();
+        var tools = new WorkspaceTools(temp.Path);
+        await File.WriteAllTextAsync(Path.Combine(temp.Path, "input.txt"), "anchor\nfirst\nanchor\nlast");
+        var repeated = await tools.ExecuteAsync(new System.Text.Json.Nodes.JsonObject
+        {
+            ["name"] = "apply_patch",
+            ["args"] = new System.Text.Json.Nodes.JsonObject { ["input"] = "*** Begin Patch\n*** Update File: input.txt\n@@ anchor\n-first\n+FIRST\n@@ anchor\n-anchor\n+SECOND\n*** End Patch" },
+        }, default);
+        Assert.Null(repeated["error"]);
+        Assert.Equal("anchor\nFIRST\nSECOND\nlast", await File.ReadAllTextAsync(Path.Combine(temp.Path, "input.txt")));
+        await File.WriteAllTextAsync(Path.Combine(temp.Path, "input.txt"), "a\nb");
+        var eof = await tools.ExecuteAsync(new System.Text.Json.Nodes.JsonObject
+        {
+            ["name"] = "apply_patch",
+            ["args"] = new System.Text.Json.Nodes.JsonObject { ["input"] = "*** Begin Patch\n*** Update File: input.txt\n@@\n a\n+X\n b\n@@\n-b\n+B\n*** End of File\n*** End Patch" },
+        }, default);
+        Assert.Null(eof["error"]);
+        Assert.Equal("a\nX\nB", await File.ReadAllTextAsync(Path.Combine(temp.Path, "input.txt")));
+        var malformed = await tools.ExecuteAsync(new System.Text.Json.Nodes.JsonObject
+        {
+            ["name"] = "apply_patch",
+            ["args"] = new System.Text.Json.Nodes.JsonObject { ["input"] = "*** Begin Patch\n*** Add File: never.txt\n+not-written\n*** Update File: input.txt\n*** End Patch" },
+        }, default);
+        Assert.NotNull(malformed["error"]);
+        Assert.False(File.Exists(Path.Combine(temp.Path, "never.txt")));
+        Assert.Equal("a\nX\nB", await File.ReadAllTextAsync(Path.Combine(temp.Path, "input.txt")));
+    }
 }

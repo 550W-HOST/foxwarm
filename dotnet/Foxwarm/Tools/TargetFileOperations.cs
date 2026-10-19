@@ -1,12 +1,5 @@
 namespace Foxwarm.Tools;
 
-internal sealed record TargetFileStat(
-    string Kind,
-    long Size,
-    double ModifiedAtMs,
-    string? Name = null
-);
-
 /// <summary>Target-owned paths and byte operations; no Main path interpretation.</summary>
 internal interface ITargetFileOperations
 {

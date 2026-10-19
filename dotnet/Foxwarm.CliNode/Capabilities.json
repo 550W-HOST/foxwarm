@@ -1,0 +1,111 @@
+{
+  "tools": [
+    {
+      "name": "read",
+      "description": "Read a file, view an image, or list a directory. Large text files are shown as bounded excerpts with their file size; use a line range to inspect a specific section. Directory listings are non-recursive and show up to 50 entries by default.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filePath": {
+            "type": "string",
+            "description": "File or directory path on this Node. Relative paths use the session working directory supplied for this Node, or its agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
+          },
+          "startLine": {
+            "type": "number",
+            "description": "First line to read, counting from 1. For directories, the first entry to list. Omit or use 0 to start at the beginning."
+          },
+          "endLine": {
+            "type": "number",
+            "description": "Last line or directory entry to include, counting from 1. Omit or use 0 for the default range."
+          }
+        },
+        "required": [
+          "filePath"
+        ]
+      }
+    },
+    {
+      "name": "write",
+      "description": "Write text to a file on this Node. Existing files are protected unless overwrite is true; missing parent directories are created only when createDirs is true.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filePath": {
+            "type": "string",
+            "description": "Destination path on this Node. Relative paths use the session working directory supplied for this Node, or its agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
+          },
+          "content": {
+            "type": "string",
+            "description": "Complete file contents."
+          },
+          "overwrite": {
+            "type": "boolean",
+            "description": "Allow replacement of an existing file. Defaults to false."
+          },
+          "createDirs": {
+            "type": "boolean",
+            "description": "Create missing parent directories. Defaults to false."
+          }
+        },
+        "required": [
+          "filePath",
+          "content"
+        ]
+      }
+    },
+    {
+      "name": "edit",
+      "description": "Replace one exact occurrence of text in a file. Use apply_patch when a line-based patch is more suitable.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filePath": {
+            "type": "string",
+            "description": "File to edit on this Node. Relative paths use the session working directory supplied for this Node, or its agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."
+          },
+          "oldText": {
+            "type": "string",
+            "description": "Exact text to replace; it must identify a single occurrence."
+          },
+          "newText": {
+            "type": "string",
+            "description": "Replacement text."
+          }
+        },
+        "required": [
+          "filePath",
+          "oldText",
+          "newText"
+        ]
+      }
+    },
+    {
+      "name": "apply_patch",
+      "description": "Add, modify, or delete files on this Node using the apply_patch format with *** Begin Patch and *** End Patch. Relative paths in patch headers use the session working directory supplied for this Node, or its agent directory if unset. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": "string",
+            "description": "Complete patch text with Add File, Update File, or Delete File operations."
+          }
+        },
+        "required": [
+          "input"
+        ]
+      }
+    },
+    {
+      "name": "get_default_cwd",
+      "description": "Get this Node's process working directory, used by exec when neither a command nor the session specifies one.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
+    }
+  ],
+  "features": {
+    "programmaticToolData": true
+  }
+}

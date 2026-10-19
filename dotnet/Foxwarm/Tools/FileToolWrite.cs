@@ -2,7 +2,7 @@ using System.Text;
 
 namespace Foxwarm.Tools;
 
-internal static partial class FileToolCore
+internal static class FileToolWrite
 {
     internal static async Task<bool> WriteAtomic(
         string destination,

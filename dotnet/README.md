@@ -1,10 +1,26 @@
 # .NET Main host
 
-The root `dotnet/Foxwarm.sln` contains three .NET 10 projects. The root build temporarily prepares both Core and the retained TypeScript lane; the repository service launchers, package `main`, Main TUI and production Docker have not yet switched from TypeScript Main:
+The root `dotnet/Foxwarm.sln` contains five .NET 10 projects. The root build temporarily prepares both Core and the retained TypeScript lane; the repository service launchers, package `main`, Main TUI and production Docker have not yet switched from TypeScript Main:
 
 - `Foxwarm` is the console host, with an optional HTTP listener (ordinary default `0.0.0.0:3001`). Its `Sessions`, `Models`, `Tools`, `Channels/WebUi`, and `Memory` folders organize the existing Message JSON, Session turns/persistence/compaction, Responses HTTP/WebSocket and Chat Completions client/stream/model selection, and interactive Chat host in one assembly.
 - `Foxwarm.Tests` contains memory, streaming/client, storage and Session contract tests, including current admitted-state and persisted compatibility checks.
 - `Foxwarm.DevTools` runs the original development probes through explicit `conditional-memory`, `responses-request`, `responses-stream`, and `session-restart`, and explicit `catalog-import-dotnet-v1` subcommands. Its corpus JSON and process-restart result shape are unchanged.
+
+## Headless CLI Node checkpoint
+
+`Foxwarm.CliNode` is a separate .NET 10 executable for authenticated, file-capable remote Nodes. It references the small BCL-only `Foxwarm.NodePrimitives` library, not Main's executable. Build the solution, then run:
+
+```sh
+dotnet run --no-build --project dotnet/Foxwarm.CliNode -- \
+  --host https://example.invalid/foxwarm --id my-node --token '<pairing-token>' \
+  --credentials-file /path/to/owned-state/node-credentials.json
+```
+
+Use the normal Main Node approval flow. Later starts can use only `--host` and `--credentials-file`; explicit `--id` plus `--auth-token` overrides a stale credential file. The credential JSON shape remains compatible with the TypeScript client and is owner-only on Unix. Environment proxy lookup follows the existing CLI precedence and `NO_PROXY`; credential-bearing connection URLs are not logged.
+
+This checkpoint implements `read`, `write`, `edit`, `apply_patch`, `get_default_cwd`, whole-file transfer, inline raster results, programmatic text data and resolved paths. It is headless: no persistent exec, external-owner lifecycle, Code/Git/PTY/browser services, local trigger or approval/history/send UI is advertised. The TypeScript CLI/bootstrap remains available and unchanged. File calls use Session cwd or the startup-root Agent directory; whole-file transfers keep their separate Agent-root semantics.
+
+The new projects enable AOT/trim analysis and explicit JSON boundaries. Linux x64 managed execution is exercised; analyzer-clean builds are not a Native AOT publish/run claim or Windows/macOS qualification. See the [CLI implementation contract](../docs/code-index/units/dotnet-cli-node.md) for ownership, interoperability fixtures and remaining boundaries.
 
 ## Build, publish and public CLI
 

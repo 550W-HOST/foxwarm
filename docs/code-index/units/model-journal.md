@@ -1,7 +1,7 @@
 # Unit: LLM request journal
 
 Files: `dotnet/Foxwarm/Models/LlmRequestJournal.cs`
-Secondary files: `dotnet/Foxwarm/JsonStringQuoting.cs`
+Secondary files: `dotnet/Foxwarm.NodePrimitives/JsonStringQuoting.cs`
 
 ## Purpose
 
