@@ -117,8 +117,10 @@ public sealed partial class AgentDeletionTests
             Assert.True(target.Metadata().Busy);
             Assert.Contains(
                 target.History(),
-                row => row["role"]!.ToString() == "tool"
-                    && row.ToJsonString().Contains("independent scheduled input", StringComparison.Ordinal)
+                row =>
+                    row["role"]!.ToString() == "tool"
+                    && row.ToJsonString()
+                        .Contains("independent scheduled input", StringComparison.Ordinal)
             );
             // Hold the next provider request: the creating tool has returned, but
             // its foreground turn is still live when the independent clock fires.
@@ -164,7 +166,9 @@ public sealed partial class AgentDeletionTests
                     Assert.True(target.Entry.Retired);
                     Assert.False(target.Processing);
                     Assert.False(File.Exists(Authority(temp.Path, target.Id)));
-                    Assert.False(Directory.Exists(Path.Combine(temp.Path, "work", "agents", "target")));
+                    Assert.False(
+                        Directory.Exists(Path.Combine(temp.Path, "work", "agents", "target"))
+                    );
                 }
                 else
                 {
@@ -175,7 +179,10 @@ public sealed partial class AgentDeletionTests
             else
             {
                 Assert.Single(queue);
-                Assert.Contains("independent scheduled input", System.Text.Json.JsonSerializer.Serialize(queue[0]));
+                Assert.Contains(
+                    "independent scheduled input",
+                    System.Text.Json.JsonSerializer.Serialize(queue[0])
+                );
                 Assert.False(rejectedDelivery.Task.IsCompleted);
             }
         }

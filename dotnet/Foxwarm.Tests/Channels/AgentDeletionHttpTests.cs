@@ -145,13 +145,16 @@ public sealed class AgentDeletionHttpTests
             Assert.Equal(
                 new[] { "plain-no-metadata/main" },
                 (await plain.Content.ReadFromJsonAsync<JsonObject>())!["deletedSessions"]!
-                    .AsArray().Select(node => node!.ToString())
+                    .AsArray()
+                    .Select(node => node!.ToString())
             );
             Assert.False(Directory.Exists(Path.Combine(data, "agents", "plain-no-metadata")));
             var noMembers = await Delete(admin, "directory-only", "directory-only");
             Assert.True(noMembers.IsSuccessStatusCode, await noMembers.Content.ReadAsStringAsync());
             Assert.Empty(
-                (await noMembers.Content.ReadFromJsonAsync<JsonObject>())!["deletedSessions"]!.AsArray()
+                (await noMembers.Content.ReadFromJsonAsync<JsonObject>())![
+                    "deletedSessions"
+                ]!.AsArray()
             );
             Assert.False(Directory.Exists(directoryOnly));
             Assert.True(Directory.Exists(metadata));
