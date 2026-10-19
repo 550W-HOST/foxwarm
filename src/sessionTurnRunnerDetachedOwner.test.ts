@@ -1687,3 +1687,34 @@ test('nested run_script Task completion forwards its real receipt and resolves t
   try { await assertLinkedChildCompletion(true); }
   finally { await (await import('./toolscript')).shutdownToolScriptRuntime(); }
 });
+
+test('final ToolScript wait stops the exact-owner runner without another provider iteration', async () => {
+  await initArchiveStore();
+  const session = createSession(`detached_script_wait_${Date.now()}`, 'wait for external input');
+  const effects = createEffects(session, []);
+  const originalChat = llm.chat;
+  let requests = 0;
+  (llm as any).chat = async (_parts: any, _owner: Session, _iteration: number, options: any) => {
+    requests++;
+    assert.equal(requests, 1, 'the terminal script wait must stop before another provider request');
+    const call = { id: 'terminal-script', name: 'run_script', args: {
+      code: 'call_tool("wait", {"waitForInput": True})\nprint("waiting")\nreturn {"saved": 42}',
+    } };
+    await options.appendMessage({ role: 'model', parts: [{ functionCall: call }] });
+    return { text: '', toolCalls: [call] };
+  };
+  try {
+    await withGlobalOwnerLookupsForbidden(() => new SessionTurnRunner(new LocalSessionTurnHost(effects, session)).processSessionQueue(session.id));
+    assert.equal(requests, 1);
+    assert.equal(session.busy, false);
+    assert.equal(session.meta.wait?.waitForInput, true);
+    assert.deepEqual(session.history.map(message => message.role), ['user', 'model', 'tool']);
+    const result = session.history.at(-1)!.parts[0].functionResponse!.response;
+    assert.deepEqual(result.result, { saved: 42 });
+    assert.equal(result.stdout, 'waiting\n');
+    assert.equal((await readSessionHistorySnapshot(session.id)).meta.wait.id, session.meta.wait.id);
+  } finally {
+    (llm as any).chat = originalChat;
+    await (await import('./toolscript')).shutdownToolScriptRuntime();
+  }
+});

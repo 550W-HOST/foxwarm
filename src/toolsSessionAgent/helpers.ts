@@ -12,6 +12,8 @@ import { expandHomePath, resolveAgentPath } from '../utils/pathResolve';
 export { expandHomePath, resolveAgentPath };
 
 export interface ToolContext {
+  /** Trusted local ToolScript hook: record a validated wait without registering it. */
+  deferSessionWait?: (args: ToolArgs) => void;
   sessionId?: string;
   session?: any;
   broadcast?: (text: string, options?: any) => Promise<void>;

@@ -1,6 +1,6 @@
 # Unit: src-toolscript
 
-Files: src/toolscript.ts, src/toolscript.test.ts, src/toolscriptImageParts.test.ts, src/toolscriptSource.test.ts, src/toolscriptSourceRouting.test.ts
+Files: src/toolscript.ts, src/toolscript.test.ts, src/toolscriptWait.test.ts, src/toolscriptImageParts.test.ts, src/toolscriptSource.test.ts, src/toolscriptSourceRouting.test.ts
 Secondary files: src/toolscriptSkills.test.ts, package.json, package-lock.json
 
 ## Purpose
@@ -32,6 +32,10 @@ The default-injected `run_script` description includes the Python-subset syntax,
 
 The exact-owner Task facade emits a process-local completion receipt containing taskId/attachedSessionId. Each run/continue slice forwards only receipts actually emitted during that slice into its internal outer post-action; nested script contexts forward the same trusted callback. Script return values, stdout and saved run data are never scanned for completion claims. The existing child-handoff consumer handles the receipt; TaskService remains the sole completion/creator-notification owner.
 
+The concrete builtin `wait` validates its arguments and declared sources, then records one deferred intent through a trusted local context hook instead of registering caller wait state. All supported `call_tool` forms reach that same handler; spellings and unified descriptors cannot bypass deferral. A later host invocation clears the intent at invocation time, including nested scripts, failed calls, OS-call rejection and `ask_agent`. Pure computation, `print` and ordinary return leave it intact. Nested run/continue calls share the execution scope, so an inner completion cannot arm a wait while its parent can still invoke tools.
+
+Only a normally completed outer `run_script` or `continue_script` re-enters the canonical builtin dispatcher to authorize and validate the pending wait again, register its existing wait/timer/liveness state, and forward its real `__toolLoopControl` and `explicitWaitId` to the outer tool executor. Script return values remain unchanged and are never scanned for control. The existing executor owns stop-turn handling and ordinary batch-error rollback of that exact explicit wait. Paused or failed slices never arm it. Timeout checkpoints may save one explicit `pendingSessionWait` intent alongside the actual pending VM resume; continuation restores that field, revalidates/re-authorizes at normal completion and invalidates it on any later host invocation. Old checkpoints without this field do not infer intent from saved output, host diagnostics or lookalike dictionaries. An inner pause retains only its own checkpoint intent and clears the enclosing execution's pending wait. Automatic managed-event resumption has no outer caller runner and does not arm these terminal caller waits or acquire a new scheduling path.
+
 Unknown external function names are returned to Monty as runtime exceptions that list the available host API. Monty OS-function suspensions are rejected rather than exposed or mounted. There is no separate ToolScript file-I/O or MCP client path; scripts compose normal Foxwarm tools through `call_tool`.
 
 ## Stable-symbol index
@@ -45,6 +49,7 @@ Unknown external function names are returned to Monty as runtime exceptions that
 | Monty runtime lifecycle | Lazy pool creation, checked-out session cleanup, and test-only restart simulation |
 | `advanceExecution` | Async complete, name lookup, host-call, OS rejection, agent-wait, managed-wait, and timeout-safe checkpoints |
 | `startRun` / `resumeRun` | Feed source into a checked-out worker or load a compatible snapshot into a fresh worker session |
+| `executeScriptSlice` | Trusted completion receipts and deferred terminal wait control at the outer invocation boundary |
 | `projectExecutionResult` / tool handlers | Lean execution responses, presentation hook, and explicit diagnostic inspection |
 
 ## Behavior
@@ -134,3 +139,7 @@ Main reads complete UTF-8 source directly. Non-master reads use the source-fence
 Legacy CLI peers without resolved-path metadata retain target-native absolute/rooted/home/Agent-token handling and same-target cwd for ordinary relative source paths. A Windows cwd plus a drive-relative path on another drive is ambiguous without the target runtime's per-drive cwd; source loading fails with a request for a drive-absolute path instead of guessing. A colon in a POSIX or provider-owned path does not imply Windows semantics.
 
 Completed builtin send subcalls retain a bounded `sessionMessage` presentation record on their existing UI activity metadata. A local delivery callback records the actual destination without changing the script-visible result, control or send semantics; exact-target post-actions provide the existing Worker fallback. See [Session communication presentation](../threads/session-communication-presentation.md).
+
+### D-toolscript-terminal-session-wait
+
+[2026-10-19] ToolScript keeps ordinary `call_tool("wait", args)` and ordinary return. A real final builtin wait is a deferred, execution-scoped intent, not a return-value protocol. Only normal completion of the outer explicit run/continue invocation executes the authorized wait and forwards its trusted existing control to the exact caller owner. Intent survives a safe timeout checkpoint in its dedicated checkpoint field, never in diagnostic/output data, and never arms on pause or failure. The implementation uses the existing Main/Worker owner context, dispatcher, wait validation, timer/liveness services and outer batch cleanup without a second controller or background scheduler.

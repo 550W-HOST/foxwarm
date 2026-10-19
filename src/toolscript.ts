@@ -23,6 +23,9 @@ type ToolArgs = Record<string, any>;
 
 type ToolContext = {
   signal?: AbortSignal;
+  /** Shared only by the currently executing nested script chain. */
+  toolScriptWaitScope?: { pending?: ToolArgs };
+  deferSessionWait?: (args: ToolArgs) => void;
   sessionId?: string;
   session?: Session;
   broadcast?: (text: string, options?: any) => Promise<void>;
@@ -92,6 +95,8 @@ type ToolScriptWaitingState = {
     pausedAtFunctionName?: string;
     pausedAtSummaryName?: string;
     pendingResume: ToolScriptPendingResume;
+    /** Explicit intent bound to this checkpoint, never inferred from its return value or diagnostics. */
+    pendingSessionWait?: ToolArgs;
   };
 };
 
@@ -160,7 +165,10 @@ type ToolScriptResult = {
 
 type ToolScriptExecutionResult = { stdout?: string } & Pick<ToolScriptResult,
   'status' | 'runId' | 'result' | 'error' | 'waitingReason' | 'continuationId' | 'question' | 'waitingFor'
-  | 'imageParts' | 'inlineData' | 'inlineDataItems'> & { __toolPostAction?: { completedLinkedTask: LinkedTaskCompletion } };
+  | 'imageParts' | 'inlineData' | 'inlineDataItems'> & {
+  __toolLoopControl?: { stopCurrentTurn: boolean };
+  __toolPostAction?: { completedLinkedTask?: LinkedTaskCompletion; explicitWaitId?: string };
+};
 
 type RuntimeState = {
   stdoutParts: string[];
@@ -727,16 +735,48 @@ function buildBaseResult(run: ToolScriptRunRecord): ToolScriptResult {
   };
 }
 
-/** Forward only completion receipts emitted by the Task facade in this execution slice. */
-async function executeWithTaskCompletion(ctx: ToolContext, execute: (context: ToolContext) => Promise<ToolScriptResult>): Promise<ToolScriptExecutionResult> {
+/** One intent for the actual execution chain, including nested run/continue calls. */
+function withDeferredSessionWait(ctx: ToolContext): ToolContext {
+  const scope = ctx.toolScriptWaitScope || {};
+  return { ...ctx, toolScriptWaitScope: scope, deferSessionWait: args => {
+    scope.pending = structuredClone(args);
+  } };
+}
+
+/** Only normal completion of the outer script may execute the real wait. */
+async function executeScriptSlice(ctx: ToolContext, execute: (context: ToolContext) => Promise<ToolScriptResult>): Promise<ToolScriptExecutionResult> {
   let completion: LinkedTaskCompletion | undefined;
-  const result = await execute({ ...ctx, onLinkedTaskCompletion: signal => {
-    completion = { ...signal };
-    ctx.onLinkedTaskCompletion?.({ ...signal });
-  } });
-  return { ...projectExecutionResult(result, ctx),
-    ...(completion ? { __toolPostAction: { completedLinkedTask: completion } } : {}),
-  };
+  const context = withDeferredSessionWait(ctx);
+  const scope = context.toolScriptWaitScope!;
+  try {
+    const result = await execute({ ...context, onLinkedTaskCompletion: signal => {
+      completion = { ...signal };
+      ctx.onLinkedTaskCompletion?.({ ...signal });
+    } });
+    const projected = projectExecutionResult(result, ctx);
+    let waitResult: Pick<ToolScriptExecutionResult, '__toolLoopControl' | '__toolPostAction'> | undefined;
+    if (result.status !== 'completed') {
+      // A checkpoint owns its saved intent; an enclosing script must not arm it.
+      scope.pending = undefined;
+    } else if (!ctx.toolScriptWaitScope && scope.pending) {
+      const pending = scope.pending;
+      scope.pending = undefined;
+      const { deferSessionWait: _defer, toolScriptWaitScope: _scope, ...waitContext } = ctx;
+      // Re-enter canonical resolution, authorization and wait source validation.
+      // No script-returned or saved result dictionary is interpreted as control.
+      waitResult = await require('./tools').call_tool({ toolId: 'builtin:wait', args: pending }, waitContext);
+    }
+    return { ...projected,
+      ...(waitResult?.__toolLoopControl ? { __toolLoopControl: waitResult.__toolLoopControl } : {}),
+      ...(completion || waitResult?.__toolPostAction ? { __toolPostAction: {
+        ...waitResult?.__toolPostAction,
+        ...(completion ? { completedLinkedTask: completion } : {}),
+      } } : {}),
+    };
+  } catch (error) {
+    scope.pending = undefined;
+    throw error;
+  }
 }
 
 /** Keep execution responses lean; complete diagnostics remain in the persisted run. */
@@ -806,7 +846,7 @@ function shouldPauseForTimeout(record: ToolScriptRunRecord): boolean {
   return getElapsedSliceMs(record) >= timeoutSecs * 1000;
 }
 
-function buildTimeoutWaitingState(record: ToolScriptRunRecord, runtimeState: RuntimeState, pendingResume: ToolScriptPendingResume): ToolScriptWaitingState {
+function buildTimeoutWaitingState(record: ToolScriptRunRecord, runtimeState: RuntimeState, pendingResume: ToolScriptPendingResume, pendingSessionWait?: ToolArgs): ToolScriptWaitingState {
   const continuationId = newContinuationId();
   return {
     reason: 'timeout',
@@ -819,6 +859,7 @@ function buildTimeoutWaitingState(record: ToolScriptRunRecord, runtimeState: Run
       ...(runtimeState.lastHostCall?.functionName ? { pausedAtFunctionName: runtimeState.lastHostCall.functionName } : {}),
       ...(runtimeState.lastHostCall?.summaryName ? { pausedAtSummaryName: runtimeState.lastHostCall.summaryName } : {}),
       pendingResume,
+      ...(pendingSessionWait ? { pendingSessionWait: structuredClone(pendingSessionWait) } : {}),
     },
   };
 }
@@ -1438,6 +1479,9 @@ async function advanceExecution(args: {
       throw new Error('ToolScript execution returned an unexpected Monty state.');
     }
 
+    // Invalidate at invocation, not when an enclosing/nested host call returns.
+    if (ctx.toolScriptWaitScope) ctx.toolScriptWaitScope.pending = undefined;
+
     if (progress.isOsFunction) {
       progress = await progress.resumeNotHandled();
       continue;
@@ -1475,7 +1519,7 @@ async function advanceExecution(args: {
             type: 'RuntimeError',
             message: toolFailureMessage(error, ctx.signal),
           },
-        }), runtimeState);
+        }, ctx.toolScriptWaitScope?.pending), runtimeState);
         await saveRun(record);
         return buildBaseResult(record);
       }
@@ -1524,7 +1568,7 @@ async function advanceExecution(args: {
       markRunWaiting(record, buildTimeoutWaitingState(record, runtimeState, {
         mode: 'return',
         value: normalizeMontyValue(result),
-      }), runtimeState);
+      }, ctx.toolScriptWaitScope?.pending), runtimeState);
       await saveRun(record);
       return buildBaseResult(record);
     }
@@ -1651,6 +1695,7 @@ async function failIncompatibleSnapshot(record: ToolScriptRunRecord, runtimeStat
 }
 
 async function startRun(record: ToolScriptRunRecord, code: string, scriptArgs: any, ctx: ToolContext): Promise<ToolScriptResult> {
+  ctx = withDeferredSessionWait(ctx);
   const runtimeState = createRuntimeState(record.stdout, record.executedTools);
   let montySession: any;
   try {
@@ -1674,6 +1719,8 @@ async function startRun(record: ToolScriptRunRecord, code: string, scriptArgs: a
 }
 
 async function resumeRun(record: ToolScriptRunRecord, resumeValue: any, ctx: ToolContext, logMessage: string): Promise<ToolScriptResult> {
+  ctx = withDeferredSessionWait(ctx);
+  ctx.toolScriptWaitScope!.pending = record.waiting?.timeout?.pendingSessionWait;
   const runtimeState = createRuntimeState(record.stdout, record.executedTools);
   const compatibilityError = getSnapshotCompatibilityError(record);
   if (compatibilityError) {
@@ -1744,7 +1791,7 @@ export async function tool_run_script(args: ToolArgs, ctx: ToolContext): Promise
   const runId = newRunId();
   const record = createRunRecord({ runId, mode, session, filePath: filePath || '<inline>', ...(sourceNode ? { sourceNode } : {}), scriptPath, timeoutSecs });
   const { toolScriptSourceRouting: _sourceRouting, ...executionContext } = ctx;
-  return executeWithTaskCompletion(executionContext, context => startRun(record, code, scriptArgs, { ...context, sessionId, session, toolScriptRunId: runId }));
+  return executeScriptSlice(executionContext, context => startRun(record, code, scriptArgs, { ...context, sessionId, session, toolScriptRunId: runId }));
 }
 
 export async function tool_start_toolscript_run(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptExecutionResult> {
@@ -1779,7 +1826,7 @@ export async function tool_continue_script(args: ToolArgs, ctx: ToolContext): Pr
   const stdoutBeforeContinue = record.stdout || '';
 
   if (record.waiting.reason === 'agent') {
-    return executeWithTaskCompletion(ctx, async context => withStdoutDelta(
+    return executeScriptSlice(ctx, async context => withStdoutDelta(
       await resumeRun(record, args?.input, { ...context, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue failed'),
       stdoutBeforeContinue,
     ));
@@ -1791,12 +1838,12 @@ export async function tool_continue_script(args: ToolArgs, ctx: ToolContext): Pr
       throw new Error(`ToolScript run \`${runId}\` is waiting on timeout but has no pending resume payload.`);
     }
     if (pendingResume.mode === 'return') {
-      return executeWithTaskCompletion(ctx, async context => withStdoutDelta(
+      return executeScriptSlice(ctx, async context => withStdoutDelta(
         await resumeRun(record, pendingResume.value, { ...context, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed'),
         stdoutBeforeContinue,
       ));
     }
-    return executeWithTaskCompletion(ctx, async context => withStdoutDelta(
+    return executeScriptSlice(ctx, async context => withStdoutDelta(
       await resumeRun(record, { __toolscriptResumeException: pendingResume.exception }, { ...context, sessionId, session, toolScriptRunId: runId }, 'ToolScript continue after timeout failed'),
       stdoutBeforeContinue,
     ));
