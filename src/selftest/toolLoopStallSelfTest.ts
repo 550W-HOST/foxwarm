@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import assert from 'assert';
 import fs from 'fs-extra';
 import os from 'os';

@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'events';

@@ -1,3 +1,4 @@
+import './testEnvironment';
 import * as promptSnapshot from './session/promptSnapshot';
 import * as promptCache from './session/promptCache';
 import * as toolExecutor from './toolExecutor';

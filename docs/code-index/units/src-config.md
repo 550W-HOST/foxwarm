@@ -66,7 +66,7 @@ Worker placement is startup configuration:
 - `nodeProviders` is a startup-only map keyed by bounded provider ID. `type: executable` accepts a fixed command/arguments and bounded request timeout. Provider definitions reject unknown fields and require restart.
 - Disabling/draining Session workers does not erase durable Worker lineage. Current-code `sessionWorkers:false` remains supported; after a nonzero cursor, pre-Session-worker code is unsupported as a writer and no lineage-retirement tooling is required. See [D-process-topology-session-worker-downgrade](../threads/process-topology-and-rpc.md#d-process-topology-session-worker-downgrade).
 
-These are selected runtime overrides, not an environment-to-YAML migration.
+These are selected runtime overrides, not an environment-to-YAML migration. Tests establish owned data and clear inherited app-config/MCP path overrides before application imports; production resolution is unchanged. The direct-entry initialization and synthetic installation canary regressions are owned by [local-test-runner](./test-runner.md).
 
 ## Current defaults
 

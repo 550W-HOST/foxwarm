@@ -1,3 +1,4 @@
+import { appE2eRuntime } from './runtime.mjs'
 import { waitForWebUiReady } from '../../packages/webui/test/webuiReadiness.mjs'
 // Section 12.2 real-application scenario, part 2: runs after the harness stopped
 // and restarted the Foxwarm application against the same data root. The session,
@@ -10,9 +11,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import puppeteer from 'puppeteer-core'
 
-const baseUrl = process.env.FOXWARM_E2E_URL
-const tokenFile = process.env.FOXWARM_E2E_TOKEN_FILE
-const dataRoot = process.env.FOXWARM_E2E_DATA_DIR
+const { baseUrl, tokenFile, dataRoot } = appE2eRuntime()
 const providerUrl = process.env.FOXWARM_E2E_PROVIDER_URL
 const artifactDir = process.env.FOXWARM_E2E_ARTIFACT_DIR
 const chromium = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'

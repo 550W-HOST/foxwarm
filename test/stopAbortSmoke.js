@@ -1,3 +1,4 @@
+require('../scripts/test/test-process-env.cjs').initializeTestEnvironment();
 const assert = require('assert');
 const axios = require('axios');
 const llm = require('../lib/llm.js');

@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import { executeTools } from '../toolExecutor';
 import { DatabaseSync } from 'node:sqlite';
 import { taskService } from './taskTools';

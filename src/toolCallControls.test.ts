@@ -1,3 +1,4 @@
+import './testEnvironment';
 import type { ToolBatchResult } from './toolExecutor';
 import { executeTools } from './toolExecutor';
 import assert from 'node:assert/strict';

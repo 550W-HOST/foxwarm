@@ -1,3 +1,4 @@
+require('../scripts/test/test-process-env.cjs').initializeTestEnvironment();
 const assert = require('assert');
 const fs = require('fs-extra');
 const path = require('path');
@@ -8,44 +9,6 @@ const BACKUP_SUFFIXES = ['', '.bak', '.1.bak', '.2.bak', '.3.bak', '.4.bak', '.5
 
 function sessionFilePath(sessionId) {
   return path.join(SESSIONS_DIR, `${sessionId}.json`);
-}
-
-async function backupMetadataFiles() {
-  const backups = [];
-  for (const suffix of BACKUP_SUFFIXES) {
-    const target = `${SESSIONS_FILE}${suffix}`;
-    if (await fs.pathExists(target)) {
-      const backup = `${target}.session-metadata-safety-backup`;
-      await fs.copy(target, backup, { overwrite: true });
-      backups.push([target, backup]);
-    }
-  }
-  return backups;
-}
-
-async function restoreMetadataFiles(backups) {
-  for (const suffix of BACKUP_SUFFIXES) {
-    const target = `${SESSIONS_FILE}${suffix}`;
-    await fs.remove(target).catch(() => {});
-  }
-  for (const [target, backup] of backups) {
-    await fs.move(backup, target, { overwrite: true });
-  }
-}
-
-
-async function backupChannelsFile() {
-  if (!await fs.pathExists(CHANNELS_FILE)) return null;
-  const backup = `${CHANNELS_FILE}.session-metadata-safety-backup`;
-  await fs.copy(CHANNELS_FILE, backup, { overwrite: true });
-  return backup;
-}
-
-async function restoreChannelsFile(backup) {
-  await fs.remove(CHANNELS_FILE).catch(() => {});
-  if (backup) {
-    await fs.move(backup, CHANNELS_FILE, { overwrite: true });
-  }
 }
 
 async function clearMetadataFiles() {
@@ -101,8 +64,6 @@ function makeMetadata(sessionId, lastMessageTime, messageCount, nextMessageSeq, 
   const sessionA = `${prefix}_a`;
   const sessionB = `${prefix}_b`;
   const createdFiles = [sessionFilePath(sessionA), sessionFilePath(sessionB)];
-  const metadataBackups = await backupMetadataFiles();
-  const channelsBackup = await backupChannelsFile();
 
   try {
     await fs.writeJson(CHANNELS_FILE, { channels: {} }, { spaces: 2 });
@@ -156,8 +117,8 @@ function makeMetadata(sessionId, lastMessageTime, messageCount, nextMessageSeq, 
     for (const filePath of createdFiles) {
       await fs.remove(filePath).catch(() => {});
     }
-    await restoreMetadataFiles(metadataBackups);
-    await restoreChannelsFile(channelsBackup);
+    await clearMetadataFiles();
+    await fs.remove(CHANNELS_FILE);
   }
 })().catch(err => {
   console.error(err);

@@ -1,3 +1,4 @@
+import './testEnvironment';
 import * as sessionRuntime from './sessionRuntime';
 import test from 'node:test';
 import assert from 'node:assert/strict';

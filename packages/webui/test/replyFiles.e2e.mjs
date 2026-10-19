@@ -1,3 +1,5 @@
+import testEnvironment from '../../../scripts/test/test-process-env.cjs'
+testEnvironment.initializeTestEnvironment()
 import test, { before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'

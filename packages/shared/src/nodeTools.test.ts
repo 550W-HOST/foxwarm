@@ -1,3 +1,4 @@
+require('../../../scripts/test/test-process-env.cjs').initializeTestEnvironment();
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -351,7 +352,7 @@ test('node exec expands cwd ~ on the executing node', async () => {
         registerBackgroundExec: async metadata => { registrations.push(metadata); },
       },
     );
-    assert.match(String(result), new RegExp(`^${os.homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n---\nExit code: 0`));
+    assert.match(String(result), new RegExp(`^${(await fs.realpath(os.homedir())).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n---\nExit code: 0`));
     assert.deepEqual(registrations, []);
     assert.equal(started, 1);
   } finally {

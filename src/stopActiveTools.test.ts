@@ -1,3 +1,4 @@
+import './testEnvironment';
 import type { Message } from './types';
 import { executeTools } from './toolExecutor';
 import assert from 'node:assert/strict';
