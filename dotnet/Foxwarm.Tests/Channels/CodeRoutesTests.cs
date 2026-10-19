@@ -399,7 +399,10 @@ public sealed class CodeRoutesTests
         var services = nodes["nodes"]![0]!["services"]!.AsObject();
         Assert.Equal(1, services["vscode-fs"]!.GetValue<int>());
         Assert.Equal(2, services["vscode-git"]!.GetValue<int>());
-        Assert.Equal(Foxwarm.Terminal.TerminalRegistry.IsSupported, services.ContainsKey("vscode-pty"));
+        Assert.Equal(
+            Foxwarm.Terminal.TerminalRegistry.IsSupported,
+            services.ContainsKey("vscode-pty")
+        );
         var missing = await f.Client.GetAsync("/vscode-web/");
         Assert.Equal(HttpStatusCode.ServiceUnavailable, missing.StatusCode);
         Assert.Contains("no-store", missing.Headers.CacheControl!.ToString());

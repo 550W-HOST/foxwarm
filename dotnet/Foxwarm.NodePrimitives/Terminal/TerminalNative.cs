@@ -10,8 +10,10 @@ internal static class TerminalNative
         AppContext.BaseDirectory,
         "libfoxwarm-pty.so"
     );
-    private static readonly IntPtr NativeHandle = OperatingSystem.IsLinux()
-        && NativeLibrary.TryLoad(NativePath, out var loaded) ? loaded : IntPtr.Zero;
+    private static readonly IntPtr NativeHandle =
+        OperatingSystem.IsLinux() && NativeLibrary.TryLoad(NativePath, out var loaded)
+            ? loaded
+            : IntPtr.Zero;
     internal static bool IsSupported =>
         OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)
         || OperatingSystem.IsLinux() && NativeHandle != IntPtr.Zero;
@@ -20,8 +22,7 @@ internal static class TerminalNative
     {
         NativeLibrary.SetDllImportResolver(
             typeof(TerminalNative).Assembly,
-            (name, _, _) =>
-                name == Library ? NativeHandle : IntPtr.Zero
+            (name, _, _) => name == Library ? NativeHandle : IntPtr.Zero
         );
     }
 

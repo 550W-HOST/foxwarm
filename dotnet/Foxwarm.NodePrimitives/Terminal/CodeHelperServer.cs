@@ -67,38 +67,54 @@ internal sealed class CodeHelperServer : IAsyncDisposable
         await start.WaitAsync();
         try
         {
-        if (Volatile.Read(ref closed) != 0)
-            throw new ObjectDisposedException(nameof(CodeHelperServer));
-        if (listener is not null || pipeStop is not null)
-            return;
-        helperDirectory = Path.Combine(stateRoot, ".temp", $"code-helper-{Environment.ProcessId}");
-        Directory.CreateDirectory(helperDirectory);
-        var bin = Path.Combine(helperDirectory, "bin");
-        Directory.CreateDirectory(bin);
-        await WriteWrapperAsync(Path.Combine(bin, OperatingSystem.IsWindows() ? "code.ps1" : "code"));
-        if (OperatingSystem.IsWindows())
+            if (Volatile.Read(ref closed) != 0)
+                throw new ObjectDisposedException(nameof(CodeHelperServer));
+            if (listener is not null || pipeStop is not null)
+                return;
+            helperDirectory = Path.Combine(
+                stateRoot,
+                ".temp",
+                $"code-helper-{Environment.ProcessId}"
+            );
+            Directory.CreateDirectory(helperDirectory);
+            var bin = Path.Combine(helperDirectory, "bin");
+            Directory.CreateDirectory(bin);
+            await WriteWrapperAsync(
+                Path.Combine(bin, OperatingSystem.IsWindows() ? "code.ps1" : "code")
+            );
+            if (OperatingSystem.IsWindows())
+            {
+                socketPath = $"foxwarm-code-{Environment.ProcessId}-{Guid.NewGuid():N}";
+                pipeStop = new CancellationTokenSource();
+                pipeAccept = AcceptPipeLoopAsync(pipeStop.Token);
+                return;
+            }
+            socketPath = Path.Combine(
+                Path.GetTempPath(),
+                $"foxwarm-code-{Environment.ProcessId}.sock"
+            );
+            try
+            {
+                File.Delete(socketPath);
+            }
+            catch { }
+            var socket = new Socket(
+                AddressFamily.Unix,
+                SocketType.Stream,
+                ProtocolType.Unspecified
+            );
+            socket.Bind(new UnixDomainSocketEndPoint(socketPath));
+            socket.Listen(16);
+            listener = socket;
+            if (OperatingSystem.IsLinux())
+                File.SetUnixFileMode(socketPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            _ = AcceptLoopAsync(socket);
+            await Task.CompletedTask;
+        }
+        finally
         {
-            socketPath = $"foxwarm-code-{Environment.ProcessId}-{Guid.NewGuid():N}";
-            pipeStop = new CancellationTokenSource();
-            pipeAccept = AcceptPipeLoopAsync(pipeStop.Token);
-            return;
+            start.Release();
         }
-        socketPath = Path.Combine(Path.GetTempPath(), $"foxwarm-code-{Environment.ProcessId}.sock");
-        try
-        {
-            File.Delete(socketPath);
-        }
-        catch { }
-        var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-        socket.Bind(new UnixDomainSocketEndPoint(socketPath));
-        socket.Listen(16);
-        listener = socket;
-        if (OperatingSystem.IsLinux())
-            File.SetUnixFileMode(socketPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        _ = AcceptLoopAsync(socket);
-        await Task.CompletedTask;
-        }
-        finally { start.Release(); }
     }
 
     private async Task WriteWrapperAsync(string path)
@@ -203,21 +219,43 @@ internal sealed class CodeHelperServer : IAsyncDisposable
             return;
         }
         JsonObject? wire;
-        try { wire = JsonNode.Parse(line ?? "") as JsonObject; }
-        catch { wire = null; }
+        try
+        {
+            wire = JsonNode.Parse(line ?? "") as JsonObject;
+        }
+        catch
+        {
+            wire = null;
+        }
         var requestId = Text(wire?["requestId"]) ?? "";
         CodeHelperResult result;
         try
         {
-            if (wire is null || !(wire["version"] is JsonValue version && version.TryGetValue<double>(out var number) && number == 1) || requestId.Length == 0)
-                throw new InvalidOperationException("Unsupported Foxwarm code helper protocol request.");
+            if (
+                wire is null
+                || !(
+                    wire["version"] is JsonValue version
+                    && version.TryGetValue<double>(out var number)
+                    && number == 1
+                )
+                || requestId.Length == 0
+            )
+                throw new InvalidOperationException(
+                    "Unsupported Foxwarm code helper protocol request."
+                );
             string? terminalId;
             lock (gate)
                 capabilities.TryGetValue(Text(wire["capability"]) ?? "", out terminalId);
             if (terminalId is null)
-                throw new InvalidOperationException("Foxwarm Code helper capability is invalid or expired.");
-            if (Text(wire["cwd"]) is not { } cwd || !Path.IsPathFullyQualified(cwd)
-                || wire["args"] is not JsonArray arguments || arguments.Any(arg => Text(arg) is null))
+                throw new InvalidOperationException(
+                    "Foxwarm Code helper capability is invalid or expired."
+                );
+            if (
+                Text(wire["cwd"]) is not { } cwd
+                || !Path.IsPathFullyQualified(cwd)
+                || wire["args"] is not JsonArray arguments
+                || arguments.Any(arg => Text(arg) is null)
+            )
                 throw new InvalidOperationException("Foxwarm code helper cwd/args are invalid.");
             var parsed = Resolve(cwd, arguments.Select(arg => Text(arg)!).ToArray());
             result = await request(terminalId, requestId, parsed);
@@ -228,7 +266,9 @@ internal sealed class CodeHelperServer : IAsyncDisposable
         }
         try
         {
-            var response = Encoding.UTF8.GetBytes(ResultJson(result, requestId).ToJsonString() + "\n");
+            var response = Encoding.UTF8.GetBytes(
+                ResultJson(result, requestId).ToJsonString() + "\n"
+            );
             await SendAllAsync(stream, response, timeout.Token);
         }
         catch { }
@@ -288,18 +328,26 @@ internal sealed class CodeHelperServer : IAsyncDisposable
             {
                 add = true;
                 if (target is not null)
-                    throw new InvalidOperationException("Foxwarm code helper accepts one path at a time.");
+                    throw new InvalidOperationException(
+                        "Foxwarm code helper accepts one path at a time."
+                    );
                 target = args.ElementAtOrDefault(++i);
-                if (string.IsNullOrEmpty(target)) throw new InvalidOperationException("--add requires a folder path.");
+                if (string.IsNullOrEmpty(target))
+                    throw new InvalidOperationException("--add requires a folder path.");
                 continue;
             }
             if (!endOptions && arg is "--goto" or "-g")
             {
                 go = true;
                 if (target is not null)
-                    throw new InvalidOperationException("Foxwarm code helper accepts one path at a time.");
+                    throw new InvalidOperationException(
+                        "Foxwarm code helper accepts one path at a time."
+                    );
                 target = args.ElementAtOrDefault(++i);
-                if (string.IsNullOrEmpty(target)) throw new InvalidOperationException($"{arg} requires <file>:<line>[:<column>].");
+                if (string.IsNullOrEmpty(target))
+                    throw new InvalidOperationException(
+                        $"{arg} requires <file>:<line>[:<column>]."
+                    );
                 continue;
             }
             if (!endOptions && arg.StartsWith("-", StringComparison.Ordinal))
@@ -386,23 +434,30 @@ internal sealed class CodeHelperServer : IAsyncDisposable
 
     private static long ParseLocation(string value)
     {
-        if (!long.TryParse(value, out var location) || location < 1 || location > 9_007_199_254_740_991)
+        if (
+            !long.TryParse(value, out var location)
+            || location < 1
+            || location > 9_007_199_254_740_991
+        )
             throw new InvalidOperationException("Line and column must be positive integers.");
         return location;
     }
 
-    internal static string? Text(JsonNode? node) => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+    internal static string? Text(JsonNode? node) =>
+        node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
 
-    private static JsonObject ResultJson(CodeHelperResult result, string requestId) => new()
-    {
-        ["requestId"] = requestId, ["ok"] = result.Ok, ["message"] = result.Message, ["error"] = result.Error,
-    };
-
+    private static JsonObject ResultJson(CodeHelperResult result, string requestId) =>
+        new()
+        {
+            ["requestId"] = requestId,
+            ["ok"] = result.Ok,
+            ["message"] = result.Message,
+            ["error"] = result.Error,
+        };
 }
 
 internal static class CodeHelperClient
 {
-
     internal static async Task<bool> TryRunAsync(string[] args)
     {
         if (args.Length == 0 || args[0] != "--code-helper")
@@ -427,11 +482,17 @@ internal static class CodeHelperClient
             );
         var cwd = Environment.CurrentDirectory;
         var requestId = Guid.NewGuid().ToString("N");
-        var payload = new JsonObject
-        {
-            ["version"] = 1, ["requestId"] = requestId, ["capability"] = capability,
-            ["cwd"] = cwd, ["args"] = new JsonArray(args.Skip(1).Select(arg => (JsonNode?)JsonValue.Create(arg)).ToArray()),
-        }.ToJsonString() + "\n";
+        var payload =
+            new JsonObject
+            {
+                ["version"] = 1,
+                ["requestId"] = requestId,
+                ["capability"] = capability,
+                ["cwd"] = cwd,
+                ["args"] = new JsonArray(
+                    args.Skip(1).Select(arg => (JsonNode?)JsonValue.Create(arg)).ToArray()
+                ),
+            }.ToJsonString() + "\n";
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(25));
         Stream connection;
         if (OperatingSystem.IsWindows())
@@ -475,12 +536,15 @@ internal static class CodeHelperClient
         await stream.WriteAsync(Encoding.UTF8.GetBytes(payload), timeout.Token);
         await stream.FlushAsync(timeout.Token);
         var line = await CodeHelperServer.ReadLineBoundedAsync(stream, 64 * 1024, timeout.Token);
-        var result = JsonNode.Parse(line ?? "") as JsonObject
+        var result =
+            JsonNode.Parse(line ?? "") as JsonObject
             ?? throw new InvalidOperationException("Invalid response from Foxwarm Code bridge.");
         if (CodeHelperServer.Text(result["requestId"]) != requestId)
             throw new InvalidOperationException("Invalid response from Foxwarm Code bridge.");
         if (result["ok"]?.ToJsonString() != "true")
-            throw new InvalidOperationException(CodeHelperServer.Text(result["error"]) ?? "Foxwarm Code request failed.");
+            throw new InvalidOperationException(
+                CodeHelperServer.Text(result["error"]) ?? "Foxwarm Code request failed."
+            );
         if (CodeHelperServer.Text(result["message"]) is { Length: > 0 } message)
             Console.WriteLine(message);
         return true;

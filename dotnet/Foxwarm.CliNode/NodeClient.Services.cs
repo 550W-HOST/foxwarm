@@ -11,14 +11,28 @@ internal sealed partial class NodeClient
         var command = Text(frame, "type") == "node_service_command";
         try
         {
-            Task Reply(JsonObject result) => command ? Task.CompletedTask : connection.Send(new JsonObject
-            {
-                ["type"] = "node_service_response", ["requestId"] = Text(frame, "requestId") ?? "", ["result"] = result,
-            });
+            Task Reply(JsonObject result) =>
+                command
+                    ? Task.CompletedTask
+                    : connection.Send(
+                        new JsonObject
+                        {
+                            ["type"] = "node_service_response",
+                            ["requestId"] = Text(frame, "requestId") ?? "",
+                            ["result"] = result,
+                        }
+                    );
             if (service == "vscode-pty" && pty is not null)
-                await pty.Dispatch(operation, frame["args"] as JsonObject ?? new(), connection, Reply);
+                await pty.Dispatch(
+                    operation,
+                    frame["args"] as JsonObject ?? new(),
+                    connection,
+                    Reply
+                );
             else
-                await Reply(await NodeCodeServices.Execute(service, operation, frame["args"] as JsonObject));
+                await Reply(
+                    await NodeCodeServices.Execute(service, operation, frame["args"] as JsonObject)
+                );
         }
         catch (Exception error)
         {

@@ -22,7 +22,11 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
     {
         terminalDirectory = Path.Combine(dataRoot, ".temp", "terminals");
         stopping = CancellationTokenSource.CreateLinkedTokenSource(applicationStopping);
-        helper = new CodeHelperServer(dataRoot, HandleCodeRequestAsync, Foxwarm.Code.CodeNativePaths.Transport);
+        helper = new CodeHelperServer(
+            dataRoot,
+            HandleCodeRequestAsync,
+            Foxwarm.Code.CodeNativePaths.Transport
+        );
     }
 
     internal static bool IsSupported => TerminalNative.IsSupported;

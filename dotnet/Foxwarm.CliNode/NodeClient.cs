@@ -33,9 +33,11 @@ internal sealed partial class NodeClient
         tools = new NodeFileTools(paths);
         transfers = new NodeFileTransfer(paths);
         if (NodePtyService.IsSupported)
-            pty = new NodePtyService(options.CredentialsFile is not null
-                ? Path.GetDirectoryName(Path.GetFullPath(options.CredentialsFile))!
-                : Path.Combine(paths.StartupDirectory, "state"));
+            pty = new NodePtyService(
+                options.CredentialsFile is not null
+                    ? Path.GetDirectoryName(Path.GetFullPath(options.CredentialsFile))!
+                    : Path.Combine(paths.StartupDirectory, "state")
+            );
         requestedName = string.IsNullOrEmpty(options.NodeId)
             ? "node_" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             : options.NodeId;
@@ -56,7 +58,8 @@ internal sealed partial class NodeClient
         finally
         {
             await DrainExec();
-            if (pty is not null) await pty.DisposeAsync();
+            if (pty is not null)
+                await pty.DisposeAsync();
         }
     }
 
@@ -230,10 +233,18 @@ internal sealed partial class NodeClient
                         if (Authenticated)
                         {
                             registeredConnection = connection;
-                            pty?.Connect(connection, detail => connection.Send(new JsonObject
-                            {
-                                ["type"] = "node_service_event", ["service"] = "vscode-pty", ["event"] = detail,
-                            }));
+                            pty?.Connect(
+                                connection,
+                                detail =>
+                                    connection.Send(
+                                        new JsonObject
+                                        {
+                                            ["type"] = "node_service_event",
+                                            ["service"] = "vscode-pty",
+                                            ["event"] = detail,
+                                        }
+                                    )
+                            );
                             recovery ??= Recover();
                         }
                         break;
@@ -644,7 +655,11 @@ internal sealed partial class NodeClient
 
         private async Task SendAfter(Task previous, JsonObject frame, bool requireOpen)
         {
-            try { await previous; } catch { }
+            try
+            {
+                await previous;
+            }
+            catch { }
             try
             {
                 if (requireOpen && Socket.State != WebSocketState.Open)

@@ -5,12 +5,20 @@
     <Nullable>enable</Nullable>
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
-  <Target Name="PrepareFoxwarmPty" BeforeTargets="AssignTargetPaths"
-    Condition="'$(OS)' != 'Windows_NT' and ('$(RuntimeIdentifier)' == '' or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')))">
+  <Target
+    Name="PrepareFoxwarmPty"
+    BeforeTargets="AssignTargetPaths"
+    Condition="'$(OS)' != 'Windows_NT' and ('$(RuntimeIdentifier)' == '' or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')))"
+  >
     <MakeDir Directories="$(IntermediateOutputPath)native" />
     <Exec Command="gcc -std=c11 -O2 -Wall -Wextra -Werror -fPIC -shared -Wl,-z,relro,-z,now -o &quot;$(IntermediateOutputPath)native/libfoxwarm-pty.so&quot; &quot;$(MSBuildProjectDirectory)/Terminal/native/foxwarm-pty.c&quot; -lutil" />
     <ItemGroup>
-      <Content Include="$(IntermediateOutputPath)native/libfoxwarm-pty.so" Link="libfoxwarm-pty.so" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+      <Content
+        Include="$(IntermediateOutputPath)native/libfoxwarm-pty.so"
+        Link="libfoxwarm-pty.so"
+        CopyToOutputDirectory="PreserveNewest"
+        CopyToPublishDirectory="PreserveNewest"
+      />
     </ItemGroup>
   </Target>
 </Project>
