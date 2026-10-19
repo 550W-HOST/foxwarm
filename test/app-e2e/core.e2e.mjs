@@ -1,3 +1,4 @@
+import { appE2eRuntime } from './runtime.mjs'
 import { waitForWebUiReady } from '../../packages/webui/test/webuiReadiness.mjs'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
@@ -6,9 +7,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import puppeteer from 'puppeteer-core'
 
-const baseUrl = process.env.FOXWARM_E2E_URL
-const tokenFile = process.env.FOXWARM_E2E_TOKEN_FILE
-const dataRoot = process.env.FOXWARM_E2E_DATA_DIR
+const { baseUrl, tokenFile, dataRoot } = appE2eRuntime()
 const providerUrl = process.env.FOXWARM_E2E_PROVIDER_URL
 const toolFile = process.env.FOXWARM_E2E_TOOL_FILE
 const artifactDir = process.env.FOXWARM_E2E_ARTIFACT_DIR

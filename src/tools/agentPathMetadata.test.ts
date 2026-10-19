@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import { executeTools } from '../toolExecutor';
 import test from 'node:test';
 import assert from 'node:assert/strict';

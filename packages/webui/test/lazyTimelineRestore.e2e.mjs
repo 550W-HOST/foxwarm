@@ -1,12 +1,12 @@
+import { appE2eRuntime } from '../../../test/app-e2e/runtime.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import puppeteer from 'puppeteer-core'
 
-const baseUrl = process.env.FOXWARM_E2E_URL || 'http://localhost:3002'
+const { baseUrl, tokenFile } = appE2eRuntime()
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
-const tokenFile = process.env.FOXWARM_E2E_TOKEN_FILE || new URL('../../../test/state/token', import.meta.url)
 
 const token = (await readFile(tokenFile, 'utf8')).trim()
 const headers = { Authorization: `Bearer ${token}` }

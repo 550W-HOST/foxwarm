@@ -13,6 +13,7 @@ import {
   standaloneSelftests,
 } from './test-inventory.mjs'
 import { parseTestResultCounts } from './test-result-counts.mjs'
+import testEnvironment from './test-process-env.cjs'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(scriptDir, '../..')
@@ -59,18 +60,10 @@ await fsp.mkdir(shortTempBase, { recursive: true })
 
 const preloadUrl = pathToFileURL(path.join(scriptDir, 'test-process-env.mjs')).href
 const baseEnv = {
-  ...process.env,
+  ...testEnvironment.isolatedApplicationEnv(path.join(runBase, 'data')),
+  FOXWARM_TEST_PROCESS_ROOT: '',
   FOXWARM_TEST_RUN_ROOT: runBase,
-  FOXWARM_TEST_REPO_ROOT: repoRoot,
   FOXWARM_TEST_TEMP_ROOT: shortTempBase,
-  OPENAI_API_KEY: '',
-  ANTHROPIC_API_KEY: '',
-  GOOGLE_API_KEY: '',
-  GEMINI_API_KEY: '',
-  HTTP_PROXY: 'http://127.0.0.1:9',
-  HTTPS_PROXY: 'http://127.0.0.1:9',
-  ALL_PROXY: 'http://127.0.0.1:9',
-  NO_PROXY: 'localhost,127.0.0.1,::1',
   NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import=${preloadUrl}`.trim(),
 }
 
@@ -137,16 +130,7 @@ function unitGroups() {
     },
     {
       name: 'standalone-selftests',
-      steps: standaloneSelftests.map(file => {
-        const key = path.basename(file, '.js')
-        const processRoot = path.join(runBase, 'selftests', key)
-        return directStep(key, process.execPath, [file], 240_000, {
-          FOXWARM_DATA_DIR: path.join(processRoot, 'data'),
-          TMPDIR: path.join(processRoot, 'tmp'),
-          TMP: path.join(processRoot, 'tmp'),
-          TEMP: path.join(processRoot, 'tmp'),
-        })
-      }),
+      steps: standaloneSelftests.map(file => directStep(path.basename(file, '.js'), process.execPath, [file], 240_000)),
     },
   ]
 }
@@ -243,9 +227,6 @@ async function runStep(group, step, log) {
   console.log(`\n[test:${group.name}] ${step.name}`)
   log.write(`\n[test:${group.name}] ${step.name}\n`)
   const env = { ...baseEnv, ...(group.env || {}), ...(step.env || {}) }
-  for (const key of ['FOXWARM_DATA_DIR', 'TMPDIR', 'TMP', 'TEMP']) {
-    if (step.env?.[key]) await fsp.mkdir(step.env[key], { recursive: true })
-  }
   return await new Promise(resolve => {
     const child = spawn(step.command, step.args, { cwd: repoRoot, env, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] })
     activeChild = child

@@ -1,3 +1,4 @@
+import './testEnvironment';
 import assert from 'assert';
 import test from 'node:test';
 import type { WebSocket } from 'ws';

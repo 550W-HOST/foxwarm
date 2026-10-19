@@ -1,3 +1,4 @@
+require('../../../scripts/test/test-process-env.cjs').initializeTestEnvironment();
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');

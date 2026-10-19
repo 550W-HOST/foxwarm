@@ -1,3 +1,4 @@
+import './testEnvironment';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
@@ -28,7 +29,6 @@ function notices(history: Message[]) {
 }
 
 async function fixture(label: string) {
-  const oldModels = await fs.pathExists(modelsFile) ? await fs.readFile(modelsFile, 'utf8') : undefined;
   await fs.ensureDir(path.dirname(modelsFile));
   await fs.writeJson(modelsFile, fixtureModels());
   const session = await sessionManager.getSession(`effective_selection_${Date.now()}_${label}`);
@@ -52,8 +52,7 @@ async function fixture(label: string) {
     async close() {
       (axios as any).post = originalPost;
       await sessionManager.deleteSession(session.id);
-      if (oldModels === undefined) await fs.remove(modelsFile);
-      else await fs.writeFile(modelsFile, oldModels);
+      await fs.remove(modelsFile);
     },
   };
 }

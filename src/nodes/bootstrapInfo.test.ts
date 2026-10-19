@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildNodeBootstrapInfo, buildNodeBootstrapCommands, NODE_BOOTSTRAP_BASE_URL_PLACEHOLDER } from './bootstrapInfo';

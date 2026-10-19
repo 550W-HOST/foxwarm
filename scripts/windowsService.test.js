@@ -1,4 +1,5 @@
 'use strict';
+require('./test/test-process-env.cjs').initializeTestEnvironment();
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

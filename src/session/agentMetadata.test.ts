@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import { setAgentInherit } from './agentSettings';
 import { setAgentIsolation } from './agentSettings';
 import * as promptSnapshot from './promptSnapshot';

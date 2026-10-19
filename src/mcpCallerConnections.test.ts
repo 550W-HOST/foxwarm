@@ -1,3 +1,4 @@
+import './testEnvironment';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { withMcpCallerConnection, closeMcpCallerConnections, type McpConnectionOptions } from './mcpCallerConnections';

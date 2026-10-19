@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { BACKGROUND_COMPLETION_EVENT_RETENTION_MS } from '../../packages/shared/dist/persistentExec';

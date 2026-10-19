@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import * as toolExecutor from '../toolExecutor';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';

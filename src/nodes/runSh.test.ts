@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
@@ -70,12 +71,15 @@ exit 0
   if (options.isolatedPath) {
     const commands = ['awk', 'cat', 'chmod', 'cksum', 'cp', 'gzip', 'hostname', 'mkdir', 'nohup', 'rm', 'sed', 'sleep'];
     for (const command of commands) {
-      const real = ['/usr/bin', '/bin'].map(dir => path.join(dir, command)).find(candidate => fs.existsSync(candidate));
+      const real = (process.env.PATH || '').split(path.delimiter)
+        .map(dir => path.resolve(dir, command)).find(candidate => fs.existsSync(candidate));
       assert.ok(real, `missing test utility ${command}`);
       await fs.symlink(real, path.join(bin, command));
     }
   }
 
+  const runtimeDir = path.join(root, 'runtime');
+  await fs.mkdir(runtimeDir, { mode: 0o700 });
   const env = {
     ...process.env,
     PATH: options.isolatedPath ? bin : `${bin}:${process.env.PATH}`,
@@ -83,6 +87,7 @@ exit 0
     MOCK_TMUX_STATE: path.join(root, 'tmux-state'),
     HOME: path.join(root, 'home with spaces'),
     XDG_CONFIG_HOME: path.join(root, 'config with spaces'),
+    XDG_RUNTIME_DIR: runtimeDir,
     USER: 'tester',
   };
 
@@ -371,7 +376,7 @@ test('run.sh --install selects a user service for non-root and starts foreground
     assert.doesNotMatch(unit, /--detach|tmux|nohup/);
     const systemdAnalyze = ['/usr/bin/systemd-analyze', '/bin/systemd-analyze'].find(candidate => fs.existsSync(candidate));
     if (systemdAnalyze) {
-      await execFileAsync(systemdAnalyze, ['verify', generated]);
+      await execFileAsync(systemdAnalyze, ['--user', 'verify', generated], { env: fixture.env });
     }
 
     const calls = await fs.readFile(path.join(fixture.calls, 'systemctl'), 'utf8');

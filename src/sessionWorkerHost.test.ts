@@ -1,3 +1,4 @@
+import './testEnvironment';
 import * as nodeExecution from './nodeExecution';
 import { ExecutableNodeProvider } from './nodes/executableProvider';
 import { MasterNodeProvider, NodeProviderRegistry } from './nodes/providerRegistry';

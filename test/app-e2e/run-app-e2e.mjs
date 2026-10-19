@@ -8,6 +8,8 @@ import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import puppeteer from 'puppeteer-core'
 import { startMockProvider } from './mock-provider.mjs'
+import testEnvironment from '../../scripts/test/test-process-env.cjs'
+import { appRuntimeE2e } from '../../scripts/test/test-inventory.mjs'
 
 const repoRoot = path.resolve(new URL('../..', import.meta.url).pathname)
 const artifactRoot = path.resolve(process.env.FOXWARM_APP_E2E_ARTIFACT_DIR || path.join(repoRoot, 'test/.temp/app-e2e'))
@@ -23,7 +25,8 @@ const toolFile = path.join(runRoot, 'tool-work', 'roundtrip.txt')
 // Targeted debugging runs: `FOXWARM_APP_E2E_FILES=a,b` or `restart:<file>` to
 // restart the application before that file. The scripted provider still fails on
 // unexpected requests, but the global request order is not enforced.
-const selectedFiles = (process.env.FOXWARM_APP_E2E_FILES || '').split(',').map(value => value.trim()).filter(Boolean)
+const selectedFiles = process.argv.length > 2 ? process.argv.slice(2) : (process.env.FOXWARM_APP_E2E_FILES || '').split(',').map(value => value.trim()).filter(Boolean)
+const fixtureEnv = testEnvironment.isolatedApplicationEnv(dataRoot)
 let provider
 let appPort
 let baseUrl
@@ -99,7 +102,7 @@ async function seedData() {
         })));
       }
     })().catch(error => { console.error(error); process.exitCode = 1; });
-  `], { cwd: repoRoot, env: { ...process.env, FOXWARM_DATA_DIR: dataRoot } })
+  `], { cwd: repoRoot, env: fixtureEnv })
   await fs.writeFile(path.join(stateRoot, 'token'), token)
   await fs.writeFile(path.join(stateRoot, 'node_token'), 'synthetic-node-token')
   await fs.writeFile(path.join(stateRoot, 'mcp.json'), '{}')
@@ -153,12 +156,10 @@ async function spawnApplication(logName) {
     cwd: repoRoot,
     detached: process.platform !== 'win32',
     env: {
-      ...process.env,
+      ...fixtureEnv,
       FOXWARM_DATA_DIR: dataRoot,
       FOXWARM_CONFIG_PATH: path.join(stateRoot, 'config.yaml'),
       MCP_CONFIG_PATH: path.join(stateRoot, 'mcp.json'),
-      OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '', GOOGLE_API_KEY: '', GEMINI_API_KEY: '',
-      HTTP_PROXY: 'http://127.0.0.1:9', HTTPS_PROXY: 'http://127.0.0.1:9', ALL_PROXY: 'http://127.0.0.1:9', NO_PROXY: 'localhost,127.0.0.1,::1',
     },
     stdio: ['ignore', appLog.fd, appLog.fd],
   })
@@ -287,7 +288,8 @@ async function runTestFile(file, baseUrl) {
     cwd: repoRoot,
     detached: process.platform !== 'win32',
     env: {
-      ...process.env,
+      ...fixtureEnv,
+      FOXWARM_APP_E2E_OWNED: '1',
       FOXWARM_E2E_URL: baseUrl,
       FOXWARM_E2E_TOKEN_FILE: path.join(stateRoot, 'token'),
       FOXWARM_E2E_DATA_DIR: dataRoot,
@@ -328,12 +330,7 @@ try {
     ? ['test/app-e2e/core.e2e.mjs']
     : [
       'test/app-e2e/core.e2e.mjs',
-      'packages/webui/test/lazyTimelineRestore.e2e.mjs',
-      'packages/webui/test/scrollState.e2e.mjs',
-      'packages/webui/test/sessionHeader.e2e.mjs',
-      'packages/webui/test/sessionListDrag.e2e.mjs',
-      'packages/webui/test/sessionListLiveRefresh.e2e.mjs',
-      'packages/webui/test/systemTabs.e2e.mjs',
+      ...appRuntimeE2e,
       'test/app-e2e/logs.e2e.mjs',
       'test/app-e2e/imageGeneration.e2e.mjs',
       // Runs after a real application restart against the same data root.

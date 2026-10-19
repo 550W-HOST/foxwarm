@@ -1,3 +1,4 @@
+import './testEnvironment';
 import { createApprovedNode, removeApprovedNode } from './nodes/registry';
 import { nodesManager } from './nodes/manager';
 import { normalizeAgentToolRules } from './permissions';
