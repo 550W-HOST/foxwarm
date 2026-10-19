@@ -176,8 +176,10 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
             if (metadata is null)
                 observation.Remove("state");
             else
-                observation["state"] = (current?.RuntimeSnapshot(metadata)
-                    ?? SessionRuntimeState.Build(metadata, toolActive: false, compacting: false))["state"]!.DeepClone();
+                observation["state"] = (
+                    current?.RuntimeSnapshot(metadata)
+                    ?? SessionRuntimeState.Build(metadata, toolActive: false, compacting: false)
+                )["state"]!.DeepClone();
             if (state?.ContainsKey("timeoutSeconds") != true)
                 observation.Remove("timeoutSeconds");
             observed.Add(EcmaJson.Stringify(observation));
