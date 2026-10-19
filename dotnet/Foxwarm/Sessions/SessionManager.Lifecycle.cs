@@ -3,7 +3,12 @@ using System.Text.Json.Nodes;
 
 namespace Foxwarm.Sessions;
 
-internal sealed record ClearHistoryResult(bool Cleared, bool RequiresRetry, bool AbortedInFlight, int DroppedQueueItems = 0);
+internal sealed record ClearHistoryResult(
+    bool Cleared,
+    bool RequiresRetry,
+    bool AbortedInFlight,
+    int DroppedQueueItems = 0
+);
 
 internal sealed partial class SessionManager
 {

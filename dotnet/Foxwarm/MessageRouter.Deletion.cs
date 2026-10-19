@@ -53,7 +53,8 @@ internal sealed partial class MessageRouter
         catch (SessionDeletionException error)
         {
             reply = "❌ " + error.Message;
-            if (publishReply) runtime.ReplyToCommand(context.SessionId, reply);
+            if (publishReply)
+                runtime.ReplyToCommand(context.SessionId, reply);
             var outcome = (JsonObject)error.Details.DeepClone();
             outcome["error"] = error.Message;
             outcome["code"] = error.Code;
@@ -71,7 +72,8 @@ internal sealed partial class MessageRouter
         {
             reply = "❌ " + error.Message;
         }
-        if (publishReply) runtime.ReplyToCommand(context.SessionId, reply);
+        if (publishReply)
+            runtime.ReplyToCommand(context.SessionId, reply);
         return new(
             200,
             new

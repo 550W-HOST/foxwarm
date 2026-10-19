@@ -184,7 +184,15 @@ public sealed partial class TelegramChannelTests
         var initial = "first line\n  second line\nthird";
         peer.Push("a", TelegramPeer.Text("42", "11", "/fork@owned_bot child " + initial));
         var id = f.Owner.Id + "_child";
-        await Until(() => peer.Sent("a").Any(call => (SessionWait.Text(call.Body["text"]) ?? "").Contains(id, StringComparison.Ordinal)));
+        await Until(() =>
+            peer.Sent("a")
+                .Any(call =>
+                    (SessionWait.Text(call.Body["text"]) ?? "").Contains(
+                        id,
+                        StringComparison.Ordinal
+                    )
+                )
+        );
         var child = await f.Manager.RequiredAsync(id);
         Assert.Equal(f.Owner.Id, child.Metadata().ParentSessionId);
         Assert.Contains(

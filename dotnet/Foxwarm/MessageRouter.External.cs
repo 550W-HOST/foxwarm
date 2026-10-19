@@ -162,7 +162,9 @@ internal sealed partial class MessageRouter
             SessionOwner? owner = selectedOwner;
             if (definition["requiresSession"]!.GetValue<bool>() && owner is null)
             {
-                var id = SessionWait.Text(runtime.Manager.ChannelBinding(source.Target)?["sessionId"]);
+                var id = SessionWait.Text(
+                    runtime.Manager.ChannelBinding(source.Target)?["sessionId"]
+                );
                 if (id is null)
                 {
                     await source.Reply("No active session found.");
@@ -194,8 +196,16 @@ internal sealed partial class MessageRouter
                     }
                     runtime.Manager.DetachChannel(source.Target);
                     runtime.Manager.AttachChannel(source.Target, target);
-                    await source.Reply("✅ Attached to session `" + target.Id + "`"
-                        + (target.Metadata().DisplayName is { } display ? " (" + display + ")" : ""));
+                    await source.Reply(
+                        "✅ Attached to session `"
+                            + target.Id
+                            + "`"
+                            + (
+                                target.Metadata().DisplayName is { } display
+                                    ? " (" + display + ")"
+                                    : ""
+                            )
+                    );
                     break;
                 case "/channel":
                     await HandleChannelCommandAsync(source, args);
@@ -223,10 +233,17 @@ internal sealed partial class MessageRouter
                     await HandleMessagesCommandAsync(source, args, owner!);
                     break;
                 case "/status":
-                    await source.Reply(SessionWait.Text((await runtime.Manager.ObserveAsync(owner!, "session", new()))["output"])!);
+                    await source.Reply(
+                        SessionWait.Text(
+                            (await runtime.Manager.ObserveAsync(owner!, "session", new()))["output"]
+                        )!
+                    );
                     break;
                 case "/node":
-                    await ReplyRouteAsync(source, await HandleNodeCommandAsync("/node " + (rawArgs ?? ""), owner!));
+                    await ReplyRouteAsync(
+                        source,
+                        await HandleNodeCommandAsync("/node " + (rawArgs ?? ""), owner!)
+                    );
                     break;
                 case "/fork":
                     await HandleForkCommandAsync(source, rawArgs, owner!);
@@ -260,7 +277,11 @@ internal sealed partial class MessageRouter
                 },
                 _ => "❌ ",
             };
-            await source.Reply(error.Message.StartsWith("❌", StringComparison.Ordinal) ? error.Message : prefix + error.Message);
+            await source.Reply(
+                error.Message.StartsWith("❌", StringComparison.Ordinal)
+                    ? error.Message
+                    : prefix + error.Message
+            );
         }
         return true;
     }
@@ -268,15 +289,19 @@ internal sealed partial class MessageRouter
     private static Task ReplyRouteAsync(ExternalChannelContext source, MessageRouteResult result)
     {
         var value = JsonSerializer.SerializeToNode(result.Value)!.AsObject();
-        return source.Reply(SessionWait.Text(value["commandResponse"])
-            ?? SessionWait.Text(value["error"]) ?? "Command completed.");
+        return source.Reply(
+            SessionWait.Text(value["commandResponse"])
+                ?? SessionWait.Text(value["error"])
+                ?? "Command completed."
+        );
     }
 
     private async Task HandleChannelCommandAsync(ExternalChannelContext source, string[] args)
     {
         var sub = args.FirstOrDefault()?.ToLowerInvariant() ?? "";
         var value = args.ElementAtOrDefault(1);
-        if (sub is "mode" or "dangerously-allow-all-users" or "dangerously-allow-all-group-members") value = value?.ToLowerInvariant();
+        if (sub is "mode" or "dangerously-allow-all-users" or "dangerously-allow-all-group-members")
+            value = value?.ToLowerInvariant();
         var manager = runtime.Manager;
         switch (sub)
         {
@@ -286,10 +311,10 @@ internal sealed partial class MessageRouter
             case "info":
                 await source.Reply(
                     $"*Channel info*\n- channelId: `{source.Instance}`\n- channelType: `{source.Type}`\n- conversationId: `{source.Conversation}`\n- channelTargetId: `{source.Target}`\n- senderId: `{source.Sender ?? "(none)"}`"
-                    + (source.Username is null ? "" : $"\n- username: `{source.Username}`")
-                    + $"\n- attachedSession: `{SessionWait.Text(manager.ChannelBinding(source.Target)?["sessionId"]) ?? "(none)"}`"
-                    + $"\n- mode: `{SessionWait.Text(manager.ChannelBinding(source.Target)?["mode"]) ?? "normal"}`"
-                    + $"\n- dangerouslyAllowAllUsers: `{(SessionCatalog.Flag(manager.ChannelBinding(source.Target)?["dangerouslyAllowAllUsers"]) ? "yes" : "no")}`"
+                        + (source.Username is null ? "" : $"\n- username: `{source.Username}`")
+                        + $"\n- attachedSession: `{SessionWait.Text(manager.ChannelBinding(source.Target)?["sessionId"]) ?? "(none)"}`"
+                        + $"\n- mode: `{SessionWait.Text(manager.ChannelBinding(source.Target)?["mode"]) ?? "normal"}`"
+                        + $"\n- dangerouslyAllowAllUsers: `{(SessionCatalog.Flag(manager.ChannelBinding(source.Target)?["dangerouslyAllowAllUsers"]) ? "yes" : "no")}`"
                 );
                 return;
             case "auth":
@@ -304,11 +329,21 @@ internal sealed partial class MessageRouter
                     await source.Reply("Usage: /channel " + sub + " <channel-id>");
                     return;
                 }
-                var wasRunning = manager.ManagedChannels!.Statuses().OfType<JsonObject>()
-                    .Any(row => SessionWait.Text(row["channelId"]) == value && SessionCatalog.Flag(row["running"]));
+                var wasRunning = manager
+                    .ManagedChannels!.Statuses()
+                    .OfType<JsonObject>()
+                    .Any(row =>
+                        SessionWait.Text(row["channelId"]) == value
+                        && SessionCatalog.Flag(row["running"])
+                    );
                 await manager.ManagedChannels.ChangeAsync(sub, value);
-                var verb = sub == "restart" ? "restarted" : sub == "start" ? wasRunning ? "was already running" : "started"
-                    : wasRunning ? "stopped" : "was already stopped";
+                var verb =
+                    sub == "restart" ? "restarted"
+                    : sub == "start"
+                        ? wasRunning ? "was already running"
+                            : "started"
+                    : wasRunning ? "stopped"
+                    : "was already stopped";
                 await source.Reply($"✅ Channel `{value}` {verb}.\n" + FormatChannelStatus(value));
                 return;
             case "mode":
@@ -372,19 +407,34 @@ internal sealed partial class MessageRouter
         );
     }
 
-
     private string FormatChannelStatus(string? filter)
     {
-        var rows = (runtime.Manager.ManagedChannels?.Statuses() ?? new JsonArray()).OfType<JsonObject>().ToArray();
+        var rows = (runtime.Manager.ManagedChannels?.Statuses() ?? new JsonArray())
+            .OfType<JsonObject>()
+            .ToArray();
         if (filter is not null)
             rows = rows.Any(row => SessionWait.Text(row["channelId"]) == filter)
                 ? rows.Where(row => SessionWait.Text(row["channelId"]) == filter).ToArray()
                 : rows.Where(row => SessionWait.Text(row["type"]) == filter).ToArray();
         static string Flag(JsonNode? value) => SessionCatalog.Flag(value) ? "yes" : "no";
-        return rows.Length == 0 ? "No known channel runtime status found."
-            : "*Channel runtime status*\n" + string.Join("\n", rows.Select(row =>
-                $"- `{row["channelId"]}` (type=`{row["type"]}`): running=`{Flag(row["running"])}`, managed=`{Flag(row["managed"])}`, configured=`{Flag(row["configured"])}`, enabled=`{Flag(row["enabled"])}`"
-                + (row["details"] is JsonArray details && details.Count > 0 ? "; " + string.Join("; ", details.Select(SessionWait.Text)) : "")
-                + (SessionWait.Text(row["lastError"]) is { } error ? "; lastError=" + error : "")));
+        return rows.Length == 0
+            ? "No known channel runtime status found."
+            : "*Channel runtime status*\n"
+                + string.Join(
+                    "\n",
+                    rows.Select(row =>
+                        $"- `{row["channelId"]}` (type=`{row["type"]}`): running=`{Flag(row["running"])}`, managed=`{Flag(row["managed"])}`, configured=`{Flag(row["configured"])}`, enabled=`{Flag(row["enabled"])}`"
+                        + (
+                            row["details"] is JsonArray details && details.Count > 0
+                                ? "; " + string.Join("; ", details.Select(SessionWait.Text))
+                                : ""
+                        )
+                        + (
+                            SessionWait.Text(row["lastError"]) is { } error
+                                ? "; lastError=" + error
+                                : ""
+                        )
+                    )
+                );
     }
 }

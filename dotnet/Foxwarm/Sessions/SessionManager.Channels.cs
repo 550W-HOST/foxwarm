@@ -25,7 +25,8 @@ internal sealed partial class SessionManager
         configuration.ManagedChannels = ManagedChannels;
     }
 
-    internal JsonObject ChannelBindings() => deletionChannels.ReadForDelivery()["channels"]!.AsObject();
+    internal JsonObject ChannelBindings() =>
+        deletionChannels.ReadForDelivery()["channels"]!.AsObject();
 
     internal JsonObject? ChannelBinding(string target) => deletionChannels.Binding(target);
 

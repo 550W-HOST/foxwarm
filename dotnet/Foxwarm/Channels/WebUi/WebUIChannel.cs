@@ -172,13 +172,7 @@ internal sealed partial class WebUIChannel(
         );
         app.MapGet(
             "/api/commands",
-            () =>
-                Results.Ok(
-                    new
-                    {
-                        commands = Foxwarm.Channels.ExternalCommands.WebUiCommands(),
-                    }
-                )
+            () => Results.Ok(new { commands = Foxwarm.Channels.ExternalCommands.WebUiCommands() })
         );
         new Foxwarm.Asr.AsrProxy(
             models.ConfigurationOwner,

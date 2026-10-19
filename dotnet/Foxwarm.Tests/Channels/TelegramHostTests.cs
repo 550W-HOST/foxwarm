@@ -185,7 +185,8 @@ public sealed class TelegramHostTests
             peer.Calls.Count(call => call.Bot == "a" && call.Method == "setMyCommands") == 2
         );
         await TelegramChannelTests.Until(() =>
-            peer.Sent("a").Skip(previousReplies)
+            peer.Sent("a")
+                .Skip(previousReplies)
                 .Any(call => (SessionWait.Text(call.Body["text"]) ?? "").Contains("alpha"))
         );
         var setup = await http.PostAsJsonAsync(

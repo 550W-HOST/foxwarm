@@ -58,8 +58,7 @@ internal sealed partial class MessageRouter
         try
         {
             if (
-                command
-                is not ("/stop" or "/continue" or "/dequeue" or "/stop compact")
+                command is not ("/stop" or "/continue" or "/dequeue" or "/stop compact")
                 && !System.Text.RegularExpressions.Regex.IsMatch(command, @"^/compact(?:\s|$)")
             )
                 return Reply(
@@ -111,7 +110,12 @@ internal sealed partial class MessageRouter
                         ? Reply("noop", "No queued messages")
                         : Reply("accepted", "Queued messages requested");
                 case "compact":
-                    var keep = CommandArguments.CompactKeep(command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Skip(1).ToArray());
+                    var keep = CommandArguments.CompactKeep(
+                        command
+                            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                            .Skip(1)
+                            .ToArray()
+                    );
                     if (owner.Entry.HistoryMutation)
                         return Reply(
                             "error",

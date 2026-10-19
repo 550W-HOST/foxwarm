@@ -26,7 +26,9 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
     {
         if (IsPresentationCommand(message.Text))
         {
-            var canonical = SessionCatalog.Text(runtime.Catalog.Resolve(context.SessionId)["sessionId"]);
+            var canonical = SessionCatalog.Text(
+                runtime.Catalog.Resolve(context.SessionId)["sessionId"]
+            );
             if (canonical is null)
                 return new(404, new { error = "Session not found" });
             return HandlePresentationCommand(context with { SessionId = canonical }, message.Text);
@@ -48,14 +50,33 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
             return await HandleControlAsync(owner, command, requestId, action);
         if (context.Platform == "webui")
         {
-            var match = System.Text.RegularExpressions.Regex.Match(message.Text,
-                @"^(/[a-zA-Z_\-.]+)(?:\s+([\s\S]*))?$");
-            if (match.Success && Foxwarm.Channels.ExternalCommands.Find(match.Groups[1].Value) is not null)
+            var match = System.Text.RegularExpressions.Regex.Match(
+                message.Text,
+                @"^(/[a-zA-Z_\-.]+)(?:\s+([\s\S]*))?$"
+            );
+            if (
+                match.Success
+                && Foxwarm.Channels.ExternalCommands.Find(match.Groups[1].Value) is not null
+            )
             {
-                var source = new Foxwarm.Channels.ExternalChannelContext("webui", "webui", context.SessionId,
-                    null, null, text => { runtime.ReplyToCommand(context.SessionId, text); return Task.CompletedTask; });
-                await HandleExternalCommandAsync(source, match.Groups[1].Value,
-                    match.Groups[2].Success ? match.Groups[2].Value : null, owner);
+                var source = new Foxwarm.Channels.ExternalChannelContext(
+                    "webui",
+                    "webui",
+                    context.SessionId,
+                    null,
+                    null,
+                    text =>
+                    {
+                        runtime.ReplyToCommand(context.SessionId, text);
+                        return Task.CompletedTask;
+                    }
+                );
+                await HandleExternalCommandAsync(
+                    source,
+                    match.Groups[1].Value,
+                    match.Groups[2].Success ? match.Groups[2].Value : null,
+                    owner
+                );
                 return new(200, new { success = true });
             }
         }
@@ -166,7 +187,12 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
             {
                 if (owner.Entry.HistoryMutation)
                     return new(409, new { error = "Session history change is in progress." });
-                var keep = CommandArguments.CompactKeep(command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Skip(1).ToArray());
+                var keep = CommandArguments.CompactKeep(
+                    command
+                        .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                        .Skip(1)
+                        .ToArray()
+                );
                 var result = await owner.Compactor.StartManualAsync(keepPercent: keep);
                 return result.Started || result.AlreadyPending
                     ? new(

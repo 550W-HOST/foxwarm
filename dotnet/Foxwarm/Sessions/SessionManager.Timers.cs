@@ -36,14 +36,26 @@ internal sealed partial class SessionManager
             );
     }
 
-    internal Task<JsonObject> ExecuteTimerToolAsync(SessionOwner source, string name, JsonObject args, CancellationToken token) =>
-        ExecuteTimerAsync(source, name, args, token, authorizeTool: true);
+    internal Task<JsonObject> ExecuteTimerToolAsync(
+        SessionOwner source,
+        string name,
+        JsonObject args,
+        CancellationToken token
+    ) => ExecuteTimerAsync(source, name, args, token, authorizeTool: true);
 
-    internal Task<JsonObject> ExecuteTimerCommandAsync(SessionOwner source, string name, JsonObject args) =>
-        ExecuteTimerAsync(source, name, args, CancellationToken.None, authorizeTool: false);
+    internal Task<JsonObject> ExecuteTimerCommandAsync(
+        SessionOwner source,
+        string name,
+        JsonObject args
+    ) => ExecuteTimerAsync(source, name, args, CancellationToken.None, authorizeTool: false);
 
     private async Task<JsonObject> ExecuteTimerAsync(
-        SessionOwner source, string name, JsonObject args, CancellationToken token, bool authorizeTool)
+        SessionOwner source,
+        string name,
+        JsonObject args,
+        CancellationToken token,
+        bool authorizeTool
+    )
     {
         var allowed = name switch
         {
@@ -128,7 +140,7 @@ internal sealed partial class SessionManager
             await WaitForIdentityMutationAsync(source.Id, token);
             CheckTimerIsolation(source, args, requested);
             if (authorizeTool)
-                    await AuthorizeToolAsync(source, new(name, "builtin", name, args), null, token);
+                await AuthorizeToolAsync(source, new(name, "builtin", name, args), null, token);
             var target = TimerSnapshot(owner);
             var row = existing is null
                 ? MainTimers.CreateRow(requested, args, target)
