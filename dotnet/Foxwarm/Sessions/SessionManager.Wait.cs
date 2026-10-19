@@ -6,6 +6,19 @@ internal sealed partial class SessionManager
 {
     internal async Task<string?> DeclareWaitAsync(SessionOwner source, JsonObject args)
     {
+        var wait = ValidateWait(source, args);
+        try
+        {
+            return await source.Entry.SaveLane.StartWaitAsync(wait);
+        }
+        catch (AuthorityCommittedException error)
+        {
+            throw new CommittedWaitDeclarationException(SessionWait.Text(wait["id"])!, error);
+        }
+    }
+
+    internal JsonObject ValidateWait(SessionOwner source, JsonObject args)
+    {
         Keys(
             args,
             [
@@ -107,14 +120,7 @@ internal sealed partial class SessionManager
                 ["satisfiedSessions"] = new JsonArray(),
                 ["deferredQueue"] = new JsonArray(),
             };
-        try
-        {
-            return await source.Entry.SaveLane.StartWaitAsync(wait);
-        }
-        catch (AuthorityCommittedException error)
-        {
-            throw new CommittedWaitDeclarationException(SessionWait.Text(wait["id"])!, error);
-        }
+        return wait;
     }
 
     internal Task<string?> StartHandoffWaitAsync(SessionOwner source, IReadOnlyList<string> targets)

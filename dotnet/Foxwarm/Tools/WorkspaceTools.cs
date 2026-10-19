@@ -232,24 +232,17 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                         );
                     return Error("not_file", "Regular file or directory not found.");
                 }
-                var mime = Path.GetExtension(path).ToLowerInvariant() switch
-                {
-                    ".png" => "image/png",
-                    ".jpg" or ".jpeg" => "image/jpeg",
-                    ".gif" => "image/gif",
-                    ".webp" => "image/webp",
-                    ".bmp" => "image/bmp",
-                    _ => null,
-                };
+                var directory = await DirectoryExistsAsync(path, cancellationToken);
+                var mime = directory ? null : Foxwarm.Images.RasterImageMime.Detect(await ReadHeaderAsync(path, cancellationToken));
                 JsonObject? data = null;
                 if (ScriptBudget is not null)
                     ScriptBudget.Charge(
-                        mime is not null && !await DirectoryExistsAsync(path, cancellationToken)
+                        mime is not null
                             ? checked(12L * await SizeAsync(path, cancellationToken))
                             : 32L * MaxBytes
                     );
                 var result =
-                    mime is not null && !await DirectoryExistsAsync(path, cancellationToken)
+                    mime is not null
                         ? new JsonObject
                         {
                             ["output"] = "[Image loaded: " + pathText + "]",

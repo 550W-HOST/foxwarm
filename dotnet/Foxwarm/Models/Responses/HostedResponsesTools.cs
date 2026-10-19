@@ -104,8 +104,8 @@ internal static class HostedResponsesTools
                     throw new InvalidDataException(
                         "response exceeded the generated image byte budget."
                     );
-                var mime = DetectMime(bytes);
-                if (mime is null)
+                var mime = Foxwarm.Images.RasterImageMime.Detect(bytes);
+                if (mime is null or "image/bmp")
                     throw new InvalidDataException(
                         "image result bytes were not a supported raster image."
                     );
@@ -271,27 +271,6 @@ internal static class HostedResponsesTools
             throw new InvalidDataException("image result was not canonical base64.");
         return bytes;
     }
-
-    private static string? DetectMime(byte[] bytes) =>
-        bytes.Length >= 8
-        && bytes[0] == 0x89
-        && bytes[1] == 0x50
-        && bytes[2] == 0x4E
-        && bytes[3] == 0x47
-        && bytes[4] == 0x0D
-        && bytes[5] == 0x0A
-        && bytes[6] == 0x1A
-        && bytes[7] == 0x0A
-            ? "image/png"
-        : bytes.Length >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF
-            ? "image/jpeg"
-        : bytes.Length >= 12
-        && Encoding.ASCII.GetString(bytes, 0, 4) == "RIFF"
-        && Encoding.ASCII.GetString(bytes, 8, 4) == "WEBP"
-            ? "image/webp"
-        : bytes.Length >= 6 && Encoding.ASCII.GetString(bytes, 0, 6) is "GIF87a" or "GIF89a"
-            ? "image/gif"
-        : null;
 
     private static string? BoundedText(string? value)
     {

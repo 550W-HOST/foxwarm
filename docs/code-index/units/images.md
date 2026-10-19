@@ -1,6 +1,6 @@
 # Unit: Image blobs, codecs, transport, and provider parts
 
-Files: `dotnet/Foxwarm/Images/HeifDecoder.cs`, `dotnet/Foxwarm/Images/ImageBlobStore.Provider.cs`, `dotnet/Foxwarm/Images/ImageBlobStore.cs`, `dotnet/Foxwarm/Images/ImageTokenEstimate.cs`, `dotnet/Foxwarm/Images/ImageTransport.cs`, `dotnet/Foxwarm/Images/ProviderImageDedup.cs`, `dotnet/Foxwarm/Images/RasterCodec.cs`
+Files: `dotnet/Foxwarm/Images/HeifDecoder.cs`, `dotnet/Foxwarm/Images/ImageBlobStore.Provider.cs`, `dotnet/Foxwarm/Images/ImageBlobStore.cs`, `dotnet/Foxwarm/Images/ImageTokenEstimate.cs`, `dotnet/Foxwarm/Images/ImageTransport.cs`, `dotnet/Foxwarm/Images/ProviderImageDedup.cs`, `dotnet/Foxwarm/Images/RasterCodec.cs`, `dotnet/Foxwarm/Images/RasterImageMime.cs`
 
 ## Purpose
 
@@ -9,6 +9,7 @@ Stores canonical image blobs, probes/decodes raster and HEIF data, converts API 
 ## Stable methods and callers
 
 - `ImageBlobStore` owns canonical blob paths, session references, cleanup/export, and hydration of inline/ref image parts.
+- `RasterImageMime.Detect` recognizes PNG/JPEG/WebP/GIF/BMP from at most twelve header bytes without decoding or validating the file. Native/provider file reads and hosted Responses image classification share it; hosted generation still excludes BMP.
 - `RasterCodec.Probe/Decode` and `HeifDecoder` normalize dimensions, MIME/orientation, transparency, and encoded variants.
 - `ImageTransport` registers JSON converters for image references/inline forms; `ProviderImageDedup` emits refs-only provider parts when a canonical image has already been sent; `ImageTokenEstimate` supplies bounded model cost estimates.
 

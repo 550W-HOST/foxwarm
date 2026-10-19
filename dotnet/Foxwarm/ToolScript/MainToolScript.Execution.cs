@@ -133,6 +133,8 @@ internal sealed partial class MainToolScript
                     throw new InvalidDataException(
                         "ToolScript persisted snapshot is not a resumable host-call snapshot."
                     );
+                context.WaitScope.Pending = record["waiting"]?["timeout"]?["pendingSessionWait"] is JsonObject intent
+                    ? (JsonObject)intent.DeepClone() : null;
                 record.Remove("waiting");
                 record.Remove("snapshotBase64");
                 oldSnapshot = null;
@@ -189,6 +191,7 @@ internal sealed partial class MainToolScript
                 }
                 if (progress.KindCase == ChildEvent.KindOneofCase.OsCall)
                 {
+                    context.WaitScope.Pending = null;
                     progressBudget = Budget();
                     progress = await worker.TurnAsync(
                         new()
@@ -209,6 +212,7 @@ internal sealed partial class MainToolScript
                     throw new InvalidDataException(
                         "Unsupported Monty suspension: " + progress.KindCase
                     );
+                context.WaitScope.Pending = null;
                 var call = progress.FunctionCall;
                 var hostBudget = progressBudget;
                 var positional = new JsonArray();
@@ -309,6 +313,8 @@ internal sealed partial class MainToolScript
                         ["pausedAtSummaryName"] = record["lastHostCall"]
                             ?["functionName"]?.DeepClone(),
                     };
+                if (pending is not null && context.WaitScope.Pending is { } intent)
+                    waiting["timeout"]!["pendingSessionWait"] = intent.DeepClone();
                 record["waiting"] = waiting;
                 record["status"] = "waiting";
                 await CommitAsync();

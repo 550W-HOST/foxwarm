@@ -664,6 +664,12 @@ internal sealed partial class SessionToolExecutor(
     {
         try
         {
+            if (scriptScope.Value is { } script)
+            {
+                sessions.ValidateWait(hosted, args);
+                script.WaitScope.Pending = (JsonObject)args.DeepClone();
+                return new JsonObject { ["output"] = "Waiting for new Session activity." };
+            }
             var id = await sessions.DeclareWaitAsync(hosted, args);
             if (id is not null)
                 explicitWaitIds.Add(id);

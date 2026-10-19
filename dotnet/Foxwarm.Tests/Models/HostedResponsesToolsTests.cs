@@ -10,6 +10,19 @@ namespace Foxwarm.Tests.Models;
 public sealed class HostedResponsesToolsTests
 {
     [Fact]
+    public async Task Shared_header_classification_does_not_expand_hosted_generation_to_BMP()
+    {
+        using var temp = new TempDirectory();
+        var normalized = await HostedResponsesTools.ExternalizeAsync(new JsonArray(new JsonObject
+        {
+            ["type"] = "image_generation_call", ["id"] = "bmp", ["status"] = "completed",
+            ["result"] = Convert.ToBase64String("BM"u8.ToArray()),
+        }), new ImageBlobStore(temp.Path), "fixture/wire", default);
+        Assert.Equal(0, normalized.SuccessfulCount);
+        Assert.Contains("supported raster", Assert.Single(normalized.Failures));
+    }
+
+    [Fact]
     public void Builds_source_shaped_hosted_tools_and_respects_partial_zero()
     {
         var search = HostedResponsesTools.BuildWebSearchTool(
