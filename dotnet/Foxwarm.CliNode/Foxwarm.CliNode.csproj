@@ -9,6 +9,7 @@
     <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="PuppeteerSharp.Cdp" Version="[25.14.0]" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <EmbeddedResource Include="Capabilities.json" />
     <ProjectReference Include="../Foxwarm.NodePrimitives/Foxwarm.NodePrimitives.csproj" />

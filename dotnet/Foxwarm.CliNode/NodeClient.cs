@@ -18,6 +18,7 @@ internal sealed partial class NodeClient
     private readonly NodePaths paths;
     private readonly NodeClientOptions options;
     private readonly NodeFileTools tools;
+    private readonly NodeBrowserTools browserTools = new();
     private readonly NodeFileTransfer transfers;
     private readonly string requestedName;
     private readonly NodePtyService? pty;
@@ -62,6 +63,7 @@ internal sealed partial class NodeClient
         {
             await StopLocalTriggerServer();
             await DrainExec();
+            await browserTools.DisposeAsync();
             if (pty is not null)
                 await pty.DisposeAsync();
         }
@@ -370,6 +372,8 @@ internal sealed partial class NodeClient
                             cancellation?.Token ?? CancellationToken.None,
                             () => execStarted = true
                         )
+                    : Text(frame, "tool")?.StartsWith("browse_", StringComparison.Ordinal) == true
+                        ? await browserTools.Execute(Text(frame, "tool")!, frame["args"] as JsonObject)
                     : await tools.Execute(
                         Text(frame, "tool") ?? "",
                         frame["args"] as JsonObject,
