@@ -94,12 +94,7 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
         foreach (var key in new[] { "createParameters", "ensureParameters" })
             if (value.ContainsKey(key))
             {
-                if (
-                    value[key] is not JsonObject schema
-                    || Encoding.UTF8.GetByteCount(schema.ToJsonString()) > 16 * 1024
-                )
-                    throw Invalid("Provider parameter schema must be a bounded object.");
-                ValidateJson(schema, 32, 10_000);
+                BoundedJson(value[key], 16 * 1024);
             }
         foreach (var key in new[] { "lifecycleDescription", "dataRetention" })
             if (value.ContainsKey(key))
@@ -117,46 +112,85 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
         var ids = new HashSet<string>(StringComparer.Ordinal);
         foreach (var raw in values)
         {
-            var node = Object(raw);
-            Keys(
-                node,
-                ["id", "label", "kind", "type", "availability", "filesystem", "exec", "defaultCwd"]
-            );
-            var local = Exact(node["id"], 128, "^[A-Za-z0-9][A-Za-z0-9._:-]*$");
-            if (local.Equals("master", StringComparison.OrdinalIgnoreCase))
-                throw Invalid("Provider Node cannot use the reserved master identity.");
-            if (!ids.Add(local))
+            var qualified = Descriptor(raw);
+            if (!ids.Add(qualified["id"]!.GetValue<string>()))
                 throw new NodeProviderException(
                     "NODE_PROVIDER_DUPLICATE_NODE",
                     "Provider advertises duplicate Node identities."
                 );
-            Exact(node["type"], 64, "^[A-Za-z0-9][A-Za-z0-9._-]*$");
-            if (
-                SessionWait.Text(node["availability"])
-                    is not ("ready" or "offline" or "unavailable" or "error")
-                || node.ContainsKey("kind")
-                    && SessionWait.Text(node["kind"]) is not ("remote" or "sandbox")
-                || SessionWait.Text(node["filesystem"]) is not ("read" or "read-write")
-                || node.ContainsKey("exec")
-                    && (
-                        node["exec"] is not JsonValue flag
-                        || !flag.TryGetValue<bool>(out var exec)
-                        || !exec
-                    )
-            )
-                throw Invalid("Provider Node has invalid primitive support or availability.");
-            if (node.ContainsKey("label"))
-                Bounded(node["label"], 256);
-            if (node.ContainsKey("defaultCwd"))
-                Bounded(node["defaultCwd"], 4096);
-            var qualified = (JsonObject)node.DeepClone();
-            qualified["id"] = id + "/" + local;
-            qualified["provider"] = id;
-            qualified["kind"] ??= "remote";
             nodes.Add(qualified);
         }
         return nodes;
     }
+
+    private JsonObject Descriptor(JsonNode? raw)
+    {
+        var node = Object(raw);
+        Keys(
+            node,
+            ["id", "label", "kind", "type", "availability", "filesystem", "exec", "defaultCwd"]
+        );
+        var local = Exact(node["id"], 128, "^[A-Za-z0-9][A-Za-z0-9._:-]*$");
+        if (local.Equals("master", StringComparison.OrdinalIgnoreCase))
+            throw Invalid("Provider Node cannot use the reserved master identity.");
+        Exact(node["type"], 64, "^[A-Za-z0-9][A-Za-z0-9._-]*$");
+        if (
+            SessionWait.Text(node["availability"])
+                is not ("ready" or "offline" or "unavailable" or "error")
+            || node.ContainsKey("kind")
+                && SessionWait.Text(node["kind"]) is not ("remote" or "sandbox")
+            || SessionWait.Text(node["filesystem"]) is not ("read" or "read-write")
+            || node.ContainsKey("exec")
+                && (
+                    node["exec"] is not JsonValue flag
+                    || !flag.TryGetValue<bool>(out var exec)
+                    || !exec
+                )
+        )
+            throw Invalid("Provider Node has invalid primitive support or availability.");
+        if (node.ContainsKey("label"))
+            Bounded(node["label"], 256);
+        if (node.ContainsKey("defaultCwd"))
+            Bounded(node["defaultCwd"], 4096);
+        var qualified = (JsonObject)node.DeepClone();
+        qualified["id"] = id + "/" + local;
+        qualified["provider"] = id;
+        qualified["kind"] ??= "remote";
+        return qualified;
+    }
+
+    internal async Task<JsonObject> LifecycleAsync(
+        string action, JsonObject request, CancellationToken token
+    )
+    {
+        var value = Object(await RunAsync(action, request, token));
+        Keys(value, ["node", "nodeId", "effect", "dataRetention", "details"]);
+        var result = new JsonObject();
+        if (action == "destroy")
+            result["nodeId"] = id + "/" + Exact(value["nodeId"], 128, "^[A-Za-z0-9][A-Za-z0-9._:-]*$");
+        else
+            result["node"] = Descriptor(value["node"]);
+        foreach (var field in new[] { "effect", "dataRetention" })
+            if (value.ContainsKey(field)) result[field] = Bounded(value[field], 4096);
+        if (value.ContainsKey("details"))
+        {
+            BoundedJson(value["details"], 64 * 1024);
+            result["details"] = value["details"]?.DeepClone();
+        }
+        return result;
+    }
+
+    internal static void BoundedJson(JsonNode? value, int maxBytes, int maxDepth = 32, int maxCount = 10_000, bool boundKeys = false)
+    {
+        if (value is not null) ValidateJson(value, maxDepth, maxCount, boundKeys);
+        if (Encoding.UTF8.GetByteCount(value?.ToJsonString(JsonEncoding) ?? "null") > maxBytes)
+            throw Invalid("Provider JSON exceeds its byte budget.");
+    }
+
+    private static readonly JsonSerializerOptions JsonEncoding = new()
+    {
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
 
     internal async Task<JsonNode?> RunAsync(
         string operation,
@@ -301,7 +335,7 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
         return text;
     }
 
-    private static void ValidateJson(JsonNode node, int maxDepth, int maxCount)
+    private static void ValidateJson(JsonNode node, int maxDepth, int maxCount, bool boundKeys = false)
     {
         var count = 0;
         void Visit(JsonNode? item, int depth)
@@ -310,7 +344,10 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
                 throw Invalid("Provider JSON is too complex.");
             if (item is JsonObject obj)
                 foreach (var pair in obj)
+                {
+                    if (boundKeys && pair.Key.Length > 256) throw Invalid("Provider JSON key is too long.");
                     Visit(pair.Value, depth + 1);
+                }
             else if (item is JsonArray array)
                 foreach (var child in array)
                     Visit(child, depth + 1);

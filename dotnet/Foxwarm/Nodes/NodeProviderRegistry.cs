@@ -8,7 +8,7 @@ using Foxwarm.Tools;
 namespace Foxwarm.Nodes;
 
 /// <summary>Main-owned generic capability boundary. Native credentials/services stay in the resident hub.</summary>
-internal sealed class NodeProviderRegistry
+internal sealed partial class NodeProviderRegistry
 {
     private readonly NodeConnectionHub native;
     private readonly Dictionary<string, ExecutableNodeProvider> providers = new(

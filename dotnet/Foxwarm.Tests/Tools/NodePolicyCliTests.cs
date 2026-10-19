@@ -220,7 +220,10 @@ public sealed class NodePolicyCliTests
             );
 
             await f.PolicyAsync(broad);
-            Assert.Null(
+            // Generic lifecycle inspection follows the fixed provider's empty declaration;
+            // the separate human/API Node summary remains supported.
+            Assert.Equal(
+                "tool_error",
                 Error(await Call("node", Obj("""{"action":"inspect","nodeId":"official"}""")))
             );
             Assert.Null(

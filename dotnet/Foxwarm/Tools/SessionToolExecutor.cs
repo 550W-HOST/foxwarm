@@ -852,7 +852,7 @@ internal sealed partial class SessionToolExecutor(
                 token
             );
         handlers["node"] = (owner, args, token) =>
-            owner.Manager.ExecuteNodeToolAsync(owner.Hosted, args, token);
+            owner.Manager.ExecuteNodeToolAsync(owner.Hosted, args, token, owner.Programmatic);
         handlers["node_create_auth_token"] = (owner, args, token) =>
             owner.Manager.CreateNodeAuthTokenAsync(owner.Hosted, args, token);
         handlers["node_remove"] = (owner, args, _) =>

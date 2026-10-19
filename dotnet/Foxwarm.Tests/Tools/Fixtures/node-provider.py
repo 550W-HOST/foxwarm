@@ -79,6 +79,13 @@ def stat(path):
 try:
     if operation == "describe":
         result = {"label": "Fixture environments", "description": "Independent executable fixture.", "lifecycle": []}
+        if mode == "lifecycle":
+            result.update(lifecycle=["create", "ensure", "inspect", "destroy"],
+                          createParameters={"type": "object", "properties": {"label": {"type": "string"}}},
+                          ensureParameters={"type": "object"}, lifecycleDescription="Manage disposable fixture environments.",
+                          dataRetention="Destroy removes discovery; target files remain.")
+        if (root / "description.json").exists():
+            result = json.loads((root / "description.json").read_text())
     elif operation == "list":
         if (root / "list-unavailable").exists():
             raise OSError(errno.EIO, "Directory temporarily unavailable")
@@ -88,7 +95,46 @@ try:
                  {"id": "offline", "type": "fixture", "availability": "offline", "filesystem": "read"}]
         if mode == "duplicate":
             nodes.append(nodes[0])
+        if mode == "lifecycle":
+            nodes += [json.loads(p.read_text()) for p in sorted((root / "environments").glob("*.json"))]
         result = {"nodes": nodes}
+    elif operation in ("create", "ensure", "inspect", "destroy"):
+        assert mode == "lifecycle"
+        assert set(body) <= {"sourceSessionId", "nodeId", "parameters", "context"}
+        assert set(body["context"]) == {"agent"}
+        assert body["sourceSessionId"]
+        local = body.get("nodeId", "generated")
+        assert "/" not in local
+        environments = root / "environments"
+        environments.mkdir(exist_ok=True)
+        descriptor_path = environments / (local + ".json")
+        parameters = body["parameters"]
+        if operation in ("create", "ensure"):
+            descriptor = {"id": local, "label": parameters.get("label", local), "type": "fixture", "kind": "sandbox",
+                          "availability": "ready", "filesystem": "read-write", "exec": True, "defaultCwd": "opaque://root"}
+            descriptor_path.write_text(json.dumps(descriptor))
+            with (root / "effects.jsonl").open("a") as effects:
+                effects.write(json.dumps({"operation": operation, "nodeId": local}) + "\n")
+            if parameters.get("block"):
+                (root / "effect-started").touch()
+                deadline = time.monotonic() + 10
+                while not (root / "release-effect").exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+            if parameters.get("lostReceipt"):
+                print("{}\n{}", flush=True)
+                sys.exit(0)
+            if parameters.get("wrongIdentity"):
+                descriptor["id"] = "wrong-result"
+            result = {"node": descriptor, "effect": operation + " completed", "dataRetention": "Target files retained.",
+                      "details": {"parameters": parameters, "sourceSessionId": body["sourceSessionId"], "context": body["context"], "nodeId": "business-data-not-qualified"}}
+        elif operation == "inspect":
+            descriptor = json.loads(descriptor_path.read_text()) if descriptor_path.exists() else {"id": local, "type": "fixture", "availability": "ready", "filesystem": "read-write"}
+            result = {"node": descriptor, "details": {"parameters": parameters}}
+        else:
+            descriptor_path.unlink(missing_ok=True)
+            with (root / "effects.jsonl").open("a") as effects:
+                effects.write(json.dumps({"operation": operation, "nodeId": local}) + "\n")
+            result = {"nodeId": "wrong-result" if parameters.get("wrongIdentity") else local, "effect": "Removed from discovery.", "dataRetention": "Target files retained."}
     elif operation == "exec-start":
         assert set(body) <= {"nodeId", "command", "cwd"}
         assert "/" not in body["nodeId"]

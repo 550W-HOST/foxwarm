@@ -184,67 +184,6 @@ internal sealed partial class SessionManager
         return new JsonObject { ["nodeId"] = id, ["disconnected"] = Nodes.Remove(id) };
     }
 
-    internal async Task<JsonObject> ExecuteNodeToolAsync(
-        SessionOwner owner,
-        JsonObject args,
-        CancellationToken token
-    )
-    {
-        var action = ToolRegistry.Text(args, "action")?.Trim().ToLowerInvariant();
-        if (action == "list")
-        {
-            ToolRegistry.Keys(args, ["action"]);
-            var values = await NodeSummariesAsync(token: token);
-            if (AgentIsolated(owner.Agent))
-                values = new JsonArray(
-                    values
-                        .Where(value =>
-                            SessionWait.Text(value?["id"])
-                            == (RecordedIsolationNode(owner.Agent) ?? "master")
-                        )
-                        .Select(value => value?.DeepClone())
-                        .ToArray()
-                );
-            return new JsonObject
-            {
-                ["output"] =
-                    $"Current node: `{CurrentNode(owner)}`.\n"
-                    + string.Join(
-                        '\n',
-                        values
-                            .OfType<JsonObject>()
-                            .Select(value =>
-                                $"- `{value["id"]!.GetValue<string>()}` ({value["type"]!.GetValue<string>()}) — {(value["executable"]!.GetValue<bool>() ? "ready" : value["online"]!.GetValue<bool>() ? "upgrade required" : "offline")}"
-                            )
-                    ),
-            };
-        }
-        ToolRegistry.Keys(args, ["action", "nodeId"]);
-        var id = (
-            ToolRegistry.Text(args, "nodeId")
-            ?? throw new InvalidDataException("nodeId is required.")
-        ).Trim();
-        if (action == "select")
-        {
-            if (AgentIsolated(owner.Agent))
-                throw new ToolAuthorizationDeniedException(
-                    "Isolated sessions cannot switch Node through model tools. Use the administrator Node command."
-                );
-            return await SelectNodeAsync(owner, id, token);
-        }
-        if (action == "inspect")
-        {
-            RequireNodeBoundary(owner, id);
-            var value =
-                (await NodeSummariesAsync(token: token))
-                    .OfType<JsonObject>()
-                    .FirstOrDefault(value => SessionWait.Text(value["id"]) == id)
-                ?? throw new InvalidDataException("Node not found.");
-            return new JsonObject { ["output"] = value.ToJsonString() };
-        }
-        throw new InvalidDataException("node action must be list, select or inspect.");
-    }
-
     internal JsonObject NodeBootstrapInfo(JsonObject args)
     {
         ToolRegistry.Keys(args, []);

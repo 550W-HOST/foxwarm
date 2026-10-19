@@ -1,7 +1,7 @@
 # Unit: example-linux-ssh-provider
 
 Files: skills/node-setup/examples/linux-ssh/provider.py, skills/node-setup/examples/linux-ssh/target.py, skills/node-setup/examples/linux-ssh/README.md
-Secondary files: src/nodes/linuxSshProvider.test.ts, src/nodes/providerExecRestartTestFixture.ts, docs/executable-node-provider-protocol.md
+Secondary files: scripts/test/loopbackSshFixture.cjs, packages/webui/test/experimentHostProviderSsh.e2e.mjs, src/nodes/linuxSshProvider.test.ts, src/nodes/providerExecRestartTestFixture.ts, docs/executable-node-provider-protocol.md
 
 ## Purpose
 
@@ -17,7 +17,8 @@ An optional independently runnable reference implementation of the generic execu
 | `target.py.start()` | Create a private UUID execution directory, preserve command data, launch a detached supervisor and return an actual target log/cwd receipt |
 | `target.py.run_command()` | Run Bash independently of the request connection, retain raw merged output and atomically publish actual exit/cwd state |
 | `target.py.identity()` / `poll()` | Match Linux boot/start identity rather than reused PID alone; read completion, observe running cwd or explicitly report lost records/process |
-| `linuxSshProvider.test.ts` | Owned loopback sshd fixture with generated keys and an exact trusted-host file; opt-in real transport evidence |
+| `loopbackSshFixture.cjs` | Shared owned loopback sshd with generated keys, exact trusted-host file and verified owned-PID cleanup; no host service/configuration changes |
+| `linuxSshProvider.test.ts` / `experimentHostProviderSsh.e2e.mjs` | Source and ordinary C# Main public-protocol interoperability over the shared real SSH fixture |
 | `providerExecRestartTestFixture.ts` | Separate short-lived Core process for start or persisted-reference recovery |
 
 ## Contract and limits
@@ -37,3 +38,5 @@ An optional independently runnable reference implementation of the generic execu
 The opt-in Linux SSH test starts only its owned loopback sshd using temporary host/client keys, authorized keys, config, port and target data. It uses exact host-key trust, proves rejection after trust is removed and proves cancellation reaps an owned SSH child blocked in a target file read. The existing host SSH service and existing Node credentials/deployments are not changed.
 
 It covers generic discovery/inspection, absent lifecycle, canonical write/edit/patch/read, exact binary bytes, 12 MiB bounded binary transfer round trips, real nonzero command exit, original shell EOF/newline behavior, quoted/Unicode/whitespace-bearing target cwd and exact-owner synchronization, background survival/completion, bounded large logs and reattachment across two actual Core process exits without another start. The environment is local real SSH transport, not an isolation demonstration. Controlled generic subprocess fixtures separately cover uncertain start, hard owner loss, transient/slow queries, lost state, missing configuration, denied authority and unavailable output.
+
+The C# Main qualification uses the packaged public adapter and adjacent helper without source-tree imports. It exercises ordinary model/native ToolScript callers, structured discovery with empty lifecycle, explicit unsupported operations, canonical files, bounded binary transfer, target cwd/raw logs and the exact provider reference across an actual Main exit/restart. The target directory count and single effect confirm no repeated start. Removing exact host trust makes discovery offline and prevents command submission.

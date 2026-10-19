@@ -36,7 +36,7 @@ Current integration boundaries:
   ordinary external Node tools, remote exec/completion, whole-file consumers and fixed
   Code/PTY services and exec-only Shell HTTP connect through .NET trust/transport/dispatch;
   Session Worker hosting and managed ToolScript/controllers remain excluded. Executable
-  Node registry/files and persistent provider exec are connected; lifecycle remains a later checkpoint (see delivery scope below).
+  Node registry/files, persistent provider exec and optional lifecycle are connected (see delivery scope below).
 
 Optional remote and compatibility components:
   CLI Node, browser extension, Android Node, sandbox runtime, VS Code Web assets,
@@ -107,4 +107,4 @@ Optional remote and compatibility components:
 
 ## D-dotnet-delivery-scope
 
-[2026-10-19] Session Worker hosting and managed ToolScript/controller execution remain intentional .NET delivery exclusions. Generic executable Node Provider implementation is now in scope: the current implementation connects registry/discovery, qualified placement, file/process primitives and their consumers through the existing persistent exec owner; optional lifecycle remains a later checkpoint and is not advertised as working. Existing authenticated external Node connection, execution and credentials remain supported. The TypeScript compatibility implementations and shared protocols remain real reference/external boundaries. Current implementation ownership is mapped in [Nodes and executable providers](./modules/dotnet-nodes.md).
+[2026-10-19] Session Worker hosting and managed ToolScript/controller execution remain intentional .NET delivery exclusions. Generic executable Node Provider implementation is now in scope: the current implementation connects registry/discovery, qualified placement, file/process primitives, optional provider lifecycle and their consumers through the existing Main authorization and persistent exec owners. Existing authenticated external Node connection, execution and credentials remain supported. The TypeScript compatibility implementations and shared protocols remain real reference/external boundaries. Current implementation ownership is mapped in [Nodes and executable providers](./modules/dotnet-nodes.md).

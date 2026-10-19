@@ -3,9 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'node:os';
-import net from 'node:net';
 import path from 'node:path';
-import { spawn, execFile } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createExecRuntime } from '../execManager';
 import { ExecutableNodeProvider } from './executableProvider';
@@ -19,43 +18,9 @@ import { callTool } from '../tools';
 const execute = promisify(execFile);
 const enabled = process.env.FOXWARM_SSH_TEST === '1' && process.platform === 'linux';
 
-async function sshFixture(root: string) {
-  const host = path.join(root, 'host');
-  const identity = path.join(root, 'identity');
-  await execute('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', host]);
-  await execute('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', identity]);
-  const listener = net.createServer();
-  await new Promise<void>(resolve => listener.listen(0, '127.0.0.1', resolve));
-  const port = (listener.address() as net.AddressInfo).port;
-  await new Promise<void>(resolve => listener.close(() => resolve()));
-  const knownHosts = path.join(root, 'known_hosts');
-  await fs.writeFile(knownHosts, `[127.0.0.1]:${port} ${await fs.readFile(`${host}.pub`, 'utf8')}`);
-  const authorizedKeys = path.join(root, 'authorized_keys');
-  await fs.copy(`${identity}.pub`, authorizedKeys);
-  await fs.chmod(authorizedKeys, 0o600);
-  const pidPath = path.join(root, 'sshd.pid');
-  const configPath = path.join(root, 'sshd_config');
-  await fs.writeFile(configPath, [
-    `Port ${port}`, 'ListenAddress 127.0.0.1', `HostKey ${host}`, `PidFile ${pidPath}`,
-    `AuthorizedKeysFile ${authorizedKeys}`, 'PasswordAuthentication no', 'KbdInteractiveAuthentication no',
-    'UsePAM no', 'StrictModes yes', `AllowUsers ${os.userInfo().username}`, 'LogLevel VERBOSE',
-  ].join('\n'));
-  const daemon = spawn('sudo', ['-n', '/usr/sbin/sshd', '-D', '-e', '-f', configPath], { stdio: ['ignore', 'ignore', 'pipe'] });
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Dedicated sshd did not start.')), 5000);
-    daemon.once('exit', code => { clearTimeout(timer); reject(new Error(`Dedicated sshd exited: ${code}`)); });
-    daemon.stderr.on('data', chunk => { if (String(chunk).includes('Server listening')) { clearTimeout(timer); resolve(); } });
-  });
-  return {
-    target: `${os.userInfo().username}@127.0.0.1`,
-    sshArgs: ['-F', '/dev/null', '-p', String(port), '-i', identity, `-oUserKnownHostsFile=${knownHosts}`, '-oIdentitiesOnly=yes'],
-    async close() {
-      const exited = new Promise<void>(resolve => daemon.once('exit', () => resolve()));
-      if (await fs.pathExists(pidPath)) await execute('sudo', ['-n', 'kill', '-TERM', (await fs.readFile(pidPath, 'utf8')).trim()]);
-      await exited;
-    },
-  };
-}
+const { sshFixture }: {
+  sshFixture(root: string): Promise<{ target: string; sshArgs: string[]; close(): Promise<void> }>;
+} = require('../../scripts/test/loopbackSshFixture.cjs');
 
 test('external SSH adapter: canonical files, raw bytes, cwd, bounded output, background completion and cross-process restart reattachment', { skip: !enabled, timeout: 60000 }, async () => {
   const root = await fs.mkdtemp(path.join(os.homedir(), '.foxwarm-ssh-test-'));
