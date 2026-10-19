@@ -201,20 +201,23 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
 
     // Budget the parsed data as JSON.stringify would, not the transport writer's
     // escaping or raw numeric spelling. This does not change protocol serialization.
-    private static long JsonBytes(JsonNode? value) => value switch
-    {
-        null => 4,
-        JsonObject obj => 2L + Math.Max(0, obj.Count - 1)
-            + obj.Sum(pair => JsonStringBytes(pair.Key) + 1 + JsonBytes(pair.Value)),
-        JsonArray array => 2L + Math.Max(0, array.Count - 1) + array.Sum(JsonBytes),
-        JsonValue scalar when scalar.TryGetValue<string>(out var text) => JsonStringBytes(text),
-        JsonValue scalar when scalar.TryGetValue<bool>(out var flag) => flag ? 4 : 5,
-        JsonValue scalar => EcmaNumber.Format(JsonNumber(scalar)).Length,
-        _ => throw Invalid("Provider value must be plain JSON."),
-    };
+    private static long JsonBytes(JsonNode? value) =>
+        value switch
+        {
+            null => 4,
+            JsonObject obj => 2L
+                + Math.Max(0, obj.Count - 1)
+                + obj.Sum(pair => JsonStringBytes(pair.Key) + 1 + JsonBytes(pair.Value)),
+            JsonArray array => 2L + Math.Max(0, array.Count - 1) + array.Sum(JsonBytes),
+            JsonValue scalar when scalar.TryGetValue<string>(out var text) => JsonStringBytes(text),
+            JsonValue scalar when scalar.TryGetValue<bool>(out var flag) => flag ? 4 : 5,
+            JsonValue scalar => EcmaNumber.Format(JsonNumber(scalar)).Length,
+            _ => throw Invalid("Provider value must be plain JSON."),
+        };
 
     private static double JsonNumber(JsonValue value) =>
-        SessionWait.Number(value) ?? double.Parse(value.ToJsonString(), CultureInfo.InvariantCulture);
+        SessionWait.Number(value)
+        ?? double.Parse(value.ToJsonString(), CultureInfo.InvariantCulture);
 
     private static long JsonStringBytes(string text)
     {
@@ -226,7 +229,11 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
                 bytes += 2;
             else if (character < 32)
                 bytes += 6;
-            else if (char.IsHighSurrogate(character) && index + 1 < text.Length && char.IsLowSurrogate(text[index + 1]))
+            else if (
+                char.IsHighSurrogate(character)
+                && index + 1 < text.Length
+                && char.IsLowSurrogate(text[index + 1])
+            )
             {
                 bytes += 4;
                 index++;
@@ -234,7 +241,10 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
             else if (char.IsSurrogate(character))
                 bytes += 6; // JSON.stringify escapes lone UTF-16 surrogates.
             else
-                bytes += character <= 0x7f ? 1 : character <= 0x7ff ? 2 : 3;
+                bytes +=
+                    character <= 0x7f ? 1
+                    : character <= 0x7ff ? 2
+                    : 3;
         }
         return bytes;
     }
@@ -417,10 +427,12 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
                 foreach (var child in array)
                     Visit(child, depth + 1);
             }
-            else if (item is JsonValue scalar
+            else if (
+                item is JsonValue scalar
                 && !scalar.TryGetValue<string>(out _)
                 && !scalar.TryGetValue<bool>(out _)
-                && !double.IsFinite(JsonNumber(scalar)))
+                && !double.IsFinite(JsonNumber(scalar))
+            )
                 throw Invalid("Provider JSON numbers must be finite.");
         }
         Visit(node, 0);
