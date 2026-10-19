@@ -144,14 +144,18 @@ public sealed partial class SessionCommandEffectsTests
                 "parts"
             ]!.AsArray();
             Assert.Equal(4, responses.Count);
-            var calls = f.Owner.History().Single(row =>
-                row["role"]?.ToString() == "model"
-                && row["parts"]!.AsArray().Any(part => part?["functionCall"] is not null)
-            )["parts"]!.AsArray();
+            var calls = f
+                .Owner.History()
+                .Single(row =>
+                    row["role"]?.ToString() == "model"
+                    && row["parts"]!.AsArray().Any(part => part?["functionCall"] is not null)
+                )["parts"]!.AsArray();
             Assert.Equal(4, calls.Count);
-            JsonNode ResponseFor(string id) => Assert.Single(responses, item =>
-                item?["functionResponse"]?["tool_use_id"]?.ToString() == id
-            )!["functionResponse"]!;
+            JsonNode ResponseFor(string id) =>
+                Assert.Single(
+                    responses,
+                    item => item?["functionResponse"]?["tool_use_id"]?.ToString() == id
+                )!["functionResponse"]!;
             foreach (var part in calls)
             {
                 var call = part!["functionCall"]!;
@@ -179,7 +183,10 @@ public sealed partial class SessionCommandEffectsTests
             Assert.Null(malformedResponse["executionTiming"]);
             Assert.Equal(
                 new[] { "allowed.txt" },
-                Directory.GetFiles(f.Manager.AgentDirectory("main")).Select(Path.GetFileName).ToArray()
+                Directory
+                    .GetFiles(f.Manager.AgentDirectory("main"))
+                    .Select(Path.GetFileName)
+                    .ToArray()
             );
             Assert.DoesNotContain("🛠", peer.Requests.Last()["input"]!.ToJsonString());
             var preview = await SourceAsync(
@@ -199,11 +206,7 @@ public sealed partial class SessionCommandEffectsTests
             );
             Assert.Equal("🛠 *[write]*: `" + preview["preview"] + "`", verbose.Text);
             var malformedPreview = await SourceAsync(
-                new JsonObject
-                {
-                    ["operation"] = "preview",
-                    ["call"] = malformedCall.DeepClone(),
-                }
+                new JsonObject { ["operation"] = "preview", ["call"] = malformedCall.DeepClone() }
             );
             Assert.Equal("🛠 *[write]*: `" + malformedPreview["preview"] + "`", malformed.Text);
             Assert.Equal(

@@ -318,25 +318,30 @@ internal sealed partial class SessionToolExecutor(
     {
         static string Text(JsonNode? value) =>
             SessionWait.Text(value) ?? (value is null ? "null" : EcmaJson.Stringify(value));
-        var preview = rawArgsText ?? (
-            name switch
-            {
-                "exec" => Text(args["command"]),
-                "edit" or "write" or "edit_memory" or "write_memory" or "delete_memory" => Text(
-                    args["filePath"]
-                ),
-                "apply_patch" or "apply_patch_memory" => SessionWait.Text(args["input"]) ?? "",
-                "read" or "read_memory" => (SessionWait.Text(args["filePath"]) ?? "")
-                    + (
-                        SessionWait.Number(args["startLine"]) is > 0
-                            ? $" (lines {Text(args["startLine"])}-{Text(args["endLine"])})"
-                            : ""
+        var preview =
+            rawArgsText
+            ?? (
+                name switch
+                {
+                    "exec" => Text(args["command"]),
+                    "edit" or "write" or "edit_memory" or "write_memory" or "delete_memory" => Text(
+                        args["filePath"]
                     ),
-                _ => args.Count == 1
-                    ? Text(args.First().Value)
-                    : string.Join('\n', args.Select(pair => pair.Key + ": " + Text(pair.Value))),
-            }
-        );
+                    "apply_patch" or "apply_patch_memory" => SessionWait.Text(args["input"]) ?? "",
+                    "read" or "read_memory" => (SessionWait.Text(args["filePath"]) ?? "")
+                        + (
+                            SessionWait.Number(args["startLine"]) is > 0
+                                ? $" (lines {Text(args["startLine"])}-{Text(args["endLine"])})"
+                                : ""
+                        ),
+                    _ => args.Count == 1
+                        ? Text(args.First().Value)
+                        : string.Join(
+                            '\n',
+                            args.Select(pair => pair.Key + ": " + Text(pair.Value))
+                        ),
+                }
+            );
         return preview.Length > 200 ? preview[..197] + "..." : preview;
     }
 
