@@ -109,16 +109,16 @@ internal sealed partial class NodeClient
                 currentConnection = connection;
                 try
                 {
-                await connection.Send(
-                    new JsonObject
-                    {
-                        ["type"] = Authenticated ? "node_register" : "pair_request",
-                        ["nodeType"] = "cli-node",
-                        ["capabilities"] = Capabilities(),
-                        ["nodeProtocol"] = new JsonObject { ["min"] = 1, ["max"] = 3 },
-                        ["requestedName"] = Authenticated ? null : requestedName,
-                    }
-                );
+                    await connection.Send(
+                        new JsonObject
+                        {
+                            ["type"] = Authenticated ? "node_register" : "pair_request",
+                            ["nodeType"] = "cli-node",
+                            ["capabilities"] = Capabilities(),
+                            ["nodeProtocol"] = new JsonObject { ["min"] = 1, ["max"] = 3 },
+                            ["requestedName"] = Authenticated ? null : requestedName,
+                        }
+                    );
                     await Receive(connection, stop);
                 }
                 finally
@@ -632,7 +632,8 @@ internal sealed partial class NodeClient
                 }
                 try
                 {
-                    var response = await TransmitAndWait().WaitAsync(TimeSpan.FromSeconds(timeoutSeconds));
+                    var response = await TransmitAndWait()
+                        .WaitAsync(TimeSpan.FromSeconds(timeoutSeconds));
                     return response["result"]?.DeepClone();
                 }
                 catch (TimeoutException)
@@ -654,7 +655,13 @@ internal sealed partial class NodeClient
                 Text(frame, "type") == "error"
                 || frame["ok"] is JsonValue value && value.TryGetValue<bool>(out var ok) && !ok
             )
-                pending.TrySetException(new IOException(Text(frame, "error") is { Length: > 0 } error ? error : "cli-node request failed"));
+                pending.TrySetException(
+                    new IOException(
+                        Text(frame, "error") is { Length: > 0 } error
+                            ? error
+                            : "cli-node request failed"
+                    )
+                );
             else
                 pending.TrySetResult(frame);
         }
@@ -666,9 +673,13 @@ internal sealed partial class NodeClient
                     pending.TrySetException(
                         new IOException(
                             "Remote node connection closed before master acknowledged the request ("
-                            + (Socket.CloseStatus is { } code ? (int)code : 1006)
-                            + (string.IsNullOrEmpty(Socket.CloseStatusDescription) ? "" : ": " + Socket.CloseStatusDescription)
-                            + ")"
+                                + (Socket.CloseStatus is { } code ? (int)code : 1006)
+                                + (
+                                    string.IsNullOrEmpty(Socket.CloseStatusDescription)
+                                        ? ""
+                                        : ": " + Socket.CloseStatusDescription
+                                )
+                                + ")"
                         )
                     );
         }

@@ -72,9 +72,7 @@ internal static class Program
                 || index + 1 >= args.Length
             )
                 throw new InvalidDataException(
-                    "Unsupported or incomplete option: "
-                        + args[index]
-                        + "."
+                    "Unsupported or incomplete option: " + args[index] + "."
                 );
             values[args[index]] = args[++index];
         }
@@ -99,23 +97,41 @@ internal static class Program
             TriggerPort(values.GetValueOrDefault("--local-trigger-port"))
         );
     }
+
     private static double TriggerPort(string? text)
     {
         text = NodePaths.TrimSpace(text ?? "");
         double port;
         if (text.Length > 2 && text[0] == '0' && "xXbBoO".Contains(text[1]))
         {
-            var radix = char.ToLowerInvariant(text[1]) switch { 'x' => 16, 'b' => 2, _ => 8 };
+            var radix = char.ToLowerInvariant(text[1]) switch
+            {
+                'x' => 16,
+                'b' => 2,
+                _ => 8,
+            };
             port = 0;
             foreach (var digit in text.AsSpan(2))
             {
-                var number = digit is >= '0' and <= '9' ? digit - '0' : digit is >= 'a' and <= 'f' ? digit - 'a' + 10 : digit is >= 'A' and <= 'F' ? digit - 'A' + 10 : -1;
-                if (number < 0 || number >= radix) return 0;
+                var number =
+                    digit is >= '0' and <= '9' ? digit - '0'
+                    : digit is >= 'a' and <= 'f' ? digit - 'a' + 10
+                    : digit is >= 'A' and <= 'F' ? digit - 'A' + 10
+                    : -1;
+                if (number < 0 || number >= radix)
+                    return 0;
                 port = port * radix + number;
             }
         }
-        else if (!double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out port)) return 0;
+        else if (
+            !double.TryParse(
+                text,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out port
+            )
+        )
+            return 0;
         return double.IsFinite(port) ? port : 0;
     }
-
 }

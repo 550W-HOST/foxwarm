@@ -25,12 +25,26 @@ public sealed class NodeSessionRequestTests
 
         internal async Task<NodeClient> Cli()
         {
-            var client = new NodeClient(new NodeClientOptions(app.Urls.Single(), "one", null, credential["authToken"]!.ToString(), null, LocalTrigger: false), new NodePaths(temp.Path));
+            var client = new NodeClient(
+                new NodeClientOptions(
+                    app.Urls.Single(),
+                    "one",
+                    null,
+                    credential["authToken"]!.ToString(),
+                    null,
+                    LocalTrigger: false
+                ),
+                new NodePaths(temp.Path)
+            );
             cliRunning = client.Run(cliStop.Token);
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             while (true)
             {
-                try { if ((await client.ListBoundSessions()).Count > 0) return client; }
+                try
+                {
+                    if ((await client.ListBoundSessions()).Count > 0)
+                        return client;
+                }
                 catch (IOException) { }
                 await Task.Delay(20, deadline.Token);
             }
@@ -195,7 +209,8 @@ public sealed class NodeSessionRequestTests
         public async ValueTask DisposeAsync()
         {
             cliStop.Cancel();
-            if (cliRunning is not null) await cliRunning;
+            if (cliRunning is not null)
+                await cliRunning;
             cliStop.Dispose();
             foreach (var socket in sockets)
             {
@@ -218,7 +233,8 @@ public sealed class NodeSessionRequestTests
     [InlineData(true)]
     public async Task Real_cli_API_uses_catalog_alias_history_and_ordinary_owner_ingress(bool bound)
     {
-        await using var f = new Fixture(); await f.Start(bound);
+        await using var f = new Fixture();
+        await f.Start(bound);
         var client = await f.Cli();
         Assert.Equal("cold", (await client.ListBoundSessions())[0]!["id"]!.ToString());
         Assert.Empty(f.Manager.Owners());
@@ -229,11 +245,20 @@ public sealed class NodeSessionRequestTests
         var owner = await f.Manager.RequiredAsync("cold");
         Assert.Empty(owner.Entry.Snapshot().Queue);
         await client.SendSessionMessage("old-cold", "ordinary CLI input");
-        Assert.True(owner.Entry.Snapshot().Queue.Count > 0 || owner.Entry.Snapshot().History.Count > 105);
-        Assert.Contains("missing", (await Assert.ThrowsAsync<IOException>(() => client.GetSessionHistory("missing"))).Message);
+        Assert.True(
+            owner.Entry.Snapshot().Queue.Count > 0 || owner.Entry.Snapshot().History.Count > 105
+        );
+        Assert.Contains(
+            "missing",
+            (
+                await Assert.ThrowsAsync<IOException>(() => client.GetSessionHistory("missing"))
+            ).Message
+        );
         // Selection/binding belongs to Main, not the client or the local HTTP caller.
-        if (bound) await f.Manager.SetAgentNodeAsync("main", null);
-        else await f.Manager.SelectNodeAsync(owner, "master");
+        if (bound)
+            await f.Manager.SetAgentNodeAsync("main", null);
+        else
+            await f.Manager.SelectNodeAsync(owner, "master");
         Assert.Empty(await client.ListBoundSessions());
         await Assert.ThrowsAsync<IOException>(() => client.SendSessionMessage("cold", "denied"));
     }
