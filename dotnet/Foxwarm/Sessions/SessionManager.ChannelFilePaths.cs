@@ -14,8 +14,15 @@ internal sealed partial class SessionManager
 
     // The resolved ingress owner, not a later conversation binding, owns the saved attachment.
     internal async Task<IReadOnlyList<JsonObject>> SaveInboundChannelFileFromPathAsync(
-        SessionOwner owner, string platform, string source, long size, string filename,
-        string mime, bool image, CancellationToken token)
+        SessionOwner owner,
+        string platform,
+        string source,
+        long size,
+        string filename,
+        string mime,
+        bool image,
+        CancellationToken token
+    )
     {
         using var admission = BeginOwnerMutation(owner);
         owner.Entry.RequireIdentityAuthority();
@@ -27,21 +34,37 @@ internal sealed partial class SessionManager
         {
             if (size > 10 * 1024 * 1024)
                 throw new InvalidDataException("Attachment exceeds the Node transfer limit.");
-            return await SaveInboundChannelFileCoreAsync(platform, owner,
-                await File.ReadAllBytesAsync(source, token), filename, mime, "", token, image);
+            return await SaveInboundChannelFileCoreAsync(
+                platform,
+                owner,
+                await File.ReadAllBytesAsync(source, token),
+                filename,
+                mime,
+                "",
+                token,
+                image
+            );
         }
         var segment = Regex.Replace(platform.Trim(), "[^a-zA-Z0-9._-]+", "_").TrimStart('.');
-        var name = ChannelFileNames.StorageName(filename, mime,
+        var name = ChannelFileNames.StorageName(
+            filename,
+            mime,
             DateTimeOffset.UtcNow.ToString("yyyy-MM-ddTHH-mm-ss-fffZ"),
-            Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(4)));
-        var path = Path.Combine(AgentDirectory(owner.Agent), ".temp", "channel-files",
-            segment.Length == 0 ? "file" : segment, name);
+            Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(4))
+        );
+        var path = Path.Combine(
+            AgentDirectory(owner.Agent),
+            ".temp",
+            "channel-files",
+            segment.Length == 0 ? "file" : segment,
+            name
+        );
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         if (!await FileToolCore.CopyPathAtomic(source, path, false, () => { }, token))
             throw new IOException("Inbound file already exists.");
         var parts = new List<JsonObject>
         {
-            new() { ["text"] = ChannelFileNames.Descriptor(filename, path, mime, "master", image) }
+            new() { ["text"] = ChannelFileNames.Descriptor(filename, path, mime, "master", image) },
         };
         if (image)
         {
@@ -51,17 +74,21 @@ internal sealed partial class SessionManager
             var bytes = await File.ReadAllBytesAsync(source, token);
             var imageId = "image_" + Guid.NewGuid();
             var reference = await Images.PutAsync(bytes, mime, imageId, token);
-            parts.Add(new JsonObject
-            {
-                ["inlineDataRef"] = reference,
-                ["imageMeta"] = new JsonObject
+            parts.Add(
+                new JsonObject
                 {
-                    ["imageId"] = imageId, ["mimeType"] = mime, ["sizeBytes"] = bytes.Length,
-                    ["width"] = reference["width"]?.DeepClone(),
-                    ["height"] = reference["height"]?.DeepClone(),
-                    ["sha256"] = reference["sha256"]?.DeepClone()
+                    ["inlineDataRef"] = reference,
+                    ["imageMeta"] = new JsonObject
+                    {
+                        ["imageId"] = imageId,
+                        ["mimeType"] = mime,
+                        ["sizeBytes"] = bytes.Length,
+                        ["width"] = reference["width"]?.DeepClone(),
+                        ["height"] = reference["height"]?.DeepClone(),
+                        ["sha256"] = reference["sha256"]?.DeepClone(),
+                    },
                 }
-            });
+            );
         }
         return parts;
     }

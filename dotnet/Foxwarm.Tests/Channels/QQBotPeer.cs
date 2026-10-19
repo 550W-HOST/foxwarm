@@ -29,7 +29,9 @@ internal sealed class QQBotPeer : IAsyncDisposable
     internal DateTimeOffset Now = DateTimeOffset.UtcNow;
     internal TimeSpan? MediaTimeout;
     internal TimeSpan? PartTimeout;
+
     private QQBotPeer(WebApplication app) => this.app = app;
+
     internal static async Task<QQBotPeer> StartAsync()
     {
         var builder = WebApplication.CreateSlimBuilder();
@@ -43,25 +45,34 @@ internal sealed class QQBotPeer : IAsyncDisposable
         peer.Address = new(peer.app.Urls.Single() + "/");
         return peer;
     }
-    internal ChannelTransportDependencies Dependencies => new(
-        CreateQQBotHttp: () => new HttpClient(new PrivateTransport(Address)),
-        Now: () => Now,
-        Delay: (span, token) =>
-        {
-            Delays.Enqueue(span);
-            return Task.Delay(span > TimeSpan.FromSeconds(1) ? TimeSpan.FromMilliseconds(30) : span, token);
-        },
-        QQBotMediaTimeout: MediaTimeout,
-        QQBotPartTimeout: PartTimeout
-    );
+
+    internal ChannelTransportDependencies Dependencies =>
+        new(
+            CreateQQBotHttp: () => new HttpClient(new PrivateTransport(Address)),
+            Now: () => Now,
+            Delay: (span, token) =>
+            {
+                Delays.Enqueue(span);
+                return Task.Delay(
+                    span > TimeSpan.FromSeconds(1) ? TimeSpan.FromMilliseconds(30) : span,
+                    token
+                );
+            },
+            QQBotMediaTimeout: MediaTimeout,
+            QQBotPartTimeout: PartTimeout
+        );
+
     // Only test transport rewrites the network destination. Production validators still receive the
     // exact HTTPS asset/COS URLs, and the peer records all headers sent to each logical authority.
-    private sealed class PrivateTransport(Uri address) : DelegatingHandler(new SocketsHttpHandler
+    private sealed class PrivateTransport(Uri address)
+        : DelegatingHandler(
+            new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false }
+        )
     {
-        AllowAutoRedirect = false, UseCookies = false
-    })
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken token
+        )
         {
             var original = request.RequestUri!;
             request.Headers.Add("X-Fixture-Authority", original.Host);
@@ -69,27 +80,75 @@ internal sealed class QQBotPeer : IAsyncDisposable
             return base.SendAsync(request, token);
         }
     }
-    internal JsonObject Config(bool mention = true, int batch = 0) => new()
-    {
-        ["type"] = "qqbot", ["appId"] = "fixture-app", ["clientSecret"] = "fixture-secret",
-        ["allowedUsers"] = new JsonArray("alice", "bob"), ["requireMention"] = mention,
-        ["groupBatchWindowMs"] = batch
-    };
-    internal static JsonObject Message(string id, string text = "hello", string sender = "alice", string group = "room", JsonArray? attachments = null) => new()
-    {
-        ["id"] = id, ["content"] = text, ["group_openid"] = group,
-        ["author"] = new JsonObject { ["member_openid"] = sender, ["user_openid"] = sender, ["id"] = sender, ["username"] = "Name " + sender },
-        ["channel_id"] = "guild-channel", ["guild_id"] = "guild-id", ["attachments"] = attachments?.DeepClone()
-    };
-    internal static JsonArray Attachment(string path = "/asset", string mime = "file", long? size = null) =>
-        new(new JsonObject { ["filename"] = "../../fixture.bin", ["content_type"] = mime, ["size"] = size, ["url"] = "https://qpic.cn" + path });
-    internal void Push(string type, JsonObject body, int sequence = 2) => Push(new JsonObject
-    {
-        ["op"] = 0, ["t"] = type, ["s"] = sequence, ["d"] = body.DeepClone()
-    });
+
+    internal JsonObject Config(bool mention = true, int batch = 0) =>
+        new()
+        {
+            ["type"] = "qqbot",
+            ["appId"] = "fixture-app",
+            ["clientSecret"] = "fixture-secret",
+            ["allowedUsers"] = new JsonArray("alice", "bob"),
+            ["requireMention"] = mention,
+            ["groupBatchWindowMs"] = batch,
+        };
+
+    internal static JsonObject Message(
+        string id,
+        string text = "hello",
+        string sender = "alice",
+        string group = "room",
+        JsonArray? attachments = null
+    ) =>
+        new()
+        {
+            ["id"] = id,
+            ["content"] = text,
+            ["group_openid"] = group,
+            ["author"] = new JsonObject
+            {
+                ["member_openid"] = sender,
+                ["user_openid"] = sender,
+                ["id"] = sender,
+                ["username"] = "Name " + sender,
+            },
+            ["channel_id"] = "guild-channel",
+            ["guild_id"] = "guild-id",
+            ["attachments"] = attachments?.DeepClone(),
+        };
+
+    internal static JsonArray Attachment(
+        string path = "/asset",
+        string mime = "file",
+        long? size = null
+    ) =>
+        new(
+            new JsonObject
+            {
+                ["filename"] = "../../fixture.bin",
+                ["content_type"] = mime,
+                ["size"] = size,
+                ["url"] = "https://qpic.cn" + path,
+            }
+        );
+
+    internal void Push(string type, JsonObject body, int sequence = 2) =>
+        Push(
+            new JsonObject
+            {
+                ["op"] = 0,
+                ["t"] = type,
+                ["s"] = sequence,
+                ["d"] = body.DeepClone(),
+            }
+        );
+
     internal void Push(JsonObject frame) => outgoing.Writer.TryWrite(frame);
-    internal IEnumerable<ProtocolCall> Sent => Calls.Where(call => call.Path.EndsWith("/messages", StringComparison.Ordinal));
+
+    internal IEnumerable<ProtocolCall> Sent =>
+        Calls.Where(call => call.Path.EndsWith("/messages", StringComparison.Ordinal));
+
     internal static JsonObject Body(ProtocolCall call) => JsonNode.Parse(call.Bytes)!.AsObject();
+
     private async Task SocketAsync(HttpContext context)
     {
         using var ws = await context.WebSockets.AcceptWebSocketAsync();
@@ -102,23 +161,49 @@ internal sealed class QQBotPeer : IAsyncDisposable
             await sender.WaitAsync(stop.Token);
             try
             {
-                var bytes = Encoding.UTF8.GetBytes(value.ToJsonString(new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
+                var bytes = Encoding.UTF8.GetBytes(
+                    value.ToJsonString(
+                        new()
+                        {
+                            Encoder = System
+                                .Text
+                                .Encodings
+                                .Web
+                                .JavaScriptEncoder
+                                .UnsafeRelaxedJsonEscaping,
+                        }
+                    )
+                );
                 for (var offset = 0; offset < bytes.Length; offset += 3)
-                    await ws.SendAsync(bytes.AsMemory(offset, Math.Min(3, bytes.Length - offset)),
-                        WebSocketMessageType.Binary, offset + 3 >= bytes.Length, stop.Token);
+                    await ws.SendAsync(
+                        bytes.AsMemory(offset, Math.Min(3, bytes.Length - offset)),
+                        WebSocketMessageType.Binary,
+                        offset + 3 >= bytes.Length,
+                        stop.Token
+                    );
             }
-            finally { sender.Release(); }
+            finally
+            {
+                sender.Release();
+            }
         }
         async Task PushLoop()
         {
             try
             {
-                while (!stop.IsCancellationRequested) await Send(await outgoing.Reader.ReadAsync(stop.Token));
+                while (!stop.IsCancellationRequested)
+                    await Send(await outgoing.Reader.ReadAsync(stop.Token));
             }
             catch (OperationCanceledException) { }
             catch (WebSocketException) { }
         }
-        await Send(new() { ["op"] = 10, ["d"] = new JsonObject { ["heartbeat_interval"] = HeartbeatMs } });
+        await Send(
+            new()
+            {
+                ["op"] = 10,
+                ["d"] = new JsonObject { ["heartbeat_interval"] = HeartbeatMs },
+            }
+        );
         var push = PushLoop();
         try
         {
@@ -133,8 +218,18 @@ internal sealed class QQBotPeer : IAsyncDisposable
                     if (frame.MessageType == WebSocketMessageType.Close)
                     {
                         await sender.WaitAsync(stop.Token);
-                        try { await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "", stop.Token); }
-                        finally { sender.Release(); }
+                        try
+                        {
+                            await ws.CloseOutputAsync(
+                                WebSocketCloseStatus.NormalClosure,
+                                "",
+                                stop.Token
+                            );
+                        }
+                        finally
+                        {
+                            sender.Release();
+                        }
                         return;
                     }
                     message.Write(buffer, 0, frame.Count);
@@ -142,40 +237,82 @@ internal sealed class QQBotPeer : IAsyncDisposable
                 var value = JsonNode.Parse(message.ToArray())!.AsObject();
                 value["fixtureConnection"] = connection;
                 Frames.Enqueue(value);
-                if (value["op"]?.ToString() == "1" && AutoAck) await Send(new() { ["op"] = 11 });
+                if (value["op"]?.ToString() == "1" && AutoAck)
+                    await Send(new() { ["op"] = 11 });
             }
         }
         catch (OperationCanceledException) { }
         catch (WebSocketException) { }
-        finally { stop.Cancel(); await push; Sockets.TryRemove(connection, out _); }
+        finally
+        {
+            stop.Cancel();
+            await push;
+            Sockets.TryRemove(connection, out _);
+        }
     }
+
     private async Task<IResult> HttpAsync(HttpContext context)
     {
         using var data = new MemoryStream();
         await context.Request.Body.CopyToAsync(data);
         var r = context.Request;
-        var call = new ProtocolCall(r.Method, r.Path, "",
+        var call = new ProtocolCall(
+            r.Method,
+            r.Path,
+            "",
             r.Query.ToDictionary(pair => pair.Key, pair => pair.Value.ToString()),
-            r.Headers.ToDictionary(pair => pair.Key, pair => pair.Value.ToString()), data.ToArray());
+            r.Headers.ToDictionary(pair => pair.Key, pair => pair.Value.ToString()),
+            data.ToArray()
+        );
         Calls.Enqueue(call);
-        if (Respond is { } respond && await respond(call) is { } response) return response;
-        if (r.Path == "/app/getAppAccessToken") return Results.Json(new { access_token = "fixture-token", expires_in = 7200 });
-        if (r.Path == "/gateway") return Results.Json(new { url = new UriBuilder(Address) { Scheme = "ws", Path = "socket" }.Uri.ToString() });
-        if (Assets.TryGetValue(r.Path, out var asset)) return Results.Bytes(asset);
-        if (r.Method == "PUT") return Results.Ok();
+        if (Respond is { } respond && await respond(call) is { } response)
+            return response;
+        if (r.Path == "/app/getAppAccessToken")
+            return Results.Json(new { access_token = "fixture-token", expires_in = 7200 });
+        if (r.Path == "/gateway")
+            return Results.Json(
+                new
+                {
+                    url = new UriBuilder(Address) { Scheme = "ws", Path = "socket" }.Uri.ToString(),
+                }
+            );
+        if (Assets.TryGetValue(r.Path, out var asset))
+            return Results.Bytes(asset);
+        if (r.Method == "PUT")
+            return Results.Ok();
         if (r.Path.Value!.EndsWith("/upload_prepare"))
         {
             var size = Body(call)["file_size"]!.GetValue<long>();
             const int block = 3 * 1024 * 1024;
-            return Results.Json(new JsonObject
-            {
-                ["upload_id"] = "fixture-upload", ["block_size"] = block,
-                ["parts"] = new JsonArray(Enumerable.Range(1, (int)((size + block - 1) / block))
-                    .Select(i => (JsonNode)new JsonObject { ["index"] = i, ["presigned_url"] = "https://cos.myqcloud.com/part/" + i }).ToArray())
-            });
+            return Results.Json(
+                new JsonObject
+                {
+                    ["upload_id"] = "fixture-upload",
+                    ["block_size"] = block,
+                    ["parts"] = new JsonArray(
+                        Enumerable
+                            .Range(1, (int)((size + block - 1) / block))
+                            .Select(i =>
+                                (JsonNode)
+                                    new JsonObject
+                                    {
+                                        ["index"] = i,
+                                        ["presigned_url"] = "https://cos.myqcloud.com/part/" + i,
+                                    }
+                            )
+                            .ToArray()
+                    ),
+                }
+            );
         }
-        if (r.Path.Value.EndsWith("/files")) return Results.Json(new { file_info = "fixture-file-info" });
+        if (r.Path.Value.EndsWith("/files"))
+            return Results.Json(new { file_info = "fixture-file-info" });
         return Results.Json(new { id = "fixture-outgoing" });
     }
-    public async ValueTask DisposeAsync() { await app.StopAsync(); await app.DisposeAsync(); }
+
+    public async ValueTask DisposeAsync()
+    {
+        await app.StopAsync();
+        await app.DisposeAsync();
+    }
 }

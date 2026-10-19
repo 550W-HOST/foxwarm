@@ -25,22 +25,47 @@ internal static partial class FileToolCore
         bool overwrite,
         Action validatePath,
         CancellationToken cancellationToken
-    )
-        => await WriteStreamAtomic(destination, overwrite, validatePath,
-            stream => stream.WriteAsync(bytes, cancellationToken).AsTask(), cancellationToken);
+    ) =>
+        await WriteStreamAtomic(
+            destination,
+            overwrite,
+            validatePath,
+            stream => stream.WriteAsync(bytes, cancellationToken).AsTask(),
+            cancellationToken
+        );
 
     internal static async Task<bool> CopyPathAtomic(
-        string source, string destination, bool overwrite, Action validatePath,
-        CancellationToken cancellationToken)
+        string source,
+        string destination,
+        bool overwrite,
+        Action validatePath,
+        CancellationToken cancellationToken
+    )
     {
-        await using var input = new FileStream(source, FileMode.Open, FileAccess.Read,
-            FileShare.Read, 65536, FileOptions.Asynchronous | FileOptions.SequentialScan);
-        return await WriteStreamAtomic(destination, overwrite, validatePath,
-            stream => input.CopyToAsync(stream, cancellationToken), cancellationToken);
+        await using var input = new FileStream(
+            source,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            65536,
+            FileOptions.Asynchronous | FileOptions.SequentialScan
+        );
+        return await WriteStreamAtomic(
+            destination,
+            overwrite,
+            validatePath,
+            stream => input.CopyToAsync(stream, cancellationToken),
+            cancellationToken
+        );
     }
 
-    private static async Task<bool> WriteStreamAtomic(string destination, bool overwrite,
-        Action validatePath, Func<Stream, Task> write, CancellationToken cancellationToken)
+    private static async Task<bool> WriteStreamAtomic(
+        string destination,
+        bool overwrite,
+        Action validatePath,
+        Func<Stream, Task> write,
+        CancellationToken cancellationToken
+    )
     {
         // Overwriting follows the final symlink; replacing the link itself is not a content write.
         if (

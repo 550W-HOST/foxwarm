@@ -14,7 +14,14 @@ public sealed partial class McpNotificationTests
         await using var work = await WeWorkPeer.StartAsync();
         await using var peer = await InboundMcpFixture.CreateAsync();
         var router = new MessageRouter(new SessionRuntime(peer.Manager));
-        peer.Manager.InitializeChannels(router, peer.Configuration, bot.Dependencies with { CreateQQBotHttp = qq.Dependencies.CreateQQBotHttp });
+        peer.Manager.InitializeChannels(
+            router,
+            peer.Configuration,
+            bot.Dependencies with
+            {
+                CreateQQBotHttp = qq.Dependencies.CreateQQBotHttp,
+            }
+        );
         await using var managed = peer.Manager.ManagedChannels!;
         await using var sender = await OutboundMcpFixture.CreateAsync();
         await Connect(sender, peer);

@@ -74,8 +74,8 @@ internal sealed class ManagedChannels(
                                 ? type == "qqbot"
                                     ? "QQ Bot gateway"
                                     : type == "wework"
-                                    ? "WeWork callback/webhook/WebSocket"
-                                    : type + " polling"
+                                        ? "WeWork callback/webhook/WebSocket"
+                                        : type + " polling"
                                 : registered is not null
                                     ? "Registered transport"
                                     : "Adapter is not implemented on this server."
@@ -194,7 +194,14 @@ internal sealed class ManagedChannels(
                 dependencies,
                 error => RecordError(id, error)
             ),
-            "qqbot" => new QQBotChannel(id, config, sessions, router, dependencies, error => RecordError(id, error)),
+            "qqbot" => new QQBotChannel(
+                id,
+                config,
+                sessions,
+                router,
+                dependencies,
+                error => RecordError(id, error)
+            ),
             "wework" => new WeWorkChannel(
                 id,
                 config,

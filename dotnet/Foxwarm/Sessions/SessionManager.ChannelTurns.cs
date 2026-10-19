@@ -111,7 +111,12 @@ internal sealed partial class SessionManager
                     text =>
                         channel.IsLifecycleActive?.Invoke(conversation) == true
                             ? Task.CompletedTask
-                            : channel.Send(conversation, text, new(PresentationTurnId: turnId), CancellationToken.None)
+                            : channel.Send(
+                                conversation,
+                                text,
+                                new(PresentationTurnId: turnId),
+                                CancellationToken.None
+                            )
                 )
             );
         }
