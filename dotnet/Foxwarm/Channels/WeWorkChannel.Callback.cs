@@ -301,24 +301,16 @@ internal sealed partial class WeWorkChannel
             );
         }
         JsonObject? passive = null;
+        ExternalChannelContext? dispatch = null;
+        WeWorkStreamSnapshot? oldPush = null, initialPush = null;
+        // Preparation may await media; only admission/card/result mutation is atomic.
+        lock (contextGate)
+        {
+            if (msgId.Length > 0 && processed.TryGetValue(msgId, out var duplicate))
+                return duplicate.Response?.DeepClone() as JsonObject;
         if (parts is { Count: > 0 } && user != "unknown")
         {
             var conversation = chatId.Length > 0 ? chatId : user;
-            Console.WriteLine(
-                "WeWork inbound: "
-                    + new JsonObject
-                    {
-                        ["channelId"] = id,
-                        ["deliveryMode"] = delivery.Mode,
-                        ["msgId"] = msgId,
-                        ["conversationId"] = conversation,
-                        ["chatType"] = chatType,
-                        ["senderId"] = user,
-                        ["username"] = username,
-                        ["isAIBot"] = messageIsAibot,
-                        ["hasResponseUrl"] = responseUrl.Length > 0,
-                    }.ToJsonString()
-            );
             WeWorkStreamSnapshot? stream = null;
             if (streamEnabled && messageIsAibot)
             {
@@ -332,24 +324,22 @@ internal sealed partial class WeWorkChannel
                         : delivery
                 );
                 stream = started.Current;
-                lock (contextGate)
-                    responseUrls.Remove(conversation);
+                responseUrls.Remove(conversation);
                 if (started.Old?.Delivery.Mode == "websocket")
-                    _ = ObserveAsync(PushStreamAsync(started.Old, CancellationToken.None));
+                    oldPush = started.Old;
                 if (stream.Delivery.Mode == "websocket")
-                    _ = ObserveAsync(PushStreamAsync(stream, CancellationToken.None));
+                    initialPush = stream;
                 else
                     passive = stream.Payload();
             }
             else if (responseUrl.Length > 0)
-                lock (contextGate)
                 {
                     responseUrls.Remove(conversation);
                     if (responseUrls.Count >= 1024)
                         responseUrls.Remove(responseUrls.Keys.First());
                     responseUrls[conversation] = responseUrl;
                 }
-            var ctx = new ExternalChannelContext(
+            dispatch = new ExternalChannelContext(
                 id,
                 "wework",
                 conversation,
@@ -378,14 +368,38 @@ internal sealed partial class WeWorkChannel
                     ),
                 Nonempty(Text(config["selfName"])) ? Text(config["selfName"]).Trim() : null
             );
-            _ = ObserveAsync(router.HandleExternalMessageAsync(ctx, new(parts)));
         }
-        lock (contextGate)
             if (msgId.Length > 0)
                 processed[msgId] = (
                     now().ToUnixTimeMilliseconds(),
                     passive?.DeepClone() as JsonObject
                 );
+        }
+        if (dispatch is not null)
+        {
+            var conversation = chatId.Length > 0 ? chatId : user;
+            Console.WriteLine(
+                "WeWork inbound: "
+                    + new JsonObject
+                    {
+                        ["channelId"] = id,
+                        ["deliveryMode"] = delivery.Mode,
+                        ["msgId"] = msgId,
+                        ["conversationId"] = conversation,
+                        ["chatType"] = chatType,
+                        ["senderId"] = user,
+                        ["username"] = username,
+                        ["isAIBot"] = messageIsAibot,
+                        ["hasResponseUrl"] = responseUrl.Length > 0,
+                    }.ToJsonString()
+            );
+        }
+        if (oldPush is not null)
+            _ = ObserveAsync(PushStreamAsync(oldPush, CancellationToken.None));
+        if (initialPush is not null)
+            _ = ObserveAsync(PushStreamAsync(initialPush, CancellationToken.None));
+        if (dispatch is not null)
+            _ = ObserveAsync(router.HandleExternalMessageAsync(dispatch, new(parts!)));
         return passive;
     }
 }

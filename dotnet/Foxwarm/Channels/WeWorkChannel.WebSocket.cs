@@ -7,33 +7,57 @@ namespace Foxwarm.Channels;
 
 internal sealed partial class WeWorkChannel
 {
-    private sealed record Pending(string Command, TaskCompletionSource<JsonObject> Completion);
+    private sealed class Connection
+    {
+        internal readonly ClientWebSocket Socket = new();
+        // A successor never shares an old connection's blocked writer.
+        internal readonly SemaphoreSlim WireSend = new(1);
+        internal readonly CancellationTokenSource Ended = new();
+        internal int Closing;
+    }
+
+    private sealed record Pending(Connection Connection, string Command, TaskCompletionSource<JsonObject> Completion);
 
     private readonly object socketGate = new();
-    private ClientWebSocket? socket;
+    private Connection? socket;
     private readonly Dictionary<string, Pending> pending = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Task> requestChains = new(StringComparer.Ordinal);
 
-    // ClientWebSocket permits one concurrent send and one receive; different req_ids may await ACKs concurrently.
-    private readonly SemaphoreSlim wireSend = new(1);
-
     private void CloseSocket()
     {
-        ClientWebSocket? current;
+        Connection? current;
         lock (socketGate)
             current = socket;
         if (current is not null)
             _ = ObserveAsync(CloseOutputAsync(current));
     }
 
-    private static async Task CloseOutputAsync(ClientWebSocket current)
+    private async Task CloseOutputAsync(Connection current, WebSocketCloseStatus status = WebSocketCloseStatus.NormalClosure)
     {
-        if (current.State is WebSocketState.Open or WebSocketState.CloseReceived)
-            await current.CloseOutputAsync(
-                WebSocketCloseStatus.NormalClosure,
-                "",
-                CancellationToken.None
-            );
+        if (Interlocked.Exchange(ref current.Closing, 1) != 0)
+            return;
+        // Like ws.close(), allow the handshake, but retire this exact socket after 30 seconds.
+        _ = ObserveAsync(ForceCloseAfterAsync(current));
+        await current.WireSend.WaitAsync(current.Ended.Token);
+        try
+        {
+            if (current.Socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
+                await current.Socket.CloseOutputAsync(status, "", current.Ended.Token);
+        }
+        finally
+        {
+            current.WireSend.Release();
+        }
+    }
+
+    private static async Task ForceCloseAfterAsync(Connection current)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(30), current.Ended.Token);
+            current.Socket.Abort();
+        }
+        catch (OperationCanceledException) when (current.Ended.IsCancellationRequested) { }
     }
 
     private async Task ConnectionLoopAsync()
@@ -42,10 +66,11 @@ internal sealed partial class WeWorkChannel
             return;
         while (!stopped)
         {
-            using var current = new ClientWebSocket();
+            var connection = new Connection();
+            using var current = connection.Socket;
             current.Options.KeepAliveInterval = Timeout.InfiniteTimeSpan;
             lock (socketGate)
-                socket = current;
+                socket = connection;
             using var heartbeatStop = CancellationTokenSource.CreateLinkedTokenSource(
                 lifetime.Token
             );
@@ -60,7 +85,7 @@ internal sealed partial class WeWorkChannel
                     lifetime.Token
                 );
                 // Do not await subscription or callbacks on the receive loop: their ACKs use that same loop.
-                _ = ObserveAsync(SubscribeAsync(current));
+                _ = ObserveAsync(SubscribeAsync(connection));
                 _ = ObserveAsync(HeartbeatAsync(heartbeatStop.Token));
                 var buffer = new byte[16384];
                 while (!stopped && current.State is WebSocketState.Open or WebSocketState.CloseSent)
@@ -75,7 +100,7 @@ internal sealed partial class WeWorkChannel
                         );
                         if (frame.MessageType == WebSocketMessageType.Close)
                         {
-                            await CloseOutputAsync(current);
+                            await CloseOutputAsync(connection);
                             throw new IOException(
                                 $"WeWork AIBot WebSocket closed ({(int?)frame.CloseStatus ?? 1005})"
                             );
@@ -83,11 +108,7 @@ internal sealed partial class WeWorkChannel
                         // The reference ws client uses its default 100 MiB decoded-message limit.
                         if (message.Length + frame.Count > 100L * 1024 * 1024)
                         {
-                            await current.CloseOutputAsync(
-                                WebSocketCloseStatus.MessageTooBig,
-                                "",
-                                CancellationToken.None
-                            );
+                            await CloseOutputAsync(connection, WebSocketCloseStatus.MessageTooBig);
                             throw new IOException(
                                 "WeWork AIBot WebSocket message exceeds the transport limit"
                             );
@@ -96,7 +117,7 @@ internal sealed partial class WeWorkChannel
                     } while (!frame.EndOfMessage);
                     // Decode only complete messages, including split UTF-8 scalars and binary ws payloads.
                     _ = ObserveAsync(
-                        HandleSocketMessageAsync(Encoding.UTF8.GetString(message.ToArray()))
+                        HandleSocketMessageAsync(connection, Encoding.UTF8.GetString(message.ToArray()))
                     );
                 }
             }
@@ -108,10 +129,11 @@ internal sealed partial class WeWorkChannel
             finally
             {
                 heartbeatStop.Cancel();
+                connection.Ended.Cancel();
                 lock (socketGate)
-                    if (ReferenceEquals(socket, current))
+                    if (ReferenceEquals(socket, connection))
                         socket = null;
-                RejectPending(new IOException("WeWork AIBot WebSocket closed"));
+                RejectPending(new IOException("WeWork AIBot WebSocket closed"), connection);
             }
             if (!stopped)
                 await delay(
@@ -126,7 +148,7 @@ internal sealed partial class WeWorkChannel
         }
     }
 
-    private async Task SubscribeAsync(ClientWebSocket current)
+    private async Task SubscribeAsync(Connection current)
     {
         try
         {
@@ -162,14 +184,16 @@ internal sealed partial class WeWorkChannel
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
     }
 
-    private void RejectPending(Exception error)
+    private void RejectPending(Exception error, Connection? connection = null)
     {
         lock (socketGate)
         {
-            requestChains.Clear();
-            foreach (var value in pending.Values)
-                value.Completion.TrySetException(error);
-            pending.Clear();
+            foreach (var (key, value) in pending.ToArray())
+                if (connection is null || ReferenceEquals(value.Connection, connection))
+                {
+                    value.Completion.TrySetException(error);
+                    pending.Remove(key);
+                }
         }
     }
 
@@ -218,17 +242,18 @@ internal sealed partial class WeWorkChannel
         catch { }
         // Source queues even the first command in a promise continuation. Yield outside the map mutation.
         await Task.Yield();
-        ClientWebSocket current;
+        Connection current;
         var completion = new TaskCompletionSource<JsonObject>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var request = new Pending(command, completion);
+        Pending request;
         lock (socketGate)
         {
             current =
-                !stopped && socket is { State: WebSocketState.Open } connected
+                !stopped && socket is { Socket.State: WebSocketState.Open, Closing: 0 } connected
                     ? connected
                     : throw new IOException("WeWork AIBot WebSocket is not connected");
+            request = new Pending(current, command, completion);
             pending[reqId] = request;
         }
         var payload = new JsonObject
@@ -238,30 +263,48 @@ internal sealed partial class WeWorkChannel
         };
         if (body is not null)
             payload["body"] = body.DeepClone();
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token, lifetime.Token, current.Ended.Token);
         timeout.CancelAfter(TimeSpan.FromSeconds(10));
         using var registration = timeout.Token.Register(() =>
             completion.TrySetException(
-                token.IsCancellationRequested
-                    ? new OperationCanceledException(token)
-                    : new IOException($"WeWork AIBot command {command} timed out waiting for ack")
+                stopped ? new IOException("WeWork AIBot WebSocket stopped")
+                : token.IsCancellationRequested ? new OperationCanceledException(token)
+                : current.Ended.IsCancellationRequested ? new IOException("WeWork AIBot WebSocket closed")
+                : new IOException($"WeWork AIBot command {command} timed out waiting for ack")
             )
         );
         try
         {
-            await wireSend.WaitAsync(token);
             try
             {
-                await current.SendAsync(
-                    Encoding.UTF8.GetBytes(payload.ToJsonString()),
-                    WebSocketMessageType.Text,
-                    true,
-                    token
-                );
+                await current.WireSend.WaitAsync(timeout.Token);
+                try
+                {
+                    try
+                    {
+                        await current.Socket.SendAsync(
+                            Encoding.UTF8.GetBytes(payload.ToJsonString()),
+                            WebSocketMessageType.Text,
+                            true,
+                            timeout.Token
+                        );
+                    }
+                    catch (Exception) when (timeout.IsCancellationRequested)
+                    {
+                        // Cancellation of a live .NET send has uncertain effects. Retire its socket,
+                        // and await the send's exit before releasing this connection's writer.
+                        current.Socket.Abort();
+                        throw;
+                    }
+                }
+                finally
+                {
+                    current.WireSend.Release();
+                }
             }
-            finally
+            catch (Exception) when (timeout.IsCancellationRequested)
             {
-                wireSend.Release();
+                // The deadline/stop registration owns the observable command outcome.
             }
             return await completion.Task;
         }
@@ -273,7 +316,7 @@ internal sealed partial class WeWorkChannel
         }
     }
 
-    private async Task HandleSocketMessageAsync(string raw)
+    private async Task HandleSocketMessageAsync(Connection current, string raw)
     {
         JsonObject? payload;
         try
@@ -291,8 +334,10 @@ internal sealed partial class WeWorkChannel
         lock (socketGate)
         {
             ack = pending.GetValueOrDefault(reqId);
-            if (ack is not null)
+            if (ack is not null && ReferenceEquals(ack.Connection, current))
                 pending.Remove(reqId);
+            else
+                ack = null;
         }
         if (ack is not null)
         {
@@ -326,6 +371,6 @@ internal sealed partial class WeWorkChannel
             Text(payload["cmd"]) == "aibot_event_callback"
             && Text(payload["body"]?["event"]?["eventtype"]) == "disconnected_event"
         )
-            CloseSocket();
+            await CloseOutputAsync(current);
     }
 }
