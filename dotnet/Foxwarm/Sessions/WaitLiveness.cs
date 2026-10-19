@@ -143,6 +143,7 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
         var visiting = new HashSet<string>(StringComparer.Ordinal);
         var memo = new Dictionary<string, bool>(StringComparer.Ordinal);
         var observed = new List<string>();
+        var legacyObserved = new List<string>();
         bool Visit(string currentId, bool root = false)
         {
             if (memo.TryGetValue(currentId, out var known))
@@ -153,24 +154,33 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
             var metadata = current?.Metadata() ?? manager.CatalogMetadata(currentId);
             var state = current?.WaitSnapshot() ?? metadata?.Wait;
             var sources = state is null ? [] : Sources(state);
-            observed.Add(
-                new JsonObject
-                {
-                    ["sessionId"] = currentId,
-                    ["exists"] = metadata is not null,
-                    ["state"] =
-                        metadata?.Busy == true ? "active"
-                        : state is not null ? "waiting"
-                        : "idle",
-                    ["queueLength"] = metadata?.QueueLength ?? 0,
-                    ["timeoutSeconds"] = state?["timeoutSeconds"]?.DeepClone(),
-                    ["waitForInput"] = state?["waitForInput"]?.GetValue<bool>() == true,
-                    ["waitExecIds"] = state?["waitExecIds"]?.DeepClone() ?? new JsonArray(),
-                    ["dependencies"] = new JsonArray(
-                        sources.Select(source => (JsonNode?)JsonValue.Create(source)).ToArray()
-                    ),
-                }.ToJsonString()
-            );
+            // Retain the original C# writer's observation only for reading its persisted receipts.
+            // New identities use Source's JSON.stringify field order, omissions and spelling.
+            var observation = new JsonObject
+            {
+                ["sessionId"] = currentId,
+                ["exists"] = metadata is not null,
+                ["state"] =
+                    metadata?.Busy == true ? "active"
+                    : state is not null ? "waiting"
+                    : "idle",
+                ["queueLength"] = metadata?.QueueLength ?? 0,
+                ["timeoutSeconds"] = state?["timeoutSeconds"]?.DeepClone(),
+                ["waitForInput"] = state?["waitForInput"]?.GetValue<bool>() == true,
+                ["waitExecIds"] = state?["waitExecIds"]?.DeepClone() ?? new JsonArray(),
+                ["dependencies"] = new JsonArray(
+                    sources.Select(source => (JsonNode?)JsonValue.Create(source)).ToArray()
+                ),
+            };
+            legacyObserved.Add(observation.ToJsonString());
+            if (metadata is null)
+                observation.Remove("state");
+            else
+                observation["state"] = (current?.RuntimeSnapshot(metadata)
+                    ?? SessionRuntimeState.Build(metadata, toolActive: false, compacting: false))["state"]!.DeepClone();
+            if (state?.ContainsKey("timeoutSeconds") != true)
+                observation.Remove("timeoutSeconds");
+            observed.Add(EcmaJson.Stringify(observation));
             var progress =
                 !root && (metadata?.Busy == true || metadata?.QueueLength > 0)
                 || SessionWait.Number(state?["timeoutSeconds"]) > 0
@@ -184,16 +194,22 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
         }
         if (Visit(id, root: true))
             return;
-        observed.Sort(StringComparer.Ordinal);
-        var fingerprint = Convert
-            .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', observed))))[..24]
-            .ToLowerInvariant();
+        static string Fingerprint(List<string> rows)
+        {
+            rows.Sort(StringComparer.Ordinal);
+            return Convert
+                .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', rows))))[..24]
+                .ToLowerInvariant();
+        }
+        var fingerprint = Fingerprint(observed);
+        var legacyFingerprint = Fingerprint(legacyObserved);
         if (
             owner!.Entry.WithState(state =>
-                SessionWait
-                    .Strings(state.Meta["waitLivenessFingerprints"])
-                    .Contains(fingerprint, StringComparer.Ordinal)
-            )
+            {
+                var prior = SessionWait.Strings(state.Meta["waitLivenessFingerprints"]);
+                return prior.Contains(fingerprint, StringComparer.Ordinal)
+                    || prior.Contains(legacyFingerprint, StringComparer.Ordinal);
+            })
         )
             return;
         var item = SessionWait.Event(
