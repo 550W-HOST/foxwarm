@@ -81,11 +81,16 @@ internal sealed partial class NodeExecManager(
                         id is null
                         || !SupportedId(id)
                         || raw.ContainsKey("backend")
-                        || (raw.ContainsKey("externalOwner") && (!ExternalNamespace
-                            || raw["externalOwner"] is not JsonObject owner
-                            || Text(owner, "kind") != "external"
-                            || string.IsNullOrEmpty(Text(owner, "externalId"))
-                            || string.IsNullOrEmpty(Text(owner, "contextId"))))
+                        || (
+                            raw.ContainsKey("externalOwner")
+                            && (
+                                !ExternalNamespace
+                                || raw["externalOwner"] is not JsonObject owner
+                                || Text(owner, "kind") != "external"
+                                || string.IsNullOrEmpty(Text(owner, "externalId"))
+                                || string.IsNullOrEmpty(Text(owner, "contextId"))
+                            )
+                        )
                         || Text(raw, "logPath") is null
                         || Text(raw, "statusPath") is null
                         || !double.IsFinite(Number(raw["startedAt"]))
@@ -243,7 +248,9 @@ internal sealed partial class NodeExecManager(
             );
             var date = DateTime.Now;
             var directory = Path.Combine(
-                agent is null ? Path.Combine(Path.GetDirectoryName(registryPath)!, "logs") : Path.GetDirectoryName(registryPath)!,
+                agent is null
+                    ? Path.Combine(Path.GetDirectoryName(registryPath)!, "logs")
+                    : Path.GetDirectoryName(registryPath)!,
                 date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
             );
             Directory.CreateDirectory(directory);
@@ -497,7 +504,8 @@ internal sealed partial class NodeExecManager(
 
     public ValueTask DisposeAsync()
     {
-        lock (initializationGate) return new ValueTask(disposal ??= DisposeOnce());
+        lock (initializationGate)
+            return new ValueTask(disposal ??= DisposeOnce());
     }
 
     private async Task DisposeOnce()

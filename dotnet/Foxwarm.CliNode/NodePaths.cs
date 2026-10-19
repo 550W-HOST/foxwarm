@@ -48,7 +48,9 @@ internal sealed class NodePaths(string startupDirectory)
             {
                 "fw_agentdir" when agent is not null => AgentDirectory(agent),
                 "fw_tmp" when agent is not null => Path.Combine(AgentDirectory(agent), "tmp"),
-                "fw_agentdir" or "fw_tmp" => throw new InvalidDataException($"Agent path variable ${name} is unavailable in this execution environment."),
+                "fw_agentdir" or "fw_tmp" => throw new InvalidDataException(
+                    $"Agent path variable ${name} is unavailable in this execution environment."
+                ),
                 _ => throw new InvalidDataException("Unknown Agent path variable: $" + name),
             };
             path =
@@ -60,11 +62,11 @@ internal sealed class NodePaths(string startupDirectory)
                     );
         }
         path = Home(path);
-        var basis = agent is null
-            ? FullPath(string.IsNullOrEmpty(cwd) ? StartupDirectory : cwd, StartupDirectory)
-            : !string.IsNullOrWhiteSpace(cwd)
-                ? FullPath(Home(cwd.Trim()), StartupDirectory)
-                : AgentDirectory(agent);
+        var basis =
+            agent is null
+                ? FullPath(string.IsNullOrEmpty(cwd) ? StartupDirectory : cwd, StartupDirectory)
+            : !string.IsNullOrWhiteSpace(cwd) ? FullPath(Home(cwd.Trim()), StartupDirectory)
+            : AgentDirectory(agent);
         return FullPath(path, basis);
     }
 
@@ -115,9 +117,10 @@ internal sealed class NodePaths(string startupDirectory)
         return (cwd, raw, source);
     }
 
-    internal static string TrimSpace(string value) => value.Trim(
-                "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff".ToCharArray()
-            );
+    internal static string TrimSpace(string value) =>
+        value.Trim(
+            "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff".ToCharArray()
+        );
 
     internal IEnumerable<string> RecoveryDirectories()
     {

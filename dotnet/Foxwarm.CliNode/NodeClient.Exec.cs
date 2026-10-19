@@ -83,7 +83,11 @@ internal sealed partial class NodeClient
     {
         var call = Text(frame, "callId") ?? "";
         CancellationTokenSource? cancellation = null;
-        if (Text(frame, "type") == "tool_call" && Text(frame, "tool") == "exec" && !frame.ContainsKey("owner"))
+        if (
+            Text(frame, "type") == "tool_call"
+            && Text(frame, "tool") == "exec"
+            && !frame.ContainsKey("owner")
+        )
         {
             cancellation = new();
             foreground[call] = (connection, cancellation);
@@ -197,12 +201,14 @@ internal sealed partial class NodeClient
         foreach (var manager in execManagers.Values)
             await manager.DisposeAsync();
         ExternalRuntime[] external;
-        lock (externalGate) external = externalExecRuntimes.Values.ToArray();
+        lock (externalGate)
+            external = externalExecRuntimes.Values.ToArray();
         foreach (var runtime in external)
             await runtime.Manager.DisposeAsync();
         lock (externalGate)
         {
-            foreach (var timer in releasedExternalOwners.Values) timer.Dispose();
+            foreach (var timer in releasedExternalOwners.Values)
+                timer.Dispose();
             releasedExternalOwners.Clear();
         }
     }

@@ -239,7 +239,9 @@ internal sealed partial class NodeExecManager
             return cwd.Length > 0 ? cwd : Text(entry, "initialCwd")!;
         }
         catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
-        { return Text(entry, "initialCwd")!; }
+        {
+            return Text(entry, "initialCwd")!;
+        }
     }
 
     internal static async Task<JsonObject> Result(

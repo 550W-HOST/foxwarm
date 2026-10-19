@@ -321,8 +321,9 @@ internal sealed partial class NodeClient
             JsonObject response;
             if (type == "tool_call")
             {
-                var result = frame.ContainsKey("owner")
-                    ? await ExecuteExternal(connection, frame, () => execStarted = true)
+                var result =
+                    frame.ContainsKey("owner")
+                        ? await ExecuteExternal(connection, frame, () => execStarted = true)
                     : Text(frame, "tool") == "exec"
                         ? await ExecuteCommand(
                             connection,
@@ -331,13 +332,13 @@ internal sealed partial class NodeClient
                             cancellation?.Token ?? CancellationToken.None,
                             () => execStarted = true
                         )
-                        : await tools.Execute(
-                            Text(frame, "tool") ?? "",
-                            frame["args"] as JsonObject,
-                            agent,
-                            Text(frame, "sessionCwd"),
-                            NodeFileTools.Flag(frame, "programmatic")
-                        );
+                    : await tools.Execute(
+                        Text(frame, "tool") ?? "",
+                        frame["args"] as JsonObject,
+                        agent,
+                        Text(frame, "sessionCwd"),
+                        NodeFileTools.Flag(frame, "programmatic")
+                    );
                 response = new JsonObject
                 {
                     ["type"] = "tool_call_response",
