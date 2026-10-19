@@ -29,23 +29,42 @@ public sealed class NodeSessionRequestTests
             using (var catalog = new SessionCatalog(data))
                 catalog.Initialize();
             if (bound)
-                await File.WriteAllTextAsync(Path.Combine(data, "state", "agents.json"),
-                    "{\"version\":2,\"agents\":[],\"metadata\":{\"main\":{\"isolated\":true,\"isolatedNode\":\"one\"}}}");
+                await File.WriteAllTextAsync(
+                    Path.Combine(data, "state", "agents.json"),
+                    "{\"version\":2,\"agents\":[],\"metadata\":{\"main\":{\"isolated\":true,\"isolatedNode\":\"one\"}}}"
+                );
             await SessionCatalogMigrationTests.Authority(data, "cold");
             var path = Path.Combine(data, "state", "sessions", "cold.json");
             var authority = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
             authority.Remove("currentNode");
             if (!bound)
                 authority["currentNode"] = "one";
-            authority["history"] = new JsonArray(Enumerable.Range(0, 105).Select(index =>
-                (JsonNode?)new JsonObject
-                {
-                    ["role"] = "user",
-                    ["parts"] = new JsonArray(new JsonObject { ["text"] = "message-" + index }),
-                    ["__meta"] = new JsonObject { ["seq"] = index + 1, ["timestamp"] = index + 1 },
-                }).ToArray());
+            authority["history"] = new JsonArray(
+                Enumerable
+                    .Range(0, 105)
+                    .Select(index =>
+                        (JsonNode?)
+                            new JsonObject
+                            {
+                                ["role"] = "user",
+                                ["parts"] = new JsonArray(
+                                    new JsonObject { ["text"] = "message-" + index }
+                                ),
+                                ["__meta"] = new JsonObject
+                                {
+                                    ["seq"] = index + 1,
+                                    ["timestamp"] = index + 1,
+                                },
+                            }
+                    )
+                    .ToArray()
+            );
             authority["nextMessageSeq"] = 106;
-            authority["meta"] = new JsonObject { ["messageCount"] = 105, ["lastMessageTime"] = 105 };
+            authority["meta"] = new JsonObject
+            {
+                ["messageCount"] = 105,
+                ["lastMessageTime"] = 105,
+            };
             authority["aliases"] = new JsonArray("old-cold");
             await File.WriteAllTextAsync(path, authority.ToJsonString());
             using (var catalog = new SessionCatalog(data))
@@ -57,7 +76,14 @@ public sealed class NodeSessionRequestTests
                 row["meta"]!["messageCount"] = 105;
                 catalog.Upsert([row]);
             }
-            var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
+            var options = new ResponsesClientOptions(
+                new Uri("http://127.0.0.1:1"),
+                "wire",
+                "a",
+                "",
+                "",
+                713
+            );
             Manager = new(data, work, options, HostModels.ForTest(options));
             await Manager.LoadAsync();
             credential = Manager.Nodes.Registry.Create("one");
@@ -74,20 +100,42 @@ public sealed class NodeSessionRequestTests
         {
             var socket = new ClientWebSocket();
             sockets.Add(socket);
-            await socket.ConnectAsync(new Uri(app.Urls.Single().Replace("http", "ws") + "/node_ws?id=one&auth=" + credential["authToken"]!.GetValue<string>()), default);
-            await Send(socket, new()
-            {
-                ["type"] = "node_register",
-                ["nodeType"] = "session-rpc-peer",
-                ["nodeProtocol"] = new JsonObject { ["min"] = generation, ["max"] = generation },
-                ["capabilities"] = new JsonObject { ["tools"] = new JsonArray() },
-            });
-            Assert.Equal(generation > 3 ? "node_incompatible" : "registered", (await Read(socket))!["type"]!.ToString());
+            await socket.ConnectAsync(
+                new Uri(
+                    app.Urls.Single().Replace("http", "ws")
+                        + "/node_ws?id=one&auth="
+                        + credential["authToken"]!.GetValue<string>()
+                ),
+                default
+            );
+            await Send(
+                socket,
+                new()
+                {
+                    ["type"] = "node_register",
+                    ["nodeType"] = "session-rpc-peer",
+                    ["nodeProtocol"] = new JsonObject
+                    {
+                        ["min"] = generation,
+                        ["max"] = generation,
+                    },
+                    ["capabilities"] = new JsonObject { ["tools"] = new JsonArray() },
+                }
+            );
+            Assert.Equal(
+                generation > 3 ? "node_incompatible" : "registered",
+                (await Read(socket))!["type"]!.ToString()
+            );
             return socket;
         }
 
         internal static async Task Send(ClientWebSocket socket, JsonObject value) =>
-            await socket.SendAsync(Encoding.UTF8.GetBytes(value.ToJsonString()), WebSocketMessageType.Text, true, default);
+            await socket.SendAsync(
+                Encoding.UTF8.GetBytes(value.ToJsonString()),
+                WebSocketMessageType.Text,
+                true,
+                default
+            );
 
         internal static async Task<JsonObject?> Read(ClientWebSocket socket)
         {
@@ -105,9 +153,23 @@ public sealed class NodeSessionRequestTests
             return JsonNode.Parse(stream.ToArray())!.AsObject();
         }
 
-        internal static async Task<JsonObject> Request(ClientWebSocket socket, string type, JsonNode? count = null, string id = "old-cold")
+        internal static async Task<JsonObject> Request(
+            ClientWebSocket socket,
+            string type,
+            JsonNode? count = null,
+            string id = "old-cold"
+        )
         {
-            await Send(socket, new() { ["type"] = type, ["requestId"] = "correlation", ["sessionId"] = id, ["count"] = count });
+            await Send(
+                socket,
+                new()
+                {
+                    ["type"] = type,
+                    ["requestId"] = "correlation",
+                    ["sessionId"] = id,
+                    ["count"] = count,
+                }
+            );
             var response = (await Read(socket))!;
             Assert.Equal("cli_response", response["type"]!.ToString());
             Assert.Equal("correlation", response["requestId"]!.ToString());
@@ -136,7 +198,9 @@ public sealed class NodeSessionRequestTests
     [InlineData(1)]
     [InlineData(2)]
     [InlineData(3)]
-    public async Task Existing_generations_keep_correlated_catalog_alias_history_and_bounded_counts(int generation)
+    public async Task Existing_generations_keep_correlated_catalog_alias_history_and_bounded_counts(
+        int generation
+    )
     {
         await using var f = new Fixture();
         await f.Start();
@@ -145,7 +209,17 @@ public sealed class NodeSessionRequestTests
         Assert.True(list["ok"]!.GetValue<bool>());
         Assert.Equal("cold", list["result"]!["sessions"]![0]!["id"]!.ToString());
         Assert.Empty(f.Manager.Owners());
-        foreach (var (count, expected) in new (JsonNode?, int)[] { (null, 30), (0, 30), (-1, 1), (1.5, 2), (999, 100), ("2", 30) })
+        foreach (
+            var (count, expected) in new (JsonNode?, int)[]
+            {
+                (null, 30),
+                (0, 30),
+                (-1, 1),
+                (1.5, 2),
+                (999, 100),
+                ("2", 30),
+            }
+        )
         {
             var response = await Fixture.Request(socket, "session_history_request", count);
             Assert.True(response["ok"]!.GetValue<bool>());
@@ -159,7 +233,10 @@ public sealed class NodeSessionRequestTests
         var absent = await Fixture.Request(socket, "session_history_request", id: "missing");
         Assert.Equal("Target session \"missing\" not found.", absent["error"]!.ToString());
         var malformed = await Fixture.Request(socket, "session_send_message");
-        Assert.Equal("Invalid session_send_message: missing sessionId or message", malformed["error"]!.ToString());
+        Assert.Equal(
+            "Invalid session_send_message: missing sessionId or message",
+            malformed["error"]!.ToString()
+        );
     }
 
     [Theory]
@@ -177,15 +254,27 @@ public sealed class NodeSessionRequestTests
             entered.SetResult();
             await release.Task.WaitAsync(token);
         };
-        await Fixture.Send(socket, new() { ["type"] = type, ["requestId"] = "held", ["sessionId"] = "old-cold", ["message"] = "must-not-enter" });
+        await Fixture.Send(
+            socket,
+            new()
+            {
+                ["type"] = type,
+                ["requestId"] = "held",
+                ["sessionId"] = "old-cold",
+                ["message"] = "must-not-enter",
+            }
+        );
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await f.Manager.SetAgentNodeAsync("main", null);
         release.SetResult();
         var response = (await Fixture.Read(socket))!;
         Assert.False(response["ok"]!.GetValue<bool>());
-        Assert.Equal(type == "session_history_request"
-            ? "Node \"one\" cannot read history for session \"old-cold\" because the session assignment changed."
-            : "Node \"one\" cannot send messages to session \"old-cold\" because the session is not assigned to that node or its isolated agent.", response["error"]!.ToString());
+        Assert.Equal(
+            type == "session_history_request"
+                ? "Node \"one\" cannot read history for session \"old-cold\" because the session assignment changed."
+                : "Node \"one\" cannot send messages to session \"old-cold\" because the session is not assigned to that node or its isolated agent.",
+            response["error"]!.ToString()
+        );
         var owner = await f.Manager.RequiredAsync("cold");
         Assert.Empty(owner.Entry.Snapshot().Queue);
         Assert.Equal(105, owner.Entry.Snapshot().History.Count);
@@ -214,7 +303,16 @@ public sealed class NodeSessionRequestTests
                 handled.SetResult();
             }
         };
-        await Fixture.Send(old, new() { ["type"] = "session_send_message", ["requestId"] = "predecessor", ["sessionId"] = "cold", ["message"] = "stale-input" });
+        await Fixture.Send(
+            old,
+            new()
+            {
+                ["type"] = "session_send_message",
+                ["requestId"] = "predecessor",
+                ["sessionId"] = "cold",
+                ["message"] = "stale-input",
+            }
+        );
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var successor = await f.Connect();
         release.SetResult();
@@ -225,7 +323,10 @@ public sealed class NodeSessionRequestTests
         Assert.Empty(f.Manager.Owners());
         Assert.Null(await Fixture.Read(old));
         var incompatible = await f.Connect(99);
-        await Fixture.Send(incompatible, new() { ["type"] = "session_list_request", ["requestId"] = "quarantined" });
+        await Fixture.Send(
+            incompatible,
+            new() { ["type"] = "session_list_request", ["requestId"] = "quarantined" }
+        );
         response = (await Fixture.Read(incompatible))!;
         Assert.Equal("error", response["type"]!.ToString());
         Assert.Equal("NODE_PROTOCOL_INCOMPATIBLE", response["error"]!.ToString());
@@ -258,7 +359,10 @@ public sealed class NodeSessionRequestTests
                 throw;
             }
         };
-        await Fixture.Send(socket, new() { ["type"] = "session_history_request", ["sessionId"] = "cold" });
+        await Fixture.Send(
+            socket,
+            new() { ["type"] = "session_history_request", ["sessionId"] = "cold" }
+        );
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         f.Manager.Nodes.BeginShutdown();
         await canceled.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -268,12 +372,19 @@ public sealed class NodeSessionRequestTests
     [Fact]
     public void History_text_preserves_existing_text_system_image_and_tool_shapes_without_optional_timestamp()
     {
-        var message = JsonNode.Parse("""
-            {"role":"model","parts":[{"text":"first","system":"ignored"},{"system":"notice"},{"inlineData":{"mimeType":"image/png"}},{"functionCall":{"name":"read","args":{"b":"<file>","1":2}}},{"functionResponse":{"name":"read","response":{"output":"done"}}},{"other":true},0,false,null]}
-            """)!.AsObject();
+        var message = JsonNode
+            .Parse(
+                """
+                {"role":"model","parts":[{"text":"first","system":"ignored"},{"system":"notice"},{"inlineData":{"mimeType":"image/png"}},{"functionCall":{"name":"read","args":{"b":"<file>","1":2}}},{"functionResponse":{"name":"read","response":{"output":"done"}}},{"other":true},0,false,null]}
+                """
+            )!
+            .AsObject();
         var result = SessionManager.NodeHistoryMessage(message, 7);
         Assert.Equal(7, result["index"]!.GetValue<int>());
         Assert.False(result.ContainsKey("timestamp"));
-        Assert.Equal("first\n[SYSTEM] notice\n[inline data: image/png]\n[tool call: read {\"1\":2,\"b\":\"<file>\"}]\n[tool response: read {\"output\":\"done\"}]\n{\"other\":true}\n0\nfalse", result["text"]!.GetValue<string>());
+        Assert.Equal(
+            "first\n[SYSTEM] notice\n[inline data: image/png]\n[tool call: read {\"1\":2,\"b\":\"<file>\"}]\n[tool response: read {\"output\":\"done\"}]\n{\"other\":true}\n0\nfalse",
+            result["text"]!.GetValue<string>()
+        );
     }
 }

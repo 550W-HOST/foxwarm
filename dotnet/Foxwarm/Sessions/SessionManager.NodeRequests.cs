@@ -6,11 +6,14 @@ namespace Foxwarm.Sessions;
 internal sealed partial class SessionManager
 {
     private bool NodeCanAccessSession(string node, JsonObject session) =>
-        ResolveExecutionNode(session, BoundNode(SessionWait.Text(session["agent"]) ?? "main")) == node
+        ResolveExecutionNode(session, BoundNode(SessionWait.Text(session["agent"]) ?? "main"))
+            == node
         || BoundNode(SessionWait.Text(session["agent"]) ?? "main") == node;
 
     private InvalidDataException NodeSessionDenied(string node, string id, string action) =>
-        new($"Node \"{node}\" cannot {action} session \"{id}\" because the session is not assigned to that node or its isolated agent.");
+        new(
+            $"Node \"{node}\" cannot {action} session \"{id}\" because the session is not assigned to that node or its isolated agent."
+        );
 
     private JsonObject RequireNodeSessionProjection(string node, string requested, string action)
     {
@@ -18,7 +21,9 @@ internal sealed partial class SessionManager
         if (normalized.Length == 0)
             throw new InvalidDataException("sessionId must be a non-empty string.");
         var canonical = SessionWait.Text(Catalog.Resolve(normalized)["sessionId"]);
-        var projection = canonical is null ? null : CatalogPresentations([canonical], false).FirstOrDefault();
+        var projection = canonical is null
+            ? null
+            : CatalogPresentations([canonical], false).FirstOrDefault();
         if (projection is null)
             throw new InvalidDataException($"Target session \"{requested}\" not found.");
         if (!NodeCanAccessSession(node, projection))
@@ -46,8 +51,16 @@ internal sealed partial class SessionManager
                 ),
             };
         var requested = NodeConnectionHub.SessionRequestString(message["sessionId"]);
-        if (type == "session_send_message" && (!NodeConnectionHub.SessionRequestTruthy(message["sessionId"]) || SessionWait.Text(message["message"]) is null))
-            throw new InvalidDataException("Invalid session_send_message: missing sessionId or message");
+        if (
+            type == "session_send_message"
+            && (
+                !NodeConnectionHub.SessionRequestTruthy(message["sessionId"])
+                || SessionWait.Text(message["message"]) is null
+            )
+        )
+            throw new InvalidDataException(
+                "Invalid session_send_message: missing sessionId or message"
+            );
         var action = type == "session_history_request" ? "read history for" : "send messages to";
         var catalog = RequireNodeSessionProjection(node, requested, action);
         var owner = await GetExistingAsync(catalog["id"]!.GetValue<string>(), token);
@@ -57,7 +70,9 @@ internal sealed partial class SessionManager
         if (type == "session_history_request")
         {
             if (!NodeCanAccessSession(node, owner.BuildDto()))
-                throw new InvalidDataException($"Node \"{node}\" cannot read history for session \"{requested}\" because the session assignment changed.");
+                throw new InvalidDataException(
+                    $"Node \"{node}\" cannot read history for session \"{requested}\" because the session assignment changed."
+                );
             var snapshot = owner.Entry.Snapshot();
             var count = SessionWait.Number(message["count"]) ?? 30;
             var safeCount = Math.Max(1, Math.Min(100, count == 0 ? 30 : count));
@@ -66,8 +81,15 @@ internal sealed partial class SessionManager
             {
                 ["session"] = NodeSessionSummary(owner.BuildDto()),
                 ["totalMessages"] = snapshot.History.Count,
-                ["messages"] = new JsonArray(snapshot.History.Skip(start).Select((row, offset) =>
-                    (JsonNode?)NodeHistoryMessage(row.ToJson(), start + offset)).ToArray()),
+                ["messages"] = new JsonArray(
+                    snapshot
+                        .History.Skip(start)
+                        .Select(
+                            (row, offset) =>
+                                (JsonNode?)NodeHistoryMessage(row.ToJson(), start + offset)
+                        )
+                        .ToArray()
+                ),
             };
         }
         var eventType = SessionWait.Text(message["eventType"]) switch
@@ -84,10 +106,18 @@ internal sealed partial class SessionManager
         };
         await new SessionRuntime(this).SubmitAndRunAsync(
             owner,
-            new QueueItem(queueType, [new JsonObject
-            {
-                ["system"] = SessionBoundary.SessionEvent(eventType, SessionWait.Text(message["message"])!),
-            }]),
+            new QueueItem(
+                queueType,
+                [
+                    new JsonObject
+                    {
+                        ["system"] = SessionBoundary.SessionEvent(
+                            eventType,
+                            SessionWait.Text(message["message"])!
+                        ),
+                    },
+                ]
+            ),
             () =>
             {
                 requireConnection();
@@ -103,9 +133,17 @@ internal sealed partial class SessionManager
         {
             ["id"] = session["id"]?.DeepClone(),
             ["displayName"] = session["displayName"]?.DeepClone(),
-            ["messageCount"] = session["messageCount"]?.DeepClone() ?? session["meta"]?["messageCount"]?.DeepClone() ?? JsonValue.Create(0),
-            ["lastMessageTime"] = session["lastMessageTime"]?.DeepClone() ?? session["meta"]?["lastMessageTime"]?.DeepClone(),
-            ["currentNode"] = ResolveExecutionNode(session, BoundNode(SessionWait.Text(session["agent"]) ?? "main")),
+            ["messageCount"] =
+                session["messageCount"]?.DeepClone()
+                ?? session["meta"]?["messageCount"]?.DeepClone()
+                ?? JsonValue.Create(0),
+            ["lastMessageTime"] =
+                session["lastMessageTime"]?.DeepClone()
+                ?? session["meta"]?["lastMessageTime"]?.DeepClone(),
+            ["currentNode"] = ResolveExecutionNode(
+                session,
+                BoundNode(SessionWait.Text(session["agent"]) ?? "main")
+            ),
             ["cwd"] = session["cwd"]?.DeepClone(),
             ["busy"] = session["busy"]?.DeepClone() ?? JsonValue.Create(false),
             ["queueLength"] = session["queueLength"]?.DeepClone() ?? JsonValue.Create(0),
@@ -116,8 +154,15 @@ internal sealed partial class SessionManager
         var result = new JsonObject
         {
             ["index"] = index,
-            ["role"] = NodeConnectionHub.SessionRequestTruthy(message["role"]) ? message["role"]!.DeepClone() : JsonValue.Create("unknown"),
-            ["text"] = string.Join("\n", (message["parts"] as JsonArray ?? new JsonArray()).Select(NodeMessagePartText).Where(text => text.Length > 0)),
+            ["role"] = NodeConnectionHub.SessionRequestTruthy(message["role"])
+                ? message["role"]!.DeepClone()
+                : JsonValue.Create("unknown"),
+            ["text"] = string.Join(
+                "\n",
+                (message["parts"] as JsonArray ?? new JsonArray())
+                    .Select(NodeMessagePartText)
+                    .Where(text => text.Length > 0)
+            ),
         };
         if (message["__meta"] is JsonObject meta && meta.ContainsKey("timestamp"))
             result["timestamp"] = meta["timestamp"]?.DeepClone();
@@ -135,8 +180,23 @@ internal sealed partial class SessionManager
         if (SessionWait.Text(obj["system"]) is { } system)
             return "[SYSTEM] " + system;
         if (NodeConnectionHub.SessionRequestTruthy(obj["inlineData"]))
-            return "[inline data: " + (NodeConnectionHub.SessionRequestString((obj["inlineData"] as JsonObject)?["mimeType"]) is { Length: > 0 } mime ? mime : "unknown") + "]";
-        foreach (var (key, label, payload) in new[] { ("functionCall", "tool call", "args"), ("functionResponse", "tool response", "response") })
+            return "[inline data: "
+                + (
+                    NodeConnectionHub.SessionRequestString(
+                        (obj["inlineData"] as JsonObject)?["mimeType"]
+                    )
+                        is { Length: > 0 } mime
+                        ? mime
+                        : "unknown"
+                )
+                + "]";
+        foreach (
+            var (key, label, payload) in new[]
+            {
+                ("functionCall", "tool call", "args"),
+                ("functionResponse", "tool response", "response"),
+            }
+        )
             if (NodeConnectionHub.SessionRequestTruthy(obj[key]))
             {
                 var tool = obj[key] as JsonObject;

@@ -5,11 +5,13 @@ namespace Foxwarm.Nodes;
 
 internal sealed partial class NodeConnectionHub
 {
-    internal Func<string, JsonObject, Action, CancellationToken, Task<JsonObject>>? SessionRequest
-    {
-        get;
-        set;
-    }
+    internal Func<
+        string,
+        JsonObject,
+        Action,
+        CancellationToken,
+        Task<JsonObject>
+    >? SessionRequest { get; set; }
 
     private async Task HandleSessionRequestAsync(
         Connection connection,
@@ -22,7 +24,12 @@ internal sealed partial class NodeConnectionHub
             token.ThrowIfCancellationRequested();
             lock (gate)
             {
-                if (connection.Retired || !connection.Open || !nodes.TryGetValue(connection.Id!, out var active) || !ReferenceEquals(active, connection))
+                if (
+                    connection.Retired
+                    || !connection.Open
+                    || !nodes.TryGetValue(connection.Id!, out var active)
+                    || !ReferenceEquals(active, connection)
+                )
                     throw new IOException("Node connection replaced.");
             }
         }
