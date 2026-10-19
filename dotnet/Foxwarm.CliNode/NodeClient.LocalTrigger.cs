@@ -151,9 +151,11 @@ internal sealed partial class NodeClient
             var rawTarget = context.Features.Get<IHttpRequestFeature>()!.RawTarget ?? "/";
             var escapedPath = rawTarget
                 .Split('?', 2)[0]
-                .Replace("%2e", ".", StringComparison.OrdinalIgnoreCase);
+                .Replace("%2e", ".", StringComparison.OrdinalIgnoreCase)
+                // Preserve other escapes through Uri normalization, including invalid UTF-8.
+                .Replace("%", "%25");
             var path = new Uri(new Uri("http://127.0.0.1"), escapedPath).AbsolutePath;
-            if (escapedPath.Contains('%') || path != "/trigger")
+            if (path != "/trigger")
             {
                 response.StatusCode = 404;
                 await response.WriteAsync("Not found");

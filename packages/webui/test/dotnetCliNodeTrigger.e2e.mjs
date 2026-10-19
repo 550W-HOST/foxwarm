@@ -68,6 +68,10 @@ async function corpus(h) {
     [{ path: '/other', method: 'GET', auth: null }, 404, 'Not found'],
     [{ path: '/trigger', method: 'GET', auth: null }, 405, 'Method not allowed'],
     [{ path: '/%74rigger', auth: null }, 404, 'Not found'],
+    [{ path: '/a/../%74rigger' }, 404, 'Not found'],
+    [{ path: '/%2574rigger' }, 404, 'Not found'],
+    [{ path: '/%61/../trigger', method: 'GET', auth: null }, 405, 'Method not allowed'],
+    [{ path: '/%ff/../trigger', auth: null, body: 'invalid' }, 401, '{"error":"Unauthorized"}'],
     [{ auth: null, body: 'invalid' }, 401, '{"error":"Unauthorized"}'],
     [{ auth: 'Bearer wrong', headers: { 'x-node-trigger-token': h.token } }, 401, '{"error":"Unauthorized"}'],
     [{ auth: null, headers: { 'x-node-trigger-token': [h.token, 'other'] } }, 401, '{"error":"Unauthorized"}'],
@@ -82,7 +86,12 @@ async function corpus(h) {
     const result = await request(h, args); assert.equal(result.status, status, JSON.stringify(result)); if (exact) assert.equal(result.text, exact); else assert.equal(typeof JSON.parse(result.text).error, 'string'); errors.push(result.status)
   }
   assert.equal(events(h).length, 0)
-  for (const path of ['/a/../trigger', '/%2e/trigger']) assert.equal((await request(h, { path })).status, 200)
+  for (const path of ['/a/../trigger', '/%61/../trigger', '/%ff/../trigger', '/%2e/trigger', '/a/%2e%2e/trigger', '/%ff/.%2e/trigger']) {
+    const before = events(h).length
+    assert.equal((await request(h, { path })).status, 200, path)
+    assert.equal(events(h).length, before + 1, path)
+    assert.equal(events(h).at(-1).frame.message, 'normal')
+  }
   assert.equal((await request(h, { body: JSON.stringify({ sessionId: '\ufeffsession\ufeff', message: '\u0085' }) })).status, 200)
   assert.equal(events(h).at(-1).frame.sessionId, 'session'); assert.equal(events(h).at(-1).frame.message, '\u0085')
   assert.equal((await request(h, { body: JSON.stringify({ sessionId: 'session', message: '\ufeff' }) })).status, 400)
