@@ -130,6 +130,15 @@ async function corpus(h) {
   good(await request(h, 'close', { terminalId: id })); await until(() => { try { process.kill(t.pid, 0); return false } catch { return true } }, 'explicit close killed actual PTY')
   h.terminals.delete(id); assert.equal(good(await request(h, 'get', { terminalId: id })).terminal, null)
   assert(!await exists(join(h.cwd, 'agents')), 'services must not manufacture Agent directories')
+  // Natural exit and a user close may overlap on the real receiver/native waiter.
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const racing = await create(h)
+    input(h, racing.id, 'exit 0\n')
+    good(await request(h, 'close', { terminalId: racing.id }))
+    good(await request(h, 'close', { terminalId: racing.id }))
+    assert.equal(good(await request(h, 'get', { terminalId: racing.id })).terminal, null)
+    h.terminals.delete(racing.id)
+  }
   const blocked = await create(h)
   good(await request(h, 'attach', { terminalId: blocked.id }))
   input(h, blocked.id, "stty raw -echo; printf 'BLOCKED-%s\\n' READY; sleep 30\n")

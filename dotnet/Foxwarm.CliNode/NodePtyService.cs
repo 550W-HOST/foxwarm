@@ -273,6 +273,7 @@ internal sealed class NodePtyService : IAsyncDisposable
         internal object? StreamingOwner;
         private string cwd = cwd;
         private volatile bool closed;
+        private bool exited;
         private Task writing = Task.CompletedTask;
         private Task reader = Task.CompletedTask, waiter = Task.CompletedTask;
         private Task? closing;
@@ -336,6 +337,7 @@ internal sealed class NodePtyService : IAsyncDisposable
         private async Task Wait()
         {
             var result = await Task.Run(Native.Wait);
+            lock (service.gate) exited = true;
             try { await reader.WaitAsync(TimeSpan.FromSeconds(1)); }
             catch (TimeoutException) { Native.CancelRead(); await reader; }
             Native.CancelRead();
@@ -360,7 +362,7 @@ internal sealed class NodePtyService : IAsyncDisposable
 
         internal Task Close()
         {
-            lock (service.gate) return closing ??= CloseCore();
+            lock (service.gate) return closed ? waiter : closing ??= CloseCore();
         }
 
         private async Task CloseCore()
@@ -375,8 +377,12 @@ internal sealed class NodePtyService : IAsyncDisposable
 
         private void Signal(int signal)
         {
-            try { Native.SignalForeground(signal); } catch (IOException) { }
-            try { Native.SignalShell(signal); } catch (IOException) { }
+            lock (service.gate)
+            {
+                if (exited) return;
+                try { Native.SignalForeground(signal); } catch (IOException) { }
+                try { Native.SignalShell(signal); } catch (IOException) { }
+            }
         }
     }
 }
