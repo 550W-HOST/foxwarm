@@ -24,7 +24,13 @@ internal sealed class NodeFileTransfer(NodePaths paths)
         };
     }
 
-    internal async Task<JsonObject> Write(string raw, string agent, string data, bool overwrite, bool restrict)
+    internal async Task<JsonObject> Write(
+        string raw,
+        string agent,
+        string data,
+        bool overwrite,
+        bool restrict
+    )
     {
         var path = paths.Transfer(raw, agent, restrict);
         var existed = NodeFileTools.Exists(path);
@@ -33,10 +39,23 @@ internal sealed class NodeFileTransfer(NodePaths paths)
             throw new InvalidDataException(existsMessage);
         var bytes = DecodeBase64(data);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var temporary = path + "." + Environment.ProcessId + "." + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(6)) + ".tmp";
+        var temporary =
+            path
+            + "."
+            + Environment.ProcessId
+            + "."
+            + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(6))
+            + ".tmp";
         try
         {
-            await using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            await using (
+                var stream = new FileStream(
+                    temporary,
+                    FileMode.CreateNew,
+                    FileAccess.Write,
+                    FileShare.None
+                )
+            )
                 await stream.WriteAsync(bytes);
             // Same-directory rename replaces a final symlink, unlike ordinary content writes.
             File.Move(temporary, path, overwrite);
@@ -75,18 +94,19 @@ internal sealed class NodeFileTransfer(NodePaths paths)
         return Convert.FromBase64String(clean.ToString());
     }
 
-    private static (string Mime, bool Image) Mime(string path) => Path.GetExtension(path).ToLowerInvariant() switch
-    {
-        ".png" => ("image/png", true),
-        ".jpg" or ".jpeg" => ("image/jpeg", true),
-        ".gif" => ("image/gif", true),
-        ".webp" => ("image/webp", true),
-        ".bmp" => ("image/bmp", true),
-        ".svg" => ("image/svg+xml", true),
-        ".json" => ("application/json", false),
-        ".txt" or ".ts" or ".js" or ".sh" => ("text/plain", false),
-        ".md" => ("text/markdown", false),
-        ".yaml" or ".yml" => ("application/yaml", false),
-        _ => ("application/octet-stream", false),
-    };
+    private static (string Mime, bool Image) Mime(string path) =>
+        Path.GetExtension(path).ToLowerInvariant() switch
+        {
+            ".png" => ("image/png", true),
+            ".jpg" or ".jpeg" => ("image/jpeg", true),
+            ".gif" => ("image/gif", true),
+            ".webp" => ("image/webp", true),
+            ".bmp" => ("image/bmp", true),
+            ".svg" => ("image/svg+xml", true),
+            ".json" => ("application/json", false),
+            ".txt" or ".ts" or ".js" or ".sh" => ("text/plain", false),
+            ".md" => ("text/markdown", false),
+            ".yaml" or ".yml" => ("application/yaml", false),
+            _ => ("application/octet-stream", false),
+        };
 }

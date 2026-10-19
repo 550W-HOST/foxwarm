@@ -7,9 +7,13 @@ internal sealed record PatchOperation(string Action, string Path, string[] Lines
 /// <summary>Source patch parsing and matching, without filesystem effects or caller policy.</summary>
 internal static class WorkspacePatch
 {
-    private const string FormatHint = "Use *** Begin Patch / *** End Patch with file action headers; prefix update lines with space/-/+ and add lines with +; use @@ between update sections.";
-    private static readonly char[] Whitespace = "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff".ToCharArray();
+    private const string FormatHint =
+        "Use *** Begin Patch / *** End Patch with file action headers; prefix update lines with space/-/+ and add lines with +; use @@ between update sections.";
+    private static readonly char[] Whitespace =
+        "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff".ToCharArray();
+
     private static string Trim(string value) => value.Trim(Whitespace);
+
     private const int MaxContextErrorLength = 1600;
     private const int MaxContextErrorPathLength = 120;
     private const string FailedHunkOmission = "\n... (middle of failed hunk omitted) ...\n";
@@ -41,8 +45,10 @@ internal static class WorkspacePatch
             if (text.Length == 0 || !IsHeader(text.Split('\n')[0]))
                 throw new InvalidDataException(
                     text.Length == 0
-                        ? "Invalid apply_patch input: missing *** Begin Patch / *** End Patch envelope.\n" + FormatHint
-                        : "Invalid apply_patch input: missing *** Begin Patch / *** End Patch envelope, or bare patch must start with *** Update File: / *** Add File: / *** Delete File:.\n" + FormatHint
+                        ? "Invalid apply_patch input: missing *** Begin Patch / *** End Patch envelope.\n"
+                            + FormatHint
+                        : "Invalid apply_patch input: missing *** Begin Patch / *** End Patch envelope, or bare patch must start with *** Update File: / *** Add File: / *** Delete File:.\n"
+                            + FormatHint
                 );
             text = "*** Begin Patch\n" + text + "\n*** End Patch";
         }
@@ -77,9 +83,16 @@ internal static class WorkspacePatch
                     $"Invalid apply_patch input for {path}: add file lines must start with '+'."
                 );
             if (action == "update" && section.Count == 0)
-                throw new InvalidDataException($"Invalid apply_patch input for {path}: update section must include patch lines.");
-            if (action == "update" && !section.Any(line => line.StartsWith('+') || line.StartsWith('-')))
-                throw new InvalidDataException($"Invalid apply_patch input for {path}: update section must include at least one changed line.");
+                throw new InvalidDataException(
+                    $"Invalid apply_patch input for {path}: update section must include patch lines."
+                );
+            if (
+                action == "update"
+                && !section.Any(line => line.StartsWith('+') || line.StartsWith('-'))
+            )
+                throw new InvalidDataException(
+                    $"Invalid apply_patch input for {path}: update section must include at least one changed line."
+                );
             result.Add(
                 new PatchOperation(
                     action,
@@ -107,22 +120,31 @@ internal static class WorkspacePatch
         var patches = new List<Chunk>();
         var cursor = 0;
         var index = 0;
-        bool Done(string line) => line.StartsWith("*** End Patch", StringComparison.Ordinal) || line.StartsWith("*** End of File", StringComparison.Ordinal);
+        bool Done(string line) =>
+            line.StartsWith("*** End Patch", StringComparison.Ordinal)
+            || line.StartsWith("*** End of File", StringComparison.Ordinal);
         while (index < lines.Length && !Done(lines[index]))
         {
             var hunkStart = index;
-            var anchor = lines[index].StartsWith("@@ ", StringComparison.Ordinal) ? lines[index++][3..] : "";
+            var anchor = lines[index].StartsWith("@@ ", StringComparison.Ordinal)
+                ? lines[index++][3..]
+                : "";
             var bare = anchor.Length == 0 && lines[index] == "@@";
             if (bare)
                 index++;
             if (anchor.Length == 0 && !bare && cursor != 0)
-                throw new InvalidDataException($"Invalid apply_patch input for {path}: expected '@@' before line: {lines[index]}");
+                throw new InvalidDataException(
+                    $"Invalid apply_patch input for {path}: expected '@@' before line: {lines[index]}"
+                );
             if (Trim(anchor).Length > 0)
             {
                 // A repeated anchor already behind the cursor is not permission to skip another hunk.
                 for (var mode = 0; mode < 3; mode++)
                 {
-                    string Normalize(string line) => mode == 0 ? line : mode == 1 ? Trim(line) : NormalizeMatchLine(line);
+                    string Normalize(string line) =>
+                        mode == 0 ? line
+                        : mode == 1 ? Trim(line)
+                        : NormalizeMatchLine(line);
                     var expected = Normalize(anchor);
                     if (input.Take(cursor).Any(line => Normalize(line) == expected))
                         continue;
@@ -141,19 +163,27 @@ internal static class WorkspacePatch
             {
                 if (removed.Count == 0 && added.Count == 0)
                     return;
-                local.Add(new Chunk(context.Count - removed.Count, removed.ToArray(), added.ToArray()));
+                local.Add(
+                    new Chunk(context.Count - removed.Count, removed.ToArray(), added.ToArray())
+                );
                 removed.Clear();
                 added.Clear();
             }
             var sectionStart = index;
             var previousWasChange = false;
-            while (index < lines.Length && !Done(lines[index]) && !lines[index].StartsWith("@@", StringComparison.Ordinal))
+            while (
+                index < lines.Length
+                && !Done(lines[index])
+                && !lines[index].StartsWith("@@", StringComparison.Ordinal)
+            )
             {
                 var raw = lines[index];
                 if (raw == "***")
                     break;
                 if (raw.StartsWith("***", StringComparison.Ordinal))
-                    throw new InvalidDataException($"Invalid apply_patch input for {path}: invalid line: {raw}\n{FormatHint}");
+                    throw new InvalidDataException(
+                        $"Invalid apply_patch input for {path}: invalid line: {raw}\n{FormatHint}"
+                    );
                 index++;
                 if (raw.Length == 0)
                     raw = " ";
@@ -176,19 +206,29 @@ internal static class WorkspacePatch
                     previousWasChange = true;
                 }
                 else
-                    throw new InvalidDataException($"Invalid apply_patch input for {path}: invalid line: {raw}\n{FormatHint}");
+                    throw new InvalidDataException(
+                        $"Invalid apply_patch input for {path}: invalid line: {raw}\n{FormatHint}"
+                    );
             }
             Flush();
             var eof = index < lines.Length && lines[index] == "*** End of File";
             if (eof)
                 index++;
             else if (index == sectionStart)
-                throw new InvalidDataException($"Invalid apply_patch input for {path}: empty update section near line {index + 1}.");
-            var matched = FindContext(input, context, eof ? Math.Max(0, input.Length - context.Count) : cursor);
+                throw new InvalidDataException(
+                    $"Invalid apply_patch input for {path}: empty update section near line {index + 1}."
+                );
+            var matched = FindContext(
+                input,
+                context,
+                eof ? Math.Max(0, input.Length - context.Count) : cursor
+            );
             if (matched < 0 && eof)
                 matched = FindContext(input, context, cursor);
             if (matched < 0)
-                throw new InvalidDataException(FormatContextMismatch(lines[hunkStart..index], cursor, eof, path));
+                throw new InvalidDataException(
+                    FormatContextMismatch(lines[hunkStart..index], cursor, eof, path)
+                );
             patches.AddRange(local.Select(chunk => chunk with { Index = chunk.Index + matched }));
             cursor = matched + context.Count;
         }
@@ -197,9 +237,13 @@ internal static class WorkspacePatch
         foreach (var chunk in patches)
         {
             if (chunk.Index > input.Length)
-                throw new InvalidDataException($"apply_patch failed for {path}: chunk starts past end of file ({chunk.Index} > {input.Length}).");
+                throw new InvalidDataException(
+                    $"apply_patch failed for {path}: chunk starts past end of file ({chunk.Index} > {input.Length})."
+                );
             if (sourceIndex > chunk.Index)
-                throw new InvalidDataException($"apply_patch failed for {path}: overlapping chunk at {chunk.Index} (cursor {sourceIndex}).");
+                throw new InvalidDataException(
+                    $"apply_patch failed for {path}: overlapping chunk at {chunk.Index} (cursor {sourceIndex})."
+                );
             output.AddRange(input[sourceIndex..chunk.Index]);
             output.AddRange(chunk.Added);
             sourceIndex = chunk.Index + chunk.Removed.Length;

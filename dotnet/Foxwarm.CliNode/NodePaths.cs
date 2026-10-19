@@ -7,8 +7,12 @@ internal sealed class NodePaths(string startupDirectory)
 
     internal static string Home(string path) =>
         path == "~" ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
-        : path.StartsWith("~/", StringComparison.Ordinal) || path.StartsWith("~\\", StringComparison.Ordinal)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), path[2..])
+        : path.StartsWith("~/", StringComparison.Ordinal)
+        || path.StartsWith("~\\", StringComparison.Ordinal)
+            ? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                path[2..]
+            )
         : path;
 
     internal string AgentDirectory(string agent)
@@ -17,7 +21,10 @@ internal sealed class NodePaths(string startupDirectory)
         if (!string.IsNullOrEmpty(explicitDirectory))
             return Path.GetFullPath(Home(explicitDirectory), StartupDirectory);
         var agents = Environment.GetEnvironmentVariable("FOXWARM_AGENTS_DIR")?.Trim();
-        return Path.GetFullPath(Path.Combine(Home(string.IsNullOrEmpty(agents) ? "agents" : agents), agent), StartupDirectory);
+        return Path.GetFullPath(
+            Path.Combine(Home(string.IsNullOrEmpty(agents) ? "agents" : agents), agent),
+            StartupDirectory
+        );
     }
 
     internal string Resolve(string? raw, string agent, string? cwd = null)
@@ -25,7 +32,10 @@ internal sealed class NodePaths(string startupDirectory)
         if (string.IsNullOrEmpty(raw))
             throw new InvalidDataException("filePath is required");
         if (raw.Contains('\0'))
-            throw new NodeFileException("ERR_INVALID_ARG_VALUE", "The path must not contain null bytes.");
+            throw new NodeFileException(
+                "ERR_INVALID_ARG_VALUE",
+                "The path must not contain null bytes."
+            );
         var path = raw;
         if (path.StartsWith('$'))
         {
@@ -37,7 +47,13 @@ internal sealed class NodePaths(string startupDirectory)
                 "fw_tmp" => Path.Combine(AgentDirectory(agent), "tmp"),
                 _ => throw new InvalidDataException("Unknown Agent path variable: $" + name),
             };
-            path = slash < 0 ? root : Path.Combine(root, path[(slash + 1)..].TrimStart(Path.DirectorySeparatorChar));
+            path =
+                slash < 0
+                    ? root
+                    : Path.Combine(
+                        root,
+                        path[(slash + 1)..].TrimStart(Path.DirectorySeparatorChar)
+                    );
         }
         path = Home(path);
         var basis = !string.IsNullOrWhiteSpace(cwd)
@@ -50,8 +66,17 @@ internal sealed class NodePaths(string startupDirectory)
     {
         var root = AgentDirectory(agent);
         var path = Resolve(raw, agent);
-        if (restrict && path != root && !path.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-            throw new InvalidDataException("Path traversal detected: cannot access files outside agent folder");
+        if (
+            restrict
+            && path != root
+            && !path.StartsWith(
+                root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+                StringComparison.Ordinal
+            )
+        )
+            throw new InvalidDataException(
+                "Path traversal detected: cannot access files outside agent folder"
+            );
         return path;
     }
 }
