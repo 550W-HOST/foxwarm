@@ -156,9 +156,18 @@ internal static class AppConfigurationRules
                 throw new InvalidDataException(
                     $"app config `nodeProviders.{id}.args` must contain at most {MaxNodeProviderArgs} bounded strings."
                 );
-            var timeout = provider.ContainsKey("timeoutSeconds") ? Number(provider["timeoutSeconds"]) : 90;
-            if (timeout is null || timeout < 1 || timeout > MaxNodeProviderTimeoutSeconds || Math.Truncate(timeout.Value) != timeout)
-                throw new InvalidDataException($"app config `nodeProviders.{id}.timeoutSeconds` must be an integer between 1 and {MaxNodeProviderTimeoutSeconds}.");
+            var timeout = provider.ContainsKey("timeoutSeconds")
+                ? Number(provider["timeoutSeconds"])
+                : 90;
+            if (
+                timeout is null
+                || timeout < 1
+                || timeout > MaxNodeProviderTimeoutSeconds
+                || Math.Truncate(timeout.Value) != timeout
+            )
+                throw new InvalidDataException(
+                    $"app config `nodeProviders.{id}.timeoutSeconds` must be an integer between 1 and {MaxNodeProviderTimeoutSeconds}."
+                );
         }
     }
 

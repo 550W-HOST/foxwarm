@@ -137,8 +137,7 @@ internal sealed class ToolRegistry(
         {
             if (
                 nodes is null
-                || !Definitions(targetNode)
-                    .Any(value => SessionWait.Text(value?["name"]) == name)
+                || !Definitions(targetNode).Any(value => SessionWait.Text(value?["name"]) == name)
             )
                 throw new InvalidDataException("Tool is not advertised by Node: " + name);
             return new(invocation, source, name, targetArgs, ExecutionNode: targetNode);
@@ -251,32 +250,89 @@ internal sealed class ToolRegistry(
             )
             : Definitions(id);
 
-    private JsonArray Definitions(string id) => providers?.Definitions(id)
-        ?? (nodes ?? throw new InvalidDataException("Remote Nodes are unavailable.")).Definitions(id);
+    private JsonArray Definitions(string id) =>
+        providers?.Definitions(id)
+        ?? (nodes ?? throw new InvalidDataException("Remote Nodes are unavailable.")).Definitions(
+            id
+        );
 
-    internal Task RefreshNodeAsync(string id, CancellationToken token) => providers?.RefreshAsync(id, token) ?? Task.CompletedTask;
+    internal Task RefreshNodeAsync(string id, CancellationToken token) =>
+        providers?.RefreshAsync(id, token) ?? Task.CompletedTask;
 
-    internal async Task<ResolvedTool> ResolveAsync(string invocation, JsonObject args, string currentNode, CancellationToken token)
+    internal async Task<ResolvedTool> ResolveAsync(
+        string invocation,
+        JsonObject args,
+        string currentNode,
+        CancellationToken token
+    )
     {
         var target = currentNode;
         var toolId = Text(args, "toolId");
-        var nodeCapability = invocation == "call_tool"
-            ? toolId is { Length: > 0 } ? toolId.StartsWith("node:", StringComparison.Ordinal) : Text(args, "source")?.Trim() == "node"
-            : !entries.TryGetValue(invocation, out var direct) || direct.Source == "node";
+        var nodeCapability =
+            invocation == "call_tool"
+                ? toolId is { Length: > 0 }
+                    ? toolId.StartsWith("node:", StringComparison.Ordinal)
+                    : Text(args, "source")?.Trim() == "node"
+                : !entries.TryGetValue(invocation, out var direct) || direct.Source == "node";
         if (invocation == "call_tool")
         {
             target = TargetNode(Text(args, "nodeId"), currentNode);
-            if (Text(args, "toolId") is string id && id.StartsWith("node:", StringComparison.Ordinal) && id.LastIndexOf('/') > 5)
+            if (
+                Text(args, "toolId") is string id
+                && id.StartsWith("node:", StringComparison.Ordinal)
+                && id.LastIndexOf('/') > 5
+            )
                 target = id[5..id.LastIndexOf('/')];
         }
-        if (nodeCapability && target != "master") await RefreshNodeAsync(target, token);
+        if (nodeCapability && target != "master")
+            await RefreshNodeAsync(target, token);
         return Resolve(invocation, args, currentNode);
     }
 
-    private Task<JsonNode?> ExecuteNodeAsync(string node, string name, JsonObject args, string sessionId, string agent,
-        string currentNode, string? cwd, bool programmatic, CancellationToken token, SessionOwner owner, Action<JsonNode?>? metadata, Foxwarm.ToolScript.ToolScriptDataBudget? budget) =>
-        providers is not null ? providers.ExecuteAsync(node, name, args, sessionId, agent, currentNode, cwd, programmatic, token, owner, metadata, budget)
-            : (nodes ?? throw new InvalidOperationException("Remote Nodes are unavailable.")).ExecuteAsync(node, name, args, sessionId, agent, currentNode, cwd, programmatic, token, owner, metadata);
+    private Task<JsonNode?> ExecuteNodeAsync(
+        string node,
+        string name,
+        JsonObject args,
+        string sessionId,
+        string agent,
+        string currentNode,
+        string? cwd,
+        bool programmatic,
+        CancellationToken token,
+        SessionOwner owner,
+        Action<JsonNode?>? metadata,
+        Foxwarm.ToolScript.ToolScriptDataBudget? budget
+    ) =>
+        providers is not null
+            ? providers.ExecuteAsync(
+                node,
+                name,
+                args,
+                sessionId,
+                agent,
+                currentNode,
+                cwd,
+                programmatic,
+                token,
+                owner,
+                metadata,
+                budget
+            )
+            : (
+                nodes ?? throw new InvalidOperationException("Remote Nodes are unavailable.")
+            ).ExecuteAsync(
+                node,
+                name,
+                args,
+                sessionId,
+                agent,
+                currentNode,
+                cwd,
+                programmatic,
+                token,
+                owner,
+                metadata
+            );
 
     internal static void LocalNode(string? node)
     {

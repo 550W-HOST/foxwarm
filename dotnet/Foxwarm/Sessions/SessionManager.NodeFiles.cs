@@ -79,7 +79,14 @@ internal sealed partial class SessionManager
     )
     {
         if (node != "master")
-            return await NodeProviders.ReadFileAsync(node, raw, owner, false, token, beforeMaterialize);
+            return await NodeProviders.ReadFileAsync(
+                node,
+                raw,
+                owner,
+                false,
+                token,
+                beforeMaterialize
+            );
         var path = files.Paths.FilePath(raw);
         if (!WorkspaceTools.RegularFile(path))
             throw new InvalidDataException("Not a regular file: " + raw);

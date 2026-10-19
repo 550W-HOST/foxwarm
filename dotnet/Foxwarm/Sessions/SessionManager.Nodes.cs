@@ -61,11 +61,15 @@ internal sealed partial class SessionManager
                     : new JsonObject { ["vscode-fs"] = 1, ["vscode-git"] = 2 },
             }
         );
-        foreach (var node in NodeProviders.Snapshot()) nodes.Add(node?.DeepClone());
+        foreach (var node in NodeProviders.Snapshot())
+            nodes.Add(node?.DeepClone());
         return nodes;
     }
 
-    internal async Task<JsonArray> NodeSummariesAsync(bool hasPty = false, CancellationToken token = default)
+    internal async Task<JsonArray> NodeSummariesAsync(
+        bool hasPty = false,
+        CancellationToken token = default
+    )
     {
         await NodeProviders.ListAsync(token);
         return NodeSummaries(hasPty);

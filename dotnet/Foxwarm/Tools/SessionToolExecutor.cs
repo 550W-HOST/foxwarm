@@ -116,7 +116,12 @@ internal sealed partial class SessionToolExecutor(
             var args =
                 call["args"] as JsonObject
                 ?? throw new InvalidDataException("Tool arguments must be an object.");
-            var resolved = await registry.ResolveAsync("exec", args, execSnapshot.Value?.Node ?? sessions.CurrentNode(hosted), token);
+            var resolved = await registry.ResolveAsync(
+                "exec",
+                args,
+                execSnapshot.Value?.Node ?? sessions.CurrentNode(hosted),
+                token
+            );
             await AuthorizeAsync(resolved, token);
             return null;
         }
@@ -357,7 +362,12 @@ internal sealed partial class SessionToolExecutor(
             var args =
                 functionCall["args"] as JsonObject
                 ?? throw new InvalidDataException("Tool arguments must be an object.");
-            var resolved = await registry.ResolveAsync(name, args, ExecutionNode, cancellationToken);
+            var resolved = await registry.ResolveAsync(
+                name,
+                args,
+                ExecutionNode,
+                cancellationToken
+            );
             if (
                 resolved.Name is "run_script" or "start_toolscript_run"
                 && invocation.Value is { } scriptCall

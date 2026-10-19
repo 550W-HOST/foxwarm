@@ -182,14 +182,17 @@ public sealed partial class WorkspaceTools
         return args[key] is JsonValue scalar && scalar.TryGetValue<string>(out value!);
     }
 
-    private string ResolvePatchPath(string text, bool allowMissing) => ResolveReadWrite(text, false);
+    private string ResolvePatchPath(string text, bool allowMissing) =>
+        ResolveReadWrite(text, false);
 
     private async Task<string> ReadPatchFileAsync(string path, CancellationToken ct)
     {
         if (targetFiles is null && !await RegularFileAsync(path, ct))
             throw new InvalidDataException($"Regular file not found: {path}");
         if (targetFiles is not null)
-            return StrictUtf8.GetString(await TargetFileContent.ReadAsync(targetFiles, path, int.MaxValue, ct));
+            return StrictUtf8.GetString(
+                await TargetFileContent.ReadAsync(targetFiles, path, int.MaxValue, ct)
+            );
         await using var stream = new FileStream(
             path,
             FileMode.Open,

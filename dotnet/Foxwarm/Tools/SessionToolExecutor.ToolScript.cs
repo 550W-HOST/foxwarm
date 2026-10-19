@@ -47,7 +47,12 @@ internal sealed partial class SessionToolExecutor
                 scriptScope.Value = new(literal, budget);
                 try
                 {
-                    var resolved = await registry.ResolveAsync("call_tool", wrapper, sessions.CurrentNode(hosted), currentToken);
+                    var resolved = await registry.ResolveAsync(
+                        "call_tool",
+                        wrapper,
+                        sessions.CurrentNode(hosted),
+                        currentToken
+                    );
                     var concrete = new JsonObject
                     {
                         ["name"] = resolved.Name,
@@ -125,9 +130,17 @@ internal sealed partial class SessionToolExecutor
                     );
                     if (sessions.NodeProviders.IsProviderNode(node))
                     {
-                        var sourceBytes = await sessions.NodeProviders.ReadSourceAsync(node, raw, cwd, currentToken,
-                            size => budget.Charge(checked(8L * size)));
-                        return (raw, new System.Text.UTF8Encoding(false, true).GetString(sourceBytes));
+                        var sourceBytes = await sessions.NodeProviders.ReadSourceAsync(
+                            node,
+                            raw,
+                            cwd,
+                            currentToken,
+                            size => budget.Charge(checked(8L * size))
+                        );
+                        return (
+                            raw,
+                            new System.Text.UTF8Encoding(false, true).GetString(sourceBytes)
+                        );
                     }
                     string? resolvedPath = null;
                     await sessions.Nodes.ExecuteAsync(

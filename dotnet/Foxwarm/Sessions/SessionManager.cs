@@ -66,7 +66,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
         HandoffConfirmationEnabled = models.HandoffConfirmationEnabled;
         this.root = Path.GetFullPath(root);
         Nodes = new(this.root);
-        NodeProviders = new(Nodes, models.ConfigurationOwner?.AppConfiguration["nodeProviders"] as JsonObject, pendingWrites);
+        NodeProviders = new(
+            Nodes,
+            models.ConfigurationOwner?.AppConfiguration["nodeProviders"] as JsonObject,
+            pendingWrites
+        );
         Nodes.Changed += () => TopologyChanged?.Invoke();
         var workspaceRoot = Path.GetFullPath(workspace);
         toolWorkspace = workspaceRoot;
@@ -578,7 +582,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
         registry.OnTurnStarting = async _ =>
         {
             StartChannelTurn(hosted);
-            try { await NodeProviders.RefreshAsync(CurrentNode(hosted), admissionStop.Token); }
+            try
+            {
+                await NodeProviders.RefreshAsync(CurrentNode(hosted), admissionStop.Token);
+            }
             catch (Exception error) when (error is IOException or InvalidOperationException) { }
             await MaybeRefreshStaleAsync(hosted);
         };

@@ -11,16 +11,25 @@ namespace Foxwarm.Nodes;
 internal sealed class NodeProviderRegistry
 {
     private readonly NodeConnectionHub native;
-    private readonly Dictionary<string, ExecutableNodeProvider> providers = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, JsonObject> discovered = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ExecutableNodeProvider> providers = new(
+        StringComparer.Ordinal
+    );
+    private readonly ConcurrentDictionary<string, JsonObject> discovered = new(
+        StringComparer.Ordinal
+    );
     private readonly PendingWriteRefs pending;
 
-    internal NodeProviderRegistry(NodeConnectionHub native, JsonObject? configuration = null, PendingWriteRefs? pending = null)
+    internal NodeProviderRegistry(
+        NodeConnectionHub native,
+        JsonObject? configuration = null,
+        PendingWriteRefs? pending = null
+    )
     {
         this.native = native;
         this.pending = pending ?? new();
         var app = new JsonObject();
-        if (configuration is not null) app["nodeProviders"] = configuration.DeepClone();
+        if (configuration is not null)
+            app["nodeProviders"] = configuration.DeepClone();
         AppConfigurationRules.Validate(app);
         foreach (var (id, raw) in configuration ?? new JsonObject())
         {
@@ -32,36 +41,67 @@ internal sealed class NodeProviderRegistry
 
     internal static void ValidateId(string id)
     {
-        if (id == "master") return;
-        if (!Regex.IsMatch(id, "^(?:[A-Za-z0-9._:-]{1,128}|[A-Za-z0-9][A-Za-z0-9._:-]{0,63}/[A-Za-z0-9][A-Za-z0-9._:-]{0,127})$", RegexOptions.CultureInvariant))
+        if (id == "master")
+            return;
+        if (
+            !Regex.IsMatch(
+                id,
+                "^(?:[A-Za-z0-9._:-]{1,128}|[A-Za-z0-9][A-Za-z0-9._:-]{0,63}/[A-Za-z0-9][A-Za-z0-9._:-]{0,127})$",
+                RegexOptions.CultureInvariant
+            )
+        )
             throw new InvalidDataException("Invalid Node identity.");
     }
 
     internal bool IsProviderNode(string id) => id.Contains('/');
-    internal bool Online(string id) => IsProviderNode(id)
-        ? discovered.TryGetValue(id, out var descriptor) && SessionWait.Text(descriptor["availability"]) == "ready"
-        : native.Online(id);
+
+    internal bool Online(string id) =>
+        IsProviderNode(id)
+            ? discovered.TryGetValue(id, out var descriptor)
+                && SessionWait.Text(descriptor["availability"]) == "ready"
+            : native.Online(id);
+
     internal bool Connected(string id) => IsProviderNode(id) ? Online(id) : native.Connected(id);
-    internal string? DefaultCwd(string id) => IsProviderNode(id)
-        ? discovered.TryGetValue(id, out var descriptor) ? SessionWait.Text(descriptor["defaultCwd"]) : null
-        : native.ShellDefaultCwd(id);
+
+    internal string? DefaultCwd(string id) =>
+        IsProviderNode(id)
+            ? discovered.TryGetValue(id, out var descriptor)
+                ? SessionWait.Text(descriptor["defaultCwd"])
+                : null
+            : native.ShellDefaultCwd(id);
 
     // Synchronous readers consume a projection only; subprocess discovery never runs under their locks.
     // Actual effects always perform fresh asynchronous exact-owner/capability resolution.
-    internal JsonArray Snapshot() => new(discovered.Values.OrderBy(value => SessionWait.Text(value["id"]), StringComparer.Ordinal).Select(Summary).Cast<JsonNode?>().ToArray());
+    internal JsonArray Snapshot() =>
+        new(
+            discovered
+                .Values.OrderBy(value => SessionWait.Text(value["id"]), StringComparer.Ordinal)
+                .Select(Summary)
+                .Cast<JsonNode?>()
+                .ToArray()
+        );
 
     internal async Task<JsonArray> ListAsync(CancellationToken token)
     {
         var values = new List<JsonObject>();
         foreach (var provider in providers.Values)
             values.AddRange((await provider.ListAsync(token)).OfType<JsonObject>());
-        var fixedIds = native.List().OfType<JsonObject>().Select(value => SessionWait.Text(value["id"])).Append("master").ToHashSet(StringComparer.Ordinal);
+        var fixedIds = native
+            .List()
+            .OfType<JsonObject>()
+            .Select(value => SessionWait.Text(value["id"]))
+            .Append("master")
+            .ToHashSet(StringComparer.Ordinal);
         var ids = new HashSet<string>(fixedIds!, StringComparer.Ordinal);
         foreach (var value in values)
             if (!ids.Add(value["id"]!.GetValue<string>()))
-                throw new NodeProviderException("NODE_PROVIDER_DUPLICATE_NODE", "Multiple providers own the same Node identity.");
+                throw new NodeProviderException(
+                    "NODE_PROVIDER_DUPLICATE_NODE",
+                    "Multiple providers own the same Node identity."
+                );
         discovered.Clear();
-        foreach (var value in values) discovered[value["id"]!.GetValue<string>()] = (JsonObject)value.DeepClone();
+        foreach (var value in values)
+            discovered[value["id"]!.GetValue<string>()] = (JsonObject)value.DeepClone();
         return new JsonArray(values.Select(Summary).Cast<JsonNode?>().ToArray());
     }
 
@@ -69,31 +109,56 @@ internal sealed class NodeProviderRegistry
     {
         ValidateId(id);
         // Fixed native owners never consult optional executable discovery.
-        if (!IsProviderNode(id)) return id == "master" ? new JsonObject { ["id"] = id, ["availability"] = "ready" }
-            : native.List().OfType<JsonObject>().FirstOrDefault(value => SessionWait.Text(value["id"]) == id);
+        if (!IsProviderNode(id))
+            return id == "master"
+                ? new JsonObject { ["id"] = id, ["availability"] = "ready" }
+                : native
+                    .List()
+                    .OfType<JsonObject>()
+                    .FirstOrDefault(value => SessionWait.Text(value["id"]) == id);
         var slash = id.IndexOf('/');
-        if (!providers.TryGetValue(id[..slash], out var provider)) return null;
+        if (!providers.TryGetValue(id[..slash], out var provider))
+            return null;
         JsonArray nodes;
-        try { nodes = await provider.ListAsync(token); }
-        catch { discovered.TryRemove(id, out _); throw; }
-        var descriptor = nodes.OfType<JsonObject>().FirstOrDefault(value => SessionWait.Text(value["id"]) == id);
-        if (descriptor is not null) discovered[id] = (JsonObject)descriptor.DeepClone();
-        else discovered.TryRemove(id, out _);
+        try
+        {
+            nodes = await provider.ListAsync(token);
+        }
+        catch
+        {
+            discovered.TryRemove(id, out _);
+            throw;
+        }
+        var descriptor = nodes
+            .OfType<JsonObject>()
+            .FirstOrDefault(value => SessionWait.Text(value["id"]) == id);
+        if (descriptor is not null)
+            discovered[id] = (JsonObject)descriptor.DeepClone();
+        else
+            discovered.TryRemove(id, out _);
         return descriptor;
     }
 
     internal async Task RefreshAsync(string id, CancellationToken token)
     {
-        if (IsProviderNode(id)) _ = await ResolveAsync(id, token);
+        if (IsProviderNode(id))
+            _ = await ResolveAsync(id, token);
     }
 
     internal JsonArray Definitions(string id)
     {
-        if (!IsProviderNode(id)) return native.DiscoveredDefinitions(id);
-        if (!Online(id) || !discovered.TryGetValue(id, out var descriptor)) return [];
+        if (!IsProviderNode(id))
+            return native.DiscoveredDefinitions(id);
+        if (!Online(id) || !discovered.TryGetValue(id, out var descriptor))
+            return [];
         var definitions = ProviderDefinitions();
         if (SessionWait.Text(descriptor["filesystem"]) == "read")
-            return new(definitions.Where(value => SessionWait.Text(value?["name"]) == "read").Select(value => value!.DeepClone()).ToArray());
+            return new(
+                definitions
+                    .Where(value => SessionWait.Text(value?["name"]) == "read")
+                    .Select(value => value!.DeepClone())
+                    .ToArray()
+            );
         return definitions;
     }
 
@@ -105,12 +170,20 @@ internal sealed class NodeProviderRegistry
             var name = SessionWait.Text(definition["name"]);
             if (name is "read" or "write" or "edit")
                 definition["parameters"]!["properties"]!["filePath"]!["description"] =
-                    (name == "read" ? "File or directory path" : name == "write" ? "Destination path" : "File to edit")
+                    (
+                        name == "read" ? "File or directory path"
+                        : name == "write" ? "Destination path"
+                        : "File to edit"
+                    )
                     + " on this Node. Relative paths use the Session's working directory, or the Node's default directory when unset. Path syntax and home-directory handling are defined by the Node. $fw_agentdir and $fw_tmp are not supported.";
             else if (name == "apply_patch")
-                definition["description"] = definition["description"]!.GetValue<string>().Replace(
-                    "Paths in patch headers use the session working directory, or the agent directory when unset. Absolute paths, ~/ paths, and leading $fw_agentdir or $fw_tmp are accepted subject to permissions. Other leading $ names are rejected.",
-                    "Relative paths in patch headers use the Session's working directory, or the Node's default directory when unset. Path syntax and home-directory handling are defined by the Node. $fw_agentdir and $fw_tmp are not supported.", StringComparison.Ordinal);
+                definition["description"] = definition["description"]!
+                    .GetValue<string>()
+                    .Replace(
+                        "Paths in patch headers use the session working directory, or the agent directory when unset. Absolute paths, ~/ paths, and leading $fw_agentdir or $fw_tmp are accepted subject to permissions. Other leading $ names are rejected.",
+                        "Relative paths in patch headers use the Session's working directory, or the Node's default directory when unset. Path syntax and home-directory handling are defined by the Node. $fw_agentdir and $fw_tmp are not supported.",
+                        StringComparison.Ordinal
+                    );
         }
         return definitions;
     }
@@ -121,66 +194,161 @@ internal sealed class NodeProviderRegistry
         var ready = SessionWait.Text(descriptor["availability"]) == "ready";
         return new JsonObject
         {
-            ["id"] = id, ["nodeId"] = id, ["provider"] = descriptor["provider"]!.DeepClone(),
-            ["type"] = descriptor["type"]!.DeepClone(), ["kind"] = descriptor["kind"]!.DeepClone(),
+            ["id"] = id,
+            ["nodeId"] = id,
+            ["provider"] = descriptor["provider"]!.DeepClone(),
+            ["type"] = descriptor["type"]!.DeepClone(),
+            ["kind"] = descriptor["kind"]!.DeepClone(),
             ["displayName"] = descriptor["label"]?.DeepClone() ?? JsonValue.Create(id),
             ["availability"] = descriptor["availability"]!.DeepClone(),
-            ["online"] = ready, ["connected"] = ready, ["executable"] = ready,
-            ["services"] = new JsonObject(), ["tools"] = DefinitionsFor(descriptor),
+            ["online"] = ready,
+            ["connected"] = ready,
+            ["executable"] = ready,
+            ["services"] = new JsonObject(),
+            ["tools"] = DefinitionsFor(descriptor),
         };
     }
 
     private static JsonArray DefinitionsFor(JsonObject descriptor)
     {
-        if (SessionWait.Text(descriptor["availability"]) != "ready") return [];
+        if (SessionWait.Text(descriptor["availability"]) != "ready")
+            return [];
         var definitions = ProviderDefinitions();
-        return SessionWait.Text(descriptor["filesystem"]) == "read" ? new JsonArray(definitions.Where(value => SessionWait.Text(value?["name"]) == "read").Select(value => value!.DeepClone()).ToArray()) : definitions;
+        return SessionWait.Text(descriptor["filesystem"]) == "read"
+            ? new JsonArray(
+                definitions
+                    .Where(value => SessionWait.Text(value?["name"]) == "read")
+                    .Select(value => value!.DeepClone())
+                    .ToArray()
+            )
+            : definitions;
     }
 
-    private async Task<ITargetFileOperations> FileOperationsAsync(string node, bool write, string? cwd, CancellationToken token)
+    private async Task<ITargetFileOperations> FileOperationsAsync(
+        string node,
+        bool write,
+        string? cwd,
+        CancellationToken token
+    )
     {
-        var descriptor = await ResolveAsync(node, token)
+        var descriptor =
+            await ResolveAsync(node, token)
             ?? throw new InvalidOperationException("Node is unavailable: " + node);
-        if (SessionWait.Text(descriptor["availability"]) != "ready"
-            || write && SessionWait.Text(descriptor["filesystem"]) != "read-write")
+        if (
+            SessionWait.Text(descriptor["availability"]) != "ready"
+            || write && SessionWait.Text(descriptor["filesystem"]) != "read-write"
+        )
             throw new InvalidOperationException("Node file capability is unavailable: " + node);
         var slash = node.IndexOf('/');
         return new ProviderFileOperations(providers[node[..slash]], node[(slash + 1)..], cwd);
     }
 
-    internal async Task<JsonNode?> ExecuteAsync(string node, string name, JsonObject args, string sessionId,
-        string agent, string currentNode, string? cwd, bool programmatic, CancellationToken token,
-        SessionOwner? owner = null, Action<JsonNode?>? pathMetadata = null, Foxwarm.ToolScript.ToolScriptDataBudget? budget = null)
+    internal async Task<JsonNode?> ExecuteAsync(
+        string node,
+        string name,
+        JsonObject args,
+        string sessionId,
+        string agent,
+        string currentNode,
+        string? cwd,
+        bool programmatic,
+        CancellationToken token,
+        SessionOwner? owner = null,
+        Action<JsonNode?>? pathMetadata = null,
+        Foxwarm.ToolScript.ToolScriptDataBudget? budget = null
+    )
     {
-        if (!IsProviderNode(node)) return await native.ExecuteAsync(node, name, args, sessionId, agent, currentNode, cwd, programmatic, token, owner, pathMetadata);
-        if (owner is null) throw new InvalidOperationException("Primitive file tools require a Session owner.");
+        if (!IsProviderNode(node))
+            return await native.ExecuteAsync(
+                node,
+                name,
+                args,
+                sessionId,
+                agent,
+                currentNode,
+                cwd,
+                programmatic,
+                token,
+                owner,
+                pathMetadata
+            );
+        if (owner is null)
+            throw new InvalidOperationException("Primitive file tools require a Session owner.");
         if (name is not ("read" or "write" or "edit" or "apply_patch"))
             throw new InvalidOperationException("Tool is unavailable on this Node: " + name);
-        var operations = await FileOperationsAsync(node, name != "read", currentNode == node ? cwd : null, token);
-        var workspace = new WorkspaceTools(operations, pending, sessionId, agent, owner) { Programmatic = programmatic, ScriptBudget = budget };
-        return await workspace.ExecuteAsync(new JsonObject { ["name"] = name, ["args"] = args.DeepClone() }, token);
+        var operations = await FileOperationsAsync(
+            node,
+            name != "read",
+            currentNode == node ? cwd : null,
+            token
+        );
+        var workspace = new WorkspaceTools(operations, pending, sessionId, agent, owner)
+        {
+            Programmatic = programmatic,
+            ScriptBudget = budget,
+        };
+        return await workspace.ExecuteAsync(
+            new JsonObject { ["name"] = name, ["args"] = args.DeepClone() },
+            token
+        );
     }
 
-    internal async Task<NodeConnectionHub.TransferFile> ReadFileAsync(string node, string path, SessionOwner owner,
-        bool ingress, CancellationToken token, Action<long>? beforeMaterialize = null)
+    internal async Task<NodeConnectionHub.TransferFile> ReadFileAsync(
+        string node,
+        string path,
+        SessionOwner owner,
+        bool ingress,
+        CancellationToken token,
+        Action<long>? beforeMaterialize = null
+    )
     {
-        if (!IsProviderNode(node)) return await native.ReadFileAsync(node, path, owner, ingress, token, beforeMaterialize);
+        if (!IsProviderNode(node))
+            return await native.ReadFileAsync(node, path, owner, ingress, token, beforeMaterialize);
         var operations = await FileOperationsAsync(node, false, null, token);
-        var bytes = await TargetFileContent.ReadAsync(operations, path, NodeConnectionHub.FileLimit, token, beforeMaterialize, requireRegular: true);
+        var bytes = await TargetFileContent.ReadAsync(
+            operations,
+            path,
+            NodeConnectionHub.FileLimit,
+            token,
+            beforeMaterialize,
+            requireRegular: true
+        );
         return new(bytes, path, NodeConnectionHub.RemoteFileName(path));
     }
 
-    internal async Task<byte[]> ReadSourceAsync(string node, string path, string? cwd, CancellationToken token, Action<long> beforeMaterialize)
+    internal async Task<byte[]> ReadSourceAsync(
+        string node,
+        string path,
+        string? cwd,
+        CancellationToken token,
+        Action<long> beforeMaterialize
+    )
     {
         var operations = await FileOperationsAsync(node, false, cwd, token);
-        return await TargetFileContent.ReadAsync(operations, path, int.MaxValue, token, beforeMaterialize, chunkSize: 65536);
+        return await TargetFileContent.ReadAsync(
+            operations,
+            path,
+            int.MaxValue,
+            token,
+            beforeMaterialize,
+            chunkSize: 65536
+        );
     }
 
-    internal async Task<JsonObject> WriteFileAsync(string node, string path, byte[] bytes, bool overwrite,
-        SessionOwner owner, bool ingress, CancellationToken token)
+    internal async Task<JsonObject> WriteFileAsync(
+        string node,
+        string path,
+        byte[] bytes,
+        bool overwrite,
+        SessionOwner owner,
+        bool ingress,
+        CancellationToken token
+    )
     {
-        if (!IsProviderNode(node)) return await native.WriteFileAsync(node, path, bytes, overwrite, owner, ingress, token);
-        if (bytes.Length > NodeConnectionHub.FileLimit) throw new IOException("File exceeds the 50 MiB transfer limit.");
+        if (!IsProviderNode(node))
+            return await native.WriteFileAsync(node, path, bytes, overwrite, owner, ingress, token);
+        if (bytes.Length > NodeConnectionHub.FileLimit)
+            throw new IOException("File exceeds the 50 MiB transfer limit.");
         owner.Entry.RequireIdentityAuthority();
         var operations = await FileOperationsAsync(node, true, null, token);
         await TargetFileContent.WriteAsync(operations, path, bytes, overwrite, token);

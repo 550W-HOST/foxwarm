@@ -30,10 +30,21 @@ internal static partial class FileToolCore
                     StringComparer.Create(CultureInfo.GetCultureInfo("en-US"), false)
                 )
                 .ToArray();
-            return FormatDirectory(display, startLine, endLine, entries.Select(entry => new TargetFileStat(
-                entry.LinkTarget is not null ? "symlink" : entry is DirectoryInfo ? "directory" : "file",
-                entry.LinkTarget is null && entry is FileInfo file ? file.Length : 0,
-                new DateTimeOffset(entry.LastWriteTimeUtc).ToUnixTimeMilliseconds(), entry.Name)).ToArray());
+            return FormatDirectory(
+                display,
+                startLine,
+                endLine,
+                entries
+                    .Select(entry => new TargetFileStat(
+                        entry.LinkTarget is not null ? "symlink"
+                            : entry is DirectoryInfo ? "directory"
+                            : "file",
+                        entry.LinkTarget is null && entry is FileInfo file ? file.Length : 0,
+                        new DateTimeOffset(entry.LastWriteTimeUtc).ToUnixTimeMilliseconds(),
+                        entry.Name
+                    ))
+                    .ToArray()
+            );
         }
         await using var stream = new FileStream(
             path,
@@ -54,7 +65,8 @@ internal static partial class FileToolCore
             while (total < count)
             {
                 var read = await stream.ReadAsync(bytes.AsMemory(total), cancellationToken);
-                if (read == 0) break;
+                if (read == 0)
+                    break;
                 total += read;
             }
             return bytes[..total];
@@ -62,9 +74,14 @@ internal static partial class FileToolCore
     }
 
     internal static async Task<string> ReadContent(
-        string path, string display, long sizeBytes, double? startLine, double? endLine,
+        string path,
+        string display,
+        long sizeBytes,
+        double? startLine,
+        double? endLine,
         Func<long, int, Task<byte[]>> ReadAt,
-        Action<System.Text.Json.Nodes.JsonObject>? data = null)
+        Action<System.Text.Json.Nodes.JsonObject>? data = null
+    )
     {
         var start = Math.Max(1, Bound(startLine) ?? 1);
         var end = Bound(endLine) is long value ? Math.Max(0, value) : (long?)null;
@@ -181,53 +198,52 @@ internal static partial class FileToolCore
             + "---\n"
             + string.Join('\n', footer);
     }
-    internal static string FormatDirectory(string display, double? startLine, double? endLine, IReadOnlyList<TargetFileStat> entries)
+
+    internal static string FormatDirectory(
+        string display,
+        double? startLine,
+        double? endLine,
+        IReadOnlyList<TargetFileStat> entries
+    )
     {
         var start = Math.Max(1, Bound(startLine) ?? 1);
         var end = Bound(endLine) is long value ? Math.Max(0, value) : (long?)null;
-            var last =
-                end
-                ?? Math.Min(
-                    entries.Count,
-                    start > long.MaxValue - 49 ? long.MaxValue : start + 49
-                );
-            var page =
-                start <= last
-                    ? entries
-                        .Skip((int)Math.Min(start - 1, entries.Count))
-                        .Take((int)Math.Min(entries.Count, last - start + 1))
-                        .ToArray()
-                    : [];
-            var lines = new List<string> { $"Directory listing for `{display}`", "" };
-            if (page.Length == 0)
-                lines.Add(
-                    entries.Count == 0 ? "(empty directory)" : "(no items in requested range)"
-                );
-            for (var index = 0; index < page.Length; index++)
-            {
-                var entry = page[index];
-                var link = entry.Kind == "symlink";
-                var directory = !link && entry.Kind == "directory";
-                var kind =
-                    link ? "symlink"
-                    : directory ? "dir"
-                    : "file";
-                var size = kind == "file" ? $", {entry.Size} B" : "";
-                lines.Add(
-                    $"{start + index}. `{entry.Name}{(directory ? "/" : "")}` ({kind}{size}) - {DateTimeOffset.FromUnixTimeMilliseconds((long)entry.ModifiedAtMs):yyyy-MM-ddTHH:mm:ss.fffZ}"
-                );
-            }
-            var next = start + page.Length;
-            lines.Add("");
+        var last =
+            end ?? Math.Min(entries.Count, start > long.MaxValue - 49 ? long.MaxValue : start + 49);
+        var page =
+            start <= last
+                ? entries
+                    .Skip((int)Math.Min(start - 1, entries.Count))
+                    .Take((int)Math.Min(entries.Count, last - start + 1))
+                    .ToArray()
+                : [];
+        var lines = new List<string> { $"Directory listing for `{display}`", "" };
+        if (page.Length == 0)
+            lines.Add(entries.Count == 0 ? "(empty directory)" : "(no items in requested range)");
+        for (var index = 0; index < page.Length; index++)
+        {
+            var entry = page[index];
+            var link = entry.Kind == "symlink";
+            var directory = !link && entry.Kind == "directory";
+            var kind =
+                link ? "symlink"
+                : directory ? "dir"
+                : "file";
+            var size = kind == "file" ? $", {entry.Size} B" : "";
             lines.Add(
-                $"Showing items {(page.Length > 0 ? start : 0)}-{(page.Length > 0 ? next - 1 : 0)} of {entries.Count}."
-                    + (
-                        next <= entries.Count
-                            ? $" Next page: read({{ filePath: {JsonSerializer.Serialize(display)}, startLine: {next}, endLine: {Math.Min(entries.Count, next + 49)} }})"
-                            : ""
-                    )
+                $"{start + index}. `{entry.Name}{(directory ? "/" : "")}` ({kind}{size}) - {DateTimeOffset.FromUnixTimeMilliseconds((long)entry.ModifiedAtMs):yyyy-MM-ddTHH:mm:ss.fffZ}"
             );
-            return string.Join('\n', lines);
+        }
+        var next = start + page.Length;
+        lines.Add("");
+        lines.Add(
+            $"Showing items {(page.Length > 0 ? start : 0)}-{(page.Length > 0 ? next - 1 : 0)} of {entries.Count}."
+                + (
+                    next <= entries.Count
+                        ? $" Next page: read({{ filePath: {JsonSerializer.Serialize(display)}, startLine: {next}, endLine: {Math.Min(entries.Count, next + 49)} }})"
+                        : ""
+                )
+        );
+        return string.Join('\n', lines);
     }
-
 }

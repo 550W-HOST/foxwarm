@@ -19,7 +19,11 @@ internal sealed partial class WebUIChannel
                 var bound = sessions.BoundNode(SessionWait.Text(row["agent"]) ?? "main");
                 var locked = bound is null ? null : $"This agent is bound to node {bound}.";
                 var choices = new JsonArray();
-                foreach (var node in (await sessions.NodeSummariesAsync(token: request.HttpContext.RequestAborted)).OfType<JsonObject>())
+                foreach (
+                    var node in (
+                        await sessions.NodeSummariesAsync(token: request.HttpContext.RequestAborted)
+                    ).OfType<JsonObject>()
+                )
                 {
                     var nodeId = SessionWait.Text(node["id"])!;
                     if (bound is not null && nodeId != bound)

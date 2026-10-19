@@ -19,7 +19,10 @@ internal static class NodeRoutes
                 Results.Json(
                     new
                     {
-                        nodes = await sessions.NodeSummariesAsync(Foxwarm.Terminal.TerminalRegistry.IsSupported, token),
+                        nodes = await sessions.NodeSummariesAsync(
+                            Foxwarm.Terminal.TerminalRegistry.IsSupported,
+                            token
+                        ),
                     }
                 )
         );

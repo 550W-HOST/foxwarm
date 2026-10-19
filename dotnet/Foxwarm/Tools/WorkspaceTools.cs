@@ -161,7 +161,13 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
         Paths = MainNativePaths.Default(this.root, cwd);
     }
 
-    internal WorkspaceTools(ITargetFileOperations operations, PendingWriteRefs pending, string sessionId, string agent, object? lifetime = null)
+    internal WorkspaceTools(
+        ITargetFileOperations operations,
+        PendingWriteRefs pending,
+        string sessionId,
+        string agent,
+        object? lifetime = null
+    )
     {
         root = "";
         targetFiles = operations;
@@ -214,7 +220,10 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                 var first = Bound("startLine");
                 var last = Bound("endLine");
                 var path = ResolveReadWrite(pathText, read: true);
-                if (!await DirectoryExistsAsync(path, cancellationToken) && !await RegularFileAsync(path, cancellationToken))
+                if (
+                    !await DirectoryExistsAsync(path, cancellationToken)
+                    && !await RegularFileAsync(path, cancellationToken)
+                )
                 {
                     if (Programmatic)
                         throw new FileNotFoundException(
@@ -312,8 +321,17 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
             }
             if (targetFiles is not null)
             {
-                var failed = await WriteTargetAsync(destination, pathText, content, overwrite, createDirs, Hint, cancellationToken);
-                if (failed is not null) return failed;
+                var failed = await WriteTargetAsync(
+                    destination,
+                    pathText,
+                    content,
+                    overwrite,
+                    createDirs,
+                    Hint,
+                    cancellationToken
+                );
+                if (failed is not null)
+                    return failed;
             }
             else
             {
@@ -395,7 +413,8 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
 
     private string ResolveReadWrite(string path, bool read)
     {
-        if (targetFiles is null) return Paths.FilePath(path);
+        if (targetFiles is null)
+            return Paths.FilePath(path);
         TargetFileContent.RequirePath(path);
         return path;
     }
