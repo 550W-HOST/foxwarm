@@ -12,7 +12,7 @@ import { until, sleep } from './experimentHostFixture.mjs'
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
 const { processRoot: root } = initializeTestEnvironment()
-const clients = [], sockets = new Set(), frames = [], registrations = []
+const clients = [], sockets = new Set(), frames = []
 const exists = path => access(path).then(() => true, () => false)
 const http = createServer(), peer = new WebSocketServer({ server: http })
 http.listen(0, '127.0.0.1'); await once(http, 'listening')
@@ -25,7 +25,7 @@ peer.on('connection', (socket, request) => {
   socket.on('message', bytes => {
     const value = JSON.parse(bytes); frames.push({ id, socket, value })
     if (value.type === 'node_register') {
-      registrations.push(value); connected.set(id, socket); generations.set(id, (generations.get(id) || 0) + 1)
+      connected.set(id, socket); generations.set(id, (generations.get(id) || 0) + 1)
       socket.send(JSON.stringify({ type: 'registered', nodeId: id, nodeProtocol: { negotiated: mode.get(id) === 'incompatible' ? 99 : 3, master: { min: 1, max: 3 } } }))
     }
     if (value.type === 'session_event') {
@@ -68,7 +68,7 @@ const normalized = output => output.replaceAll(/Duration: [^\n]+/g, 'Duration: <
 
 try {
   const source = await launch('source', true), cli = await launch('cli')
-  const caps = registrations.find(row => row.capabilities.tools.length === 6).capabilities
+  const caps = frames.find(row => row.id === cli.id && row.value.type === 'node_register').value.capabilities
   assert(caps.features.execWaitCancellation && caps.features.remoteExecBackgroundRegistration)
   assert.equal(caps.features.externalToolOwner, 1)
   // These are the first execs for genuinely absent Agent roots, before the corpus prepares tmp.
