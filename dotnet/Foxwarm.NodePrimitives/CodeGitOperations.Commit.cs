@@ -18,13 +18,22 @@ internal static partial class CodeGitOperations
             );
         var top = await TopLevelAsync(workspace, token);
         if (
-            Text(await RunAsync(top, ["cat-file", "-t", id], token, 1024 * 1024, discover: true)).Trim() != "commit"
+            Text(await RunAsync(top, ["cat-file", "-t", id], token, 1024 * 1024, discover: true))
+                .Trim() != "commit"
         )
             throw new CodeServiceException(
                 "InvalidCommit",
                 "The supplied object id does not name a commit directly."
             );
-        var oid = Text(await RunAsync(top, ["rev-parse", "--verify", id], token, 1024 * 1024, discover: true))
+        var oid = Text(
+                await RunAsync(
+                    top,
+                    ["rev-parse", "--verify", id],
+                    token,
+                    1024 * 1024,
+                    discover: true
+                )
+            )
             .Trim()
             .ToLowerInvariant();
         if (!Regex.IsMatch(oid, "^[0-9a-f]{40}([0-9a-f]{24})?$"))

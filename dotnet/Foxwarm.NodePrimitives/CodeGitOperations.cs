@@ -62,7 +62,10 @@ internal static partial class CodeGitOperations
         }
         catch (CodeServiceException error) when (error.Code == "PayloadTooLarge")
         {
-            throw new CodeServiceException("PayloadTooLarge", "Git output exceeds " + limit + " bytes.");
+            throw new CodeServiceException(
+                "PayloadTooLarge",
+                "Git output exceeds " + limit + " bytes."
+            );
         }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         {
@@ -70,11 +73,7 @@ internal static partial class CodeGitOperations
         }
         catch (System.ComponentModel.Win32Exception error)
         {
-            throw new CodeServiceException(
-                "Unavailable",
-                error.Message,
-                inner: error
-            );
+            throw new CodeServiceException("Unavailable", error.Message, inner: error);
         }
         finally
         {
@@ -136,13 +135,14 @@ internal static partial class CodeGitOperations
             if (row.StartsWith("? "))
             {
                 changes.Add(
-                    (JsonNode)new JsonObject
-                    {
-                        ["path"] = row[2..],
-                        ["indexStatus"] = "?",
-                        ["workingTreeStatus"] = "?",
-                        ["kind"] = "untracked",
-                    }
+                    (JsonNode)
+                        new JsonObject
+                        {
+                            ["path"] = row[2..],
+                            ["indexStatus"] = "?",
+                            ["workingTreeStatus"] = "?",
+                            ["kind"] = "untracked",
+                        }
                 );
                 continue;
             }
@@ -189,7 +189,10 @@ internal static partial class CodeGitOperations
         foreach (var change in changes.OfType<JsonObject>())
             if (
                 change["submodule"] is JsonObject sub
-                && await ReadHeadAsync(WorkspaceChild(top, RelativePath(top, change["path"]!.GetValue<string>())), token)
+                && await ReadHeadAsync(
+                    WorkspaceChild(top, RelativePath(top, change["path"]!.GetValue<string>())),
+                    token
+                )
                     is string oid
             )
                 sub["worktreeOid"] = oid;
@@ -221,9 +224,11 @@ internal static partial class CodeGitOperations
         if (!Directory.Exists(git))
         {
             var pointer = await SmallTextAsync(git, token);
-            if (pointer is null) return null;
+            if (pointer is null)
+                return null;
             var match = Regex.Match(pointer, @"^gitdir:\s*(.+)$", RegexOptions.IgnoreCase);
-            if (!match.Success) return null;
+            if (!match.Success)
+                return null;
             git = Path.GetFullPath(match.Groups[1].Value, worktree);
         }
         var head = await SmallTextAsync(Path.Combine(git, "HEAD"), token);
@@ -232,11 +237,19 @@ internal static partial class CodeGitOperations
         if (Regex.IsMatch(head, "^[0-9a-f]{40,64}$", RegexOptions.IgnoreCase))
             return head.ToLowerInvariant();
         var symbolic = Regex.Match(head, @"^ref:\s*(refs/.+)$");
-        if (!symbolic.Success) return null;
+        if (!symbolic.Success)
+            return null;
         string reference;
-        try { reference = RelativePath(git, symbolic.Groups[1].Value); }
-        catch (Exception error) when (error is CodeServiceException or ArgumentException) { return null; }
-        if (!reference.StartsWith("refs/", StringComparison.Ordinal)) return null;
+        try
+        {
+            reference = RelativePath(git, symbolic.Groups[1].Value);
+        }
+        catch (Exception error) when (error is CodeServiceException or ArgumentException)
+        {
+            return null;
+        }
+        if (!reference.StartsWith("refs/", StringComparison.Ordinal))
+            return null;
         var loose = await SmallTextAsync(Path.Combine(git, reference), token);
         if (loose is not null && Regex.IsMatch(loose, "^[0-9a-f]{40,64}$", RegexOptions.IgnoreCase))
             return loose.ToLowerInvariant();
@@ -262,7 +275,10 @@ internal static partial class CodeGitOperations
         var value = node is JsonValue json && json.TryGetValue<string>(out var text) ? text : null;
         if (node is null || value is "" or "HEAD")
             return "HEAD";
-        if (value is null || !Regex.IsMatch(value, "^[0-9a-f]{40}([0-9a-f]{24})?$", RegexOptions.IgnoreCase))
+        if (
+            value is null
+            || !Regex.IsMatch(value, "^[0-9a-f]{40}([0-9a-f]{24})?$", RegexOptions.IgnoreCase)
+        )
             throw new CodeServiceException(
                 "InvalidCommit",
                 "Git content ref must be HEAD or a full 40/64-character object id."
@@ -280,14 +296,26 @@ internal static partial class CodeGitOperations
         var parts = new List<string>();
         foreach (var part in input.Split('/'))
         {
-            if (part is "" or ".") continue;
-            if (part == ".." && parts.Count > 0 && parts[^1] != "..") parts.RemoveAt(parts.Count - 1);
-            else parts.Add(part);
+            if (part is "" or ".")
+                continue;
+            if (part == ".." && parts.Count > 0 && parts[^1] != "..")
+                parts.RemoveAt(parts.Count - 1);
+            else
+                parts.Add(part);
         }
         var normalized = parts.Count == 0 ? "." : string.Join('/', parts);
-        if (input.EndsWith('/')) normalized += "/";
-        if (normalized == "." || input.StartsWith('/') || normalized == ".." || normalized.StartsWith("../"))
-            throw new CodeServiceException("InvalidPath", "path must be relative to the repository.");
+        if (input.EndsWith('/'))
+            normalized += "/";
+        if (
+            normalized == "."
+            || input.StartsWith('/')
+            || normalized == ".."
+            || normalized.StartsWith("../")
+        )
+            throw new CodeServiceException(
+                "InvalidPath",
+                "path must be relative to the repository."
+            );
         _ = WorkspaceChild(workspace, normalized);
         return normalized;
     }
@@ -331,11 +359,15 @@ internal static partial class CodeGitOperations
             if ((stat["type"]!.GetValue<int>() & 1) == 0)
                 return [];
             if (stat["size"]!.GetValue<ulong>() > MaxOutput)
-                throw new CodeServiceException("PayloadTooLarge", "File exceeds " + MaxOutput + " bytes: " + full);
+                throw new CodeServiceException(
+                    "PayloadTooLarge",
+                    "File exceeds " + MaxOutput + " bytes: " + full
+                );
             using var file = File.OpenRead(full);
             return await CodeFileOperations.ReadBoundedAsync(file, MaxOutput, token);
         }
-        catch (CodeServiceException error) when (error.Code is "FileNotFound" or "FileNotADirectory")
+        catch (CodeServiceException error)
+            when (error.Code is "FileNotFound" or "FileNotADirectory")
         {
             return [];
         }

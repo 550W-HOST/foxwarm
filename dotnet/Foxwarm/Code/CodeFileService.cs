@@ -54,12 +54,46 @@ internal static class CodeFileService
             _ => false,
         };
 
-    internal static JsonObject StatFile(string path) => CodeFileOperations.StatFile(CodeNativePaths.Native(path));
-    internal static JsonObject ReadDirectory(string path) => CodeFileOperations.ReadDirectory(CodeNativePaths.Native(path));
-    internal static Task<byte[]> ReadFileAsync(string path, CancellationToken token) => CodeFileOperations.ReadFileAsync(CodeNativePaths.Native(path), token);
-    internal static Task<byte[]> ReadBoundedAsync(Stream input, long limit, CancellationToken token) => CodeFileOperations.ReadBoundedAsync(input, limit, token);
-    internal static Task<JsonObject> WriteFileAsync(string path, Stream input, bool create, bool overwrite, CancellationToken token) => CodeFileOperations.WriteFileAsync(CodeNativePaths.Native(path), input, create, overwrite, token);
-    internal static JsonObject CreateDirectory(string path) => CodeFileOperations.CreateDirectory(CodeNativePaths.Native(path));
-    internal static JsonObject Delete(string path, bool recursive) => CodeFileOperations.Delete(CodeNativePaths.Native(path), recursive);
-    internal static JsonObject Rename(string oldPath, string newPath, bool overwrite) => CodeFileOperations.Rename(CodeNativePaths.Native(oldPath), CodeNativePaths.Native(newPath), overwrite);
+    internal static JsonObject StatFile(string path) =>
+        CodeFileOperations.StatFile(CodeNativePaths.Native(path));
+
+    internal static JsonObject ReadDirectory(string path) =>
+        CodeFileOperations.ReadDirectory(CodeNativePaths.Native(path));
+
+    internal static Task<byte[]> ReadFileAsync(string path, CancellationToken token) =>
+        CodeFileOperations.ReadFileAsync(CodeNativePaths.Native(path), token);
+
+    internal static Task<byte[]> ReadBoundedAsync(
+        Stream input,
+        long limit,
+        CancellationToken token
+    ) => CodeFileOperations.ReadBoundedAsync(input, limit, token);
+
+    internal static Task<JsonObject> WriteFileAsync(
+        string path,
+        Stream input,
+        bool create,
+        bool overwrite,
+        CancellationToken token
+    ) =>
+        CodeFileOperations.WriteFileAsync(
+            CodeNativePaths.Native(path),
+            input,
+            create,
+            overwrite,
+            token
+        );
+
+    internal static JsonObject CreateDirectory(string path) =>
+        CodeFileOperations.CreateDirectory(CodeNativePaths.Native(path));
+
+    internal static JsonObject Delete(string path, bool recursive) =>
+        CodeFileOperations.Delete(CodeNativePaths.Native(path), recursive);
+
+    internal static JsonObject Rename(string oldPath, string newPath, bool overwrite) =>
+        CodeFileOperations.Rename(
+            CodeNativePaths.Native(oldPath),
+            CodeNativePaths.Native(newPath),
+            overwrite
+        );
 }

@@ -11,24 +11,32 @@ internal sealed partial class NodeClient
         var command = Text(frame, "type") == "node_service_command";
         try
         {
-            var result = await NodeCodeServices.Execute(service, operation, frame["args"] as JsonObject);
+            var result = await NodeCodeServices.Execute(
+                service,
+                operation,
+                frame["args"] as JsonObject
+            );
             if (!command)
-                await connection.Send(new JsonObject
-                {
-                    ["type"] = "node_service_response",
-                    ["requestId"] = Text(frame, "requestId") ?? "",
-                    ["result"] = result,
-                });
+                await connection.Send(
+                    new JsonObject
+                    {
+                        ["type"] = "node_service_response",
+                        ["requestId"] = Text(frame, "requestId") ?? "",
+                        ["result"] = result,
+                    }
+                );
         }
         catch (Exception error)
         {
             if (!command)
-                await connection.Send(new JsonObject
-                {
-                    ["type"] = "node_service_error",
-                    ["requestId"] = Text(frame, "requestId") ?? "",
-                    ["error"] = NodeCodeServices.Error(error),
-                });
+                await connection.Send(
+                    new JsonObject
+                    {
+                        ["type"] = "node_service_error",
+                        ["requestId"] = Text(frame, "requestId") ?? "",
+                        ["error"] = NodeCodeServices.Error(error),
+                    }
+                );
             else
             {
                 var detail = new JsonObject
@@ -39,12 +47,14 @@ internal sealed partial class NodeClient
                 };
                 if (Text(frame["args"] as JsonObject ?? new(), "terminalId") is { } terminal)
                     detail["terminalId"] = terminal;
-                await connection.Send(new JsonObject
-                {
-                    ["type"] = "node_service_event",
-                    ["service"] = service,
-                    ["event"] = detail,
-                });
+                await connection.Send(
+                    new JsonObject
+                    {
+                        ["type"] = "node_service_event",
+                        ["service"] = service,
+                        ["event"] = detail,
+                    }
+                );
             }
         }
     }

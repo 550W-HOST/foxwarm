@@ -105,7 +105,8 @@ public sealed class CodeRoutesTests
     [Fact]
     public async Task Local_Code_native_metadata_and_link_errors_follow_the_filesystem_service_contract()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux())
+            return;
         await using var f = await Fixture.Create();
         var file = Path.Combine(f.Work, "readonly");
         await File.WriteAllTextAsync(file, "content");
@@ -114,17 +115,39 @@ public sealed class CodeRoutesTests
         Assert.Equal(1, stat["permissions"]!.GetValue<int>());
         var nested = await f.Client.GetAsync(f.Fs("stat", file + "/child"));
         Assert.Equal(HttpStatusCode.BadRequest, nested.StatusCode);
-        Assert.Equal("FileNotADirectory", JsonNode.Parse(await nested.Content.ReadAsStringAsync())!["code"]!.ToString());
+        Assert.Equal(
+            "FileNotADirectory",
+            JsonNode.Parse(await nested.Content.ReadAsStringAsync())!["code"]!.ToString()
+        );
         File.CreateSymbolicLink(Path.Combine(f.Work, "broken"), Path.Combine(f.Work, "missing"));
         var listing = await f.Json(await f.Client.GetAsync(f.Fs("read-directory", f.Work)));
-        Assert.Equal(0, listing["entries"]!.AsArray().Single(entry => entry!["name"]!.ToString() == "broken")!["type"]!.GetValue<int>());
+        Assert.Equal(
+            0,
+            listing["entries"]!.AsArray().Single(entry => entry!["name"]!.ToString() == "broken")![
+                "type"
+            ]!.GetValue<int>()
+        );
         var directory = Path.Combine(f.Work, "directory");
         Directory.CreateDirectory(directory);
-        var refused = await f.Client.PostAsJsonAsync(f.Fs("delete", directory), new { recursive = false });
+        var refused = await f.Client.PostAsJsonAsync(
+            f.Fs("delete", directory),
+            new { recursive = false }
+        );
         Assert.Equal(HttpStatusCode.InternalServerError, refused.StatusCode);
-        Assert.Equal("Unknown", JsonNode.Parse(await refused.Content.ReadAsStringAsync())!["code"]!.ToString());
+        Assert.Equal(
+            "Unknown",
+            JsonNode.Parse(await refused.Content.ReadAsStringAsync())!["code"]!.ToString()
+        );
         Assert.True(Directory.Exists(directory));
-        var self = await f.Client.PostAsJsonAsync("/api/vscode-web/fs/rename", new { oldPath = file, newPath = file, overwrite = true });
+        var self = await f.Client.PostAsJsonAsync(
+            "/api/vscode-web/fs/rename",
+            new
+            {
+                oldPath = file,
+                newPath = file,
+                overwrite = true,
+            }
+        );
         Assert.Equal(HttpStatusCode.NotFound, self.StatusCode);
         Assert.False(File.Exists(file));
     }
@@ -135,19 +158,32 @@ public sealed class CodeRoutesTests
         await using var f = await Fixture.Create();
         var file = Path.Combine(f.Work, "working.txt");
         await File.WriteAllTextAsync(file, "working without a repository");
-        var url = "/api/vscode-web/git/content?workspace=" + Uri.EscapeDataString(f.Work) + "&path=working.txt&side=working&ref=not-an-immutable-ref";
+        var url =
+            "/api/vscode-web/git/content?workspace="
+            + Uri.EscapeDataString(f.Work)
+            + "&path=working.txt&side=working&ref=not-an-immutable-ref";
         Assert.Equal("working without a repository", await f.Client.GetStringAsync(url));
         var previous = Environment.GetEnvironmentVariable("PATH");
         try
         {
             Environment.SetEnvironmentVariable("PATH", Path.Combine(f.Temp.Path, "no-git"));
-            var status = await f.Client.GetAsync("/api/vscode-web/git/status?workspace=" + Uri.EscapeDataString(f.Work));
+            var status = await f.Client.GetAsync(
+                "/api/vscode-web/git/status?workspace=" + Uri.EscapeDataString(f.Work)
+            );
             Assert.Equal(HttpStatusCode.ServiceUnavailable, status.StatusCode);
-            Assert.Equal("Unavailable", JsonNode.Parse(await status.Content.ReadAsStringAsync())!["code"]!.ToString());
-            var content = await f.Client.GetAsync(url.Replace("&side=working&ref=not-an-immutable-ref", "&side=base"));
+            Assert.Equal(
+                "Unavailable",
+                JsonNode.Parse(await status.Content.ReadAsStringAsync())!["code"]!.ToString()
+            );
+            var content = await f.Client.GetAsync(
+                url.Replace("&side=working&ref=not-an-immutable-ref", "&side=base")
+            );
             Assert.Equal(HttpStatusCode.ServiceUnavailable, content.StatusCode);
         }
-        finally { Environment.SetEnvironmentVariable("PATH", previous); }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", previous);
+        }
     }
 
     [Fact]

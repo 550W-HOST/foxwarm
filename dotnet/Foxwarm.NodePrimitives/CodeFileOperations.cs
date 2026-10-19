@@ -48,44 +48,75 @@ internal static class CodeFileOperations
     {
         var errno = Marshal.GetLastPInvokeError();
         var code = OperatingSystem.IsWindows()
-            ? errno switch { 2 or 3 => "FileNotFound", 5 => "NoPermissions", 80 or 183 => "FileExists", 145 => "DirectoryNotEmpty", 267 => "FileNotADirectory", _ => "Unknown" }
-            : errno switch { 2 => "FileNotFound", 20 => "FileNotADirectory", 21 => "FileIsADirectory", 13 or 1 => "NoPermissions", 17 => "FileExists", 39 => "DirectoryNotEmpty", _ => "Unknown" };
+            ? errno switch
+            {
+                2 or 3 => "FileNotFound",
+                5 => "NoPermissions",
+                80 or 183 => "FileExists",
+                145 => "DirectoryNotEmpty",
+                267 => "FileNotADirectory",
+                _ => "Unknown",
+            }
+            : errno switch
+            {
+                2 => "FileNotFound",
+                20 => "FileNotADirectory",
+                21 => "FileIsADirectory",
+                13 or 1 => "NoPermissions",
+                17 => "FileExists",
+                39 => "DirectoryNotEmpty",
+                _ => "Unknown",
+            };
         return FileError(code, path, new System.ComponentModel.Win32Exception(errno).Message);
     }
 
     internal static Exception FileError(Exception error, string path)
     {
-        if (error is CodeServiceException) return error;
+        if (error is CodeServiceException)
+            return error;
         var code = error switch
         {
             UnauthorizedAccessException => "NoPermissions",
             FileNotFoundException => "FileNotFound",
             IOException => (error.HResult & 0xffff) switch
             {
-                2 or 3 => "FileNotFound", 20 or 267 => "FileNotADirectory", 21 => "FileIsADirectory",
-                5 or 13 => "NoPermissions", 17 or 80 or 183 => "FileExists", 39 or 145 => "DirectoryNotEmpty", _ => "Unknown"
+                2 or 3 => "FileNotFound",
+                20 or 267 => "FileNotADirectory",
+                21 => "FileIsADirectory",
+                5 or 13 => "NoPermissions",
+                17 or 80 or 183 => "FileExists",
+                39 or 145 => "DirectoryNotEmpty",
+                _ => "Unknown",
             },
-            _ => "Unknown"
+            _ => "Unknown",
         };
         return FileError(code, path, error.Message);
     }
 
-    private static CodeServiceException FileError(string code, string path, string fallback) => new(code,
-        code switch
-        {
-            "FileNotFound" => "File not found: " + path,
-            "FileExists" => "Path already exists: " + path,
-            "FileNotADirectory" => "Path is not a directory: " + path,
-            "FileIsADirectory" => "Path is a directory: " + path,
-            "NoPermissions" => "Permission denied: " + path,
-            "DirectoryNotEmpty" => "Directory is not empty: " + path,
-            _ => fallback
-        });
+    private static CodeServiceException FileError(string code, string path, string fallback) =>
+        new(
+            code,
+            code switch
+            {
+                "FileNotFound" => "File not found: " + path,
+                "FileExists" => "Path already exists: " + path,
+                "FileNotADirectory" => "Path is not a directory: " + path,
+                "FileIsADirectory" => "Path is a directory: " + path,
+                "NoPermissions" => "Permission denied: " + path,
+                "DirectoryNotEmpty" => "Directory is not empty: " + path,
+                _ => fallback,
+            }
+        );
 
     [DllImport("libc", EntryPoint = "mkdir", SetLastError = true)]
     private static extern int MakeDirectory(string path, uint mode);
 
-    [DllImport("kernel32.dll", EntryPoint = "CreateDirectoryW", CharSet = CharSet.Unicode, SetLastError = true)]
+    [DllImport(
+        "kernel32.dll",
+        EntryPoint = "CreateDirectoryW",
+        CharSet = CharSet.Unicode,
+        SetLastError = true
+    )]
     private static extern bool MakeDirectoryWindows(string path, IntPtr securityAttributes);
 
     private static LinuxStat Stat(string path, bool link)
@@ -143,7 +174,8 @@ internal static class CodeFileOperations
             ["mtime"] = actual.ModifiedSeconds * 1000d + actual.ModifiedNanoseconds / 1_000_000d,
             ["size"] = actual.Size,
         };
-        if ((actual.Mode & 0x80) == 0) result["permissions"] = 1;
+        if ((actual.Mode & 0x80) == 0)
+            result["permissions"] = 1;
         return result;
     }
 
@@ -165,7 +197,10 @@ internal static class CodeFileOperations
     private static void Parent(string path)
     {
         if (!DirectoryStat(StatFile(Path.GetDirectoryName(path) ?? Path.GetPathRoot(path)!)))
-            throw new CodeServiceException("FileNotADirectory", "Parent is not a directory: " + Path.GetDirectoryName(path));
+            throw new CodeServiceException(
+                "FileNotADirectory",
+                "Parent is not a directory: " + Path.GetDirectoryName(path)
+            );
     }
 
     internal static JsonObject ReadDirectory(string path)
@@ -186,16 +221,31 @@ internal static class CodeFileOperations
                 try
                 {
                     if (OperatingSystem.IsLinux())
-                        type = (Stat(child, true).Mode & 0xf000) switch { 0x8000 => 1, 0x4000 => 2, _ => 0 };
+                        type = (Stat(child, true).Mode & 0xf000) switch
+                        {
+                            0x8000 => 1,
+                            0x4000 => 2,
+                            _ => 0,
+                        };
                     else
                     {
                         var attributes = File.GetAttributes(child);
-                        type = (attributes & FileAttributes.ReparsePoint) != 0 ? 0 : (attributes & FileAttributes.Directory) != 0 ? 2 : 1;
+                        type =
+                            (attributes & FileAttributes.ReparsePoint) != 0 ? 0
+                            : (attributes & FileAttributes.Directory) != 0 ? 2
+                            : 1;
                     }
                 }
-                catch (Exception error) when (error is CodeServiceException or IOException or UnauthorizedAccessException) { }
+                catch (Exception error)
+                    when (error
+                            is CodeServiceException
+                                or IOException
+                                or UnauthorizedAccessException
+                    ) { }
             }
-            entries.Add((JsonNode)new JsonObject { ["name"] = Path.GetFileName(child), ["type"] = type });
+            entries.Add(
+                (JsonNode)new JsonObject { ["name"] = Path.GetFileName(child), ["type"] = type }
+            );
         }
         return new() { ["entries"] = entries };
     }
@@ -206,7 +256,10 @@ internal static class CodeFileOperations
         if ((stat["type"]!.GetValue<int>() & 1) == 0)
             throw new CodeServiceException("FileIsADirectory", "Path is not a file: " + path);
         if (stat["size"]!.GetValue<ulong>() > (ulong)MaxFileBytes)
-            throw new CodeServiceException("PayloadTooLarge", "File exceeds " + MaxFileBytes + " bytes: " + path);
+            throw new CodeServiceException(
+                "PayloadTooLarge",
+                "File exceeds " + MaxFileBytes + " bytes: " + path
+            );
         using var input = new FileStream(
             path,
             FileMode.Open,
@@ -279,7 +332,11 @@ internal static class CodeFileOperations
         Parent(path);
         if (Exists(path))
             throw new CodeServiceException("FileExists", "Path already exists: " + path);
-        if (OperatingSystem.IsWindows() ? !MakeDirectoryWindows(path, IntPtr.Zero) : MakeDirectory(path, 0x1ff) != 0)
+        if (
+            OperatingSystem.IsWindows()
+                ? !MakeDirectoryWindows(path, IntPtr.Zero)
+                : MakeDirectory(path, 0x1ff) != 0
+        )
             throw NativeError(path);
         return new() { ["success"] = true, ["stat"] = StatFile(path) };
     }
@@ -290,7 +347,10 @@ internal static class CodeFileOperations
         if (DirectoryStat(stat))
         {
             if (!recursive && (stat["type"]!.GetValue<int>() & 64) == 0)
-                throw new CodeServiceException("Unknown", "Path is a directory: rm returned EISDIR (is a directory) " + path);
+                throw new CodeServiceException(
+                    "Unknown",
+                    "Path is a directory: rm returned EISDIR (is a directory) " + path
+                );
             Directory.Delete(path, recursive);
         }
         else
