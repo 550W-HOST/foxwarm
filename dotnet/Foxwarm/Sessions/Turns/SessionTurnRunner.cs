@@ -304,7 +304,8 @@ public sealed class SessionTurnRunner
                 finally
                 {
                     if (registry.OnProcessorFinalizing is { } finalizing)
-                        await finalizing(entry, escapingError, interrupted, suspended).ConfigureAwait(false);
+                        await finalizing(entry, escapingError, interrupted, suspended)
+                            .ConfigureAwait(false);
                 }
             }
             catch

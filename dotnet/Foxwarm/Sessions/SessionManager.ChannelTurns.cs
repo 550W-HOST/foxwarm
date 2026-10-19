@@ -362,7 +362,12 @@ internal sealed partial class SessionManager
             }
             else if ((final || suspended) && channel.Finalize is { } finish)
                 _ = ChannelProgress.BestEffortAsync(
-                    _ => finish(conversation, new(TurnFinal: final, TurnSuspended: suspended), CancellationToken.None),
+                    _ =>
+                        finish(
+                            conversation,
+                            new(TurnFinal: final, TurnSuspended: suspended),
+                            CancellationToken.None
+                        ),
                     ""
                 );
         }

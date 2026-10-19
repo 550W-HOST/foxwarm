@@ -313,15 +313,19 @@ public sealed partial class LocalSessionTurnHost
                         )
                     );
                     var stopping = entry.WithState(state => state.Stopping);
-                    var ending =
-                        tools is ITurnToolControl turnControl
+                    var ending = tools is ITurnToolControl turnControl
                         ? await turnControl
                             .CompleteBatchAsync(toolMessage, stopping)
-                            .ConfigureAwait(false) : TurnBatchEnding.Continue;
+                            .ConfigureAwait(false)
+                        : TurnBatchEnding.Continue;
                     if (stopping)
                         throw new OperationCanceledException(registered.Token);
                     if (ending != TurnBatchEnding.Continue)
-                        return result with { Terminal = true, Suspended = ending == TurnBatchEnding.Suspended };
+                        return result with
+                        {
+                            Terminal = true,
+                            Suspended = ending == TurnBatchEnding.Suspended,
+                        };
                     AssertCanContinue();
                     await ContinueAfterResultAsync(result, registered.Token).ConfigureAwait(false);
                     if (iteration + 1 >= maxToolIterations)

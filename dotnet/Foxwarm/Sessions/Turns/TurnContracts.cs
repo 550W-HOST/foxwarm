@@ -62,7 +62,12 @@ public interface ITurnToolExecutor
     Task<JsonNode?> ExecuteAsync(JsonObject functionCall, CancellationToken cancellationToken);
 }
 
-public enum TurnBatchEnding { Continue, Finished, Suspended }
+public enum TurnBatchEnding
+{
+    Continue,
+    Finished,
+    Suspended,
+}
 
 /// <summary>A successful handoff ends only after its complete paired tool batch is committed.</summary>
 public interface ITurnToolControl
@@ -71,7 +76,9 @@ public interface ITurnToolControl
     bool PolicyUnavailable => false;
     bool ConsumeFinishAfterBatch();
     Task<TurnBatchEnding> CompleteBatchAsync(JsonObject toolMessage, bool stopping) =>
-        Task.FromResult(ConsumeFinishAfterBatch() ? TurnBatchEnding.Finished : TurnBatchEnding.Continue);
+        Task.FromResult(
+            ConsumeFinishAfterBatch() ? TurnBatchEnding.Finished : TurnBatchEnding.Continue
+        );
 }
 
 public sealed class UnsupportedTurnToolExecutor : ITurnToolExecutor

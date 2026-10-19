@@ -140,7 +140,8 @@ public sealed class WeWorkTurnTests
                 WeWorkCallbackTests.Id(independent)
             );
             Assert.Equal(
-                "<think>\nI will inspect it.\n\n" + WeWorkCallbackTests.Content(pending)["<think>\n".Length..],
+                "<think>\nI will inspect it.\n\n"
+                    + WeWorkCallbackTests.Content(pending)["<think>\n".Length..],
                 WeWorkCallbackTests.Content(unchanged)
             );
             releaseFinal.TrySetResult();
@@ -288,7 +289,10 @@ public sealed class WeWorkTurnTests
             new(),
             new("tool-calls-start", [new("d", "exec")])
         );
-        Assert.Equal("<think>\n> ☑️ exec ×2 | ⌛️ read\n\nbetween\n\n> ⌛️ exec", next.Changed!.Content);
+        Assert.Equal(
+            "<think>\n> ☑️ exec ×2 | ⌛️ read\n\nbetween\n\n> ⌛️ exec",
+            next.Changed!.Content
+        );
         var truncated = aggregator
             .Apply("conversation", string.Concat(Enumerable.Repeat("你好🦊", 5000)), new(true))
             .Changed!;

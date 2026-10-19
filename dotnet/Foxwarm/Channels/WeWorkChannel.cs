@@ -56,7 +56,11 @@ internal sealed partial class WeWorkChannel : IManagedChannel
             crypto = new(Text(config["token"]), Text(config["encodingAESKey"]));
         streamEnabled = SessionCatalog.Flag(config["aibot"]?["stream"]);
         var requestedBytes = SessionWait.Number(config["aibot"]?["streamMaxContentBytes"]) ?? 20000;
-        streams = new((int)Math.Clamp(requestedBytes == 0 ? 20000 : requestedBytes, 1, 20480), now, Text(config["aibot"]?["streamThinkFrame"]));
+        streams = new(
+            (int)Math.Clamp(requestedBytes == 0 ? 20000 : requestedBytes, 1, 20480),
+            now,
+            Text(config["aibot"]?["streamThinkFrame"])
+        );
         websocketConfig = config["aibot"]?["websocket"] as JsonObject ?? new();
     }
 

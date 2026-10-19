@@ -32,7 +32,11 @@ internal sealed record WeWorkStreamSnapshot(
 }
 
 // Adapter-local presentation only. Neither IDs nor progress enter Session authority.
-internal sealed class WeWorkStreamAggregator(int maxBytes = 20000, Func<DateTimeOffset>? now = null, string? thinkFrame = null)
+internal sealed class WeWorkStreamAggregator(
+    int maxBytes = 20000,
+    Func<DateTimeOffset>? now = null,
+    string? thinkFrame = null
+)
 {
     private abstract class Block;
 
@@ -70,7 +74,8 @@ internal sealed class WeWorkStreamAggregator(int maxBytes = 20000, Func<DateTime
     private readonly Dictionary<string, State> conversations = new(StringComparer.Ordinal);
     private readonly Dictionary<string, State> streams = new(StringComparer.Ordinal);
     private readonly int limit = Math.Clamp(maxBytes == 0 ? 20000 : maxBytes, 1, 20480);
-    private const string Open = "<think>", Close = "</think>";
+    private const string Open = "<think>",
+        Close = "</think>";
     private const string TruncationSuffix = "\n\n…[内容过长，已截断]";
     private readonly string frameStyle = thinkFrame == "closed" ? "closed" : "open";
     private long Now => (now?.Invoke() ?? DateTimeOffset.UtcNow).ToUnixTimeMilliseconds();
@@ -102,7 +107,13 @@ internal sealed class WeWorkStreamAggregator(int maxBytes = 20000, Func<DateTime
             WeWorkStreamSnapshot? old = null;
             if (conversations.GetValueOrDefault(conversation) is { Finish: false } previous)
             {
-                var text = string.Join("\n\n", previous.Blocks.OfType<TextBlock>().Select(block => block.Text).Where(text => text.Length > 0));
+                var text = string.Join(
+                    "\n\n",
+                    previous
+                        .Blocks.OfType<TextBlock>()
+                        .Select(block => block.Text)
+                        .Where(text => text.Length > 0)
+                );
                 previous.Blocks = text.Length > 0 ? [new TextBlock(text) { Final = true }] : [];
                 previous.Finish = true;
                 old = Update(previous);
@@ -167,7 +178,8 @@ internal sealed class WeWorkStreamAggregator(int maxBytes = 20000, Func<DateTime
                 if (options.TurnFinal)
                 {
                     ClearThinking(state);
-                    if (appended is not null) appended.Final = true;
+                    if (appended is not null)
+                        appended.Final = true;
                     state.Finish = true;
                 }
             }
@@ -228,26 +240,47 @@ internal sealed class WeWorkStreamAggregator(int maxBytes = 20000, Func<DateTime
 
     private WeWorkStreamSnapshot Update(State state)
     {
-        var process = string.Join("\n\n", state.Blocks
-            .Where(block => block is not TextBlock { Final: true })
-            .Select(block => block is TextBlock text ? text.Text : RenderGroup((ToolGroup)block))
-            .Where(value => value.Length > 0));
+        var process = string.Join(
+            "\n\n",
+            state
+                .Blocks.Where(block => block is not TextBlock { Final: true })
+                .Select(block =>
+                    block is TextBlock text ? text.Text : RenderGroup((ToolGroup)block)
+                )
+                .Where(value => value.Length > 0)
+        );
         var overhead = Encoding.UTF8.GetByteCount(Open + Close) + 4;
-        string FitProcess(int budget) => process.Length == 0 || budget <= Encoding.UTF8.GetByteCount(TruncationSuffix)
-            ? "" : Truncate(process, budget);
+        string FitProcess(int budget) =>
+            process.Length == 0 || budget <= Encoding.UTF8.GetByteCount(TruncationSuffix)
+                ? ""
+                : Truncate(process, budget);
         if (!state.Finish)
         {
             var body = FitProcess(limit - overhead);
-            state.Content = frameStyle == "open"
-                ? body.Length > 0 ? Open + "\n" + body : Open
-                : body.Length > 0 ? Open + "\n" + body + "\n" + Close : Open + Close;
+            state.Content =
+                frameStyle == "open"
+                    ? body.Length > 0
+                        ? Open + "\n" + body
+                        : Open
+                    : body.Length > 0
+                        ? Open + "\n" + body + "\n" + Close
+                        : Open + Close;
         }
         else
         {
-            var answer = state.Blocks.OfType<TextBlock>().FirstOrDefault(block => block.Final)?.Text;
-            if (string.IsNullOrEmpty(answer)) answer = "处理完成。";
-            var body = FitProcess(limit - overhead - Math.Min(Encoding.UTF8.GetByteCount(answer), 1000));
-            state.Content = Truncate(body.Length == 0 ? answer : Open + "\n" + body + "\n" + Close + "\n" + answer, limit);
+            var answer = state
+                .Blocks.OfType<TextBlock>()
+                .FirstOrDefault(block => block.Final)
+                ?.Text;
+            if (string.IsNullOrEmpty(answer))
+                answer = "处理完成。";
+            var body = FitProcess(
+                limit - overhead - Math.Min(Encoding.UTF8.GetByteCount(answer), 1000)
+            );
+            state.Content = Truncate(
+                body.Length == 0 ? answer : Open + "\n" + body + "\n" + Close + "\n" + answer,
+                limit
+            );
         }
         state.UpdatedAt = Now;
         return Snapshot(state);
@@ -255,7 +288,8 @@ internal sealed class WeWorkStreamAggregator(int maxBytes = 20000, Func<DateTime
 
     private static string RenderGroup(ToolGroup group)
     {
-        if (group.Tools.Count == 0) return "";
+        if (group.Tools.Count == 0)
+            return "";
         var grouped = group.Tools.GroupBy(tool => (tool.Status, tool.Name));
         var items = grouped
             .Select(tools =>
@@ -288,7 +322,13 @@ internal sealed class WeWorkStreamAggregator(int maxBytes = 20000, Func<DateTime
         );
 
     internal static string StripThinkTags(string value) =>
-        System.Text.RegularExpressions.Regex.Replace(value, @"</?think>", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        System.Text.RegularExpressions.Regex.Replace(
+            value,
+            @"</?think>",
+            "",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                | System.Text.RegularExpressions.RegexOptions.CultureInvariant
+        );
 
     internal static string Truncate(string value, int maxBytes)
     {
