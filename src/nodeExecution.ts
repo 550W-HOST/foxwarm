@@ -114,12 +114,12 @@ export async function listNodeTopology(sourceSessionId: string, nodeId?: string,
   return (await (await getClient()).call('list', { sourceSessionId, ...(nodeId ? { nodeId } : {}), ...(currentNode ? { currentNode } : {}) })).nodes;
 }
 
-export async function validateNodeSelection(sourceSessionId: string, nodeId: string) {
-  return await (await getClient()).call('select', { sourceSessionId, nodeId });
+export async function validateNodeSelection(sourceSessionId: string, nodeId: string, callerCurrentNode?: string) {
+  return await (await getClient()).call('select', { sourceSessionId, nodeId, ...(callerCurrentNode ? { callerCurrentNode } : {}) });
 }
 
-export async function listNodeLifecycleProviders(sourceSessionId: string) {
-  return (await (await getClient()).call('lifecycleProviders', { sourceSessionId })).providers;
+export async function listNodeProviders(sourceSessionId: string) {
+  return (await (await getClient()).call('providersList', { sourceSessionId })).providers;
 }
 
 export async function executeNodeLifecycle(sourceSessionId: string, request: {
@@ -128,12 +128,13 @@ export async function executeNodeLifecycle(sourceSessionId: string, request: {
   nodeId?: string;
   parameters?: Record<string, unknown>;
   confirmation?: string;
+  callerCurrentNode?: string;
 }) {
   return (await (await getClient()).call('lifecycle', { sourceSessionId, ...request })).result;
 }
 
 export async function copyBetweenNodes(sourceSessionId: string, request: {
-  sourceNode: string; sourcePath: string; targetNode: string; targetPath: string; overwrite?: boolean;
+  sourceNode: string; sourcePath: string; targetNode: string; targetPath: string; overwrite?: boolean; callerCurrentNode?: string;
 }) {
   return await (await getClient()).call('copy', { sourceSessionId, ...request });
 }

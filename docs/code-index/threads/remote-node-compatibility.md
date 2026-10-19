@@ -64,6 +64,5 @@ Session Worker hosting and Node Provider environment lifecycle are intentional .
 - [CLI Node](../units/cli-node-client.md)
 - [Browser Node](../units/browser-node-extension.md)
 - [Android Node](../units/shared-and-nodes-android-node.md)
-- [Sandbox Node](../units/src-docker-worktree-provider.md)
 - [Tools/permissions](./tools-permissions-and-exec.md)
-- shared protocol, CLI compatibility, browser protocol/tool-result, Android auth, and sandbox worktree tests.
+- shared protocol, CLI compatibility, browser protocol/tool-result, Android auth tests.

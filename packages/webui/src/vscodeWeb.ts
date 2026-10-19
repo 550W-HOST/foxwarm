@@ -1,3 +1,4 @@
+import { isCoreNodeId } from '../../shared/src/nodeIdentity'
 export const VSCODE_WEB_TAB_ID = 'vscode-web'
 export const CODE_OPEN_NEW_WINDOW_STORAGE_KEY = 'foxwarm_code_open_new_window_v1'
 export const CODE_WORKSPACE_PATH_STORAGE_KEY = 'foxwarm_code_workspace_path_v1'
@@ -71,7 +72,7 @@ export function resolveToolCodeFileTarget(
   lines: { startLine?: unknown; endLine?: unknown } = {},
 ): CodeFileTarget | null {
   const normalizedNodeId = typeof nodeId === 'string' && nodeId.trim() ? nodeId.trim() : 'master'
-  if (!/^[A-Za-z0-9._-]+$/.test(normalizedNodeId)) return null
+  if (!isCoreNodeId(normalizedNodeId)) return null
   if (typeof filePath !== 'string' || !filePath.trim() || filePath.trim().startsWith('~')) return null
   const rawPath = filePath.trim()
   const normalizedCwd = normalizeCodePath(cwd)
@@ -126,14 +127,14 @@ export function readCodeWorkspacePathPreference(storage: CodePreferenceStorage):
 export function readCodeWorkspaceNodePreference(storage: CodePreferenceStorage): string {
   try {
     const value = storage.getItem(CODE_WORKSPACE_NODE_STORAGE_KEY)
-    return typeof value === 'string' && /^[A-Za-z0-9._-]+$/.test(value.trim()) ? value.trim() : 'master'
+    return typeof value === 'string' && isCoreNodeId(value.trim()) ? value.trim() : 'master'
   } catch {
     return 'master'
   }
 }
 
 export function writeCodeWorkspaceNodePreference(storage: CodePreferenceStorage, nodeId: string): string {
-  const normalized = /^[A-Za-z0-9._-]+$/.test(nodeId.trim()) ? nodeId.trim() : 'master'
+  const normalized = isCoreNodeId(nodeId.trim()) ? nodeId.trim() : 'master'
   try {
     storage.setItem(CODE_WORKSPACE_NODE_STORAGE_KEY, normalized)
   } catch {}
@@ -153,13 +154,13 @@ export function shouldOpenCodeInNewWindow(preferred: boolean, forceNewWindow = f
 }
 
 export function resolveSessionCodeTarget(nodeId: unknown, cwd: unknown): CodeTarget {
-  const normalizedNodeId = typeof nodeId === 'string' && /^[A-Za-z0-9._-]+$/.test(nodeId) ? nodeId : 'master'
+  const normalizedNodeId = typeof nodeId === 'string' && isCoreNodeId(nodeId) ? nodeId : 'master'
   return { nodeId: normalizedNodeId, path: normalizeCodePath(cwd) || '/' }
 }
 
 export function makeCodeWorkspaceUri(target: CodeTarget): string {
   const path = normalizeCodePath(target.path)
-  if (!/^[A-Za-z0-9._-]+$/.test(target.nodeId) || !path) {
+  if (!isCoreNodeId(target.nodeId) || !path) {
     throw new Error('Code workspace target must use a valid node and an absolute path')
   }
   const encodedPath = path.split('/').map((segment) => encodeURIComponent(segment)).join('/')

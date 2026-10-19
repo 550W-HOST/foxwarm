@@ -57,7 +57,6 @@ For send/read, use an exact internal Session ID, not `<main>` or `<parent>`. Ses
 ## Supported environments and retained results
 
 - First-party CLI Nodes must negotiate protocol v3 and advertise external-owner support.
-- First-party Docker-worktree Nodes must already be configured, created, and ready. Creation/destruction remains internal administration.
 - Configured outbound MCP servers expose only the tools allowed by this external identity's rules.
 
 Supported Node tools are `read`, `write`, `edit`, `apply_patch`, and `exec`. Inbound MCP does not expose execution on `master`, executable providers, browser tabs, cross-Node copy, Node lifecycle changes, or general Agent/Session management. Agent isolation/binding belongs to [agent-management](../../agent-management/SKILL.md); Node bootstrap belongs to [node-setup](../../node-setup/SKILL.md).

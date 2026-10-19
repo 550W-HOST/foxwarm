@@ -67,7 +67,7 @@ const screenshot = async name => {
 }
 
 test('a completed coordination sequence keeps every update visible with scoped usage and original technical cards', async () => {
-  assert.equal(await page.$$eval('[data-timeline-activity]', elements => elements.length), 4)
+  assert.equal(await page.$$eval('[data-timeline-activity]', elements => elements.length), 5)
   assert.equal(await page.$$eval('[data-usage-badge-anchor]', elements => elements.length), 0)
   assert.equal(await page.evaluate(() => window.fixture.matches('I will ask').length), 1)
   assert.equal(await page.evaluate(() => window.fixture.matches('implementation is consistent').length), 1)
@@ -100,7 +100,9 @@ test('a completed coordination sequence keeps every update visible with scoped u
   assert.equal(await page.$$eval('[data-activity-details]', elements => elements.some(element => element.textContent.includes('I will ask a child'))),false)
   assert.equal(await page.$$eval('[data-conversation-step]', elements => elements.length), 0)
   assert.ok(!(await page.$eval('main', element => element.textContent)).includes('TOOL_OUTPUT_VISIBLE_ONLY_AFTER_OPEN'))
-  assert.ok(await page.$('[data-activity-details] [data-system-message-kind="inter-agent"]'), 'Internal input uses its original system card')
+  assert.equal(await page.$$eval('[data-session-communication="received"]', nodes => nodes.length), 1)
+  assert.equal(await page.$eval('[data-session-communication="received"]', node => !!node.closest('[data-activity-details]')), false)
+  assert.match(await page.$eval('[data-session-communication="received"]', node => node.textContent), /fixture\/inspection.*The inspection found no issue in the supported path\./s)
   assert.ok(await page.$('[data-activity-details] [data-system-message-kind="task"]'), 'Task input uses its original system card')
   const reasoningStyle = await page.$eval('.foxwarm-reasoning-preview', element => ({ weight: getComputedStyle(element).fontWeight, size: parseFloat(getComputedStyle(element).fontSize), bodySize: parseFloat(getComputedStyle(document.querySelector('.foxwarm-conversation-reply')).fontSize) }))
   assert.equal(reasoningStyle.weight, '400')

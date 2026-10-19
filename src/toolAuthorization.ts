@@ -1,4 +1,5 @@
-import { builtinNodeArgumentSelectsFileSource } from './tools/placement';
+import { splitProviderNodeId, isCoreNodeId } from '../packages/shared/dist/nodeIdentity';
+import { builtinNodeArgumentSelectsFileSource, builtinNodeArgumentSelectsPlacement } from './tools/placement';
 import fs from 'fs-extra';
 import { replaceConfigFile } from './configFile';
 import path from 'path';
@@ -28,7 +29,9 @@ type Scalar = string | number | boolean | null;
 export type ScalarMatcher = Scalar | Scalar[] | { equals?: Scalar; oneOf?: Scalar[]; exists?: boolean };
 export type SessionTargetRelation = 'parent' | 'child';
 export type SessionTargetMatcher = { self?: true; sameAgent?: true; relation?: SessionTargetRelation | SessionTargetRelation[] };
-export type ArgumentMatcher = ScalarMatcher | { session: SessionTargetMatcher };
+export type IdentityPattern = string | string[];
+export type NodeMatcher = IdentityPattern | { current: true } | { provider: IdentityPattern };
+export type ArgumentMatcher = ScalarMatcher | { session: SessionTargetMatcher } | { task: { owned: true } };
 export type ToolMatcher = string | string[] | {
   source?: ScalarMatcher;
   server?: ScalarMatcher;
@@ -40,6 +43,9 @@ export type PathMatcher = {
   anyNotWithin?: string;
 };
 export interface ToolAuthorizationRuleMatch {
+  /** Shorthand identity patterns; legacy match.session remains exact. */
+  sessionPattern?: IdentityPattern;
+  node?: NodeMatcher;
   agent?: ScalarMatcher;
   session?: ScalarMatcher;
   externalId?: ScalarMatcher;
@@ -77,6 +83,11 @@ export type ToolAuthorizationRequest = {
   paths: ToolAuthorizationPathRecord[];
   sourceParentSessionId?: string;
   sessionTargets?: Record<string, ToolAuthorizationSessionTarget | undefined>;
+  taskTarget?: { ownerSessionId?: string };
+  /** All actual Node effect targets; absent for unrelated Main/MCP and ToolScript VM operations. */
+  nodeTargets?: string[];
+  /** Caller-owned routing fact, never a provider file-context stub. */
+  currentNode?: string;
 } & (
   | { principal: 'internal'; agent: string; session: string; targetNode: string; externalId?: never }
   | { principal: 'external'; externalId: string; session?: string; agent?: never; targetNode?: string }
@@ -164,7 +175,38 @@ function normalizeScalarMatcher(value: unknown, label: string): ScalarMatcher {
   }
   return result;
 }
+function normalizeIdentityPattern(value: unknown, label: string): IdentityPattern {
+  const items = Array.isArray(value) ? value : [value];
+  if (!items.length || items.length > MAX_MATCHER_ITEMS) throw new Error(`${label} must contain 1-${MAX_MATCHER_ITEMS} identity patterns.`);
+  const normalized = items.map(item => {
+    const pattern = boundedString(item, label);
+    if (!/^[A-Za-z0-9._:/*-]+$/.test(pattern)) throw new Error(`${label} supports identity characters and '*' only.`);
+    return pattern;
+  });
+  return Array.isArray(value) ? normalized : normalized[0];
+}
+function normalizeNodeMatcher(value: unknown, label: string): NodeMatcher {
+  if (!isPlainRecord(value)) return normalizeIdentityPattern(value, label);
+  assertExactFields(value, ['current', 'provider'], label);
+  if (Object.keys(value).length !== 1) throw new Error(`${label} requires exactly one of current or provider.`);
+  if ('current' in value) {
+    if (value.current !== true) throw new Error(`${label}.current must be true.`);
+    return { current: true };
+  }
+  const provider = normalizeIdentityPattern(value.provider, `${label}.provider`);
+  if ((Array.isArray(provider) ? provider : [provider]).some(item => item.includes('*') || item.includes('/'))) {
+    throw new Error(`${label}.provider requires exact Provider IDs.`);
+  }
+  return { provider };
+}
 function normalizeArgumentMatcher(value: unknown, label: string): ArgumentMatcher {
+  if (isPlainRecord(value) && 'task' in value) {
+    assertExactFields(value, ['task'], label);
+    if (!isPlainRecord(value.task) || Object.keys(value.task).length !== 1 || value.task.owned !== true) {
+      throw new Error(`${label}.task requires { owned: true }.`);
+    }
+    return { task: { owned: true } };
+  }
   if (!isPlainRecord(value) || !Object.prototype.hasOwnProperty.call(value, 'session')) {
     return normalizeScalarMatcher(value, label);
   }
@@ -294,8 +336,13 @@ export function parseToolAuthorizationPolicyBytes(bytes: Buffer | string): ToolA
   const rules = rawRules.map((rawRule: unknown, index: number): ToolAuthorizationRule => {
     const label = `Tool authorization rule #${index + 1}`;
     if (!isPlainRecord(rawRule)) throw new Error(`${label} must be an object.`);
-    assertExactFields(rawRule, ['id', 'enabled', 'match', 'action', 'reason'], label);
-    const id = boundedString(rawRule.id, `${label}.id`, MAX_ID_BYTES);
+    assertExactFields(rawRule, ['id', 'enabled', 'match', 'action', 'reason', 'agent', 'session', 'externalId', 'tool', 'node', 'args', 'path'], label);
+    const shorthandKeys = ['agent', 'session', 'externalId', 'tool', 'node', 'args', 'path'];
+    const shorthand = shorthandKeys.some(key => Object.prototype.hasOwnProperty.call(rawRule, key));
+    if (shorthand && Object.prototype.hasOwnProperty.call(rawRule, 'match')) {
+      throw new Error(`${label} cannot mix top-level selectors with match.`);
+    }
+    const id = boundedString(rawRule.id === undefined ? `rule-${index + 1}` : rawRule.id, `${label}.id`, MAX_ID_BYTES);
     if (seen.has(id)) throw new Error(`Tool authorization rule id is duplicated: ${id}.`);
     seen.add(id);
     if (rawRule.enabled !== undefined && typeof rawRule.enabled !== 'boolean') throw new Error(`${label}.enabled must be boolean.`);
@@ -305,17 +352,24 @@ export function parseToolAuthorizationPolicyBytes(bytes: Buffer | string): ToolA
       throw new Error(`${label}.reason exceeds ${MAX_REASON_BYTES} bytes.`);
     }
     const match: ToolAuthorizationRuleMatch = {};
-    if (rawRule.match !== undefined) {
-      if (!isPlainRecord(rawRule.match)) throw new Error(`${label}.match must be an object.`);
-      assertExactFields(rawRule.match, ['agent', 'session', 'externalId', 'tool', 'targetNode', 'args', 'path'], `${label}.match`);
-      if (rawRule.match.agent !== undefined) match.agent = normalizeScalarMatcher(rawRule.match.agent, `${label}.match.agent`);
-      if (rawRule.match.session !== undefined) match.session = normalizeScalarMatcher(rawRule.match.session, `${label}.match.session`);
-      if (rawRule.match.externalId !== undefined) match.externalId = normalizeScalarMatcher(rawRule.match.externalId, `${label}.match.externalId`);
-      if (rawRule.match.tool !== undefined) match.tool = normalizeToolMatcher(rawRule.match.tool, `${label}.match.tool`);
-      if (rawRule.match.targetNode !== undefined) match.targetNode = normalizeScalarMatcher(rawRule.match.targetNode, `${label}.match.targetNode`);
-      if (rawRule.match.args !== undefined) {
-        if (!isPlainRecord(rawRule.match.args)) throw new Error(`${label}.match.args must be an object.`);
-        const entries = Object.entries(rawRule.match.args);
+    const rawMatch = shorthand
+      ? Object.fromEntries(shorthandKeys.filter(key => key in rawRule).map(key => [key, rawRule[key]]))
+      : rawRule.match;
+    if (rawMatch !== undefined) {
+      if (!isPlainRecord(rawMatch)) throw new Error(`${label}.match must be an object.`);
+      assertExactFields(rawMatch, ['agent', 'session', 'externalId', 'tool', 'targetNode', 'args', 'path', ...(shorthand ? ['node'] : [])], `${label}.match`);
+      if (rawMatch.agent !== undefined) match.agent = normalizeScalarMatcher(rawMatch.agent, `${label}.match.agent`);
+      if (rawMatch.session !== undefined) {
+        if (shorthand) match.sessionPattern = normalizeIdentityPattern(rawMatch.session, `${label}.session`);
+        else match.session = normalizeScalarMatcher(rawMatch.session, `${label}.match.session`);
+      }
+      if (shorthand && rawMatch.node !== undefined) match.node = normalizeNodeMatcher(rawMatch.node, `${label}.node`);
+      if (rawMatch.externalId !== undefined) match.externalId = normalizeScalarMatcher(rawMatch.externalId, `${label}.match.externalId`);
+      if (rawMatch.tool !== undefined) match.tool = normalizeToolMatcher(rawMatch.tool, `${label}.match.tool`);
+      if (rawMatch.targetNode !== undefined) match.targetNode = normalizeScalarMatcher(rawMatch.targetNode, `${label}.match.targetNode`);
+      if (rawMatch.args !== undefined) {
+        if (!isPlainRecord(rawMatch.args)) throw new Error(`${label}.match.args must be an object.`);
+        const entries = Object.entries(rawMatch.args);
         if (entries.length > MAX_MATCHER_ITEMS) throw new Error(`${label}.match.args exceeds ${MAX_MATCHER_ITEMS} entries.`);
         match.args = {};
         for (const [key, matcher] of entries) {
@@ -323,6 +377,12 @@ export function parseToolAuthorizationPolicyBytes(bytes: Buffer | string): ToolA
             throw new Error(`${label}.match.args contains an unsafe dotted path.`);
           }
           match.args[key] = normalizeArgumentMatcher(matcher, `${label}.match.args.${key}`);
+        }
+        const taskEntries = Object.entries(match.args).filter(([, matcher]) => isPlainRecord(matcher) && 'task' in matcher);
+        if (taskEntries.length && (taskEntries.length !== 1 || taskEntries[0][0] !== 'taskId'
+          || !match.tool || typeof match.tool !== 'object' || Array.isArray(match.tool)
+          || match.tool.source !== 'builtin' || match.tool.name !== 'task' || match.tool.server !== undefined)) {
+          throw new Error(`${label}.args Task matcher requires taskId and exact builtin task selector.`);
         }
         const sessionEntries = Object.entries(match.args).filter(([, matcher]) => isPlainRecord(matcher) && 'session' in matcher);
         if (sessionEntries.length) {
@@ -332,7 +392,7 @@ export function parseToolAuthorizationPolicyBytes(bytes: Buffer | string): ToolA
           exactToolNamesForSessionMatcher(match.tool, `${label}.match.args.sessionId.session`);
         }
       }
-      if (rawRule.match.path !== undefined) match.path = normalizePathMatcher(rawRule.match.path, `${label}.match.path`);
+      if (rawMatch.path !== undefined) match.path = normalizePathMatcher(rawMatch.path, `${label}.match.path`);
     }
     return { id, enabled: rawRule.enabled !== false, match, action: rawRule.action, ...(rawRule.reason ? { reason: rawRule.reason } : {}) };
   });
@@ -437,6 +497,9 @@ function matchesArgs(matchers: Record<string, ArgumentMatcher> | undefined, requ
     if (isPlainRecord(matcher) && 'session' in matcher) {
       return matchesSessionTarget((matcher as { session: SessionTargetMatcher }).session, request, request.sessionTargets?.[key]);
     }
+    if (isPlainRecord(matcher) && 'task' in matcher) {
+      return request.principal === 'internal' && request.taskTarget?.ownerSessionId === request.session;
+    }
     return matchesScalar(matcher as ScalarMatcher, getValueByPath(request.args, key));
   });
 }
@@ -478,12 +541,45 @@ function matchesRule(rule: ToolAuthorizationRule, request: ToolAuthorizationRequ
     && matchesArgs(rule.match.args, request)
     && matchesPath(rule.match.path, request);
 }
-function matchesRuleIdentity(rule: ToolAuthorizationRule, request: ToolAuthorizationRequest, targetNodeUnknown = false): boolean {
+function matchesIdentityPattern(pattern: IdentityPattern, actual: string | undefined): boolean {
+  if (actual === undefined) return false;
+  const patterns = Array.isArray(pattern) ? pattern : [pattern];
+  // A bounded literal substring matcher avoids arbitrary regular expressions and backtracking.
+  return patterns.some(item => {
+    const parts = item.split('*');
+    if (parts.length === 1) return actual === item;
+    if (!actual.startsWith(parts[0]) || !actual.endsWith(parts[parts.length - 1])) return false;
+    let offset = parts[0].length;
+    const end = actual.length - parts[parts.length - 1].length;
+    for (const part of parts.slice(1, -1)) {
+      const index = actual.indexOf(part, offset);
+      if (index < 0 || index + part.length > end) return false;
+      offset = index + part.length;
+    }
+    return offset <= end;
+  });
+}
+function matchesNode(matcher: NodeMatcher, nodeId: string, request: ToolAuthorizationRequest): boolean {
+  if (!isPlainRecord(matcher)) return matchesIdentityPattern(matcher as IdentityPattern, nodeId);
+  if ('current' in matcher) return request.principal === 'internal' && request.currentNode !== undefined && request.currentNode === nodeId;
+  // Slash-free IDs belong only to native adapters. Executable namespaces cannot claim a native ID.
+  const provider = splitProviderNodeId(nodeId)?.providerId || (nodeId === 'master' ? 'master' : 'authenticated-remote');
+  return matchesIdentityPattern((matcher as { provider: IdentityPattern }).provider, provider);
+}
+function matchesNodeTargets(rule: ToolAuthorizationRule, request: ToolAuthorizationRequest): boolean {
+  if (rule.match.node === undefined) return true;
+  if (!request.nodeTargets?.length) return false;
+  const matches = (node: string) => matchesNode(rule.match.node!, node, request);
+  return rule.action === 'deny' ? request.nodeTargets.some(matches) : request.nodeTargets.every(matches);
+}
+function matchesRuleIdentity(rule: ToolAuthorizationRule, request: ToolAuthorizationRequest, targetNodeUnknown = false, nodeTargetsUnknown = false): boolean {
   return (rule.match.agent === undefined || (request.principal === 'internal' && matchesScalar(rule.match.agent, request.agent)))
     && matchesScalar(rule.match.session, request.session)
+    && (rule.match.sessionPattern === undefined || matchesIdentityPattern(rule.match.sessionPattern, request.session))
     && (rule.match.externalId === undefined || (request.principal === 'external' && matchesScalar(rule.match.externalId, request.externalId)))
     && matchesTool(rule.match.tool, request.tool)
-    && (targetNodeUnknown || matchesScalar(rule.match.targetNode, request.targetNode));
+    && (targetNodeUnknown || matchesScalar(rule.match.targetNode, request.targetNode))
+    && (nodeTargetsUnknown || matchesNodeTargets(rule, request));
 }
 export async function evaluateToolAuthorization(request: ToolAuthorizationRequest): Promise<ToolAuthorizationEvaluation> {
   return evaluateToolAuthorizationPolicy(await loadToolAuthorizationPolicy(), request);
@@ -495,9 +591,16 @@ export function toolAuthorizationNeedsSessionTarget(policy: ToolAuthorizationPol
   return policy.rules.some(rule => rule.enabled && matchesRuleIdentity(rule, request)
     && !!rule.match.args && Object.values(rule.match.args).some(matcher => isPlainRecord(matcher) && 'session' in matcher));
 }
+export function toolAuthorizationNeedsTaskTarget(policy: ToolAuthorizationPolicy, request: ToolAuthorizationRequest): boolean {
+  return request.tool.source === 'builtin' && request.tool.name === 'task'
+    && policy.rules.some(rule => rule.enabled && matchesRuleIdentity(rule, request)
+      && !!rule.match.args && Object.values(rule.match.args).some(matcher => isPlainRecord(matcher) && 'task' in matcher));
+}
 export interface ToolAuthorizationVisibilityProjection {
   /** A model-facing builtin's Node selector has not been supplied yet. */
   targetNodeUnknown?: boolean;
+  /** A registered Node-effect builtin has not received its endpoint arguments yet. */
+  nodeTargetsUnknown?: boolean;
 }
 export function isToolAuthorizationPotentiallyVisibleSync(
   request: ToolAuthorizationRequest,
@@ -505,10 +608,11 @@ export function isToolAuthorizationPotentiallyVisibleSync(
 ): boolean {
   const policy = loadToolAuthorizationPolicySync();
   for (const rule of policy.rules) {
-    if (!rule.enabled || !matchesRuleIdentity(rule, request, projection.targetNodeUnknown)) continue;
+    if (!rule.enabled || !matchesRuleIdentity(rule, request, projection.targetNodeUnknown, projection.nodeTargetsUnknown)) continue;
     const conditional = rule.match.path !== undefined
       || (rule.match.args !== undefined && Object.keys(rule.match.args).length > 0)
-      || (projection.targetNodeUnknown === true && rule.match.targetNode !== undefined);
+      || (projection.targetNodeUnknown === true && rule.match.targetNode !== undefined)
+      || (projection.nodeTargetsUnknown === true && rule.match.node !== undefined);
     if (!conditional) return rule.action === 'allow';
     if (rule.action === 'allow') return true;
   }
@@ -550,8 +654,24 @@ function extractPatchPaths(input: unknown): string[] {
   if (typeof input !== 'string') return [];
   return parseApplyPatchInput(input).map(operation => operation.filePath);
 }
+/** Registered effect semantics only. Tool arguments never turn unrelated tools into Node capabilities. */
+export function resolveToolAuthorizationNodeTargets(tool: ToolAuthorizationToolRef, targetNode: string | undefined, args: Record<string, any>): string[] | undefined {
+  if (tool.source === 'node') return targetNode && isCoreNodeId(targetNode) ? [targetNode] : undefined;
+  if (tool.source !== 'builtin') return undefined;
+  if (builtinNodeArgumentSelectsPlacement(tool.name)) return targetNode && isCoreNodeId(targetNode) ? [targetNode] : undefined;
+  if (tool.name === 'copy_between_nodes') {
+    const endpoints = [args.sourceNode, args.targetNode].map(value => typeof value === 'string' ? value.trim() : value);
+    return endpoints.every(isCoreNodeId) ? endpoints : undefined;
+  }
+  if (tool.name === 'node' && ['select', 'inspect', 'destroy'].includes(String(args.action).trim().toLowerCase())
+    && args.providerId === undefined && typeof args.nodeId === 'string') {
+    const node = args.nodeId.trim();
+    return isCoreNodeId(node) ? [node] : undefined;
+  }
+  return undefined;
+}
 export function buildToolAuthorizationRequest(options: {
-  session?: Pick<Session, 'id' | 'agent' | 'cwd'> | null;
+  session?: Pick<Session, 'id' | 'agent' | 'cwd' | 'currentNode'> | null;
   sessionId?: string;
   tool: ToolAuthorizationToolRef;
   targetNode?: string;
@@ -590,7 +710,10 @@ export function buildToolAuthorizationRequest(options: {
       agentName, session: options.session, memory: options.tool.name === 'apply_patch_memory',
     });
   }
-  return { principal: 'internal', agent: agentName, session: sessionId, tool: options.tool, targetNode, args, paths };
+  const nodeTargets = resolveToolAuthorizationNodeTargets(options.tool, targetNode, args);
+  return { principal: 'internal', agent: agentName, session: sessionId, tool: options.tool, targetNode, args, paths,
+    ...(nodeTargets ? { nodeTargets } : {}),
+    ...(options.session ? { currentNode: options.session.currentNode || 'master' } : {}) };
 }
 
 /** Construct trusted external identity facts; execution-session and path context arrive in later integration. */
@@ -609,6 +732,7 @@ export function buildExternalToolAuthorizationRequest(options: {
     ...(options.sessionId ? { session: options.sessionId } : {}),
     tool: options.tool, ...(options.targetNode ? { targetNode: options.targetNode } : {}),
     args: options.args || {}, paths: options.paths || [],
+    nodeTargets: resolveToolAuthorizationNodeTargets(options.tool, options.targetNode, options.args || {}),
   };
 }
 

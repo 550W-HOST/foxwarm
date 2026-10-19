@@ -15,6 +15,7 @@ import { SessionWorkerStore } from './sessionWorkerStore';
 import { SessionWorkerSupervisor } from './sessionWorkerSupervisor';
 import type { Session } from './types';
 import { COMMANDS } from './commands';
+import { parseSessionControlFeedback } from '../packages/shared/dist/sessionControlFeedback';
 
 function baseSession(id: string): Session {
   return {
@@ -118,13 +119,17 @@ test('MessageRouter routes ordinary and busy channel input through the durable W
     assert.equal(authority.history[3].role, 'model');
     assert.equal(store.countMailboxIntents(), 2, 'continue does not invent a queue/mailbox intent');
     assert.equal(replies.length, 1);
-    assert.equal(replies[0].text, '▶️ Continuing interrupted turn...');
+    assert.equal(parseSessionControlFeedback(replies[0].options?.sessionControlFeedback)?.action, 'continue');
+    assert.equal(parseSessionControlFeedback(replies[0].options?.sessionControlFeedback)?.status, 'accepted');
     assert.equal(deliveries[2].text, 'deterministic child answer');
     await COMMANDS['/continue'].handler(continueCtx, [], sessionId, stubSession);
     authority = await fs.readJson(statePath);
     assert.equal(authority.history.length, 4, 'a completed Worker answer cannot be continued again');
-    assert.equal(replies[1].text, '▶️ Continuing interrupted turn...');
-    assert.equal(replies[2].text, '⚠️ Session has no interrupted turn to continue.');
+    assert.deepEqual(replies.slice(1).map(reply => {
+      const feedback = parseSessionControlFeedback(reply.options?.sessionControlFeedback);
+      return [feedback?.action, feedback?.status];
+    }), [['continue', 'accepted'], ['continue', 'noop']]);
+    assert.equal(replies[2].options?.sessionControlFeedback?.details, 'Session has no interrupted turn to continue.');
     assert.deepEqual(await sessionRuntime.control(sessionId, 'dequeue'), {
       action: 'dequeue', queuedItems: 0, stoppedCurrent: false, abortedInFlight: false,
     });
@@ -184,7 +189,10 @@ test('Worker retry response loss is reported as ambiguous after exactly one comm
     assert.equal(committed.history.at(-1)?.parts?.[0]?.text, 'deterministic child answer');
     assert.equal(store.countMailboxIntents(), 0, 'retry ambiguity does not create or replay a mailbox intent');
     assert.equal(deliveries.filter(reply => reply.text === 'deterministic child answer').length, 1, 'the committed final was delivered exactly once before response loss');
-    assert.ok(replies.some(reply => String(reply.text).startsWith('⚠️ Continue outcome is unknown:')));
+    const feedback = replies.map(reply => parseSessionControlFeedback(reply.options?.sessionControlFeedback));
+    assert.deepEqual(feedback.map(item => [item?.action, item?.status]), [['continue', 'accepted'], ['continue', 'error']]);
+    assert.match(feedback[1]?.message || '', /outcome unknown/i);
+    assert.match(feedback[1]?.details || '', /inspect session history/i);
     assert.ok(!replies.some(reply => String(reply.text).startsWith('❌ Continue failed:')));
   } finally {
     await sessionRuntime.shutdownSessionRuntime().catch(() => {});

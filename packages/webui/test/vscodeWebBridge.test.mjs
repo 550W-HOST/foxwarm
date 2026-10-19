@@ -27,6 +27,9 @@ const {
   planCodeOpen,
   resolveToolCodeFileTarget,
   resolveSessionCodeTarget,
+
+  readCodeWorkspaceNodePreference,
+  writeCodeWorkspaceNodePreference,
   selectCodeFrameStarted,
 } = await import(pathToFileURL(bundledPath).href)
 
@@ -139,4 +142,29 @@ test('Windows drive paths use the same Code URI while preserving relative resolu
   assert.deepEqual(resolveToolCodeFileTarget('w:\\file.txt', 'master', '/elsewhere'), {
     kind: 'openFile', nodeId: 'master', path: '/W:/file.txt',
   })
+})
+
+test('Provider-qualified workspace and tool targets retain their Node through encoded Code URLs', () => {
+  const target = { nodeId: 'development/worker:one', path: '/workspace' }
+  const url = makeVscodeWebUrl('/proxy/api', 'https://example.test', target)
+  assert.equal(url.searchParams.get('folderUri'), 'foxwarm://node+development%2Fworker%3Aone/workspace')
+  assert.deepEqual(resolveToolCodeFileTarget('/workspace/file.ts', target.nodeId), {
+    kind: 'openFile', nodeId: target.nodeId, path: '/workspace/file.ts',
+  })
+})
+
+
+test('native leading-character identities stay native in Code targets and workspace preferences', () => {
+  for (const nodeId of ['_native-review', '-legacy-native', '.legacy-code']) {
+    let stored = nodeId
+    const storage = { getItem: () => stored, setItem: (_key, value) => { stored = value } }
+    assert.equal(readCodeWorkspaceNodePreference(storage), nodeId)
+    assert.equal(writeCodeWorkspaceNodePreference(storage, nodeId), nodeId)
+    assert.equal(stored, nodeId)
+    assert.deepEqual(resolveToolCodeFileTarget('/workspace/file.ts', nodeId), {
+      kind: 'openFile', nodeId, path: '/workspace/file.ts',
+    })
+    const url = makeVscodeWebUrl('/proxy/api', 'https://example.test', { nodeId, path: '/workspace' })
+    assert.equal(url.searchParams.get('folderUri'), `foxwarm://node+${nodeId}/workspace`)
+  }
 })

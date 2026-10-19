@@ -145,7 +145,7 @@ esbuild bundle 仍在每次构建时生成。
 不要保留缓存而只删除部分产物。清理全部后重新构建：
 
 ```bash
-rm -rf lib packages/shared/dist packages/sandbox-node-runtime/dist packages/cli-node/dist
+rm -rf lib packages/shared/dist packages/cli-node/dist
 npm run build
 ```
 

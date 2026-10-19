@@ -58,3 +58,11 @@ test('legacy Source responses without a master descriptor retain their existing 
   assert.deepEqual(getNodeTargetAvailability(master, 'vscode-fs'), { available: true })
   assert.deepEqual(getNodeTargetAvailability(master, 'vscode-pty'), { available: true })
 })
+
+test('generic provider Nodes retain canonical IDs and status without inventing Code or terminal support', () => {
+  const node = parseWebUiNodeTargets({ nodes: [{ id: 'external:linux', displayName: 'Build machine', online: true, availability: 'ready', services: {} }] }).find(item => item.id === 'external:linux')
+  assert.ok(node)
+  assert.equal(node.availability, 'ready')
+  assert.deepEqual(getNodeTargetAvailability(node, 'vscode-fs'), { available: false, reason: 'filesystem unavailable' })
+  assert.deepEqual(getNodeTargetAvailability(node, 'vscode-pty'), { available: false, reason: 'terminal unavailable' })
+})

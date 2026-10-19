@@ -238,9 +238,9 @@ test('worker direct and unified current-node routing carries exact cwd while exp
     await tool_call_tool({ source: 'node', name: 'read', args: { filePath: 'x' } }, ctx);
     await tool_call_tool({ source: 'node', nodeId: 'remote-other', name: 'read', args: { filePath: 'x' } }, ctx);
     assert.deepEqual(calls.map(call => call[4]), [
-      { currentNode: 'remote-current', cwd: '/exact/cwd' },
-      { currentNode: 'remote-current', cwd: '/exact/cwd' },
-      undefined,
+      { currentNode: 'remote-current', callerCurrentNode: 'remote-current', cwd: '/exact/cwd' },
+      { currentNode: 'remote-current', callerCurrentNode: 'remote-current', cwd: '/exact/cwd' },
+      { currentNode: 'remote-current', callerCurrentNode: 'remote-current' },
     ]);
   } finally { (nodeExecution as any).executeNodeTool = original; }
 });
@@ -306,11 +306,11 @@ test('worker node topology select and compound copy use fixed facade with exact 
   const session = owner();
   let persists = 0; let selectCalls = 0; let copyCalls = 0;
   const originals = { list: nodeExecution.listNodeTopology, select: nodeExecution.validateNodeSelection,
-    lifecycleProviders: nodeExecution.listNodeLifecycleProviders,
+    providersList: nodeExecution.listNodeProviders,
     copy: nodeExecution.copyBetweenNodes, get: sessionManager.getSession, save: sessionManager.saveSession,
     isolated: sessionManager.isSessionEffectivelyIsolated };
   (nodeExecution as any).listNodeTopology = async () => [{ id: 'master', type: 'master', tools: [{ name: 'read', description: 'read', parameters: { type: 'object' } }] }];
-  (nodeExecution as any).listNodeLifecycleProviders = async (): Promise<any[]> => [];
+  (nodeExecution as any).listNodeProviders = async (): Promise<any[]> => [];
   (nodeExecution as any).validateNodeSelection = async () => { selectCalls += 1; return { nodeId: 'remote-a', defaultCwd: '/remote/default' }; };
   (nodeExecution as any).copyBetweenNodes = async () => { copyCalls += 1; return { sizeBytes: 3, sha256: 'copy-hash', overwritten: false }; };
   (sessionManager as any).getSession = async () => { throw new Error('child node getSession'); };
@@ -352,7 +352,7 @@ test('worker node topology select and compound copy use fixed facade with exact 
     assert.equal(copyCalls, 3);
   } finally {
     (nodeExecution as any).listNodeTopology = originals.list; (nodeExecution as any).validateNodeSelection = originals.select;
-    (nodeExecution as any).listNodeLifecycleProviders = originals.lifecycleProviders;
+    (nodeExecution as any).listNodeProviders = originals.providersList;
     (nodeExecution as any).copyBetweenNodes = originals.copy; (sessionManager as any).getSession = originals.get;
     (sessionManager as any).saveSession = originals.save; (sessionManager as any).isSessionEffectivelyIsolated = originals.isolated;
   }

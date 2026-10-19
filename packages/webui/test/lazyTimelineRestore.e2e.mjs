@@ -177,9 +177,13 @@ test('lazy prepend uses scroll-height geometry when the visible slice has no sta
     await page.waitForFunction(() => !document.body.textContent?.includes('Scroll upward to load'), { timeout: 15_000 })
     await new Promise(resolve => setTimeout(resolve, 100))
     const after = await page.$eval('.foxwarm-chat-messages', container => ({
+      scrollTop: container.scrollTop,
+      scrollHeight: container.scrollHeight,
+      clientHeight: container.clientHeight,
       distanceFromBottom: container.scrollHeight - container.scrollTop - container.clientHeight,
     }))
-    assert.ok(Math.abs(after.distanceFromBottom - before.distanceFromBottom) <= 2, `distance from bottom changed from ${before.distanceFromBottom} to ${after.distanceFromBottom}`)
+    // Prepend retains the content position; App chrome can independently change viewport height.
+    assert.ok(Math.abs((after.scrollHeight - after.scrollTop) - (before.scrollHeight - before.scrollTop)) <= 2, `prepend geometry changed: ${JSON.stringify({ before, after })}`)
     assert.ok(after.distanceFromBottom > 500)
   } finally {
     await browser.close()

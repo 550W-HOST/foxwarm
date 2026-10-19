@@ -472,7 +472,7 @@ function App() {
     return Number.isFinite(saved) ? Math.min(420, Math.max(180, saved)) : 256
   })
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true')
-  const { sendKeyMode, setSendKeyMode, timelineView, setTimelineView, showUsageBadge, setShowUsageBadge, showUserMessageMetadata, setShowUserMessageMetadata, fullWidth, setFullWidth } = useChatPreferences()
+  const { sendKeyMode, setSendKeyMode, timelineView, setTimelineView, showUsageBadge, setShowUsageBadge, showUserMessageMetadata, setShowUserMessageMetadata, showInterAgentMessages, setShowInterAgentMessages, showCommentary, setShowCommentary, fullWidth, setFullWidth } = useChatPreferences()
   const [webUiSettings, setWebUiSettings] = useState<WebUiSettings>({ instanceName: '', tabIcon: '' })
   const [vscodeFrameStarted, setVscodeFrameStarted] = useState(false)
   const vscodeFrameRef = useRef<VscodeWebFrameHostHandle | null>(null)
@@ -810,7 +810,10 @@ function App() {
     if (route.tabId && tabsById[route.tabId] && route.tabId !== focusedActiveTabId) {
       activateTab(route.tabId, { expandPane: false })
     }
-  }, [route, tabsById, focusedActiveTabId, activateTab])
+    // Hydrate a route when it changes or its tab arrives. Workbench activation
+    // publishes the hash separately, so reacting to focus would replay the old
+    // route during that transition.
+  }, [route.tabId, !!(route.tabId && tabsById[route.tabId]), activateTab])
 
   useEffect(() => {
     if (route.tabId && tabsById[route.tabId] && pendingRouteTabIdRef.current === route.tabId) {
@@ -1623,6 +1626,10 @@ function App() {
           sendKeyMode={sendKeyMode}
           timelineView={timelineView}
           showUsageBadge={showUsageBadge}
+          showInterAgentMessages={showInterAgentMessages}
+          onShowInterAgentMessagesChange={setShowInterAgentMessages}
+          showCommentary={showCommentary}
+          onShowCommentaryChange={setShowCommentary}
           fullWidth={fullWidth}
           onFullWidthChange={setFullWidth}
           showUserMessageMetadata={showUserMessageMetadata}

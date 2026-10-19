@@ -206,27 +206,28 @@ test('collapsed Session-list controller follows the desktop rail mount and physi
       window.__laneRequests = {}
       window.foxwarmCollapsedLifecycle.setSurface('async-lanes')
     })
-    await page.waitForFunction(() => window.__laneRequests.root?.length >= 2 && window.__laneRequests.exact?.length >= 2)
+    await page.waitForFunction(() => window.__laneRequests.root?.length >= 2 && window.__laneRequests.exact?.length >= 2 && window.__laneRequests.summary?.length >= 2)
     consoleErrors.length = 0
     pageErrors.length = 0
 
     await page.evaluate(() => {
       window.__settleLane('exact', 0, 'reject')
+      window.__settleLane('summary', 0, 'reject')
       window.__settleLane('root', 0, 'resolve')
     })
     await new Promise(resolve => setTimeout(resolve, 50))
     assert.deepEqual(consoleErrors, [], 'StrictMode first-pass exact failure stays silent after the second setup owns the hook')
-    assert.deepEqual(await page.evaluate(() => ({ summary: window.__laneRequests.summary?.length || 0, badge: window.__laneRequests.badge?.length || 0 })), { summary: 0, badge: 0 }, 'stale first-pass root completion cannot launch summary or badge work')
+    assert.deepEqual(await page.evaluate(() => ({ summary: window.__laneRequests.summary?.length || 0, badge: window.__laneRequests.badge?.length || 0 })), { summary: 2, badge: 0 }, 'summary owns its initial lane independently; stale first-pass root completion cannot launch badge work')
 
     await page.evaluate(() => window.__settleLane('root', 1, 'resolve'))
-    await page.waitForFunction(() => window.__laneRequests.summary?.length === 1 && window.__laneRequests.badge?.length === 1)
+    await page.waitForFunction(() => window.__laneRequests.summary?.length === 2 && window.__laneRequests.badge?.length === 1)
     await page.evaluate(() => {
       window.__settleLane('exact', 1, 'reject')
-      window.__settleLane('summary', 0, 'reject')
+      window.__settleLane('summary', 1, 'reject')
     })
     await new Promise(resolve => setTimeout(resolve, 50))
     assert.equal(consoleErrors.filter(message => message.includes('Failed bounded Session exact context')).length, 1, 'current exact failure reports once')
-    assert.equal(consoleErrors.filter(message => message.includes('Failed bounded Session bootstrap')).length, 1, 'current bootstrap-summary failure reports once')
+    assert.equal(consoleErrors.filter(message => message.includes('Failed bounded Session summary')).length, 1, 'current independent summary failure reports once')
 
     await page.evaluate(() => window.foxwarmAsyncLaneController.setQuery('one'))
     await page.waitForFunction(() => window.__laneRequests.search?.length === 1)
@@ -309,9 +310,8 @@ test('collapsed Session-list controller follows the desktop rail mount and physi
       window.__settleLane('root', 2, 'resolve')
       window.__settleLane('exact', 2, 'resolve')
     })
-    await page.waitForFunction(() => window.__laneRequests.summary?.length === 2 && window.__laneRequests.badge?.length === 3)
+    await page.waitForFunction(() => window.__laneRequests.summary?.length === 1 && window.__laneRequests.badge?.length === 3)
     await page.evaluate(() => {
-      window.__settleLane('summary', 1, 'resolve')
       window.__settleLane('badge', 1, 'resolve')
       window.__settleLane('badge', 2, 'resolve')
       window.foxwarmAsyncLaneController.setQuery('refresh-query')
@@ -324,19 +324,19 @@ test('collapsed Session-list controller follows the desktop rail mount and physi
     await page.evaluate(() => window.__settleLane('root', 3, 'resolve'))
     await page.waitForFunction(() => window.__laneRequests.exact?.length === 4)
     await page.evaluate(() => window.__settleLane('exact', 3, 'resolve'))
-    await page.waitForFunction(() => window.__laneRequests.summary?.length === 3)
+    await page.waitForFunction(() => window.__laneRequests.summary?.length === 2)
 
     await page.evaluate(() => { void window.foxwarmAsyncLaneController.refresh() })
     await page.waitForFunction(() => window.__laneRequests.root?.length === 5)
     await page.evaluate(() => window.__settleLane('root', 4, 'resolve'))
     await page.waitForFunction(() => window.__laneRequests.exact?.length === 5)
     await page.evaluate(() => window.__settleLane('exact', 4, 'resolve'))
-    await page.waitForFunction(() => window.__laneRequests.summary?.length === 4)
+    await page.waitForFunction(() => window.__laneRequests.summary?.length === 3)
     const searchesBeforeOldSummary = await page.evaluate(() => window.__laneRequests.search.length)
-    await page.evaluate(() => window.__settleLane('summary', 2, 'resolve'))
+    await page.evaluate(() => window.__settleLane('summary', 1, 'resolve'))
     await new Promise(resolve => setTimeout(resolve, 50))
     assert.equal(await page.evaluate(() => window.__laneRequests.search.length), searchesBeforeOldSummary, 'a superseded summary cannot continue its refresh into search')
-    await page.evaluate(() => window.__settleLane('summary', 3, 'resolve'))
+    await page.evaluate(() => window.__settleLane('summary', 2, 'resolve'))
     await page.waitForFunction(expected => window.__laneRequests.search.length === expected + 1, {}, searchesBeforeOldSummary)
     await page.evaluate(index => window.__settleLane('search', index, 'resolve'), searchesBeforeOldSummary)
     await new Promise(resolve => setTimeout(resolve, 50))

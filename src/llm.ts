@@ -19,7 +19,7 @@ import { listNodeTopology } from './nodeExecution';
 import { formatTime, getRecentLogPath, moveLogsToDateErrorDir } from './logRotation';
 import { isToolVisibleForSession } from './isolatedCheck';
 import { isPermissionNeutralBuiltinDispatcher } from './permissions';
-import { builtinHasOptionalFileNode, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './tools/placement';
+import { builtinHasOptionalFileNode, builtinHasNodeEffectSelector, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './tools/placement';
 import {
     collectOpenAIChatCompletionsStream as collectOpenAIChatCompletionsStreamProvider,
     collectOpenAIResponsesStream as collectOpenAIResponsesStreamProvider,
@@ -1311,7 +1311,7 @@ export async function resolveSessionToolDefinitions(session: Session, override?:
         }
         const placement = resolveBuiltinToolPlacement(tool.name, undefined, currentNode);
         return isToolVisibleForSession(session, { source: 'builtin', tool: tool.name }, placement.executionNode,
-            { targetNodeUnknown: builtinHasOptionalFileNode(tool.name) });
+            { targetNodeUnknown: builtinHasOptionalFileNode(tool.name), nodeTargetsUnknown: builtinHasNodeEffectSelector(tool.name) });
     });
     if (!session.currentNode || session.currentNode === 'master') return definitions;
     let node;
@@ -2694,9 +2694,10 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
                 attempt,
                 requestedEffort,
             });
-            if (abortController.signal.aborted) throw makeAbortError();
-            await options.onAttempt?.(attempt);
-            if (abortController.signal.aborted) throw makeAbortError();
+            // A prepared plan still uses the established start/abort journal
+            // path if Stop arrived during preparation. Do not publish a new
+            // active-attempt notice, and let the dispatch guard below abort it.
+            if (!abortController.signal.aborted) await options.onAttempt?.(attempt);
             if (!requestJournalStarted) {
                 await beginLlmRequestJournal({
                     requestId,

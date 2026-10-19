@@ -14,7 +14,7 @@ import { buildNodeBootstrapInfo, ensureNodePairingToken } from '../nodes/bootstr
 import {
     copyBetweenNodes,
     executeNodeLifecycle,
-    listNodeLifecycleProviders,
+    listNodeProviders,
     listNodeTopology,
     validateNodeSelection,
 } from '../nodeExecution';
@@ -105,7 +105,7 @@ export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) 
     }
 
     if (ctx.sessionPlacement === 'session-worker') {
-        const result = await copyBetweenNodes(ctx.sessionId, { sourceNode, sourcePath, targetNode, targetPath, overwrite: overwrite === true });
+        const result = await copyBetweenNodes(ctx.sessionId, { sourceNode, sourcePath, targetNode, targetPath, overwrite: overwrite === true, callerCurrentNode: ctx.session?.currentNode || 'master' });
         const lines = [`Copied \`${sourcePath}\` from node \`${sourceNode}\` to \`${targetPath}\` on node \`${targetNode}\`.`,
             `Size: ${result.sizeBytes} B`, `SHA256: ${result.sha256}`, `Overwrote existing file: ${result.overwritten ? 'yes' : 'no'}`];
         if (result.absolutePath) lines.push(`Target absolute path: ${result.absolutePath}`);
@@ -120,8 +120,12 @@ export async function tool_copy_between_nodes(args: ToolArgs, ctx: ToolContext) 
         overwrite,
     });
 
-    const file = await nodesManager.readFileFromNode(String(sourceNode), String(sourcePath), ctx.sessionId);
-    const result = await nodesManager.writeFileToNode(String(targetNode), String(targetPath), file.dataBase64, overwrite === true, ctx.sessionId);
+    const source = sessionManager.getSessionCatalog(ctx.sessionId);
+    if (!source) throw new Error(`Session \`${ctx.sessionId}\` not found`);
+    const { nodeProviderRegistry } = await import('../nodes/providers');
+    const context = { agent: source.agent || 'main' };
+    const file = await nodeProviderRegistry.readTransferFile({ nodeId: String(sourceNode), filePath: String(sourcePath), sourceSessionId: ctx.sessionId, context });
+    const result = await nodeProviderRegistry.writeTransferFile({ nodeId: String(targetNode), filePath: String(targetPath), dataBase64: file.dataBase64, overwrite: overwrite === true, sourceSessionId: ctx.sessionId, context });
 
     const lines = [
         `Copied \`${sourcePath}\` from node \`${sourceNode}\` to \`${targetPath}\` on node \`${targetNode}\`.`,
@@ -152,19 +156,20 @@ export const tool_list_nodes = async (_args: ToolArgs = {}, ctx?: ToolContext) =
     if (ctx.sessionPlacement === 'session-worker' && ctx.session?.id !== ctx.sessionId) throw new Error('Node listing requires exact session context.');
     const currentNode = await resolveCurrentNodeForList(ctx);
     const nodes = await listNodeTopology(ctx.sessionId, undefined, currentNode);
-    const lifecycleProviders = await listNodeLifecycleProviders(ctx.sessionId);
-    const providerBody = lifecycleProviders.length > 0
-        ? `\nLifecycle providers:\n${lifecycleProviders.map(provider => `- \`${provider.id}\` (${provider.actions.join(', ')})`).join('\n')}\n`
+    const providersList = await listNodeProviders(ctx.sessionId);
+    const finish = (output: string) => ctx.programmatic ? { output, nodes, providers: providersList, currentNode } : output;
+    const providerBody = providersList.length > 0
+        ? `\nProviders:\n${providersList.map(provider => `- \`${provider.id}\` (${provider.lifecycle.join(', ')})`).join('\n')}\n`
         : '';
-    if (nodes.length === 0) return `No nodes registered. Current node: \`${currentNode}\`.${providerBody}`;
+    if (nodes.length === 0) return finish(`No nodes registered. Current node: \`${currentNode}\`.${providerBody}`);
     const body = nodes.map(node => {
         const label = node.kind === 'master' ? 'local' : node.kind;
         return `- \`${node.id}\` (${label})${node.id === currentNode ? ' ✅ current' : ''}`
             + (node.availability !== 'ready' ? ` ⚠️ ${node.unavailable?.message || node.availability}` : '')
             + (typeof node.lastActivity === 'number' ? ` - Last activity: ${new Date(node.lastActivity).toISOString()}` : '');
     }).join('\n');
-    return `Found ${nodes.length} node(s). Current node: \`${currentNode}\`.\n\n${body}\n${providerBody}`
-        + (nodes.some(node => node.id === currentNode) ? '' : `\nCurrent node \`${currentNode}\` is not currently available.\n`);
+    return finish(`Found ${nodes.length} node(s). Current node: \`${currentNode}\`.\n\n${body}\n${providerBody}`
+        + (nodes.some(node => node.id === currentNode) ? '' : `\nCurrent node \`${currentNode}\` is not currently available.\n`));
 };
 
 export const tool_change_current_node = async (args: ToolArgs, ctx: ToolContext) => {
@@ -180,7 +185,7 @@ export const tool_change_current_node = async (args: ToolArgs, ctx: ToolContext)
         if (sessionManager.isSessionEffectivelyIsolated(session)) {
             throw new Error('This session is isolated and cannot switch node via tools. Use /node from the user channel.');
         }
-        const validated = await validateNodeSelection(ctx.sessionId, nodeId);
+        const validated = await validateNodeSelection(ctx.sessionId, nodeId, ctx.session?.currentNode || 'master');
         session.currentNode = validated.nodeId; delete session.cwd;
         await ctx.persistCurrentSession();
         return `Current node changed to \`${validated.nodeId}\`. Session cwd cleared. Subsequent exec calls will use the node default cwd: \`${validated.defaultCwd}\`.`;
@@ -191,7 +196,7 @@ export const tool_change_current_node = async (args: ToolArgs, ctx: ToolContext)
         throw new Error('This session is isolated and cannot switch node via tools. Use /node from the user channel.');
     }
     
-    const validated = await validateNodeSelection(ctx.sessionId, nodeId);
+    const validated = await validateNodeSelection(ctx.sessionId, nodeId, ctx.session?.currentNode || 'master');
     await sessionRuntime.updateSettings(ctx.sessionId, { currentNode: validated.nodeId, cwd: null });
     return `Current node changed to \`${validated.nodeId}\`. Session cwd cleared. Subsequent exec calls will use the node default cwd: \`${validated.defaultCwd}\`.`;
 };
@@ -220,7 +225,7 @@ export async function tool_node(args: ToolArgs, ctx: ToolContext): Promise<any> 
         assertNodeActionKeys(args, action, action === 'create' || action === 'ensure'
             ? ['providerId', 'nodeId', 'parameters', 'parametersJson']
             : action === 'inspect'
-                ? ['nodeId', 'parameters', 'parametersJson']
+                ? ['providerId', 'nodeId', 'parameters', 'parametersJson']
                 : ['nodeId', 'parameters', 'parametersJson', 'confirmation']);
         const parameters = resolveObjectArgWithJsonFallback(args, 'parameters', 'parametersJson', {
             label: `node ${action} parameters`,
@@ -231,16 +236,24 @@ export async function tool_node(args: ToolArgs, ctx: ToolContext): Promise<any> 
             }
             return executeNodeLifecycle(ctx.sessionId, {
                 action,
+                callerCurrentNode: ctx.session?.currentNode || 'master',
                 providerId: args.providerId.trim(),
                 ...(args.nodeId === undefined ? {} : { nodeId: args.nodeId }),
                 parameters,
             });
+        }
+        if (action === 'inspect' && args.providerId !== undefined) {
+            if (args.nodeId !== undefined || Object.keys(parameters).length || typeof args.providerId !== 'string' || !args.providerId.trim()) {
+                throw new Error('Provider inspection requires providerId and does not accept nodeId or parameters.');
+            }
+            return executeNodeLifecycle(ctx.sessionId, { action, providerId: args.providerId.trim(), callerCurrentNode: ctx.session?.currentNode || 'master' });
         }
         if (typeof args.nodeId !== 'string' || !args.nodeId.trim()) {
             throw new Error(`node.nodeId is required for action="${action}".`);
         }
         return executeNodeLifecycle(ctx.sessionId, {
             action: action as 'inspect' | 'destroy',
+            callerCurrentNode: ctx.session?.currentNode || 'master',
             nodeId: args.nodeId.trim(),
             parameters,
             ...(action === 'destroy' ? { confirmation: args.confirmation } : {}),

@@ -4204,33 +4204,70 @@ test('retry preparation is awaited, propagates local failure, and rechecks cance
   }
 });
 
-test('cancellation after owner preparation prevents retry dispatch and retains ordinary abort journaling', async () => {
+test('cancellation after owner preparation prevents retry dispatch and retains ordinary abort journaling', async t => {
+  for (const cancelAt of ['stream reset', 'attempt hook']) {
+    await t.test(cancelAt, async () => {
+      const originalPost = axios.post;
+      const session = createOpenAITestSession(makeId('retry_cancel_before_dispatch'));
+      const abort = new AbortController();
+      const resets: any[] = [];
+      const attempts: number[] = [];
+      let requests = 0;
+      (axios as any).post = async () => { requests++; throw new Error('initial provider outage'); };
+      try {
+        await assert.rejects(() => chat([{ text: 'input' }], session, 0, {
+          toolDefinitions: [], registerAbortController: false, maxRetries: 2, abortSignal: abort.signal,
+          appendMessage: async message => { session.history.push(message); },
+          prepareRetry: async () => false,
+          onAttempt: async attempt => {
+            attempts.push(attempt);
+            if (cancelAt === 'attempt hook' && attempt === 2) {
+              await new Promise(resolve => setImmediate(resolve));
+              abort.abort();
+            }
+          },
+          currentSessionEffects: { ...createDefaultCurrentSessionEffects(), persistSession: async () => {},
+            notifySessionEvent: (_id, event) => {
+              if (event.type !== 'model-stream-reset') return;
+              resets.push(event);
+              if (cancelAt === 'stream reset' && resets.length === 2) abort.abort();
+            },
+          },
+        }), llmModule.isAbortError);
+        assert.equal(requests, 1);
+        assert.equal(resets.length, 2);
+        assert.deepEqual(attempts, cancelAt === 'stream reset' ? [1] : [1, 2], 'cancelled preparation must not publish an active-attempt notice');
+        const journal = await reconstructLlmRequest(resets[0].llmRequestId);
+        assert.equal(journal.completeness, 'complete');
+        if (journal.completeness === 'complete') {
+          assert.deepEqual(journal.attempts.map(attempt => attempt.result?.outcome), ['failure', 'abort']);
+        }
+      } finally { (axios as any).post = originalPost; }
+    });
+  }
+});
+
+test('attempt notification failure remains outside provider retry classification', async () => {
   const originalPost = axios.post;
-  const session = createOpenAITestSession(makeId('retry_cancel_before_dispatch'));
-  const abort = new AbortController();
-  const resets: any[] = [];
+  const session = createOpenAITestSession(makeId('attempt_hook_failure'));
+  const localFailure = new Error('attempt notification failed');
+  const attempts: number[] = [];
   let requests = 0;
+  let retries = 0;
   (axios as any).post = async () => { requests++; throw new Error('initial provider outage'); };
   try {
     await assert.rejects(() => chat([{ text: 'input' }], session, 0, {
-      toolDefinitions: [], registerAbortController: false, maxRetries: 2, abortSignal: abort.signal,
+      toolDefinitions: [], registerAbortController: false, notifySessionEvents: false, maxRetries: 3,
       appendMessage: async message => { session.history.push(message); },
-      prepareRetry: async () => false,
-      currentSessionEffects: { ...createDefaultCurrentSessionEffects(), persistSession: async () => {},
-        notifySessionEvent: (_id, event) => {
-          if (event.type !== 'model-stream-reset') return;
-          resets.push(event);
-          if (resets.length === 2) abort.abort();
-        },
+      onRetry: () => { retries++; },
+      onAttempt: async attempt => {
+        attempts.push(attempt);
+        if (attempt === 2) throw localFailure;
       },
-    }), llmModule.isAbortError);
+    }), error => error === localFailure);
     assert.equal(requests, 1);
-    assert.equal(resets.length, 2);
-    const journal = await reconstructLlmRequest(resets[0].llmRequestId);
-    assert.equal(journal.completeness, 'complete');
-    if (journal.completeness === 'complete') {
-      assert.deepEqual(journal.attempts.map(attempt => attempt.result?.outcome), ['failure', 'abort']);
-    }
+    assert.equal(retries, 1, 'local notification failure must not consume another provider retry');
+    assert.deepEqual(attempts, [1, 2]);
   } finally { (axios as any).post = originalPost; }
 });
 

@@ -48,8 +48,6 @@ function classify(file) {
   if (/^src\/.*\.test\.ts$/.test(file)) return 'backend'
   if (/^packages\/shared\/src\/.*\.test\.ts$/.test(file)) return 'shared'
   if (/^packages\/cli-node\/src\/.*\.test\.ts$/.test(file)) return 'cli-node'
-  if (/^packages\/sandbox-node-runtime\/src\/.*\.test\.ts$/.test(file)
-    || file === 'packages/sandbox-node-runtime/scripts/build-bundle.test.mjs') return 'sandbox-node'
   if (/^packages\/browser-node\/test\/.*\.test\.mjs$/.test(file)) return 'browser-node'
   if (/^packages\/android-node\/test_[^/]+\.py$/.test(file)) return 'python'
   if (/^docs\/code-index\/scripts\/tests\/test_[^/]+\.py$/.test(file)) return 'python'
@@ -86,7 +84,7 @@ export function loadTestInventory(repoRoot) {
 
 export function compiledPath(file) {
   if (file.startsWith('src/') && file.endsWith('.ts')) return `lib/${file.slice(4, -3)}.js`
-  const packageMatch = file.match(/^packages\/(shared|cli-node|sandbox-node-runtime)\/src\/(.*)\.ts$/)
+  const packageMatch = file.match(/^packages\/(shared|cli-node)\/src\/(.*)\.ts$/)
   if (packageMatch) return `packages/${packageMatch[1]}/dist/${packageMatch[2]}.js`
   return file
 }
@@ -95,7 +93,6 @@ export const routineUnitGroups = [
   'backend',
   'shared',
   'cli-node',
-  'sandbox-node',
   'browser-node',
   'scripts',
   'skill-node',

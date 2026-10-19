@@ -273,7 +273,7 @@ test('nonfinal tail retries are external until a later record folds them into Ac
     window.fixture.setDraft(null)
     window.fixture.setRuntime({ state: 'idle', busy: false, queueLength: 0 })
   })
-  await page.waitForSelector('#timeline [data-system-event]')
+  await page.waitForSelector('#timeline [data-search-row="seq-local-502"] [data-system-event]')
   assert.equal(await page.$eval('#timeline [data-system-event]', node => !!node.closest('[data-activity-details]')), false)
   assert.equal(await countMatches('RETRY_LOG'), 2)
   for (const selectedMode of ['detailed', 'grouped']) {
@@ -883,7 +883,7 @@ test('trusted system events stay identifiable in every timeline mode and never r
   await page.evaluate(records=>{window.fixture.setCurrentHistory(undefined);window.fixture.setMessages(records);window.fixture.setSlice([0,undefined]);window.fixture.setDraft(null)},records)
   for(const selectedMode of ['conversation','detailed','grouped']){
     await mode(selectedMode)
-    await page.waitForSelector('#timeline [data-system-event][data-event-source="compaction"]')
+    await page.waitForSelector('#timeline [data-search-row="seq-local-802"] [data-system-event]')
     assert.equal(await page.$$eval('#timeline [data-system-event]',rows=>rows.length),1)
     assert.equal(await countMatches('Compaction failed'),1)
     assert.equal(await countMatches('Internal diagnostic'),0)

@@ -28,6 +28,8 @@ The journal uses `state/llm-request-journal.sqlite` as its sole runtime authorit
 6. A normalized attempt result is appended after success/failure/abort.
 7. A successful result carries its request identity back through `chat` to assistant history metadata.
 
+Cancellation before retry-owner preparation finishes does not start another attempt. Once a concrete request plan is prepared, cancellation uses the existing attempt-start/abort-result path even if no provider send occurs. The dispatch guard prevents that send; an attempt-start record alone is not evidence of dispatch. Active-attempt notifications are skipped for an already-cancelled plan, and cancellation during their awaited callback reaches the same abort journal path. Callback failures remain local preparation failures outside provider retry classification.
+
 ## Compatibility and recovery
 
 Existing session message/block archives remain readable and unchanged. They do not receive fabricated historical request manifests. `reconstructLlmRequest` reports an unknown/legacy request as `legacy-partial` with named missing facts rather than guessing from current history or prompt snapshots.

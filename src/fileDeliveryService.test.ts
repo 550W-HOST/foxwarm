@@ -66,13 +66,14 @@ test('file delivery preserves Main preparation, target routing, WebUI fallback, 
   await fs.writeFile(path.join(dir, 'demo.txt'), 'master-file');
   const source: any = { id: sourceId, agent: 'main', currentNode: 'master', cwd: dir, history: [], queue: [], meta: {}, stats: {} };
   const originals = { get: sessionManager.getSessionCatalog, session: sessionManager.sendFileToSession,
-    channel: sessionManager.sendFileToChannelTargetId, read: nodesManager.readFileFromNode };
+    channel: sessionManager.sendFileToChannelTargetId, read: nodesManager.readFileFromNode, getNode: nodesManager.getNode };
   const sessionFiles: any[] = []; const channelFiles: any[] = [];
   (sessionManager as any).getSessionCatalog = (id: string) => id === sourceId ? source : null;
   (sessionManager as any).sendFileToSession = async (...args: any[]) => { sessionFiles.push(args); return {
     deliveredChannels: ['telegram:x'], skippedChannels: [] as any[], failedChannels: [] as any[],
   }; };
   (sessionManager as any).sendFileToChannelTargetId = async (...args: any[]) => { channelFiles.push(args); };
+  (nodesManager as any).getNode = (id: string) => id === 'remote-a' ? { id, ws: {}, tools: new Set(['read']) } : originals.getNode.call(nodesManager, id);
   (nodesManager as any).readFileFromNode = async () => ({ dataBase64: Buffer.from('remote-file').toString('base64'), name: 'remote.txt', mimeType: 'text/plain', sizeBytes: 11, isImage: false });
   const rpc = client(sourceId);
   try {
@@ -107,7 +108,7 @@ test('file delivery preserves Main preparation, target routing, WebUI fallback, 
         && error.retryable === false && error.details === undefined && !JSON.stringify(error).includes('never-cross'));
   } finally {
     (sessionManager as any).getSessionCatalog = originals.get; (sessionManager as any).sendFileToSession = originals.session;
-    (sessionManager as any).sendFileToChannelTargetId = originals.channel; (nodesManager as any).readFileFromNode = originals.read;
+    (sessionManager as any).sendFileToChannelTargetId = originals.channel; (nodesManager as any).readFileFromNode = originals.read; (nodesManager as any).getNode = originals.getNode;
     await rpc.transport.drain(); rpc.transport.close(); await fs.remove(dir);
   }
 });

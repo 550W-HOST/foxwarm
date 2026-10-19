@@ -177,7 +177,6 @@ To pair a CLI Node, an administrator supplies the existing token from the instan
 ## Supported execution environments
 
 - **First-party CLI Nodes:** must negotiate protocol v3 and advertise external-owner support. Update older clients before using them through MCP.
-- **First-party Docker-worktree Nodes:** must already be configured, created, and ready. Creation and destruction remain internal administrative operations.
 - **Configured outbound MCP servers:** expose only tools permitted by the external identity's rules.
 
 The supported Node tools are `read`, `write`, `edit`, `apply_patch`, and `exec`. The endpoint does not currently expose execution on `master` or executable providers, browser tabs, cross-Node copy, Node lifecycle changes, or general internal Session/Agent tools. Model-hosted search is not a Node capability.

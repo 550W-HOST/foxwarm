@@ -72,3 +72,18 @@ test('exec cwd change notice is appended and names subsequent default-cwd tools'
     (sessionRuntime as any).updateSettings = originalUpdateSettings;
   }
 });
+
+test('provider cwd synchronization preserves target whitespace and never overwrites a subsequently selected Node', async () => {
+  const { applyDeferredExecCwdSync } = await import('./execTools');
+  const session = { id: 'provider-cwd-owner', agent: 'main', currentNode: 'provider-a', cwd: '/initial' };
+  let persisted = 0;
+  const ctx: any = { sessionId: session.id, session, persistCurrentSession: async () => { persisted += 1; } };
+  await applyDeferredExecCwdSync(ctx, { output: 'command complete' }, { nextCwd: '/target/path with spaces ', nodeId: 'provider-a' });
+  assert.equal(session.cwd, '/target/path with spaces ');
+  assert.equal(persisted, 1);
+  session.currentNode = 'provider-b';
+  const original = { output: 'another command complete' };
+  assert.equal(await applyDeferredExecCwdSync(ctx, original, { nextCwd: '/old-node/cwd', nodeId: 'provider-a' }), original);
+  assert.equal(session.cwd, '/target/path with spaces ');
+  assert.equal(persisted, 1);
+});

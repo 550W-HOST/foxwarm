@@ -49,6 +49,12 @@ var vscode3 = __toESM(require("vscode"));
 // src/provider.ts
 var vscode = __toESM(require("vscode"));
 
+// ../../shared/src/nodeIdentity.ts
+var MAX_CORE_NODE_ID_LENGTH = 193;
+function isCoreNodeId(value) {
+  return typeof value === "string" && value.length <= MAX_CORE_NODE_ID_LENGTH && (/^[A-Za-z0-9._:-]{1,128}$/.test(value) || /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}\/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value));
+}
+
 // src/foxwarmUri.ts
 function decodePathSegment(segment) {
   try {
@@ -93,8 +99,8 @@ function parseFoxwarmUri(uri) {
   };
 }
 function buildFoxwarmNodeUriString(nodeId, realPath) {
-  if (!nodeId || nodeId.includes("/")) {
-    throw new Error("nodeId must be a non-empty single path segment.");
+  if (!isCoreNodeId(nodeId)) {
+    throw new Error("nodeId must be a valid Core Node ID.");
   }
   if (!realPath.startsWith("/")) {
     throw new Error("realPath must be absolute.");
@@ -136,7 +142,7 @@ function normalizeFoxwarmOpenRequest(value) {
     throw new Error("Invalid Foxwarm open request.");
   }
   const request = value;
-  if (typeof request.nodeId !== "string" || !/^[A-Za-z0-9._-]+$/.test(request.nodeId)) {
+  if (typeof request.nodeId !== "string" || !isCoreNodeId(request.nodeId)) {
     throw new Error("Foxwarm node id is invalid.");
   }
   const nodeId = request.nodeId;
@@ -857,37 +863,15 @@ var APP_CONFIG_SCHEMA = {
       type: "object",
       propertyNames: { pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
       additionalProperties: {
-        oneOf: [
-          {
-            type: "object",
-            additionalProperties: false,
-            required: ["type", "command"],
-            properties: {
-              type: { const: "executable", description: "Trusted one-shot executable Node provider adapter." },
-              command: { type: "string", minLength: 1, maxLength: 4096, pattern: "^\\S(?:.*\\S)?$" },
-              args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4096 } },
-              timeoutSeconds: { type: "integer", minimum: 1, maximum: 300, default: 90 }
-            }
-          },
-          {
-            type: "object",
-            additionalProperties: false,
-            required: ["type", "command", "image", "allowedWorktreeRoots"],
-            properties: {
-              type: { const: "docker-worktree", description: "Trusted resident Linux Docker provider for one existing Git worktree." },
-              command: { type: "string", minLength: 1, maxLength: 4096, pattern: "^\\S(?:.*\\S)?$", description: "Fixed Docker launcher command, for example docker or sudo." },
-              args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4096 }, description: 'Fixed launcher arguments, for example ["-n", "docker"].' },
-              image: { type: "string", minLength: 1, maxLength: 4096 },
-              allowedWorktreeRoots: { type: "array", minItems: 1, maxItems: 64, items: { type: "string", minLength: 1, maxLength: 4096 } },
-              networkModes: { type: "array", minItems: 1, uniqueItems: true, items: { enum: ["none", "bridge"] }, default: ["none"] },
-              stateDir: { type: "string", minLength: 1, maxLength: 4096 },
-              memory: { type: "string", pattern: "^[1-9]\\d*[kKmMgG]$", default: "2g" },
-              cpus: { type: "number", exclusiveMinimum: 0, maximum: 64, default: 2 },
-              pidsLimit: { type: "integer", minimum: 16, maximum: 65536, default: 256 },
-              tmpfsSize: { type: "string", pattern: "^[1-9]\\d*[kKmMgG]$", default: "256m" }
-            }
-          }
-        ]
+        type: "object",
+        additionalProperties: false,
+        required: ["type", "command"],
+        properties: {
+          type: { const: "executable", description: "Trusted one-shot executable Node provider adapter." },
+          command: { type: "string", minLength: 1, maxLength: 4096, pattern: "^\\S(?:.*\\S)?$" },
+          args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4096 } },
+          timeoutSeconds: { type: "integer", minimum: 1, maximum: 300, default: 90 }
+        }
       },
       description: "Startup-only trusted Node providers. Requires restart."
     },

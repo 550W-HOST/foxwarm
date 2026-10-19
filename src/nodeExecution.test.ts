@@ -109,7 +109,8 @@ test('protocol-incompatible Nodes stay visible but list, select, and dispatch fa
 test('Node compound copy keeps bytes inside Main for master and remote sources', async () => {
   const sourceId = makeId('node_copy_source');
   await sessionManager.getSession(sourceId);
-  const originals = { read: nodesManager.readFileFromNode, write: nodesManager.writeFileToNode };
+  const originals = { read: nodesManager.readFileFromNode, write: nodesManager.writeFileToNode, getNode: nodesManager.getNode };
+  (nodesManager as any).getNode = (id: string) => ['remote-a', 'remote-b'].includes(id) ? fakeNode(id, ['read', 'write']) : originals.getNode.call(nodesManager, id);
   const reads: any[] = []; const writes: any[] = [];
   (nodesManager as any).readFileFromNode = async (...args: any[]) => {
     reads.push(args); const data = Buffer.from(`bytes-${args[0]}`);
@@ -146,7 +147,7 @@ test('Node compound copy keeps bytes inside Main for master and remote sources',
       assert.equal(writes.length, writesBeforeInvalidSource);
     }
   } finally {
-    (nodesManager as any).readFileFromNode = originals.read; (nodesManager as any).writeFileToNode = originals.write;
+    (nodesManager as any).readFileFromNode = originals.read; (nodesManager as any).writeFileToNode = originals.write; (nodesManager as any).getNode = originals.getNode;
     await cleanup(sourceId);
   }
 });
@@ -310,6 +311,13 @@ test('primitive Node backends derive canonical file tools and preserve provider-
   const tools = Object.fromEntries((await registry.listNodes()).map(node => [node.id, node.tools.map(tool => tool.name)]));
   assert.deepEqual(tools['primitive-rw'], ['read', 'write', 'edit', 'apply_patch']);
   assert.deepEqual(tools['primitive-ro'], ['read']);
+  for (const toolName of ['read', 'write']) {
+    await assert.rejects(() => registry.invokeTool({
+      owner: { kind: 'external', externalId: 'fixture', contextId: 'fixture-context' },
+      nodeId: 'primitive-rw', toolName, args: { filePath: 'urn:existing', content: 'not applied' }, context: {},
+    }), (error: any) => error?.code === 'NODE_EXTERNAL_OWNER_UNSUPPORTED');
+  }
+  assert.equal(observed.length, 0, 'external owners never reach primitive effects');
   const base = { sourceSessionId: 'source', nodeId: 'primitive-rw', context: { agent: 'agent', currentNode: 'primitive-rw', cwd: 'urn:cwd' } };
   assert.equal(
     await registry.invokeTool({ ...base, toolName: 'read', args: { filePath: 'urn:existing' } }),
@@ -361,16 +369,16 @@ test('primitive descriptors reject provider tool schemas and missing advertised 
 test('primitive exec refuses Agent cwd tokens before invoking the provider', async () => {
   let invoked = 0;
   const descriptor: NodeProviderDescriptor = { id: 'primitive-exec', kind: 'sandbox', provider: 'primitive-exec',
-    type: 'memory', availability: 'ready', primitiveBackends: { exec: true } };
+    type: 'memory', availability: 'ready', primitiveBackends: { filesystem: 'read', exec: true } };
   const registry = new NodeProviderRegistry([{ id: 'primitive-exec', listNodes: () => [descriptor],
     getNode: nodeId => nodeId === descriptor.id ? descriptor : undefined,
-    invokeExec: async () => { invoked += 1; return { output: 'unchanged' }; } }]);
+    invokeFilesystem: async () => null,
+    startExec: async () => { invoked += 1; throw new Error('unexpected launch'); },
+    pollExec: async () => ({ state: 'running' }) }]);
   const base = { sourceSessionId: 'agent/main', nodeId: descriptor.id, toolName: 'exec', context: { agent: 'agent' } };
   await assert.rejects(() => registry.invokeTool({ ...base, args: { command: 'pwd', cwd: '$fw_tmp' } }), /unavailable in this execution environment/);
   await assert.rejects(() => registry.invokeTool({ ...base, args: { command: 'pwd', cwd: '${fw_tmp}' } }), /Unknown Agent path variable/);
   assert.equal(invoked, 0);
-  assert.deepEqual(await registry.invokeTool({ ...base, args: { command: 'pwd', cwd: 'urn:provider-cwd' } }), { output: 'unchanged' });
-  assert.equal(invoked, 1);
 });
 
 test('primitive patch Add propagates invalid stat and performs no mutation', async () => {
@@ -957,8 +965,8 @@ test('foreground Stop does not forward abort-to-kill to a provider without exec-
     id: 'no-wait-handoff',
     listNodes: (): [] => [],
     getNode: (nodeId: string) => ({ id: nodeId, provider: 'no-wait-handoff', type: 'fixture', kind: 'remote' as const,
-      availability: 'ready' as const, primitiveBackends: { exec: true as const } }),
-    invokeExec: async (_request: any, options: any) => {
+      availability: 'ready' as const, tools: [{ name: 'exec' }] }),
+    invokeTool: async (_request: any, options: any) => {
       backendSignal = options.signal;
       entered();
       await finished;

@@ -85,6 +85,8 @@ interface ChatTimelineProps {
   runtimeState?: import('../sessionRuntimeState').SessionRuntimeState
   busyStartedAt?: number | null
   isMobile: boolean
+  showInterAgentMessages?: boolean
+  showCommentary?: boolean
   timelineView: TimelineView
   showUsageBadge: boolean
   showTimeDividers?: boolean
@@ -1055,7 +1057,7 @@ const MessageRow = memo(function MessageRow({
             : ''
         }`}
       >
-        {row.communication ? <SessionMessageCard communication={row.communication}><MarkdownContent text={row.communication.message} className="prose prose-sm dark:prose-invert max-w-none break-words text-fw-text" /></SessionMessageCard> : sessionNotice ? <SystemEventCard notice={sessionNotice} reveal={!!rowSearchTarget} /> : systemLikeMessage ? (
+        {row.communication ? <SessionMessageCard communication={row.communication} searchReveal={rowSearchTarget?.surface === 'communication'}><MarkdownContent text={row.communication.message} className="prose prose-sm dark:prose-invert max-w-none break-words text-fw-text" /></SessionMessageCard> : sessionNotice ? <SystemEventCard notice={sessionNotice} reveal={!!rowSearchTarget} /> : systemLikeMessage ? (
           <SystemLikeMessageCard msg={msg} messageKey={messageKey} searchReveal={rowSearchTarget?.surface === 'system'} />
         ) : msg.role === 'user' ? (
           <>
@@ -1273,7 +1275,7 @@ const TimelineTimeSeparator = memo(function TimelineTimeSeparator({ marker }: { 
   )
 })
 
-const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, reasoningPresentation, isRunningTool = false, isMobile, timelineView, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget, historyMessages, currentHistoryMessages, activityDetails, runtimeState, busyStartedAt, renderMessageFooter }: ChatTimelineProps) {
+const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, reasoningPresentation, isRunningTool = false, isMobile, timelineView, showInterAgentMessages = true, showCommentary = true, showUsageBadge, showTimeDividers = true, showUserMessageMetadata = false, onOpenCodeFile, onOpenCodeCommit, nestedDepth = 0, searchTarget, historyMessages, currentHistoryMessages, activityDetails, runtimeState, busyStartedAt, renderMessageFooter }: ChatTimelineProps) {
   const hideMetrics = useMobileChatViewport()
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set())
   const [expandedTools, setExpandedTools] = useState<ExpandedTools>(new Map())
@@ -1286,9 +1288,12 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
       key={keyPrefix}
       sessionId={sessionId}
       messages={nestedMessages}
+      historyMessages={overrideView ? historyMessages || messages : undefined}
       reasoningPresentation={overrideView ? rowsCacheRef.current?.reasoningPresentation : undefined}
       isMobile={isMobile}
       timelineView={overrideView || timelineView}
+      showInterAgentMessages={showInterAgentMessages}
+      showCommentary={showCommentary}
       activityDetails={overrideView !== undefined}
       searchTarget={nestedSearchTarget}
       showUsageBadge={overrideView ? false : nextNestedDepth > 0 ? false : showUsageBadge}
@@ -1298,10 +1303,10 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
       onOpenCodeCommit={onOpenCodeCommit}
       nestedDepth={nextNestedDepth}
     />
-  ), [timelineView, isMobile, onOpenCodeCommit, onOpenCodeFile, sessionId, showUsageBadge, showUserMessageMetadata])
+  ), [timelineView, showInterAgentMessages, showCommentary, historyMessages, messages, isMobile, onOpenCodeCommit, onOpenCodeFile, sessionId, showUsageBadge, showUserMessageMetadata])
 
   const rows = useMemo(() => {
-    const input = { messages, reasoningPresentation, isRunningTool, isMobile, timelineView, showUsageBadge: showUsageBadge && !hideMetrics, showTimeDividers, nestedDepth, activityDetails, historyMessages, currentHistoryMessages, timing: { runtimeState, busyStartedAt, now: historyMessages && nestedDepth === 0 ? Date.now() : undefined }, expandedGroupKeys: expandedToolGroups }
+    const input = { messages, reasoningPresentation, isRunningTool, isMobile, timelineView, showInterAgentMessages, showCommentary, showUsageBadge: showUsageBadge && !hideMetrics, showTimeDividers, nestedDepth, activityDetails, historyMessages, currentHistoryMessages, timing: { runtimeState, busyStartedAt, now: historyMessages && nestedDepth === 0 ? Date.now() : undefined }, expandedGroupKeys: expandedToolGroups }
     let result = buildTimelineRows(input, rowsCacheRef.current)
     // A search reveal is transient: include only its owning group without changing manual expansion state.
     if (searchTarget && timelineView === 'grouped' && nestedDepth === 0) {
@@ -1316,7 +1321,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
     }
     rowsCacheRef.current = result.cache
     return result.rows
-  }, [expandedToolGroups, timelineView, isMobile, isRunningTool, messages, reasoningPresentation, nestedDepth, activityDetails, historyMessages, currentHistoryMessages, clockTick, runtimeState, busyStartedAt, searchTarget, showUsageBadge, showTimeDividers, hideMetrics])
+  }, [expandedToolGroups, timelineView, showInterAgentMessages, showCommentary, isMobile, isRunningTool, messages, reasoningPresentation, nestedDepth, activityDetails, historyMessages, currentHistoryMessages, clockTick, runtimeState, busyStartedAt, searchTarget, showUsageBadge, showTimeDividers, hideMetrics])
 
 
   // A loaded predecessor can change the projected first row without changing the process being read.

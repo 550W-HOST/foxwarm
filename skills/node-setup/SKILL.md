@@ -1,11 +1,17 @@
 ---
 name: node-setup
-description: "Use for Foxwarm node setup and troubleshooting: node pairing/approval flow, bootstrap scripts, sandbox nodes, and binding/unbinding isolated agents to nodes."
+description: "Set up and troubleshoot Foxwarm Nodes, configure optional Providers, or assign development work to an existing Node with Task and Git delivery examples."
 ---
 
 # node-setup
 
-Use this skill when you need to explain, bootstrap, or troubleshoot a Foxwarm **node**.
+Use this skill to explain, bootstrap, troubleshoot, or coordinate development work on a Foxwarm **Node**.
+
+## Choose a workflow
+
+- **Existing-Node development:** read [the portable workflow](references/development-workflow.md) and its runnable [ToolScript example](examples/development_workflow.py) for source/material transfer, Task assignment, committed or evidence-only delivery, review and deliberate cleanup.
+- **Optional SSH Provider:** read [the Linux SSH adapter guide](examples/linux-ssh/README.md). It includes opt-in registration for existing hosts; it is neither a default backend nor an OS/network sandbox. Python 3 and OpenSSH are administrator prerequisites.
+- **Pairing, bootstrap and legacy isolated-Agent binding:** use the sections below. Policy syntax belongs to `access-control`; Agent lifecycle belongs to `agent-management`.
 
 ## First: tools vs commands
 
@@ -598,8 +604,7 @@ Use **`agent-management`** when the task is mainly about:
 - snapshot refresh after editing another agent's memory
 
 Use **`isolated-worker`** when a coordinator should create a temporary isolated
-agent/session on an already-online Node or through a configured Docker-worktree
-provider for one exact existing worktree.
+agent/session on an already-online Node.
 
 ## WebUI onboarding
 
