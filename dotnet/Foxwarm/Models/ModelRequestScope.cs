@@ -28,8 +28,9 @@ internal static class ProviderPromptCache
                             sessionId
                                 + (
                                     scope == ModelRequestScope.Btw ? "--btw"
-                                        : scope == ModelRequestScope.BackgroundCompactPlan ? "--compact-plan"
-                                        : ""
+                                    : scope == ModelRequestScope.BackgroundCompactPlan
+                                        ? "--compact-plan"
+                                    : ""
                                 )
                         )
                     )

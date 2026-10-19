@@ -314,7 +314,11 @@ internal sealed partial class SessionManager
             );
     }
 
-    internal JsonArray ModelDefinitions(SessionOwner owner, JsonArray? explicitOverride = null, string? selectedNode = null)
+    internal JsonArray ModelDefinitions(
+        SessionOwner owner,
+        JsonArray? explicitOverride = null,
+        string? selectedNode = null
+    )
     {
         if (explicitOverride is not null)
             return (JsonArray)explicitOverride.DeepClone();
@@ -327,7 +331,12 @@ internal sealed partial class SessionManager
             .Entries.Where(entry =>
                 entry.DefaultInject
                 && entry.Source != "node"
-                && ToolVisible(owner, entry.Source, SessionWait.Text(entry.Definition["name"])!, selectedNode: node)
+                && ToolVisible(
+                    owner,
+                    entry.Source,
+                    SessionWait.Text(entry.Definition["name"])!,
+                    selectedNode: node
+                )
             )
             .Select(entry => (JsonNode?)ToolCallControls.ForModel(entry.Definition))
             .ToList();

@@ -8,7 +8,9 @@ namespace Foxwarm.Sessions;
 internal sealed partial class SessionCompactor
 {
     private sealed class PruningEstimateExceededException : Exception;
-    private sealed class PruningSnapshotChangedException(string message) : InvalidOperationException(message);
+
+    private sealed class PruningSnapshotChangedException(string message)
+        : InvalidOperationException(message);
 
     private static readonly HashSet<string> RetainedResponseMetadata =
     [
@@ -199,10 +201,20 @@ internal sealed partial class SessionCompactor
     {
         var originalRows = snapshot.History.Materialize();
         var cutoff = CompactCandidateBuilder.Split(originalRows, keep);
-        var persistentSnapshot = SessionWait.Text(snapshot.AuthorityEnvelope["persistentMemorySnapshot"]) ?? "";
+        var persistentSnapshot =
+            SessionWait.Text(snapshot.AuthorityEnvelope["persistentMemorySnapshot"]) ?? "";
         var before = EstimateHistory(originalRows, persistentSnapshot);
-        var result = new ToolPruneResult(false, 0, 0, cutoff, cutoff,
-            originalRows.Length - cutoff, before, before, 0);
+        var result = new ToolPruneResult(
+            false,
+            0,
+            0,
+            cutoff,
+            cutoff,
+            originalRows.Length - cutoff,
+            before,
+            before,
+            0
+        );
         if (cutoff <= 0)
             return result;
         var bySeq = store
@@ -246,7 +258,8 @@ internal sealed partial class SessionCompactor
                     id is not null && skillLoads.Contains(id) ? null : PrunePart(part, seq.Value);
                 nextParts.Add(pruned ?? part.DeepClone());
                 changed |= pruned is not null;
-                if (pruned is not null) replaced++;
+                if (pruned is not null)
+                    replaced++;
             }
             if (!changed)
                 continue;
@@ -301,7 +314,9 @@ internal sealed partial class SessionCompactor
                             )
                             .Any()
                     )
-                        throw new PruningSnapshotChangedException("Tool-response pruning snapshot changed incompatibly.");
+                        throw new PruningSnapshotChangedException(
+                            "Tool-response pruning snapshot changed incompatibly."
+                        );
                     var nextHistory = snapshot.History;
                     for (var index = 0; index < rewritten.Length; index++)
                         if (snapshot.History[index].Sequence is long seq && affected.Contains(seq))
@@ -310,14 +325,19 @@ internal sealed partial class SessionCompactor
                                 HistoryMessage.FromJson(rewritten[index])
                             );
                     nextHistory = nextHistory.Append(live.History.Skip(snapshot.History.Count));
-                    var liveBefore = EstimateHistory(live.History.Snapshot().Materialize(),
-                        SessionWait.Text(live.AuthorityEnvelope["persistentMemorySnapshot"]) ?? "");
+                    var liveBefore = EstimateHistory(
+                        live.History.Snapshot().Materialize(),
+                        SessionWait.Text(live.AuthorityEnvelope["persistentMemorySnapshot"]) ?? ""
+                    );
                     var liveAfter = EstimateHistory(
-                            nextHistory.Materialize(),
-                            SessionWait.Text(live.AuthorityEnvelope["persistentMemorySnapshot"])
-                                ?? ""
-                        );
-                    result = result with { EstimatedTokensBefore = liveBefore, EstimatedTokensAfter = liveAfter };
+                        nextHistory.Materialize(),
+                        SessionWait.Text(live.AuthorityEnvelope["persistentMemorySnapshot"]) ?? ""
+                    );
+                    result = result with
+                    {
+                        EstimatedTokensBefore = liveBefore,
+                        EstimatedTokensAfter = liveAfter,
+                    };
                     if (automatic && liveAfter > maximum)
                         throw new PruningEstimateExceededException();
                     var envelope = (JsonObject)live.AuthorityEnvelope.DeepClone();
@@ -341,7 +361,8 @@ internal sealed partial class SessionCompactor
                         {
                             state.AuthorityEnvelope.Remove("indexingState");
                             if (envelope["vectorIndexPosition"] is { } position)
-                                state.AuthorityEnvelope["vectorIndexPosition"] = position.DeepClone();
+                                state.AuthorityEnvelope["vectorIndexPosition"] =
+                                    position.DeepClone();
                         }
                         state.PublishCommittedHistoryRewrite(
                             nextHistory,
@@ -355,33 +376,60 @@ internal sealed partial class SessionCompactor
                 token
             );
         }
-        catch (Exception error) when (error is PruningEstimateExceededException || !automatic && error is PruningSnapshotChangedException)
+        catch (Exception error)
+            when (error is PruningEstimateExceededException
+                || !automatic && error is PruningSnapshotChangedException
+            )
         {
             return result;
         }
         hosted.PublishStateChanged();
-        return result with { Committed = true, ReplacedFunctionResponses = replaced,
+        return result with
+        {
+            Committed = true,
+            ReplacedFunctionResponses = replaced,
             TouchedMessages = affected.Count,
-            EstimatedTokensSaved = Math.Max(0, result.EstimatedTokensBefore - result.EstimatedTokensAfter) };
+            EstimatedTokensSaved = Math.Max(
+                0,
+                result.EstimatedTokensBefore - result.EstimatedTokensAfter
+            ),
+        };
     }
 
-    private async Task<bool> TryPruneToolsAsync(SessionSnapshot snapshot, CancellationToken token,
-        double keep, HostModels catalog) => (await PruneToolsAsync(snapshot, token, keep, true)).Committed;
+    private async Task<bool> TryPruneToolsAsync(
+        SessionSnapshot snapshot,
+        CancellationToken token,
+        double keep,
+        HostModels catalog
+    ) => (await PruneToolsAsync(snapshot, token, keep, true)).Committed;
 
     internal async Task<ToolPruneResult> PruneToolsManuallyAsync(double? keep = null)
     {
         using var admission = hosted.Entry.AdmitMutation();
         var snapshot = hosted.Entry.Snapshot();
-        return await PruneToolsAsync(snapshot, CancellationToken.None,
-            keep ?? models.Capture().CompactKeepFraction, false);
+        return await PruneToolsAsync(
+            snapshot,
+            CancellationToken.None,
+            keep ?? models.Capture().CompactKeepFraction,
+            false
+        );
     }
 }
 
-internal sealed record ToolPruneResult(bool Committed, int ReplacedFunctionResponses,
-    int TouchedMessages, int InspectedMessages, int KeepStartIndex, int KeptMessages,
-    int EstimatedTokensBefore, int EstimatedTokensAfter, int EstimatedTokensSaved)
+internal sealed record ToolPruneResult(
+    bool Committed,
+    int ReplacedFunctionResponses,
+    int TouchedMessages,
+    int InspectedMessages,
+    int KeepStartIndex,
+    int KeptMessages,
+    int EstimatedTokensBefore,
+    int EstimatedTokensAfter,
+    int EstimatedTokensSaved
+)
 {
-    internal string Text => $"🧹 Historical tool-response pruning finished. Pruned {ReplacedFunctionResponses} oversized response(s) across {TouchedMessages} message(s); tool-call arguments were unchanged. "
+    internal string Text =>
+        $"🧹 Historical tool-response pruning finished. Pruned {ReplacedFunctionResponses} oversized response(s) across {TouchedMessages} message(s); tool-call arguments were unchanged. "
         + $"Inspected {InspectedMessages} older message(s), kept the most recent {KeptMessages} message(s) untouched, "
         + $"and estimated {EstimatedTokensSaved} token(s) saved ({EstimatedTokensBefore} → {EstimatedTokensAfter}).";
 }

@@ -13,16 +13,25 @@ namespace Foxwarm.Tests;
 public sealed partial class SessionCommandEffectsTests
 {
     private static Task<ExternalChannelFixture> FixtureAsync(Uri? provider = null) =>
-        ExternalChannelFixture.CreateAsync(new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }, provider);
+        ExternalChannelFixture.CreateAsync(
+            new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() },
+            provider
+        );
 
     private static async Task<JsonObject> SourceAsync(JsonObject input)
     {
-        var root = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
+        var root =
+            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
             ?? throw new InvalidOperationException("FOXWARM_TS_ROOT is required");
-        var start = new ProcessStartInfo("node", Path.Combine(root, "dotnet", "session-command-effects-fixture-ts.mjs"))
+        var start = new ProcessStartInfo(
+            "node",
+            Path.Combine(root, "dotnet", "session-command-effects-fixture-ts.mjs")
+        )
         {
-            WorkingDirectory = root, RedirectStandardInput = true,
-            RedirectStandardOutput = true, RedirectStandardError = true,
+            WorkingDirectory = root,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
         };
         using var child = Process.Start(start)!;
         var output = child.StandardOutput.ReadToEndAsync();
@@ -37,63 +46,127 @@ public sealed partial class SessionCommandEffectsTests
     private static async Task<List<string>> CommandAsync(ExternalChannelFixture f, string text)
     {
         var replies = new List<string>();
-        var context = new ExternalChannelContext("alpha", "telegram", "commands", "11", "operator",
-            value => { replies.Add(value); return Task.CompletedTask; });
+        var context = new ExternalChannelContext(
+            "alpha",
+            "telegram",
+            "commands",
+            "11",
+            "operator",
+            value =>
+            {
+                replies.Add(value);
+                return Task.CompletedTask;
+            }
+        );
         if (f.Manager.ChannelBinding(context.Target) is null)
             f.Manager.AttachChannel(context.Target, f.Owner);
-        await f.Router.HandleExternalMessageAsync(context, new([new JsonObject { ["text"] = text }]));
+        await f.Router.HandleExternalMessageAsync(
+            context,
+            new([new JsonObject { ["text"] = text }])
+        );
         return replies;
     }
 
     private static Task AppendAsync(SessionOwner owner, params JsonObject[] rows) =>
         owner.Entry.SaveLane.CommitCanonicalAppendAsync(state =>
-            LocalSessionTurnHost.PrepareCanonicalAppend(state, rows, [], false, false,
-                () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+            LocalSessionTurnHost.PrepareCanonicalAppend(
+                state,
+                rows,
+                [],
+                false,
+                false,
+                () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            )
+        );
 
-    private static JsonObject Text(string text) => new()
-    {
-        ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["text"] = text }),
-    };
+    private static JsonObject Text(string text) =>
+        new() { ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["text"] = text }) };
 
-    private static JsonObject Call(string name, string id, JsonObject args) => new()
-    {
-        ["role"] = "model", ["parts"] = new JsonArray(new JsonObject
+    private static JsonObject Call(string name, string id, JsonObject args) =>
+        new()
         {
-            ["functionCall"] = new JsonObject { ["id"] = id, ["name"] = name, ["args"] = args.DeepClone() },
-        }),
-    };
+            ["role"] = "model",
+            ["parts"] = new JsonArray(
+                new JsonObject
+                {
+                    ["functionCall"] = new JsonObject
+                    {
+                        ["id"] = id,
+                        ["name"] = name,
+                        ["args"] = args.DeepClone(),
+                    },
+                }
+            ),
+        };
 
-    private static JsonObject Response(string name, string id, string text) => new()
-    {
-        ["role"] = "tool", ["parts"] = new JsonArray(new JsonObject
+    private static JsonObject Response(string name, string id, string text) =>
+        new()
         {
-            ["functionResponse"] = new JsonObject { ["name"] = name, ["tool_use_id"] = id,
-                ["response"] = new JsonObject { ["output"] = text } },
-        }),
-    };
+            ["role"] = "tool",
+            ["parts"] = new JsonArray(
+                new JsonObject
+                {
+                    ["functionResponse"] = new JsonObject
+                    {
+                        ["name"] = name,
+                        ["tool_use_id"] = id,
+                        ["response"] = new JsonObject { ["output"] = text },
+                    },
+                }
+            ),
+        };
 
-    private static Task SendAsync(NetworkStream stream, string? text = "finished", JsonObject? call = null)
+    private static Task SendAsync(
+        NetworkStream stream,
+        string? text = "finished",
+        JsonObject? call = null
+    )
     {
         var output = new JsonArray();
-        if (call is not null) output.Add(call.DeepClone());
-        else if (text is not null) output.Add(new JsonObject
-        {
-            ["type"] = "message", ["role"] = "assistant", ["content"] = new JsonArray(new JsonObject
-            { ["type"] = "output_text", ["text"] = text }),
-        });
-        return LoopbackResponsesServer.WriteResponseAsync(stream, 200, "text/event-stream",
-            Encoding.UTF8.GetBytes("data: " + new JsonObject
-            { ["type"] = "response.completed", ["response"] = new JsonObject
-                { ["id"] = Guid.NewGuid().ToString(), ["output"] = output } }.ToJsonString() + "\n\n"));
+        if (call is not null)
+            output.Add(call.DeepClone());
+        else if (text is not null)
+            output.Add(
+                new JsonObject
+                {
+                    ["type"] = "message",
+                    ["role"] = "assistant",
+                    ["content"] = new JsonArray(
+                        new JsonObject { ["type"] = "output_text", ["text"] = text }
+                    ),
+                }
+            );
+        return LoopbackResponsesServer.WriteResponseAsync(
+            stream,
+            200,
+            "text/event-stream",
+            Encoding.UTF8.GetBytes(
+                "data: "
+                    + new JsonObject
+                    {
+                        ["type"] = "response.completed",
+                        ["response"] = new JsonObject
+                        {
+                            ["id"] = Guid.NewGuid().ToString(),
+                            ["output"] = output,
+                        },
+                    }.ToJsonString()
+                    + "\n\n"
+            )
+        );
     }
 
-    private static JsonObject ProviderCall(string name, JsonObject args) => new()
-    {
-        ["type"] = "function_call", ["call_id"] = "usable-call", ["name"] = name,
-        ["arguments"] = args.ToJsonString(),
-    };
+    private static JsonObject ProviderCall(string name, JsonObject args) =>
+        new()
+        {
+            ["type"] = "function_call",
+            ["call_id"] = "usable-call",
+            ["name"] = name,
+            ["arguments"] = args.ToJsonString(),
+        };
 
-    private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private static TaskCompletionSource Signal() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private sealed class ConcurrentPeer : IAsyncDisposable
     {
@@ -102,12 +175,14 @@ public sealed partial class SessionCommandEffectsTests
         private readonly Task running;
         internal Uri Uri { get; }
         internal readonly ConcurrentQueue<JsonObject> Requests = new();
+
         internal ConcurrentPeer(int count, Func<int, NetworkStream, JsonObject, Task> handler)
         {
             listener.Start();
             Uri = new($"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/v1");
             running = RunAsync(count, handler);
         }
+
         private async Task RunAsync(int count, Func<int, NetworkStream, JsonObject, Task> handler)
         {
             var tasks = new List<Task>();
@@ -119,7 +194,12 @@ public sealed partial class SessionCommandEffectsTests
             }
             await Task.WhenAll(tasks);
         }
-        private async Task HandleAsync(TcpClient client, int index, Func<int, NetworkStream, JsonObject, Task> handler)
+
+        private async Task HandleAsync(
+            TcpClient client,
+            int index,
+            Func<int, NetworkStream, JsonObject, Task> handler
+        )
         {
             using (client)
             {
@@ -130,10 +210,15 @@ public sealed partial class SessionCommandEffectsTests
                 await handler(index, stream, body);
             }
         }
+
         public async ValueTask DisposeAsync()
         {
-            stop.Cancel(); listener.Stop();
-            try { await running.WaitAsync(TimeSpan.FromSeconds(5)); }
+            stop.Cancel();
+            listener.Stop();
+            try
+            {
+                await running.WaitAsync(TimeSpan.FromSeconds(5));
+            }
             catch (OperationCanceledException) { }
             stop.Dispose();
         }

@@ -155,9 +155,9 @@ public sealed partial class CommandAdministrationTests
                         new { text, controlRequestId = "correlated-" + text }
                     );
                     Assert.True(
-                            response.IsSuccessStatusCode,
-                            text + ": " + await response.Content.ReadAsStringAsync()
-                        );
+                        response.IsSuccessStatusCode,
+                        text + ": " + await response.Content.ReadAsStringAsync()
+                    );
                 }
             }
             var history = (

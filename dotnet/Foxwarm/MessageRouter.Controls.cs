@@ -110,9 +110,14 @@ internal sealed partial class MessageRouter
                         ? Reply("noop", "No queued messages")
                         : Reply("accepted", "Queued messages requested");
                 case "compact":
-                    var args = command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Skip(1).ToArray();
+                    var args = command
+                        .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                        .Skip(1)
+                        .ToArray();
                     var toolsOnly = args.FirstOrDefault() == "tools";
-                    var keep = CommandArguments.CompactKeep(toolsOnly ? args.Skip(1).ToArray() : args);
+                    var keep = CommandArguments.CompactKeep(
+                        toolsOnly ? args.Skip(1).ToArray() : args
+                    );
                     if (owner.Entry.HistoryMutation)
                         return Reply(
                             "error",

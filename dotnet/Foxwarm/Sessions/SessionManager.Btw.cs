@@ -29,50 +29,100 @@ internal sealed partial class SessionManager
         ChatResult? result = null;
         try
         {
-            var definitions = ModelDefinitions(source, selectedNode: ResolveExecutionNode(snapshot.AuthorityEnvelope, BoundNode(source.Agent)));
+            var definitions = ModelDefinitions(
+                source,
+                selectedNode: ResolveExecutionNode(
+                    snapshot.AuthorityEnvelope,
+                    BoundNode(source.Agent)
+                )
+            );
             var environment = ExecutionEnvironment(source, snapshot);
             var requestId = Guid.NewGuid().ToString();
             var catalog = models.Capture();
             var selected = catalog.Select(snapshot.AuthorityEnvelope);
-            var request = new ModelRequestOwner(http, clientOptions, modelRouting,
-                websockets: websockets, images: Images, journal: Journal);
-            var history = RequestHistory.FromSnapshot(snapshot.History).WithContext([
-                new JsonObject
-                {
-                    ["role"] = "user",
-                    ["parts"] = new JsonArray(
-                        new JsonObject { ["system"] = "<foxwarm-system kind=\"btw\" type=\"side-request\">\n" + BtwPrompt + "\n</foxwarm-system>" },
-                        new JsonObject { ["text"] = question }),
-                },
-            ]);
-            var persistent = SessionWait.Text(snapshot.AuthorityEnvelope["persistentMemorySnapshot"]) ?? "";
+            var request = new ModelRequestOwner(
+                http,
+                clientOptions,
+                modelRouting,
+                websockets: websockets,
+                images: Images,
+                journal: Journal
+            );
+            var history = RequestHistory
+                .FromSnapshot(snapshot.History)
+                .WithContext([
+                    new JsonObject
+                    {
+                        ["role"] = "user",
+                        ["parts"] = new JsonArray(
+                            new JsonObject
+                            {
+                                ["system"] =
+                                    "<foxwarm-system kind=\"btw\" type=\"side-request\">\n"
+                                    + BtwPrompt
+                                    + "\n</foxwarm-system>",
+                            },
+                            new JsonObject { ["text"] = question }
+                        ),
+                    },
+                ]);
+            var persistent =
+                SessionWait.Text(snapshot.AuthorityEnvelope["persistentMemorySnapshot"]) ?? "";
             string? attemptedModel = null;
             async Task<string> Prompt(ConcreteHostModel leaf, CancellationToken token)
             {
                 attemptedModel = leaf.Key;
                 if (ConditionalMemory.ReadCurrentModelSnapshotId(persistent) != leaf.Key)
-                    persistent = await memory.BuildAsync(snapshot.AuthorityEnvelope["agent"]?.GetValue<string>() ?? source.Agent,
-                        snapshot.Id, leaf.Key, token, AgentMemory.Selection(snapshot.AuthorityEnvelope));
+                    persistent = await memory.BuildAsync(
+                        snapshot.AuthorityEnvelope["agent"]?.GetValue<string>() ?? source.Agent,
+                        snapshot.Id,
+                        leaf.Key,
+                        token,
+                        AgentMemory.Selection(snapshot.AuthorityEnvelope)
+                    );
                 var value = persistent + "\n\n" + environment;
-                return clientOptions.Instructions.Length == 0 ? value : clientOptions.Instructions + "\n\n" + value;
+                return clientOptions.Instructions.Length == 0
+                    ? value
+                    : clientOptions.Instructions + "\n\n" + value;
             }
-            result = await request.RequestAsync(snapshot.Id,
-                request.Capture(catalog, selected.RawModel ?? catalog.DefaultKey, selected.RawEffort),
-                cacheKey, requestId, history, Prompt, null, null, null,
-                source.Entry.RecordBestEffortFailure, admissionStop.Token, ModelRequestScope.Btw,
-                () => (JsonArray)definitions.DeepClone(), journalPurpose: "btw");
+            result = await request.RequestAsync(
+                snapshot.Id,
+                request.Capture(
+                    catalog,
+                    selected.RawModel ?? catalog.DefaultKey,
+                    selected.RawEffort
+                ),
+                cacheKey,
+                requestId,
+                history,
+                Prompt,
+                null,
+                null,
+                null,
+                source.Entry.RecordBestEffortFailure,
+                admissionStop.Token,
+                ModelRequestScope.Btw,
+                () => (JsonArray)definitions.DeepClone(),
+                journalPurpose: "btw"
+            );
             var message = result.AssistantMessage;
             modelId = SessionWait.Text(message?["__meta"]?["modelId"]);
             modelId ??= attemptedModel;
-            virtualModel = SessionWait.Text(message?["__meta"]?["virtualModelKey"])
+            virtualModel =
+                SessionWait.Text(message?["__meta"]?["virtualModelKey"])
                 ?? (selected.Model.IsVirtual ? selected.Model.Key : null);
             var parts = (message?["parts"] as JsonArray)?.OfType<JsonObject>().ToArray() ?? [];
             var calls = parts.Select(part => part["functionCall"]).OfType<JsonObject>().ToArray();
             if (calls.Length > 0)
             {
-                var names = calls.Select(call => SessionWait.Text(call["name"]))
-                    .Where(name => !string.IsNullOrEmpty(name)).Distinct().Select(name => "`" + name + "`").ToArray();
-                payload = "⚠️ [BTW aborted]\nThe side request attempted to call tool(s): "
+                var names = calls
+                    .Select(call => SessionWait.Text(call["name"]))
+                    .Where(name => !string.IsNullOrEmpty(name))
+                    .Distinct()
+                    .Select(name => "`" + name + "`")
+                    .ToArray();
+                payload =
+                    "⚠️ [BTW aborted]\nThe side request attempted to call tool(s): "
                     + (names.Length == 0 ? "unknown tool" : string.Join(", ", names))
                     + ".\nBTW mode does not execute tools. Please ask in the main chat if tool use is needed.";
             }
@@ -110,16 +160,29 @@ internal sealed partial class SessionManager
         };
         // Persistence is outside request retry: a local append failure never resends the generation.
         await target.Entry.SaveLane.CommitCanonicalAppendAsync(state =>
-            LocalSessionTurnHost.PrepareCanonicalAppend(state, [display], [], false, false,
-                () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+            LocalSessionTurnHost.PrepareCanonicalAppend(
+                state,
+                [display],
+                [],
+                false,
+                false,
+                () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            )
+        );
         target.Entry.InvokeCommitted(target.Entry.Snapshot());
         BroadcastTransientText(target, text);
     }
 
     private static async Task ObserveBtwAsync(Task request, SessionOwner owner)
     {
-        try { await request; }
-        catch (Exception error) { owner.Entry.RecordBackgroundProcessorFailure(error); }
+        try
+        {
+            await request;
+        }
+        catch (Exception error)
+        {
+            owner.Entry.RecordBackgroundProcessorFailure(error);
+        }
     }
 
     internal void StartBtw(SessionOwner owner, string question) =>

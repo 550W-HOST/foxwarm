@@ -154,15 +154,7 @@ public sealed partial class CommandAdministrationTests
         Assert.Contains("/btw", telegram);
         Assert.Contains("/verbose", telegram);
         Assert.True(ExternalCommands.Find("/messages")!["requiresSession"]!.GetValue<bool>());
-        foreach (
-            var name in new[]
-            {
-                "/tools",
-                "/config",
-                "/index",
-                "/retry",
-            }
-        )
+        foreach (var name in new[] { "/tools", "/config", "/index", "/retry" })
             Assert.Null(ExternalCommands.Find(name));
         Assert.Equal(
             web.Select(row => row["name"]!.GetValue<string>()).Order(StringComparer.Ordinal),
