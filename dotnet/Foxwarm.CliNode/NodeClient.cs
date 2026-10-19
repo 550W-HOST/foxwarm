@@ -18,6 +18,7 @@ internal sealed partial class NodeClient
     private readonly NodeFileTools tools;
     private readonly NodeFileTransfer transfers;
     private readonly string requestedName;
+    private readonly NodePtyService? pty;
     private string? nodeId;
     private string? authToken;
     private bool initialCredentialsPending;
@@ -31,6 +32,10 @@ internal sealed partial class NodeClient
         this.paths = paths;
         tools = new NodeFileTools(paths);
         transfers = new NodeFileTransfer(paths);
+        if (NodePtyService.IsSupported)
+            pty = new NodePtyService(options.CredentialsFile is not null
+                ? Path.GetDirectoryName(Path.GetFullPath(options.CredentialsFile))!
+                : Path.Combine(paths.StartupDirectory, "state"));
         requestedName = string.IsNullOrEmpty(options.NodeId)
             ? "node_" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             : options.NodeId;
@@ -51,6 +56,7 @@ internal sealed partial class NodeClient
         finally
         {
             await DrainExec();
+            if (pty is not null) await pty.DisposeAsync();
         }
     }
 
@@ -111,6 +117,7 @@ internal sealed partial class NodeClient
                 {
                     if (ReferenceEquals(registeredConnection, connection))
                         registeredConnection = null;
+                    pty?.Disconnect(connection);
                     connection.RejectPending();
                 }
                 if (
@@ -223,6 +230,10 @@ internal sealed partial class NodeClient
                         if (Authenticated)
                         {
                             registeredConnection = connection;
+                            pty?.Connect(connection, detail => connection.Send(new JsonObject
+                            {
+                                ["type"] = "node_service_event", ["service"] = "vscode-pty", ["event"] = detail,
+                            }));
                             recovery ??= Recover();
                         }
                         break;
@@ -509,6 +520,8 @@ internal sealed partial class NodeClient
         }
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsWindows())
             capabilities.Remove("services");
+        if (NodePtyService.IsSupported && capabilities["services"] is JsonObject services)
+            services["vscode-pty"] = 1;
         return capabilities;
     }
 
@@ -570,7 +583,9 @@ internal sealed partial class NodeClient
     {
         internal ClientWebSocket Socket { get; } = new();
         internal int Protocol { get; set; } = 1;
-        private readonly SemaphoreSlim send = new(1, 1);
+        private readonly object sendGate = new();
+        private Task sending = Task.CompletedTask;
+        internal Task PtyDispatch { get; set; } = Task.CompletedTask;
         private readonly System.Collections.Concurrent.ConcurrentDictionary<
             string,
             TaskCompletionSource<JsonObject>
@@ -621,9 +636,15 @@ internal sealed partial class NodeClient
                     );
         }
 
-        internal async Task Send(JsonObject frame, bool requireOpen = false)
+        internal Task Send(JsonObject frame, bool requireOpen = false)
         {
-            await send.WaitAsync();
+            lock (sendGate)
+                return sending = SendAfter(sending, frame, requireOpen);
+        }
+
+        private async Task SendAfter(Task previous, JsonObject frame, bool requireOpen)
+        {
+            try { await previous; } catch { }
             try
             {
                 if (requireOpen && Socket.State != WebSocketState.Open)
@@ -645,10 +666,6 @@ internal sealed partial class NodeClient
             {
                 if (requireOpen)
                     throw new IOException("Remote node is not connected to master");
-            }
-            finally
-            {
-                send.Release();
             }
         }
 

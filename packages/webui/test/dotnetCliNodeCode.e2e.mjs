@@ -192,7 +192,7 @@ async function corpus(handle) {
 }
 try {
   const source = await launch('source', true), cli = await launch('cli')
-  assert.deepEqual(registrations.get('cli').capabilities.services, { 'vscode-fs': 1, 'vscode-git': 2 })
+  assert.deepEqual(registrations.get('cli').capabilities.services, { 'vscode-fs': 1, 'vscode-git': 2, 'vscode-pty': 1 })
   assert.equal(registrations.get('source').capabilities.services['vscode-fs'], 1); assert.equal(registrations.get('source').capabilities.services['vscode-git'], 2)
   const expectedBoundary = await gitContentBoundary(source), actualBoundary = await gitContentBoundary(cli)
   console.log(JSON.stringify({ gitContentBoundary: { source: expectedBoundary, cli: actualBoundary } }))
@@ -218,7 +218,7 @@ try {
     const sameFile = join(cli.cwd, 'exact-stat'); await writeFile(sameFile, 'stat'); await chmod(sameFile, 0o444)
     const sourceStat = good(await request(source, 'vscode-fs', 'stat', { path: sameFile })), cliStat = good(await request(cli, 'vscode-fs', 'stat', { path: sameFile }))
     for (const field of ['type', 'size', 'permissions']) assert.equal(cliStat[field], sourceStat[field]); for (const field of ['ctime', 'mtime']) assert(Math.abs(cliStat[field] - sourceStat[field]) < 0.002)
-    await chmod(sameFile, 0o644); assert.equal((await request(cli, 'vscode-pty', 'create', { cwd: cli.cwd })).error.statusCode, 500); console.log(JSON.stringify({ serviceParityRows: actual.length, fiftyMiBAndGitLimits: true, linksFlagsAndPartialRename: true }))
+    await chmod(sameFile, 0o644); console.log(JSON.stringify({ serviceParityRows: actual.length, fiftyMiBAndGitLimits: true, linksFlagsAndPartialRename: true }))
     // One-way commands preserve the fixed framing and emit only a correlated service error event.
     cli.socket.send(JSON.stringify({ type: 'node_service_command', service: 'vscode-fs', operation: 'stat', args: { path: 'relative', terminalId: 'echo-only' } }))
     const event = await until(() => frames.find(row => row.id === 'cli' && row.value.type === 'node_service_event')?.value, 'command error event')

@@ -57,7 +57,7 @@ fw_pty *fw_spawn(const char *exe, char *const argv[], char *const env[], const c
         (rc = posix_spawn_file_actions_adddup2(&actions, 0, 1)) ||
         (rc = posix_spawn_file_actions_adddup2(&actions, 0, 2)) ||
         (rc = posix_spawn_file_actions_addclosefrom_np(&actions, 3))) goto fail;
-    rc = posix_spawn(&pid, exe, &actions, &attr, argv, env); if (rc) goto fail;
+    rc = posix_spawnp(&pid, exe, &actions, &attr, argv, env); if (rc) goto fail;
     pidfd = pidfd_open_owned(pid);
     if (pidfd < 0) { rc = errno; kill(pid, SIGKILL); while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {} goto fail; }
     posix_spawn_file_actions_destroy(&actions); posix_spawnattr_destroy(&attr); own_close(slave);

@@ -5,12 +5,24 @@ import { once } from 'node:events'
 import { spawn, execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile, access } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { createRequire } from 'node:module'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 
+const require = createRequire(import.meta.url)
+const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
+initializeTestEnvironment()
+const normalRuntime = process.env.FOXWARM_TEST_MAIN_RUNTIME
+const sourceMain = normalRuntime === 'source'
 const hasCode = !!process.env.FOXWARM_VSCODE_WEB_ASSET_DIR
-const options = { env: { FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN: '', ...(hasCode ? { FOXWARM_VSCODE_WEB_ASSET_DIR: resolve(process.env.FOXWARM_VSCODE_WEB_ASSET_DIR) } : {}) } }
+const options = { onPage: page => page.setViewport({ width: 1440, height: 1000 }), ...(normalRuntime ? { runtime: normalRuntime, normalStartup: true } : {}), env: { FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN: '', ...(hasCode ? { FOXWARM_VSCODE_WEB_ASSET_DIR: resolve(process.env.FOXWARM_VSCODE_WEB_ASSET_DIR) } : {}) } }
 const fixture = await createHostFixture('node-code', options)
+if (normalRuntime) {
+  Object.assign(options.env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '', FOXWARM_BIND_ADDRESS: '127.0.0.1' })
+  await writeFile(join(fixture.data, 'state/config.yaml'), `bot:\n  name: terminal-fixture\n  httpPort: ${fixture.port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nhandoffConfirmation: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(join(fixture.data, 'state/mcp.json'))}\n`)
+  await writeFile(join(fixture.data, 'state/mcp.json'), '{}')
+}
 const home = join(fixture.root, 'home'), runtime = join(fixture.root, 'cli'), repo = join(runtime, 'repository')
 for (const path of [home, runtime, repo]) await mkdir(path, { recursive: true })
 const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim()
@@ -19,6 +31,7 @@ await writeFile(join(repo, 'notes.txt'), 'first\nselected second\nselected third
 git('add', '.'); git('commit', '-qm', 'remote root fixture'); const rootCommit = git('rev-parse', 'HEAD')
 git('mv', 'notes.txt', 'renamed.txt'); await writeFile(join(repo, 'binary.bin'), Buffer.from([0, 1, 255])); git('add', '.'); git('commit', '-qm', 'remote rename and binary')
 const commit = git('rev-parse', 'HEAD'); await writeFile(join(repo, 'renamed.txt'), 'first\nselected second\nselected third\nworking\n')
+await writeFile(join(repo, 'spaces 雪.txt'), 'first\nsecond\nthird\n')
 const wire = [], errors = [], connections = [], nodeSockets = new Set(), peers = []
 const proxyServer = createServer(), proxy = new WebSocketServer({ server: proxyServer, maxPayload: 75 * 1024 * 1024 })
 proxyServer.listen(0, '127.0.0.1'); await once(proxyServer, 'listening')
@@ -53,9 +66,17 @@ const model = createServer(async (request, response) => {
   } catch (error) { errors.push(error.stack); response.writeHead(500); response.end(String(error)) }
 })
 model.listen(0, '127.0.0.1'); await once(model, 'listening')
-await writeFile(fixture.modelPath, JSON.stringify({ default: 'local', providers: { local: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${model.address().port}`, models: ['wire'] } } }))
+await writeFile(fixture.modelPath, JSON.stringify({ default: 'local/wire', providers: { local: { providerType: 'openai-responses', apiKey: 'synthetic-model', asyncCompact: false, effort: { allowed: ['none'], default: 'none' }, baseUrl: `http://127.0.0.1:${model.address().port}`, models: ['wire'] } } }))
+async function credential(nodeId) {
+  if (!sourceMain) {
+    const reply = await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId }); assert.equal(reply.status, 200); return reply.body
+  }
+  const reply = await fixture.api('POST', '/api/nodes/onboarding/create-shell', { nodeId, baseUrl: fixture.origin }); assert.equal(reply.status, 200)
+  const token = /NODE_AUTH_TOKEN='([^']+)'/.exec(reply.body.command)?.[1]; assert(token)
+  return { nodeId, authToken: token }
+}
 const nodes = async () => (await fixture.api('GET', '/api/nodes')).body.nodes
-const online = () => until(async () => (await nodes()).find(row => row.id === 'official-code' && row.online && row.executable), 'official CLI service connection', 40000)
+const online = () => until(async () => (await nodes()).find(row => row.id === 'official-code' && row.online), 'official CLI service connection', 40000)
 const fsUrl = (operation, path) => '/api/vscode-web/fs/' + operation + '?nodeId=official-code&path=' + encodeURIComponent(path)
 async function rawApi(method, path, bytes) {
   const response = await fetch(fixture.origin + path, { method, headers: { authorization: 'Bearer ' + fixture.token }, ...(bytes === undefined ? {} : { body: bytes }) })
@@ -88,8 +109,9 @@ const codeFrame = () => until(() => page.frames().find(frame => new URL(frame.ur
 try {
   await fixture.start()
   assert.equal((await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'main' })).status, 200)
-  const credential = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'official-code' })).body
-  cli = spawn(process.execPath, [resolve('packages/cli-node/dist/client.js'), '--host', nodeHost, '--id', 'official-code', '--auth-token', credential.authToken, '--credentials-file', join(runtime, 'credentials.json'), '--no-local-trigger'], { cwd: runtime, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, HOME: home, FOXWARM_AGENTS_DIR: join(runtime, 'agents') } })
+  const approval = await credential('official-code')
+  const cliExecutable = process.env.FOXWARM_CLI_EXECUTABLE
+  cli = spawn(cliExecutable || process.execPath, [...(cliExecutable ? [] : [resolve('packages/cli-node/dist/client.js')]), '--host', nodeHost, '--id', 'official-code', '--auth-token', approval.authToken, '--credentials-file', join(runtime, 'credentials.json'), '--no-local-trigger'], { cwd: runtime, stdio: ['ignore', 'pipe', 'pipe'], env: { ...isolatedApplicationEnv(join(runtime, 'data')), HOME: home, FOXWARM_AGENTS_DIR: join(runtime, 'agents') } })
   for (const stream of [cli.stdout, cli.stderr]) stream.on('data', bytes => { cliOutput = (cliOutput + bytes).slice(-20000) })
   const node = await online(); assert.equal(node.services['vscode-fs'], 1); assert.equal(node.services['vscode-git'], 2); assert.equal(node.services['vscode-pty'], 1, cliOutput)
   // Real fixed filesystem and read-only Git APIs do not borrow model Session identity.
@@ -116,24 +138,27 @@ try {
   assert.equal((await rawApi('GET', gitUrl('content') + '&path=renamed.txt&ref=' + commit)).bytes.toString(), 'first\nselected second\nselected third\nlast\n')
   assert.equal((await fixture.api('GET', gitUrl('commit') + '&id=HEAD')).status, 422); assert.equal(git('rev-parse', 'HEAD'), commit)
   // Unsupported versions reject before any service request; no Master fallback for matching local paths.
-  const oldCredential = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'old-services' })).body
+  const oldCredential = await credential('old-services')
   const old = new WebSocket(fixture.origin.replace(/^http/, 'ws') + `/node_ws?id=old-services&auth=${oldCredential.authToken}`); peers.push(old); await once(old, 'open')
   old.send(JSON.stringify({ type: 'node_register', nodeType: 'protocol-fixture', capabilities: { tools: [], services: { 'vscode-git': 1 } }, nodeProtocol: { min: 1, max: 3 } })); await once(old, 'message')
   assert.equal((await fixture.api('GET', gitUrl('commit').replace('official-code', 'old-services') + '&id=' + commit)).status, 501)
   assert.equal((await fixture.api('GET', fsUrl('read-file', boundary).replace('official-code', 'old-services'))).status, 501)
-  assert.equal((await fixture.api('POST', '/api/terminals', { nodeId: 'old-services', cwd: repo })).status, 501)
+  assert.equal((await fixture.api('POST', '/api/terminals', { nodeId: 'old-services', cwd: repo })).status, sourceMain ? 400 : 501)
   assert.equal((await fixture.api('POST', '/api/sessions/main/cwd', { cwd: repo })).status, 200)
   page = await fixture.openApp()
+  page.on('pageerror', error => errors.push(error.stack))
+  page.on('console', message => { if (message.type() === 'error') wire.push({ browserError: message.text() }) })
+  page.on('request', request => { if (request.url().includes('/terminals')) wire.push({ browserRequest: request.url(), method: request.method(), body: request.postData() }) })
   const remote = await terminal(), id = remote.id
-  await attachBrowser('owner', id, true); await attachBrowser('second', id, true)
+  await attachBrowser('owner', id, true); await attachBrowser('second', id, !sourceMain)
   assert.equal(ptyRequests().filter(row => row.operation === 'attach' && row.args.terminalId === id).length, 1)
   // An independently authenticated advertised peer cannot inject output or helper authority into another Node's terminal.
-  const noiseCredential = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'wrong-connection' })).body
+  const noiseCredential = await credential('wrong-connection')
   const noise = new WebSocket(fixture.origin.replace(/^http/, 'ws') + `/node_ws?id=wrong-connection&auth=${noiseCredential.authToken}`); peers.push(noise); await once(noise, 'open')
   noise.send(JSON.stringify({ type: 'node_register', nodeType: 'event-fault-peer', capabilities: { tools: [], services: { 'vscode-pty': 1 } }, nodeProtocol: { min: 1, max: 3 } })); await once(noise, 'message')
   noise.send(JSON.stringify({ type: 'node_service_event', service: 'vscode-pty', nodeId: 'official-code', event: { type: 'output', terminalId: id, data: 'WRONG-CONNECTION-OUTPUT' } }))
   noise.send(JSON.stringify({ type: 'node_service_event', service: 'vscode-pty', nodeId: 'official-code', event: { type: 'code-request', terminalId: id, requestId: 'wrong-connection-control', request: { kind: 'openFile', nodeId: 'master', path: join(repo, 'renamed.txt') } } }))
-  noise.send(JSON.stringify({ type: 'ping' })); assert.equal(JSON.parse((await once(noise, 'message'))[0]).type, 'pong')
+  noise.send(JSON.stringify({ type: 'session_list_request', requestId: 'event-order-barrier' })); assert.equal(JSON.parse((await once(noise, 'message'))[0]).type, 'cli_response')
   assert(!(await output('owner')).includes('WRONG-CONNECTION-OUTPUT')); assert(!(await events('owner')).some(row => row.type === 'control'))
   noise.terminate(); await until(async () => !(await nodes()).find(row => row.id === 'wrong-connection').online, 'adversarial event peer disconnected')
   await input('owner', "printf 'TWO-BROWSER-PTY\\n'; stty size\n")
@@ -145,7 +170,11 @@ try {
   assert.equal(control.request.nodeId, 'official-code'); assert.equal(control.request.path, join(repo, 'renamed.txt')); assert.equal(control.request.startLine, 3)
   assert(!(await events('second')).some(row => row.type === 'control'), 'second opt-in client cannot take over')
   await page.evaluate(requestId => window.nodeCodeClients.second.socket.send(JSON.stringify({ type: 'control-result', requestId, ok: true })), control.requestId)
-  await until(() => page.evaluate(() => window.nodeCodeClients.second.closed), 'unauthorized helper ACK closes only second client')
+  if (sourceMain) {
+    await until(async () => (await events('second')).some(row => row.type === 'error' && row.message.includes('unauthorized')), 'Source rejects unauthorized helper ACK')
+    await page.evaluate(() => window.nodeCodeClients.second.socket.close())
+  }
+  await until(() => page.evaluate(() => window.nodeCodeClients.second.closed), 'only second browser detached')
   await page.evaluate(requestId => window.nodeCodeClients.owner.socket.send(JSON.stringify({ type: 'control-result', requestId, ok: true, message: 'Owned browser handled open' })), control.requestId)
   await until(async () => (await output('owner')).includes('HELPER-ACK=0'), 'official helper received correlated ACK')
   await attachBrowser('ordinary', id)
@@ -170,16 +199,19 @@ try {
   await page.evaluate(() => window.nodeCodeClients.after.socket.close())
   await fixture.stop(); await fixture.start(); await online()
   const rediscovered = (await fixture.api('GET', '/api/terminals')).body.terminals.find(row => row.id === id); assert.equal(rediscovered.pid, remote.pid)
+  await attachBrowser('restart', id); await input('restart', "printf 'RESTART-PID=%s\\n' \"$$\"\n"); await until(async () => (await output('restart')).includes('RESTART-PID=' + remote.pid), 'same live CLI shell after Main restart')
+  await page.evaluate(() => window.nodeCodeClients.restart.socket.close())
   assert.equal((await fixture.api('DELETE', '/api/terminals/' + encodeURIComponent(id))).status, 200); assert.equal((await live(id)).status, 404)
   await until(() => { try { process.kill(remote.pid, 0); return false } catch { return true } }, 'explicit close killed real remote PTY')
-  await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForFunction(() => window.foxwarmTest?.sendMessage)
+  await page.reload({ waitUntil: 'domcontentloaded' }); await waitForWebUiReady(page); await page.waitForFunction(() => window.foxwarmTest?.sendMessage)
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-session-header-subtitle]')].some(header => header.textContent.includes('main')))
   await page.evaluate(() => window.foxwarmTest.sendMessage('NODE-CODE'))
   await until(async () => { const state = JSON.parse(await readFile(join(fixture.data, 'state/sessions/main.json'), 'utf8').catch(() => 'null')); return state && !state.busy && state.history.some(row => row.parts?.some(part => part.text?.includes('NODE-CODE-DONE'))) }, 'real remote file turn')
   const state = JSON.parse(await readFile(join(fixture.data, 'state/sessions/main.json'), 'utf8')), fileResponse = state.history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === 'read-code').functionResponse
   assert.deepEqual(fileResponse.__meta.resolvedPaths, [{ raw: join(repo, 'renamed.txt'), resolved: join(repo, 'renamed.txt'), nodeId: 'official-code' }]); assert(!JSON.stringify(fileResponse.response).includes('__foxwarmResolvedToolPaths'))
   assert.equal((await fixture.api('POST', '/api/sessions/main/cwd', { cwd: repo })).status, 200)
-  await page.evaluate(() => window.foxwarmTest.switchToSession('main'))
-  await page.waitForSelector('button[title="Terminal"]'); await page.click('button[title="Terminal"]')
+  await page.waitForFunction(repo => [...document.querySelectorAll('[data-session-header-subtitle]')].some(header => header.textContent.includes(repo)), {}, repo)
+  await page.waitForSelector('button[title="Create terminal tab"]:not([disabled])'); await page.click('button[title="Create terminal tab"]')
   const appTerminal = await until(async () => (await fixture.api('GET', '/api/terminals')).body.terminals.find(row => row.nodeId === 'official-code'), 'original App remote terminal')
   await page.waitForSelector('.xterm-screen, .xterm-rows'); await page.click('.xterm-screen, .xterm-rows'); await page.keyboard.type("printf 'APP-REMOTE\\n' > app-remote.txt"); await page.keyboard.press('Enter')
   assert.equal(appTerminal.cwd, repo)
@@ -193,23 +225,25 @@ try {
     await until(async () => (await readFile(join(repo, 'renamed.txt'), 'utf8')).includes('Saved remotely in original Code'), 'official browser FS provider saved remotely')
     await palette(code, 'Foxwarm: New Terminal')
     const codeTerminal = await until(async () => (await fixture.api('GET', '/api/terminals')).body.terminals.find(row => row.nodeId === 'official-code'), 'official Code remote PTY')
-    assert.equal(codeTerminal.cwd, repo); await palette(code, 'Terminal: Focus Terminal'); await code.waitForFunction(() => document.activeElement?.classList.contains('xterm-helper-textarea')); await page.keyboard.type('code --goto renamed.txt:3:1', { delay: 20 }); await page.keyboard.press('Enter')
+    assert.equal(codeTerminal.cwd, repo); await palette(code, 'Terminal: Focus Terminal'); await code.waitForFunction(() => document.activeElement?.classList.contains('xterm-helper-textarea')); await page.keyboard.type("code --goto 'spaces 雪.txt:3:1'", { delay: 20 }); await page.keyboard.press('Enter')
     await code.waitForFunction(() => document.body.innerText.includes('Ln 3, Col 1'), { timeout: 30000 })
-    await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('button[title="Open commit details in Code"]'); await page.click('button[title="Open commit details in Code"]')
-    const commitFrame = await until(async () => { for (const frame of page.frames()) { try { if ((await frame.evaluate(() => document.body.innerText)).includes('remote rename and binary') && (await frame.evaluate(() => document.body.innerText)).includes('Changed files')) return frame } catch {} } }, 'official SCM immutable commit webview', 45000)
-    await (await commitFrame.$('button.file:not([disabled])')).click(); code = await codeFrame(); await code.waitForSelector('.monaco-diff-editor', { timeout: 30000 })
-    assert(wire.some(row => row.type === 'node_service_request' && row.service === 'vscode-git' && row.operation === 'content' && row.args.ref))
-    await palette(code, 'Foxwarm: Open Foxwarm data folder')
-    const roots = (await fixture.api('GET', '/api/vscode-web/fs/workspace-roots')).body; assert.equal(roots.roots.data.nodeId, 'master')
-    await until(async () => JSON.parse(await readFile(join(fixture.data, 'state/vscode-web/foxwarm.code-workspace'), 'utf8')).folders.some(folder => folder.uri ? folder.uri.startsWith('foxwarm://node+master') && decodeURIComponent(new URL(folder.uri).pathname) === fixture.data : typeof folder.path === 'string' && resolve(fixture.data, 'state/vscode-web', folder.path) === fixture.data), 'authoritative Master data command from remote workspace')
+    if (!normalRuntime) {
+      await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('button[title="Open commit details in Code"]'); await page.click('button[title="Open commit details in Code"]')
+      const commitFrame = await until(async () => { for (const frame of page.frames()) { try { if ((await frame.evaluate(() => document.body.innerText)).includes('remote rename and binary') && (await frame.evaluate(() => document.body.innerText)).includes('Changed files')) return frame } catch {} } }, 'official SCM immutable commit webview', 45000)
+      await (await commitFrame.$('button.file:not([disabled])')).click(); code = await codeFrame(); await code.waitForSelector('.monaco-diff-editor', { timeout: 30000 })
+      assert(wire.some(row => row.type === 'node_service_request' && row.service === 'vscode-git' && row.operation === 'content' && row.args.ref))
+      await palette(code, 'Foxwarm: Open Foxwarm data folder')
+      const roots = (await fixture.api('GET', '/api/vscode-web/fs/workspace-roots')).body; assert.equal(roots.roots.data.nodeId, 'master')
+      await until(async () => JSON.parse(await readFile(join(fixture.data, 'state/vscode-web/foxwarm.code-workspace'), 'utf8')).folders.some(folder => folder.uri ? folder.uri.startsWith('foxwarm://node+master') && decodeURIComponent(new URL(folder.uri).pathname) === fixture.data : typeof folder.path === 'string' && resolve(fixture.data, 'state/vscode-web', folder.path) === fixture.data), 'authoritative Master data command from remote workspace')
+    }
     await fixture.api('DELETE', '/api/terminals/' + encodeURIComponent(codeTerminal.id))
   }
   for (const row of wire.filter(row => row.type === 'node_service_request' || row.type === 'node_service_command')) { assert.equal(row.sessionId, undefined); assert.equal(row.agentName, undefined) }
   assert.deepEqual(errors, [])
-  console.log(JSON.stringify({ result: 'passed', officialCli: true, originalWebUi: true, officialWorkbench: hasCode, realRemoteFs: true, fiftyMiB: true, readOnlyGitV2: true, twoBrowserAttachments: true, remotePtyPid: remote.pid, actualResize: '37x91', detachDoesNotKill: true, explicitCloseKills: true, connectionRediscovery: true, hostRestartRediscovery: true, wrongConnectionEventsRejected: true, helperSingleOwner: true, pendingHelperDetachRejected: true, helperOriginalExtension: hasCode, serviceRequests: wire.filter(row => row.type === 'node_service_request').length, serviceCommands: wire.filter(row => row.type === 'node_service_command').length, serviceEvents: wire.filter(row => row.type === 'node_service_event').length, limits: hasCode ? [] : ['Official Code assets not configured; API and original WebUI qualified.'] }))
+  console.log(JSON.stringify({ result: 'passed', cli: process.env.FOXWARM_CLI_EXECUTABLE ? 'configured-native-capable' : 'source', mainRuntime: normalRuntime || 'experiment', originalWebUi: true, officialWorkbench: hasCode, realRemoteFs: true, fiftyMiB: true, readOnlyGitV2: true, twoBrowserAttachments: true, remotePtyPid: remote.pid, actualResize: '37x91', detachDoesNotKill: true, explicitCloseKills: true, connectionRediscovery: true, hostRestartRediscovery: true, wrongConnectionEventsRejected: true, helperSingleOwner: true, pendingHelperDetachRejected: true, helperOriginalExtension: hasCode, serviceRequests: wire.filter(row => row.type === 'node_service_request').length, serviceCommands: wire.filter(row => row.type === 'node_service_command').length, serviceEvents: wire.filter(row => row.type === 'node_service_event').length, limits: hasCode ? [] : ['Official Code assets not configured; API and original WebUI qualified.'] }))
 } catch (error) {
   if (page) { await page.screenshot({ path: join(fixture.root, 'failure.png') }).catch(() => {}); await writeFile(join(fixture.root, 'browser-state.json'), JSON.stringify(await Promise.all(page.frames().map(async frame => ({ url: frame.url(), text: await frame.evaluate(() => document.body.innerText).catch(() => '') }))), null, 2)).catch(() => {}) }
-  console.error(cliOutput); console.error(fixture.output); throw error
+  console.error(JSON.stringify({ errors, browser: wire.filter(row => row.browserRequest || row.browserError) })); console.error(cliOutput); console.error(fixture.output); throw error
 } finally {
   for (const peer of peers) peer.terminate()
   for (const socket of nodeSockets) socket.terminate()

@@ -62,8 +62,8 @@ for (const runtime of ['source', 'dotnet']) {
     for (const stream of [cli.stdout, cli.stderr]) stream.on('data', bytes => { cliOutput = (cliOutput + bytes).slice(-20000) })
     const pending = await until(async () => (await fixture.api('GET', '/api/nodes/onboarding/pending')).body.items.find(item => item.requestedName === 'code-cli'), 'ordinary pairing pending')
     assert.equal((await fixture.api('POST', '/api/nodes/onboarding/approve', { pendingId: pending.id })).status, 200)
-    const node = await online(); assert.deepEqual(node.services, { 'vscode-fs': 1, 'vscode-git': 2 })
-    const unsupportedTerminal = await fixture.api('POST', '/api/terminals', { nodeId: 'code-cli', cwd: repo }); assert.equal(unsupportedTerminal.status, runtime === 'source' ? 400 : 501); assert.match(unsupportedTerminal.body.error, /vscode-pty/)
+    const node = await online(); assert.deepEqual(node.services, { 'vscode-fs': 1, 'vscode-git': 2, 'vscode-pty': 1 })
+    const actualTerminal = await fixture.api('POST', '/api/terminals', { nodeId: 'code-cli', cwd: repo }); assert.equal(actualTerminal.status, 200); assert.equal((await fixture.api('DELETE', '/api/terminals/' + actualTerminal.body.terminal.id)).status, 200)
     assert.equal((await fixture.api('GET', fsUrl('stat', repo))).body.type, 2)
     const binary = join(cwd, 'api.bin'), bytes = Buffer.from([0, 255, 1, 128])
     assert.equal((await rawApi('PUT', fsUrl('write-file', binary) + '&create=1', bytes)).status, 200); assert.deepEqual((await rawApi('GET', fsUrl('read-file', binary))).bytes, bytes)
@@ -98,10 +98,10 @@ for (const runtime of ['source', 'dotnet']) {
       assert(wire.some(row => row.type === 'node_service_request' && row.service === 'vscode-git' && row.operation === 'content' && row.args.ref))
     }
     const requests = wire.filter(row => row.type === 'node_service_request' || row.type === 'node_service_command')
-    for (const row of requests) { assert.equal(row.sessionId, undefined); assert.equal(row.agentName, undefined); assert.equal(row.owner, undefined); assert.notEqual(row.service, 'vscode-pty') }
+    for (const row of requests) { assert.equal(row.sessionId, undefined); assert.equal(row.agentName, undefined); assert.equal(row.owner, undefined) }
     assert.deepEqual(errors, []); assert.equal(git('rev-parse', 'HEAD'), commit)
     await fixture.stop(); await fixture.start(); await online(); assert.equal((await fixture.api('GET', gitUrl('commit') + '&id=' + commit)).body.commit.oid, commit)
-    console.log(JSON.stringify({ pass: runtime, mainStarts: fixture.hostPids.length, originalApp: true, officialFsScmAndImmutableCommit: !!assets, absentPty: true, serviceRequests: requests.length }))
+    console.log(JSON.stringify({ pass: runtime, mainStarts: fixture.hostPids.length, originalApp: true, officialFsScmAndImmutableCommit: !!assets, actualPty: true, serviceRequests: requests.length }))
   } catch (error) {
     if (page) { await page.screenshot({ path: join(fixture.root, 'failure.png') }).catch(() => {}); await writeFile(join(fixture.root, 'browser-state.json'), JSON.stringify(await Promise.all(page.frames().map(async frame => ({ url: frame.url(), text: await frame.evaluate(() => document.body.innerText).catch(() => '') }))), null, 2)).catch(() => {}) }
     console.error(runtime, cliOutput, fixture.output); throw error

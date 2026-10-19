@@ -20,7 +20,7 @@ Callers: [Code files/Git](./code-services.md) and [terminal routing/helper](./te
 
 The host's normal instance-token/cookie authentication grants administrator API access. These services do not fabricate a Session, Agent or model principal and do not pass through model-tool authorization. Model tools still use their real Session and concrete policy. Code capability URLs and the browser bridge retain their narrower origin/source/hash checks separately from ordinary HTTP authentication.
 
-`vscode-fs` and `vscode-pty` require version 1; status/content require `vscode-git` version 1 and immutable commit details require version 2. The matching client owns operation validation and actual filesystem/Git/process effects. The [.NET CLI](./dotnet-cli-node.md#fixed-code-services) implements filesystem version 1 and Git version 2; it does not advertise PTY.
+`vscode-fs` and `vscode-pty` require version 1; status/content require `vscode-git` version 1 and immutable commit details require version 2. The matching client owns operation validation and actual filesystem/Git/process effects. The [.NET CLI](./dotnet-cli-node.md#fixed-code-services) implements filesystem version 1, Git version 2 and PTY version 1 only when its native backend is available.
 
 ## Tests
 

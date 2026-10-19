@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
 
-const fixture = await createHostFixture('pty-list')
+const fixture = await createHostFixture('pty-list', { env: { FOXWARM_BIND_ADDRESS: '127.0.0.1' } })
 const runtime = join(fixture.root, 'cli'), home = join(fixture.root, 'home')
 await mkdir(runtime); await mkdir(home)
 const proxyServer = createServer(), proxy = new WebSocketServer({ server: proxyServer })
@@ -57,7 +57,8 @@ try {
   await fixture.start()
   const credential = await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'list-cli' })
   assert.equal(credential.status, 200)
-  cli = spawn(process.execPath, [resolve('packages/cli-node/dist/client.js'), '--host', `http://127.0.0.1:${proxyServer.address().port}`, '--id', 'list-cli', '--auth-token', credential.body.authToken, '--credentials-file', join(runtime, 'credentials.json'), '--no-local-trigger'], {
+  const executable = process.env.FOXWARM_CLI_EXECUTABLE
+  cli = spawn(executable || process.execPath, [...(executable ? [] : [resolve('packages/cli-node/dist/client.js')]), '--host', `http://127.0.0.1:${proxyServer.address().port}`, '--id', 'list-cli', '--auth-token', credential.body.authToken, '--credentials-file', join(runtime, 'credentials.json'), '--no-local-trigger'], {
     cwd: runtime, stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, HOME: home, FOXWARM_AGENTS_DIR: join(runtime, 'agents') },
   })
@@ -105,7 +106,7 @@ try {
     try { process.kill(terminal.pid, 0); return false } catch (error) { if (error.code === 'ESRCH') return true; throw error }
   }, 'explicit close killed real PTY')
   assert.equal(ptyRequests('close').length, 1)
-  console.log(JSON.stringify({ result: 'passed', officialCli: true, genuineEmptyList: true, staleListReturnedEmpty: true, terminalId: terminal.id, realPid: terminal.pid, sameBrowserStream: true, samePidOutputBeforeAndAfter: true, falseErrors: 0, nodeAttachRequests: 1, detachBeforeClose: 0, explicitCloseKills: true }))
+  console.log(JSON.stringify({ result: 'passed', cli: process.env.FOXWARM_CLI_EXECUTABLE ? 'configured-native-capable' : 'source', genuineEmptyList: true, staleListReturnedEmpty: true, terminalId: terminal.id, realPid: terminal.pid, sameBrowserStream: true, samePidOutputBeforeAndAfter: true, falseErrors: 0, nodeAttachRequests: 1, detachBeforeClose: 0, explicitCloseKills: true }))
   await fixture.stop()
 } catch (error) {
   console.error(cliOutput); console.error(fixture.output); throw error

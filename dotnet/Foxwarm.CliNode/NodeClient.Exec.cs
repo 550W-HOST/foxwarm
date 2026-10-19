@@ -94,8 +94,12 @@ internal sealed partial class NodeClient
         }
         var sequence = Interlocked.Increment(ref dispatchSequence);
         // Register cancellation before queueing so a back-to-back Stop cannot miss prelaunch.
+        var ptyFrame = Text(frame, "service") == "vscode-pty"
+            && Text(frame, "type") is "node_service_request" or "node_service_command";
+        var previous = ptyFrame ? connection.PtyDispatch : Task.CompletedTask;
         var task = Task.Run(async () =>
         {
+            try { await previous; } catch { }
             try
             {
                 await Dispatch(connection, frame, cancellation);
@@ -114,6 +118,7 @@ internal sealed partial class NodeClient
                 }
             }
         });
+        if (ptyFrame) connection.PtyDispatch = task;
         // Source external shutdown drains manager observers/persistence, not a foreground call's wait.
         dispatches[sequence] = (task, !frame.ContainsKey("owner") || Text(frame, "tool") != "exec");
         _ = task.ContinueWith(

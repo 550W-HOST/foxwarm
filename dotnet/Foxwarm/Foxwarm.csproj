@@ -53,31 +53,6 @@
       CopyToPublishDirectory="PreserveNewest"
     />
   </ItemGroup>
-  <Target
-    Name="BuildFoxwarmPty"
-    AfterTargets="Build"
-    Condition="'$(OS)' != 'Windows_NT' and ('$(RuntimeIdentifier)' == '' or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')))"
-  >
-    <Exec Command="gcc -std=c11 -O2 -Wall -Wextra -Werror -fPIC -shared -Wl,-z,relro,-z,now -o &quot;$(TargetDir)libfoxwarm-pty.so&quot; &quot;$(MSBuildProjectDirectory)/Terminal/native/foxwarm-pty.c&quot; -lutil" />
-  </Target>
-  <Target
-    Name="PublishFoxwarmPty"
-    AfterTargets="Publish"
-    Condition="'$(OS)' != 'Windows_NT' and ('$(RuntimeIdentifier)' == '' or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')))"
-  >
-    <Copy
-      SourceFiles="$(TargetDir)libfoxwarm-pty.so"
-      DestinationFolder="$(PublishDir)"
-      SkipUnchangedFiles="true"
-    />
-  </Target>
-  <Target
-    Name="CleanFoxwarmPty"
-    AfterTargets="Clean"
-    Condition="'$(OS)' != 'Windows_NT' and ('$(RuntimeIdentifier)' == '' or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')))"
-  >
-    <Delete Files="$(TargetDir)libfoxwarm-pty.so" />
-  </Target>
   <!-- Native worker selection follows the requested target, never the build host. -->
   <PropertyGroup>
     <MontyTargetRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</MontyTargetRid>

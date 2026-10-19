@@ -6,6 +6,8 @@ internal static class Program
 {
     internal static async Task<int> Main(string[] args)
     {
+        if (await Foxwarm.Terminal.NativeHelperEntry.TryRunAsync(args))
+            return Environment.ExitCode;
         if (ExecNative.Helper(args) is int helperExit)
             return helperExit;
         using var stop = new CancellationTokenSource();

@@ -4,27 +4,21 @@ namespace Foxwarm.CliNode;
 
 internal sealed partial class NodeClient
 {
-    private static async Task DispatchService(Connection connection, JsonObject frame)
+    private async Task DispatchService(Connection connection, JsonObject frame)
     {
         var service = Text(frame, "service") ?? "";
         var operation = Text(frame, "operation") ?? "";
         var command = Text(frame, "type") == "node_service_command";
         try
         {
-            var result = await NodeCodeServices.Execute(
-                service,
-                operation,
-                frame["args"] as JsonObject
-            );
-            if (!command)
-                await connection.Send(
-                    new JsonObject
-                    {
-                        ["type"] = "node_service_response",
-                        ["requestId"] = Text(frame, "requestId") ?? "",
-                        ["result"] = result,
-                    }
-                );
+            Task Reply(JsonObject result) => command ? Task.CompletedTask : connection.Send(new JsonObject
+            {
+                ["type"] = "node_service_response", ["requestId"] = Text(frame, "requestId") ?? "", ["result"] = result,
+            });
+            if (service == "vscode-pty" && pty is not null)
+                await pty.Dispatch(operation, frame["args"] as JsonObject ?? new(), connection, Reply);
+            else
+                await Reply(await NodeCodeServices.Execute(service, operation, frame["args"] as JsonObject));
         }
         catch (Exception error)
         {

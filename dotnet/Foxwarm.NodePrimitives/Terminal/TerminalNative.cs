@@ -10,18 +10,18 @@ internal static class TerminalNative
         AppContext.BaseDirectory,
         "libfoxwarm-pty.so"
     );
+    private static readonly IntPtr NativeHandle = OperatingSystem.IsLinux()
+        && NativeLibrary.TryLoad(NativePath, out var loaded) ? loaded : IntPtr.Zero;
     internal static bool IsSupported =>
         OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)
-        || OperatingSystem.IsLinux() && File.Exists(NativePath);
+        || OperatingSystem.IsLinux() && NativeHandle != IntPtr.Zero;
 
     static TerminalNative()
     {
         NativeLibrary.SetDllImportResolver(
             typeof(TerminalNative).Assembly,
             (name, _, _) =>
-                name == Library && File.Exists(NativePath)
-                    ? NativeLibrary.Load(NativePath)
-                    : IntPtr.Zero
+                name == Library ? NativeHandle : IntPtr.Zero
         );
     }
 
@@ -116,7 +116,7 @@ internal static class TerminalNative
                 );
             if (!IsSupported)
                 throw new PlatformNotSupportedException(
-                    "Main terminal PTY is unavailable on this Linux host."
+                    "Native terminal PTY is unavailable on this host."
                 );
             var exe = Marshal.StringToCoTaskMemUTF8(shell);
             var directory = Marshal.StringToCoTaskMemUTF8(cwd);
@@ -129,8 +129,8 @@ internal static class TerminalNative
                 argv.Pointer,
                 env.Pointer,
                 directory,
-                checked((ushort)cols),
-                checked((ushort)rows),
+                unchecked((ushort)cols),
+                unchecked((ushort)rows),
                 out var error
             );
             Marshal.FreeCoTaskMem(exe);
@@ -183,7 +183,7 @@ internal static class TerminalNative
                 windows.Resize(cols, rows);
                 return;
             }
-            var error = fw_resize(Pointer, checked((ushort)cols), checked((ushort)rows));
+            var error = fw_resize(Pointer, unchecked((ushort)cols), unchecked((ushort)rows));
             if (error != 0)
                 throw new IOException($"Terminal resize failed (errno {error}).");
         }
