@@ -289,16 +289,17 @@ internal sealed class ModelRequestOwner(
                             beginAttempt?.Invoke();
                         if (journal is not null && currentJournalRequestId is not null)
                             await JournalAttemptStartAsync(
-                                journal,
-                                currentJournalRequestId,
-                                currentJournalAttempt,
-                                leaf.Key,
-                                request is null ? null : route.Key,
-                                leaf.ProviderType,
-                                payload,
-                                instructions,
-                                manifestCompletion
-                            ).ConfigureAwait(false);
+                                    journal,
+                                    currentJournalRequestId,
+                                    currentJournalAttempt,
+                                    leaf.Key,
+                                    request is null ? null : route.Key,
+                                    leaf.ProviderType,
+                                    payload,
+                                    instructions,
+                                    manifestCompletion
+                                )
+                                .ConfigureAwait(false);
                         attemptPrepared = true;
                         cancellationToken.ThrowIfCancellationRequested();
                     },
@@ -392,7 +393,11 @@ internal sealed class ModelRequestOwner(
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    if (attemptPrepared && journal is not null && currentJournalRequestId is not null)
+                    if (
+                        attemptPrepared
+                        && journal is not null
+                        && currentJournalRequestId is not null
+                    )
                         try
                         {
                             await journal

@@ -319,7 +319,12 @@ public sealed class JournalWriterOverlapTests
         var row = Assert.Single(await journal.ListAsync("s", null, null, null, 10));
         var restored = await journal.ReconstructAsync(row!["requestId"]!.GetValue<string>());
         Assert.Equal("complete", restored["completeness"]!.GetValue<string>());
-        Assert.Equal("abort", Assert.Single(restored["attempts"]!.AsArray())!["result"]!["outcome"]!.GetValue<string>());
+        Assert.Equal(
+            "abort",
+            Assert.Single(restored["attempts"]!.AsArray())!["result"]![
+                "outcome"
+            ]!.GetValue<string>()
+        );
     }
 
     private static ModelRequestOwner Owner(HttpClient http, LlmRequestJournalStore journal) =>

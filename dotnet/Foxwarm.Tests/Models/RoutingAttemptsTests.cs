@@ -189,26 +189,61 @@ public sealed class RoutingAttemptsTests
         var notices = 0;
         var retries = 0;
         var localError = new IOException("Local attempt notification failed.");
-        using var client = new HttpClient(new Handler((_, _) =>
-        {
-            sends++;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
-            {
-                Content = new StringContent("unavailable"),
-            });
-        }));
+        using var client = new HttpClient(
+            new Handler(
+                (_, _) =>
+                {
+                    sends++;
+                    return Task.FromResult(
+                        new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                        {
+                            Content = new StringContent("unavailable"),
+                        }
+                    );
+                }
+            )
+        );
         var catalog = Catalog(2);
         var routing = new ModelRouting();
-        var owner = new ModelRequestOwner(client, Defaults(), routing, (_, _) => Task.CompletedTask);
-        var error = await Record.ExceptionAsync(() => owner.RequestAsync("session", catalog,
-            "route", null, "lineage", "turn", [], (_, _) => Task.FromResult("prompt"),
-            _ => { retries++; return Task.FromResult(false); },
-            () => { if (++notices == 2) throw localError; }, null, null, default));
+        var owner = new ModelRequestOwner(
+            client,
+            Defaults(),
+            routing,
+            (_, _) => Task.CompletedTask
+        );
+        var error = await Record.ExceptionAsync(() =>
+            owner.RequestAsync(
+                "session",
+                catalog,
+                "route",
+                null,
+                "lineage",
+                "turn",
+                [],
+                (_, _) => Task.FromResult("prompt"),
+                _ =>
+                {
+                    retries++;
+                    return Task.FromResult(false);
+                },
+                () =>
+                {
+                    if (++notices == 2)
+                        throw localError;
+                },
+                null,
+                null,
+                default
+            )
+        );
         Assert.Same(localError, error);
         Assert.Equal(1, sends);
         Assert.Equal(2, notices);
         Assert.Equal(1, retries);
-        Assert.Equal("a/m", routing.Select(routing.Begin("route", catalog.Resolve("route")), "lineage").TargetKey);
+        Assert.Equal(
+            "a/m",
+            routing.Select(routing.Begin("route", catalog.Resolve("route")), "lineage").TargetKey
+        );
     }
 
     [Fact]
