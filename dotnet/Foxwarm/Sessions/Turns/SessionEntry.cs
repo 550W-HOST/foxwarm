@@ -73,6 +73,8 @@ public sealed class SessionEntry
         return scope;
     }
 
+    internal static void DetachTurnScope() => currentTurn.Value = null;
+
     internal bool CanSettleDuringShutdown =>
         currentTurn.Value is { Active: true } scope && ReferenceEquals(scope.Entry, this);
 

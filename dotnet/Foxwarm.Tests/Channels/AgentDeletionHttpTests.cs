@@ -133,17 +133,28 @@ public sealed class AgentDeletionHttpTests
         Assert.False(File.Exists(Path.Combine(data, "state", "sessions", selectedId + ".json")));
         var directoryOnly = Path.Combine(data, "agents", "directory-only");
         Directory.CreateDirectory(directoryOnly);
-        var noMembers = await Delete(admin, "directory-only", "directory-only");
-        Assert.True(noMembers.IsSuccessStatusCode, await noMembers.Content.ReadAsStringAsync());
-        Assert.Empty(
-            (await noMembers.Content.ReadFromJsonAsync<JsonObject>())!["deletedSessions"]!.AsArray()
-        );
-        await Create(admin, "metadata-failure");
+        await Create(admin, "plain-no-metadata");
+        await Create(admin, "metadata-failure", "main");
         var metadata = Path.Combine(data, "state", "agents.json");
         File.Move(metadata, metadata + ".held");
         Directory.CreateDirectory(metadata);
         try
         {
+            var plain = await Delete(admin, "plain-no-metadata", "plain-no-metadata");
+            Assert.True(plain.IsSuccessStatusCode, await plain.Content.ReadAsStringAsync());
+            Assert.Equal(
+                new[] { "plain-no-metadata/main" },
+                (await plain.Content.ReadFromJsonAsync<JsonObject>())!["deletedSessions"]!
+                    .AsArray().Select(node => node!.ToString())
+            );
+            Assert.False(Directory.Exists(Path.Combine(data, "agents", "plain-no-metadata")));
+            var noMembers = await Delete(admin, "directory-only", "directory-only");
+            Assert.True(noMembers.IsSuccessStatusCode, await noMembers.Content.ReadAsStringAsync());
+            Assert.Empty(
+                (await noMembers.Content.ReadFromJsonAsync<JsonObject>())!["deletedSessions"]!.AsArray()
+            );
+            Assert.False(Directory.Exists(directoryOnly));
+            Assert.True(Directory.Exists(metadata));
             var failed = await Delete(admin, "metadata-failure", "metadata-failure");
             Assert.Equal(HttpStatusCode.BadRequest, failed.StatusCode);
             Assert.NotNull((await failed.Content.ReadFromJsonAsync<JsonObject>())!["error"]);

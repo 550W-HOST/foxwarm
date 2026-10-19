@@ -207,6 +207,28 @@ public sealed partial class AgentDeletionTests
         Assert.Empty(envelope["agents"]!.AsArray());
     }
 
+    [Fact]
+    public async Task Retained_WebUI_deletion_persists_membership_removal_even_without_own_metadata()
+    {
+        using var temp = new TempDirectory();
+        await using (var manager = Manager(temp.Path, canonical: false))
+        {
+            await manager.LoadAsync();
+            await manager.CreateAgentAsync("target");
+            Assert.Null(manager.AgentMetadata["target"]);
+            Assert.Equal(new[] { "target/main" }, await manager.DeleteAgentAsync("target"));
+        }
+        await using var reopened = Manager(temp.Path, canonical: false);
+        await reopened.LoadAsync();
+        Assert.DoesNotContain("target", reopened.Agents());
+        Assert.Empty(reopened.Catalog.List());
+        var envelope = JsonNode.Parse(
+            await File.ReadAllTextAsync(Path.Combine(Data(temp.Path), "state", "agents.json"))
+        )!;
+        Assert.Empty(envelope["agents"]!.AsArray());
+        Assert.Empty(envelope["metadata"]!.AsObject());
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

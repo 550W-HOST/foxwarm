@@ -92,6 +92,9 @@ internal sealed partial class MainTimers
 
     private async Task RunClockAsync(TimerRecord record, TaskCompletionSource completion)
     {
+        // A clock is independent work, not a continuation settling the tool's
+        // foreground turn. Detach before even an already-due timer can deliver.
+        SessionEntry.DetachTurnScope();
         try
         {
             var row = record.Row;

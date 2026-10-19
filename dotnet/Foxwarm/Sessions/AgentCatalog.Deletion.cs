@@ -34,11 +34,12 @@ internal sealed partial class AgentCatalog
             // retained envelope additionally needs its directory membership removed.
             if (retainMetadata && canonicalLayout)
                 return;
+            var next = MetadataSnapshot();
+            var removedMetadata = !retainMetadata && next.Remove(name);
+            if (canonicalLayout && !removedMetadata)
+                return;
             if (beforeStage is not null)
                 await beforeStage(name, "metadata");
-            var next = MetadataSnapshot();
-            if (!retainMetadata)
-                next.Remove(name);
             var names = List().Where(id => id != "main" && id != name).ToArray();
             void Publish()
             {
