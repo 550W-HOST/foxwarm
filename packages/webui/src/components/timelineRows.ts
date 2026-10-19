@@ -288,7 +288,7 @@ const hasConversationImage = (part: Message['parts'][number]): boolean => (
   !!(part.inlineData || part.inlineDataRef || part.inlineDataUnavailable) && !part.toolUseId && !part.functionResponse
 )
 
-type ConversationRequest = { messages: Message[]; complete: boolean }
+type ConversationRequest = { messages: Message[]; tools: boolean; complete: boolean }
 
 /** Link only loaded segments within one CTX scope; never infer a work ID or change history. */
 const conversationRequests = (history: readonly Message[], visible: readonly Message[]) => {
@@ -299,9 +299,10 @@ const conversationRequests = (history: readonly Message[], visible: readonly Mes
     if (getContextBlockMetaFromMessage(message)) { requests = new Map(); continue }
     if (message.role !== 'model' || getLlmErrorMessageDetails(message)) continue
     const id = message.__meta?.llmRequestId
-    const request = id ? requests.get(id) || { messages: [], complete: false } : { messages: [], complete: false }
+    const request = id ? requests.get(id) || { messages: [], tools: false, complete: false } : { messages: [], tools: false, complete: false }
     if (id) requests.set(id, request)
     request.messages.push(message)
+    request.tools ||= message.parts.some(part => !!part.functionCall || !!getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem))
     request.complete ||= !message.__meta?.streaming && isCommittedHistoryMessage(message) && message.__meta?.llmSegment?.complete !== false
     byMessage.set(message, request)
   }
@@ -785,14 +786,15 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
     const communications = projectSessionCommunications([...new Set([...(historyMessages || messages), ...messages])])
     // Retry cards use the active-history tail rule, not the general event escape hatch.
     const isStandaloneNotice = (msg: Message): boolean => !!getSessionNotice(msg) && !getLlmErrorMessageDetails(msg)
-    const visibleText = (part: Message['parts'][number]) => hasConversationText(part) && (showCommentary || part.phase !== 'commentary')
-    // Only explicitly marked commentary can fold; unknown and live prose stay ordinary output.
+    // Explicit phase wins; otherwise only this loaded logical request's actual tools justify folding.
+    const visibleText = (msg: Message, part: Message['parts'][number]) => hasConversationText(part)
+      && (showCommentary || (part.phase ? part.phase !== 'commentary' : !requests.get(msg)?.tools))
     const boundary = (msg: Message, partIndex?: number): 'visible' | 'context' | undefined => {
       if (communications.has(msg)) return showInterAgentMessages ? 'visible' : undefined
       if (isStandaloneNotice(msg)) return 'visible'
       if (getContextBlockMetaFromMessage(msg)) return 'context'
       if (msg.role === 'user' && getConversationInputKind(msg) !== 'activity') return 'visible'
-      if (msg.role === 'model' && !getLlmErrorMessageDetails(msg) && (partIndex === undefined ? msg.parts.some(visibleText) : visibleText(msg.parts[partIndex]))) return 'visible'
+      if (msg.role === 'model' && !getLlmErrorMessageDetails(msg) && (partIndex === undefined ? msg.parts.some(part => visibleText(msg, part)) : visibleText(msg, msg.parts[partIndex]))) return 'visible'
       return undefined
     }
     let activityStart = -1
@@ -892,7 +894,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       if (activityStart >= 0) activitySources.add(msg)
       let visiblePartCount = 0
       msg.parts.forEach((part, partIndex) => {
-        const textBody = visibleText(part)
+        const textBody = visibleText(msg, part)
         const foldedText = hasConversationText(part) && !textBody
         const image = hasConversationImage(part)
         const technical = foldedText || part.system || part.functionCall || part.functionResponse || part.toolUseId || isReasoningPart(part) || getWebSearchAction(part.providerMeta?.openaiResponses?.outputItem) || !hasConversationText(part) && !image && part.text === undefined && Object.keys(part).length > 0
