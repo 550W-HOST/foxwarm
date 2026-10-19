@@ -192,7 +192,12 @@ public sealed partial class SqliteArchiveMessageStore
                     || block.SourceEnd != block.RawEndSeq
                 )
             || block.SourceKind == "block"
-                && (block.Level <= 1 || block.SourceBlockIds is not { Count: > 0 })
+                && (
+                    block.Level <= 1
+                    || (block.SourceBlockIds is null
+                        ? block.SourceStart > block.SourceEnd
+                        : block.SourceBlockIds.Count == 0)
+                )
             || block.RawStartTimestamp is double start && !double.IsFinite(start)
             || block.RawEndTimestamp is double end && !double.IsFinite(end)
         )
@@ -334,7 +339,10 @@ public sealed partial class SqliteArchiveMessageStore
                 reader.GetString(3),
                 reader.GetInt64(4),
                 reader.GetInt64(5),
-                NullableText(reader, 6) is string ids ? JsonNode.Parse(ids) as JsonArray : null,
+                NullableText(reader, 6) is string ids
+                    ? JsonNode.Parse(ids) as JsonArray
+                        ?? throw new InvalidDataException("Archive source block ids must be an array.")
+                    : null,
                 reader.GetInt64(7),
                 reader.GetInt64(8),
                 NullableNumber(reader, 9),
@@ -386,7 +394,10 @@ public sealed partial class SqliteArchiveMessageStore
                 reader.GetString(3),
                 reader.GetInt64(4),
                 reader.GetInt64(5),
-                NullableText(reader, 6) is string ids ? JsonNode.Parse(ids) as JsonArray : null,
+                NullableText(reader, 6) is string ids
+                    ? JsonNode.Parse(ids) as JsonArray
+                        ?? throw new InvalidDataException("Archive source block ids must be an array.")
+                    : null,
                 reader.GetInt64(7),
                 reader.GetInt64(8),
                 NullableNumber(reader, 9),
