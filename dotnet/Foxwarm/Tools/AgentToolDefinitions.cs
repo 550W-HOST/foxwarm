@@ -102,8 +102,9 @@ internal static class AgentToolDefinitions
                         "cancelled"
                     ),
                     ["scope"] = Choice(
-                        "For list, choose tasks created by or assigned to the current Session (default), any Session in the current Agent, or all Sessions and users.",
+                        "For list, choose tasks created by or assigned to the current Session (default), tasks owned by the current Session, tasks in the current Agent, or all tasks.",
                         "current-session",
+                        "owned",
                         "current-agent",
                         "all"
                     ),

@@ -21,6 +21,8 @@ internal static class ToolAuthorizationYaml
         Matcher,
         Argument,
         Session,
+        Task,
+        Node,
         Scalar,
         ScalarList,
         ScalarOrList,
@@ -80,6 +82,7 @@ internal static class ToolAuthorizationYaml
                         or Shape.Matcher
                         or Shape.Argument
                         or Shape.Tool
+                        or Shape.Node
                         or Shape.ScalarList
                         or Shape.ScalarOrList
                     )
@@ -102,7 +105,7 @@ internal static class ToolAuthorizationYaml
             var allowed = shape switch
             {
                 Shape.Root => new[] { "version", "defaultAction", "rules" },
-                Shape.Rule => ["id", "enabled", "match", "action", "reason"],
+                Shape.Rule => ["id", "enabled", "match", "action", "reason", "agent", "session", "externalId", "tool", "node", "args", "path"],
                 Shape.Match =>
                 [
                     "agent",
@@ -116,6 +119,9 @@ internal static class ToolAuthorizationYaml
                 Shape.Tool => ["source", "server", "name"],
                 Shape.Path => ["arg", "allWithin", "anyNotWithin"],
                 Shape.Session => ["self", "sameAgent", "relation"],
+                Shape.Task => ["owned"],
+                Shape.Node => ["current", "provider"],
+                Shape.Argument when keys.Any(pair => pair.Key == "task") => ["task"],
                 Shape.Argument when keys.Any(pair => pair.Key == "session") => ["session"],
                 Shape.Matcher or Shape.Argument => ["equals", "oneOf", "exists"],
                 Shape.Args => null,
@@ -134,6 +140,13 @@ internal static class ToolAuthorizationYaml
                 {
                     Shape.Root when pair.Key == "rules" => Shape.Rules,
                     Shape.Rule when pair.Key == "match" => Shape.Match,
+                    Shape.Rule when pair.Key == "args" => Shape.Args,
+                    Shape.Rule when pair.Key == "tool" => Shape.Tool,
+                    Shape.Rule when pair.Key == "path" => Shape.Path,
+                    Shape.Rule when pair.Key == "node" => Shape.Node,
+                    Shape.Rule when pair.Key == "session" => Shape.ScalarOrList,
+                    Shape.Rule when pair.Key is "agent" or "externalId" => Shape.Matcher,
+                    Shape.Node when pair.Key == "provider" => Shape.ScalarOrList,
                     Shape.Match when pair.Key == "args" => Shape.Args,
                     Shape.Match when pair.Key == "tool" => Shape.Tool,
                     Shape.Match when pair.Key == "path" => Shape.Path,
@@ -141,6 +154,7 @@ internal static class ToolAuthorizationYaml
                     Shape.Args => Shape.Argument,
                     Shape.Tool => Shape.Matcher,
                     Shape.Argument when pair.Key == "session" => Shape.Session,
+                    Shape.Argument when pair.Key == "task" => Shape.Task,
                     Shape.Matcher or Shape.Argument when pair.Key == "oneOf" => Shape.ScalarList,
                     Shape.Path when pair.Key == "arg" => Shape.ScalarOrList,
                     Shape.Session when pair.Key == "relation" => Shape.ScalarOrList,

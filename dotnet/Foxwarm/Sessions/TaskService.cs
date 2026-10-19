@@ -39,6 +39,8 @@ internal sealed class TaskService : IDisposable
         store = new TaskStore(root, resolveSessionId, aliases);
     }
 
+    internal string? OwnerSessionId(string taskId) => store.OwnerSessionId(taskId);
+
     internal async Task<TaskStoreResult> ExecuteAsync(
         JsonObject args,
         string? actor,
@@ -166,7 +168,7 @@ internal sealed class TaskService : IDisposable
                     404
                 );
             scopeIds =
-                scope == "current-session"
+                scope is "current-session" or "owned"
                     ? new[] { actor }
                     : manager
                         .Catalog.List()

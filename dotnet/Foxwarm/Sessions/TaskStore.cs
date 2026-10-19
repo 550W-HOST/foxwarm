@@ -125,6 +125,15 @@ internal sealed class TaskStore : IDisposable
     internal TaskStoreResult ExecuteAsUser(JsonObject args, int? httpLimit = null) =>
         Execute(args, null, httpLimit, null, "user");
 
+    internal string? OwnerSessionId(string taskId)
+    {
+        lock (gate)
+        {
+            var row = Read(Open(), taskId);
+            return row is null ? null : Canonical(Text(row["ownerSessionId"]));
+        }
+    }
+
     internal string? DefaultActor(JsonObject args)
     {
         var id = Text(args["taskId"]);
@@ -446,7 +455,7 @@ internal sealed class TaskStore : IDisposable
                     ? (
                         scopeSessionIds
                         ?? (
-                            scope == "current-session" && actor is not null
+                            scope is "current-session" or "owned" && actor is not null
                                 ? new[] { actor }
                                 : Array.Empty<string>()
                         )
@@ -456,14 +465,12 @@ internal sealed class TaskStore : IDisposable
                         .ToArray()
                     : null;
             if (scoped is not null)
-                where +=
-                    scoped.Length == 0
-                        ? " AND 0"
-                        : " AND (createdBySessionId IN ("
-                            + string.Join(',', scoped.Select((_, i) => "$scope" + i))
-                            + ") OR ownerSessionId IN ("
-                            + string.Join(',', scoped.Select((_, i) => "$scope" + i))
-                            + "))";
+            {
+                var placeholders = string.Join(',', scoped.Select((_, i) => "$scope" + i));
+                where += scoped.Length == 0 ? " AND 0"
+                    : Text(args["scope"]) == "owned" ? $" AND ownerSessionId IN ({placeholders})"
+                    : $" AND (createdBySessionId IN ({placeholders}) OR ownerSessionId IN ({placeholders}))";
+            }
             var rows = Query(
                 db,
                 $"SELECT id,title,status,parentTaskId,createdByKind,createdBySessionId,ownerSessionId,updatedAt FROM tasks WHERE {where} ORDER BY updatedAt DESC,id LIMIT $limit",
@@ -1119,11 +1126,11 @@ internal sealed class TaskStore : IDisposable
                 );
         if (
             args.ContainsKey("scope")
-            && Text(args["scope"]) is not ("current-session" or "current-agent" or "all")
+            && Text(args["scope"]) is not ("current-session" or "owned" or "current-agent" or "all")
         )
             throw new TaskError(
                 "TASK_INVALID_ARGS",
-                "scope must be current-session, current-agent, or all."
+                "scope must be current-session, owned, current-agent, or all."
             );
         Limit(args, "title", 200);
         Limit(args, "description", 20000);
@@ -1241,11 +1248,11 @@ internal sealed class TaskStore : IDisposable
         }
         if (
             args.ContainsKey("scope")
-            && Text(args["scope"]) is not ("current-session" or "current-agent" or "all")
+            && Text(args["scope"]) is not ("current-session" or "owned" or "current-agent" or "all")
         )
             throw new TaskError(
                 "TASK_INVALID_ARGS",
-                "scope must be current-session, current-agent, or all."
+                "scope must be current-session, owned, current-agent, or all."
             );
         Limit(args, "title", 200);
         Limit(args, "description", 20000);

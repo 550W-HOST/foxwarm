@@ -5,7 +5,7 @@ using Foxwarm.Tools;
 
 namespace Foxwarm.Tests;
 
-public sealed class ToolAuthorizationSourceTests
+public sealed partial class ToolAuthorizationSourceTests
 {
     private static JsonObject Obj(string json) => JsonNode.Parse(json)!.AsObject();
 
@@ -41,7 +41,12 @@ public sealed class ToolAuthorizationSourceTests
                     target["parentSessionId"]?.GetValue<string>()
                 ),
             source["principal"]!.GetValue<string>(),
-            source["externalId"]?.GetValue<string>()
+            source["externalId"]?.GetValue<string>(),
+            source["taskTarget"]?["ownerSessionId"]?.GetValue<string>(),
+            source["resolveEffects"]?.GetValue<bool>() == true
+                ? ToolAuthorizationNodeEffects.Resolve(tool["source"]!.GetValue<string>(), tool["name"]!.GetValue<string>(), source["targetNode"]?.GetValue<string>(), source["args"]!.AsObject())
+                : (source["nodeTargets"] as JsonArray)?.Select(value => value!.GetValue<string>()).ToArray(),
+            source["currentNode"]?.GetValue<string>()
         );
     }
 
@@ -200,6 +205,7 @@ public sealed class ToolAuthorizationSourceTests
                     ),
                 }
             );
+        AddCurrentPolicyFixtures(fixtures, normal);
         var own = Path.Combine(temp.Path, "workspace", "agents", "alpha");
         Directory.CreateDirectory(own);
         foreach (var condition in new[] { "allWithin", "anyNotWithin" })
@@ -455,7 +461,7 @@ public sealed class ToolAuthorizationSourceTests
             }
             Assert.True(
                 expected[i]!["valid"]!.GetValue<bool>() == (failure is null),
-                $"Case {i}: {actual}; expected {expected[i]}; actual {failure}"
+                $"Case {i}: {actual["yaml"]}; expected valid={expected[i]!["valid"]}; actual {failure}"
             );
             if (failure is not null)
                 continue;
@@ -484,13 +490,15 @@ public sealed class ToolAuthorizationSourceTests
                     ToolAuthorizationEvaluation.Visible(
                         policy,
                         request,
-                        requests[n]?["projection"]?["targetNodeUnknown"]?.GetValue<bool>() == true
+                        requests[n]?["projection"]?["targetNodeUnknown"]?.GetValue<bool>() == true,
+                        requests[n]?["projection"]?["nodeTargetsUnknown"]?.GetValue<bool>() == true
                     )
                 );
                 Assert.Equal(
                     check["needsTarget"]!.GetValue<bool>(),
                     ToolAuthorizationEvaluation.NeedsTarget(policy, request)
                 );
+                Assert.Equal(check["needsTaskTarget"]!.GetValue<bool>(), ToolAuthorizationEvaluation.NeedsTaskTarget(policy, request));
             }
         }
     }

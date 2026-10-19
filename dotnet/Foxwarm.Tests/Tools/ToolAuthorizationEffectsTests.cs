@@ -7,7 +7,7 @@ using Foxwarm.Tools;
 
 namespace Foxwarm.Tests;
 
-public sealed class ToolAuthorizationEffectsTests
+public sealed partial class ToolAuthorizationEffectsTests
 {
     private static ResponsesClientOptions Options =>
         new(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
@@ -89,6 +89,10 @@ public sealed class ToolAuthorizationEffectsTests
         foreach (var definition in LocalExecManager.Definitions())
             definitions.Add(definition?.DeepClone());
         definitions.Add(ArchiveRecallTool.Definition());
+        foreach (var definition in ToolScriptToolDefinitions.Definitions())
+            definitions.Add(definition?.DeepClone());
+        foreach (var definition in FileDeliveryDefinitions.Definitions())
+            definitions.Add(definition?.DeepClone());
         var mcp = new Foxwarm.McpClient(Path.Combine(root, "data"));
         var registry = SessionToolExecutor.CreateRegistry(
             definitions,

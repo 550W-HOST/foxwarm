@@ -213,8 +213,49 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         return result;
     }
 
+    private static JsonNode IdentityPattern(JsonNode? node)
+    {
+        var values = node is JsonArray list ? list.ToArray() : [node];
+        if (values.Length is < 1 or > 64)
+            throw new InvalidDataException("Identity pattern requires 1-64 items.");
+        var patterns = values.Select(value => String(value)).ToArray();
+        if (patterns.Any(value => !Regex.IsMatch(value, @"^[A-Za-z0-9._:/*-]+$", RegexOptions.CultureInvariant)))
+            throw new InvalidDataException("Identity pattern supports identity characters and '*' only.");
+        return node is JsonArray
+            ? new JsonArray(patterns.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray())
+            : JsonValue.Create(patterns[0])!;
+    }
+
+    private static JsonNode NodeMatcher(JsonNode? node)
+    {
+        if (node is not JsonObject map)
+            return IdentityPattern(node);
+        Fields(map, "current", "provider");
+        if (map.Count != 1)
+            throw new InvalidDataException("Node matcher requires exactly one of current or provider.");
+        if (map.ContainsKey("current"))
+        {
+            if (!Boolean(map["current"]))
+                throw new InvalidDataException("Node current matcher must be true.");
+            return new JsonObject { ["current"] = true };
+        }
+        var provider = IdentityPattern(map["provider"]);
+        var values = provider is JsonArray list ? list.ToArray() : [provider];
+        if (values.Any(value => String(value).Contains('*') || String(value).Contains('/')))
+            throw new InvalidDataException("Node provider matcher requires exact Provider IDs.");
+        return new JsonObject { ["provider"] = provider };
+    }
+
     private static JsonNode? Argument(JsonNode? node)
     {
+        if (node is JsonObject taskWrapper && taskWrapper.ContainsKey("task"))
+        {
+            Fields(taskWrapper, "task");
+            if (taskWrapper["task"] is not JsonObject task || task.Count != 1
+                || !task.ContainsKey("owned") || !Boolean(task["owned"]))
+                throw new InvalidDataException("Task matcher requires { owned: true }.");
+            return new JsonObject { ["task"] = new JsonObject { ["owned"] = true } };
+        }
         if (node is not JsonObject wrapper || !wrapper.ContainsKey("session"))
             return Matcher(node);
         Fields(wrapper, "session");
@@ -268,8 +309,12 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         {
             if (node is not JsonObject rule)
                 throw new InvalidDataException("Policy rule must be an object.");
-            Fields(rule, "id", "enabled", "match", "action", "reason");
-            var id = String(rule["id"], 128);
+            Fields(rule, "id", "enabled", "match", "action", "reason", "agent", "session", "externalId", "tool", "node", "args", "path");
+            var shorthandKeys = new[] { "agent", "session", "externalId", "tool", "node", "args", "path" };
+            var shorthand = shorthandKeys.Any(rule.ContainsKey);
+            if (shorthand && rule.ContainsKey("match"))
+                throw new InvalidDataException("Cannot mix top-level selectors with match.");
+            var id = rule.ContainsKey("id") ? String(rule["id"], 128) : $"rule-{rules.Count + 1}";
             if (!ids.Add(id))
                 throw new InvalidDataException("Duplicate policy rule ID.");
             var enabled = !rule.ContainsKey("enabled") || Boolean(rule["enabled"]);
@@ -277,9 +322,12 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
             if (effect is not ("allow" or "deny"))
                 throw new InvalidDataException("Invalid policy action.");
             var match = new JsonObject();
-            if (rule.ContainsKey("match"))
+            if (shorthand || rule.ContainsKey("match"))
             {
-                if (rule["match"] is not JsonObject source)
+                var rawMatch = shorthand
+                    ? new JsonObject(rule.Where(pair => shorthandKeys.Contains(pair.Key)).Select(pair => new KeyValuePair<string, JsonNode?>(pair.Key, pair.Value?.DeepClone())))
+                    : rule["match"];
+                if (rawMatch is not JsonObject source)
                     throw new InvalidDataException("Policy match must be an object.");
                 Fields(
                     source,
@@ -289,11 +337,16 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                     "tool",
                     "targetNode",
                     "args",
-                    "path"
+                    "path",
+                    shorthand ? "node" : "targetNode"
                 );
-                foreach (var key in new[] { "agent", "session", "externalId", "targetNode" })
+                foreach (var key in new[] { "agent", "externalId", "targetNode" })
                     if (source.ContainsKey(key))
                         match[key] = Matcher(source[key]);
+                if (source.ContainsKey("session"))
+                    match[shorthand ? "sessionPattern" : "session"] = shorthand ? IdentityPattern(source["session"]) : Matcher(source["session"]);
+                if (shorthand && source.ContainsKey("node"))
+                    match["node"] = NodeMatcher(source["node"]);
                 if (source.ContainsKey("tool"))
                     match["tool"] = Tool(source["tool"]);
                 if (source.ContainsKey("path"))
@@ -318,6 +371,13 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                             throw new InvalidDataException("Unsafe dotted policy argument.");
                         arguments[pair.Key] = Argument(pair.Value);
                     }
+                    var tasks = arguments.Where(pair => pair.Value is JsonObject task && task.ContainsKey("task")).ToArray();
+                    if (tasks.Length > 0 && (tasks.Length != 1 || tasks[0].Key != "taskId"
+                        || match["tool"] is not JsonObject taskSelector
+                        || taskSelector.ContainsKey("server")
+                        || SessionWait.Text(taskSelector["source"]) != "builtin"
+                        || SessionWait.Text(taskSelector["name"]) != "task"))
+                        throw new InvalidDataException("Task matcher requires taskId and exact builtin task selector.");
                     var targets = arguments
                         .Where(pair =>
                             pair.Value is JsonObject target && target.ContainsKey("session")

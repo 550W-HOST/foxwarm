@@ -145,7 +145,8 @@ internal sealed class McpExternalAuthorization(
             null,
             null,
             Principal: "external",
-            ExternalId: context.ExternalId
+            ExternalId: context.ExternalId,
+            NodeTargets: ToolAuthorizationNodeEffects.Resolve(source, name, node, args)
         );
 
     internal async Task RequireAsync(
