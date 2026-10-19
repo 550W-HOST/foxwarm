@@ -31,7 +31,7 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
 
     internal JsonObject Commands(
         string? baseUrl = null,
-        string id = "my-node",
+        string? id = null,
         string directory = "/opt/foxwarm-node"
     )
     {
@@ -48,6 +48,8 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
             throw new InvalidDataException(
                 "Enter an HTTP(S) Node host address without credentials, query or fragment."
             );
+        var shellId = id ?? "my-shell";
+        id ??= "my-node";
         ApprovedNodeRegistry.ValidateId(id);
         if (directory.Length == 0 || directory.Any(c => c is '\0' or '\r' or '\n'))
             throw new InvalidDataException("Enter an installation directory.");
@@ -65,7 +67,7 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
             ["baseUrl"] = url,
             ["commands"] = new JsonObject
             {
-                ["shell"] = ShellCommand(url, id, "YOUR_PER_NODE_AUTH_TOKEN"),
+                ["shell"] = ShellCommand(url, shellId, "YOUR_PER_NODE_AUTH_TOKEN"),
                 ["bareMetal"] = Download("run.sh") + " --dir=" + Quote(directory) + arguments,
                 ["bareMetalBackground"] =
                     Download("run.sh") + " --dir=" + Quote(directory) + arguments + " -d",

@@ -221,6 +221,20 @@ public sealed class SessionExecutionNodeProjectionTests
             new SessionRuntime(manager)
         );
         Assert.Equal(expected, stateEvent["session"]!["currentNode"]!.GetValue<string>());
+        var replies = new List<string>();
+        var source = new Foxwarm.Channels.ExternalChannelContext(
+            "webui", "webui", owner.Id, null, null,
+            text =>
+            {
+                replies.Add(text);
+                return Task.CompletedTask;
+            }
+        );
+        await new MessageRouter(new SessionRuntime(manager)).HandleExternalCommandAsync(
+            source, "/status", null, owner
+        );
+        Assert.Contains($"current node: `{expected}`", replies.Single());
+        Assert.Contains("connected=" + (expected == "master" ? "true" : "false"), replies.Single());
         Assert.Equal(hasNode, snapshot.AuthorityEnvelope.ContainsKey("currentNode"));
         Assert.Equal(storedNode, SessionWait.Text(snapshot.AuthorityEnvelope["currentNode"]));
         Assert.Equal(original, await File.ReadAllTextAsync(file));

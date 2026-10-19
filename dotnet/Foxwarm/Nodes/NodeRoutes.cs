@@ -73,7 +73,7 @@ internal static class NodeRoutes
                 Task.FromResult(
                     bootstrap.Commands(
                         Text(body, "baseUrl"),
-                        Text(body, "nodeId") ?? "my-node",
+                        Text(body, "nodeId"),
                         Text(body, "installDir") ?? "/opt/foxwarm-node"
                     )
                 )

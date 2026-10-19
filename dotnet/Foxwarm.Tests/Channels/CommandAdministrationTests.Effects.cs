@@ -6,6 +6,60 @@ namespace Foxwarm.Tests;
 
 public sealed partial class CommandAdministrationTests
 {
+    [Theory]
+    [InlineData("default", "local", null)]
+    [InlineData("local", "local", "local")]
+    [InlineData("local/wire", "local/wire", "local/wire")]
+    public async Task Model_inspection_preserves_catalog_selection_and_uses_leaf_effort_capabilities(
+        string selection, string displayed, string? stored
+    )
+    {
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
+        );
+        await f.Configuration.SaveAsync(new JsonObject
+        {
+            ["yaml"] = """
+            default: local
+            providers:
+              local:
+                providerType: openai-responses
+                baseUrl: http://127.0.0.1:1/v1
+                models:
+                  - id: wire
+                    effort: {allowed: [none, low], default: low}
+            """
+        });
+        var replies = new List<string>();
+        var source = Source(replies);
+        f.Manager.AttachChannel(source.Target, f.Owner);
+        await f.Router.HandleExternalMessageAsync(source, Message("/model " + selection));
+        Assert.Equal(stored, f.Owner.Metadata().Model);
+        Assert.Contains($"model: `{displayed}`", replies.Single());
+        var authority = await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath);
+        replies.Clear();
+        await f.Router.HandleExternalMessageAsync(source, Message("/model"));
+        var reply = replies.Single();
+        Assert.Contains($"model: `{displayed}`", reply);
+        Assert.Contains("allowed: none, low", reply);
+        Assert.Contains("effective=low", reply);
+        Assert.Contains("model default: low", reply);
+        if (displayed == "local")
+            Assert.Contains("`local` (default, current)", reply);
+        else
+            Assert.Contains("`local` (default)", reply);
+        Assert.Equal(authority, await File.ReadAllTextAsync(f.Owner.AuthorityStore.AuthorityPath));
+        replies.Clear();
+        await f.Router.HandleExternalMessageAsync(source, Message("/model --effort high"));
+        Assert.Equal(stored, f.Owner.Metadata().Model);
+        Assert.Null(f.Owner.Metadata().Effort);
+        replies.Clear();
+        await f.Router.HandleExternalMessageAsync(source, Message("/model --effort none"));
+        Assert.Equal(stored, f.Owner.Metadata().Model);
+        Assert.Equal("none", f.Owner.Metadata().Effort);
+        Assert.Contains("effective=none", replies.Single());
+    }
+
     [Fact]
     public async Task Skill_generic_main_fallback_and_explicit_administrator_selection_match_actual_Source_callers()
     {

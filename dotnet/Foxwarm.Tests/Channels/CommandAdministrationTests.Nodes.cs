@@ -12,6 +12,39 @@ namespace Foxwarm.Tests;
 public sealed partial class CommandAdministrationTests
 {
     [Fact]
+    public async Task Pair_help_shell_arguments_authenticate_as_the_instructed_reservation_and_keep_explicit_IDs()
+    {
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
+        );
+        f.Manager.Bootstrap = new(f.Manager.Nodes, new PublicWebAddress(
+            "https://example.invalid/nested/app", "/nested/app", "/nested/app/", true
+        ));
+        var replies = new List<string>();
+        var source = Source(replies);
+        f.Manager.AttachChannel(source.Target, f.Owner);
+        await f.Router.HandleExternalMessageAsync(source, Message("/node pair-help"));
+        var help = replies.Single();
+        var reservation = Regex.Match(help, @"/node create ([a-zA-Z0-9_-]+)").Groups[1].Value;
+        var shell = help[help.IndexOf("run-shell.sh", StringComparison.Ordinal)..];
+        var shellId = Regex.Match(shell, "--node-id='([^']+)'").Groups[1].Value;
+        Assert.Equal("my-shell", reservation);
+        Assert.Equal(reservation, shellId);
+        Assert.Contains("--node-id='my-node'", help);
+        Assert.Contains("/nested/app/node/run-shell.sh", help);
+        replies.Clear();
+        await f.Router.HandleExternalMessageAsync(source, Message("/node create " + reservation));
+        var token = Regex.Match(replies.Single(), @"--auth-token=([a-f0-9]+)").Groups[1].Value;
+        Assert.NotEmpty(token);
+        // run-shell.sh forwards --node-id in X-Foxwarm-Node with this bearer token.
+        Assert.True(f.Manager.Nodes.Registry.Authenticate(shellId, token));
+        Assert.False(f.Manager.Nodes.Registry.Authenticate("my-node", token));
+        var explicitCommands = f.Manager.Bootstrap.Commands(id: "explicit-shell")["commands"]!;
+        Assert.Contains("--node-id='explicit-shell'", SessionWait.Text(explicitCommands["shell"]));
+        Assert.Contains("--node-id='explicit-shell'", SessionWait.Text(explicitCommands["bareMetal"]));
+    }
+
+    [Fact]
     public async Task Actual_Node_commands_reserve_pair_approve_select_move_and_revoke_with_official_client_effects()
     {
         await using var f = await ExternalChannelFixture.CreateAsync(
@@ -97,6 +130,27 @@ public sealed partial class CommandAdministrationTests
         try
         {
             await TelegramChannelTests.Until(() => f.Manager.Nodes.Online("command-node"));
+            foreach (var id in new[] { "master", "command-node" })
+            {
+                replies.Clear();
+                await f.Router.HandleExternalMessageAsync(source, Message("/node inspect " + id));
+                var reply = replies.Single();
+                var json = reply[(reply.IndexOf("```json\n", StringComparison.Ordinal) + 8)..reply.LastIndexOf("\n```", StringComparison.Ordinal)];
+                var inspected = JsonNode.Parse(json)!.AsObject();
+                var summary = f.Manager.NodeSummaries().OfType<JsonObject>().Single(node => SessionWait.Text(node["id"]) == id);
+                Assert.Equal(id, SessionWait.Text(inspected["id"]));
+                Assert.True(SessionCatalog.Flag(inspected["connected"]));
+                Assert.True(SessionCatalog.Flag(inspected["executable"]));
+                Assert.NotEmpty(inspected["services"]!.AsObject());
+                Assert.True(JsonNode.DeepEquals(summary["services"], inspected["services"]));
+                if (id != "master")
+                {
+                    Assert.NotEmpty(inspected["tools"]!.AsArray());
+                    Assert.Equal("compatible", SessionWait.Text(inspected["protocolCompatibility"]?["status"]));
+                    Assert.True(JsonNode.DeepEquals(summary["protocolCompatibility"], inspected["protocolCompatibility"]));
+                    Assert.True(JsonNode.DeepEquals(summary["tools"], inspected["tools"]));
+                }
+            }
             replies.Clear();
             await f.Router.HandleExternalMessageAsync(source, Message("/node command-node"));
             Assert.Equal("command-node", f.Manager.CurrentNode(f.Owner));

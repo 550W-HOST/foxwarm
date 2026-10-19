@@ -197,7 +197,7 @@ internal sealed partial class MessageRouter
             case "fork":
                 var child = await runtime.ForkAsync(
                     owner.Id,
-                    rest.FirstOrDefault() ?? "s_" + Guid.NewGuid().ToString("N")
+                    rest.FirstOrDefault()
                 );
                 Bind(child);
                 await source.Reply(

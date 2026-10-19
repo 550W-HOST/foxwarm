@@ -248,6 +248,46 @@ public sealed partial class CommandAdministrationTests
     }
 
     [Fact]
+    public async Task Omitted_session_fork_suffix_uses_owner_default_and_numbered_collisions_through_generic_and_selected_entries()
+    {
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
+        );
+        var replies = new List<string>();
+        var source = Source(replies);
+        for (var number = 1; number <= 2; number++)
+        {
+            f.Manager.DetachChannel(source.Target);
+            f.Manager.AttachChannel(source.Target, f.Owner);
+            replies.Clear();
+            await f.Router.HandleExternalMessageAsync(source, Message("/session fork"));
+            var expected = f.Owner.Id + "_fork" + (number == 1 ? "" : "_" + number);
+            Assert.Equal(expected, SessionWait.Text(f.Manager.ChannelBinding(source.Target)?["sessionId"]));
+            Assert.NotNull(f.Manager.Catalog.Get(expected));
+            Assert.Contains(expected, replies.Single());
+        }
+        var events = new List<SessionRuntimeEvent>();
+        f.Manager.Changed += events.Add;
+        for (var number = 3; number <= 4; number++)
+        {
+            events.Clear();
+            await f.Router.HandleMessageAsync(new(f.Owner.Id, "webui"), new("/session fork", null));
+            var expected = f.Owner.Id + "_fork_" + number;
+            Assert.Equal(expected, SessionWait.Text(f.Manager.ChannelBinding("webui:" + f.Owner.Id)?["sessionId"]));
+            Assert.NotNull(f.Manager.Catalog.Get(expected));
+            Assert.Single(events.Where(e => e.Kind == SessionEventKind.CommandReply));
+        }
+        f.Manager.DetachChannel(source.Target);
+        f.Manager.AttachChannel(source.Target, f.Owner);
+        Assert.Empty(f.Owner.History());
+        var before = f.Manager.Catalog.List().Select(row => SessionWait.Text(row["id"])).ToHashSet();
+        await f.Router.HandleExternalMessageAsync(source, Message("/fork"));
+        var generated = f.Manager.Catalog.List().Single(row => !before.Contains(SessionWait.Text(row["id"])));
+        Assert.Matches("^" + System.Text.RegularExpressions.Regex.Escape(f.Owner.Id) + "_s_[a-f0-9]{32}$", SessionWait.Text(generated["id"])!);
+        Assert.Equal(f.Owner.Id, SessionWait.Text(f.Manager.ChannelBinding(source.Target)?["sessionId"]));
+    }
+
+    [Fact]
     public async Task Raw_multiline_fork_matches_Source_keeps_parent_attachment_and_session_fork_rebinds()
     {
         const string raw = "leaf First line\n\n  second line  ";

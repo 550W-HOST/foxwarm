@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
 
@@ -127,13 +128,16 @@ internal sealed partial class MessageRouter
                     $"✅ Moved approved node `{args[1]}` → `{args[2]}`.\nAuth token hash and metadata were preserved server-side.\nRuntime connection: `{(online ? "old connection closed" : "old node not online")}`.\nNode-side credentials still store the old node id. Update the node credentials file to use nodeId `{args[2]}` with the existing authToken, then restart the node so it reconnects with the new id.";
             }
             else if (args.Length == 2 && args[0] == "inspect")
-                reply = NodeRow(
-                    manager
+            {
+                var summary = manager
                         .NodeSummaries()
                         .OfType<JsonObject>()
                         .FirstOrDefault(node => SessionWait.Text(node["id"]) == args[1])
-                        ?? throw new InvalidDataException("Node not found.")
-                );
+                        ?? throw new InvalidDataException("Node not found.");
+                reply = $"Node inspection: `{args[1]}`\n```json\n"
+                    + summary.ToJsonString(new JsonSerializerOptions { WriteIndented = true })
+                    + "\n```";
+            }
             else if (bound is not null)
                 reply =
                     $"🔒 Current session belongs to an isolated agent bound to node `{bound}`. Changing `currentNode` here would not affect runtime execution. Use `/agent isolated <agent> off` first if you really want to unbind it.";

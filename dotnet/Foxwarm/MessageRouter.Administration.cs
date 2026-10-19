@@ -76,7 +76,9 @@ internal sealed partial class MessageRouter
             await owner.Entry.SaveLane.CommitSettingsAsync(patch, runtime.Manager.Models);
         var dto = owner.BuildDto();
         var models = runtime.Manager.Models.Capture();
-        var current = models.All.Count == 0 ? null : models.Resolve(owner.Metadata().Model);
+        var rawModel = owner.Metadata().Model;
+        var currentKey = rawModel is not null && models.Contains(rawModel) ? rawModel : models.DefaultKey;
+        var current = models.All.Count == 0 ? null : models.Resolve(currentKey);
         var lines = child
             ? new List<string>
             {
@@ -90,7 +92,7 @@ internal sealed partial class MessageRouter
             : new List<string>
             {
                 "🤖 *Model / Effort*",
-                $"- model: `{current?.Key ?? models.DefaultKey}` (raw: {(owner.Metadata().Model is { } raw ? "`" + raw + "`" : "default")})",
+                $"- model: `{currentKey}` (raw: {(rawModel is { } raw ? "`" + raw + "`" : "default")})",
                 $"- effort: raw={owner.Metadata().Effort ?? "unset"}, effective={SessionWait.Text(dto["effectiveEffort"]) ?? "per-leaf default"}",
                 "- allowed: " + string.Join(", ", current?.AllowedEfforts ?? HostModels.Efforts),
                 "- model default: " + (current?.DefaultEffort ?? "per-leaf default"),
@@ -103,7 +105,7 @@ internal sealed partial class MessageRouter
                 var tags = new[]
                 {
                     option.Key == models.DefaultKey ? "default" : null,
-                    option.Key == current?.Key ? "current" : null,
+                    option.Key == currentKey ? "current" : null,
                 }
                     .OfType<string>()
                     .ToArray();

@@ -285,9 +285,7 @@ internal sealed partial class SessionManager
         var catalog = models.Capture();
         var leaf = catalog.All.Count == 0 ? null : catalog.Resolve(meta.Model);
         var (_, children) = CatalogMetadataOffset(0, 10, parent: statusTarget.Id);
-        var currentNode = statusTarget.Entry.WithState(state =>
-            SessionWait.Text(state.AuthorityEnvelope["currentNode"]) ?? "master"
-        );
+        var currentNode = SessionWait.Text(dto["currentNode"])!;
         var isolated = AgentIsolated(statusTarget.Agent);
         var usage = summary.Usage;
         var cached = SessionWait.Number(usage?["cachedTokens"]) ?? 0;
