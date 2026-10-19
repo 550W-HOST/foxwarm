@@ -380,6 +380,9 @@ internal sealed partial class SessionToolExecutor(
             }
             cancellationToken.ThrowIfCancellationRequested();
             hosted.Registry.Runner.AssertCanContinue();
+            if (!Programmatic && hosted.Entry.WithState(state => SessionCatalog.Flag(state.AuthorityEnvelope["verbose"])))
+                sessions.BroadcastTransientText(hosted,
+                    $"🛠 *[{name}]*: `{ToolArgsPreview(name, args)}`");
             dispatched = true;
             var runtimeLease = Programmatic ? null : hosted.BeginTool(ToolRuntime(resolved));
             var startedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();

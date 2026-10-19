@@ -110,12 +110,9 @@ internal sealed partial class MessageRouter
                         ? Reply("noop", "No queued messages")
                         : Reply("accepted", "Queued messages requested");
                 case "compact":
-                    var keep = CommandArguments.CompactKeep(
-                        command
-                            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
-                            .Skip(1)
-                            .ToArray()
-                    );
+                    var args = command.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Skip(1).ToArray();
+                    var toolsOnly = args.FirstOrDefault() == "tools";
+                    var keep = CommandArguments.CompactKeep(toolsOnly ? args.Skip(1).ToArray() : args);
                     if (owner.Entry.HistoryMutation)
                         return Reply(
                             "error",
@@ -124,6 +121,11 @@ internal sealed partial class MessageRouter
                         );
                     if (owner.Entry.WithState(state => state.History.Count == 0))
                         return Reply("noop", "History is empty");
+                    if (toolsOnly)
+                    {
+                        await owner.Compactor.PruneToolsManuallyAsync(keep);
+                        return Reply("accepted", "Tool outputs pruned");
+                    }
                     var compact = await owner.Compactor.StartManualAsync(keepPercent: keep);
                     return compact.AlreadyPending ? Reply("noop", "Compaction is already pending")
                         : compact.Started

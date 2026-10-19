@@ -21,7 +21,7 @@ Callers: SessionManager settings/goal/timer operations, SessionOwner retry/compa
 
 ## Contract and side effects
 
-Existing prompt-cache keys are read without capturing history. Retry append/replacement stages an immutable record and shares unchanged history, publishing only after the same strict store result. Settings patches validate against the host's model configuration before publication. Retry notices are persisted as model-visible history metadata through the same canonical ordering; they do not create child-handoff receipts. Compact wake cleanup is wait-neutral and must not clear a declared Session wait accidentally.
+Existing prompt-cache keys are read without capturing history. Retry append/replacement stages an immutable record and shares unchanged history, publishing only after the same strict store result. Model settings patches validate against the host's model configuration before publication; the verbose flag uses the same strict settings lane and requires a boolean. Retry notices are persisted as model-visible history metadata through the same canonical ordering; they do not create child-handoff receipts. Compact wake cleanup is wait-neutral and must not clear a declared Session wait accidentally.
 
 ## Tests
 

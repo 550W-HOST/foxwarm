@@ -154,10 +154,7 @@ public sealed partial class CommandAdministrationTests
                         route,
                         new { text, controlRequestId = "correlated-" + text }
                     );
-                    if (text.Contains("tools", StringComparison.Ordinal))
-                        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-                    else
-                        Assert.True(
+                    Assert.True(
                             response.IsSuccessStatusCode,
                             text + ": " + await response.Content.ReadAsStringAsync()
                         );
@@ -206,7 +203,7 @@ public sealed partial class CommandAdministrationTests
     }
 
     [Fact]
-    public async Task Correlated_controls_keep_one_feedback_no_history_and_reject_tools_without_model_compaction()
+    public async Task Correlated_controls_keep_one_feedback_no_history_and_empty_tools_pruning_does_not_run_model_compaction()
     {
         await using var f = await ExternalChannelFixture.CreateAsync();
         var events = new List<SessionRuntimeEvent>();
@@ -232,10 +229,7 @@ public sealed partial class CommandAdministrationTests
                 e => SessionWait.Text(e.Data?["type"]) == "session-control-feedback"
             );
             Assert.Equal("request", SessionWait.Text(feedback.Data?["requestId"]));
-            Assert.Equal(
-                text.Contains("tools") ? "error" : "noop",
-                SessionWait.Text(feedback.Data?["feedback"]?["status"])
-            );
+            Assert.Equal("noop", SessionWait.Text(feedback.Data?["feedback"]?["status"]));
             Assert.DoesNotContain(events, e => e.Kind == SessionEventKind.CommandReply);
             Assert.Empty(f.Owner.History());
         }

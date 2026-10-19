@@ -26,10 +26,6 @@ internal static class CommandArguments
 
     internal static double? CompactKeep(string[] args)
     {
-        if (args.FirstOrDefault() == "tools")
-            throw new InvalidDataException(
-                "Historical tool-response pruning is not available through this command yet."
-            );
         return Number(args.FirstOrDefault()) is > 0 and <= 100 and var value ? value / 100 : null;
     }
 

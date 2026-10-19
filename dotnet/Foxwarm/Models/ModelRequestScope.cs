@@ -7,6 +7,7 @@ internal enum ModelRequestScope
 {
     LowLevel,
     Canonical,
+    Btw,
     CompactPlan,
     BackgroundCompactPlan,
 }
@@ -26,8 +27,8 @@ internal static class ProviderPromptCache
                         Encoding.UTF8.GetBytes(
                             sessionId
                                 + (
-                                    scope == ModelRequestScope.BackgroundCompactPlan
-                                        ? "--compact-plan"
+                                    scope == ModelRequestScope.Btw ? "--btw"
+                                        : scope == ModelRequestScope.BackgroundCompactPlan ? "--compact-plan"
                                         : ""
                                 )
                         )

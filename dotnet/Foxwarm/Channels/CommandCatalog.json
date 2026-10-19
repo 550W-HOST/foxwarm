@@ -17,16 +17,45 @@
   },
   {
     "name": "/compact",
-    "description": "Compact the current session's history. Optional argument: [keep%].",
+    "description": "Compact history. `args: [keep%]` or `/compact tools [keep%]`",
     "usage": null,
     "requiresSession": true,
     "showInTelegram": true,
     "autocomplete": {
       "children": [
         {
+          "value": "tools",
+          "kind": "literal",
+          "description": "Shorten oversized historical tool results without running model compaction",
+          "usage": "/compact tools [keep%]",
+          "children": [
+            {
+              "value": "[keep%]",
+              "kind": "placeholder",
+              "description": "Optional keep percentage, e.g. 20 or 50"
+            }
+          ]
+        },
+        {
           "value": "[keep%]",
           "kind": "placeholder",
           "description": "Optional keep percentage, e.g. 20 or 50"
+        }
+      ]
+    }
+  },
+  {
+    "name": "/btw",
+    "description": "Run a side/background model request without executing tools",
+    "usage": "Usage: /btw <message>",
+    "requiresSession": true,
+    "showInTelegram": true,
+    "autocomplete": {
+      "children": [
+        {
+          "value": "<message>",
+          "kind": "placeholder",
+          "description": "Side/background question to answer without executing tools"
         }
       ]
     }
@@ -808,6 +837,43 @@
               ]
             }
           ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "/delete-messages",
+    "description": "Delete messages from current session. `args: <num>` (positive: oldest, negative: newest)",
+    "usage": null,
+    "requiresSession": true,
+    "showInTelegram": false,
+    "autocomplete": {
+      "children": [
+        {
+          "value": "<num>",
+          "kind": "placeholder",
+          "description": "Positive = oldest, negative = newest"
+        }
+      ]
+    }
+  },
+  {
+    "name": "/verbose",
+    "description": "Toggle verbose mode (show tool calls). `args: [on|off]`",
+    "usage": null,
+    "requiresSession": true,
+    "showInTelegram": true,
+    "autocomplete": {
+      "children": [
+        {
+          "value": "on",
+          "kind": "literal",
+          "description": "Show tool calls and verbose details"
+        },
+        {
+          "value": "off",
+          "kind": "literal",
+          "description": "Hide tool calls and verbose details"
         }
       ]
     }

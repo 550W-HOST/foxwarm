@@ -229,6 +229,9 @@ internal sealed partial class MessageRouter
                 case "/search":
                     await HandleSearchCommandAsync(source, args, owner!);
                     break;
+                case "/btw" or "/verbose" or "/delete-messages":
+                    await HandleSessionEffectAsync(source, command, args, owner!);
+                    break;
                 case "/messages":
                     await HandleMessagesCommandAsync(source, args, owner!);
                     break;

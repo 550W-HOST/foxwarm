@@ -15,12 +15,19 @@ internal sealed partial class MessageRouter
         switch (command)
         {
             case "/compact":
-                var keep = CommandArguments.CompactKeep(args);
+                var toolsOnly = args.FirstOrDefault() == "tools";
+                var keep = CommandArguments.CompactKeep(toolsOnly ? args.Skip(1).ToArray() : args);
                 if (owner.Entry.HistoryMutation)
                     throw new InvalidOperationException("Session history change is in progress.");
                 if (owner.Entry.WithState(state => state.History.Count == 0))
                 {
                     await source.Reply("History is empty.");
+                    return;
+                }
+                if (toolsOnly)
+                {
+                    var pruned = await owner.Compactor.PruneToolsManuallyAsync(keep);
+                    await source.Reply(pruned.Text);
                     return;
                 }
                 var compact = await owner.Compactor.StartManualAsync(keepPercent: keep);

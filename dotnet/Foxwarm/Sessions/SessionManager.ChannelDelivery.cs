@@ -39,6 +39,14 @@ internal sealed partial class SessionManager
         return new JsonObject { ["output"] = $"Message sent to channel target `{target}`" };
     }
 
+    internal void BroadcastTransientText(SessionOwner owner, string text)
+    {
+        // Source broadcast options contain only excludePlatforms; no final/parse-mode/progress decoration.
+        foreach (var (_, conversation, channel) in AutomaticTargets(owner.Id))
+            _ = Foxwarm.Channels.ChannelProgress.BestEffortAsync(
+                value => channel.Send(conversation, value, new(), CancellationToken.None), text);
+    }
+
     internal void PresentChannelText(string id, string text)
     {
         var data = new JsonObject

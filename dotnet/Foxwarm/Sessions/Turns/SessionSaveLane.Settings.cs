@@ -22,6 +22,12 @@ public sealed partial class SessionSaveLane
                 if (patch.ContainsKey("compactThresholdTokens"))
                     desired["compactThresholdTokens"] = patch["compactThresholdTokens"]
                         ?.DeepClone();
+                if (patch.ContainsKey("verbose"))
+                {
+                    if (patch["verbose"] is not JsonValue flag || !flag.TryGetValue<bool>(out _))
+                        throw new InvalidDataException("verbose must be boolean.");
+                    desired["verbose"] = flag.DeepClone();
+                }
                 var changes = new JsonObject();
                 foreach (var (key, value) in desired)
                 {

@@ -131,7 +131,7 @@ public sealed partial class CommandAdministrationTests
     }
 
     [Fact]
-    public async Task Shared_catalog_projects_hidden_handlers_autocomplete_and_completed_effects_without_P2_advertising()
+    public async Task Shared_catalog_projects_hidden_handlers_autocomplete_and_completed_effects()
     {
         await using var f = await ExternalChannelFixture.CreateAsync(
             new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
@@ -149,13 +149,14 @@ public sealed partial class CommandAdministrationTests
         Assert.Contains("/agent", telegram);
         Assert.DoesNotContain("/messages", telegram);
         Assert.DoesNotContain("`/messages`", help);
+        Assert.DoesNotContain("/delete-messages", telegram);
+        Assert.NotNull(ExternalCommands.Find("/delete-messages"));
+        Assert.Contains("/btw", telegram);
+        Assert.Contains("/verbose", telegram);
         Assert.True(ExternalCommands.Find("/messages")!["requiresSession"]!.GetValue<bool>());
         foreach (
             var name in new[]
             {
-                "/btw",
-                "/verbose",
-                "/delete-messages",
                 "/tools",
                 "/config",
                 "/index",
@@ -177,7 +178,7 @@ public sealed partial class CommandAdministrationTests
                 Assert.True(row.ContainsKey("usage"));
             }
         );
-        Assert.DoesNotContain(
+        Assert.Contains(
             ExternalCommands.Find("/compact")!["autocomplete"]!["children"]!.AsArray(),
             row => SessionWait.Text(row?["value"]) == "tools"
         );

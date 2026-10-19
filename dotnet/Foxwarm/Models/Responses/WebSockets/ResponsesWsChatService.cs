@@ -71,6 +71,7 @@ internal sealed class ResponsesWsChatService(
                                 or ModelRequestScope.BackgroundCompactPlan
                             ? "compact-plan"
                         : scope == ModelRequestScope.Canonical ? "chat"
+                        : scope == ModelRequestScope.Btw ? "btw"
                         : "low-level"
                 )
                 .ConfigureAwait(false);

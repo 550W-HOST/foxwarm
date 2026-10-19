@@ -265,7 +265,8 @@ internal sealed partial class SessionManager
         string name,
         string? server = null,
         bool unknownNode = false,
-        string? node = null
+        string? node = null,
+        string? selectedNode = null
     )
     {
         if (name == "call_tool" && source == "builtin")
@@ -284,7 +285,7 @@ internal sealed partial class SessionManager
             ?? (
                 source == "node"
                 || source == "builtin" && name is "send_file" or "image_write_to_file"
-                    ? CurrentNode(owner)
+                    ? selectedNode ?? CurrentNode(owner)
                     : "master"
             );
         if (
@@ -313,7 +314,7 @@ internal sealed partial class SessionManager
             );
     }
 
-    internal JsonArray ModelDefinitions(SessionOwner owner, JsonArray? explicitOverride = null)
+    internal JsonArray ModelDefinitions(SessionOwner owner, JsonArray? explicitOverride = null, string? selectedNode = null)
     {
         if (explicitOverride is not null)
             return (JsonArray)explicitOverride.DeepClone();
@@ -321,12 +322,12 @@ internal sealed partial class SessionManager
             throw new InvalidOperationException(
                 "Model request source is no longer the current Session owner."
             );
-        var node = CurrentNode(owner);
+        var node = selectedNode ?? CurrentNode(owner);
         var definitions = tools
             .Entries.Where(entry =>
                 entry.DefaultInject
                 && entry.Source != "node"
-                && ToolVisible(owner, entry.Source, SessionWait.Text(entry.Definition["name"])!)
+                && ToolVisible(owner, entry.Source, SessionWait.Text(entry.Definition["name"])!, selectedNode: node)
             )
             .Select(entry => (JsonNode?)ToolCallControls.ForModel(entry.Definition))
             .ToList();
