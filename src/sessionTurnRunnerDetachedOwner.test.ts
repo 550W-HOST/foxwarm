@@ -21,8 +21,11 @@ import * as sessionHistory from './session/history';
 import { LocalSessionTurnHost, SessionTurnRunner } from './sessionTurnRunner';
 import type { Message, QueueItem, Session } from './types';
 import { logger } from './common';
-import { putImageBlob, resolveImageBlobPath } from './imageBlobs';
+import { hydrateMessagesForProvider, putImageBlob, resolveImageBlobPath } from './imageBlobs';
 import fs from 'fs-extra';
+import os from 'node:os';
+import path from 'node:path';
+import { createExecRuntime } from './execManager';
 import sharp from 'sharp';
 
 function createSession(id: string, text: string): Session {
@@ -1716,5 +1719,127 @@ test('final ToolScript wait stops the exact-owner runner without another provide
   } finally {
     (llm as any).chat = originalChat;
     await (await import('./toolscript')).shutdownToolScriptRuntime();
+  }
+});
+
+test('ToolScript returns an extensionless image and waits on a real owned background exec before its completion wakes the caller', async () => {
+  await initArchiveStore();
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'script-image-exec-wait-'));
+  const imagePath = path.join(root, 'opaque-image');
+  const releasePath = path.join(root, 'release-exec');
+  const png = await sharp({ create: { width: 7, height: 5, channels: 3, background: { r: 40, g: 110, b: 190 } } }).png().toBuffer();
+  await fs.writeFile(imagePath, png);
+  const session = createSession(`script_image_exec_wait_${Date.now()}`, 'capture the image and wait for the command');
+  const effects = createEffects(session, []);
+  let completed!: { execId: string; exitCode: number | null };
+  let resolveCompletion!: () => void;
+  const completion = new Promise<void>(resolve => { resolveCompletion = resolve; });
+  const runtime = createExecRuntime({
+    getDefaultCwd: () => root,
+    getExecTempDir: () => path.join(root, 'exec'),
+    getAgentDir: () => root,
+    registryPath: path.join(root, 'running-exec.json'),
+    completionDispatcher: async (entry, status, message) => {
+      assert.equal(entry.sessionId, session.id);
+      assert.equal(entry.agentName, session.agent);
+      completed = { execId: entry.id, exitCode: status.exitCode };
+      const transition = sessionManager.applyQueuedItemToWaitState(session, {
+        type: 'background', execId: entry.id, externalEventId: `exec-completion:${entry.id}`, parts: [{ system: message }],
+      });
+      assert.equal(transition.action, 'enqueue');
+      if (transition.action === 'enqueue') session.queue.push(...transition.items);
+      await effects.persistSession(session);
+      resolveCompletion();
+    },
+  });
+  effects.execRuntime = runtime;
+  const list = runtime.listRunningExecs;
+  const ownershipChecks: ReturnType<typeof list>[] = [];
+  runtime.listRunningExecs = () => {
+    const actual = list();
+    ownershipChecks.push(actual);
+    return actual;
+  };
+  const program = "const fs = require('node:fs'); const gate = setInterval(() => { if (fs.existsSync(process.argv[1])) { clearInterval(gate); console.log('owned exec completed'); } }, 50);";
+  const command = `${JSON.stringify(process.execPath)} -e "${program}" ${JSON.stringify(releasePath)}`;
+  const originalChat = llm.chat;
+  let requests = 0;
+  let execId: string | undefined;
+  let blobId: string | undefined;
+  (llm as any).chat = async (_parts: any, _owner: Session, _iteration: number, options: any) => {
+    requests++;
+    if (requests === 1) {
+      const call = { id: 'image-exec-script', name: 'run_script', args: {
+        code: [
+          'image = call_tool("read", {"filePath": args["imagePath"]})',
+          'job = call_tool("exec", {"command": args["command"], "timeout": 1})',
+          'image["execId"] = job["execId"]',
+          'call_tool("wait", {"waitExecIds": [job["execId"]], "wakeIfNoActivityAfterSeconds": None})',
+          'return image',
+        ].join('\n'),
+        args: { imagePath, command },
+      } };
+      await options.appendMessage({ role: 'model', parts: [{ functionCall: call }] });
+      return { text: '', toolCalls: [call] };
+    }
+    assert.equal(requests, 2, 'only the real exec completion may start another provider iteration');
+    assert.ok(completed, 'the caller must remain stopped before the real command completion');
+    await options.appendMessage({ role: 'model', parts: [{ text: 'owned command completed' }] });
+    return { text: 'owned command completed' };
+  };
+  const deadline = setTimeout(() => resolveCompletion(), 10_000);
+  try {
+    await runtime.initialize();
+    const runner = new SessionTurnRunner(new LocalSessionTurnHost(effects, session));
+    await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
+    assert.equal(requests, 1, 'the image result and final wait must not trigger a provider continuation');
+    assert.equal(session.busy, false);
+    const toolMessage = session.history.at(-1)!;
+    assert.equal(toolMessage.role, 'tool');
+    const result = toolMessage.parts.find(part => part.functionResponse)!.functionResponse!.response;
+    execId = result.result.execId;
+    assert.ok(execId);
+    assert.equal(result.status, 'completed', result.error);
+    assert.equal(result.result.inlineData, '[image promoted, mimeType=image/png]');
+    assert.deepEqual(session.meta.wait?.waitExecIds, [execId]);
+    assert.equal(session.meta.wait?.timeoutSeconds, undefined);
+    assert.ok(ownershipChecks.length >= 2, 'both initial validation and final dispatch inspect the actual exec runtime');
+    for (const entries of ownershipChecks) {
+      assert.ok(entries.some(entry => entry.id === execId && entry.sessionId === session.id && entry.agentName === session.agent && entry.notifyOnCompletion));
+    }
+    const image = toolMessage.parts.find(part => part.inlineDataRef)!;
+    assert.ok(image.inlineDataRef?.blobId);
+    blobId = image.inlineDataRef.blobId;
+    assert.equal(image.toolUseId, 'image-exec-script');
+    assert.equal(image.imageMeta?.width, 7);
+    assert.equal(image.imageMeta?.height, 5);
+    assert.equal(JSON.stringify(toolMessage).includes(png.toString('base64')), false);
+    await fs.remove(imagePath);
+    const hydrated = await hydrateMessagesForProvider([toolMessage]);
+    assert.deepEqual(Buffer.from(hydrated[0].parts.find(part => part.inlineData)!.inlineData!.data, 'base64'), png);
+
+    await fs.writeFile(releasePath, 'release');
+    await runtime.waitForExecCompletion(execId, 5_000);
+    await runtime.reconcileNow();
+    await completion;
+    assert.deepEqual(completed, { execId, exitCode: 0 });
+    assert.equal(session.meta.wait, undefined, 'real completion clears the caller wait through the canonical queue transition');
+    assert.equal(session.queue.length, 1);
+    assert.equal(session.queue[0].execId, execId);
+    await withGlobalOwnerLookupsForbidden(() => runner.processSessionQueue(session.id));
+    assert.equal(requests, 2);
+    assert.equal(session.history.at(-1)!.parts[0].text, 'owned command completed');
+    assert.equal(session.busy, false);
+  } finally {
+    clearTimeout(deadline);
+    (llm as any).chat = originalChat;
+    const remaining = list();
+    await fs.writeFile(releasePath, 'release');
+    await Promise.all(remaining.map(entry => runtime.waitForExecCompletion(entry.id, 5_000)));
+    await runtime.reconcileNow();
+    await runtime.shutdown();
+    await (await import('./toolscript')).shutdownToolScriptRuntime();
+    if (blobId) await fs.remove(resolveImageBlobPath(blobId));
+    await fs.remove(root);
   }
 });

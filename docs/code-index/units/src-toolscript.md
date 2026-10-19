@@ -1,7 +1,7 @@
 # Unit: src-toolscript
 
 Files: src/toolscript.ts, src/toolscript.test.ts, src/toolscriptWait.test.ts, src/toolscriptImageParts.test.ts, src/toolscriptSource.test.ts, src/toolscriptSourceRouting.test.ts
-Secondary files: src/toolscriptSkills.test.ts, package.json, package-lock.json
+Secondary files: src/toolscriptSkills.test.ts, src/sessionTurnRunnerDetachedOwner.test.ts, src/sessionWorkerHost.test.ts, skills/toolscript-automation/SKILL.md, package.json, package-lock.json
 
 ## Purpose
 
@@ -23,7 +23,7 @@ Host calls inherit only the current invocation signal and check it before anothe
 
 ## Host API
 
-The default-injected `run_script` description includes the Python-subset syntax, synchronous `call_tool` usage with a tool name or tool ID, and a minimal inline example with `args` and `return`.
+The default-injected `run_script` description includes the Python-subset syntax, synchronous `call_tool` usage with a tool name or tool ID, and a minimal inline example with `args` and `return`. It also identifies the top-level image return fields and the last-host-call condition for a nested wait to affect the calling Session.
 
 - `call_tool(...)` — normalize shorthand or a unified descriptor, dynamically load `./tools`, and invoke the exported `call_tool` handler with the outer exact `ToolContext`, including its trusted placement/persist hooks and programmatic producer hint.
 - `request_model_without_context(prompt, model?)` — production one-shot model request using the current session's raw effort and optional model selection but not its history; returns the text plus canonical parts (text and Blob-referenced images) without reasoning, function calls, provider metadata, or image bytes.
