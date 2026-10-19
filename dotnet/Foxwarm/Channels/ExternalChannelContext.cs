@@ -1,3 +1,4 @@
+using Foxwarm.Sessions;
 using System.Text.Json.Nodes;
 
 namespace Foxwarm.Channels;
@@ -15,7 +16,11 @@ internal sealed record ExternalChannelContext(
     internal string Target => Instance + ":" + Conversation;
 }
 
-internal sealed record ExternalChannelMessage(IReadOnlyList<JsonObject> Parts)
+internal sealed record ExternalChannelMessage(
+    IReadOnlyList<JsonObject> Parts,
+    IReadOnlyList<JsonObject>? IngressMetadataParts = null,
+    Func<SessionOwner, Task<IReadOnlyList<JsonObject>>>? MaterializeParts = null
+)
 {
     internal string Text =>
         string.Join(

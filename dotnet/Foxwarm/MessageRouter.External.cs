@@ -51,12 +51,24 @@ internal sealed partial class MessageRouter
             await source.Reply(error.Message);
             return;
         }
+        IReadOnlyList<JsonObject> parts = message.Parts;
+        if (authorizedAtIngress && message.MaterializeParts is { } materialize)
+            try
+            {
+                parts = await materialize(owner);
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine("Channel media materialization failed: " + error.Message);
+            }
+        if (message.IngressMetadataParts is { } metadata)
+            parts = metadata.Concat(parts).ToArray();
         runtime.Manager.RecordLastChannel(owner, source);
         var sendOnly =
             SessionWait.Text(runtime.Manager.ChannelBinding(source.Target)?["mode"]) == "send-only";
         var item = new QueueItem(
             QueueItemType.User,
-            SessionBoundary.ExternalChannelInput(message.Parts, source, sendOnly),
+            SessionBoundary.ExternalChannelInput(parts, source, sendOnly),
             Source: new QueueSource(
                 source.Type,
                 source.Conversation,

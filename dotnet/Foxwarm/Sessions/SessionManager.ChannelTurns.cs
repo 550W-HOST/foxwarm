@@ -89,7 +89,7 @@ internal sealed partial class SessionManager
         }
     }
 
-    private ChannelProgressTarget[] ProgressTargets(SessionOwner owner)
+    private ChannelProgressTarget[] ProgressTargets(SessionOwner owner, string turnId)
     {
         var configured = models.ConfigurationOwner?.CurrentChannels() ?? new JsonObject();
         var result = new List<ChannelProgressTarget>();
@@ -111,7 +111,7 @@ internal sealed partial class SessionManager
                     text =>
                         channel.IsLifecycleActive?.Invoke(conversation) == true
                             ? Task.CompletedTask
-                            : channel.Send(conversation, text, new(), CancellationToken.None)
+                            : channel.Send(conversation, text, new(PresentationTurnId: turnId), CancellationToken.None)
                 )
             );
         }
@@ -146,7 +146,7 @@ internal sealed partial class SessionManager
         {
             ChannelProgress.Report(
                 turn.Id,
-                ProgressTargets(owner),
+                ProgressTargets(owner, turn.Id),
                 SessionWait.Text(call["id"]) ?? "",
                 SessionWait.Text(call["name"]) ?? "tool",
                 start
@@ -346,7 +346,7 @@ internal sealed partial class SessionManager
                         channel.Send(
                             conversation,
                             value,
-                            new(final, final ? null : "Markdown"),
+                            new(final, final ? null : "Markdown", PresentationTurnId: turn.Id),
                             CancellationToken.None
                         ),
                     decorated

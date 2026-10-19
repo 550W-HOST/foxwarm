@@ -20,6 +20,13 @@ internal sealed partial class SessionManager
     {
         var id = SessionWait.Text(ChannelBinding(platform + ":" + conversation)?["sessionId"]);
         var owner = id is null ? null : await GetExistingAsync(id, token);
+        return await SaveInboundChannelFileCoreAsync(platform, owner, bytes, filename, mime, caption, token, isImage);
+    }
+
+    private async Task<IReadOnlyList<JsonObject>> SaveInboundChannelFileCoreAsync(
+        string platform, SessionOwner? owner, byte[] bytes, string filename, string mime,
+        string caption, CancellationToken token, bool? isImage)
+    {
         using var admission = owner is null ? null : BeginOwnerMutation(owner);
         var agent = owner?.Agent ?? "main";
         // External Source saves differ from WebUI staging: only effectively isolated Sessions select a Node.

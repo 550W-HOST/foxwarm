@@ -20,7 +20,8 @@ internal sealed record ChannelSendOptions(
     int? NativeChatType = null,
     string? MessageType = null,
     IReadOnlyList<string>? MentionedList = null,
-    IReadOnlyList<string>? MentionedMobileList = null
+    IReadOnlyList<string>? MentionedMobileList = null,
+    string? PresentationTurnId = null
 );
 
 internal sealed record RegisteredChannel(

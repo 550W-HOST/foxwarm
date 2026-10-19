@@ -11,7 +11,10 @@ internal sealed record ChannelTransportDependencies(
     Func<string, Uri>? TelegramFiles = null,
     Func<TimeSpan, CancellationToken, Task>? Delay = null,
     Func<DateTimeOffset>? Now = null,
-    System.Net.IPAddress? CallbackAddress = null
+    System.Net.IPAddress? CallbackAddress = null,
+    Func<HttpClient>? CreateQQBotHttp = null,
+    TimeSpan? QQBotMediaTimeout = null,
+    TimeSpan? QQBotPartTimeout = null
 );
 
 internal sealed class ManagedChannels(
@@ -24,7 +27,7 @@ internal sealed class ManagedChannels(
     internal WeixinApi Weixin { get; } = new(dependencies);
 
     private static bool Implemented(string type) =>
-        type is "telegram" or "matrix" or "weixin" or "wework";
+        type is "telegram" or "matrix" or "weixin" or "wework" or "qqbot";
 
     private readonly Dictionary<string, IManagedChannel> running = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> errors = new(StringComparer.Ordinal);
@@ -68,7 +71,9 @@ internal sealed class ManagedChannels(
                         ["enabled"] = enabled,
                         ["details"] = new JsonArray(
                             implemented
-                                ? type == "wework"
+                                ? type == "qqbot"
+                                    ? "QQ Bot gateway"
+                                    : type == "wework"
                                     ? "WeWork callback/webhook/WebSocket"
                                     : type + " polling"
                                 : registered is not null
@@ -189,6 +194,7 @@ internal sealed class ManagedChannels(
                 dependencies,
                 error => RecordError(id, error)
             ),
+            "qqbot" => new QQBotChannel(id, config, sessions, router, dependencies, error => RecordError(id, error)),
             "wework" => new WeWorkChannel(
                 id,
                 config,

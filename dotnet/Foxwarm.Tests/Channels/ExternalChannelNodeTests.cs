@@ -14,8 +14,9 @@ public sealed class ExternalChannelNodeTests
     public async Task Real_repository_CLI_Node_receives_isolated_inbound_bytes_while_nonisolated_selected_Node_and_named_helper_keep_Source_placement()
     {
         await using var peer = await WeWorkPeer.StartAsync();
+        await using var qq = await QQBotPeer.StartAsync();
         await using var f = await ExternalChannelFixture.CreateAsync(
-            dependencies: peer.Dependencies
+            dependencies: peer.Dependencies with { CreateQQBotHttp = qq.Dependencies.CreateQQBotHttp }
         );
         var builder = WebApplication.CreateSlimBuilder();
         builder.Logging.ClearProviders();
@@ -136,6 +137,19 @@ public sealed class ExternalChannelNodeTests
                         .Select(part => SessionWait.Text(part["text"] ?? part["system"]))
                 )
             );
+            // QQ resolves the actual authorized Session before its bounded Node materializer runs.
+            qq.Assets["/small"] = "QQ Node bytes"u8.ToArray();
+            await f.Configuration.SaveChannelsAsync(new JsonObject { ["qq"] = qq.Config() });
+            f.Manager.AttachChannel("qq:group:room", f.Owner);
+            qq.Push("GROUP_AT_MESSAGE_CREATE", QQBotPeer.Message("qq-node", "QQ media", attachments: QQBotPeer.Attachment("/small")));
+            await TelegramChannelTests.Until(() => f.Owner.Entry.Snapshot().Queue.Count == 2);
+            var qqFiles = Directory.GetFiles(Path.Combine(nodeRoot, "agents", "main", ".temp/channel-files/qqbot"));
+            Assert.Single(qqFiles);
+            Assert.Equal("QQ Node bytes", await File.ReadAllTextAsync(qqFiles.Single()));
+            qq.Push("GROUP_AT_MESSAGE_CREATE", QQBotPeer.Message("qq-node-over-cap", "QQ cap", attachments: QQBotPeer.Attachment("/must-not-fetch", size: 10L * 1024 * 1024 + 1)));
+            await TelegramChannelTests.Until(() => f.Owner.Entry.Snapshot().Queue.Count == 3);
+            Assert.DoesNotContain(qq.Calls, call => call.Path == "/must-not-fetch");
+            Assert.Single(Directory.GetFiles(Path.Combine(nodeRoot, "agents", "main", ".temp/channel-files/qqbot")));
             // The eagerly called helper receives the adapter TYPE, not this named instance's binding.
             var created = await f.Manager.CreateAgentAsync("named-destination");
             var named = await f.Manager.RequiredAsync(created.MainSessionId!);

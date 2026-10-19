@@ -126,18 +126,19 @@ upload flow.
 - QQ offers typing through C2C input-notify messages, so this adapter sends
   typing only for a C2C conversation with a current latest inbound message ID.
 - C2C/group `sendFile` reuses a latest conversation-local message ID when
-  available, or a matching persisted ID supplied by the generic file-delivery
-  boundary after restart. It sends locally prepared files smaller than 5 MiB
+  available. The adapter still accepts exact-instance/conversation legacy option
+  fields, but normal Session/tool/file producers no longer supply or persist those IDs. It sends locally prepared files smaller than 5 MiB
   through the destination-specific direct base64 flow, and uses the official
   streamed chunk flow at or above 5 MiB. Images are sent only for
   byte-probed JPEG/PNG/GIF/WebP/BMP within the image cap; other images downgrade
   to generic files within the file cap. Outbound local files are hard-capped at
   100 MiB; this is lower than the 200 MiB inbound configuration hard cap.
-- `SessionTurnRunner` carries only the current turn's QQ source metadata through
-  the in-process tool context to `send_file`. An explicit target receives that
-  fallback metadata only when its exact instance/conversation matches; a
-  mismatched target is therefore proactive, while session broadcast still
-  relies on the adapter's exact-match check.
+- Normal `SessionTurnRunner`, automatic attachment delivery, and `send_file`
+  tool context carry no QQ message IDs. Legacy option readers in the adapter and
+  the read-old/drop QueueSource normalizer are not current producers. Explicit
+  request replies bind their own original inbound ID; generic direct text is
+  proactive unless actual call options select a passive route. File delivery
+  independently prefers the adapter's latest conversation-local ID.
 
 ## Runtime and configuration
 
@@ -166,9 +167,8 @@ reply and C2C typing identifiers, gateway identify and resume control flow,
 guild/DM media rejection, group/guild/DM outbound routes, and
 shutdown/reconnect fencing. Outbound tests cover destination-specific
 upload routes, direct-small bodies, streamed hash/chunk order, passive IDs/counts/sequences,
-caption/cap handling, permission failures, generation fences, and the
-`send_file` target path, including current-turn restart fallback metadata and
-mismatched-target proactive delivery. `src/channels/qqbotMediaUpload.test.ts` covers safe
+caption/cap handling, permission failures, generation fences, legacy option
+readers, and the actual `send_file` target path without new turn reply metadata. `src/channels/qqbotMediaUpload.test.ts` covers safe
 regular-file validation, the 100 MiB sparse-file preflight, HTTPS/userinfo/port
 checks, bounded prepare responses, part hashing, bounded PUT
 cancellation/timeouts, no whole-file buffering, and opaque completion tokens.

@@ -23,3 +23,5 @@ Path/cwd checks are security and data-loss boundaries, not convenience validatio
 ## Tests
 
 `dotnet/Foxwarm.Tests/Tools/MainExecCwdTests.cs`; `WindowsLocalToolsTests.cs` (Windows-only native shell/PTY paths); `MainFileDeliveryTests.cs`; `FileRetryLifetimeTests.cs`; `ExecParallelTests.cs`; `MainNativePathTests.cs`; `ExecDurationTests.cs` (real foreground/background/recovered process clocks); `NodePrivateCredentialTests.cs`; `MainLocalToolsTests.cs`; `WorkspacePatchTests.cs`; `ExactReplacementTests.cs`; `CompactLifecycleTests.cs` (paired failed-hunk feedback during repair).
+
+`FileToolCore.CopyPathAtomic` shares the existing same-directory temporary-file/rename owner with byte/text writes. It streams a prepared local spool without a whole-file buffer; QQ Main-hosted inbound media is its channel-file caller. This does not change write overwrite, path-validation or file-publication guarantees.

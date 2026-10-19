@@ -1,6 +1,6 @@
 # Module: channels
 
-> Current .NET common channel and Telegram behavior is mapped in [external channels](../units/dotnet-external-channels.md); [Matrix/Weixin](../units/dotnet-matrix-weixin.md) and [WeWork](../units/dotnet-wework.md) have transport-specific maps.
+> Current .NET common channel and Telegram behavior is mapped in [external channels](../units/dotnet-external-channels.md); [Matrix/Weixin](../units/dotnet-matrix-weixin.md) and [WeWork](../units/dotnet-wework.md) have transport-specific maps; [QQ Bot](../units/dotnet-qqbot.md) maps gateway and media execution.
 >
 > TypeScript Main compatibility/reference map. The active .NET Main architecture is mapped in the [overview](../overview.md); these contracts do not by themselves establish .NET runtime support.
 
@@ -15,7 +15,7 @@ Owns the platform-neutral channel contract/registry/authorization/runtime plus M
 - [src-channels-tui](../units/src-channels-tui.md) — blessed terminal channel.
 - [src-channels-webui](../units/src-channels-webui.md) — authenticated HTTP/SSE/upload/setup/terminal WebUI surface.
 - [src-channels-wework](../units/src-channels-wework.md) — WeChat Work webhook/callback/WebSocket modes and opt-in conversation-latest stream cards.
-- [src-channels-qqbot](../units/src-channels-qqbot.md) — official QQ Bot gateway text ingress and REST delivery.
+- [src-channels-qqbot](../units/src-channels-qqbot.md) — official QQ Bot gateway, group policy, deferred ingress media and REST/upload delivery.
 - [src-weixin](../units/src-weixin.md) — Weixin polling/send/QR-login protocol helpers.
 
 Persisted conversation attachments and broadcast selection are owned by [session channels](../units/src-session-channels.md).
@@ -104,7 +104,7 @@ The exact builtin tool name `wait` is presentation-silent for this fallback: its
 
 [2026-09-21] QQ Bot message IDs, WeWork stream-card IDs, and WeWork non-stream `response_url` callbacks are bounded adapter-local passive-delivery context, not Router state, queue boundaries, Worker RPC fields, or tool context. Within one configured Channel instance and scoped conversation, the latest valid inbound context owns subsequent automatic typing, progress, intermediate, final, lifecycle, and ordinary text delivery. Automatic Session output is broadcast to every eligible attachment; each adapter independently selects its passive context or proactive route.
 
-QQ Bot keeps a bounded in-memory latest-message map and does not persist or receive serialized message IDs from the Session turn. WeWork supersedes the previous active card, preserves substantive model text while removing transient thinking/tool status, and finishes it before routing ongoing updates to the latest card. Any ordinary text uses that latest unfinished card without requiring turn metadata; `turnFinal` controls only completion and structured progress controls only progress content. After the card finishes or expires, the existing proactive route applies. Without a stream card, WeWork keeps a bounded in-memory latest `response_url` per conversation; one terminal attachment delivery takes and removes that callback before awaiting the send, so a newer inbound callback cannot be deleted by the older attempt. Explicit webhook overrides and ordinary proactive sends bypass that terminal context. Different instances or conversations never share passive context. This policy adds no delivery ledger, outbox, persisted adapter state, receipt layer, or strategy registry.
+QQ Bot keeps a bounded in-memory latest-message map and does not persist or receive serialized message IDs from the Session turn. Explicit QQ request-level replies still bind their original inbound ID. Generic direct text is proactive unless real call options select passive delivery; file sends independently prefer adapter-local latest context. WeWork supersedes the previous active card, preserves substantive model text while removing transient thinking/tool status, and finishes it before routing ongoing updates to the latest card. Any ordinary text uses that latest unfinished card without requiring turn metadata; `turnFinal` controls only completion and structured progress controls only progress content. After the card finishes or expires, the existing proactive route applies. Without a stream card, WeWork keeps a bounded in-memory latest `response_url` per conversation; one terminal attachment delivery takes and removes that callback before awaiting the send, so a newer inbound callback cannot be deleted by the older attempt. Explicit webhook overrides and ordinary proactive sends bypass that terminal context. Different instances or conversations never share passive context. This policy adds no delivery ledger, outbox, persisted adapter state, receipt layer, or strategy registry.
 
 ### D-channel-wework-aibot-proactive-delivery
 
