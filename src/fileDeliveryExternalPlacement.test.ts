@@ -1,3 +1,4 @@
+import './testEnvironment';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -17,6 +18,9 @@ test('borrowed file delivery missing service never falls back to child SessionMa
     await fileDelivery.initializeFileDelivery({ transport, placement: 'child-reverse' });
     await assert.rejects(() => fileDelivery.deliverFile({ sourceSessionId: 'source', intent: { filePath: 'x' },
       routing: { runtimeNodeId: 'master', currentNode: 'master' } }), { code: 'FILE_DELIVERY_UNAVAILABLE', retryable: true });
+    await assert.rejects(() => fileDelivery.writeImageArtifact({ sourceSessionId: 'source', artifactPath: '/owned/image.png',
+      intent: { id: 'owned-image', filePath: 'target.png' }, routing: { runtimeNodeId: 'remote-a', currentNode: 'remote-a' } }),
+      { code: 'FILE_DELIVERY_UNAVAILABLE', retryable: true });
     await fileDelivery.shutdownFileDelivery();
   } finally { (sessionManager as any).sendFileToSession = original; transport.close(); }
 });

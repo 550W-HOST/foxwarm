@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import test from 'node:test';

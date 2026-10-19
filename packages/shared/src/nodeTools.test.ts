@@ -1,3 +1,4 @@
+require('../../../scripts/test/test-process-env.cjs').initializeTestEnvironment();
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -283,7 +284,7 @@ test('node apply_patch reports added and updated line counts', async () => {
 test('node write edit and patch compose the injected file primitives without changing write flags', async () => {
   const agentName = uniqueAgent('node_file_operations');
   const baseDir = getNodeAgentDir(agentName);
-  const writes: Array<{ filePath: string; flag: 'w' | 'wx' }> = [];
+  const writes: Array<{ filePath: string; flag: Parameters<FileOperations['write']>[2] }> = [];
   const removed: string[] = [];
   const madeDirs: string[] = [];
   const operations: FileOperations = {
@@ -351,7 +352,7 @@ test('node exec expands cwd ~ on the executing node', async () => {
         registerBackgroundExec: async metadata => { registrations.push(metadata); },
       },
     );
-    assert.match(String(result), new RegExp(`^${os.homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n---\nExit code: 0`));
+    assert.match(String(result), new RegExp(`^${(await fs.realpath(os.homedir())).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n---\nExit code: 0`));
     assert.deepEqual(registrations, []);
     assert.equal(started, 1);
   } finally {

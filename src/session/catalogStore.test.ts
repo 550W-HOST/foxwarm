@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'fs-extra';

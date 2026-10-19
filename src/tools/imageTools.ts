@@ -10,8 +10,8 @@ import {
 
 import { cropImageById, cropImageForSession, resolveImageById, resolveImageForSession } from '../toolImages';
 import { nodesManager } from '../nodes/manager';
-import { getAgentDir } from '../config';
-import { copyBetweenNodes } from '../nodeExecution';
+import { writeImageArtifact } from '../fileDelivery';
+import { getImageWriteHandoffRoot, requireImageWriteHandoffRoot } from '../imageWriteHandoff';
 
 function getTrustedCurrentSession(ctx: ToolContext) {
     if (!ctx.persistCurrentSession || !ctx.session || !ctx.sessionId) return undefined;
@@ -23,27 +23,23 @@ function boundedError(error: unknown): string {
 }
 
 async function writeWorkerRemoteImage(options: {
-    sessionId: string; agentName: string; targetNode: string; targetPath: string; overwrite: boolean;
+    sessionId: string; agentName: string; currentNode: string; targetNode: string; targetPath: string; overwrite?: boolean;
     imageId: string; buffer: Buffer;
 }): Promise<string> {
-    const agentDir = getAgentDir(options.agentName);
-    const handoffRoot = path.join(agentDir, '.temp', 'image-write-handoff');
+    const handoffRoot = getImageWriteHandoffRoot(options.agentName, options.sessionId);
     await fs.ensureDir(path.dirname(handoffRoot));
     try { await fs.mkdir(handoffRoot, { mode: 0o700 }); }
     catch (error: any) { if (error?.code !== 'EEXIST') throw error; }
-    const rootStat = await fs.lstat(handoffRoot);
-    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw new Error('Image handoff root must be a real directory.');
-    const [realAgentDir, realRoot] = await Promise.all([fs.realpath(agentDir), fs.realpath(handoffRoot)]);
-    if (realRoot !== realAgentDir && !realRoot.startsWith(realAgentDir + path.sep)) throw new Error('Image handoff root escapes the agent directory.');
+    const realRoot = await requireImageWriteHandoffRoot(options.agentName, options.sessionId);
 
     let operationDir: string | undefined; let result: string | undefined; let operationError: unknown;
     try {
         operationDir = await fs.mkdtemp(path.join(realRoot, 'operation-'));
-        const extension = path.extname(options.targetPath).slice(0, 32);
-        const tempPath = path.join(operationDir, `image${extension}`);
+        const tempPath = path.join(operationDir, 'image');
         await fs.writeFile(tempPath, options.buffer, { flag: 'wx', mode: 0o600 });
-        await copyBetweenNodes(options.sessionId, { sourceNode: 'master', sourcePath: tempPath,
-            targetNode: options.targetNode, targetPath: options.targetPath, overwrite: options.overwrite });
+        await writeImageArtifact({ sourceSessionId: options.sessionId, artifactPath: tempPath,
+            intent: { id: options.imageId, filePath: options.targetPath, ...(options.overwrite !== undefined ? { overwrite: options.overwrite } : {}) },
+            routing: { runtimeNodeId: options.targetNode, currentNode: options.currentNode } });
         result = [
             `Image \`${options.imageId}\` written to \`${options.targetPath}\` on node \`${options.targetNode}\`.`,
             `You can send it with send_file({ filePath: "${options.targetPath}", node: "${options.targetNode}" }).`,
@@ -136,10 +132,12 @@ export async function tool_image_write_to_file(args: ToolArgs, ctx: ToolContext)
         await fs.writeFile(fullPath, resolved.buffer);
     } else {
         if (ctx.sessionPlacement === 'session-worker') {
-            return await writeWorkerRemoteImage({ sessionId, agentName: ctx.session?.agent || 'main', targetNode,
-                targetPath: filePath, overwrite: overwrite === true, imageId: id, buffer: resolved.buffer });
+            return await writeWorkerRemoteImage({ sessionId, agentName: ctx.session?.agent || 'main', currentNode: ctx.session?.currentNode || 'master', targetNode,
+                targetPath: filePath, overwrite: args.overwrite, imageId: id, buffer: resolved.buffer });
         } else {
-            await nodesManager.writeFileToNode(targetNode, filePath, resolved.buffer.toString('base64'), overwrite === true, sessionId);
+            const { nodeProviderRegistry } = await import('../nodes/providers');
+            await nodeProviderRegistry.writeTransferFile({ sourceSessionId: sessionId, nodeId: targetNode, filePath,
+                dataBase64: resolved.buffer.toString('base64'), overwrite: overwrite === true, context: { agent: ctx.session?.agent || 'main' } });
         }
     }
 

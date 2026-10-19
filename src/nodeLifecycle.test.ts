@@ -1,3 +1,4 @@
+import './testEnvironment';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -135,7 +136,7 @@ test('node lifecycle uses exact provider/node routing, confirmation, and provide
     const ctx: any = { sessionId: sourceId, session, sessionPlacement: 'local' };
 
     const listed = String(await callTool('node', { action: 'list' }, ctx));
-    assert.match(listed, /Lifecycle providers:/);
+    assert.match(listed, /lifecycle-fixture/);
     assert.match(listed, /`lifecycle-fixture` \(create, ensure, inspect, destroy\)/);
 
     const created: any = await callTool('node', {
@@ -172,6 +173,12 @@ test('node lifecycle uses exact provider/node routing, confirmation, and provide
     assert.equal(inspected.node.id, 'created-a');
     assert.equal(inspected.details.request.nodeId, 'created-a');
 
+    const inspectedProvider: any = await callTool('node', { action: 'inspect', providerId: 'lifecycle-fixture' }, ctx);
+    assert.equal(inspectedProvider.provider.id, 'lifecycle-fixture');
+    assert.deepEqual(inspectedProvider.provider.lifecycle, ['create', 'ensure', 'inspect', 'destroy']);
+    const structuredList: any = await callTool('node', { action: 'list' }, { ...ctx, programmatic: true });
+    assert.ok(Array.isArray(structuredList.nodes));
+    assert.ok(structuredList.providers.some((provider: any) => provider.id === 'lifecycle-fixture'));
     const callsBeforeBadConfirmation = calls.length;
     await assert.rejects(
       () => callTool('node', { action: 'create', providerId: 'lifecycle-fixture', confirmation: 'not-accepted', parameters: {} }, ctx),
@@ -179,7 +186,7 @@ test('node lifecycle uses exact provider/node routing, confirmation, and provide
     );
     await assert.rejects(
       () => callTool('node', { action: 'inspect', nodeId: 'created-a', providerId: 'lifecycle-fixture' }, ctx),
-      /does not accept providerId/,
+      /providerId.*nodeId/,
     );
     await assert.rejects(
       () => callTool('node', { action: 'destroy', nodeId: 'created-a', confirmation: 'destroy created-a' }, ctx),

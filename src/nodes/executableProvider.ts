@@ -1,3 +1,4 @@
+import type { ExecStarted, ExecSnapshot } from '../../packages/shared/dist/execBackend';
 import crypto from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { NormalizedExecutableNodeProviderConfig } from '../config';
@@ -9,12 +10,14 @@ import {
   type NodeLifecycleProviderRequest,
   type NodeLifecycleResult,
   type NodeFilesystemRequest,
-  type NodeExecRequest,
+  type NodeExecStartRequest,
+  type NodeExecPollRequest,
+  type NodeProviderDescription,
   type NodeProvider,
   type NodeProviderCallOptions,
 } from './providerRegistry';
 
-export const EXECUTABLE_NODE_PROVIDER_PROTOCOL = 'foxwarm-node-provider@1';
+export const EXECUTABLE_NODE_PROVIDER_PROTOCOL = 'foxwarm-node-provider';
 export const EXECUTABLE_NODE_PROVIDER_MAX_LIST_BYTES = 256 * 1024;
 export const EXECUTABLE_NODE_PROVIDER_MAX_RESULT_BYTES = 8 * 1024 * 1024;
 export const EXECUTABLE_NODE_PROVIDER_MAX_LIFECYCLE_BYTES = 512 * 1024;
@@ -162,13 +165,13 @@ function normalizeNode(value: unknown, providerId: string, index: number): NodeP
   if (!isPlainRecord(value)) {
     throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Provider \`${providerId}\` node ${index} must be an object.`);
   }
-  assertOnlyKeys(value, ['id', 'kind', 'type', 'availability', 'filesystem', 'exec', 'defaultCwd'], `Provider \`${providerId}\` node ${index}`);
+  assertOnlyKeys(value, ['id', 'label', 'kind', 'type', 'availability', 'filesystem', 'exec', 'defaultCwd'], `Provider \`${providerId}\` node ${index}`);
   const id = exactString(value.id, `Provider \`${providerId}\` node id`, 128, /^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
   if (id.toLowerCase() === 'master') {
     throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', 'Executable providers cannot advertise the reserved `master` Node ID.');
   }
-  if (value.kind !== 'sandbox') {
-    throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Executable provider node \`${id}\` kind must be \`sandbox\`.`);
+  if (value.kind !== undefined && value.kind !== 'sandbox' && value.kind !== 'remote') {
+    throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Executable provider node \`${id}\` kind must be \`remote\` or \`sandbox\`.`);
   }
   const type = exactString(value.type, `Node \`${id}\` type`, 64, /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
   const availabilityValues: NodeAvailability[] = ['ready', 'unavailable', 'offline', 'error'];
@@ -181,12 +184,13 @@ function normalizeNode(value: unknown, providerId: string, index: number): NodeP
   if (value.exec !== undefined && value.exec !== true) {
     throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Node \`${id}\` exec must be true when present.`);
   }
-  if (value.filesystem === undefined && value.exec !== true) {
-    throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Node \`${id}\` must expose a filesystem or exec backend.`);
+  if (value.filesystem === undefined) {
+    throw new NodeProviderError('NODE_PROVIDER_INVALID_DESCRIPTOR', `Node \`${id}\` must expose a filesystem backend (exec logs use the same filesystem).`);
   }
   return {
     id,
-    kind: 'sandbox',
+    kind: value.kind === 'sandbox' ? 'sandbox' : 'remote',
+    ...(value.label === undefined ? {} : { label: boundedString(value.label, 'Node label', 256) }),
     provider: providerId,
     type,
     availability: value.availability as NodeAvailability,
@@ -244,7 +248,70 @@ function normalizeLifecycleResult(
   return result;
 }
 
-export type ExecutableNodeProviderOperation = 'list' | 'filesystem' | 'exec' | 'create' | 'ensure' | 'inspect' | 'destroy';
+function normalizeDescription(value: unknown): NodeProviderDescription {
+  if (!isPlainRecord(value)) throw new NodeProviderError('NODE_PROVIDER_PROTOCOL_INVALID_RESPONSE', 'Provider description must be an object.');
+  assertOnlyKeys(value, ['label', 'description', 'lifecycle', 'createParameters', 'ensureParameters', 'lifecycleDescription', 'dataRetention'], 'Provider description');
+  if (!Array.isArray(value.lifecycle) || value.lifecycle.length > 4 || new Set(value.lifecycle).size !== value.lifecycle.length
+    || value.lifecycle.some(action => !['create', 'ensure', 'inspect', 'destroy'].includes(action))) {
+    throw new NodeProviderError('NODE_PROVIDER_PROTOCOL_INVALID_RESPONSE', 'Provider lifecycle must list supported operations.');
+  }
+  return {
+    label: boundedString(value.label, 'Provider label', 256),
+    description: boundedString(value.description, 'Provider description', 4096),
+    lifecycle: value.lifecycle as NodeProviderDescription['lifecycle'],
+    ...Object.fromEntries(['createParameters', 'ensureParameters'].filter(key => value[key] !== undefined).map(key => [key, validatePlainJson(value[key], key)])),
+    ...Object.fromEntries(['lifecycleDescription', 'dataRetention'].filter(key => value[key] !== undefined).map(key => [key, boundedString(value[key], key, 4096)])),
+  };
+}
+
+function protocolRecord(value: unknown, keys: string[], label: string): Record<string, unknown> {
+  if (!isPlainRecord(value)) throw new NodeProviderError('NODE_PROVIDER_PROTOCOL_INVALID_RESPONSE', `${label} must be an object.`);
+  assertOnlyKeys(value, keys, label);
+  return value;
+}
+
+function optionalCwd(value: Record<string, unknown>): { cwd?: string } {
+  return value.cwd === undefined ? {} : { cwd: boundedString(value.cwd, 'Exec cwd', 4096) };
+}
+
+function optionalTimestamp(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length > 128 || !Number.isFinite(Date.parse(value))) throw new NodeProviderError('NODE_PROVIDER_PROTOCOL_INVALID_RESPONSE', `${label} must be a timestamp.`);
+  return value;
+}
+
+function normalizeStarted(raw: unknown): ExecStarted {
+  const value = protocolRecord(raw, ['ref', 'outputPath', 'cwd', 'startedAt', 'pid'], 'Exec start');
+  if (value.pid !== undefined && (!Number.isSafeInteger(value.pid) || (value.pid as number) <= 0)) throw new NodeProviderError('NODE_PROVIDER_PROTOCOL_INVALID_RESPONSE', 'Exec PID must be a positive integer.');
+  const startedAt = optionalTimestamp(value.startedAt, 'startedAt');
+  return {
+    ref: boundedString(value.ref, 'Exec ref', 4096), outputPath: boundedString(value.outputPath, 'Exec outputPath', 4096),
+    cwd: boundedString(value.cwd, 'Exec cwd', 4096),
+    ...(startedAt ? { startedAt } : {}), ...(value.pid === undefined ? {} : { pid: value.pid as number }),
+  };
+}
+
+function normalizeSnapshot(raw: unknown): ExecSnapshot {
+  const value = protocolRecord(raw, ['state', 'exitCode', 'finishedAt', 'durationMs', 'cwd', 'error', 'reason'], 'Exec poll');
+  if (value.state === 'running') {
+    assertOnlyKeys(value, ['state', 'cwd'], 'Running exec');
+    return { state: 'running', ...optionalCwd(value) };
+  }
+  if (value.state === 'lost') {
+    assertOnlyKeys(value, ['state', 'reason'], 'Lost exec');
+    return { state: 'lost', reason: boundedString(value.reason, 'Exec lost reason', 4096) };
+  }
+  if (value.state !== 'finished' || (value.exitCode !== null && !Number.isSafeInteger(value.exitCode))) throw new NodeProviderError('NODE_PROVIDER_PROTOCOL_INVALID_RESPONSE', 'Finished exec must report a real exit code or null.');
+  assertOnlyKeys(value, ['state', 'exitCode', 'finishedAt', 'durationMs', 'cwd', 'error'], 'Finished exec');
+  if (value.durationMs !== undefined && (typeof value.durationMs !== 'number' || !Number.isFinite(value.durationMs) || value.durationMs < 0)) throw new NodeProviderError('NODE_PROVIDER_PROTOCOL_INVALID_RESPONSE', 'Exec durationMs must be nonnegative.');
+  const finishedAt = optionalTimestamp(value.finishedAt, 'finishedAt');
+  return { state: 'finished', exitCode: value.exitCode as number | null, ...optionalCwd(value),
+    ...(finishedAt ? { finishedAt } : {}), ...(value.durationMs === undefined ? {} : { durationMs: value.durationMs as number }),
+    ...(value.error === undefined ? {} : { error: boundedString(value.error, 'Exec error', 4096) }),
+  };
+}
+
+export type ExecutableNodeProviderOperation = 'describe' | 'list' | 'filesystem' | 'exec-start' | 'exec-poll' | 'create' | 'ensure' | 'inspect' | 'destroy';
 
 export type ExecutableNodeProviderRequest = {
   protocol: typeof EXECUTABLE_NODE_PROVIDER_PROTOCOL;
@@ -267,7 +334,9 @@ export type ExecutableNodeProviderResponse = {
 export class ExecutableNodeProvider implements NodeProvider {
   readonly id: string;
   readonly deferredLookup = true;
+  readonly namespaceNodeIds = true;
   private activeRequests = 0;
+  private descriptionPromise?: Promise<NodeProviderDescription>;
 
   constructor(private readonly config: NormalizedExecutableNodeProviderConfig) {
     this.id = config.id;
@@ -282,12 +351,27 @@ export class ExecutableNodeProvider implements NodeProvider {
     return (await this.listNodes(options)).find(node => node.id === nodeId);
   }
 
-  async invokeFilesystem(request: NodeFilesystemRequest, options?: NodeProviderCallOptions): Promise<unknown> {
-    return this.run('filesystem', request, EXECUTABLE_NODE_PROVIDER_MAX_RESULT_BYTES, options);
+  async describe(options?: NodeProviderCallOptions): Promise<NodeProviderDescription> {
+    if (!this.descriptionPromise) {
+      this.descriptionPromise = this.run('describe', undefined, EXECUTABLE_NODE_PROVIDER_MAX_LIFECYCLE_BYTES, options)
+        .then(normalizeDescription).catch(error => { this.descriptionPromise = undefined; throw error; });
+    }
+    return this.descriptionPromise;
   }
 
-  async invokeExec(request: NodeExecRequest, options?: NodeProviderCallOptions): Promise<unknown> {
-    return this.run('exec', request, EXECUTABLE_NODE_PROVIDER_MAX_RESULT_BYTES, options);
+  async invokeFilesystem(request: NodeFilesystemRequest, options?: NodeProviderCallOptions): Promise<unknown> {
+    const { sourceSessionId: _source, context, ...primitive } = request;
+    return this.run('filesystem', { ...primitive, context: { ...(context.cwd === undefined ? {} : { cwd: context.cwd }) } }, EXECUTABLE_NODE_PROVIDER_MAX_RESULT_BYTES, options);
+  }
+
+  async startExec(request: NodeExecStartRequest, options?: NodeProviderCallOptions): Promise<ExecStarted> {
+    const value = await this.run('exec-start', request, EXECUTABLE_NODE_PROVIDER_MAX_LIST_BYTES, options);
+    return normalizeStarted(value);
+  }
+
+  async pollExec(request: NodeExecPollRequest): Promise<ExecSnapshot> {
+    const value = await this.run('exec-poll', request, EXECUTABLE_NODE_PROVIDER_MAX_LIST_BYTES);
+    return normalizeSnapshot(value);
   }
 
   async createNode(request: NodeLifecycleProviderRequest, options?: NodeProviderCallOptions): Promise<NodeLifecycleResult> {
@@ -342,14 +426,14 @@ export class ExecutableNodeProvider implements NodeProvider {
 
     this.activeRequests += 1;
     try {
-      const raw = await this.runChild(encoded, maxStdoutBytes, options?.signal);
+      const raw = await this.runChild(encoded, maxStdoutBytes, options?.signal, operation === 'exec-poll' ? Math.min(this.config.timeoutMs, 5000) : this.config.timeoutMs);
       return this.parseResponse(raw, requestId, operation);
     } finally {
       this.activeRequests -= 1;
     }
   }
 
-  private runChild(encoded: string, maxStdoutBytes: number, signal?: AbortSignal): Promise<string> {
+  private runChild(encoded: string, maxStdoutBytes: number, signal: AbortSignal | undefined, timeoutMs: number): Promise<string> {
     return new Promise((resolve, reject) => {
       let child: ChildProcessWithoutNullStreams;
       try {
@@ -376,7 +460,7 @@ export class ExecutableNodeProvider implements NodeProvider {
       let killTimer: NodeJS.Timeout | undefined;
       let confirmTimer: NodeJS.Timeout | undefined;
       let closeTimer: NodeJS.Timeout | undefined;
-      const deadlineAt = Date.now() + this.config.timeoutMs;
+      const deadlineAt = Date.now() + timeoutMs;
 
       const cleanup = () => {
         if (timeoutTimer) clearTimeout(timeoutTimer);
@@ -448,8 +532,8 @@ export class ExecutableNodeProvider implements NodeProvider {
       };
       const onAbort = () => terminate(new NodeProviderError('NODE_PROVIDER_CANCELLED', `Executable Node provider \`${this.id}\` request was cancelled.`, true));
       timeoutTimer = setTimeout(() => {
-        terminate(new NodeProviderError('NODE_PROVIDER_TIMEOUT', `Executable Node provider \`${this.id}\` exceeded its ${this.config.timeoutMs}ms request timeout.`, true));
-      }, this.config.timeoutMs);
+        terminate(new NodeProviderError('NODE_PROVIDER_TIMEOUT', `Executable Node provider \`${this.id}\` exceeded its ${timeoutMs}ms request timeout.`, true));
+      }, timeoutMs);
 
       signal?.addEventListener('abort', onAbort, { once: true });
       if (signal?.aborted) onAbort();

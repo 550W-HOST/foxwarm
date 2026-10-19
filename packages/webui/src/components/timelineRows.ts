@@ -815,7 +815,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
       let preview: ConversationActivityView['preview']
       if (!hasReply) {
         for (const message of activityMessages) {
-          message.parts.forEach((part, partIndex) => { if (message.role === 'model' && !getLlmErrorMessageDetails(message) && visibleText(part)) preview = { message, partIndex } })
+          message.parts.forEach((part, partIndex) => { if (message.role === 'model' && !getLlmErrorMessageDetails(message) && hasConversationText(part)) preview = { message, partIndex } })
         }
       }
       for (const source of sources) {

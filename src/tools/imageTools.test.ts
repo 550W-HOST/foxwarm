@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
@@ -11,7 +12,8 @@ import { normalizeToolResultImages } from '../toolImages';
 import { putImageBlob, resolveImageBlobPath } from '../imageBlobs';
 import { nodesManager } from '../nodes/manager';
 import type { Session } from '../types';
-import * as nodeExecution from '../nodeExecution';
+import * as fileDelivery from '../fileDelivery';
+import { getImageWriteHandoffRoot } from '../imageWriteHandoff';
 import { getAgentDir } from '../config';
 
 async function makePngBase64(width: number, height: number, rgb: { r: number; g: number; b: number } = { r: 32, g: 96, b: 192 }): Promise<string> {
@@ -221,7 +223,8 @@ test('detached current owner resolves live and archived images and writes master
     getCurrentNode: nodesManager.getCurrentNode,
     writeFileToNode: nodesManager.writeFileToNode,
     isolated: sessionManager.isSessionEffectivelyIsolated,
-    copy: nodeExecution.copyBetweenNodes,
+    imageWrite: fileDelivery.writeImageArtifact,
+    getNode: nodesManager.getNode,
   };
   (sessionManager as any).getExistingSession = async () => { throw new Error('global session lookup forbidden'); };
   (sessionManager as any).getArchivedMessages = async () => { throw new Error('archive facade forbidden'); };
@@ -229,6 +232,7 @@ test('detached current owner resolves live and archived images and writes master
   (nodesManager as any).getCurrentNode = async () => { throw new Error('global node lookup forbidden'); };
   const remoteWrites: any[][] = [];
   (nodesManager as any).writeFileToNode = async (...args: any[]) => { remoteWrites.push(args); };
+  (nodesManager as any).getNode = (id: string) => id === 'remote-a' ? { id, ws: {}, tools: new Set(['read', 'write']) } : originals.getNode.call(nodesManager, id);
   (sessionManager as any).isSessionEffectivelyIsolated = () => false;
   const ctx: any = { sessionId, session, persistCurrentSession: async () => {} };
 
@@ -254,20 +258,21 @@ test('detached current owner resolves live and archived images and writes master
     ]]);
 
     const handoffs: any[] = [];
-    (nodeExecution as any).copyBetweenNodes = async (_sourceId: string, request: any) => {
-      handoffs.push({ ...request, bytes: await fs.readFile(request.sourcePath) });
+    (fileDelivery as any).writeImageArtifact = async (request: any) => {
+      handoffs.push({ ...request, bytes: await fs.readFile(request.artifactPath) });
       return { sha256: 'a'.repeat(64), sizeBytes: Buffer.byteLength(inlineBase64, 'base64'), overwritten: false };
     };
     await image_write_to_file({ id: 'live-inline', filePath: 'worker-remote.png', overwrite: true }, {
       ...ctx, runtimeNodeId: 'remote-a', sessionPlacement: 'session-worker',
     });
     assert.deepEqual(handoffs[0].bytes, Buffer.from(inlineBase64, 'base64'));
-    assert.equal(handoffs[0].sourceNode, 'master'); assert.equal(handoffs[0].targetNode, 'remote-a');
+    assert.equal(handoffs[0].routing.runtimeNodeId, 'remote-a');
+    assert.equal('sourceNode' in handoffs[0], false, 'the owned artifact is not an arbitrary caller-selected copy source');
     assert.equal(JSON.stringify({ ...handoffs[0], bytes: undefined }).includes(inlineBase64), false);
-    assert.equal(await fs.pathExists(handoffs[0].sourcePath), false);
+    assert.equal(await fs.pathExists(handoffs[0].artifactPath), false);
 
     let failedTemp = '';
-    (nodeExecution as any).copyBetweenNodes = async (_sourceId: string, request: any) => { failedTemp = request.sourcePath; throw new Error('copy failed'); };
+    (fileDelivery as any).writeImageArtifact = async (request: any) => { failedTemp = request.artifactPath; throw new Error('copy failed'); };
     await assert.rejects(() => image_write_to_file({ id: 'live-inline', filePath: 'worker-fail.png' }, {
       ...ctx, runtimeNodeId: 'remote-a', sessionPlacement: 'session-worker',
     }), /copy failed/);
@@ -276,7 +281,7 @@ test('detached current owner resolves live and archived images and writes master
     const originalNow = Date.now; const originalRandom = Math.random;
     Date.now = () => 1; Math.random = () => 0.5;
     const concurrentPaths: string[] = [];
-    (nodeExecution as any).copyBetweenNodes = async (_sourceId: string, request: any) => { concurrentPaths.push(request.sourcePath); };
+    (fileDelivery as any).writeImageArtifact = async (request: any) => { concurrentPaths.push(request.artifactPath); };
     try {
       await Promise.all(['one.png', 'two.png'].map(filePath => image_write_to_file({ id: 'live-inline', filePath }, {
         ...ctx, runtimeNodeId: 'remote-a', sessionPlacement: 'session-worker',
@@ -285,7 +290,7 @@ test('detached current owner resolves live and archived images and writes master
       assert.equal(concurrentPaths.every(filePath => !fs.pathExistsSync(path.dirname(filePath))), true);
     } finally { Date.now = originalNow; Math.random = originalRandom; }
 
-    const handoffRoot = path.join(getAgentDir('main'), '.temp', 'image-write-handoff');
+    const handoffRoot = getImageWriteHandoffRoot('main', sessionId);
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'image-handoff-outside-'));
     await fs.remove(handoffRoot); await fs.ensureDir(path.dirname(handoffRoot)); await fs.symlink(outside, handoffRoot, 'dir');
     await assert.rejects(() => image_write_to_file({ id: 'live-inline', filePath: 'symlink.png' }, {
@@ -295,7 +300,7 @@ test('detached current owner resolves live and archived images and writes master
 
     const originalWriteFile = fs.writeFile;
     (fs as any).writeFile = async (filePath: string, ...args: any[]) => {
-      if (filePath.includes(`${path.sep}image-write-handoff${path.sep}operation-`)) throw new Error('staging write failed');
+      if (filePath.includes(`${path.sep}image-write-handoff${path.sep}`) && path.basename(path.dirname(filePath)).startsWith('operation-')) throw new Error('staging write failed');
       return await (originalWriteFile as any)(filePath, ...args);
     };
     try {
@@ -306,7 +311,7 @@ test('detached current owner resolves live and archived images and writes master
     assert.deepEqual((await fs.readdir(handoffRoot)).filter(name => name.startsWith('operation-')), []);
 
     const originalRemove = fs.remove; let residue = '';
-    (nodeExecution as any).copyBetweenNodes = async (_sourceId: string, request: any) => { residue = path.dirname(request.sourcePath); };
+    (fileDelivery as any).writeImageArtifact = async (request: any) => { residue = path.dirname(request.artifactPath); };
     (fs as any).remove = async (filePath: string) => {
       if (filePath === residue) throw new Error('cleanup refused');
       return await originalRemove(filePath);
@@ -318,7 +323,7 @@ test('detached current owner resolves live and archived images and writes master
     } finally { (fs as any).remove = originalRemove; }
     await fs.remove(residue);
 
-    (nodeExecution as any).copyBetweenNodes = async (_sourceId: string, request: any) => { residue = path.dirname(request.sourcePath); throw new Error('operation refused'); };
+    (fileDelivery as any).writeImageArtifact = async (request: any) => { residue = path.dirname(request.artifactPath); throw new Error('operation refused'); };
     (fs as any).remove = async (filePath: string) => {
       if (filePath === residue) throw new Error('cleanup refused');
       return await originalRemove(filePath);
@@ -341,7 +346,8 @@ test('detached current owner resolves live and archived images and writes master
     (nodesManager as any).getCurrentNode = originals.getCurrentNode;
     (nodesManager as any).writeFileToNode = originals.writeFileToNode;
     (sessionManager as any).isSessionEffectivelyIsolated = originals.isolated;
-    (nodeExecution as any).copyBetweenNodes = originals.copy;
+    (fileDelivery as any).writeImageArtifact = originals.imageWrite;
+    (nodesManager as any).getNode = originals.getNode;
     await fs.remove(tempDir);
     if (blobRef.blobId) await fs.remove(resolveImageBlobPath(blobRef.blobId));
   }

@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildQueuedPreviewMessages, composeQueuedPreviewProjection, MAX_QUEUED_PREVIEW_ITEMS } from './webuiQueuePreview';

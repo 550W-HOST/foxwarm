@@ -88,7 +88,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
     window.fetch = (input, options = {}) => {
       const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, location.href)
       const pathname = url.pathname
-      window.__fetches.push({ path: pathname, search: url.search })
+      window.__fetches.push({ path: pathname, search: url.search, body: options.body || null })
       if (pathname.endsWith('/api/nodes/onboarding/pending')) return json({ items: [], total: 0, offset: 0, limit: 50 })
       if (pathname.endsWith('/api/tasks') && window.__failTaskPreview && url.searchParams.get('limit') === '3') return Promise.resolve(new Response('{}', { status: 503 }))
       if (pathname.endsWith('/api/auth/session')) return json({ role: 'admin' })
@@ -3592,4 +3592,93 @@ for (const liveDuringCatchup of [false, true]) test(`prepared continuous history
   } finally {
     await page.close()
   }
+})
+
+test('Session switching request budget follows one focus transition without reloading an unchanged exact set', async () => {
+  const page = await openFixture({ tabs: [chat('e2e-a', false), chat('e2e-b', false), chat('e2e-c', false)], responsiveChat: true, chatMessages: [{ role: 'model', parts: [{ text: 'Switch fixture' }], __meta: { seq: 1 } }] })
+  try {
+    await page.waitForFunction(() => window.__fetches.filter(request => request.path.endsWith('/session-list/architecture')).length >= 2)
+    await new Promise(resolve => setTimeout(resolve, 100))
+    await page.evaluate(() => { window.__fetches = [] })
+    await page.click('[data-session-id="e2e-b"]')
+    await page.waitForFunction(() => decodeURIComponent(location.hash).includes('chat:e2e-b'))
+    await new Promise(resolve => setTimeout(resolve, 500))
+    await page.click('[data-session-id="e2e-a"]')
+    await page.waitForFunction(() => decodeURIComponent(location.hash).includes('chat:e2e-a'))
+    await new Promise(resolve => setTimeout(resolve, 500))
+    const requests = await page.evaluate(() => window.__fetches.filter(request => request.path.includes('/session-list/')))
+    const sidebar = requests.filter(request => request.path.endsWith('/sidebar'))
+    console.log('switch-request-budget', JSON.stringify({
+      counts: Object.fromEntries(['sidebar', 'by-id', 'children', 'descendant-activity', 'architecture']
+        .map(endpoint => [endpoint, requests.filter(request => request.path.endsWith('/' + endpoint)).length])),
+      focusIds: sidebar.map(request => new URLSearchParams(request.search).getAll('focusSessionId')),
+      exactSets: requests.filter(request => request.path.endsWith('/by-id')).map(request => JSON.parse(request.body).ids),
+    }))
+    assert.deepEqual(sidebar.map(request => new URLSearchParams(request.search).getAll('focusSessionId')), [['e2e-b'], ['e2e-a']], 'one real focus query per selection, without bouncing to the previous route')
+    assert.equal(requests.filter(request => request.path.endsWith('/by-id')).length, 0, 'focus reordering does not refetch the unchanged open/watch ID set')
+    assert.equal(requests.filter(request => request.path.endsWith('/architecture')).length, 0, 'focus is not a global-summary invalidation')
+    assert.equal(requests.filter(request => request.path.endsWith('/descendant-activity')).length, 2, 'each accepted structural replay retains its complete descendant projection')
+
+    await page.evaluate(() => {
+      window.__fetches = []
+      window.__emitRealtime({ type: 'session-list-delta', sessions: [{ id: 'e2e-b', displayName: 'Renamed live B', aliases: [], parentSessionId: null, runtimeState: { state: 'running-tool', toolName: 'fixture' }, messageCount: 9, sequenceMessageCount: 12 }], deletedIds: [] })
+    })
+    await page.waitForFunction(() => document.querySelector('[data-session-id="e2e-b"]')?.textContent.includes('Renamed live B') && document.querySelector('[data-tab-id="chat:e2e-b"]')?.textContent.includes('Renamed live B'))
+    assert.ok(await page.$('[data-session-id="e2e-b"] .runtime-busy-spinner'), 'the watched row retains live runtime status')
+    assert.equal(await page.evaluate(() => window.__fetches.filter(request => request.path.includes('/session-list/')).length), 0, 'row and tab metadata still update directly through the exact subscription')
+    await page.evaluate(() => {
+      const original = window.fetch
+      window.fetch = async (input, options) => {
+        const response = await original(input, options)
+        if (!String(input).includes('/session-list/architecture')) return response
+        return new Response(JSON.stringify({ summary: { total: 3, busy: 1 } }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      window.__emitRealtime({ type: 'session-list-invalidated', eventId: 'fixture-1', presentationRevision: 'r2' })
+      window.__emitRealtime({ type: 'session-list-invalidated', eventId: 'fixture-1', presentationRevision: 'r2' })
+    })
+    await page.waitForSelector('[data-workbench-status-bar] [aria-label="Running sessions: 1"]')
+    const invalidated = await page.evaluate(() => window.__fetches.filter(request => request.path.includes('/session-list/')))
+    assert.equal(invalidated.filter(request => request.path.endsWith('/sidebar')).length, 1, 'duplicate live invalidations keep one scheduled refresh')
+    assert.equal(invalidated.filter(request => request.path.endsWith('/by-id')).length, 1, 'an actual invalidation still refreshes exact rows')
+    assert.equal(invalidated.filter(request => request.path.endsWith('/architecture')).length, 1, 'an actual invalidation still refreshes counters')
+    assert.deepEqual(JSON.parse(invalidated.find(request => request.path.endsWith('/by-id')).body), { ids: ['e2e-a', 'e2e-b', 'e2e-c'], includePaths: false })
+  } finally { await page.close() }
+})
+
+test('rapid Session preview switches retain the latest focus and exact generation when older list responses finish last', async () => {
+  const page = await openFixture({ tabs: [chat('e2e-a')], responsiveChat: true })
+  try {
+    await page.waitForFunction(() => window.__fetches.filter(request => request.path.endsWith('/session-list/architecture')).length >= 2)
+    await page.evaluate(() => {
+      const original = window.fetch
+      window.__fetches = []
+      window.__releaseOldList = []
+      window.fetch = async (input, options = {}) => {
+        const url = new URL(String(input), location.href)
+        const response = await original(input, options)
+        const oldRoot = url.pathname.endsWith('/session-list/sidebar') && url.searchParams.get('focusSessionId') === 'e2e-b'
+        const oldExact = url.pathname.endsWith('/session-list/by-id') && JSON.parse(options.body).ids.includes('e2e-b')
+        if (!oldRoot && !oldExact) return response
+        const session = id => ({ id, aliases: [], displayName: 'Stale response', archived: false, parentSessionId: null, childTotal: 0, messageCount: 0, busy: false })
+        const payload = oldRoot
+          ? { version: 1, revision: 'r1', sessions: [session('stale-root'), session('e2e-c')], nextCursor: null, children: [], focus: [], pathContext: [], forcedChildren: {} }
+          : { results: [{ requestedId: 'e2e-b', session: session('e2e-b') }] }
+        await new Promise(resolve => window.__releaseOldList.push(resolve))
+        return new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+    })
+    await page.click('[data-session-id="e2e-b"]')
+    await page.waitForFunction(() => window.__releaseOldList.length === 2)
+    await page.click('[data-session-id="e2e-c"]')
+    await page.waitForFunction(() => decodeURIComponent(location.hash).includes('chat:e2e-c') && !!document.querySelector('[data-workbench-content-tab="chat:e2e-c"]'))
+    await page.evaluate(() => { for (const release of window.__releaseOldList) release() })
+    await new Promise(resolve => setTimeout(resolve, 100))
+    assert.equal((await state(page)).root.activeTabId, 'chat:e2e-c')
+    assert.equal(await page.$('[data-session-id="stale-root"]'), null, 'an older focus window cannot replace the current forest')
+    assert.equal(await page.$eval('[data-session-list-scroll-container]', element => element.textContent.includes('Stale response')), false, 'older root and exact rows cannot overwrite current metadata')
+    const requests = await page.evaluate(() => window.__fetches.filter(request => request.path.includes('/session-list/')))
+    assert.deepEqual(requests.filter(request => request.path.endsWith('/sidebar')).map(request => new URLSearchParams(request.search).getAll('focusSessionId')), [['e2e-b'], ['e2e-c']])
+    assert.deepEqual(requests.filter(request => request.path.endsWith('/by-id')).map(request => JSON.parse(request.body).ids), [['e2e-b'], ['e2e-c']], 'each genuinely changed preview exact set loads once')
+    assert.equal(requests.filter(request => request.path.endsWith('/architecture')).length, 0)
+  } finally { await page.close() }
 })

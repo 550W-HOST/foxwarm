@@ -1,3 +1,4 @@
+import { MAX_CORE_NODE_ID_LENGTH, splitProviderNodeId } from '../packages/shared/dist/nodeIdentity';
 import path from 'path';
 import { getAgentDir, getAgentMemoryDir } from './config';
 import { NODE_ENVIRONMENT_BUILTIN_NAMES } from './tools/placement';
@@ -40,13 +41,13 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
-function exactString(value: unknown, field: string, index: number): string {
+function exactString(value: unknown, field: string, index: number, maxBytes = MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES): string {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error(`toolRules[${index}].${field} must be a non-empty string.`);
   }
   const normalized = value.trim();
-  if (Buffer.byteLength(normalized, 'utf8') > MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES) {
-    throw new Error(`toolRules[${index}].${field} must be at most ${MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES} UTF-8 bytes.`);
+  if (Buffer.byteLength(normalized, 'utf8') > maxBytes) {
+    throw new Error(`toolRules[${index}].${field} must be at most ${maxBytes} UTF-8 bytes.`);
   }
   if (normalized.includes('*')) {
     throw new Error(`toolRules[${index}].${field} must be exact and cannot contain wildcards.`);
@@ -104,7 +105,8 @@ export function normalizeAgentToolRules(value: unknown): AgentToolRule[] {
       assertExactKeys(raw, ['effect', 'source', 'node', 'tool'], index);
       normalized = {
         effect, source,
-        node: exactString(raw.node, 'node', index),
+        node: exactString(raw.node, 'node', index, typeof raw.node === 'string' && splitProviderNodeId(raw.node.trim())
+          ? MAX_CORE_NODE_ID_LENGTH : MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES),
         tool: exactString(raw.tool, 'tool', index),
       };
     } else {

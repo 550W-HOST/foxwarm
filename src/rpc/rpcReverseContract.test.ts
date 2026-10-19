@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fork, type ChildProcess } from 'node:child_process';

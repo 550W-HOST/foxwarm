@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import assert from 'node:assert/strict';
 import fsExtra from 'fs-extra';
 import fs from 'node:fs/promises';

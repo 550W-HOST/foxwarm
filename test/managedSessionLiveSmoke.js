@@ -1,3 +1,4 @@
+require('../scripts/test/test-process-env.cjs').initializeTestEnvironment();
 const assert = require('assert');
 const fs = require('fs-extra');
 const path = require('path');

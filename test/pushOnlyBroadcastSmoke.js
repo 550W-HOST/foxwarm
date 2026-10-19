@@ -1,3 +1,4 @@
+require('../scripts/test/test-process-env.cjs').initializeTestEnvironment();
 const path = require('path');
 const sessionManager = require(path.join(__dirname, '..', 'lib', 'sessionManager'));
 const { registerChannel } = require(path.join(__dirname, '..', 'lib', 'channel'));

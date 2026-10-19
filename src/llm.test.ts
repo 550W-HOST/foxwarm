@@ -1,3 +1,4 @@
+import './testEnvironment';
 import { ensurePromptCacheKey } from './session/promptCache';
 import * as toolExecutor from './toolExecutor';
 import type { CurrentSessionEffects } from './session/currentSessionEffects';

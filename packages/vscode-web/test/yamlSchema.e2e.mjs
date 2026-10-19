@@ -1,3 +1,5 @@
+import testEnvironment from '../../../scripts/test/test-process-env.cjs'
+testEnvironment.initializeTestEnvironment()
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';

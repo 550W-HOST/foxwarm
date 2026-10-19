@@ -17,7 +17,9 @@ async function main() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-oauth-browser-'));
   const keyPath = path.join(directory, 'key.pem');
   const certPath = path.join(directory, 'cert.pem');
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost',
+  const opensslConfig = path.join(directory, 'openssl.cnf');
+  fs.writeFileSync(opensslConfig, '[req]\ndistinguished_name = dn\n[dn]\n');
+  execFileSync('openssl', ['req', '-config', opensslConfig, '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost',
     '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1', '-keyout', keyPath, '-out', certPath], { stdio: 'ignore' });
   const certificate = fs.readFileSync(certPath);
   const resource = await createMcpOAuthFixture();
@@ -25,7 +27,7 @@ async function main() {
   const root = path.resolve(__dirname, '..');
   const webuiRoot = path.join(root, 'packages', 'webui');
   const { createServer } = createRequire(path.join(webuiRoot, 'package.json'))('vite');
-  const vite = await createServer({ root: webuiRoot, cacheDir: path.join(directory, 'vite-cache'),
+  const vite = await createServer({ root: webuiRoot, configLoader: 'runner', cacheDir: path.join(directory, 'vite-cache'),
     server: { host: '127.0.0.1', port: 0, proxy: {} }, logLevel: 'error' });
   await vite.listen();
   const vitePort = vite.httpServer.address().port;

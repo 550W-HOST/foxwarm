@@ -1,3 +1,4 @@
+import { isCoreNodeId } from '../../shared/src/nodeIdentity'
 import { normalizeCodePath, type CodeCommitTarget } from './vscodeWeb'
 export type { CodeCommitTarget } from './vscodeWeb'
 
@@ -6,7 +7,6 @@ export type CommitMarkerSegment =
   | { kind: 'commit'; raw: string; target: CodeCommitTarget }
   | { kind: 'invalid'; raw: string }
 
-const NODE_ID_RE = /^[A-Za-z0-9._-]{1,128}$/
 const COMMIT_ID_RE = /^[0-9a-f]{7,64}$/i
 const ATTRIBUTE_NAME_RE = /^[A-Za-z_:][A-Za-z0-9_.:-]*/
 const MAX_COMMIT_PATH_LENGTH = 4096
@@ -59,7 +59,7 @@ export function parseCommitMarkerLine(line: string): CodeCommitTarget | null {
   const nodeId = attrs.get('node') || ''
   const rawPath = attrs.get('path') || ''
   const commitId = (attrs.get('id') || '').toLowerCase()
-  if (!NODE_ID_RE.test(nodeId) || rawPath.length > MAX_COMMIT_PATH_LENGTH || !COMMIT_ID_RE.test(commitId)) return null
+  if (!isCoreNodeId(nodeId) || rawPath.length > MAX_COMMIT_PATH_LENGTH || !COMMIT_ID_RE.test(commitId)) return null
   const normalizedPath = normalizeCodePath(rawPath)
   if (!normalizedPath || rawPath.includes('\0')) return null
   return { nodeId, path: normalizedPath, commitId }

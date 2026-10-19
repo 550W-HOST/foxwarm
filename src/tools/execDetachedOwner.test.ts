@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import * as toolExecutor from '../toolExecutor';
 import type { CurrentSessionEffects } from '../session/currentSessionEffects';
 import test from 'node:test';

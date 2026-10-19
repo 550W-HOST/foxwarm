@@ -6,7 +6,8 @@
 import http from 'http';
 import crypto from 'crypto';
 import { logger } from '../common';
-import { NodeTransferFilePayload, NodeTransferWriteResult, readNodeTransferFile, writeNodeTransferFile } from '../nodeFileTransfer';
+import { readNodeTransferFile, writeNodeTransferFile } from '../nodeFileTransfer';
+import type { NodeTransferFilePayload, NodeTransferWriteResult } from '../../packages/shared/dist/nodeFileTransfer';
 import * as sessionManager from '../sessionManager';
 import * as sessionRuntime from '../sessionRuntime';
 import { WebSocket } from 'ws';

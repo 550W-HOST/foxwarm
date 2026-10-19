@@ -1,3 +1,4 @@
+import './testEnvironment';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { LocalRpcTransport, RpcClient, RpcServiceRegistry } from './rpc';
@@ -27,7 +28,7 @@ test('projection registry applies clones in order and fences stale identities an
   Object.defineProperty(accessor, 'stats', { enumerable: true, get() { accessorCalls += 1; return {}; } });
   await assert.rejects(() => registry.apply(first, accessor), { code: 'SESSION_WORKER_PUBLICATION_INVALID' });
   assert.equal(accessorCalls, 0);
-  await assert.rejects(() => registry.apply(first, { ...projection(first.sessionId), currentNode: 'x'.repeat(129) }),
+  await assert.rejects(() => registry.apply(first, { ...projection(first.sessionId), currentNode: 'x'.repeat(194) }),
     { code: 'SESSION_WORKER_PUBLICATION_INVALID' });
   for (const runtimeState of [
     { ...projection(first.sessionId).runtimeState, active: { phase: 'unknown', extra: true } },

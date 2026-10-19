@@ -211,11 +211,14 @@ test('mode changes, reload, and another browser root retain preferences without 
   await closeSearch()
 })
 
-test('explicit live commentary folds but unmarked streaming prose and the committed final remain visible', async () => {
+test('the latest live commentary stays in the collapsed preview until visible prose replaces it', async () => {
   await choose('Show commentary'); await closeMenu()
   const activityCount = await page.$$eval('[data-timeline-activity]',nodes=>nodes.length)
   await page.evaluate(() => window.fixture.emit({type:'model-stream-update',streamId:'display-stream',streamVersion:2,sequence:1,partDeltas:[{outputIndex:0,kind:'text',phase:'commentary',textDelta:{offset:0,text:'LIVE_COMMENTARY'}}]}))
   await page.waitForFunction(count=>document.querySelectorAll('[data-timeline-activity]').length>count,{},activityCount)
+  await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-conversation-reply')].some(node => node.textContent.includes('LIVE_COMMENTARY')))
+  await search('LIVE_COMMENTARY'); await hits('0/0')
+  await closeSearch()
   await expandActivities()
   await page.waitForFunction(() => document.querySelector('[data-activity-details]') && [...document.querySelectorAll('[data-activity-details]')].some(node=>node.textContent.includes('LIVE_COMMENTARY')))
   assert.equal(await page.$$eval('.foxwarm-conversation-reply:not([data-activity-details] .foxwarm-conversation-reply)', nodes=>nodes.some(node=>node.textContent.includes('LIVE_COMMENTARY'))), false)
@@ -393,4 +396,39 @@ test('folded mixed parts preserve images, one-owner request usage, timing scope,
   assert.ok(evidence.folded.summaries.some(summary => summary.includes('12s')), evidence.folded.summaries.join('; '))
   assert.deepEqual(evidence.cutSends, ['LEGACY_FULL_BODY'])
   assert.equal(evidence.unchanged, true)
+})
+
+
+test('Show commentary off retains only the last commentary of a reply-free turn, including Search and disclosure', async () => {
+  await page.setViewport({ width: 1100, height: 850 })
+  await page.evaluate(() => {
+    window.fixture.prefs.setTimelineView('conversation')
+    window.fixture.prefs.setShowCommentary(false)
+    window.fixture.prefs.setShowInterAgentMessages(false)
+    const messages = [
+      { role: 'user', parts: [{ text: 'First turn' }] },
+      { role: 'model', parts: [{ text: 'EARLIER_COMMENTARY', phase: 'commentary' }] },
+      { role: 'model', parts: [{ text: 'LAST_TURN_COMMENTARY', phase: 'commentary' }, { functionCall: { id: 'tail-call', name: 'exec', args: { command: 'synthetic command' } } }] },
+      { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'tail-call', name: 'exec', response: { output: 'Synthetic result' } } }] },
+      { role: 'model', parts: [], __meta: { llmRequestId: 'tail-request', llmSegment: { outputStart: 0, outputEndExclusive: 0, complete: true } } },
+      { role: 'user', parts: [{ text: 'Second turn' }] },
+      { role: 'model', parts: [{ text: 'SUPERSEDED_COMMENTARY', phase: 'commentary' }, { text: 'ORDINARY_FINAL_REPLY', phase: 'final_answer' }] },
+    ].map((message, index) => ({ ...message, __meta: { ...message.__meta, seq: 100 + index, timestamp: 1700000100000 + index * 1000 } }))
+    window.fixture.replace(messages)
+  })
+  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-messages').textContent.includes('ORDINARY_FINAL_REPLY'))
+  const collapsed = await text()
+  assert.ok(collapsed.includes('LAST_TURN_COMMENTARY'))
+  assert.ok(!collapsed.includes('EARLIER_COMMENTARY'))
+  assert.ok(!collapsed.includes('SUPERSEDED_COMMENTARY'))
+  await search('LAST_TURN_COMMENTARY'); await hits('1/1')
+  await search('EARLIER_COMMENTARY'); await hits('0/0')
+  await search('SUPERSEDED_COMMENTARY'); await hits('0/0')
+  await closeSearch()
+  await screenshot('last-commentary-preview')
+  await expandActivities()
+  const expanded = await text()
+  for (const body of ['EARLIER_COMMENTARY', 'LAST_TURN_COMMENTARY', 'SUPERSEDED_COMMENTARY']) {
+    assert.equal(expanded.split(body).length - 1, 1, body + ' is rendered once in expanded Activity')
+  }
 })

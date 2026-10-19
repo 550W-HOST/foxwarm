@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
@@ -139,7 +140,6 @@ test('createSessionBroadcast sends empty final lifecycle to every capable attach
 test('configured progress targets exclude WebUI and use source-blind turn metadata', async () => {
   await withTempDir(async dirPath => {
     setChannelsStoreForTests(createChannelsStore(path.join(dirPath, 'channels.json')));
-    const previousConfig = await fs.pathExists(APP_CONFIG_PATH) ? await fs.readFile(APP_CONFIG_PATH, 'utf8') : undefined;
     await fs.ensureDir(path.dirname(APP_CONFIG_PATH));
     await fs.writeFile(APP_CONFIG_PATH, `channels:\n  qq:\n    type: qqbot\n    channelProgress: { intervalMs: 30000 }\n  telegram:\n    type: telegram\n    channelProgress: { intervalMs: 60000 }\n  webui:\n    type: webui\n    channelProgress: { intervalMs: 30000 }\n  wework:\n    type: wework\n    channelProgress: { intervalMs: 30000 }\n`);
     const sent: Array<{ id: string; text: string; options: any }> = [];
@@ -170,8 +170,7 @@ test('configured progress targets exclude WebUI and use source-blind turn metada
       assert.equal(sent.some(item => item.id === 'webui'), false);
     } finally {
       for (const id of ['qq', 'telegram', 'webui', 'wework']) unregisterChannel(id);
-      if (previousConfig === undefined) await fs.remove(APP_CONFIG_PATH);
-      else await fs.writeFile(APP_CONFIG_PATH, previousConfig);
+      await fs.remove(APP_CONFIG_PATH);
     }
   });
 });

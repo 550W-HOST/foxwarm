@@ -5,45 +5,7 @@ import { getAgentDir } from './config';
 import { expandHomePath } from './utils/pathResolve';
 import { expandAgentPathVariable } from '../packages/shared/dist/agentPathVariables';
 
-export interface NodeTransferFilePayload {
-  filePath: string;
-  name: string;
-  sizeBytes: number;
-  mimeType: string;
-  isImage: boolean;
-  sha256: string;
-  dataBase64: string;
-}
-
-export interface NodeTransferWriteResult {
-  filePath: string;
-  absolutePath?: string;
-  sizeBytes: number;
-  sha256: string;
-  overwritten: boolean;
-}
-
-const IMAGE_MIME: Record<string, string> = {
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.bmp': 'image/bmp',
-  '.svg': 'image/svg+xml',
-};
-
-const GENERIC_MIME: Record<string, string> = {
-  '.json': 'application/json',
-  '.txt': 'text/plain',
-  '.md': 'text/markdown',
-  '.yaml': 'application/yaml',
-  '.yml': 'application/yaml',
-  '.ts': 'text/plain',
-  '.js': 'text/plain',
-  '.sh': 'text/plain',
-};
-
+import { buildNodeTransferFilePayload, buildNodeTransferWriteResult, type NodeTransferFilePayload, type NodeTransferWriteResult } from '../packages/shared/dist/nodeFileTransfer';
 
 export function resolveNodeTransferPath(filePath: string, agentName: string, restrictToAgentDir = true): string {
   if (!filePath || typeof filePath !== 'string') {
@@ -63,14 +25,6 @@ export function resolveNodeTransferPath(filePath: string, agentName: string, res
   return resolved;
 }
 
-export function detectTransferMimeType(filePath: string): { mimeType: string; isImage: boolean } {
-  const ext = path.extname(filePath).toLowerCase();
-  if (IMAGE_MIME[ext]) {
-    return { mimeType: IMAGE_MIME[ext], isImage: true };
-  }
-  return { mimeType: GENERIC_MIME[ext] || 'application/octet-stream', isImage: false };
-}
-
 export async function readNodeTransferFile(filePath: string, agentName: string, restrictToAgentDir = true): Promise<NodeTransferFilePayload> {
   const fullPath = resolveNodeTransferPath(filePath, agentName, restrictToAgentDir);
   const stats = await fs.stat(fullPath);
@@ -79,16 +33,7 @@ export async function readNodeTransferFile(filePath: string, agentName: string, 
   }
 
   const buffer = await fs.readFile(fullPath);
-  const { mimeType, isImage } = detectTransferMimeType(filePath);
-  return {
-    filePath,
-    name: path.basename(filePath),
-    sizeBytes: buffer.length,
-    mimeType,
-    isImage,
-    sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
-    dataBase64: buffer.toString('base64'),
-  };
+  return buildNodeTransferFilePayload(filePath, buffer);
 }
 
 export async function writeNodeTransferFile(filePath: string, agentName: string, dataBase64: string, overwrite = false, restrictToAgentDir = true): Promise<NodeTransferWriteResult> {
@@ -106,18 +51,12 @@ export async function writeNodeTransferFile(filePath: string, agentName: string,
   await fs.ensureDir(path.dirname(fullPath));
   await fs.writeFile(fullPath, buffer);
 
-  return {
-    filePath,
-    absolutePath: fullPath,
-    sizeBytes: buffer.length,
-    sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
-    overwritten: exists,
-  };
+  return buildNodeTransferWriteResult(filePath, buffer, exists, fullPath);
 }
 
 /** Decode the existing authenticated transfer payload without accepting partial data. */
 export function decodeNodeTransferFile(file: Pick<NodeTransferFilePayload, 'dataBase64' | 'sizeBytes' | 'sha256'>): Buffer {
-  if (!file || typeof file.dataBase64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(file.dataBase64)) {
+  if (!file || typeof file.dataBase64 !== 'string') {
     throw new Error('Node file source returned invalid base64 data.');
   }
   const decoded = Buffer.from(file.dataBase64, 'base64');

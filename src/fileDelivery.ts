@@ -1,5 +1,5 @@
 import { LocalRpcTransport, RpcClient, RpcError, RpcServiceRegistry, type RpcTransport } from './rpc';
-import { createFileDeliveryServiceHandler, fileDeliveryServiceDescriptor, type FileDeliveryRequest } from './fileDeliveryService';
+import { createFileDeliveryServiceHandler, fileDeliveryServiceDescriptor, type FileDeliveryRequest, type ImageArtifactWriteRequest } from './fileDeliveryService';
 
 let transport: RpcTransport | undefined;
 let client: RpcClient<typeof fileDeliveryServiceDescriptor> | undefined;
@@ -40,15 +40,22 @@ async function getClient() {
   return client;
 }
 
+function rethrowFileDeliveryError(error: unknown): never {
+  if (error instanceof RpcError && ['RPC_UNAVAILABLE', 'RPC_CLOSED', 'RPC_SEND_FAILED', 'RPC_READY_TIMEOUT', 'RPC_DRAINING',
+    'RPC_PROTOCOL_MISMATCH', 'RPC_SERVICE_NOT_FOUND', 'RPC_SERVICE_VERSION_MISMATCH'].includes(error.code)) {
+    throw new RpcError('FILE_DELIVERY_UNAVAILABLE', error.message, true);
+  }
+  throw error;
+}
+
 export async function deliverFile(request: FileDeliveryRequest) {
   try { return await (await getClient()).call('deliver', request); }
-  catch (error) {
-    if (error instanceof RpcError && ['RPC_UNAVAILABLE', 'RPC_CLOSED', 'RPC_SEND_FAILED', 'RPC_READY_TIMEOUT', 'RPC_DRAINING',
-      'RPC_PROTOCOL_MISMATCH', 'RPC_SERVICE_NOT_FOUND', 'RPC_SERVICE_VERSION_MISMATCH'].includes(error.code)) {
-      throw new RpcError('FILE_DELIVERY_UNAVAILABLE', error.message, true);
-    }
-    throw error;
-  }
+  catch (error) { rethrowFileDeliveryError(error); }
+}
+
+export async function writeImageArtifact(request: ImageArtifactWriteRequest) {
+  try { return await (await getClient()).call('writeImageArtifact', request); }
+  catch (error) { rethrowFileDeliveryError(error); }
 }
 
 export async function shutdownFileDelivery(timeoutMs = 10_000) {

@@ -49,6 +49,12 @@ var vscode3 = __toESM(require("vscode"));
 // src/provider.ts
 var vscode = __toESM(require("vscode"));
 
+// ../../shared/src/nodeIdentity.ts
+var MAX_CORE_NODE_ID_LENGTH = 193;
+function isCoreNodeId(value) {
+  return typeof value === "string" && value.length <= MAX_CORE_NODE_ID_LENGTH && (/^[A-Za-z0-9._:-]{1,128}$/.test(value) || /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}\/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value));
+}
+
 // src/foxwarmUri.ts
 function decodePathSegment(segment) {
   try {
@@ -93,8 +99,8 @@ function parseFoxwarmUri(uri) {
   };
 }
 function buildFoxwarmNodeUriString(nodeId, realPath) {
-  if (!nodeId || nodeId.includes("/")) {
-    throw new Error("nodeId must be a non-empty single path segment.");
+  if (!isCoreNodeId(nodeId)) {
+    throw new Error("nodeId must be a valid Core Node ID.");
   }
   if (!realPath.startsWith("/")) {
     throw new Error("realPath must be absolute.");
@@ -136,7 +142,7 @@ function normalizeFoxwarmOpenRequest(value) {
     throw new Error("Invalid Foxwarm open request.");
   }
   const request = value;
-  if (typeof request.nodeId !== "string" || !/^[A-Za-z0-9._-]+$/.test(request.nodeId)) {
+  if (typeof request.nodeId !== "string" || !isCoreNodeId(request.nodeId)) {
     throw new Error("Foxwarm node id is invalid.");
   }
   const nodeId = request.nodeId;

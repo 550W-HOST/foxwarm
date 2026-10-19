@@ -1,3 +1,4 @@
+import './testEnvironment';
 import { parseFoxwarmOpeningTag } from './utils/promptWrappers';
 import * as llm from './llm';
 import * as nodeExecution from './nodeExecution';

@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import * as promptSnapshot from './promptSnapshot';
 import test from 'node:test';
 import assert from 'node:assert/strict';
