@@ -160,18 +160,22 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
     }
 
     internal async Task<JsonObject> LifecycleAsync(
-        string action, JsonObject request, CancellationToken token
+        string action,
+        JsonObject request,
+        CancellationToken token
     )
     {
         var value = Object(await RunAsync(action, request, token));
         Keys(value, ["node", "nodeId", "effect", "dataRetention", "details"]);
         var result = new JsonObject();
         if (action == "destroy")
-            result["nodeId"] = id + "/" + Exact(value["nodeId"], 128, "^[A-Za-z0-9][A-Za-z0-9._:-]*$");
+            result["nodeId"] =
+                id + "/" + Exact(value["nodeId"], 128, "^[A-Za-z0-9][A-Za-z0-9._:-]*$");
         else
             result["node"] = Descriptor(value["node"]);
         foreach (var field in new[] { "effect", "dataRetention" })
-            if (value.ContainsKey(field)) result[field] = Bounded(value[field], 4096);
+            if (value.ContainsKey(field))
+                result[field] = Bounded(value[field], 4096);
         if (value.ContainsKey("details"))
         {
             BoundedJson(value["details"], 64 * 1024);
@@ -180,9 +184,16 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
         return result;
     }
 
-    internal static void BoundedJson(JsonNode? value, int maxBytes, int maxDepth = 32, int maxCount = 10_000, bool boundKeys = false)
+    internal static void BoundedJson(
+        JsonNode? value,
+        int maxBytes,
+        int maxDepth = 32,
+        int maxCount = 10_000,
+        bool boundKeys = false
+    )
     {
-        if (value is not null) ValidateJson(value, maxDepth, maxCount, boundKeys);
+        if (value is not null)
+            ValidateJson(value, maxDepth, maxCount, boundKeys);
         if (Encoding.UTF8.GetByteCount(value?.ToJsonString(JsonEncoding) ?? "null") > maxBytes)
             throw Invalid("Provider JSON exceeds its byte budget.");
     }
@@ -335,7 +346,12 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
         return text;
     }
 
-    private static void ValidateJson(JsonNode node, int maxDepth, int maxCount, bool boundKeys = false)
+    private static void ValidateJson(
+        JsonNode node,
+        int maxDepth,
+        int maxCount,
+        bool boundKeys = false
+    )
     {
         var count = 0;
         void Visit(JsonNode? item, int depth)
@@ -345,7 +361,8 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
             if (item is JsonObject obj)
                 foreach (var pair in obj)
                 {
-                    if (boundKeys && pair.Key.Length > 256) throw Invalid("Provider JSON key is too long.");
+                    if (boundKeys && pair.Key.Length > 256)
+                        throw Invalid("Provider JSON key is too long.");
                     Visit(pair.Value, depth + 1);
                 }
             else if (item is JsonArray array)

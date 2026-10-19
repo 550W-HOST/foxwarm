@@ -8,11 +8,15 @@ namespace Foxwarm.Sessions;
 internal sealed partial class SessionManager
 {
     internal async Task<JsonObject> ExecuteNodeToolAsync(
-        SessionOwner owner, JsonObject args, CancellationToken token, bool programmatic = false
+        SessionOwner owner,
+        JsonObject args,
+        CancellationToken token,
+        bool programmatic = false
     )
     {
         owner.Entry.RequireIdentityAuthority();
-        if (!IsCurrentOwner(owner)) throw new InvalidOperationException("Node tools require the current Session owner.");
+        if (!IsCurrentOwner(owner))
+            throw new InvalidOperationException("Node tools require the current Session owner.");
         var action = ToolRegistry.Text(args, "action")?.Trim().ToLowerInvariant();
         var isolated = AgentIsolated(owner.Agent);
         if (action == "list")
@@ -23,10 +27,25 @@ internal sealed partial class SessionManager
             var currentNode = CurrentNode(owner);
             var result = new JsonObject
             {
-                ["output"] = $"Current node: `{currentNode}`.\n"
-                    + string.Join('\n', nodes.OfType<JsonObject>().Select(value => $"- `{value["id"]!.GetValue<string>()}` ({value["kind"]!.GetValue<string>()}) — {value["availability"]!.GetValue<string>()}"))
+                ["output"] =
+                    $"Current node: `{currentNode}`.\n"
+                    + string.Join(
+                        '\n',
+                        nodes
+                            .OfType<JsonObject>()
+                            .Select(value =>
+                                $"- `{value["id"]!.GetValue<string>()}` ({value["kind"]!.GetValue<string>()}) — {value["availability"]!.GetValue<string>()}"
+                            )
+                    )
                     + "\nProviders:\n"
-                    + string.Join('\n', providers.OfType<JsonObject>().Select(value => $"- `{value["id"]!.GetValue<string>()}` ({string.Join(", ", value["lifecycle"]!.AsArray().Select(SessionWait.Text))})")),
+                    + string.Join(
+                        '\n',
+                        providers
+                            .OfType<JsonObject>()
+                            .Select(value =>
+                                $"- `{value["id"]!.GetValue<string>()}` ({string.Join(", ", value["lifecycle"]!.AsArray().Select(SessionWait.Text))})"
+                            )
+                    ),
             };
             if (programmatic)
             {
@@ -40,18 +59,29 @@ internal sealed partial class SessionManager
         {
             ToolRegistry.Keys(args, ["action", "nodeId"]);
             var id = RequiredNodeArgument(args, "nodeId", 193).Trim();
-            if (isolated) throw new ToolAuthorizationDeniedException("Isolated sessions cannot switch Node through model tools. Use the administrator Node command.");
+            if (isolated)
+                throw new ToolAuthorizationDeniedException(
+                    "Isolated sessions cannot switch Node through model tools. Use the administrator Node command."
+                );
             return await SelectNodeAsync(owner, id, token);
         }
         if (action is not ("create" or "ensure" or "inspect" or "destroy"))
-            throw new InvalidDataException("node action must be list, select, create, ensure, inspect, or destroy.");
-        ToolRegistry.Keys(args, action == "destroy"
-            ? ["action", "nodeId", "parameters", "parametersJson", "confirmation"]
-            : ["action", "providerId", "nodeId", "parameters", "parametersJson"]);
-        var parameters = ToolRegistry.ObjectArg(args, "parameters", "parametersJson") ?? new JsonObject();
+            throw new InvalidDataException(
+                "node action must be list, select, create, ensure, inspect, or destroy."
+            );
+        ToolRegistry.Keys(
+            args,
+            action == "destroy"
+                ? ["action", "nodeId", "parameters", "parametersJson", "confirmation"]
+                : ["action", "providerId", "nodeId", "parameters", "parametersJson"]
+        );
+        var parameters =
+            ToolRegistry.ObjectArg(args, "parameters", "parametersJson") ?? new JsonObject();
         ExecutableNodeProvider.BoundedJson(parameters, 64 * 1024, 12, int.MaxValue, true);
         if (isolated && action != "inspect")
-            throw new ToolAuthorizationDeniedException("Effectively isolated sessions cannot mutate provider Nodes without an ownership policy.");
+            throw new ToolAuthorizationDeniedException(
+                "Effectively isolated sessions cannot mutate provider Nodes without an ownership policy."
+            );
         string? providerId = null;
         string? nodeId = null;
         JsonObject resultValue;
@@ -83,19 +113,38 @@ internal sealed partial class SessionManager
             {
                 nodeId = RequiredNodeArgument(args, "nodeId", 193).Trim();
                 RequireNodeBoundary(owner, nodeId);
-                if (action == "destroy" && ToolRegistry.Text(args, "confirmation") != "destroy node " + nodeId)
-                    throw new InvalidDataException("destroy requires exact confirmation `destroy node " + nodeId + "`.");
+                if (
+                    action == "destroy"
+                    && ToolRegistry.Text(args, "confirmation") != "destroy node " + nodeId
+                )
+                    throw new InvalidDataException(
+                        "destroy requires exact confirmation `destroy node " + nodeId + "`."
+                    );
             }
-            resultValue = await NodeProviders.LifecycleAsync(action, providerId, nodeId, parameters, owner.Id, owner.Agent, token);
+            resultValue = await NodeProviders.LifecycleAsync(
+                action,
+                providerId,
+                nodeId,
+                parameters,
+                owner.Id,
+                owner.Agent,
+                token
+            );
             ExecutableNodeProvider.BoundedJson(resultValue, 128 * 1024, 12, int.MaxValue, true);
         }
         return resultValue;
     }
 
-    private static string RequiredNodeArgument(JsonObject args, string key, int max, bool exact = false)
+    private static string RequiredNodeArgument(
+        JsonObject args,
+        string key,
+        int max,
+        bool exact = false
+    )
     {
         var text = ToolRegistry.Text(args, key);
-        if (!exact) text = text?.Trim();
+        if (!exact)
+            text = text?.Trim();
         if (string.IsNullOrWhiteSpace(text) || text.Length > max)
             throw new InvalidDataException(key + " must be a non-empty bounded string.");
         return text;
@@ -110,16 +159,27 @@ internal sealed partial class SessionManager
         {
             var id = SessionWait.Text(summary["id"])!;
             var type = SessionWait.Text(summary["type"]);
-            if (id.Length > 193 || type is not { Length: > 0 and <= 64 }) continue;
-            if (AgentIsolated(owner.Agent) && id != "master" && id != (RecordedIsolationNode(owner.Agent) ?? current) && id != current) continue;
-            if (result.Count == 100) break;
-            var tools = id == "master" ? this.tools.NodeDefinitions(id) : NodeProviders.Definitions(id);
+            if (id.Length > 193 || type is not { Length: > 0 and <= 64 })
+                continue;
+            if (
+                AgentIsolated(owner.Agent)
+                && id != "master"
+                && id != (RecordedIsolationNode(owner.Agent) ?? current)
+                && id != current
+            )
+                continue;
+            if (result.Count == 100)
+                break;
+            var tools =
+                id == "master" ? this.tools.NodeDefinitions(id) : NodeProviders.Definitions(id);
             var visible = new JsonArray();
             foreach (var definition in tools.OfType<JsonObject>().Take(200))
             {
                 var name = SessionWait.Text(definition["name"]);
-                if (name is not { Length: > 0 and <= 128 }) continue;
-                if (!ToolVisible(owner, "node", name, node: id)) continue;
+                if (name is not { Length: > 0 and <= 128 })
+                    continue;
+                if (!ToolVisible(owner, "node", name, node: id))
+                    continue;
                 var tool = new JsonObject { ["name"] = name };
                 if (SessionWait.Text(definition["description"]) is string description)
                     tool["description"] = description[..Math.Min(2000, description.Length)];
@@ -127,7 +187,13 @@ internal sealed partial class SessionManager
                 {
                     try
                     {
-                        ExecutableNodeProvider.BoundedJson(schema, 16 * 1024, 12, int.MaxValue, true);
+                        ExecutableNodeProvider.BoundedJson(
+                            schema,
+                            16 * 1024,
+                            12,
+                            int.MaxValue,
+                            true
+                        );
                         tool["parameters"] = schema.DeepClone();
                     }
                     catch (NodeProviderException) { }
@@ -137,13 +203,27 @@ internal sealed partial class SessionManager
             var node = new JsonObject
             {
                 ["id"] = id,
-                ["kind"] = summary["kind"]?.DeepClone() ?? JsonValue.Create(id == "master" ? "master" : "remote"),
-                ["provider"] = summary["provider"]?.DeepClone() ?? JsonValue.Create(id == "master" ? "master" : "authenticated-remote"),
+                ["kind"] =
+                    summary["kind"]?.DeepClone()
+                    ?? JsonValue.Create(id == "master" ? "master" : "remote"),
+                ["provider"] =
+                    summary["provider"]?.DeepClone()
+                    ?? JsonValue.Create(id == "master" ? "master" : "authenticated-remote"),
                 ["type"] = summary["type"]!.DeepClone(),
-                ["availability"] = summary["availability"]?.DeepClone() ?? JsonValue.Create(SessionCatalog.Flag(summary["executable"]) ? "ready" : SessionCatalog.Flag(summary["online"]) ? "error" : "offline"),
+                ["availability"] =
+                    summary["availability"]?.DeepClone()
+                    ?? JsonValue.Create(
+                        SessionCatalog.Flag(summary["executable"]) ? "ready"
+                        : SessionCatalog.Flag(summary["online"]) ? "error"
+                        : "offline"
+                    ),
                 ["tools"] = visible,
             };
-            if (SessionWait.Number(summary["lastActivity"]) is double activity && double.IsFinite(activity) && activity >= 0)
+            if (
+                SessionWait.Number(summary["lastActivity"]) is double activity
+                && double.IsFinite(activity)
+                && activity >= 0
+            )
                 node["lastActivity"] = activity;
             if (summary["protocolCompatibility"] is JsonObject compatibility)
             {
@@ -157,7 +237,8 @@ internal sealed partial class SessionManager
             if (SessionWait.Text(summary["displayName"]) is { Length: > 0 and <= 256 } label)
                 node["label"] = label;
             var size = Encoding.UTF8.GetByteCount(node.ToJsonString());
-            if (totalBytes + size > 256 * 1024) break;
+            if (totalBytes + size > 256 * 1024)
+                break;
             totalBytes += size;
             result.Add(node);
         }
