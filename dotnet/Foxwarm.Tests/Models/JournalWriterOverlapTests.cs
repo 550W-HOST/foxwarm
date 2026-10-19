@@ -276,7 +276,7 @@ public sealed class JournalWriterOverlapTests
     }
 
     [Fact]
-    public async Task Cancelling_while_manifest_is_queued_preserves_cancellation_and_resolves_it_before_returning()
+    public async Task Cancelling_after_concrete_plan_while_manifest_is_queued_preserves_durable_abort()
     {
         using var temp = new TempDirectory();
         await using var journal = new LlmRequestJournalStore(temp.Path);
@@ -316,7 +316,10 @@ public sealed class JournalWriterOverlapTests
             request.WaitAsync(TimeSpan.FromSeconds(5))
         );
         Assert.Equal(0, sends);
-        Assert.Empty(await journal.ListAsync("s", null, null, null, 10));
+        var row = Assert.Single(await journal.ListAsync("s", null, null, null, 10));
+        var restored = await journal.ReconstructAsync(row!["requestId"]!.GetValue<string>());
+        Assert.Equal("complete", restored["completeness"]!.GetValue<string>());
+        Assert.Equal("abort", Assert.Single(restored["attempts"]!.AsArray())!["result"]!["outcome"]!.GetValue<string>());
     }
 
     private static ModelRequestOwner Owner(HttpClient http, LlmRequestJournalStore journal) =>

@@ -183,6 +183,35 @@ public sealed class RoutingAttemptsTests
     }
 
     [Fact]
+    public async Task Prepared_notice_failure_without_journal_keeps_original_error_and_does_not_count_toward_health()
+    {
+        var sends = 0;
+        var notices = 0;
+        var retries = 0;
+        var localError = new IOException("Local attempt notification failed.");
+        using var client = new HttpClient(new Handler((_, _) =>
+        {
+            sends++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+            {
+                Content = new StringContent("unavailable"),
+            });
+        }));
+        var catalog = Catalog(2);
+        var routing = new ModelRouting();
+        var owner = new ModelRequestOwner(client, Defaults(), routing, (_, _) => Task.CompletedTask);
+        var error = await Record.ExceptionAsync(() => owner.RequestAsync("session", catalog,
+            "route", null, "lineage", "turn", [], (_, _) => Task.FromResult("prompt"),
+            _ => { retries++; return Task.FromResult(false); },
+            () => { if (++notices == 2) throw localError; }, null, null, default));
+        Assert.Same(localError, error);
+        Assert.Equal(1, sends);
+        Assert.Equal(2, notices);
+        Assert.Equal(1, retries);
+        Assert.Equal("a/m", routing.Select(routing.Begin("route", catalog.Resolve("route")), "lineage").TargetKey);
+    }
+
+    [Fact]
     public async Task Local_snapshot_failure_does_not_become_provider_attempts_or_health()
     {
         var count = 0;

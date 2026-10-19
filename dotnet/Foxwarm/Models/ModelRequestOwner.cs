@@ -257,6 +257,9 @@ internal sealed class ModelRequestOwner(
                 options = options with { Images = images };
                 if (journal is not null && journalRequestId is null)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    // Accepted manifests must remain available to a later prepared start/abort,
+                    // even when Stop arrives before this early write reaches the writer.
                     var admission = await journal.EnqueueRequestAsync(
                         sessionId.Length == 0 ? null : sessionId,
                         journalPurpose,
@@ -265,8 +268,7 @@ internal sealed class ModelRequestOwner(
                         requestDefaults.Tools ?? new JsonArray(),
                         RequestHistoryRepair.SelectAndRepair(history),
                         captured.RouteKey,
-                        cacheKey,
-                        cancellationToken
+                        cacheKey
                     );
                     journalRequestId = admission.RequestId;
                     manifestCompletion = admission.Completion;
@@ -275,12 +277,18 @@ internal sealed class ModelRequestOwner(
                 var currentJournalRequestId = journalRequestId;
                 var currentJournalAttempt = journal is null ? 0 : ++journalAttempt;
                 if (journal is not null && currentJournalRequestId is not null)
-                {
                     journalRequestStarted?.Invoke(currentJournalRequestId);
-                    options = options with
+                var attemptPrepared = false;
+                options = options with
+                {
+                    AttemptPrepared = async payload =>
                     {
-                        JournalAttemptStart = payload =>
-                            JournalAttemptStartAsync(
+                        // Serializers call this only after the complete semantic body exists.
+                        // A cancelled plan still records its durable start/abort, without a new notice.
+                        if (!cancellationToken.IsCancellationRequested)
+                            beginAttempt?.Invoke();
+                        if (journal is not null && currentJournalRequestId is not null)
+                            await JournalAttemptStartAsync(
                                 journal,
                                 currentJournalRequestId,
                                 currentJournalAttempt,
@@ -289,11 +297,12 @@ internal sealed class ModelRequestOwner(
                                 leaf.ProviderType,
                                 payload,
                                 instructions,
-                                manifestCompletion,
-                                cancellationToken
-                            ),
-                    };
-                }
+                                manifestCompletion
+                            ).ConfigureAwait(false);
+                        attemptPrepared = true;
+                        cancellationToken.ThrowIfCancellationRequested();
+                    },
+                };
                 var prepared = ConcreteRequestHistory.PrepareRequest(history.Messages, leaf.Key);
                 if (images is not null)
                 {
@@ -324,8 +333,6 @@ internal sealed class ModelRequestOwner(
                     websockets,
                     scope
                 );
-                cancellationToken.ThrowIfCancellationRequested();
-                beginAttempt?.Invoke();
                 cancellationToken.ThrowIfCancellationRequested();
                 ModelAttemptFailure failure;
                 ChatResult? result = null;
@@ -385,7 +392,7 @@ internal sealed class ModelRequestOwner(
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    if (journal is not null && currentJournalRequestId is not null)
+                    if (attemptPrepared && journal is not null && currentJournalRequestId is not null)
                         try
                         {
                             await journal
@@ -406,6 +413,11 @@ internal sealed class ModelRequestOwner(
                         {
                             warning?.Invoke(journalError);
                         }
+                    throw;
+                }
+                catch (Exception) when (!attemptPrepared)
+                {
+                    // Serialization and local attempt callbacks are not provider failures.
                     throw;
                 }
                 catch (ModelPreparationException error)
@@ -589,8 +601,7 @@ internal sealed class ModelRequestOwner(
         string providerType,
         JsonNode payload,
         string effectivePrompt,
-        Task manifestCompletion,
-        CancellationToken token
+        Task manifestCompletion
     )
     {
         try
@@ -603,15 +614,10 @@ internal sealed class ModelRequestOwner(
                     virtualModelKey,
                     providerType,
                     payload,
-                    effectivePrompt,
-                    token
+                    effectivePrompt
                 )
                 .ConfigureAwait(false);
             await Task.WhenAll(manifestCompletion, receipt.Completion).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
-        {
-            throw;
         }
         catch (Exception error)
         {

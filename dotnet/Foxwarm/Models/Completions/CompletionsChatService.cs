@@ -23,8 +23,8 @@ internal sealed class CompletionsChatService(
             reasoningField,
             promptCacheKey
         );
-        if (options.JournalAttemptStart is not null)
-            await options.JournalAttemptStart(body).ConfigureAwait(false);
+        if (options.AttemptPrepared is not null)
+            await options.AttemptPrepared(body).ConfigureAwait(false);
         var endpoint = new Uri(
             options.BaseUri.ToString().TrimEnd('/') + "/chat/completions",
             UriKind.Absolute

@@ -95,7 +95,7 @@ internal sealed partial class SessionManager
         var attemptStarted = false;
         options = options with
         {
-            JournalAttemptStart = async payload =>
+            AttemptPrepared = async payload =>
             {
                 await Journal.AppendAttemptStartAsync(
                     requestId,

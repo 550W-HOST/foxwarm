@@ -37,8 +37,8 @@ internal sealed class ResponsesWsChatService(
                 : options
         );
         body.Remove("stream");
-        if (options.JournalAttemptStart is not null)
-            await options.JournalAttemptStart(body).ConfigureAwait(false);
+        if (options.AttemptPrepared is not null)
+            await options.AttemptPrepared(body).ConfigureAwait(false);
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["Content-Type"] = "application/json",

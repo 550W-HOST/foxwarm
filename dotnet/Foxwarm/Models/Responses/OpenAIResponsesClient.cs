@@ -26,7 +26,7 @@ public sealed record ResponsesClientOptions(
 {
     internal double? HardTimeoutMs { get; init; }
     internal string? ProviderPromptCacheKey { get; init; }
-    internal Func<JsonNode, Task>? JournalAttemptStart { get; init; }
+    internal Func<JsonNode, Task>? AttemptPrepared { get; init; }
     internal JsonObject? WebSearch { get; init; }
     internal JsonObject? ImageGeneration { get; init; }
     internal Foxwarm.Images.ImageBlobStore? Images { get; init; }
@@ -978,8 +978,8 @@ public sealed class ResponsesChatService : IChatService
     )
     {
         var body = ResponsesRequestPlan.Build(history, options);
-        if (options.JournalAttemptStart is not null)
-            await options.JournalAttemptStart(body).ConfigureAwait(false);
+        if (options.AttemptPrepared is not null)
+            await options.AttemptPrepared(body).ConfigureAwait(false);
         var completed = await OpenAIHttp
             .RequestAsync(
                 httpClient,
