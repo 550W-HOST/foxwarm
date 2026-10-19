@@ -21,8 +21,8 @@ Ingress forces trusted trigger state at the boundary; callers cannot smuggle a p
 
 Stop is intentionally different from queue admission. `SessionControl.StopAsync` takes the immediate owner cancellation/CTS path (`SessionEntry.BeginStop` and `SessionSaveLane` stop state) so the current request can be interrupted before a persistence tail completes; the later save/finalization must not let a stale snapshot overwrite the stopping/queue outcome. Wait clearing can release deferred queue items as one ordered transition. Trusted passive `trigger:false` rows and compact wakes neither clear waits nor satisfy wait-all targets. Task previous-owner notices retain this state and their existing notification deduplication. Explicit dequeue clears the wait through the same lane before starting passive-only work. Stale timeout IDs remain ineffective; ordinary ingress still forces triggering.
 
-A committed wait survives restart through active JSON; transient requesting-model/running-tool phases do not become persisted waits.
+A committed wait survives restart through active JSON; transient requesting-model/running-tool phases do not become persisted waits. Persisted/internal `waitAll.sessions` accepts a nonempty single-target list, matching Source's existing wait writer and transition contract. Normal hydration, save and reopen preserve the original wait and absent `declarationVersion`; they do not convert it to wait-any or enroll it in current declaration/quiescence semantics. New model-facing wait-all declarations still require at least two distinct accessible non-self targets through `SessionManager.ValidateWait`, separately from persisted-state validation.
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Sessions/SessionAdmissionTests.cs`; `PersistentSessionTurnTests.cs`; `PassiveTaskInputTests.cs`; `RetryNoticeTests.cs`; `dotnet/Foxwarm.Tests/Timers/MainTimerToolsTests.cs`.
+`dotnet/Foxwarm.Tests/Sessions/SessionAdmissionTests.cs`; `PersistentSessionTurnTests.cs`; `PassiveTaskInputTests.cs`; `RetryNoticeTests.cs`; `LegacyWaitAuthorityTests.cs` with actual Source fixture `dotnet/legacy-wait-fixture-ts.mjs`; `dotnet/Foxwarm.Tests/Timers/MainTimerToolsTests.cs`.

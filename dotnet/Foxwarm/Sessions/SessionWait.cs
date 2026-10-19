@@ -178,7 +178,8 @@ internal static class SessionWait
             throw new InvalidDataException("Invalid wait declaration version.");
         if (wait["waitAll"] is JsonObject all)
         {
-            ValidateIds(all["sessions"], "waitAll.sessions", 2);
+            // Stored/internal waits can have one source; new tool declarations are validated separately.
+            ValidateIds(all["sessions"], "waitAll.sessions", 1);
             ValidateIds(all["satisfiedSessions"], "waitAll.satisfiedSessions", 0);
             if (
                 Strings(all["satisfiedSessions"])

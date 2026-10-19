@@ -20,8 +20,10 @@ Branch existence/replay decisions and branch/block mutations run in the shared A
 
 Nested effective reads apply cumulative fork caps: late parent/child rows do not leak into a descendant after its fork point. Parent rows are never copied or deleted when a child branch is compensated. Block pruning in a compaction operation concerns active context selection; it does not rewrite immutable Archive rows or alter committed branch identity.
 
+Block reads, exact replay and compensation accept legacy block-backed ascending source ranges without `sourceBlockIds`, preserving SQL NULL and omitted context metadata. Serialized JSON null/non-array values are not SQL NULL and still fail admission on reads. This matches the [active authority read/save contract](./session-authority-json.md); current compaction still generates explicit source IDs and applies its existing stricter candidate rules.
+
 `ArchiveBlockRecord.FrictionScore` is nullable and part of immutable block identity, duplicate-write comparison, and compensation. Initialization adds the nullable `friction_score` column to an otherwise valid old block schema; read-only old-schema readers project a missing column as null without migrating it. Owned/effective reads preserve scores, including zero, through cumulative fork caps and restart. Context metadata and rendered summaries expose a score only when present.
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Storage/ArchiveLineageTests.cs`; `ArchiveFrictionTests.cs`; `PersistencePrimitiveTests.cs`; `dotnet/Foxwarm.Tests/Sessions/ForkClearLifecycleTests.cs`.
+`dotnet/Foxwarm.Tests/Storage/ArchiveLineageTests.cs`; `ArchiveFrictionTests.cs`; `PersistencePrimitiveTests.cs`; `dotnet/Foxwarm.Tests/Sessions/ForkClearLifecycleTests.cs`; `LegacyBlockAuthorityTests.cs` and `dotnet/legacy-block-fixture-ts.mjs` (actual Source seed/reopen, mandatory owner startup, preserved legacy provenance, inherited expansion, unchanged candidate exclusion, normal compact commit and reopen).
