@@ -23,7 +23,12 @@ internal sealed class MainLauncherLifetime : IAsyncDisposable
         var name = Environment.GetEnvironmentVariable("FOXWARM_MAIN_LIFETIME_PIPE");
         if (string.IsNullOrEmpty(name))
             return null;
-        var pipe = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
+        var pipe = new NamedPipeClientStream(
+            ".",
+            name,
+            PipeDirection.InOut,
+            PipeOptions.Asynchronous
+        );
         try
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));

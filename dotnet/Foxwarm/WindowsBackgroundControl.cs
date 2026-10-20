@@ -20,19 +20,31 @@ internal sealed class WindowsBackgroundControl : IAsyncDisposable
         this.lifetime = lifetime;
         var name = Environment.GetEnvironmentVariable("FOXWARM_WINDOWS_CONTROL_PIPE");
         if (string.IsNullOrWhiteSpace(name))
-            throw new InvalidDataException("The Windows background entry requires its data-root control pipe.");
-        pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1,
-            PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+            throw new InvalidDataException(
+                "The Windows background entry requires its data-root control pipe."
+            );
+        pipe = new NamedPipeServerStream(
+            name,
+            PipeDirection.InOut,
+            1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous
+        );
         server = ServeAsync();
     }
 
-    internal static WindowsBackgroundControl? Start(bool enabled, string dataRoot,
-        IHostApplicationLifetime lifetime)
+    internal static WindowsBackgroundControl? Start(
+        bool enabled,
+        string dataRoot,
+        IHostApplicationLifetime lifetime
+    )
     {
         if (!enabled)
             return null;
         if (!OperatingSystem.IsWindows())
-            throw new PlatformNotSupportedException("The Windows background entry requires Windows.");
+            throw new PlatformNotSupportedException(
+                "The Windows background entry requires Windows."
+            );
         return new(dataRoot, lifetime);
     }
 
@@ -48,10 +60,15 @@ internal sealed class WindowsBackgroundControl : IAsyncDisposable
                 var logs = Path.Combine(dataRoot, "state", "logs");
                 object response = command switch
                 {
-                    "status" => new { ok = true, pid = Environment.ProcessId,
+                    "status" => new
+                    {
+                        ok = true,
+                        pid = Environment.ProcessId,
                         stopping = lifetime.ApplicationStopping.IsCancellationRequested,
-                        logDir = logs, stdoutLog = Path.Combine(logs, "foxwarm.stdout.log"),
-                        stderrLog = Path.Combine(logs, "foxwarm.stderr.log") },
+                        logDir = logs,
+                        stdoutLog = Path.Combine(logs, "foxwarm.stdout.log"),
+                        stderrLog = Path.Combine(logs, "foxwarm.stderr.log"),
+                    },
                     "stop" => new { ok = true, pid = Environment.ProcessId },
                     _ => new { ok = false, error = "unknown command" },
                 };
