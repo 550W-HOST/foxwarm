@@ -6,6 +6,8 @@ internal sealed partial class NodeClient
 {
     private Connection? currentConnection;
 
+    internal object? SessionConnection => currentConnection;
+
     private Connection Connected =>
         currentConnection is { Socket.State: System.Net.WebSockets.WebSocketState.Open } connection
             ? connection

@@ -78,6 +78,7 @@ internal sealed partial class NodeClient
                         or "get_default_cwd"
                     )
                 || tool == "exec" && !ExecNative.Supported
+                || options.ToolCallInterceptor is not null
             )
                 throw new InvalidDataException("This external Node tool is not available.");
             var cwd = Text(frame, "sessionCwd") is { Length: > 0 } supplied

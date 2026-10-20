@@ -30,10 +30,16 @@ internal static class Program
             : null;
         try
         {
-            var options = Parse(args);
-            await new NodeClient(options, new NodePaths(Environment.CurrentDirectory)).Run(
-                stop.Token
-            );
+            if (args.Contains("--help") || args.Contains("-h"))
+            {
+                Console.WriteLine(Help);
+                return 0;
+            }
+            var (options, interactive) = Parse(args);
+            if (interactive is not null)
+                await ConsoleNode.Run(options, interactive, stop.Token);
+            else
+                await new NodeClient(options, new NodePaths(Environment.CurrentDirectory)).Run(stop.Token);
             return 0;
         }
         catch (Exception error)
@@ -48,12 +54,24 @@ internal static class Program
         }
     }
 
-    private static NodeClientOptions Parse(string[] args)
+    private static (NodeClientOptions Client, InteractiveOptions? Interactive) Parse(string[] args)
     {
         var values = new Dictionary<string, string>();
         var localTrigger = true;
+        var interactive = false;
+        var autoAll = false;
         for (var index = 0; index < args.Length; index++)
         {
+            if (args[index] == "--interactive")
+            {
+                interactive = true;
+                continue;
+            }
+            if (args[index] == "--auto-approve-all")
+            {
+                autoAll = true;
+                continue;
+            }
             if (args[index] == "--no-local-trigger")
             {
                 localTrigger = false;
@@ -68,6 +86,8 @@ internal static class Program
                         or "--auth-token"
                         or "--credentials-file"
                         or "--local-trigger-port"
+                        or "--auto-approve"
+                        or "--timeout"
                     )
                 || index + 1 >= args.Length
             )
@@ -87,7 +107,9 @@ internal static class Program
             throw new InvalidDataException(
                 "Provide --token, or (--auth-token with --id), or --credentials-file with stored node credentials"
             );
-        return new NodeClientOptions(
+        if (!interactive && (autoAll || values.ContainsKey("--auto-approve") || values.ContainsKey("--timeout")))
+            throw new InvalidDataException("Approval options require --interactive");
+        return (new NodeClientOptions(
             host,
             values.GetValueOrDefault("--id"),
             values.GetValueOrDefault("--token"),
@@ -95,8 +117,40 @@ internal static class Program
             values.GetValueOrDefault("--credentials-file"),
             localTrigger,
             TriggerPort(values.GetValueOrDefault("--local-trigger-port"))
-        );
+        ), interactive ? new InteractiveOptions(autoAll, values.GetValueOrDefault("--auto-approve"), TriggerPort(values.GetValueOrDefault("--timeout"))) : null);
     }
+
+    private const string Help = """
+        Foxwarm CLI Node
+
+        Usage: Foxwarm.CliNode --host URL [credentials] [options]
+
+        Credentials:
+          --token TOKEN                 Pairing token
+          --id NAME                     Requested name or approved Node ID
+          --auth-token TOKEN            Approved auth token (requires --id)
+          --credentials-file PATH       Load/save approved credentials
+
+        Options:
+          --interactive                 Show bound Sessions, history and tool approvals
+          --auto-approve PATTERN        Interactive: match tool names with a case-insensitive
+                                        .NET ECMAScript regular expression (culture invariant).
+                                        Empty means manual; invalid patterns fail startup.
+          --auto-approve-all            Interactive: approve future ordinary tool calls
+          --timeout SECONDS             Interactive: fallback approval deadline when the server
+                                        supplies none. Positive deadlines reject 2 seconds early,
+                                        with a 1-second minimum. The server deadline takes priority.
+                                        This does not set an exec command's foreground wait.
+          --local-trigger-port PORT     Loopback trigger port (default: OS-selected)
+          --no-local-trigger            Disable the loopback trigger
+          --help, -h                    Show this help
+
+        Native default: headless.
+        Interactive keys: Up/Down select, Enter send, Backspace/Delete erase,
+          Ctrl+R refresh, Ctrl+C quit; q quits only with an empty draft and no approval.
+          During approval: Y/Enter approve, N/Esc reject, A toggles future auto-approval.
+          A does not decide the displayed request. Text batches are not shortcut keys.
+        """;
 
     private static double TriggerPort(string? text)
     {

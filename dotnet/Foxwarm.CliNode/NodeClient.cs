@@ -10,7 +10,9 @@ internal sealed record NodeClientOptions(
     string? AuthToken,
     string? CredentialsFile,
     bool LocalTrigger = true,
-    double LocalTriggerPort = 0
+    double LocalTriggerPort = 0,
+    Func<NodeToolCall, CancellationToken, Task<ToolApproval>>? ToolCallInterceptor = null,
+    Action<string, string>? OnStatus = null
 );
 
 internal sealed partial class NodeClient
@@ -97,6 +99,7 @@ internal sealed partial class NodeClient
                         )
                 );
                 using var connection = new Connection();
+                using var closeApprovals = stop.Register(connection.CloseApprovals);
                 connection.Socket.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
                 connection.Socket.Options.KeepAliveTimeout = TimeSpan.FromSeconds(10);
                 connection.Socket.Options.Proxy = MasterProxy.Create(address);
@@ -116,7 +119,7 @@ internal sealed partial class NodeClient
                         {
                             ["type"] = Authenticated ? "node_register" : "pair_request",
                             ["nodeType"] = "cli-node",
-                            ["capabilities"] = Capabilities(),
+                            ["capabilities"] = Capabilities(options.ToolCallInterceptor is not null),
                             ["nodeProtocol"] = new JsonObject { ["min"] = 1, ["max"] = 3 },
                             ["requestedName"] = Authenticated ? null : requestedName,
                         }
@@ -125,6 +128,7 @@ internal sealed partial class NodeClient
                 }
                 finally
                 {
+                    connection.CloseApprovals();
                     if (ReferenceEquals(currentConnection, connection))
                         currentConnection = null;
                     if (ReferenceEquals(registeredConnection, connection))
@@ -361,6 +365,8 @@ internal sealed partial class NodeClient
             JsonObject response;
             if (type == "tool_call")
             {
+                if (!frame.ContainsKey("owner"))
+                    await Approve(connection, frame, cancellation?.Token ?? CancellationToken.None);
                 var result =
                     frame.ContainsKey("owner")
                         ? await ExecuteExternal(connection, frame, () => execStarted = true)
@@ -528,12 +534,14 @@ internal sealed partial class NodeClient
 
     private static string? Text(JsonObject value, string key) => NodeFileTools.Text(value[key]);
 
-    internal static JsonObject Capabilities()
+    internal static JsonObject Capabilities(bool intercepted = false)
     {
         using var stream = typeof(NodeClient).Assembly.GetManifestResourceStream(
             "Foxwarm.CliNode.Capabilities.json"
         )!;
         var capabilities = (JsonObject)JsonNode.Parse(stream)!;
+        if (intercepted)
+            capabilities["features"]!.AsObject().Remove("externalToolOwner");
         if (!ExecNative.Supported)
         {
             var definitions = capabilities["tools"]!.AsArray();
@@ -600,8 +608,11 @@ internal sealed partial class NodeClient
             && (result = (int)number) == number;
     }
 
-    private static void Log(string state, string detail)
+    private void Log(string state, string detail)
     {
+        options.OnStatus?.Invoke(state, detail);
+        if (options.OnStatus is not null)
+            return;
         if (Environment.GetEnvironmentVariable("FOXWARM_NO_CONSOLE_LOG") != "1")
             Console.Error.WriteLine("[" + state + "] " + detail);
     }
@@ -609,6 +620,8 @@ internal sealed partial class NodeClient
     private sealed class Connection : IDisposable
     {
         internal ClientWebSocket Socket { get; } = new();
+        internal CancellationTokenSource ApprovalStop { get; } = new();
+        internal void CloseApprovals() => CancelWait(ApprovalStop);
         internal int Protocol { get; set; } = 1;
         private readonly object sendGate = new();
         private Task sending = Task.CompletedTask;
@@ -730,6 +743,7 @@ internal sealed partial class NodeClient
 
         public void Dispose()
         {
+            CloseApprovals();
             RejectPending();
             Socket.Dispose();
         }
