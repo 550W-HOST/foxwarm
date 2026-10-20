@@ -449,7 +449,10 @@ public sealed class ModelInteractionDiagnosticsTests
         var fragment = OldToken[..^1];
         var evidence = "terminal evidence " + new string('x', 80);
         var body = truncated
-            ? evidence + new string('x', 65536 - evidence.Length - fragment.Length) + OldToken + " trailing evidence"
+            ? evidence
+                + new string('x', 65536 - evidence.Length - fragment.Length)
+                + OldToken
+                + " trailing evidence"
             : evidence + " " + OldToken + " ordinary partial label " + fragment;
         using var handler = new DiagnosticHandler((_, _) => (HttpStatusCode.BadRequest, body));
         using var http = new HttpClient(handler);
@@ -467,8 +470,13 @@ public sealed class ModelInteractionDiagnosticsTests
         Assert.Equal("400", error.Final.Status);
         Assert.Null(error.Final.NextAttempt);
         var persisted = await File.ReadAllTextAsync(
-            Assert.Single(Directory.GetFiles(
-                Path.Combine(temp.Path, "state", "logs"), "*_res.json", SearchOption.AllDirectories))
+            Assert.Single(
+                Directory.GetFiles(
+                    Path.Combine(temp.Path, "state", "logs"),
+                    "*_res.json",
+                    SearchOption.AllDirectories
+                )
+            )
         );
         var attempt = Assert.Single(JsonNode.Parse(persisted)!["attempts"]!.AsArray())!;
         Assert.Contains(evidence, attempt["body"]!.GetValue<string>());
@@ -479,9 +487,15 @@ public sealed class ModelInteractionDiagnosticsTests
             Assert.DoesNotContain(fragment, persisted);
         else
         {
-            Assert.Contains("ordinary partial label " + fragment, attempt["body"]!.GetValue<string>());
+            Assert.Contains(
+                "ordinary partial label " + fragment,
+                attempt["body"]!.GetValue<string>()
+            );
             if (protocol == "anthropic")
-                Assert.Contains("ordinary partial label " + fragment, attempt["error"]!.GetValue<string>());
+                Assert.Contains(
+                    "ordinary partial label " + fragment,
+                    attempt["error"]!.GetValue<string>()
+                );
         }
     }
 
