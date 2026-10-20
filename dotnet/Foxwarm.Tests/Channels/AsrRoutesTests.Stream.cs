@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -8,7 +7,7 @@ namespace Foxwarm.Tests;
 public sealed partial class AsrRoutesTests
 {
     [Fact]
-    public async Task Real_PCM_stream_preserves_shorter_partials_final_context_fragments_and_secrets()
+    public async Task Real_PCM_stream_preserves_browser_start_ready_audio_stop_final_and_extensions()
     {
         await using var f = await Fixture.Create(prefix: true);
         using var socket = await f.Connect("/prefix/api/asr/stream", "https://public.example");
@@ -18,40 +17,73 @@ public sealed partial class AsrRoutesTests
             new
             {
                 type = "start",
-                context = " " + context + " ",
+                context,
                 language = " English ",
-                credential = "not-forwarded",
+                extension = "retained",
             }
         );
-        var ready = await Json(socket);
-        Assert.Equal("ready", ready["type"]!.ToString());
-        Assert.DoesNotContain(Fixture.Key, ready.ToJsonString());
+        Assert.Equal("ready", (await Json(socket))["type"]!.ToString());
         await socket.SendAsync(
             new byte[] { 1, 0, 255 },
             WebSocketMessageType.Binary,
             false,
-            CancellationToken.None
+            default
         );
-        await socket.SendAsync(
-            new byte[] { 127 },
-            WebSocketMessageType.Binary,
-            true,
-            CancellationToken.None
-        );
+        await socket.SendAsync(new byte[] { 127 }, WebSocketMessageType.Binary, true, default);
         Assert.Equal("long hypothesis", (await Json(socket))["text"]!.ToString());
         Assert.Equal("short", (await Json(socket))["text"]!.ToString());
         await Send(socket, new { type = "stop" });
         var final = await Json(socket);
         Assert.Equal("scripted final", final["text"]!.ToString());
         Assert.Equal("final", final["type"]!.ToString());
-        Assert.Null(final["credential"]);
-        Assert.Null(final["privatePath"]);
+        Assert.Equal("service extension", final["extension"]!.ToString());
         Assert.Equal(4, f.AudioLength);
         Assert.Equal(context, f.Controls[0]["context"]!.ToString());
-        Assert.Equal("English", f.Controls[0]["language"]!.ToString());
-        Assert.Null(f.Controls[0]["credential"]);
+        Assert.Equal(" English ", f.Controls[0]["language"]!.ToString());
+        Assert.Equal("retained", f.Controls[0]["extension"]!.ToString());
         Assert.All(f.ReceivedCookies, value => Assert.Empty(value));
         Assert.All(f.ReceivedOrigins, value => Assert.Empty(value));
+        await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "browser final", default);
+    }
+
+    [Fact]
+    public async Task Opaque_text_binary_and_output_cross_old_protocol_caps_without_rewriting_or_final_ownership()
+    {
+        await using var f = await Fixture.Create();
+        f.Stream = async (socket, context) =>
+        {
+            while (await Receive(socket, context.RequestAborted) is { } frame)
+                await socket.SendAsync(frame.Bytes, frame.Type, true, context.RequestAborted);
+        };
+        using var client = await f.Connect();
+        var messages = new[]
+        {
+            new Received(WebSocketMessageType.Binary, new byte[] { 1, 2, 3 }),
+            new Received(
+                WebSocketMessageType.Text,
+                Encoding.UTF8.GetBytes("{not parsed " + new string('x', 17000))
+            ),
+            new Received(
+                WebSocketMessageType.Text,
+                Encoding.UTF8.GetBytes("{\"type\":\"final\",\"text\":\"\",\"extension\":true}")
+            ),
+            new Received(
+                WebSocketMessageType.Binary,
+                Enumerable.Repeat((byte)91, 26 * 1024 * 1024).ToArray()
+            ),
+            new Received(
+                WebSocketMessageType.Text,
+                Encoding.UTF8.GetBytes("still open after final")
+            ),
+        };
+        foreach (var message in messages)
+        {
+            await client.SendAsync(message.Bytes, message.Type, true, default);
+            var echo = (await Receive(client))!;
+            Assert.Equal(message.Type, echo.Type);
+            Assert.Equal(message.Bytes, echo.Bytes);
+        }
+        await client.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", default);
     }
 
     [Fact]
@@ -68,170 +100,16 @@ public sealed partial class AsrRoutesTests
     [Theory]
     [InlineData(401)]
     [InlineData(307)]
-    public async Task Upstream_rejected_or_redirected_WS_never_admits_browser_or_replays_credentials(
+    public async Task Upstream_rejected_or_redirected_WS_closes_browser_without_replaying_credentials(
         int status
     )
     {
         await using var f = await Fixture.Create();
         f.StreamStatus = status;
-        await Assert.ThrowsAsync<WebSocketException>(() => f.Connect());
-        Assert.Equal(1, f.Requests);
-    }
-
-    [Theory]
-    [InlineData("binary-before-ready")]
-    [InlineData("duplicate-start")]
-    [InlineData("odd-pcm")]
-    [InlineData("control-overflow")]
-    [InlineData("invalid-control")]
-    [InlineData("audio-overflow")]
-    public async Task Browser_invalid_order_samples_controls_and_total_audio_fail_visibly(
-        string fault
-    )
-    {
-        await using var f = await Fixture.Create();
         using var socket = await f.Connect();
-        if (fault == "binary-before-ready")
-            await socket.SendAsync(
-                new byte[2],
-                WebSocketMessageType.Binary,
-                true,
-                CancellationToken.None
-            );
-        else
-        {
-            await Send(socket, new { type = "start" });
-            await Json(socket);
-            if (fault == "duplicate-start")
-                await Send(socket, new { type = "start" });
-            if (fault == "odd-pcm")
-                await socket.SendAsync(
-                    new byte[3],
-                    WebSocketMessageType.Binary,
-                    true,
-                    CancellationToken.None
-                );
-            if (fault == "control-overflow")
-                await Send(socket, new { type = "stop", junk = new string('x', 17000) });
-            if (fault == "invalid-control")
-                await Send(socket, new { type = "unsupported" });
-            if (fault == "audio-overflow")
-            {
-                // A single fragmented PCM message crosses the aggregate budget;
-                // none is forwarded before the complete message is validated.
-                await socket.SendAsync(
-                    new byte[25 * 1024 * 1024],
-                    WebSocketMessageType.Binary,
-                    false,
-                    CancellationToken.None
-                );
-                await socket.SendAsync(
-                    new byte[2],
-                    WebSocketMessageType.Binary,
-                    true,
-                    CancellationToken.None
-                );
-            }
-        }
-        var result = await Json(socket);
-        Assert.Equal("error", result["type"]!.ToString());
-        Assert.DoesNotContain(Fixture.Key, result.ToJsonString());
-        Assert.Equal(0, f.AudioLength);
-    }
-
-    [Theory]
-    [InlineData("error")]
-    [InlineData("final-before-ready")]
-    [InlineData("invalid-json")]
-    [InlineData("invalid-utf8")]
-    [InlineData("binary")]
-    [InlineData("oversized-transcript")]
-    [InlineData("aggregate-text")]
-    [InlineData("abrupt")]
-    [InlineData("empty-final")]
-    public async Task Provider_frame_errors_caps_close_and_empty_final_are_not_fabricated(
-        string fault
-    )
-    {
-        await using var f = await Fixture.Create();
-        f.Stream = async (socket, context) =>
-        {
-            await Receive(socket, context.RequestAborted);
-            if (fault == "error")
-            {
-                await Send(socket, new { type = "error", error = Fixture.Key + "/private/path" });
-                return;
-            }
-            if (fault == "final-before-ready")
-            {
-                await Send(socket, new { type = "final", text = "too early" });
-                return;
-            }
-            if (fault == "invalid-json")
-            {
-                await socket.SendAsync(
-                    Encoding.UTF8.GetBytes("{invalid"),
-                    WebSocketMessageType.Text,
-                    true,
-                    context.RequestAborted
-                );
-                return;
-            }
-            if (fault == "invalid-utf8")
-            {
-                await socket.SendAsync(
-                    new byte[] { 255 },
-                    WebSocketMessageType.Text,
-                    true,
-                    context.RequestAborted
-                );
-                return;
-            }
-            if (fault == "binary")
-            {
-                await socket.SendAsync(
-                    new byte[2],
-                    WebSocketMessageType.Binary,
-                    true,
-                    context.RequestAborted
-                );
-                return;
-            }
-            if (fault == "abrupt")
-            {
-                socket.Abort();
-                return;
-            }
-            await Send(socket, new { type = "ready" });
-            if (fault == "empty-final")
-            {
-                await Send(socket, new { type = "final", text = "" });
-                return;
-            }
-            if (fault == "oversized-transcript")
-            {
-                await Send(socket, new { type = "partial", text = new string('x', 256 * 1024) });
-                return;
-            }
-            while (socket.State == WebSocketState.Open)
-                await Send(
-                    socket,
-                    new { type = "partial", text = new string('x', 128 * 1024) },
-                    context.RequestAborted
-                );
-        };
-        using var client = await f.Connect();
-        await Send(client, new { type = "start" });
-        JsonObject result;
-        do
-        {
-            result = await Json(client);
-        } while (result["type"]!.ToString() is "ready" or "partial");
-        Assert.DoesNotContain(Fixture.Key, result.ToJsonString());
-        Assert.DoesNotContain("/private/path", result.ToJsonString());
-        Assert.Equal(fault == "empty-final" ? "final" : "error", result["type"]!.ToString());
-        if (fault == "empty-final")
-            Assert.Equal("", result["text"]!.ToString());
+        Assert.Null(await Receive(socket));
+        Assert.Equal(WebSocketCloseStatus.InternalServerError, socket.CloseStatus);
+        Assert.Equal(1, f.Requests);
     }
 
     [Fact]
@@ -256,56 +134,89 @@ public sealed partial class AsrRoutesTests
         using var client = await f.Connect();
         await Send(client, new { type = "start" });
         await admitted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await client.CloseOutputAsync(
-            WebSocketCloseStatus.NormalClosure,
-            "cancel",
-            CancellationToken.None
-        );
+        await client.CloseAsync(WebSocketCloseStatus.NormalClosure, "cancel", default);
         await closed.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(0, f.AudioLength);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Real_ready_and_final_deadlines_release_stalled_service(bool final)
+    [Fact]
+    public async Task Browser_cancel_during_upstream_handshake_cancels_that_request()
     {
         await using var f = await Fixture.Create();
-        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        f.Stream = async (socket, context) =>
+        var admitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        f.BeforeStream = async context =>
         {
-            await Receive(socket, context.RequestAborted);
-            if (final)
-            {
-                await Send(socket, new { type = "ready" });
-                await Receive(socket, context.RequestAborted);
-            }
+            admitted.TrySetResult();
             try
             {
-                await Receive(socket, context.RequestAborted);
+                await Task.Delay(Timeout.Infinite, context.RequestAborted);
             }
-            finally
+            catch (OperationCanceledException)
             {
-                closed.TrySetResult();
+                cancelled.TrySetResult();
+                throw;
             }
         };
         using var client = await f.Connect();
-        await Send(client, new { type = "start" });
-        if (final)
+        await Send(client, new { type = "start", extension = "pending" });
+        await admitted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await client.CloseAsync(WebSocketCloseStatus.NormalClosure, "cancel handshake", default);
+        await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task Service_close_code_and_reason_are_forwarded_without_fabricated_transcript()
+    {
+        await using var f = await Fixture.Create();
+        f.Stream = async (socket, context) =>
         {
-            await Json(client);
-            await Send(client, new { type = "stop" });
-        }
-        var clock = Stopwatch.StartNew();
-        try
-        {
-            var response = await Receive(client);
-            Assert.True(
-                response is null || JsonNode.Parse(response.Bytes)?["type"]?.ToString() == "error"
+            await Receive(socket, context.RequestAborted);
+            await socket.CloseAsync(
+                WebSocketCloseStatus.PolicyViolation,
+                "service reason",
+                context.RequestAborted
             );
-        }
-        catch (WebSocketException) { }
-        await closed.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.InRange(clock.Elapsed.TotalSeconds, final ? 28 : 8, final ? 38 : 18);
+        };
+        using var client = await f.Connect();
+        await Send(client, new { type = "start" });
+        Assert.Null(await Receive(client));
+        Assert.Equal(WebSocketCloseStatus.PolicyViolation, client.CloseStatus);
+        Assert.Equal("service reason", client.CloseStatusDescription);
+    }
+
+    [Fact]
+    public async Task Delayed_final_after_previous_finalization_deadline_is_forwarded()
+    {
+        await using var f = await Fixture.Create();
+        f.Stream = async (socket, context) =>
+        {
+            await Receive(socket, context.RequestAborted);
+            await Send(socket, new { type = "ready" }, context.RequestAborted);
+            await Receive(socket, context.RequestAborted);
+            // Exercise the removed thirty-second product cutoff once, not a ten-minute recording sleep.
+            await Task.Delay(TimeSpan.FromSeconds(31), context.RequestAborted);
+            await Send(
+                socket,
+                new
+                {
+                    type = "final",
+                    text = "late final",
+                    extension = 713,
+                },
+                context.RequestAborted
+            );
+            await Receive(socket, context.RequestAborted);
+        };
+        using var client = await f.Connect();
+        await Send(client, new { type = "start" });
+        Assert.Equal("ready", (await Json(client))["type"]!.ToString());
+        await Send(client, new { type = "stop" });
+        var final = await Json(client);
+        Assert.Equal("late final", final["text"]!.ToString());
+        Assert.Equal(713, final["extension"]!.GetValue<int>());
+        await client.CloseAsync(WebSocketCloseStatus.NormalClosure, "browser final", default);
     }
 }

@@ -18,6 +18,7 @@ public sealed class WebUiUploadedFilesTests
         internal SessionManager Manager = null!;
         internal SessionOwner Owner = null!;
         internal WebUiUploadedFiles Files = null!;
+        internal string Staging = "";
 
         internal static async Task<Fixture> Create(JsonObject? isolation = null)
         {
@@ -50,6 +51,7 @@ public sealed class WebUiUploadedFilesTests
                 await f.Manager.LoadAsync();
                 f.Owner = await f.Manager.CreateNamedAsync("main", "source", null, null);
                 f.Files = new(f.Manager);
+                f.Staging = Path.Combine(f.Files.Root, Guid.NewGuid().ToString("N"));
                 return f;
             }
             catch
@@ -63,8 +65,8 @@ public sealed class WebUiUploadedFilesTests
 
         internal async Task<JsonObject> Stage(string name, byte[] bytes, string mime = "")
         {
-            Directory.CreateDirectory(Files.Root);
-            var path = Path.Combine(Files.Root, Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Staging);
+            var path = Path.Combine(Staging, Guid.NewGuid().ToString("N"));
             await File.WriteAllBytesAsync(path, bytes);
             return new()
             {
@@ -90,6 +92,8 @@ public sealed class WebUiUploadedFilesTests
         public async ValueTask DisposeAsync()
         {
             await Manager.DisposeAsync();
+            if (Directory.Exists(Staging))
+                Directory.Delete(Staging, recursive: true);
             Temp.Dispose();
         }
     }
@@ -170,12 +174,12 @@ public sealed class WebUiUploadedFilesTests
     public async Task Bad_staging_outside_symlink_directory_and_oversize_are_explicit_and_do_not_save_or_remove_unrelated_files()
     {
         await using var f = await Fixture.Create();
-        Directory.CreateDirectory(f.Files.Root);
+        Directory.CreateDirectory(f.Staging);
         var outside = Path.Combine(f.Temp.Path, "outside.txt");
         await File.WriteAllTextAsync(outside, "untouched");
-        var link = Path.Combine(f.Files.Root, "escape");
+        var link = Path.Combine(f.Staging, "escape");
         File.CreateSymbolicLink(link, outside);
-        var large = Path.Combine(f.Files.Root, "large");
+        var large = Path.Combine(f.Staging, "large");
         await using (var stream = File.Create(large))
             stream.SetLength(WebUiUploadedFiles.Limit + 1);
         foreach (var path in new[] { outside, link, f.Files.Root, large })

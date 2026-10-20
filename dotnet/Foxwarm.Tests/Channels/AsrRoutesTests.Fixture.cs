@@ -36,6 +36,7 @@ public sealed partial class AsrRoutesTests
         internal readonly List<string> ReceivedOrigins = [];
         internal Func<HttpContext, Task>? Upload;
         internal Func<WebSocket, HttpContext, Task>? Stream = null;
+        internal Func<HttpContext, Task>? BeforeStream;
         internal string PeerUrl = "";
         internal string Data => Path.Combine(Temp.Path, "data");
         internal string Work => Path.Combine(Temp.Path, "work");
@@ -79,6 +80,8 @@ public sealed partial class AsrRoutesTests
                         await context.Response.WriteAsJsonAsync(new { error = Key });
                         return;
                     }
+                    if (context.Request.Path == "/ws/stream" && f.BeforeStream is not null)
+                        await f.BeforeStream(context);
                     await next(context);
                 }
             );
@@ -206,7 +209,11 @@ public sealed partial class AsrRoutesTests
                 lock (Controls)
                     Controls.Add(body);
                 if (body["type"]!.ToString() == "start")
-                    await Send(socket, new { type = "ready", credential = Key }, token);
+                    await Send(
+                        socket,
+                        new { type = "ready", extension = "service extension" },
+                        token
+                    );
                 if (body["type"]!.ToString() == "stop")
                 {
                     await Send(
@@ -215,12 +222,10 @@ public sealed partial class AsrRoutesTests
                         {
                             type = "final",
                             text = "scripted final",
-                            privatePath = "/service-private-path",
-                            credential = Key,
+                            extension = "service extension",
                         },
                         token
                     );
-                    return;
                 }
             }
         }

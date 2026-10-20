@@ -49,7 +49,7 @@ sockets.on('connection', socket => {
           record.partial = true
           if (record.mode === 'normal') { send({ type: 'partial', text: 'long dictated thought' }); send({ type: 'partial', text: 'short' }); send({ type: 'partial', text: 'short' }) }
           else send({ type: 'partial', text: ' retained' })
-          if (record.mode === 'error') send({ type: 'error', error: key + '/service-private-path' })
+          if (record.mode === 'error') send({ type: 'error', error: 'Scripted speech service error' })
           if (record.mode === 'abrupt') socket.terminate()
         }
         return
@@ -97,6 +97,7 @@ await writeFile(join(owned.data, 'state/token'), owned.token, { mode: 0o600 })
 const appConfig = enabled => 'bot:\n  httpPort: ' + owned.port + '\nllm:\n  maxOutput: 713\nasrService:\n  enabled: ' + enabled + '\n  url: ' + serviceUrl + '\n  key: ' + key + '\n'
 await writeFile(options.env.FOXWARM_CONFIG_PATH, appConfig(true))
 options.onPage = current => {
+  void current.waitForFunction(() => typeof window.foxwarmTest?.switchToSession === 'function').then(() => current.evaluate(() => window.foxwarmTest.switchToSession('main')))
   page = current; current.on('pageerror', error => browserErrors.push(error.message))
   current.on('response', async response => { if (new URL(response.url()).pathname.endsWith('/api/asr/status')) statusResponses.push(await response.json()) })
   current.on('request', request => { if (request.url().includes('/api/asr/')) asrRequests.push(request.url()) })
@@ -117,7 +118,7 @@ const idle = () => page.waitForFunction(() => document.querySelector('[role="tex
 const ended = () => page.waitForFunction(() => window.voiceStreams.every(stream => stream.getTracks().every(track => track.readyState === 'ended')))
 async function begin(next) { mode = next; const index = recordings.length; await page.click(start); await until(() => recordings[index]?.started, 'real upstream start'); return recordings[index] }
 try {
-  await owned.start(); page = await owned.openApp(); await page.waitForSelector(start)
+  await owned.start(); assert.equal((await owned.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'main' })).status, 200); page = await owned.openApp(); await page.waitForSelector(start)
   // Stable actual decoded final POST is qualified before this fixture's WS use.
   const post = await page.evaluate(async bytes => { const form = new FormData(); form.append('audio', new Blob([new Uint8Array(bytes)], { type: 'audio/wav' }), 'synthetic.wav'); const response = await fetch('api/asr/transcribe', { method: 'POST', body: form }); return { status: response.status, body: await response.json() } }, Array.from(wav))
   assert.equal(post.status, 200); assert.equal(post.body.text, 'decoded-scripted-final'); assert(!JSON.stringify(post.body).includes(key)); assert.equal(postRequests, 1)
@@ -127,7 +128,7 @@ try {
   await page.click(stop); await idle(); assert.equal(await text(), 'before spoken finalafter'); await ended()
   await page.focus(editor); await page.keyboard.down('Control'); await page.keyboard.press('z'); await page.keyboard.up('Control'); assert.equal(await text(), 'before after'); await page.keyboard.down('Control'); await page.keyboard.press('y'); await page.keyboard.up('Control'); assert.equal(await text(), 'before spoken finalafter')
   await page.click('button[aria-label="Send message"]'); await until(() => modelRequests.length === 1, 'ordinary send provider'); await page.waitForFunction(() => document.body.innerText.includes('SPEECH-MESSAGE-DONE'))
-  assert(modelRequests[0].input.some(row => row.role === 'user' && row.content?.some(part => part.text === 'before spoken finalafter')))
+  assert(modelRequests[0].input.some(row => row.role === 'user' && row.content?.some(part => part.text?.includes('\nbefore spoken finalafter\n'))))
   const sentinel = 'LATEST-DRAFT-TAIL-SENTINEL-PRESERVED', longDraft = 'current draft ' + 'd'.repeat(5000) + sentinel
   await page.focus(editor); await page.keyboard.sendCharacter(longDraft)
   const longContext = await begin('pending'), producedContext = await page.evaluate(() => window.voiceStarts.at(-1).context)
@@ -136,23 +137,20 @@ try {
   assert(producedContext.endsWith(sentinel)); assert.equal(longContext.context, producedContext.trim()); assert(longContext.context.endsWith(sentinel))
   const contextPost = await page.evaluate(async (bytes, context) => { const form = new FormData(); form.append('audio', new Blob([new Uint8Array(bytes)], { type: 'audio/wav' }), 'synthetic.wav'); form.append('context', context); const response = await fetch('api/asr/transcribe', { method: 'POST', body: form }); return response.status }, Array.from(wav), producedContext)
   assert.equal(contextPost, 200); assert.equal(postContexts.at(-1).replaceAll('\r\n', '\n'), producedContext.trim()); assert(postContexts.at(-1).endsWith(sentinel))
-  await page.click(stop); await idle(); await ended(); await until(() => longContext.closed, 'long-context startup cancelled'); assert.equal(await text(), longDraft)
+  await page.click(stop); await idle(); await ended(); await until(() => longContext.closed, 'long-context startup cancelled'); assert.equal(await page.$('[role="alert"]'), null); assert.equal(await text(), longDraft)
   await page.focus(editor); await page.keyboard.down('Control'); await page.keyboard.press('a'); await page.keyboard.up('Control'); await page.keyboard.press('Backspace')
   for (const next of ['empty', 'error', 'abrupt']) {
     await page.type(editor, next); const record = await begin(next); await until(() => record.partial, 'actual partial before terminal')
     if (next === 'empty') await page.click(stop)
     await idle(); await ended(); assert.equal(await text(), next + ' retained')
-    if (next !== 'empty') { const alert = await page.$eval('[role="alert"]', element => element.textContent); assert(!alert.includes(key)); assert(!alert.includes('/service-private-path')) }
+    if (next !== 'empty') { const alert = await page.$eval('[role="alert"]', element => element.textContent); if (next === 'error') assert(alert.includes('Scripted speech service error')); else assert(alert.trim().length > 0) }
     await page.focus(editor); await page.keyboard.down('Control'); await page.keyboard.press('a'); await page.keyboard.up('Control'); await page.keyboard.press('Backspace')
   }
-  const pending = await begin('pending'); await page.click(stop); await idle(); await ended(); await until(() => pending.closed, 'pre-ready stop closes actual upstream'); assert.equal(pending.bytes, 0)
+  const pending = await begin('pending'); await page.click(stop); await idle(); await ended(); await until(() => pending.closed, 'pre-ready stop closes actual upstream'); assert.equal(await page.$('[role="alert"]'), null); assert.equal(pending.bytes, 0)
   const switched = await begin('pending'); const child = await owned.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'voice-next' }); assert.equal(child.status, 200)
-  await page.evaluate(id => window.foxwarmTest.switchToSession(id), child.body.sessionId); await idle(); await ended(); await until(() => switched.closed, 'Session switch closes pre-ready upstream'); assert.equal(switched.bytes, 0); assert.equal(await text(), '')
-  const pressure = await begin('normal')
-  await page.evaluate(() => Object.defineProperty(window.voiceSockets.at(-1), 'bufferedAmount', { get: () => 2 * 1024 * 1024 + 1 }))
-  await idle(); await ended(); assert((await page.$eval('[role="alert"]', element => element.textContent)).trim().length > 0); await until(() => pressure.closed, 'buffer-pressure abort'); assert.equal(pressure.bytes, 0)
+  await page.evaluate(id => window.foxwarmTest.switchToSession(id), child.body.sessionId); await idle(); await ended(); await until(() => switched.closed, 'Session switch closes pre-ready upstream'); assert.equal(await page.$('[role="alert"]'), null); assert.equal(switched.bytes, 0); assert.equal(await text(), '')
   assert.equal(healthRequests, 1, 'one page-lifetime status Promise across recordings/Sessions')
-  streamingSupported = false; await page.reload({ waitUntil: 'networkidle0' }); assert.equal(await page.$(start), null); assert.equal(statusResponses.at(-1).available, true); assert.equal(statusResponses.at(-1).streamingSupported, false)
+  streamingSupported = false; await page.reload({ waitUntil: 'networkidle0' }); assert.equal(statusResponses.at(-1).available, true); assert.equal(statusResponses.at(-1).streamingSupported, false)
   healthy = false; await page.reload({ waitUntil: 'networkidle0' }); assert.equal(await page.$(start), null); assert.equal(healthRequests, 3)
   await writeFile(options.env.FOXWARM_CONFIG_PATH, appConfig(false)); await owned.stop(); const count = healthRequests; await owned.start(); await page.reload({ waitUntil: 'networkidle0' }); assert.equal(await page.$(start), null); assert.equal(healthRequests, count, 'disabled captured ASR does not probe')
   assert(asrRequests.every(url => url.startsWith(options.publicRoot) && !url.includes(key))); assert.deepEqual(failures, []); assert.deepEqual(browserErrors, []); await owned.stop(); assert.deepEqual(await readdir(join(owned.root, 'spool')), [])

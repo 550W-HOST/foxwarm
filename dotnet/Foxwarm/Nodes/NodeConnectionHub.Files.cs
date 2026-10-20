@@ -7,10 +7,6 @@ namespace Foxwarm.Nodes;
 
 internal sealed partial class NodeConnectionHub
 {
-    internal const int FileLimit = 50 * 1024 * 1024;
-
-    // Base64 of a supported file plus bounded metadata, including extended Windows paths.
-    internal const int FileFrameLimit = 4 * ((FileLimit + 2) / 3) + 1024 * 1024;
     private readonly ConcurrentDictionary<string, FileInvocation> transfers = new(
         StringComparer.Ordinal
     );
@@ -44,8 +40,6 @@ internal sealed partial class NodeConnectionHub
         var encoded =
             SessionWait.Text(file["dataBase64"])
             ?? throw new InvalidDataException("Node file response is missing base64 data.");
-        if (encoded.Length > 4 * ((FileLimit + 2) / 3))
-            throw new InvalidDataException("File exceeds the 50 MiB transfer limit.");
         var decodedLength =
             encoded.Length / 4 * 3
             - (
@@ -53,14 +47,8 @@ internal sealed partial class NodeConnectionHub
                 : encoded.EndsWith('=') ? 1
                 : 0
             );
-        if (
-            encoded.Length % 4 != 0
-            || decodedLength > FileLimit
-            || SessionWait.Number(file["sizeBytes"]) != decodedLength
-        )
-            throw new InvalidDataException(
-                "Node file size is invalid or exceeds the transfer limit."
-            );
+        if (encoded.Length % 4 != 0 || SessionWait.Number(file["sizeBytes"]) != decodedLength)
+            throw new InvalidDataException("Node file size is invalid.");
         // Charge the encoded payload's actual materialization, not an untrusted reported size.
         beforeMaterialize?.Invoke(decodedLength);
         byte[] bytes;
@@ -91,8 +79,6 @@ internal sealed partial class NodeConnectionHub
         CancellationToken token
     )
     {
-        if (bytes.Length > FileLimit)
-            throw new InvalidDataException("File exceeds the 50 MiB transfer limit.");
         var response = await TransferAsync(node, path, owner, restrict, bytes, overwrite, token);
         var result =
             response["result"] as JsonObject
@@ -106,8 +92,7 @@ internal sealed partial class NodeConnectionHub
     private static void ValidateIntegrity(JsonObject value, byte[] bytes)
     {
         if (
-            bytes.Length > FileLimit
-            || SessionWait.Number(value["sizeBytes"]) != bytes.Length
+            SessionWait.Number(value["sizeBytes"]) != bytes.Length
             || !string.Equals(
                 SessionWait.Text(value["sha256"]),
                 Convert.ToHexStringLower(SHA256.HashData(bytes)),
