@@ -58,8 +58,8 @@ function fixture(t, built = true) {
   // Empty optional host port variables are invalid overrides, not an unset selection.
   delete env.FOXWARM_HTTP_PORT;
   const children = [];
-  async function launch(args = [app], overrides = {}) {
-    const child = spawn(process.execPath, args, { cwd, env: { ...env, ...overrides }, stdio: ['pipe', 'pipe', 'pipe'] });
+  async function launch(args = [app], overrides = {}, launchCwd = cwd) {
+    const child = spawn(process.execPath, args, { cwd: launchCwd, env: { ...env, ...overrides }, stdio: ['pipe', 'pipe', 'pipe'] });
     let text = '';
     child.stdout.on('data', value => { text += value; });
     child.stderr.on('data', value => { text += value; });
@@ -149,50 +149,119 @@ test('a hard foreground-parent termination requests Main drain rather than leavi
   await until(() => !running(pid), 'Managed Main survived its foreground parent.');
 });
 
-test('launcher shutdown waits for a real accepted canonical owner before Main exits', linux, async t => {
-  const f = fixture(t);
-  const listener = net.createServer();
-  listener.listen(0, '127.0.0.1'); await once(listener, 'listening');
-  const port = listener.address().port;
-  await new Promise(resolve => listener.close(resolve));
-  let release, reached;
-  const held = new Promise(resolve => { release = resolve; });
-  const request = new Promise(resolve => { reached = resolve; });
-  const peer = http.createServer(async (req, res) => {
-    for await (const _ of req) { /* consume the real request */ }
-    reached(); await held;
-    res.writeHead(200, { 'content-type': 'text/event-stream' });
-    res.end('data: ' + JSON.stringify({ type: 'response.completed', response: { output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'entry-drained' }] }] } }) + '\n\n');
+for (const signal of ['SIGTERM', 'SIGKILL']) {
+  test(`launcher ${signal} waits for a real accepted canonical owner before Main exits`, linux, async t => {
+    const f = fixture(t);
+    const listener = net.createServer();
+    listener.listen(0, '127.0.0.1'); await once(listener, 'listening');
+    const port = listener.address().port;
+    await new Promise(resolve => listener.close(resolve));
+    let release, reached;
+    const held = new Promise(resolve => { release = resolve; });
+    const request = new Promise(resolve => { reached = resolve; });
+    const peer = http.createServer(async (req, res) => {
+      for await (const _ of req) { /* consume the real request */ }
+      reached(); await held;
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end('data: ' + JSON.stringify({ type: 'response.completed', response: { output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'entry-drained' }] }] } }) + '\n\n');
+    });
+    peer.listen(0, '127.0.0.1'); await once(peer, 'listening');
+    t.after(() => { release(); peer.closeAllConnections(); peer.close(); });
+    fs.writeFileSync(path.join(f.app, 'app.yaml'), `vector: false\nbot: {httpPort: ${port}}\n`);
+    fs.writeFileSync(path.join(f.data, 'state/token'), 'synthetic-entry-token');
+    fs.writeFileSync(path.join(f.data, 'state/models.yaml'), JSON.stringify({ default: 'a', providers: { a: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${peer.address().port}`, models: ['wire'] } } }));
+    const instance = await f.launch();
+    const pid = await f.ready(instance, `Main HTTP listening: http://127.0.0.1:${port}`);
+    async function post(route, body) {
+      const result = await fetch(`http://127.0.0.1:${port}${route}`, { method: 'POST', headers: { authorization: 'Bearer synthetic-entry-token', 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const value = await result.json();
+      assert(result.ok, `${route}: ${result.status} ${JSON.stringify(value)}`);
+      return value;
+    }
+    const { sessionId } = await post('/api/sessions', { agentId: 'main', sessionId: 'drain-entry' });
+    await post('/api/sessions/' + encodeURIComponent(sessionId) + '/message', { text: 'qualification' });
+    await request;
+    const faults = path.join(f.data, 'state/experiment-faults');
+    fs.mkdirSync(faults, { recursive: true });
+    const hold = path.join(faults, 'id_' + Buffer.from(sessionId).toString('base64url') + '.canonical-hold-before-rename');
+    fs.writeFileSync(hold, 'owned qualification');
+    release();
+    await until(() => fs.existsSync(hold + '.reached'), 'Canonical owner did not reach its publication barrier.');
+    instance.child.kill(signal);
+    await sleep(150);
+    assert(running(pid), 'Main exited instead of draining its accepted canonical owner.');
+    fs.rmSync(hold);
+    assert.deepEqual(await instance.exited, signal === 'SIGKILL' ? { code: null, signal } : { code: 0, signal: null }, instance.text);
+    await until(() => !running(pid), 'Managed Main survived a completed drain.');
+    const saved = JSON.parse(fs.readFileSync(path.join(f.data, 'state/sessions', sessionId + '.json'), 'utf8'));
+    assert.equal(saved.busy, false);
+    assert(JSON.stringify(saved.history).includes('entry-drained'));
   });
-  peer.listen(0, '127.0.0.1'); await once(peer, 'listening');
-  t.after(() => { release(); peer.closeAllConnections(); peer.close(); });
-  fs.writeFileSync(path.join(f.app, 'app.yaml'), `vector: false\nbot: {httpPort: ${port}}\n`);
-  fs.writeFileSync(path.join(f.data, 'state/token'), 'synthetic-entry-token');
-  fs.writeFileSync(path.join(f.data, 'state/models.yaml'), JSON.stringify({ default: 'a', providers: { a: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${peer.address().port}`, models: ['wire'] } } }));
-  const instance = await f.launch();
-  const pid = await f.ready(instance, `Main HTTP listening: http://127.0.0.1:${port}`);
-  async function post(route, body) {
-    const result = await fetch(`http://127.0.0.1:${port}${route}`, { method: 'POST', headers: { authorization: 'Bearer synthetic-entry-token', 'content-type': 'application/json' }, body: JSON.stringify(body) });
-    const value = await result.json();
-    assert(result.ok, `${route}: ${result.status} ${JSON.stringify(value)}`);
-    return value;
-  }
-  const { sessionId } = await post('/api/sessions', { agentId: 'main', sessionId: 'drain-entry' });
-  await post('/api/sessions/' + encodeURIComponent(sessionId) + '/message', { text: 'qualification' });
-  await request;
-  const faults = path.join(f.data, 'state/experiment-faults');
-  fs.mkdirSync(faults, { recursive: true });
-  const hold = path.join(faults, 'id_' + Buffer.from(sessionId).toString('base64url') + '.canonical-hold-before-rename');
-  fs.writeFileSync(hold, 'owned qualification');
-  release();
-  await until(() => fs.existsSync(hold + '.reached'), 'Canonical owner did not reach its publication barrier.');
+}
+
+test('relative explicit installation root is captured before a launcher changes cwd', linux, async t => {
+  const f = fixture(t);
+  const other = path.join(f.cwd, 'relative installation');
+  fs.mkdirSync(path.join(other, 'state'), { recursive: true });
+  fs.writeFileSync(path.join(other, 'chosen.yaml'), 'vector: false\nbot: {enableWebUI: false, enableTrigger: false}\n');
+  const relative = path.relative(f.cwd, other);
+  // The Windows client selects data before spawning from its installation cwd.
+  const selector = execFileSync(process.execPath, ['-e', `const {resolveDataRoot}=require(${JSON.stringify(path.join(__dirname, 'windowsService'))}); const {coreEnvironment}=require(${JSON.stringify(path.join(__dirname, 'core-executable'))}); console.log(JSON.stringify({app:coreEnvironment().FOXWARM_APP_ROOT,data:resolveDataRoot()}));`], {
+    cwd: f.cwd, env: { ...f.env, FOXWARM_APP_ROOT: relative }, encoding: 'utf8',
+  });
+  const selected = JSON.parse(selector);
+  assert.deepEqual(selected, { app: other, data: other });
+  const instance = await f.launch([f.app], { FOXWARM_APP_ROOT: selected.app, FOXWARM_DATA_DIR: selected.data, FOXWARM_CONFIG_PATH: 'chosen.yaml' }, f.app);
+  const pid = await f.ready(instance);
+  assert(fs.existsSync(path.join(other, 'agents/main/memory')));
+  assert(!fs.existsSync(path.join(other, relative, 'agents')));
   instance.child.kill('SIGTERM');
-  await sleep(150);
-  assert(running(pid), 'Main exited instead of draining its accepted canonical owner.');
-  fs.rmSync(hold);
   assert.deepEqual(await instance.exited, { code: 0, signal: null }, instance.text);
-  await until(() => !running(pid), 'Managed Main survived a completed drain.');
-  const saved = JSON.parse(fs.readFileSync(path.join(f.data, 'state/sessions', sessionId + '.json'), 'utf8'));
-  assert.equal(saved.busy, false);
-  assert(JSON.stringify(saved.history).includes('entry-drained'));
+  await until(() => !running(pid), 'Managed Main survived relative-root shutdown.');
 });
+
+for (const signal of ['SIGTERM', 'SIGKILL']) {
+  test(`foreground ${signal} stops Main while the production Matrix startup response remains held`, linux, async t => {
+    const f = fixture(t);
+    let reached;
+    const request = new Promise(resolve => { reached = resolve; });
+    let heldResponse;
+    const peer = http.createServer((req, res) => {
+      if (req.url === '/_matrix/client/versions') {
+        heldResponse = res;
+        reached();
+      } else {
+        res.writeHead(500); res.end('Unexpected request after startup stop');
+      }
+    });
+    peer.listen(0, '127.0.0.1'); await once(peer, 'listening');
+    t.after(() => { peer.closeAllConnections(); peer.close(); });
+    const listener = net.createServer();
+    listener.listen(0, '127.0.0.1'); await once(listener, 'listening');
+    const port = listener.address().port;
+    await new Promise(resolve => listener.close(resolve));
+    fs.writeFileSync(path.join(f.app, 'app.yaml'), JSON.stringify({ vector: false, bot: { httpPort: port }, channels: { matrix: {
+      homeserver: `http://127.0.0.1:${peer.address().port}`, accessToken: 'synthetic-matrix-token', botUserId: '@fixture:owned.invalid',
+    } } }));
+    fs.writeFileSync(path.join(f.data, 'state/token'), 'synthetic-startup-token');
+    fs.writeFileSync(path.join(f.data, 'state/models.yaml'), JSON.stringify({ default: 'a', providers: { a: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:9', models: ['wire'] } } }));
+    const instance = await f.launch();
+    const pid = await f.ready(instance, 'Main HTTP listening:');
+    await request;
+    const post = id => fetch(`http://127.0.0.1:${port}/api/sessions`, { method: 'POST', headers: { authorization: 'Bearer synthetic-startup-token', 'content-type': 'application/json' }, body: JSON.stringify({ agentId: 'main', sessionId: id }), signal: AbortSignal.timeout(2000) });
+    const before = await post('before-stop');
+    assert.equal(before.status, 200, await before.text());
+    instance.child.kill(signal);
+    const exit = await Promise.race([instance.exited, sleep(5000).then(() => null)]);
+    assert(exit, `Launcher did not exit while Matrix startup was held: ${instance.text}`);
+    assert.deepEqual(exit, signal === 'SIGKILL' ? { code: null, signal } : { code: 0, signal: null }, instance.text);
+    await until(() => !running(pid), 'Main survived parent stop during channel startup.');
+    assert(!heldResponse.writableEnded, 'The fixture released startup before shutdown completed.');
+    let after;
+    try { after = await post('after-stop'); } catch { /* A closed listener is expected. */ }
+    assert(!after || !after.ok, 'Stopped Main admitted a new Session.');
+    // Releasing the original response after Main exit cannot publish a transport or restart it.
+    heldResponse.end(JSON.stringify({ versions: ['v1.4'] }));
+    assert(!running(pid));
+  });
+}

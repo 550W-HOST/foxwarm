@@ -15,6 +15,7 @@ const START_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 30_000;
 
 function resolveDataRoot(rootDir = process.env.FOXWARM_APP_ROOT || ROOT_DIR, env = process.env) {
+  rootDir = path.resolve(rootDir);
   function resolve(value) {
     const home = env.HOME;
     if (home && value === '~') return home;

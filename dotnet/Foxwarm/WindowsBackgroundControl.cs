@@ -8,7 +8,8 @@ namespace Foxwarm;
 // headless installations. Stop closes admission through the normal host lifetime.
 internal sealed class WindowsBackgroundControl : IAsyncDisposable
 {
-    private readonly NamedPipeServerStream pipe;
+    private readonly NamedPipeServerStream first;
+    private readonly string pipeName;
     private readonly IHostApplicationLifetime lifetime;
     private readonly string dataRoot;
     private readonly CancellationTokenSource stopping = new();
@@ -18,20 +19,22 @@ internal sealed class WindowsBackgroundControl : IAsyncDisposable
     {
         this.dataRoot = dataRoot;
         this.lifetime = lifetime;
-        var name = Environment.GetEnvironmentVariable("FOXWARM_WINDOWS_CONTROL_PIPE");
-        if (string.IsNullOrWhiteSpace(name))
+        pipeName = Environment.GetEnvironmentVariable("FOXWARM_WINDOWS_CONTROL_PIPE") ?? "";
+        if (string.IsNullOrWhiteSpace(pipeName))
             throw new InvalidDataException(
                 "The Windows background entry requires its data-root control pipe."
             );
-        pipe = new NamedPipeServerStream(
-            name,
+        first = CreatePipe();
+        server = ServeAsync();
+    }
+
+    private NamedPipeServerStream CreatePipe() => new(
+            pipeName,
             PipeDirection.InOut,
-            1,
+            2,
             PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous
         );
-        server = ServeAsync();
-    }
 
     internal static WindowsBackgroundControl? Start(
         bool enabled,
@@ -50,11 +53,24 @@ internal sealed class WindowsBackgroundControl : IAsyncDisposable
 
     private async Task ServeAsync()
     {
-        while (!stopping.IsCancellationRequested)
+        var next = first;
+        try
         {
-            try
+            while (!stopping.IsCancellationRequested)
             {
-                await pipe.WaitForConnectionAsync(stopping.Token);
+                using var pipe = next;
+                try
+                {
+                    await pipe.WaitForConnectionAsync(stopping.Token);
+                }
+                catch (OperationCanceledException) when (stopping.IsCancellationRequested)
+                {
+                    break;
+                }
+                // Keep the published name available while the connected instance completes.
+                next = CreatePipe();
+                try
+                {
                 using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
                 var command = await reader.ReadLineAsync(stopping.Token);
                 var logs = Path.Combine(dataRoot, "state", "logs");
@@ -75,19 +91,23 @@ internal sealed class WindowsBackgroundControl : IAsyncDisposable
                 var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(response));
                 await pipe.WriteAsync(bytes, stopping.Token);
                 await pipe.FlushAsync(stopping.Token);
-                pipe.Disconnect();
+                // Source socket.end completes with EOF. DisconnectNamedPipe instead
+                // forces the client off with EPIPE, even after it received valid JSON.
+                if (OperatingSystem.IsWindows())
+                    pipe.WaitForPipeDrain();
                 if (command == "stop")
                     lifetime.StopApplication();
+                }
+                catch (OperationCanceledException) when (stopping.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (IOException) { }
             }
-            catch (OperationCanceledException) when (stopping.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (IOException)
-            {
-                if (pipe.IsConnected)
-                    pipe.Disconnect();
-            }
+        }
+        finally
+        {
+            next.Dispose();
         }
     }
 
@@ -95,7 +115,6 @@ internal sealed class WindowsBackgroundControl : IAsyncDisposable
     {
         stopping.Cancel();
         await server;
-        pipe.Dispose();
         stopping.Dispose();
     }
 }

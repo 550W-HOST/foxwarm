@@ -36,6 +36,9 @@ async function main() {
     const child = spawn(executable.command, [...executable.args, ...process.argv.slice(2)], {
       env: { ...coreEnvironment(), FOXWARM_MAIN_LIFETIME_PIPE: process.platform === 'win32' ? name : pipe },
       stdio: 'inherit',
+      // libuv otherwise places Windows children in its kill-on-parent-exit job.
+      // Keep the child referenced and awaited; the lifetime pipe owns normal drain.
+      detached: process.platform === 'win32',
     });
     await new Promise((resolve, reject) => {
       child.once('error', error => reject(new Error(`Cannot launch Foxwarm Main: ${error.message}. Make the .NET 10 ASP.NET Core runtime available on PATH.`)));

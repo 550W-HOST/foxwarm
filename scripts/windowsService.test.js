@@ -27,6 +27,23 @@ test('getControlPath is stable and Windows-safe', () => {
   assert.match(first, /^\\\\\.\\pipe\\foxwarm-[a-f0-9]{20}$/);
 });
 
+test('relative and absolute installation roots select the same data, logs and control identity', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-windows-root-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const relative = path.relative(process.cwd(), root);
+  for (const env of [{}, { FOXWARM_DATA_DIR: 'explicit-data' }, { FOXWARM_DATA_DIR: path.join(root, 'absolute-data') }]) {
+    const selected = resolveDataRoot(relative, env);
+    assert(path.isAbsolute(selected));
+    assert.equal(selected, resolveDataRoot(root, env));
+    assert.deepEqual(servicePaths(selected), servicePaths(resolveDataRoot(root, env)));
+    assert.equal(getControlPath(selected), getControlPath(resolveDataRoot(root, env)));
+    assert.equal(selected, env.FOXWARM_DATA_DIR ? path.resolve(root, env.FOXWARM_DATA_DIR) : root);
+  }
+  fs.writeFileSync(path.join(root, 'data_dir'), 'pointer-data');
+  assert.equal(resolveDataRoot(relative, {}), path.join(root, 'pointer-data'));
+  assert.equal(resolveDataRoot(relative, { FOXWARM_DATA_DIR: 'explicit-data' }), path.join(root, 'explicit-data'));
+});
+
 test('servicePaths keeps lifecycle logs under the data root', () => {
   const paths = servicePaths(path.join('C:', 'foxwarm-data'));
   assert.equal(paths.stdoutLog, path.join('C:', 'foxwarm-data', 'state', 'logs', 'foxwarm.stdout.log'));

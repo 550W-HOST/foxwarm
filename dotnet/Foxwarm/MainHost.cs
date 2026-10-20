@@ -23,7 +23,17 @@ internal sealed class MainHost : IAsyncDisposable
     {
         await host.StartAsync();
         if (sessions.ManagedChannels is { } channels)
-            await channels.ReloadAsync();
+        {
+            var stopping = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = Lifetime.ApplicationStopping.Register(() => stopping.TrySetResult());
+            if (Lifetime.ApplicationStopping.IsCancellationRequested)
+                return;
+            var startup = channels.ReloadAsync();
+            if (await Task.WhenAny(startup, stopping.Task) == stopping.Task)
+                await channels.StopIngressAsync();
+            // Startup retains ownership until cancellation and cleanup have settled.
+            await startup;
+        }
     }
 
     private readonly object lifecycle = new();

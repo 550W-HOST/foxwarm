@@ -82,8 +82,8 @@ host.Lifetime.ApplicationStarted.Register(() =>
 if (launcher?.StopRequested.IsCancellationRequested == true)
     return;
 await using var control = WindowsBackgroundControl.Start(background, paths.DataRoot, host.Lifetime);
-await host.StartAsync();
 using var parentStop = launcher?.StopRequested.Register(host.Lifetime.StopApplication);
+await host.StartAsync();
 await host.WaitForShutdownAsync();
 
 // Keep status/stop available until the exact Main owners have drained.

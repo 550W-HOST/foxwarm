@@ -22,7 +22,7 @@ function coreExecutable() {
 }
 
 function coreEnvironment(env = process.env) {
-  return { ...env, FOXWARM_APP_ROOT: env.FOXWARM_APP_ROOT || root };
+  return { ...env, FOXWARM_APP_ROOT: path.resolve(env.FOXWARM_APP_ROOT || root) };
 }
 
 module.exports = { coreExecutable, coreEnvironment };

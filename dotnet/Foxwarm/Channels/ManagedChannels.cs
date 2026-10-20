@@ -30,9 +30,11 @@ internal sealed class ManagedChannels(
         type is "telegram" or "matrix" or "weixin" or "wework" or "qqbot";
 
     private readonly Dictionary<string, IManagedChannel> running = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (IManagedChannel Channel, TaskCompletionSource Settled)> starting = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> errors = new(StringComparer.Ordinal);
     private readonly object gate = new();
-    private bool closed;
+    private volatile bool closed;
+    private Task? ingressStop;
 
     internal static string Type(string id, JsonObject config) =>
         SessionWait.Text(config["type"])?.Trim() is { Length: > 0 } type ? type : id;
@@ -132,6 +134,10 @@ internal sealed class ManagedChannels(
                 if (await StartCoreAsync(id))
                     started.Add(id);
             }
+            catch (OperationCanceledException) when (closed)
+            {
+                break;
+            }
             catch (Exception error)
             {
                 RecordError(id, error);
@@ -171,7 +177,7 @@ internal sealed class ManagedChannels(
     private async Task<bool> StartCoreAsync(string id)
     {
         lock (gate)
-            if (running.ContainsKey(id))
+            if (closed || running.ContainsKey(id) || starting.ContainsKey(id))
                 return false;
         if (sessions.ChannelRegistry.Get(id) is not null)
             throw new InvalidOperationException("Channel ID is already registered: " + id);
@@ -221,16 +227,30 @@ internal sealed class ManagedChannels(
                 "Adapter is not implemented on this server: " + id
             ),
         };
+        var settled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var published = false;
+        var initializing = false;
         try
         {
-            await channel.StartAsync();
-            sessions.ChannelRegistry.Register(id, channel.Transport);
+            Task startup;
             lock (gate)
             {
+                if (closed || running.ContainsKey(id) || starting.ContainsKey(id))
+                    return false;
+                starting.Add(id, (channel, settled));
+                initializing = true;
+                // Stop cannot precede an adapter's synchronous start admission.
+                startup = channel.StartAsync();
+            }
+            await startup;
+            lock (gate)
+            {
+                if (closed)
+                    return false;
+                sessions.ChannelRegistry.Register(id, channel.Transport);
                 running.Add(id, channel);
                 errors.Remove(id);
-            }
-            if (
+                if (
                 SessionWait.Text(
                     config[Type(id, config) == "matrix" ? "botUserId" : "mainAttachUser"]
                 )
@@ -238,12 +258,24 @@ internal sealed class ManagedChannels(
                 && sessions.ChannelBinding(id + ":" + conversation) is null
             )
                 sessions.AttachConfiguredChannel(id + ":" + conversation, "main");
+                published = true;
+            }
             return true;
         }
-        catch
+        finally
         {
-            await channel.DisposeAsync();
-            throw;
+            try
+            {
+                if (!published)
+                    await channel.DisposeAsync();
+            }
+            finally
+            {
+                lock (gate)
+                    if (initializing)
+                        starting.Remove(id);
+                settled.TrySetResult();
+            }
         }
     }
 
@@ -271,13 +303,24 @@ internal sealed class ManagedChannels(
         Console.Error.WriteLine("Channel " + id + ": " + safe);
     }
 
-    internal async Task StopIngressAsync()
+    internal Task StopIngressAsync()
     {
-        closed = true;
-        IManagedChannel[] current;
         lock (gate)
-            current = running.Values.ToArray();
+            return ingressStop ??= StopIngressCoreAsync();
+    }
+
+    private async Task StopIngressCoreAsync()
+    {
+        IManagedChannel[] current;
+        Task[] initializers;
+        lock (gate)
+        {
+            closed = true;
+            current = running.Values.Concat(starting.Values.Select(value => value.Channel)).Distinct().ToArray();
+            initializers = starting.Values.Select(value => value.Settled.Task).ToArray();
+        }
         await Task.WhenAll(current.Select(channel => channel.StopAsync()));
+        await Task.WhenAll(initializers);
     }
 
     public async ValueTask DisposeAsync()
