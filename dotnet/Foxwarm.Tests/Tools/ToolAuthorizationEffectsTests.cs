@@ -93,6 +93,9 @@ public sealed partial class ToolAuthorizationEffectsTests
             definitions.Add(definition?.DeepClone());
         foreach (var definition in FileDeliveryDefinitions.Definitions())
             definitions.Add(definition?.DeepClone());
+        definitions.Add(CompactToolDefinition.Definition());
+        foreach (var definition in SessionSettingsDefinitions.Definitions())
+            definitions.Add(definition?.DeepClone());
         var mcp = new Foxwarm.McpClient(Path.Combine(root, "data"));
         var registry = SessionToolExecutor.CreateRegistry(
             definitions,

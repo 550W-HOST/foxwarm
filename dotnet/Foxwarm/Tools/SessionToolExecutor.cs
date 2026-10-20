@@ -906,7 +906,14 @@ internal sealed partial class SessionToolExecutor(
                 source,
                 name
                     is not (
-                        "artifact"
+                        "set_session_child_model"
+                        or "set_session_compact_threshold"
+                        or "refresh_session_snapshot"
+                        or "compact_session"
+                        or "create_agent"
+                        or "create_session"
+                        or "set_agent_inherit"
+                        or "artifact"
                         or "mcp_config"
                         or "mcp_notifications"
                         or "set_agent_isolated"
