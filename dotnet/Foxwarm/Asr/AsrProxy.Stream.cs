@@ -5,6 +5,9 @@ namespace Foxwarm.Asr;
 
 internal sealed partial class AsrProxy
 {
+    // Source ws bounds each complete message, not the sum of a recording's messages.
+    private const long StreamMessageLimit = 100L * 1024 * 1024;
+
     private sealed record StreamFragment(WebSocketMessageType Type, byte[] Bytes, bool End);
 
     private async Task StreamAsync(HttpContext context)
@@ -45,14 +48,20 @@ internal sealed partial class AsrProxy
         async Task ReceiveClient()
         {
             var buffer = new byte[8192];
+            long messageBytes = 0;
             while (true)
             {
                 var frame = await downstream.ReceiveAsync(buffer, lifetime.Token);
                 if (frame.MessageType == WebSocketMessageType.Close)
                     return;
+                messageBytes += frame.Count;
+                if (messageBytes > StreamMessageLimit)
+                    throw new WebSocketException("ASR message exceeds the transport limit");
                 pending.Writer.TryWrite(
                     new(frame.MessageType, buffer[..frame.Count], frame.EndOfMessage)
                 );
+                if (frame.EndOfMessage)
+                    messageBytes = 0;
             }
         }
         var fromClient = ReceiveClient();
@@ -77,11 +86,15 @@ internal sealed partial class AsrProxy
         {
             await connected;
             var buffer = new byte[8192];
+            long messageBytes = 0;
             while (true)
             {
                 var frame = await upstream.ReceiveAsync(buffer, lifetime.Token);
                 if (frame.MessageType == WebSocketMessageType.Close)
                     return;
+                messageBytes += frame.Count;
+                if (messageBytes > StreamMessageLimit)
+                    throw new WebSocketException("ASR message exceeds the transport limit");
                 await downstreamWrites.WaitAsync(lifetime.Token);
                 try
                 {
@@ -96,6 +109,8 @@ internal sealed partial class AsrProxy
                 {
                     downstreamWrites.Release();
                 }
+                if (frame.EndOfMessage)
+                    messageBytes = 0;
             }
         }
         var toService = SendToService();
