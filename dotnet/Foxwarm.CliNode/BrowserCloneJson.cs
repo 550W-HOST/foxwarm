@@ -88,23 +88,28 @@ internal static class BrowserCloneJson
             var escape = token[++index];
             if (escape == 'u')
             {
-                decoded.Append((char)ushort.Parse(
-                    token.AsSpan(index + 1, 4),
-                    NumberStyles.AllowHexSpecifier,
-                    CultureInfo.InvariantCulture
-                ));
+                decoded.Append(
+                    (char)
+                        ushort.Parse(
+                            token.AsSpan(index + 1, 4),
+                            NumberStyles.AllowHexSpecifier,
+                            CultureInfo.InvariantCulture
+                        )
+                );
                 index += 4;
             }
             else
-                decoded.Append(escape switch
-                {
-                    'b' => '\b',
-                    'f' => '\f',
-                    'n' => '\n',
-                    'r' => '\r',
-                    't' => '\t',
-                    _ => escape,
-                });
+                decoded.Append(
+                    escape switch
+                    {
+                        'b' => '\b',
+                        'f' => '\f',
+                        'n' => '\n',
+                        'r' => '\r',
+                        't' => '\t',
+                        _ => escape,
+                    }
+                );
         }
         JsonStringQuoting.Append(output, decoded.ToString());
     }
