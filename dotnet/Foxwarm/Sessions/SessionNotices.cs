@@ -78,6 +78,13 @@ internal sealed partial class SessionOwner
             presentedFailures.GetValue(error, _ => new object());
             return;
         }
+        // This terminal Session notice is also the public text-only client failure signal.
+        // Compaction notices and already-published provider retry notices keep their owners.
+        var details = source == "session"
+            ? error is ModelRequestException
+                ? "⚠️ LLM request failed: " + error.Message
+                : "Error: " + error.Message
+            : error.Message;
         var message = SessionNotices.Create(
             source,
             source == "compaction" ? "Compaction failed" : "Run failed",
@@ -86,7 +93,7 @@ internal sealed partial class SessionOwner
                     ? "Could not apply the compaction result."
                     : "Could not prepare a compaction plan."
                 : "The current run did not complete.",
-            error.Message,
+            details,
             operationId is null ? null : "compact:" + operationId
         );
         var appended = false;
