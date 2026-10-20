@@ -436,30 +436,53 @@ public sealed class ModelInteractionDiagnosticsTests
     }
 
     [Theory]
-    [InlineData("openai-responses")]
-    [InlineData("anthropic")]
-    public async Task Bounded_HTTP_error_redacts_a_credential_cut_by_the_existing_collector(
-        string protocol
+    [InlineData("openai-responses", true)]
+    [InlineData("anthropic", true)]
+    [InlineData("openai-responses", false)]
+    [InlineData("anthropic", false)]
+    public async Task HTTP_error_diagnostics_redact_complete_and_collector_cut_credentials(
+        string protocol,
+        bool truncated
     )
     {
         using var temp = new TempDirectory();
         var fragment = OldToken[..^1];
-        var body = new string('x', 65536 - fragment.Length) + OldToken + " trailing evidence";
+        var evidence = "terminal evidence " + new string('x', 80);
+        var body = truncated
+            ? evidence + new string('x', 65536 - evidence.Length - fragment.Length) + OldToken + " trailing evidence"
+            : evidence + " " + OldToken + " ordinary partial label " + fragment;
         using var handler = new DiagnosticHandler((_, _) => (HttpStatusCode.BadRequest, body));
         using var http = new HttpClient(handler);
         var uri = new Uri("http://unused.invalid");
-        await Assert.ThrowsAsync<ModelRequestException>(() =>
+        var error = await Assert.ThrowsAsync<ModelRequestException>(() =>
             Request(
                 new(http, Options(uri), new ModelRouting(), diagnostics: new(temp.Path)),
                 HostModels.Parse(Catalog(uri, protocol), new JsonObject())
             )
         );
         Assert.Single(handler.Bodies);
-        var log = await ReadResponse(temp.Path);
-        var captured = log["attempts"]![0]!["body"]!.GetValue<string>();
-        Assert.Contains(new string('x', 80), captured);
-        Assert.DoesNotContain(fragment, captured);
-        Assert.DoesNotContain(OldToken, log.ToJsonString());
+        Assert.True(error.Final.Final);
+        Assert.Equal(1, error.Final.Attempt);
+        Assert.Equal("http-error", error.Final.Kind);
+        Assert.Equal("400", error.Final.Status);
+        Assert.Null(error.Final.NextAttempt);
+        var persisted = await File.ReadAllTextAsync(
+            Assert.Single(Directory.GetFiles(
+                Path.Combine(temp.Path, "state", "logs"), "*_res.json", SearchOption.AllDirectories))
+        );
+        var attempt = Assert.Single(JsonNode.Parse(persisted)!["attempts"]!.AsArray())!;
+        Assert.Contains(evidence, attempt["body"]!.GetValue<string>());
+        if (protocol == "anthropic")
+            Assert.Contains(evidence, attempt["error"]!.GetValue<string>());
+        Assert.DoesNotContain(OldToken, persisted);
+        if (truncated)
+            Assert.DoesNotContain(fragment, persisted);
+        else
+        {
+            Assert.Contains("ordinary partial label " + fragment, attempt["body"]!.GetValue<string>());
+            if (protocol == "anthropic")
+                Assert.Contains("ordinary partial label " + fragment, attempt["error"]!.GetValue<string>());
+        }
     }
 
     [Theory]

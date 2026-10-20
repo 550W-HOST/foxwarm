@@ -122,7 +122,7 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
             {
                 current["attempt"] = attempt.Number;
                 current["modelId"] = attempt.ModelId;
-                current["error"] = attempt.SafeText(error.Message);
+                current["error"] = attempt.ErrorText(error.Message);
                 current["name"] = error.GetType().Name;
                 if (attempt.VirtualModel is not null)
                     current["virtualModelKey"] = attempt.VirtualModel;
@@ -185,6 +185,7 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
             private readonly RawCapture raw;
             private readonly object rawGate = new();
             private JsonObject response = new();
+            private bool responseBodyTruncated;
             internal string ModelId { get; }
             internal string? VirtualModel { get; }
             internal int Number { get; }
@@ -299,10 +300,18 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                 }
             }
 
-            private JsonNode? RedactBody(JsonNode? body, bool truncated) =>
-                truncated && SessionWait.Text(body) is string text
+            private JsonNode? RedactBody(JsonNode? body, bool truncated)
+            {
+                responseBodyTruncated = truncated;
+                return truncated && SessionWait.Text(body) is string text
                     ? JsonValue.Create(SafeText(TrimCredentialSuffix(text)))
                     : Redact(body);
+            }
+
+            // A provider may also expose its bounded response body as the error
+            // message. Carry the same cutoff protection into that projection.
+            internal string ErrorText(string text) =>
+                SafeText(responseBodyTruncated ? TrimCredentialSuffix(text) : text);
 
             internal void ResponseBody(JsonNode? body, bool truncated = false)
             {
