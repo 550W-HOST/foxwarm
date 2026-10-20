@@ -204,6 +204,43 @@ test('argument parser accepts Multica Qwen invocation and rejects protocol drift
   assert.throws(() => parseArgs(['-p', 'task', '--output-format', 'stream-json', '--mcp-config', 'x']), /Unsupported option/);
 });
 
+test('public package bin completes an authenticated HTTP/SSE turn from an unrelated cwd', { timeout: 15_000 }, async t => {
+  const fake = await createFakeFoxwarm();
+  t.after(fake.close);
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-multica-bin-'));
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const packageRoot = process.env.FOXWARM_PUBLISHED_CORE || path.join(__dirname, '..');
+  const metadata = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
+  const child = spawn(process.execPath, [path.join(packageRoot, metadata.bin['foxwarm-multica']), '-p', 'packaged task', '--output-format', 'stream-json'], {
+    cwd,
+    env: bridgeEnv(fake.url),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', chunk => { stdout += chunk; });
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  const exit = await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code, signal) => resolve({ code, signal }));
+  });
+  assert.deepEqual(exit, { code: 0, signal: null }, stderr + stdout);
+  assert.equal(fake.state.created, 1);
+  assert.equal(fake.state.cwd, cwd);
+  assert.equal(fake.state.streamBeforeMessage, true);
+  assert.equal(fake.state.prompt, 'packaged task');
+  assert.equal(fake.state.stops, 0);
+  assert.ok(fake.state.authHeaders.every(value => value === 'Bearer foxwarm-secret'));
+  const events = jsonLines(stdout);
+  assert.equal(events[0].type, 'system');
+  const results = events.filter(event => event.type === 'result');
+  assert.equal(results.length, 1);
+  assert.equal(results[0].subtype, 'success');
+  assert.equal(results[0].session_id, 'multica-agent/run-1');
+  assert.equal(results[0].result, 'Final answer');
+  assert.equal(stderr, '');
+});
+
 test('new run maps agent, cwd, model, QWEN context, streaming events, and one final result', async t => {
   const fake = await createFakeFoxwarm();
   t.after(fake.close);

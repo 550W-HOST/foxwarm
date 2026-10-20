@@ -13,7 +13,7 @@ Owns deterministic local test discovery, classification, data isolation, process
 - `npm test` / `npm run test:unit` run the managed solution plus retained Source backend, shared, CLI Node, sandbox Node (compiled and bundle tests), browser Node, script, skill, VS Code Web, WebUI unit, Python, and standalone self-test groups.
 - `npm run test:managed` runs the real .NET solution, with the explicit built Source oracle root; the full suite includes optional HEIC tests requiring their pinned native prerequisite. CI builds that test-only prerequisite in owned runner-temporary storage.
 - `npm run test:reference` runs only retained Source/package groups.
-- `npm run test:published` publishes complete managed Main into a fresh owned artifact directory and proves original App/Setup, Node archive/resources, native ToolScript and Main browser/image behavior, normal stop/restart and preserved data.
+- `npm run test:published` publishes complete managed Main into a fresh owned artifact directory, runs the packaged public Multica bin through an authenticated HTTP/SSE turn, and proves original App/Setup, Node archive/resources, native ToolScript and Main browser/image behavior, normal stop/restart and preserved data. The published fixture uses the supplied `DOTNET_ROOT` or PATH for its managed host/version calls, without changing public apphost runtime discovery.
 - `npm run test:webui:e2e` runs local disposable WebUI browser fixtures with one explicit Chromium configuration.
 - `npm run test:app:e2e` runs the real disposable application with a scripted loopback provider and Chromium.
 - `npm run test:local` runs the unit, complete-publish, local-browser, and full-application groups together.

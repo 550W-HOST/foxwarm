@@ -104,6 +104,7 @@ function publishedGroup() {
     name: 'published-core',
     steps: [
       directStep('publish', 'dotnet', ['publish', 'dotnet/Foxwarm/Foxwarm.csproj', '-c', 'Release', '--self-contained', 'false', '-o', payload], 600_000),
+      directStep('multica-bin', process.execPath, ['--test', '--test-name-pattern=^public package bin ', 'scripts/multicaBridge.test.js'], 30_000),
       directStep('original-app', process.execPath, ['packages/webui/test/publishedCore.e2e.mjs'], 240_000),
     ],
     env: {

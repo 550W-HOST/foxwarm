@@ -13,6 +13,7 @@ import { until } from './experimentHostFixture.mjs'
 
 const payload = process.env.FOXWARM_PUBLISHED_CORE
 assert(payload, 'Set FOXWARM_PUBLISHED_CORE to an owned complete Core publish directory.')
+const dotnet = process.env.DOTNET_ROOT ? join(process.env.DOTNET_ROOT, 'dotnet') : 'dotnet'
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-published-'))
 const data = join(root, 'selected data'), cwd = join(root, 'unrelated cwd')
 await mkdir(join(data, 'state'), { recursive: true }); await mkdir(cwd)
@@ -29,7 +30,7 @@ env.NODE_OPTIONS = ''
 let child, output = '', browser, token, browserErrors = []
 function startHost() {
   output = ''
-  child = spawn(join(process.env.DOTNET_ROOT, 'dotnet'), [join(payload, 'Foxwarm.dll')], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
+  child = spawn(dotnet, [join(payload, 'Foxwarm.dll')], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
   child.stdout.on('data', bytes => { output += bytes }); child.stderr.on('data', bytes => { output += bytes })
 }
 startHost()
@@ -81,7 +82,7 @@ try {
   assert((await readdir(join(data, 'agents/main/memory'))).length > 0)
   const version = JSON.parse(await readFile(join(payload, 'package.json'), 'utf8')).version
   assert.equal(execFileSync(process.execPath, [join(payload, 'scripts/foxwarm.js'), '--version'], { cwd, env, encoding: 'utf8' }).trim(), version)
-  assert.equal(execFileSync(join(process.env.DOTNET_ROOT, 'dotnet'), [join(payload, 'Foxwarm.dll'), '--version'], { cwd, env, encoding: 'utf8' }).trim(), version)
+  assert.equal(execFileSync(dotnet, [join(payload, 'Foxwarm.dll'), '--version'], { cwd, env, encoding: 'utf8' }).trim(), version)
   const exported = join(root, 'cli-export')
   const cli = JSON.parse(execFileSync(process.execPath, [join(payload, 'scripts/foxwarm.js'), 'archive', 'export-jsonl', '-o', exported], { cwd, env, encoding: 'utf8' }))
   assert.equal(cli.sessions.records, 0); assert.equal(cli.llm.records, 0)

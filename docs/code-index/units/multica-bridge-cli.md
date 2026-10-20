@@ -58,7 +58,7 @@ The bridge is a proof of concept for trusted same-host execution. A Multica daem
 
 ## Tests
 
-`scripts/multicaBridge.test.js` uses a fake authenticated Foxwarm HTTP/SSE server to cover runtime behavior. `scripts/multicaBridgeSetup.test.js` uses fake Foxwarm and Multica surfaces to cover new setup, idempotent reuse, explicit agent creation, auth/workspace/agent failures, file modes and redaction, profile creation/path pinning, and mutation-free dry-run.
+`scripts/multicaBridge.test.js` uses a fake authenticated Foxwarm HTTP/SSE server to cover runtime behavior. Its public-bin case resolves the bin from package metadata and executes the normal command from an unrelated cwd, asserting the task POST, subscribe-before-send, successful result and no spurious stop. The maintained complete-publish lane selects that case with `FOXWARM_PUBLISHED_CORE` pointing to its actual payload, so missing runtime helpers fail before dispatch rather than passing from the Source scripts tree. `scripts/multicaBridgeSetup.test.js` uses fake Foxwarm and Multica surfaces to cover new setup, idempotent reuse, explicit agent creation, auth/workspace/agent failures, file modes and redaction, profile creation/path pinning, and mutation-free dry-run.
 
 ## Design decisions
 
