@@ -9,6 +9,8 @@ Production and test Compose build one root recipe and start complete managed Mai
 
 The recipe prepares assets then publishes the [existing resource graph](./core-delivery-cli.md#build-and-resource-boundary); it has no separate asset copier. Docker context excludes host dependencies/build outputs, installation data and caches. Ordinary npm locks, pinned NuGet packages and pinned Monty acquisition run inside build layers. The runtime retains resources/native helpers/notices and has no baked experiment settings. Large optional Code workbench assets and optional HEIF remain external prerequisites.
 
+After the dependency-install layer, the build stage explicitly copies `tsconfig.artifacts.json`, its extended root `tsconfig.json` and the three Main artifact helper sources (`managedPrepare.ts`, `reactCompiler.ts`, `rasterMetadata.ts`). These are the bounded Main inputs to `build:artifacts`; its Shared validator imports come from the preceding `build:node` output. Neither host-generated helpers nor the full Source Main tree are compiler inputs to this recipe.
+
 ## Consumers and side effects
 
 The default command is `dotnet Foxwarm.dll`, installation root `/app`, data root `/data`, port 3001. Root Compose retains its data mount, init process, healthcheck and separately paired optional sandbox Node. Test Compose uses the same recipe but preserves its existing host port and explicit legacy physical workspace; this is not the image default or an automatic data migration. Both use Main's normal stop/drain. Forced deployment grace expiry is not successful drain.
