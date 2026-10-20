@@ -331,11 +331,7 @@ internal sealed class ResponsesWsTransport(
                 }
                 resource.StartPump();
             }
-            var lease = resource.Begin(
-                watched,
-                lifetimeCaller ?? caller,
-                watchdog.Finish
-            );
+            var lease = resource.Begin(watched, lifetimeCaller ?? caller, watchdog.Finish);
             using var abortDeadline = deadline.Token.Register(() =>
                 resource.Abort("attempt-timeout-or-abort")
             );
@@ -409,7 +405,11 @@ internal sealed class ResponsesWsTransport(
                         captured.Abort("replay-failure");
                         throw;
                     }
-                    if (items is null || (lifetimeCaller ?? caller).IsCancellationRequested || !captured.Release(lease))
+                    if (
+                        items is null
+                        || (lifetimeCaller ?? caller).IsCancellationRequested
+                        || !captured.Release(lease)
+                    )
                     {
                         captured.Abort("finalizer-discard");
                         return;

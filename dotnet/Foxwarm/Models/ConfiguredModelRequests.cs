@@ -80,7 +80,8 @@ internal static class ConfiguredModelRequests
         }
         return defaults with
         {
-            KeepReasoningOnError = model.Configuration["keepReasoningOnError"]?.GetValue<bool>() == true,
+            KeepReasoningOnError =
+                model.Configuration["keepReasoningOnError"]?.GetValue<bool>() == true,
             BaseUri = model.BaseUri,
             RequestModel = model.ModelId,
             MaxOutputTokens = model.MaxOutput,
@@ -172,12 +173,21 @@ internal static class ConfiguredModelRequests
                 "Unsupported providerType: " + model.ProviderType + "."
             );
         if (options.HardTimeoutMs is > 0)
-            service = new AttemptTimeoutService(service, options.HardTimeoutMs.Value, options.Clock);
-        return options.Diagnostics is { } capture ? new DiagnosticChatService(service, capture) : service;
+            service = new AttemptTimeoutService(
+                service,
+                options.HardTimeoutMs.Value,
+                options.Clock
+            );
+        return options.Diagnostics is { } capture
+            ? new DiagnosticChatService(service, capture)
+            : service;
     }
 
-    private sealed class AttemptTimeoutService(IChatService service, double timeoutMs, TimeProvider? clock)
-        : IChatService
+    private sealed class AttemptTimeoutService(
+        IChatService service,
+        double timeoutMs,
+        TimeProvider? clock
+    ) : IChatService
     {
         public async Task<ChatResult> ChatAsync(
             string sessionId,
@@ -185,8 +195,14 @@ internal static class ConfiguredModelRequests
             CancellationToken token
         )
         {
-            using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs), clock ?? TimeProvider.System);
-            using var attempt = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token);
+            using var deadline = new CancellationTokenSource(
+                TimeSpan.FromMilliseconds(timeoutMs),
+                clock ?? TimeProvider.System
+            );
+            using var attempt = CancellationTokenSource.CreateLinkedTokenSource(
+                token,
+                deadline.Token
+            );
             return await service.ChatAsync(sessionId, history, attempt.Token);
         }
     }

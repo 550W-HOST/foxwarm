@@ -51,31 +51,35 @@ internal sealed class ResponsesWsChatService(
             headers[key] = SessionWait.Text(value) ?? (value?.ToJsonString() ?? "");
         var started = Stopwatch.GetTimestamp();
         WsPendingCompletion? pending = null;
-        using var attempt = new ResponsesAttempt(options, token, update => progress?.Invoke(sessionId, update));
+        using var attempt = new ResponsesAttempt(
+            options,
+            token,
+            update => progress?.Invoke(sessionId, update)
+        );
         try
         {
             try
             {
-            pending = await transport
-                .RequestAsync(
-                    options.ResponsesUri,
-                    headers,
-                    options.ConcreteModelId,
-                    body,
-                    attempt.Callbacks,
-                    options.StreamInactivityTimeoutMs,
-                    attempt.Token,
-                    sessionId,
-                    scope
-                            is ModelRequestScope.CompactPlan
-                                or ModelRequestScope.BackgroundCompactPlan
-                            ? "compact-plan"
-                        : scope == ModelRequestScope.Canonical ? "chat"
-                        : scope == ModelRequestScope.Btw ? "btw"
-                        : "low-level",
-                    token
-                )
-                .ConfigureAwait(false);
+                pending = await transport
+                    .RequestAsync(
+                        options.ResponsesUri,
+                        headers,
+                        options.ConcreteModelId,
+                        body,
+                        attempt.Callbacks,
+                        options.StreamInactivityTimeoutMs,
+                        attempt.Token,
+                        sessionId,
+                        scope
+                                is ModelRequestScope.CompactPlan
+                                    or ModelRequestScope.BackgroundCompactPlan
+                                ? "compact-plan"
+                            : scope == ModelRequestScope.Canonical ? "chat"
+                            : scope == ModelRequestScope.Btw ? "btw"
+                            : "low-level",
+                        token
+                    )
+                    .ConfigureAwait(false);
             }
             catch (Exception error)
             {
@@ -83,8 +87,13 @@ internal sealed class ResponsesWsChatService(
                 throw;
             }
             options.Diagnostics?.Response("101 WebSocket", new JsonObject(), pending.Response);
-            var result = await attempt.CompleteAsync(pending.Response,
-                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), Stopwatch.GetElapsedTime(started).TotalMilliseconds).ConfigureAwait(false);
+            var result = await attempt
+                .CompleteAsync(
+                    pending.Response,
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    Stopwatch.GetElapsedTime(started).TotalMilliseconds
+                )
+                .ConfigureAwait(false);
             var assistant = result.AssistantMessage;
             var captured = pending;
             var unsafeReplay =
@@ -116,7 +125,10 @@ internal sealed class ResponsesWsChatService(
                         captured.Finalize(null);
                         return;
                     }
-                    var prepared = ConcreteRequestHistory.Prepare(attempt.Committed.Concat(rows).ToArray(), options.ConcreteModelId);
+                    var prepared = ConcreteRequestHistory.Prepare(
+                        attempt.Committed.Concat(rows).ToArray(),
+                        options.ConcreteModelId
+                    );
                     var replay = ResponsesRequestSerializer.ConvertHistoryWithImages(
                         prepared,
                         options.ConcreteModelId,
@@ -147,5 +159,4 @@ internal sealed class ResponsesWsChatService(
                 await transport.DisposeAsync().ConfigureAwait(false);
         }
     }
-
 }

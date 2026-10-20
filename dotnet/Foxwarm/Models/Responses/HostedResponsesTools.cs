@@ -94,7 +94,10 @@ internal static class HostedResponsesTools
             var imageId = ImageId(Text(item["id"]), outputStart + index);
             while (!budget.UsedIds.Add(imageId))
                 imageId +=
-                    "_" + (outputStart + index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    "_"
+                    + (outputStart + index + 1).ToString(
+                        System.Globalization.CultureInfo.InvariantCulture
+                    );
             if (!IsCompletedGeneratedImage(item))
             {
                 failures.Add(imageId + ": image generation result was missing or incomplete.");

@@ -984,21 +984,37 @@ public sealed class ResponsesChatService : IChatService
         var body = ResponsesRequestPlan.Build(history, options);
         if (options.AttemptPrepared is not null)
             await options.AttemptPrepared(body).ConfigureAwait(false);
-        using var attempt = new ResponsesAttempt(options, cancellationToken,
-            update => progress?.Invoke(sessionId, update));
+        using var attempt = new ResponsesAttempt(
+            options,
+            cancellationToken,
+            update => progress?.Invoke(sessionId, update)
+        );
         OpenAIHttp.Completed completed;
         try
         {
-            completed = await OpenAIHttp.RequestAsync(
-                httpClient, options.ResponsesUri, body, options, sessionId, null, null,
-                (stream, token, callbacks) => ResponsesSseCollector.CollectAsync(stream, token, callbacks),
-                attempt.Token, attempt.Callbacks).ConfigureAwait(false);
+            completed = await OpenAIHttp
+                .RequestAsync(
+                    httpClient,
+                    options.ResponsesUri,
+                    body,
+                    options,
+                    sessionId,
+                    null,
+                    null,
+                    (stream, token, callbacks) =>
+                        ResponsesSseCollector.CollectAsync(stream, token, callbacks),
+                    attempt.Token,
+                    attempt.Callbacks
+                )
+                .ConfigureAwait(false);
         }
         catch (Exception error)
         {
             await attempt.FailedAsync(error).ConfigureAwait(false);
             throw;
         }
-        return await attempt.CompleteAsync(completed.Payload, completed.CompletedAt, completed.DurationMs).ConfigureAwait(false);
+        return await attempt
+            .CompleteAsync(completed.Payload, completed.CompletedAt, completed.DurationMs)
+            .ConfigureAwait(false);
     }
 }

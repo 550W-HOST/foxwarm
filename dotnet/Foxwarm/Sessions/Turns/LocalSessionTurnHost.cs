@@ -126,7 +126,13 @@ public sealed partial class LocalSessionTurnHost
                 var history = entry.WithState(state => state.History.Snapshot());
                 var result = chat is ISessionChatService ordinary
                     ? await ordinary
-                        .ChatAsync(entry.State.Id, history, PrepareRetryAsync, CommitAssistantSegmentAsync, registered.Token)
+                        .ChatAsync(
+                            entry.State.Id,
+                            history,
+                            PrepareRetryAsync,
+                            CommitAssistantSegmentAsync,
+                            registered.Token
+                        )
                         .ConfigureAwait(false)
                     : await chat.ChatAsync(entry.State.Id, history.Materialize(), registered.Token)
                         .ConfigureAwait(false);

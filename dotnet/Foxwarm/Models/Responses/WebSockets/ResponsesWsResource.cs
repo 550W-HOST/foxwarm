@@ -329,15 +329,21 @@ internal sealed class ResponsesWsResource(
     }
 }
 
-internal sealed class WsLease(ResponsesEventAccumulator accumulator, Action completed, ResponsesStreamCallbacks callbacks)
+internal sealed class WsLease(
+    ResponsesEventAccumulator accumulator,
+    Action completed,
+    ResponsesStreamCallbacks callbacks
+)
 {
     internal ResponsesEventAccumulator Accumulator { get; } = accumulator;
     internal Action Completed { get; } = completed;
+
     internal void RawFrame(string text)
     {
         callbacks.OnDecodedChunk?.Invoke(text + "\n");
         callbacks.OnSseBlock?.Invoke(text);
     }
+
     internal TaskCompletionSource<JsonObject> Completion { get; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 }

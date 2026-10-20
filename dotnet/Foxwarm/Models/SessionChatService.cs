@@ -41,7 +41,14 @@ internal sealed class SessionChatService(
         Func<CancellationToken, Task<bool>> prepareRetry,
         Func<JsonObject, bool, Task<JsonObject>> commitAssistantSegment,
         CancellationToken cancellationToken
-    ) => ChatCoreAsync(sessionId, RequestHistory.FromSnapshot(history), prepareRetry, cancellationToken, commitAssistantSegment);
+    ) =>
+        ChatCoreAsync(
+            sessionId,
+            RequestHistory.FromSnapshot(history),
+            prepareRetry,
+            cancellationToken,
+            commitAssistantSegment
+        );
 
     private async Task<ChatResult> ChatCoreAsync(
         string sessionId,
@@ -206,12 +213,15 @@ internal sealed class SessionChatService(
                         )
                         : null;
                 },
-                commitAssistantSegment is null ? null : async (message, deliver) =>
-                {
-                    var committed = await commitAssistantSegment(message, deliver).ConfigureAwait(false);
-                    committedPrefix = true;
-                    return committed;
-                }
+                commitAssistantSegment is null
+                    ? null
+                    : async (message, deliver) =>
+                    {
+                        var committed = await commitAssistantSegment(message, deliver)
+                            .ConfigureAwait(false);
+                        committedPrefix = true;
+                        return committed;
+                    }
             );
         }
         catch (SessionTurnShutdownException)

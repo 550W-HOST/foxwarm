@@ -20,17 +20,39 @@ public sealed class OutboundMcpEnvironmentTests
             Environment.SetEnvironmentVariable(overlaid, "parent-value");
             Environment.SetEnvironmentVariable(secret, "must-not-be-inherited");
             Environment.SetEnvironmentVariable(filtered, "() { forbidden function; }");
-            await fixture.Mcp.ConfigureAsync(new JsonObject
-            {
-                ["name"] = "peer", ["transport"] = "stdio", ["command"] = "node",
-                ["args"] = new JsonArray(OutboundSdkPeer.Script, "stdio", Path.Combine(fixture.Temp.Path, "environment")),
-                ["env"] = new JsonObject { [overlaid] = "explicit-overlay", ["FOXWARM_MCP_EXPLICIT"] = "configured-only" },
-                ["stderr"] = "pipe",
-            }, default);
-            var result = await fixture.CallAsync(fixture.First, "result", new JsonObject
-            {
-                ["kind"] = "environment", ["names"] = new JsonArray(keys.Append("FOXWARM_MCP_EXPLICIT").Select(key => (JsonNode?)JsonValue.Create(key)).ToArray()),
-            });
+            await fixture.Mcp.ConfigureAsync(
+                new JsonObject
+                {
+                    ["name"] = "peer",
+                    ["transport"] = "stdio",
+                    ["command"] = "node",
+                    ["args"] = new JsonArray(
+                        OutboundSdkPeer.Script,
+                        "stdio",
+                        Path.Combine(fixture.Temp.Path, "environment")
+                    ),
+                    ["env"] = new JsonObject
+                    {
+                        [overlaid] = "explicit-overlay",
+                        ["FOXWARM_MCP_EXPLICIT"] = "configured-only",
+                    },
+                    ["stderr"] = "pipe",
+                },
+                default
+            );
+            var result = await fixture.CallAsync(
+                fixture.First,
+                "result",
+                new JsonObject
+                {
+                    ["kind"] = "environment",
+                    ["names"] = new JsonArray(
+                        keys.Append("FOXWARM_MCP_EXPLICIT")
+                            .Select(key => (JsonNode?)JsonValue.Create(key))
+                            .ToArray()
+                    ),
+                }
+            );
             Assert.Equal("safe-inherited-value", result![inherited]!.GetValue<string>());
             Assert.Equal("explicit-overlay", result[overlaid]!.GetValue<string>());
             Assert.Null(result[secret]);

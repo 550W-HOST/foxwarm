@@ -25,7 +25,10 @@ internal sealed class StreamingModelPeer : IAsyncDisposable
         this.respond = respond;
     }
 
-    internal static async Task<StreamingModelPeer> StartAsync(bool websocket, Func<Context, int, Task> respond)
+    internal static async Task<StreamingModelPeer> StartAsync(
+        bool websocket,
+        Func<Context, int, Task> respond
+    )
     {
         var builder = WebApplication.CreateBuilder();
         builder.Logging.ClearProviders();
@@ -50,17 +53,30 @@ internal sealed class StreamingModelPeer : IAsyncDisposable
 
     private async Task Http(HttpContext http)
     {
-        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stop.Token, http.RequestAborted);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(
+            stop.Token,
+            http.RequestAborted
+        );
         try
         {
-            var request = (await JsonNode.ParseAsync(http.Request.Body, cancellationToken: lifetime.Token))!.AsObject();
+            var request = (
+                await JsonNode.ParseAsync(http.Request.Body, cancellationToken: lifetime.Token)
+            )!.AsObject();
             http.Response.ContentType = "text/event-stream";
             await http.Response.StartAsync(lifetime.Token);
-            var context = new Context(request, lifetime.Token, async frame =>
-            {
-                await http.Response.WriteAsync("data: " + frame.ToJsonString() + "\n\n", lifetime.Token);
-                await http.Response.Body.FlushAsync(lifetime.Token);
-            }, http.Abort);
+            var context = new Context(
+                request,
+                lifetime.Token,
+                async frame =>
+                {
+                    await http.Response.WriteAsync(
+                        "data: " + frame.ToJsonString() + "\n\n",
+                        lifetime.Token
+                    );
+                    await http.Response.Body.FlushAsync(lifetime.Token);
+                },
+                http.Abort
+            );
             await respond(context, Record(request));
         }
         catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
@@ -69,7 +85,10 @@ internal sealed class StreamingModelPeer : IAsyncDisposable
 
     private async Task WebSocket(HttpContext http)
     {
-        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(stop.Token, http.RequestAborted);
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(
+            stop.Token,
+            http.RequestAborted
+        );
         using var socket = await http.WebSockets.AcceptWebSocketAsync();
         async Task<JsonObject?> Read()
         {
@@ -90,7 +109,10 @@ internal sealed class StreamingModelPeer : IAsyncDisposable
                         return JsonNode.Parse(Encoding.UTF8.GetString(bytes.ToArray()))!.AsObject();
                 }
             }
-            catch (WebSocketException) { lifetime.Cancel(); }
+            catch (WebSocketException)
+            {
+                lifetime.Cancel();
+            }
             catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
             return null;
         }
@@ -100,9 +122,24 @@ internal sealed class StreamingModelPeer : IAsyncDisposable
             while (await next is { } request)
             {
                 next = Read(); // Also observes caller Stop while a response is held.
-                var context = new Context(request, lifetime.Token,
-                    frame => socket.SendAsync(Encoding.UTF8.GetBytes(frame.ToJsonString()).AsMemory(), WebSocketMessageType.Text, WebSocketMessageFlags.EndOfMessage, lifetime.Token).AsTask(),
-                    () => { socket.Abort(); lifetime.Cancel(); });
+                var context = new Context(
+                    request,
+                    lifetime.Token,
+                    frame =>
+                        socket
+                            .SendAsync(
+                                Encoding.UTF8.GetBytes(frame.ToJsonString()).AsMemory(),
+                                WebSocketMessageType.Text,
+                                WebSocketMessageFlags.EndOfMessage,
+                                lifetime.Token
+                            )
+                            .AsTask(),
+                    () =>
+                    {
+                        socket.Abort();
+                        lifetime.Cancel();
+                    }
+                );
                 await respond(context, Record(request));
             }
         }
@@ -110,7 +147,12 @@ internal sealed class StreamingModelPeer : IAsyncDisposable
         catch (WebSocketException) when (lifetime.IsCancellationRequested) { }
     }
 
-    internal sealed record Context(JsonObject Request, CancellationToken Token, Func<JsonObject, Task> Send, Action Abort);
+    internal sealed record Context(
+        JsonObject Request,
+        CancellationToken Token,
+        Func<JsonObject, Task> Send,
+        Action Abort
+    );
 
     public async ValueTask DisposeAsync()
     {

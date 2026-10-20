@@ -260,7 +260,12 @@ internal sealed class ModelRequestOwner(
                 options = options with
                 {
                     Images = images,
-                    Diagnostics = interaction?.StartAttempt(leaf, options, attempt, request is null ? null : route.Key),
+                    Diagnostics = interaction?.StartAttempt(
+                        leaf,
+                        options,
+                        attempt,
+                        request is null ? null : route.Key
+                    ),
                 };
                 if (journal is not null && journalRequestId is null)
                 {
@@ -288,19 +293,21 @@ internal sealed class ModelRequestOwner(
                 var attemptPrepared = false;
                 options = options with
                 {
-                    CommitAssistantSegment = scope == ModelRequestScope.Canonical && commitAssistantSegment is not null
-                        ? async (message, deliver) =>
-                        {
-                            var meta = message["__meta"]!.AsObject();
-                            if (currentJournalRequestId is not null)
-                                meta["llmRequestId"] = currentJournalRequestId;
-                            meta["llmAttempt"] = currentJournalAttempt;
-                            meta["modelId"] = leaf.Key;
-                            if (request is not null)
-                                meta["virtualModelKey"] = route.Key;
-                            return await commitAssistantSegment(message, deliver).ConfigureAwait(false);
-                        }
-                        : null,
+                    CommitAssistantSegment =
+                        scope == ModelRequestScope.Canonical && commitAssistantSegment is not null
+                            ? async (message, deliver) =>
+                            {
+                                var meta = message["__meta"]!.AsObject();
+                                if (currentJournalRequestId is not null)
+                                    meta["llmRequestId"] = currentJournalRequestId;
+                                meta["llmAttempt"] = currentJournalAttempt;
+                                meta["modelId"] = leaf.Key;
+                                if (request is not null)
+                                    meta["virtualModelKey"] = route.Key;
+                                return await commitAssistantSegment(message, deliver)
+                                    .ConfigureAwait(false);
+                            }
+                            : null,
                     AttemptPrepared = async payload =>
                     {
                         // Serializers call this only after the complete semantic body exists.
@@ -628,11 +635,14 @@ internal sealed class ModelRequestOwner(
         var assistant = result.AssistantMessage is null
             ? new JsonObject { ["role"] = "model" }
             : (JsonObject)result.AssistantMessage.DeepClone();
-        assistant["parts"] = new JsonArray(result.CommittedSegments
-            .Append(result.AssistantMessage)
-            .Where(message => message is not null)
-            .SelectMany(message => message!["parts"] as JsonArray ?? [])
-            .Select(part => part?.DeepClone()).ToArray());
+        assistant["parts"] = new JsonArray(
+            result
+                .CommittedSegments.Append(result.AssistantMessage)
+                .Where(message => message is not null)
+                .SelectMany(message => message!["parts"] as JsonArray ?? [])
+                .Select(part => part?.DeepClone())
+                .ToArray()
+        );
         return result with { AssistantMessage = assistant };
     }
 

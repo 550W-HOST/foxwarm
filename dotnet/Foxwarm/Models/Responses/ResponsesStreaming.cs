@@ -144,7 +144,12 @@ public sealed class ResponsesEventAccumulator
                         callbacks?.OnImageGenerationActivity?.Invoke();
                     EmitProgress();
                     if (type == "response.output_item.done")
-                        callbacks?.OnOutputItemDone?.Invoke(outputIndex.Value, BuildOutputEntries().Single(entry => entry.Index == outputIndex.Value).Item);
+                        callbacks?.OnOutputItemDone?.Invoke(
+                            outputIndex.Value,
+                            BuildOutputEntries()
+                                .Single(entry => entry.Index == outputIndex.Value)
+                                .Item
+                        );
                 }
                 return;
             case "response.image_generation_call.in_progress":

@@ -28,7 +28,11 @@ internal static class OpenAIHttp
             headers["Authorization"] = "Bearer " + options.Token;
         using var request = ProviderHttpRequest.Create(endpoint, body, options, headers);
         using var activity = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        using var watchdog = new StreamActivityWatchdog(activity, options.StreamInactivityTimeoutMs, options.Clock);
+        using var watchdog = new StreamActivityWatchdog(
+            activity,
+            options.StreamInactivityTimeoutMs,
+            options.Clock
+        );
         var token = activity.Token;
         var callbacks = new ResponsesStreamCallbacks
         {
@@ -62,15 +66,27 @@ internal static class OpenAIHttp
         {
             var (error, truncated) = await ReadBoundedAsync(response.Content, token)
                 .ConfigureAwait(false);
-            options.Diagnostics?.Response($"{(int)response.StatusCode} {response.ReasonPhrase}", ProviderHttpRequest.ResponseHeaders(response), JsonValue.Create(error));
+            options.Diagnostics?.Response(
+                $"{(int)response.StatusCode} {response.ReasonPhrase}",
+                ProviderHttpRequest.ResponseHeaders(response),
+                JsonValue.Create(error)
+            );
             throw new ResponsesHttpException(response.StatusCode, error, truncated);
         }
         await using var stream = await response
             .Content.ReadAsStreamAsync(token)
             .ConfigureAwait(false);
-        options.Diagnostics?.Response($"{(int)response.StatusCode} {response.ReasonPhrase}", ProviderHttpRequest.ResponseHeaders(response), null);
+        options.Diagnostics?.Response(
+            $"{(int)response.StatusCode} {response.ReasonPhrase}",
+            ProviderHttpRequest.ResponseHeaders(response),
+            null
+        );
         var payload = await collect(stream, token, callbacks).ConfigureAwait(false);
-        options.Diagnostics?.Response($"{(int)response.StatusCode} {response.ReasonPhrase}", ProviderHttpRequest.ResponseHeaders(response), payload);
+        options.Diagnostics?.Response(
+            $"{(int)response.StatusCode} {response.ReasonPhrase}",
+            ProviderHttpRequest.ResponseHeaders(response),
+            payload
+        );
         return new Completed(
             payload,
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),

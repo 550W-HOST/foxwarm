@@ -9,7 +9,11 @@ internal sealed class StreamActivityWatchdog : IDisposable
     private int? inactivityMs;
     private bool finished;
 
-    internal StreamActivityWatchdog(CancellationTokenSource attempt, int? inactivityMs, TimeProvider? clock = null)
+    internal StreamActivityWatchdog(
+        CancellationTokenSource attempt,
+        int? inactivityMs,
+        TimeProvider? clock = null
+    )
     {
         this.inactivityMs = inactivityMs;
         timer = (clock ?? TimeProvider.System).CreateTimer(
@@ -17,13 +21,16 @@ internal sealed class StreamActivityWatchdog : IDisposable
             {
                 lock (gate)
                 {
-                    if (finished) return;
+                    if (finished)
+                        return;
                     finished = true;
                     attempt.Cancel();
                 }
-            }, null,
+            },
+            null,
             inactivityMs is null ? Timeout.InfiniteTimeSpan : TimeSpan.FromMilliseconds(180000),
-            Timeout.InfiniteTimeSpan);
+            Timeout.InfiniteTimeSpan
+        );
     }
 
     internal void Progress()
@@ -37,7 +44,8 @@ internal sealed class StreamActivityWatchdog : IDisposable
     {
         lock (gate)
         {
-            if (finished) return;
+            if (finished)
+                return;
             inactivityMs = Math.Max(inactivityMs ?? 60000, 600000);
             timer.Change(TimeSpan.FromMilliseconds(inactivityMs.Value), Timeout.InfiniteTimeSpan);
         }
