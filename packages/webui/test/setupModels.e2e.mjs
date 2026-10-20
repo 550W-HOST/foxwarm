@@ -384,7 +384,8 @@ async function evaluateMonacoEditorAction(targetPage, modelUri, action, payload 
   return targetPage.evaluate(async ({ targetModelUri, editorAction, actionPayload }) => {
     const monacoUrl = performance.getEntriesByType('resource')
       .map((entry) => entry.name)
-      .find((name) => /\/node_modules\/\.vite\/deps\/monaco-editor\.js(?:\?|$)/.test(name))
+      // An external Vite cache is served through /@fs/, not /node_modules/.vite/.
+      .find((name) => /\/deps\/monaco-editor\.js(?:\?|$)/.test(name))
     if (!monacoUrl) throw new Error('Monaco module URL was not loaded')
     const monaco = await import(monacoUrl)
     const editor = monaco.editor.getEditors().find((candidate) => candidate.getModel()?.uri.toString() === targetModelUri)
@@ -702,7 +703,9 @@ test('Appearance owns browser name and tab icon editing with save, cancel, and s
     await brandingPage.click('#webui-instance-name', { clickCount: 3 })
     await brandingPage.type('#webui-instance-name', 'Renamed fixture')
     await brandingPage.click('button::-p-text(Save name)')
-    await brandingPage.waitForFunction(() => document.querySelector('#webui-instance-name')?.value === 'Renamed fixture')
+    // The draft already has this value before Save; wait for App's saved title.
+    await brandingPage.waitForFunction(() => document.title === 'Renamed fixture · Foxwarm')
+    assert.equal(await brandingPage.$eval('#webui-instance-name', input => input.value), 'Renamed fixture')
     assert.deepEqual(webUiSettingsRequests.at(-1), { instanceName: 'Renamed fixture' })
     assert.equal(await brandingPage.title(), 'Renamed fixture · Foxwarm')
 
