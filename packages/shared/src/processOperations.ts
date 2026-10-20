@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
+import { openSync, closeSync } from 'node:fs';
 
 export interface ProcessSnapshotEntry {
   pid: number;
@@ -14,6 +15,8 @@ export interface ProcessLaunchRequest {
   env: NodeJS.ProcessEnv;
   detached: boolean;
   windowsHide: boolean;
+  /** New log file inherited by stdout and stderr; no parent-side output pump. */
+  outputPath?: string;
 }
 
 /** Native process dependencies used by PersistentExecManager. */
@@ -85,21 +88,28 @@ export function createNativeProcessOperations(): ProcessOperations {
     nodePath: process.execPath,
 
     async launch(request) {
-      const child = spawn(request.command, request.args, {
-        cwd: request.cwd,
-        env: request.env,
-        stdio: 'ignore',
-        detached: request.detached,
-        windowsHide: request.windowsHide,
-        shell: false,
-      });
-      await new Promise<void>((resolve, reject) => {
-        child.once('spawn', () => resolve());
-        child.once('error', reject);
-      });
-      child.unref();
-      if (!child.pid) throw new Error('Failed to start background process: missing pid');
-      return { pid: child.pid };
+      // Keep opening and spawning synchronous so the caller's final launch fence
+      // cannot be separated from process creation by an asynchronous file open.
+      const outputFd = request.outputPath === undefined ? undefined : openSync(request.outputPath, 'wx');
+      try {
+        const child = spawn(request.command, request.args, {
+          cwd: request.cwd,
+          env: request.env,
+          stdio: outputFd === undefined ? 'ignore' : ['ignore', outputFd, outputFd],
+          detached: request.detached,
+          windowsHide: request.windowsHide,
+          shell: false,
+        });
+        await new Promise<void>((resolve, reject) => {
+          child.once('spawn', () => resolve());
+          child.once('error', reject);
+        });
+        child.unref();
+        if (!child.pid) throw new Error('Failed to start background process: missing pid');
+        return { pid: child.pid };
+      } finally {
+        if (outputFd !== undefined) closeSync(outputFd);
+      }
     },
 
     isRunning(pid) {

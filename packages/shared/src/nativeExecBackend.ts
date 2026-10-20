@@ -22,25 +22,12 @@ function buildManagedExecScript(command: string, platform: NodeJS.Platform): str
   if (platform === 'win32') {
     return [
       '$ErrorActionPreference = "Continue"',
-      'chcp 65001 | Out-Null',
-      '$basePath = Join-Path $env:FOXWARM_EXEC_LOG_DIR ("{0}_pid{1}" -f $env:FOXWARM_EXEC_TIME_TOKEN, $PID)',
-      '$index = 0',
-      'while ($true) {',
-      '  if ($index -eq 0) {',
-      '    $logPath = "$basePath.log"',
-      '  } else {',
-      '    $logPath = "${basePath}_$index.log"',
-      '  }',
-      '  $statusPath = "$logPath.exit.json"',
-      '  $cwdPath = "$logPath.cwd.txt"',
-      '  if (!(Test-Path -LiteralPath $logPath) -and !(Test-Path -LiteralPath $statusPath) -and !(Test-Path -LiteralPath $cwdPath)) { break }',
-      '  $index += 1',
-      '}',
-      '$pathsTmp = "$env:FOXWARM_EXEC_PATHS_PATH.tmp.$PID"',
-      '$paths = @{ logPath = $logPath; statusPath = $statusPath; cwdPath = $cwdPath } | ConvertTo-Json -Compress',
-      'Set-Content -LiteralPath $pathsTmp -Value $paths',
-      'Move-Item -LiteralPath $pathsTmp -Destination $env:FOXWARM_EXEC_PATHS_PATH -Force',
-      'Start-Transcript -LiteralPath $logPath -Append | Out-Null',
+      '$utf8 = New-Object System.Text.UTF8Encoding $false',
+      '[Console]::InputEncoding = $utf8',
+      '[Console]::OutputEncoding = $utf8',
+      '$OutputEncoding = $utf8',
+      '$statusPath = $env:FOXWARM_EXEC_STATUS_PATH',
+      '$cwdPath = $env:FOXWARM_EXEC_CWD_PATH',
       '$global:LASTEXITCODE = $null',
       '$foxwarmExecSucceeded = $true',
       'try {',
@@ -59,12 +46,11 @@ function buildManagedExecScript(command: string, platform: NodeJS.Platform): str
       '}',
       '$cwdTmp = "$cwdPath.tmp.$PID"',
       '$statusTmp = "$statusPath.tmp.$PID"',
-      '(Get-Location).Path | Set-Content -LiteralPath $cwdTmp -NoNewline',
+      '[System.IO.File]::WriteAllText($cwdTmp, (Get-Location).Path, $utf8)',
       'Move-Item -LiteralPath $cwdTmp -Destination $cwdPath -Force',
       '$status = @{ exitCode = $EXIT_CODE; finishedAt = [DateTime]::UtcNow.ToString("o") } | ConvertTo-Json -Compress',
-      'Set-Content -LiteralPath $statusTmp -Value $status',
+      '[System.IO.File]::WriteAllText($statusTmp, $status, $utf8)',
       'Move-Item -LiteralPath $statusTmp -Destination $statusPath -Force',
-      'Stop-Transcript | Out-Null',
       'exit $EXIT_CODE',
     ].join('\r\n');
   }
@@ -191,14 +177,20 @@ export class NativeExecBackend {
     const scriptPath = `${path.join(dateDir, execId)}.command${platform === 'win32' ? '.ps1' : '.sh'}`;
     const commandScriptPath = platform === 'win32' ? `${path.join(dateDir, execId)}.user.ps1` : undefined;
     const pathsPath = path.join(dateDir, `${execId}.paths.json`);
+    // Windows must know its log before spawn so both inherited output handles
+    // can point at it. POSIX keeps choosing its PID-based paths in the wrapper.
+    const windowsLogPath = platform === 'win32' ? path.join(dateDir, `${timeToken}_${execId}.log`) : undefined;
+    const windowsPaths = windowsLogPath ? {
+      logPath: windowsLogPath, statusPath: `${windowsLogPath}.exit.json`, cwdPath: `${windowsLogPath}.cwd.txt`,
+    } : undefined;
 
     if (commandScriptPath) {
-      await fs.writeFile(commandScriptPath, `${command}${command.endsWith('\n') ? '' : '\n'}`);
+      await fs.writeFile(commandScriptPath, `\uFEFF${command}${command.endsWith('\n') ? '' : '\n'}`, 'utf8');
     }
 
     await fs.writeFile(
       scriptPath,
-      `${buildManagedExecScript(command, platform)}${command.endsWith('\n') ? '' : '\n'}`,
+      `${platform === 'win32' ? '\uFEFF' : ''}${buildManagedExecScript(command, platform)}${command.endsWith('\n') ? '' : '\n'}`,
       platform === 'win32' ? undefined : { mode: 0o700 },
     );
 
@@ -229,10 +221,12 @@ export class NativeExecBackend {
           FOXWARM_EXEC_TIME_TOKEN: timeToken,
           FOXWARM_EXEC_PATHS_PATH: pathsPath,
           FOXWARM_EXEC_NODE_PATH: processOperations.nodePath,
+          ...(windowsPaths ? { FOXWARM_EXEC_STATUS_PATH: windowsPaths.statusPath, FOXWARM_EXEC_CWD_PATH: windowsPaths.cwdPath } : {}),
           ...(commandScriptPath ? { FOXWARM_EXEC_COMMAND_PATH: commandScriptPath } : {}),
         },
         detached: platform !== 'win32',
         windowsHide: true,
+        ...(windowsLogPath ? { outputPath: windowsLogPath } : {}),
       });
       options.onProcessStarted?.();
     } catch (err: any) {
@@ -242,7 +236,7 @@ export class NativeExecBackend {
       throw err;
     }
 
-    const resolvedPaths = await this.waitForResolvedExecPaths(pathsPath, buildResolvedExecPaths(dateDir, timeToken, launched.pid));
+    const resolvedPaths = windowsPaths || await this.waitForResolvedExecPaths(pathsPath, buildResolvedExecPaths(dateDir, timeToken, launched.pid));
     const entry: RunningExecEntry = {
       id: execId,
       pid: launched.pid,
