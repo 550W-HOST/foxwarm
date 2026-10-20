@@ -453,6 +453,9 @@ internal sealed partial class WebUIChannel(
                 var canonicalId = hosted.Id;
                 context.Response.Headers.ContentType = "text/event-stream";
                 context.Response.Headers.CacheControl = "no-cache";
+                context.Response.Headers["X-Accel-Buffering"] = "no";
+                using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(
+                    context.RequestAborted, app.Lifetime.ApplicationStopping);
                 var (subscriptionId, reader) = hosted.Subscribe();
                 try
                 {
@@ -465,21 +468,45 @@ internal sealed partial class WebUIChannel(
                                 {
                                     type = "session-state",
                                     session = scoped is null
-                                        ? (object)hosted.State()
+                                        ? hosted.BuildDto()
                                         : scoped.Session(hosted.BuildDto()),
                                 }
                             )!
                             .AsObject()
                     );
-                    await foreach (var item in reader.ReadAllAsync(context.RequestAborted))
+                    var available = reader.WaitToReadAsync(lifetime.Token).AsTask();
+                    var keepAlive = Task.Delay(TimeSpan.FromSeconds(30), lifetime.Token);
+                    var deleted = false;
+                    while (!deleted)
                     {
+                        await Task.WhenAny(available, keepAlive);
                         scoped?.Require(canonicalId);
-                        var payload = scoped is null
-                            ? WebUiContract.CliEvent(item, runtime)
-                            : WebUiContract.Event(item, runtime);
-                        if (scoped is not null && payload["session"] is JsonObject session)
-                            payload["session"] = scoped.Session(session);
-                        await SendSse(context, payload);
+                        if (keepAlive.IsCompleted)
+                        {
+                            await keepAlive;
+                            await context.Response.WriteAsync(": keep-alive\n\n", lifetime.Token);
+                            await context.Response.Body.FlushAsync(lifetime.Token);
+                            keepAlive = Task.Delay(TimeSpan.FromSeconds(30), lifetime.Token);
+                        }
+                        if (!available.IsCompleted)
+                            continue;
+                        if (!await available)
+                            break;
+                        while (reader.TryRead(out var item))
+                        {
+                            if (item.Kind == SessionEventKind.RequestProgress)
+                                continue;
+                            var payload = WebUiContract.Event(item, runtime);
+                            if (scoped is not null && payload["session"] is JsonObject session)
+                                payload["session"] = scoped.Session(session);
+                            await SendSse(context, payload);
+                            if (item.Kind == SessionEventKind.Deleted)
+                            {
+                                deleted = true;
+                                break;
+                            }
+                        }
+                        available = reader.WaitToReadAsync(lifetime.Token).AsTask();
                     }
                 }
                 catch (WebUiAccessException)
@@ -487,10 +514,11 @@ internal sealed partial class WebUIChannel(
                     context.Abort();
                 }
                 catch (OperationCanceledException)
-                    when (context.RequestAborted.IsCancellationRequested) { }
+                    when (lifetime.IsCancellationRequested) { }
                 catch (IOException) when (context.RequestAborted.IsCancellationRequested) { }
                 finally
                 {
+                    lifetime.Cancel();
                     hosted.Unsubscribe(subscriptionId);
                 }
             }

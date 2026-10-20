@@ -234,7 +234,7 @@ def main():
                     if line.startswith(b'data: '):
                         event = json.loads(line[6:])
                         progress.append(event)
-                        if event['type'] == 'model-progress' and 'alp' in event['text']:
+                        if event['type'] == 'session-event' and 'alp' in event['event'].get('text', ''):
                             PROGRESS_SEEN.set()
             except (OSError, ValueError):
                 pass
@@ -254,8 +254,8 @@ def main():
         assert [row['__meta']['seq'] for row in bh] == list(range(1, 7))
         assert bh[4]['parts'][0]['functionResponse']['response']['output'] == 'héllo\n---\nFile has 1 line.\nFile size: 6 bytes.\nFile has no trailing newline.'
         assert (tools / 'note.txt').read_bytes() == 'héllo'.encode()
-        assert any(event['type'] == 'model-progress' and event['text'] == 'alp' for event in progress)
-        assert any(event['type'] == 'message-committed' for event in progress)
+        assert any(event['type'] == 'session-event' and event['event'].get('text') == 'alp' for event in progress)
+        assert any(event['type'] == 'message' for event in progress)
         send(port, a, 'alpha stop')
         assert HELD_REQUEST.wait(10), 'held provider never accepted request'
         code, stopped = call(port, 'POST', f'/api/sessions/{a}/stop', {})
@@ -278,8 +278,8 @@ def main():
         assert result[8]['parts'][0]['functionResponse']['response']['error']['type'] == 'file_exists'
         assert result[10]['parts'][0]['functionResponse']['response']['error']['type'] == 'invalid_path'
         assert (tools / 'note.txt').read_text() == 'updated'
-        assert state(port, b)['nextMessageSeq'] == 15 and not state(port, b)['busy']
-        assert state(port, a)['queueCount'] == 0
+        assert state(port, b)['messageCount'] == 14 and not state(port, b)['busy']
+        assert state(port, a)['queueLength'] == 0
         with sqlite3.connect(data / 'state/archive-store.sqlite') as conn:
             assert conn.execute('SELECT session_id, COUNT(*), MIN(seq), MAX(seq) '
                                 'FROM archive_messages GROUP BY session_id ORDER BY session_id').fetchall() == sorted([

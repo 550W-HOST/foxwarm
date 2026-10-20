@@ -237,36 +237,6 @@ internal static class WebUiContract
         };
     }
 
-    public static JsonObject CliEvent(SessionRuntimeEvent entry, SessionRuntime runtime)
-    {
-        if (entry.Kind == SessionEventKind.MessageCommitted)
-            return new JsonObject
-            {
-                ["type"] = "message-committed",
-                ["message"] = entry.Data?.DeepClone(),
-            };
-        if (entry.Kind == SessionEventKind.StateChanged)
-            return new JsonObject
-            {
-                ["type"] = "session-state",
-                ["session"] = System.Text.Json.JsonSerializer.SerializeToNode(
-                    runtime.Owner(entry.SessionId)!.State()
-                ),
-            };
-        if (entry.Kind == SessionEventKind.RequestProgress)
-        {
-            var draft = entry.Data as JsonObject ?? new JsonObject();
-            return new JsonObject
-            {
-                ["type"] = "model-progress",
-                ["sessionId"] = entry.SessionId,
-                ["text"] = draft["text"]?.DeepClone() ?? JsonValue.Create(""),
-                ["reasoning"] = draft["reasoning"]?.DeepClone() ?? JsonValue.Create(""),
-            };
-        }
-        return Event(entry, runtime);
-    }
-
     public static JsonObject Models(HostModels config, string? current = null)
     {
         config = config.Capture();

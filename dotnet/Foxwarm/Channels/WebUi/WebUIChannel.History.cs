@@ -61,7 +61,7 @@ internal sealed partial class WebUIChannel
             "/api/sessions/{id}/state",
             async (string id, HttpRequest request) =>
                 await FindRouteAsync(request, id) is { } hosted
-                    ? Results.Ok(new { session = hosted.State() })
+                    ? Results.Ok(new { session = hosted.BuildDto() })
                     : Results.NotFound(new { error = "Session not found" })
         );
         app.MapGet(
