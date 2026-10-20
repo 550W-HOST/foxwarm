@@ -541,7 +541,7 @@ internal sealed partial class SessionToolExecutor(
         }
         else if (completionTarget is not null)
             invocation.Value!.Receipt = new TurnToolReceipt(completionTarget, null, null);
-        return new JsonObject { ["output"] = visible.ToJsonString() };
+        return visible;
     }
 
     private async Task<JsonObject> ExecuteExecAsync(JsonObject args, CancellationToken token)

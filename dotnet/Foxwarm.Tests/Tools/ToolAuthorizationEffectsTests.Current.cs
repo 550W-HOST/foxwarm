@@ -58,7 +58,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         var defaultList = await Call(execution.Tools, "task", Obj("""{"action":"list"}"""));
         Assert.Equal(
             4,
-            JsonNode.Parse(defaultList["output"]!.GetValue<string>())!["total"]!.GetValue<int>()
+            defaultList["total"]!.GetValue<int>()
         );
         // Shared note/description authority is unchanged without the optional ownership policy.
         Assert.Null(

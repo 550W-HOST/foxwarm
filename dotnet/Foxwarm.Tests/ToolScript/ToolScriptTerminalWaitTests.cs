@@ -386,15 +386,22 @@ public sealed class ToolScriptTerminalWaitTests
         Assert.Equal(1, peer.RequestCount);
         var tools = Dispatcher(f);
         var inner =
-            "call_tool('task', {'action':'complete', 'taskId':args['task'], 'result':'done'})\n"
+            "done=call_tool('task', {'action':'complete', 'taskId':args['task'], 'result':'done'})\n"
             + Wait
-            + "\nreturn 'kept'";
+            + "\nreturn done";
         var result = await Run(
             tools,
             "return call_tool('run_script', {'code':args['inner'], 'args':{'task':args['task']}})",
             new JsonObject { ["inner"] = inner, ["task"] = taskId }
         );
         Assert.Equal("completed", SessionWait.Text(result["status"]));
+        var visible = result["result"]!["result"]!.AsObject();
+        Assert.Equal(taskId, SessionWait.Text(visible["taskId"]));
+        Assert.Equal("completed", SessionWait.Text(visible["status"]));
+        Assert.Equal(1, visible["sentNotifications"]!.GetValue<int>());
+        Assert.Null(visible["output"]);
+        Assert.Null(visible["__toolPostAction"]);
+        Assert.Null(visible["task"]);
         var receipt = Assert.Single(tools.ConsumeReceipts());
         Assert.Equal(taskId, receipt.CompletedTaskId);
         Assert.Equal(f.Owner.Id, receipt.AttachedSessionId);

@@ -107,12 +107,12 @@ try {
 
   // Actual native receipts feed the merged Activity summary, while arbitrary script data does not.
   let state = await turn(actor, 'task-create', [call('create-task', 'task', { action: 'create', title: 'Owned by teammate', ownerSessionId: owner, notifySession: true })])
-  const task = { id: JSON.parse(pair(state, 'create-task').response.output).taskId }
-  assert.equal(JSON.parse(pair(state, 'create-task').response.output).sentNotifications, 1)
+  const task = { id: pair(state, 'create-task').response.taskId }
+  assert.equal(pair(state, 'create-task').response.sentNotifications, 1)
   await turn(other, 'other-task', [call('other-task', 'task', { action: 'create', title: 'Other team task' })])
   await turn(outside, 'outside-task', [call('outside-task', 'task', { action: 'create', title: 'Outside task' })])
   state = await turn(actor, 'scope', [call('default-scope', 'task', { action: 'list' }), call('agent-scope', 'task', { action: 'list', scope: 'current-agent' }), call('all-scope', 'task', { action: 'list', scope: 'all' })])
-  const listed = id => JSON.parse(pair(state, id).response.output).tasks.map(row => row.title).sort()
+  const listed = id => pair(state, id).response.tasks.map(row => row.title).sort()
   assert.deepEqual(listed('default-scope'), ['Owned by teammate'])
   assert.deepEqual(listed('agent-scope'), ['Other team task', 'Owned by teammate'])
   assert.deepEqual(listed('all-scope'), ['Other team task', 'Outside task', 'Owned by teammate'])
