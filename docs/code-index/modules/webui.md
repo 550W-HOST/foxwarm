@@ -162,5 +162,3 @@ Commit marker ownership: [D-code-model-commit-marker](../threads/code-integratio
 Mobile presentation: [mobile shell](../threads/webui-mobile-shell.md). User attachments: [attachment presentation](../threads/webui-attachment-presentation.md).
 
 - [Reply file grids](../units/webui-reply-files.md) expose successful deliveries outside process disclosure.
-
-- [Node data usage](../threads/node-data-usage.md): shared Topology/Nodes storage entry and workspace breakdown.
