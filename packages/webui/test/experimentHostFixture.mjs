@@ -60,7 +60,7 @@ export async function createHostFixture(name, options = {}) {
       child.once('exit', exited); child.once('error', finish)
       child.stdout.on('data', bytes => {
         output = (output + bytes).slice(-20000)
-        const bound = source && output.includes('HTTP server started') ? origin : /^Main HTTP listening: (.+)$/m.exec(output)?.[1]
+        const bound = source && output.includes('HTTP server started') ? origin : /^Main HTTP listening: ([^\r\n]+)\r?\n/m.exec(output)?.[1]
         if (bound) {
           if (bound !== origin || child.exitCode !== null || child.signalCode !== null) finish(new Error('Owned listener address does not match fixture: ' + bound))
           else { ownedListener = true; finish() }
