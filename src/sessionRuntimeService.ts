@@ -1,3 +1,5 @@
+import { normalizeTimerScript, runTimerScriptForOwner, type TimerScript, type TimerScriptOutcome } from './timerScript';
+import { createDefaultCurrentSessionEffects } from './session/defaultCurrentSessionEffects';
 import { externalizeMessages } from './imageBlobs';
 import {
   defineRpcService,
@@ -153,7 +155,7 @@ export type SessionListProjectionBatchDto = {
   revision: string;
 };
 
-export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 14, {
+export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime', 15, {
   getSession: rpcMethod<{ sessionId: string }, { session: SessionRuntimeSessionDto | null }>(),
   listSessions: rpcMethod<{ limit?: number; offset?: number; agent?: string }, { sessions: SessionRuntimeSessionDto[]; total: number }>(),
   getSessionListProjections: rpcMethod<{ sessionIds: string[]; includeVolatile?: boolean; currentOwnersOnly?: boolean }, SessionListProjectionBatchDto>(),
@@ -162,6 +164,7 @@ export const sessionRuntimeServiceDescriptor = defineRpcService('session-runtime
   submitAndRun: rpcMethod<{ sessionId: string; item: QueueItem }, SessionWorkerIngressResult>(),
   requestCompaction: rpcMethod<{ sessionId: string; keepPercent?: number; toolNoise?: boolean }, SessionRuntimeCompactionResultDto>(),
   cancelCompaction: rpcMethod<{ sessionId: string }, SessionRuntimeCompactCancellationResultDto>(),
+  runTimerScript: rpcMethod<{ sessionId: string; script: TimerScript }, TimerScriptOutcome>(),
   runBtw: rpcMethod<{ sessionId: string; message: string }, SessionRuntimeBtwResultDto>(),
   queueEvent: rpcMethod<{
     sessionId: string;
@@ -691,6 +694,20 @@ export function createSessionRuntimeServiceHandler(options?: { worker?: SessionR
         return options.worker.ingress.cancelCompaction(selection.canonicalId);
       }
       return sessionManager.cancelSessionCompaction(selection.canonicalId);
+    },
+    async runTimerScript(input) {
+      const sessionId = normalizeSessionId(input.sessionId);
+      const script = normalizeTimerScript(input.script);
+      if (options?.worker) {
+        // Configured placement owns even an inactive lifetime; never hydrate its Main stub.
+        if (!options.worker.ingress) throw new RpcError('SESSION_WORKER_OPERATION_UNAVAILABLE', 'Session-worker timer execution is unavailable.', true);
+        return options.worker.ingress.runTimerScript(sessionManager.resolveLoadedSessionId(sessionId), script);
+      }
+      const session = await requireSession(sessionId);
+      sessionManager.assertSessionDestructiveMutationAllowed([session.id], 'run a timer script');
+      const effects = createDefaultCurrentSessionEffects();
+      return runTimerScriptForOwner(script, { sessionId: session.id, session, sessionPlacement: 'local',
+        persistCurrentSession: () => effects.persistSession(session), execRuntime: effects.execRuntime });
     },
     async runBtw(input) {
       const requestedId = normalizeSessionId(input.sessionId);

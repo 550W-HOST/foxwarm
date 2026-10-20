@@ -12,7 +12,7 @@ Defines the high-level asynchronous SessionRuntime service contract used at exte
 
 ## Key exports
 
-- `sessionRuntimeServiceDescriptor` — version-14 request/event descriptor, including queue-origin history batches, the exact latest history sequence frontier, and placement-neutral compact cancellation.
+- `sessionRuntimeServiceDescriptor` — version-15 request/event descriptor, including queue-origin history batches, the exact latest history sequence frontier, and placement-neutral compact cancellation.
 - `createSessionRuntimeServiceHandler()` — local authoritative handler over current session-manager operations.
 - `initializeSessionRuntime()` / `shutdownSessionRuntime()` — local service lifecycle and bounded drain.
 - `listSessions()`, `getSession()`, `getHistory()` — immutable local or exact current-Worker projections/snapshots; history includes the exact authority's latest committed sequence frontier, while list requests carry SQL-backed `limit`/`offset` and optional exact `agent` filtering, returning the corresponding maintained total. Unfiltered callers retain the global catalog page.
@@ -73,3 +73,4 @@ Defines the high-level asynchronous SessionRuntime service contract used at exte
 ## Canonical ownership
 
 Process placement, future worker ownership, and current child-placement limitations are canonical in [process topology and RPC](../threads/process-topology-and-rpc.md).
+The fixed `runTimerScript` command routes cloneable source/input intent to the exact configured owner without model queue/history ingress. Main-local execution reuses live owner persistence while busy; Worker routing ensures the owner and calls its closed timer method. It never hydrates Worker authority in Main. The script action contract is [src-timers](./src-timers.md#script-action-contract).

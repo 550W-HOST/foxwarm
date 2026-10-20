@@ -323,7 +323,8 @@ export async function sendToSession(
   options?: SessionDeliveryOptions
 ): Promise<{ requestedSessionId: string; resolvedSessionId: string }> {
   const { sourceSession: fromSession, targetSession, requestedTargetSessionId } = await resolvePermittedSessionTarget(deps, targetSessionId, fromSessionId);
-  if (fromSession && fromSession.id === targetSession.id) {
+  const selfSend = !!fromSession && fromSession.id === targetSession.id;
+  if (selfSend && !options?.toolScriptRunId) {
     throw new Error(`send_to_session target resolves to this same session: current_session_id=\`${fromSession.id}\`, requested_session_id=\`${requestedTargetSessionId}\`, resolved_session_id=\`${targetSession.id}\`. You are already in this session; check whether you meant to send to a parent/child/other session. If you meant to message the direct user in the current session rather than another agent, do not use send_to_session; generate ordinary assistant text instead.`);
   }
 
@@ -346,6 +347,11 @@ export async function sendToSession(
           : options.taskNotification.recipient === 'new'
             ? 'Task assignment from Foxwarm, not direct user input. Complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report.'
             : 'task notification from Foxwarm; not direct user input',
+      }, message || '')
+      : selfSend
+      ? formatFoxwarmMessage({
+        type: 'toolscript', sourceSessionId, runId: options?.toolScriptRunId, time,
+        hint: 'Message queued by a ToolScript in this Session, not direct user input.',
       }, message || '')
       : sourceSessionId
       ? formatFoxwarmMessage({

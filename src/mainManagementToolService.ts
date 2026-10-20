@@ -63,6 +63,7 @@ export type MainManagementToolRequest = {
   sourceSessionId: string;
   operation: MainManagementToolOperation;
   args: ToolArgs;
+  toolScriptRunId?: string;
 };
 export type MainManagementToolResponse = { result: unknown };
 export type ScheduleWaitTimeoutRequest = { sourceSessionId: string; waitId: string; timeoutSeconds: number };
@@ -80,7 +81,7 @@ export type MigrateLegacyGoalRequest = { sourceSessionId: string; goal: string; 
 export type TaskContextRequest = { sourceSessionId: string; sequences: number[]; consume: boolean; retainedTaskIds?: string[] };
 export type TaskContextResponse = { tasks: { id: string; title: string; status: string }[]; omitted: number };
 
-export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 19, {
+export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 20, {
   migrateLegacyGoal: rpcMethod<MigrateLegacyGoalRequest, { taskId: string }>(),
   taskContext: rpcMethod<TaskContextRequest, TaskContextResponse>(),
   execute: rpcMethod<MainManagementToolRequest, MainManagementToolResponse>(),
@@ -267,6 +268,10 @@ export function createMainManagementToolServiceHandler(options: {
         throw new RpcError('MAIN_MANAGEMENT_OPERATION_NOT_ALLOWED', `Main management operation is not allowed: ${String(operation)}`);
       }
       let args = normalizeArgs(input?.args);
+      if (input.toolScriptRunId !== undefined && (operation !== 'send_to_session'
+          || typeof input.toolScriptRunId !== 'string' || !/^tsr_\d+_[a-f0-9]{8}$/.test(input.toolScriptRunId))) {
+        throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'Invalid ToolScript send provenance.');
+      }
       const source = sessionManager.getAllSessions().get(sourceSessionId);
       if (!source) {
         throw new RpcError('MAIN_MANAGEMENT_SOURCE_NOT_FOUND', `Source session \`${sourceSessionId}\` was not found.`);
@@ -333,7 +338,7 @@ export function createMainManagementToolServiceHandler(options: {
           ? await exactSourceContext(sourceSessionId, source)
           : {
             sessionId: sourceSessionId,
-            ...(operation === 'send_to_session' ? { captureSuccessfulSendToSessionTarget: true } : {}),
+            ...(operation === 'send_to_session' ? { captureSuccessfulSendToSessionTarget: true, toolScriptRunId: input.toolScriptRunId } : {}),
           },
         options.readSessionHistory,
       ) };

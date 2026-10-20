@@ -1765,6 +1765,18 @@ function ensureRunOwnedBySession(record: ToolScriptRunRecord, sessionId: string)
   }
 }
 
+/** Shared starter validation without source I/O; scheduled source is loaded only at firing. */
+export function normalizeToolScriptStartArgs(args: ToolArgs): import('./timerScript').TimerScript {
+  const mode = parseToolScriptRunMode(args?.mode ?? args?.runMode ?? args?.background);
+  const timeoutSecs = parseTimeoutSecs(args?.timeoutSecs);
+  const scriptArgs = resolveObjectArgWithJsonFallback(args, 'args', 'argsJson', { label: 'run_script args' }) || {};
+  resolveToolScriptSourceNode(args || {}, 'master');
+  const code = typeof args.code === 'string' && args.code.trim() ? args.code : undefined;
+  const filePath = typeof args.filePath === 'string' && args.filePath.trim() ? args.filePath : undefined;
+  if (!code && !filePath) throw new Error('Either filePath or code must be provided.');
+  return { ...(code ? { code } : { filePath, ...(args.node !== undefined ? { node: args.node } : {}) }), args: scriptArgs, mode, timeoutSecs };
+}
+
 export async function tool_run_script(args: ToolArgs, ctx: ToolContext): Promise<ToolScriptExecutionResult> {
   const { sessionId, session } = await requireSessionContext(ctx);
   const { filePath, code: inlineCode } = args || {};

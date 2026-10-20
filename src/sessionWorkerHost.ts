@@ -1,3 +1,4 @@
+import { runTimerScriptForOwner, type TimerScript, type TimerScriptOutcome } from './timerScript';
 import { refreshSessionSnapshotForSession } from './session/agentSettings';
 import type { CurrentSessionTurnEffects } from './session/currentSessionEffects';
 import crypto from 'node:crypto';
@@ -121,7 +122,7 @@ export class SessionWorkerHost {
   private runTail: Promise<void> = Promise.resolve();
   private serializedPending = 0;
   private readonly pendingOperations: Array<{
-    kind: 'ordinary' | 'run-pending' | 'selection-settings';
+    kind: 'ordinary' | 'run-pending' | 'selection-settings' | 'timer-script';
     execute: () => Promise<void>;
     failure?: unknown;
   }> = [];
@@ -248,6 +249,15 @@ export class SessionWorkerHost {
       }
       return { projection: buildSessionWorkerProjection(owner) };
     });
+  }
+
+  async runTimerScript(script: TimerScript): Promise<TimerScriptOutcome> {
+    return this.serialize(async () => {
+      await this.ensureLoaded(); await this.ensureHealthy(); await this.fenceMutation();
+      const session = this.session!;
+      return runTimerScriptForOwner(script, { sessionId: session.id, session, sessionPlacement: 'session-worker',
+        persistCurrentSession: () => this.persistOwner(), execRuntime: this.execRuntime });
+    }, 'timer-script');
   }
 
   async runBtw(message: string): Promise<SessionWorkerBtwResult> {
@@ -532,7 +542,7 @@ export class SessionWorkerHost {
     return { queuedItems, stoppedCurrent: false, abortedInFlight: false };
   }
 
-  private serialize<T>(operation: () => Promise<T>, kind: 'ordinary' | 'run-pending' | 'selection-settings' = 'ordinary'): Promise<T> {
+  private serialize<T>(operation: () => Promise<T>, kind: 'ordinary' | 'run-pending' | 'selection-settings' | 'timer-script' = 'ordinary'): Promise<T> {
     this.serializedPending += 1;
     let resolve!: (value: T) => void;
     let reject!: (error: unknown) => void;
@@ -551,7 +561,7 @@ export class SessionWorkerHost {
     return result;
   }
 
-  /** Cooperatively execute a bounded accepted prefix on the current owner lane.
+  /** Cooperatively execute accepted selection settings and timer slices on the owner lane.
    * Pending runPending calls are transparent placeholders, not early RPC replies.
    * History/admin operations remain barriers; nothing mutates the owner concurrently.
    */
@@ -559,7 +569,7 @@ export class SessionWorkerHost {
     const accepted = [...this.pendingOperations];
     for (const entry of accepted) {
       if (entry.kind === 'run-pending') continue;
-      if (entry.kind !== 'selection-settings') break;
+      if (entry.kind !== 'selection-settings' && entry.kind !== 'timer-script') break;
       await entry.execute();
       if (this.isResyncError(entry.failure)) throw entry.failure;
       await this.ensureHealthy();

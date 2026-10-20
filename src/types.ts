@@ -366,6 +366,8 @@ export interface SessionEnqueueOptions {
 
 /** Trusted delivery metadata, applied before the existing queue boundary. */
 export interface SessionDeliveryOptions extends SessionEnqueueOptions {
+  /** Trusted execution provenance, never a model-facing send argument. */
+  toolScriptRunId?: string;
   taskNotification?: {
     taskId: string;
     event: 'assigned' | 'note' | 'completed' | 'transferred' | 'released';

@@ -5,6 +5,16 @@ import { MAX_AGENT_TOOL_RULES, MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES } from '.
 import { HANDOFF_CONFIRMATION_ENABLED } from '../config';
 import { addHandoffConfirmationSchema } from '../toolCallControls';
 
+const TOOLSCRIPT_SOURCE_PROPERTIES = {
+    node: { type: 'string', description: "Node containing filePath. Omit or use current for this Session's current Node, or use master for Main. Source selection does not change script execution or nested tools' default Node." },
+    filePath: { type: 'string', description: "Script path on the source Node. Relative paths follow that Node's file-tool path rules; surrounding whitespace is trimmed. Omit when using inline code." },
+    code: { type: 'string', description: "Inline ToolScript. Top-level code can read args and return a result; a defined main(args) is called automatically. When supplied, filePath is not required." },
+    args: { type: 'object', description: "Input object available to the script as args.", additionalProperties: true },
+    argsJson: { type: 'string', description: "Input encoded as a JSON object string when args cannot be supplied." },
+    mode: { type: 'string', enum: ['foreground', 'background'], description: "foreground (default) runs until a result or pause; background starts a run that can continue independently." },
+    timeoutSecs: { type: 'number', description: "Time budget in seconds for this run segment. Defaults to 30. At a safe pause point after the budget is reached, the run pauses for continue_script rather than failing." }
+};
+
 const TOOL_RULES_SCHEMA = {
     type: 'array',
     maxItems: MAX_AGENT_TOOL_RULES,
@@ -325,7 +335,7 @@ Example:
         {
             name: 'send_to_session',
             defaultInject: true,
-            description: "Send a message to another session. Use this to assign work or report results across sessions. For a completed child report, use afterSend=finish; use wait only when you need a later response.",
+            description: "Send a message to another Session. Self-send is available only from inside ToolScript. Use this to assign work or report results across Sessions. For a completed child report, use afterSend=finish; use wait only when you need a later response.",
             parameters: {
                 type: 'object',
                 properties: {
@@ -580,20 +590,22 @@ Example:
         },
         {
             name: 'create_timer',
-            description: "Schedule a message for a session, once or on a recurring schedule. Choose one of at, afterSeconds, or cron. Timers survive restarts. Load the timer-automation skill before creating or changing timers.",
+            description: "Schedule a message or a ToolScript run, once or on a recurring schedule. Choose one of at, afterSeconds, or cron. ToolScript timers run for the calling Session without starting a model turn; the script can send a message when needed. Timers survive restarts. Load the timer-automation skill before creating or changing timers.",
             parameters: {
                 type: 'object',
                 properties: {
-                    sessionId: { type: 'string', description: "Session that owns the timer. Defaults to this session." },
+                    action: { type: 'string', enum: ['message', 'toolscript'], description: "What each trigger does. Defaults to message." },
+                    script: { type: 'object', description: "ToolScript to run on each trigger when action is toolscript.", properties: TOOLSCRIPT_SOURCE_PROPERTIES },
+                    sessionId: { type: 'string', description: "Session that owns the timer. Defaults to this Session. ToolScript timers must belong to the calling Session." },
                     at: { type: ['string', 'number'], description: "One-time trigger time as an ISO date-time string or Unix epoch milliseconds." },
                     afterSeconds: { type: 'number', description: "Seconds from now until a one-time trigger." },
                     cron: { type: 'string', description: "Cron schedule for recurring triggers." },
-                    message: { type: 'string', description: "Message delivered on each trigger." },
-                    newSession: { type: 'boolean', description: "Deliver each trigger to a newly created session instead of the owner session." },
-                    sessionPrefix: { type: 'string', description: "Name prefix for newly created sessions. Defaults to timer; applies when newSession is true." },
-                    agentName: { type: 'string', description: "Agent for newly created sessions. Defaults to the owner session's agent; applies when newSession is true." }
+                    message: { type: 'string', description: "Message delivered on each trigger when action is message." },
+                    newSession: { type: 'boolean', description: "Deliver each message trigger to a newly created Session instead of the owner Session." },
+                    sessionPrefix: { type: 'string', description: "Name prefix for newly created Sessions. Defaults to timer; applies to message timers when newSession is true." },
+                    agentName: { type: 'string', description: "Agent for newly created Sessions. Defaults to the owner Session's Agent; applies to message timers when newSession is true." }
                 },
-                required: ['message']
+                required: []
             }
         },
         {
@@ -608,19 +620,21 @@ Example:
         },
         {
             name: 'update_timer',
-            description: "Change an existing timer. Omitted fields keep their current values. To change its schedule, supply exactly one of at, afterSeconds, or cron. Load the timer-automation skill before changing timers.",
+            description: "Change an existing timer. Omitted fields keep their current values. To change its schedule, supply exactly one of at, afterSeconds, or cron. A supplied script replaces the complete script specification. Load the timer-automation skill before changing timers.",
             parameters: {
                 type: 'object',
                 properties: {
+                    action: { type: 'string', enum: ['message', 'toolscript'], description: "Replacement trigger action. Supply the message or script required by the new action." },
+                    script: { type: 'object', description: "Complete replacement ToolScript specification for future triggers.", properties: TOOLSCRIPT_SOURCE_PROPERTIES },
                     timerId: { type: 'string', description: "Timer to update." },
-                    sessionId: { type: 'string', description: "Owner Session ID. Defaults to this session." },
+                    sessionId: { type: 'string', description: "Owner Session ID. Defaults to this Session. Only the owner Session may configure a ToolScript timer." },
                     at: { type: ['string', 'number'], description: "New one-time trigger time as an ISO date-time string or Unix epoch milliseconds." },
                     afterSeconds: { type: 'number', description: "Seconds from now until the rescheduled one-time trigger." },
                     cron: { type: 'string', description: "New recurring cron schedule." },
-                    message: { type: 'string', description: "Replacement message for future triggers." },
-                    newSession: { type: 'boolean', description: "Use a new session for each trigger when true. Setting false returns delivery to the owner and clears new-session target settings." },
-                    sessionPrefix: { type: 'string', description: "Name prefix for new sessions; applies only when newSession is true." },
-                    agentName: { type: 'string', description: "Agent for new sessions; applies only when newSession is true and defaults to the owner session's agent." }
+                    message: { type: 'string', description: "Replacement message for future message triggers." },
+                    newSession: { type: 'boolean', description: "Use a new Session for each message trigger when true. Setting false returns message delivery to the owner and clears new-session target settings." },
+                    sessionPrefix: { type: 'string', description: "Name prefix for new Sessions; applies to message timers when newSession is true." },
+                    agentName: { type: 'string', description: "Agent for new Sessions; applies to message timers when newSession is true and defaults to the owner Session's Agent." }
                 },
                 required: ['timerId']
             }
@@ -755,15 +769,7 @@ Example:
             description: "Run Python-subset ToolScript to combine related tool calls without extra model turns. Use sequential call_tool calls to pass results to dependent steps, branch on results, or stop after a failed prerequisite. Keep independent calls in one outer tool batch instead; adjacent exec calls may run concurrently. Supply code or filePath; args is the input dictionary. call_tool is synchronous (no await); its first argument can be a tool name or tool ID. Example: code='created = call_tool(\"task\", args[\"task\"])\nreturn call_tool(\"create_child_session\", dict(args[\"child\"], taskId=created[\"taskId\"]))', with complete task and child arguments in args. Tools return native values, not a common response envelope. Use call_tool for filesystem/process access rather than Python OS APIs. A defined main(args) is called automatically. Use return for the result. Returns status and runId; resume time-budget or agent-input pauses with continue_script using runId and continuationId. Return an object with top-level inlineData, inlineDataItems, or image-bearing parts to pass one or more images to the model. A nested wait takes effect in the calling Session only if it remains the last host call when the script completes normally.",
             parameters: {
                 type: 'object',
-                properties: {
-                    node: { type: 'string', description: "Node containing filePath. Omit or use current for this Session's current Node, or use master for Main. Source selection does not change script execution or nested tools' default Node." },
-                    filePath: { type: 'string', description: "Script path on the source Node. Relative paths follow that Node's file-tool path rules; surrounding whitespace is trimmed. Omit when using inline code." },
-                    code: { type: 'string', description: "Inline ToolScript. Top-level code can read args and return a result; a defined main(args) is called automatically. When supplied, filePath is not required." },
-                    args: { type: 'object', description: "Input object available to the script as args.", additionalProperties: true },
-                    argsJson: { type: 'string', description: "Input encoded as a JSON object string when args cannot be supplied." },
-                    mode: { type: 'string', enum: ['foreground', 'background'], description: "foreground (default) runs until a result or pause; background starts a run that can continue independently." },
-                    timeoutSecs: { type: 'number', description: "Time budget in seconds for this run segment. Defaults to 30. At a safe pause point after the budget is reached, the run pauses for continue_script rather than failing." }
-                },
+                properties: TOOLSCRIPT_SOURCE_PROPERTIES,
                 required: []
             }
         },

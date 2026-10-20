@@ -91,7 +91,32 @@ For both `create_timer` and schedule-changing `update_timer`, pass exactly one s
 
 For `update_timer`, omit schedule fields when you only want to change metadata such as `message`, `newSession`, `sessionPrefix`, or `agentName`. If you provide a schedule, provide only one of `afterSeconds`, `at`, or `cron`.
 
-`newSession=true` means every firing creates a new session instead of delivering into the owner session. `sessionPrefix` and `agentName` are only meaningful with `newSession=true`.
+`newSession=true` on a message timer means every firing creates a new session instead of delivering into the owner session. `sessionPrefix` and `agentName` are only meaningful with `newSession=true`.
+
+## ToolScript timers
+
+Set `action: "toolscript"` and supply a complete `script` specification instead of a message. These timers must belong to the calling Session. Message timers retain the default `action: "message"`, including their existing other-Session and new-Session targets.
+
+```json
+{
+  "toolId": "builtin:create_timer",
+  "args": {
+    "action": "toolscript",
+    "cron": "*/10 * * * *",
+    "script": {
+      "node": "master",
+      "filePath": "checks/monitor.py",
+      "args": {"check": "disk"}
+    }
+  }
+}
+```
+
+`script` accepts the normal `run_script` source/input fields: `code` or `filePath`, source `node`, `args` or `argsJson`, `mode`, and `timeoutSecs`. Files are read and authorized anew at firing. Omitted/current source Node and relative paths use the owner's current routing; explicit source selection does not change VM placement or nested tools' default Node. Inline code cannot specify a source Node. A supplied replacement `script` replaces the whole specification, not individual keys. Switching action requires its new payload and clears stale fields. `newSession` target fields apply only to message timers.
+
+A normal check adds no Session history or initial model request. The script can call `send_to_session` with its own canonical Session ID when a notification is useful; this self-send is available only inside real ToolScript, retains normal permissions and configured handoff confirmation fields, and queues a real wake. `print`/return remain run diagnostics, not messages. Explicit called tools keep their own effects, including background exec completion notifications; an explicit `request_model_without_context` still requests a model.
+
+Main-local checks can progress during an owner model request. Worker checks run at existing cooperative owner safe points; an outstanding provider/tool await or earlier history/admin operation can delay a tick. Only one initial slice per timer runs at once; overlapping cron ticks are skipped, not queued. Failed or paused checks do not automatically wake a model. Cron keeps its schedule; pauses remain available through the existing ToolScript run inspection and `continue_script` tools. A final nested `wait` cannot put the unattended owner into Session wait state. Manual model continuations retain ordinary caller-turn semantics. Delete prevents later ticks, not prior effects. Timers/checkpoints survive restarts under their existing best-effort scheduling; there is no missed-cron replay or exactly-once delivery.
 
 ## Cron Syntax
 

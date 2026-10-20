@@ -12,6 +12,8 @@ import { expandHomePath, resolveAgentPath } from '../utils/pathResolve';
 export { expandHomePath, resolveAgentPath };
 
 export interface ToolContext {
+  /** Trusted provenance supplied only by a running ToolScript host call. */
+  toolScriptRunId?: string;
   /** Trusted local ToolScript hook: record a validated wait without registering it. */
   deferSessionWait?: (args: ToolArgs) => void;
   sessionId?: string;
@@ -257,7 +259,7 @@ export function formatTimerSummary(timer: timers.TimerView): string {
     ? `new session (${timer.agentName || 'main'} / ${timer.sessionPrefix || 'timer'})`
     : `session ${timer.sessionId}`;
 
-  return `Timer \`${timer.id}\` created.\nMode: ${mode}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}`;
+  return `Timer \`${timer.id}\` created.\nMode: ${mode}${timers.getTimerAction(timer) === 'toolscript' ? `\nAction: ${timers.describeTimerAction(timer)}` : ''}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}`;
 }
 
 export function formatTimerUpdateSummary(timer: timers.TimerView): string {
@@ -268,7 +270,7 @@ export function formatTimerUpdateSummary(timer: timers.TimerView): string {
     ? `new session (${timer.agentName || 'main'} / ${timer.sessionPrefix || 'timer'})`
     : `session ${timer.sessionId}`;
 
-  return `Timer \`${timer.id}\` updated.\nMode: ${mode}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}`;
+  return `Timer \`${timer.id}\` updated.\nMode: ${mode}${timers.getTimerAction(timer) === 'toolscript' ? `\nAction: ${timers.describeTimerAction(timer)}` : ''}\nTarget: ${target}\nNext run: ${formatTimerTimestamp(timer.nextRunAt)}`;
 }
 
 export function detectMimeType(filePath: string): string {

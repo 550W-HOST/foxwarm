@@ -1,3 +1,4 @@
+import type { TimerScript, TimerScriptOutcome } from './timerScript';
 import { SESSION_WORKERS_ENABLED } from './config';
 import {
   LocalRpcTransport,
@@ -111,6 +112,10 @@ export async function requestCompaction(sessionId: string, keepPercent?: number,
 
 export async function cancelCompaction(sessionId: string): Promise<SessionRuntimeCompactCancellationResultDto> {
   return (await getClient()).call('cancelCompaction', { sessionId });
+}
+
+export async function runTimerScript(sessionId: string, script: TimerScript): Promise<TimerScriptOutcome> {
+  return (await getClient()).call('runTimerScript', { sessionId, script });
 }
 
 export async function runBtw(sessionId: string, message: string): Promise<SessionRuntimeBtwResultDto> {

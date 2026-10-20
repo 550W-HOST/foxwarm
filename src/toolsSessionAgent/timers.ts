@@ -27,17 +27,22 @@ export async function tool_create_timer(args: ToolArgs, ctx: ToolContext) {
     throw new Error(`Session \`${targetSessionId}\` not found.`);
   }
 
+  if (args.action === 'toolscript' && targetSession.id !== ctx.sessionId) {
+    throw new Error('ToolScript timers must belong to the calling Session.');
+  }
   const timer = await timers.createTimer({
-    sessionId: targetSessionId,
+    sessionId: args.action === 'toolscript' ? targetSession.id : targetSessionId,
     at: args.at,
     afterSeconds: args.afterSeconds,
     cron: args.cron,
     message: args.message,
+    action: args.action,
+    script: args.script,
     newSession: args.newSession,
     sessionPrefix: args.sessionPrefix,
     agentName: args.agentName,
-    currentNode: targetSession.currentNode,
-    model: targetSession.model,
+    currentNode: args.action === 'toolscript' ? undefined : targetSession.currentNode,
+    model: args.action === 'toolscript' ? undefined : targetSession.model,
   });
 
   return formatTimerSummary(timer);
@@ -64,7 +69,7 @@ export async function tool_list_timers(args: ToolArgs, ctx: ToolContext) {
       ? `new session (${timer.agentName || 'main'} / ${timer.sessionPrefix || 'timer'})`
       : `session ${timer.sessionId}`;
     result += `- \`${timer.id}\` - ${mode} - next: ${formatTimerTimestamp(timer.nextRunAt)} - ${target}\n`;
-    result += `  ${timer.message}\n`;
+    result += `  ${timers.getTimerAction(timer) === 'toolscript' ? timers.describeTimerAction(timer) : timer.message}\n`;
   }
 
   return result.trimEnd();
@@ -85,6 +90,11 @@ export async function tool_update_timer(args: ToolArgs, ctx: ToolContext) {
     throw new Error('timerId is required');
   }
 
+  const existing = timers.listTimers().find(timer => timer.id === timerId);
+  if ((args.action === 'toolscript' || existing?.action === 'toolscript')
+      && (!existing || existing.sessionId !== ctx.sessionId || targetSessionId !== ctx.sessionId)) {
+    throw new Error('Only the owner Session may configure a ToolScript timer.');
+  }
   const timer = await timers.updateTimer({
     timerId,
     sessionId: targetSessionId,
@@ -92,6 +102,8 @@ export async function tool_update_timer(args: ToolArgs, ctx: ToolContext) {
     afterSeconds: args.afterSeconds,
     cron: args.cron,
     message: args.message,
+    action: args.action,
+    script: args.script,
     newSession: args.newSession,
     sessionPrefix: args.sessionPrefix,
     agentName: args.agentName,

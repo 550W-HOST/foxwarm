@@ -1,3 +1,4 @@
+import type { TimerScript } from './timerScript';
 import crypto from 'node:crypto';
 import fs from 'fs-extra';
 import { logger } from './common';
@@ -310,6 +311,11 @@ export class SessionWorkerIngressCoordinator {
       // later accepted input belongs to a fresh turn.
       return this.supervisor.interruptActivated(sessionId, expected);
     });
+  }
+
+  async runTimerScript(requestedSessionId: string, script: TimerScript) {
+    return this.invokeEnsuringWorker(requestedSessionId, 'run a timer script',
+      (sessionId, expected) => this.supervisor.runTimerScriptActivated(sessionId, expected, script));
   }
 
   async runBtw(requestedSessionId: string, message: string) {

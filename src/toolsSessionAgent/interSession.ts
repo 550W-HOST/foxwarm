@@ -105,7 +105,7 @@ export async function tool_send_to_session(args: ToolArgs, ctx: ToolContext) {
     throw new Error('sessionId is required');
   }
 
-  const result = await sessionManager.sendToSession(sessionId, message, fromSessionId);
+  const result = await sessionManager.sendToSession(sessionId, message, fromSessionId, ctx.toolScriptRunId ? { toolScriptRunId: ctx.toolScriptRunId } : undefined);
   const output = result.resolvedSessionId !== result.requestedSessionId
     ? `Message sent to session \`${result.resolvedSessionId}\` (requested \`${result.requestedSessionId}\`)`
     : `Message sent to session \`${result.resolvedSessionId}\``;
