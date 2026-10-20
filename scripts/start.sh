@@ -18,11 +18,19 @@ if [ -z "$NODE_BIN" ]; then
     exit 1
 fi
 
-START_CMD="cd $(printf '%q' "$FOXWARM_DIR") && "
-if [ -n "${FOXWARM_DATA_DIR:-}" ]; then
-    START_CMD+="FOXWARM_DATA_DIR=$(printf '%q' "$FOXWARM_DATA_DIR") "
-fi
-START_CMD+="$(printf '%q' "$NODE_BIN") lib/index.js"
+UNSET_ENV=""
+SET_ENV=""
+START_CMD="cd $(printf '%q' "$FOXWARM_DIR") && env "
+# A long-lived tmux server may have a different environment from this invocation.
+for name in FOXWARM_APP_ROOT FOXWARM_DATA_DIR FOXWARM_CONFIG_PATH CONFIG_PATH MCP_CONFIG_PATH FOXWARM_HTTP_PORT FOXWARM_BIND_ADDRESS DOTNET_ROOT; do
+    if [ -n "${!name:-}" ]; then
+        SET_ENV+="$(printf '%q' "$name=${!name}") "
+    else
+        UNSET_ENV+="-u $name "
+    fi
+done
+START_CMD+="$UNSET_ENV$SET_ENV$(printf '%q' "PATH=$PATH") $(printf '%q' "$NODE_BIN") scripts/main.js"
+for arg in "$@"; do START_CMD+=" $(printf '%q' "$arg")"; done
 
 # Check if session exists
 if tmux has-session -t "=$SESSION" 2>/dev/null; then

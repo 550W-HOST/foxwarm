@@ -41,16 +41,15 @@ RUN npm ci \
     && npm --prefix packages/cli-node-runtime ci --omit=dev \
     && npm cache clean --force
 
-# Copy source and build the shared, CLI-node, and root runtime outputs.
+# Copy source and build the independent Shared and CLI Node outputs.
 COPY tsconfig.json ./
-COPY src ./src
 COPY templates ./templates
 COPY scripts/start-sandbox-node.sh ./scripts/start-sandbox-node.sh
 COPY packages/shared ./packages/shared
 COPY packages/cli-node ./packages/cli-node
 COPY packages/cli-node-runtime ./packages/cli-node-runtime
 
-RUN npm run build
+RUN npm run build:node
 
 RUN chmod +x /app/scripts/start-sandbox-node.sh
 

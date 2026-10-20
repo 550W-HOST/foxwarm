@@ -21,8 +21,24 @@ if (args is ["--version"] or ["-v"])
     return;
 }
 
+if (args.Contains("--tui", StringComparer.Ordinal))
+{
+    Console.Error.WriteLine("Main TUI is not implemented by the managed host. Use the WebUI instead.");
+    Environment.ExitCode = 2;
+    return;
+}
+var background = args.Contains("--windows-background", StringComparer.Ordinal);
+if (background && !OperatingSystem.IsWindows())
+    throw new PlatformNotSupportedException("The Windows background entry requires Windows.");
+args = args.Where(value => value != "--windows-background").ToArray();
+await using var launcher = await MainLauncherLifetime.ConnectAsync();
+if (launcher?.StopRequested.IsCancellationRequested == true)
+    return;
+
 var configuration = new ModelConfiguration(HostPaths.Capture());
 var paths = configuration.Paths;
+if (configuration.AppConfiguration["bot"]?["enableTUI"]?.ToString().Equals("true", StringComparison.OrdinalIgnoreCase) == true)
+    Console.Error.WriteLine("Configured bot.enableTUI is ignored: Main TUI is not implemented by the managed host.");
 var http = await HttpServerSettings.CaptureAsync(configuration, paths.DataRoot);
 var distRoot = Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_WEBUI_DIST");
 if (distRoot is not null)
@@ -54,5 +70,11 @@ host.Lifetime.ApplicationStarted.Register(() =>
             : "Main started without HTTP."
     );
 });
+if (launcher?.StopRequested.IsCancellationRequested == true)
+    return;
+await using var control = WindowsBackgroundControl.Start(background, paths.DataRoot, host.Lifetime);
 await host.StartAsync();
+using var parentStop = launcher?.StopRequested.Register(host.Lifetime.StopApplication);
 await host.WaitForShutdownAsync();
+// Keep status/stop available until the exact Main owners have drained.
+await host.DisposeAsync();

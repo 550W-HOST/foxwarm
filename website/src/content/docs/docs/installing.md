@@ -5,11 +5,13 @@ sidebar:
   order: 1
 ---
 
+This branch is a managed Main source-entry candidate, not a public release switch. Linux x64 and Windows x64 are the candidate targets; Windows launch/installer execution requires independent qualification. macOS Main is not qualified here, and other-platform TypeScript Node clients are unchanged. Main TUI, Session Worker hosting and managed ToolScript/controllers are outside this candidate. Explicit `--tui` fails; persisted `bot.enableTUI` logs an ignored diagnostic.
+
 The installer creates `./foxwarm` for the program and `./foxwarm-data` for runtime data. It builds and starts the app, then prints a WebUI URL containing the login token.
 
-## Linux, macOS, or WSL
+## Linux x64 or x64 WSL
 
-Install Git, Node.js 20.19+ (20.x) or 22.12+ with npm, and tmux. The installer checks for these prerequisites but does not install system packages.
+Install Git, Node.js 20.19+ (20.x) or 22.12+ with npm, a net10.0-capable .NET SDK, the ASP.NET Core 10 runtime, tmux, Python 3, make, GCC/G++, and libc/libutil development files. Python/native tools support the pinned Monty worker, Linux PTY helper and retained node-pty build. No optional image codec is required. The installer checks prerequisites but does not install system packages.
 
 ```bash
 curl -fsSL https://foxwarm.550w.host/install-foxwarm.sh | bash
@@ -27,7 +29,7 @@ You can inspect the [Bash installer](https://github.com/550W-HOST/foxwarm/blob/m
 
 ## Windows PowerShell
 
-Install Git for Windows and Node.js 20.19+ (20.x) or 22.12+ with npm, then open PowerShell:
+On Windows x64 install Git for Windows, Node.js 20.19+ (20.x) or 22.12+ with npm, a net10.0-capable .NET SDK, the ASP.NET Core 10 runtime, and Python 3 for a fresh pinned native-worker build. No exact SDK patch version is required. Then open PowerShell:
 
 ```powershell
 irm https://foxwarm.550w.host/install-foxwarm.ps1 | iex
@@ -58,7 +60,7 @@ Use the URL printed at startup, typically:
 http://localhost:3001/#token=...
 ```
 
-If you no longer have the URL, read `state/token` in your data directory and use it as the token value. For a default install on Linux, macOS, or WSL:
+If you no longer have the URL, read `state/token` in your data directory and use it as the token value. For a default install on Linux x64 or x64 WSL:
 
 ```bash
 cat foxwarm-data/state/token
@@ -70,7 +72,7 @@ Treat the token like a password. Once logged in, [configure your first model](/d
 
 Run these commands from the program checkout:
 
-| Action | Linux, macOS, WSL | Windows |
+| Action | Linux x64, WSL | Windows |
 | --- | --- | --- |
 | Start in the background | `npm start` | `npm run start:windows` |
 | Restart | `npm run restart` | `npm run restart:windows` |
@@ -83,7 +85,7 @@ Logs are under `state/logs/` in the data directory. See [upgrades and backups](/
 
 ## Docker Compose
 
-Install Docker with Compose, then run from a checkout:
+The production Docker recipe is not yet migrated to the managed source build. These retained release commands are not qualification of this candidate; Docker delivery is a separate phase. For a compatible released checkout:
 
 ```bash
 git clone https://github.com/550W-HOST/foxwarm.git foxwarm
@@ -107,7 +109,7 @@ If you change `bot.httpPort`, update the Compose port mapping and healthcheck as
 
 ## Manual checkout
 
-For development or a manual Linux/macOS/WSL install:
+For development or a manual Linux x64/WSL install:
 
 ```bash
 git clone https://github.com/550W-HOST/foxwarm.git foxwarm

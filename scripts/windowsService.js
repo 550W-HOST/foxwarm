@@ -7,20 +7,27 @@ const net = require('net');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const { coreExecutable, coreEnvironment } = require('./core-executable');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 const CONTROL_TIMEOUT_MS = 2_000;
 const START_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 30_000;
 
-function resolveDataRoot(rootDir = ROOT_DIR, env = process.env) {
-  const configured = String(env.FOXWARM_DATA_DIR || '').trim();
-  if (configured) return path.isAbsolute(configured) ? configured : path.resolve(rootDir, configured);
+function resolveDataRoot(rootDir = process.env.FOXWARM_APP_ROOT || ROOT_DIR, env = process.env) {
+  function resolve(value) {
+    const home = env.HOME;
+    if (home && value === '~') return home;
+    if (home && value.startsWith('~/')) return path.resolve(home, value.slice(2));
+    return path.resolve(rootDir, value);
+  }
+  const configured = String(env.FOXWARM_DATA_DIR || '').trim() || String(env.FOXWARM_EXPERIMENT_DATA_ROOT || '').trim();
+  if (configured) return resolve(configured);
 
   const pointerPath = path.join(rootDir, 'data_dir');
   if (fs.existsSync(pointerPath)) {
     const pointer = fs.readFileSync(pointerPath, 'utf8').trim();
-    if (pointer) return path.isAbsolute(pointer) ? pointer : path.resolve(rootDir, pointer);
+    if (pointer) return resolve(pointer);
   }
 
   return rootDir;
@@ -114,23 +121,30 @@ async function startService(dataRoot, controlPath) {
     return 1;
   }
 
+  const executable = coreExecutable();
   const paths = servicePaths(dataRoot);
   fs.mkdirSync(paths.logDir, { recursive: true });
   const stdoutFd = fs.openSync(paths.stdoutLog, 'a');
   const stderrFd = fs.openSync(paths.stderrLog, 'a');
   let child;
   try {
-    child = spawn(process.execPath, [__filename, 'run'], {
+    child = spawn(executable.command, [...executable.args, '--windows-background'], {
       cwd: ROOT_DIR,
       detached: true,
       env: {
-        ...process.env,
+        ...coreEnvironment(),
         FOXWARM_DATA_DIR: dataRoot,
+        FOXWARM_MAIN_LIFETIME_PIPE: '',
+        FOXWARM_WINDOWS_CONTROL_PIPE: path.win32.basename(controlPath),
         FOXWARM_WINDOWS_STDOUT_LOG: paths.stdoutLog,
         FOXWARM_WINDOWS_STDERR_LOG: paths.stderrLog,
       },
       stdio: ['ignore', stdoutFd, stderrFd],
       windowsHide: true,
+    });
+    await new Promise((resolve, reject) => {
+      child.once('spawn', resolve);
+      child.once('error', error => reject(new Error(`Cannot launch Foxwarm Main: ${error.message}. The .NET 10 ASP.NET Core runtime is required.`)));
     });
     child.unref();
   } finally {
@@ -185,56 +199,11 @@ async function stopService(controlPath) {
   return 0;
 }
 
-function runService(dataRoot, controlPath) {
-  if (process.platform !== 'win32') {
-    console.error('The background service launcher is for Windows. Use scripts/start.sh on this platform.');
-    process.exit(1);
-  }
-
-  const paths = servicePaths(dataRoot);
-  let stopping = false;
-  const server = net.createServer(socket => {
-    socket.setEncoding('utf8');
-    socket.on('error', error => {
-      console.error(`[windows-service] Control client error: ${error.message}`);
-    });
-    socket.once('data', rawCommand => {
-      const command = rawCommand.trim();
-      if (command === 'status') {
-        socket.end(JSON.stringify({ ok: true, pid: process.pid, stopping, ...paths }));
-        return;
-      }
-      if (command === 'stop') {
-        socket.end(JSON.stringify({ ok: true, pid: process.pid }));
-        if (!stopping) {
-          stopping = true;
-          setImmediate(() => process.emit('SIGTERM'));
-        }
-        return;
-      }
-      socket.end(JSON.stringify({ ok: false, error: 'unknown command' }));
-    });
-  });
-
-  server.once('error', error => {
-    console.error(`Foxwarm control pipe failed: ${error.stack || error.message}`);
-    process.exit(1);
-  });
-  server.listen(controlPath, () => {
-    console.log(`[windows-service] Control pipe ready for PID ${process.pid}`);
-    require(path.join(ROOT_DIR, 'lib', 'index.js'));
-  });
-}
-
 async function main() {
   const command = process.argv[2] || 'status';
   const dataRoot = resolveDataRoot();
   const controlPath = getControlPath(dataRoot);
 
-  if (command === 'run') {
-    runService(dataRoot, controlPath);
-    return;
-  }
   if (process.platform !== 'win32') {
     console.error('Windows service commands are only supported on Windows.');
     process.exitCode = 1;

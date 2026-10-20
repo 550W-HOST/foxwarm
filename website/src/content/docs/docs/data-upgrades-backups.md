@@ -30,6 +30,10 @@ Logs are only one part of the state. Restore the databases and the rest of the d
 
 A live instance needs a SQLite-consistent online backup. A simpler option is to stop Foxwarm cleanly, confirm that it has stopped, and copy the complete data directory. Copying only a `.sqlite` file while its writer is active can omit committed data still in the WAL.
 
+## Managed source-candidate boundary
+
+Source startup now selects managed Main; this does not adopt TypeScript native running exec jobs. Before a real cutover, choose whether to drain those jobs or implement separately specified adoption. Preserve Worker/controller configuration and records, but do not treat their hosts as implemented by this candidate. Production/test Docker delivery and default CI/test-lane conversion remain separate work.
+
 ## Upgrade
 
 Before updating an important instance:
@@ -41,7 +45,7 @@ Before updating an important instance:
 5. Reinstall/build using the project commands for your platform.
 6. Start Foxwarm and verify WebUI, model access, and any configured Channels or Nodes.
 
-For a default Linux/macOS installer checkout:
+For a Linux x64 source-candidate checkout (not a public release promotion):
 
 ```bash
 cd foxwarm
@@ -51,7 +55,7 @@ npm run build-all
 npm start
 ```
 
-On Windows, run `npm run stop:windows`, update the checkout, and then run `npm run start:windows`. The start command installs and builds after the old process stops, which avoids replacing native files that are still loaded.
+On Windows, run `npm run stop:windows`, update the checkout, and then run `npm run start:windows`. The start command installs and builds after the old process stops, which avoids replacing native files that are still loaded. `restart:windows` also stops before its build. The four PowerShell control wrappers retain `-SkipBuild` on start/restart for already-built output.
 
 :::caution
 If the checkout contains local work, review and preserve it before updating. `git reset --hard` will discard those changes.

@@ -62,8 +62,24 @@ function Require-BuildNode() {
   }
 }
 
+function Require-ManagedBuild() {
+  Require-Command dotnet 'Install a net10.0-capable .NET SDK and the ASP.NET Core 10 runtime, then rerun this script.'
+  $sdk = & dotnet --version
+  if ($LASTEXITCODE -ne 0 -or $sdk -notmatch '^(\d+)\.' -or [int]$Matches[1] -lt 10) {
+    throw "A net10.0-capable .NET SDK is required; selected: $sdk"
+  }
+  $runtimes = & dotnet --list-runtimes
+  if ($LASTEXITCODE -ne 0 -or -not ($runtimes -match '^Microsoft.AspNetCore.App 10\.')) {
+    throw 'The ASP.NET Core 10 runtime is required to run managed Main.'
+  }
+  if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
+    throw 'This managed Main source candidate requires Windows x64.'
+  }
+}
+
 Require-Command git 'Install Git for Windows, then rerun this script: https://git-scm.com/download/win'
 Require-BuildNode
+Require-ManagedBuild
 
 if (Test-Path (Join-Path $Dir '.git')) {
   Write-Step "Using existing checkout: $Dir"
@@ -83,10 +99,17 @@ if (Test-Path (Join-Path $Dir '.git')) {
 Set-Location $Dir
 New-Item -ItemType Directory -Force -Path (Join-Path $DataDir 'state'),(Join-Path $DataDir 'agents') | Out-Null
 Set-Content -Path (Join-Path $Dir 'data_dir') -Value $DataDir -NoNewline
+$env:FOXWARM_DATA_DIR = $DataDir
 
 node scripts/windowsService.js check-stopped
 if ($LASTEXITCODE -ne 0) {
   throw 'Foxwarm must be stopped before dependency installation. Run npm run stop:windows, then rerun this installer.'
+}
+
+if (-not (Test-Path 'dotnet/Foxwarm/obj/monty-0.0.19/win-x64/bin/monty.exe')) {
+  Require-Command python 'Python 3 is required to acquire the pinned Monty worker on a fresh source build.'
+  & python -c "import sys; sys.exit(0 if sys.version_info.major == 3 else 1)"
+  if ($LASTEXITCODE -ne 0) { throw 'Python 3 is required for the pinned native worker acquisition.' }
 }
 
 Write-Step 'Installing dependencies and building Foxwarm. This can take a few minutes.'

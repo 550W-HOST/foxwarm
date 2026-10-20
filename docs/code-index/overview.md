@@ -11,7 +11,7 @@ This is the entry point for the project map and repository-specific index conven
 
 ## Overview
 
-Foxwarm is an AI agent system with a .NET Main host, browser WebUI, model adapters, durable Session state, local tools, optional remote Nodes, and compatibility packages that are still being retired or replaced. The .NET solution is the active Main architecture being developed in this branch. The intended end state is a .NET Main with the existing platform packages connected to its public contracts; the repository still contains TypeScript Main source, root TypeScript CLI/build/start entries, and remote-platform implementations, so this index does not describe those components as deleted, fully integrated, or already switched over.
+Foxwarm is an AI agent system with a .NET Main host, browser WebUI, model adapters, durable Session state, local tools, optional remote Nodes, and compatibility packages that are still being retired or replaced. The .NET solution is the active Main architecture being developed in this branch. The intended end state is a .NET Main with the existing platform packages connected to its public contracts; the repository still contains TypeScript Main source, retained TypeScript CLI/reference build entries, and remote-platform implementations, so this index does not describe those components as deleted, fully integrated, or publicly promoted. Existing package/npm/tmux/Windows source Main entries now select the managed host; see [source startup](./units/source-main-entry.md) for the candidate boundary.
 
 ## Start here
 
@@ -81,7 +81,7 @@ Optional remote and compatibility components:
 | [Tasks and timers](./modules/dotnet-tasks-timers.md) | Task authority/service, cron parsing, timer persistence, and scheduling. |
 | [Images](./modules/dotnet-images.md) | Blob storage, codecs, transport conversion, provider deduplication, and token estimates. |
 | [Nodes and executable providers](./modules/dotnet-nodes.md) | Generic executable registry/files, placement, persistent trust, authenticated WebSocket negotiation and ordinary native remote tools. |
-| [External channels](./units/dotnet-external-channels.md) | Shared authorization/routing/attachments/delivery and managed Telegram, Matrix, Weixin, WeWork and [QQ Bot](./units/dotnet-qqbot.md) transports; Main TUI, remaining administration and final entry/service cutover remain later work. |
+| [External channels](./units/dotnet-external-channels.md) | Shared authorization/routing/attachments/delivery and managed Telegram, Matrix, Weixin, WeWork and [QQ Bot](./units/dotnet-qqbot.md) transports; Main TUI and public delivery cutover remain outside the source candidate. |
 | [MCP](./modules/dotnet-mcp.md) | Inbound external contexts/catalog, explicit Session notifications/replies, and official outbound SDK configuration, pooling and calls. |
 
 ## Remaining repository components

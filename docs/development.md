@@ -15,7 +15,8 @@ Foxwarm 开发指南，覆盖本地运行、目录结构、调试方式，以及
 ### 初始安装
 
 ```bash
-npm install
+npm ci
+npm --prefix packages/webui ci
 npm run build
 ```
 
@@ -37,17 +38,20 @@ npm run build-all
 
 ## Core delivery and retained backend lane
 
-The source service/TUI launchers still run TypeScript Main during this transition, but root `npm run build` now prepares both that lane and .NET Core for the public model/archive commands. Install the .NET 10 SDK in addition to the npm prerequisites above; the helpers do not install it automatically. Linux Core builds also need Python for pinned Monty acquisition and GCC/libutil for the PTY helper. Use `npm run build:reference` for the retained TypeScript-only fixture lane and `npm run test:reference` for its tests. Backend `dotnet test` builds/tests C# without rebuilding a frontend; Source-backed differential tests retain their explicit built `FOXWARM_TS_ROOT` oracle prerequisite.
+Default `npm run build` now builds the managed Main delivery graph: Shared, TS CLI Node, original WebUI, tracked Code extensions and Core resources. Install a net10.0-capable .NET SDK plus ASP.NET Core 10 runtime; no exact patch SDK is required. Fresh Monty acquisition uses Python 3. Linux source installation also needs make and GCC/G++ with libc/libutil development files (root node-pty still uses node-gyp). No optional image decoder or Desktop installer is required.
 
-Use `npm run build:delivery` for a complete Core/WebUI/skills/templates/Node/extension build, or `npm run publish:core -- -r linux-x64 -o /path/to/empty/output` for a framework-dependent Core directory. `npm run build:assets` prepares the independent assets for direct `dotnet publish`. Publishing rejects missing required built inputs; plain backend compilation is not a delivery build. The same resource graph feeds optional Windows Desktop; it does not copy a second WebUI tree. Core's qualified native artifact scope is Linux x64 and Windows x64, not every .NET RID. See [the host build and runtime prerequisites](../dotnet/README.md#build-publish-and-public-cli).
+`node .`, `npm run start:notmux`, tmux start/restart and Windows start/status/restart/stop use managed Main with the same installation-relative data/config selection. Windows restart stops before rebuilding loaded native files. Main TUI is not implemented: `--tui` fails before startup, while persisted `bot.enableTUI` logs an ignored diagnostic. Worker/controller hosting remains excluded without deleting its records. This source candidate does not promote public Main or convert production/test Docker and default CI/test lanes. macOS Main is not qualified; other-platform TS Node clients remain supported.
 
-These commands do not switch package `main`, tmux/Windows background management, Main TUI or production Docker. Root `foxwarm` remains a one-shot CLI/help dispatcher; it is not a no-argument Main service launcher.
+Use `npm run build:reference` before retained TypeScript unit/app tests and differential fixtures; `npm run test:reference` runs the existing unit runner. Default builds no longer compile TypeScript Main. `npm run dev` watches that reference source, not managed Main. `build:node`, `node` and `cli-node` remain independent Shared/TS CLI builds without .NET.
+
+`npm run publish:core -- -r linux-x64 -o /path/to/empty/output` creates a framework-dependent runtime directory. `build:assets` prepares independent inputs for direct `dotnet publish`; publishing rejects missing built resources. Plain backend build/test never invokes npm. The same graph feeds optional Windows Desktop without a second WebUI copy. See [host build and runtime prerequisites](../dotnet/README.md#build-publish-and-public-cli). The public `foxwarm` bin remains a one-shot CLI/help dispatcher, not a new Main start command.
 
 ## 代码结构
 
 ```text
 foxwarm/
-├── src/
+├── dotnet/Foxwarm/         # managed Main
+├── src/                   # retained TypeScript reference
 │   ├── index.ts            # 启动入口
 │   ├── commands.ts         # 用户命令定义
 │   ├── commandHandler.ts   # 命令分发

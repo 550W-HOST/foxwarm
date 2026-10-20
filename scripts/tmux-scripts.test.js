@@ -95,13 +95,13 @@ sleep 300
       }
       assert.ok(fs.existsSync(file), `Startup not received by ${pane}`);
       assert.deepEqual(fs.readFileSync(file, 'utf8').trimEnd().split('\n'), [
-        pane, app, env.FOXWARM_DATA_DIR, 'lib/index.js',
+        pane, app, env.FOXWARM_DATA_DIR, 'scripts/main.js',
       ]);
     },
     assertUntouched(pane) {
       assert.equal(tmux('display-message', '-p', '-t', pane, '#{pane_current_command}'), 'sleep');
       assert.ok(!fs.existsSync(path.join(log, pane)), `Startup sent to unrelated pane ${pane}`);
-      assert.ok(!tmux('capture-pane', '-p', '-t', pane).includes('lib/index.js'));
+      assert.ok(!tmux('capture-pane', '-p', '-t', pane).includes('scripts/main.js'));
     },
   };
 }

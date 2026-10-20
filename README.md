@@ -1,12 +1,14 @@
 # Foxwarm 🦊
 
-Foxwarm is a self-hosted TypeScript runtime for AI agents. It combines persistent conversations, Agent memory, tool calling, and a WebUI with optional messaging Channels and execution Nodes.
+Foxwarm is a self-hosted runtime for AI agents. It combines persistent conversations, Agent memory, tool calling, and a WebUI with optional messaging Channels and execution Nodes.
 
 [Website](https://foxwarm.550w.host/) · [Documentation](https://foxwarm.550w.host/docs/)
 
-## Core build and CLI transition
+## Managed Main source candidate
 
-The public `foxwarm model` and `foxwarm archive export-jsonl` commands use the C# backend. Root `npm run build` therefore also requires the .NET 10 SDK; the existing service/TUI launchers still use the retained TypeScript Main lane pending their separate transition. `npm run build:delivery` and `npm run publish:core` collect the complete shared Core resources. See [Core build, publish and runtime prerequisites](dotnet/README.md#build-publish-and-public-cli), including the qualified Linux x64 / Windows x64 native limits. This does not retire the existing public source-install helpers or switch service launchers.
+This branch selects the .NET Main host at the existing package/directory, npm, tmux and Windows background entries. `npm run build` prepares its complete resources; source builds need a net10.0-capable .NET SDK and the ASP.NET Core 10 runtime in addition to Node/npm. The public `foxwarm` bin still shows help with no arguments and retains its one-shot `model` and `archive` commands. Missing managed output never falls back to TypeScript.
+
+This is a source-entry candidate, not a public release or live-installation cutover. Production/test Docker delivery and default CI/test-lane conversion remain separate work. Main TUI is not implemented (`--tui` fails clearly); Session Worker hosting and managed ToolScript/controllers remain outside this candidate. Retained TypeScript source and other-platform Node clients remain available. See [build, publish and runtime prerequisites](dotnet/README.md#build-publish-and-public-cli) for the Linux x64 / Windows x64 boundary; macOS Main is not qualified.
 
 ## What you can do
 
@@ -18,9 +20,9 @@ The public `foxwarm model` and `foxwarm archive export-jsonl` commands use the C
 
 ## Get started
 
-Install Git and Node.js 20.19+ (20.x) or 22.12+ with npm. Linux, macOS, and WSL also need tmux.
+Install Git, Node.js 20.19+ (20.x) or 22.12+ with npm, a net10.0-capable .NET SDK, and the ASP.NET Core 10 runtime. Linux x64 (including x64 WSL) also needs tmux, Python 3, make, GCC/G++ and libc/libutil development files. Windows x64 needs Python 3 for a fresh pinned native-worker build. Installers diagnose prerequisites; they do not install host toolchains.
 
-### Linux, macOS, or WSL
+### Linux x64 or x64 WSL
 
 ```bash
 curl -fsSL https://foxwarm.550w.host/install-foxwarm.sh | bash

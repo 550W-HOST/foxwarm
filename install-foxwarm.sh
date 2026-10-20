@@ -59,7 +59,7 @@ fi
 FOXWARM_DATA_DIR="${FOXWARM_DATA_DIR:-$(dirname "$FOXWARM_DIR")/foxwarm-data}"
 FOXWARM_DIR="$(absolute_path_from_call_dir "$FOXWARM_DIR")"
 FOXWARM_DATA_DIR="$(absolute_path_from_call_dir "$FOXWARM_DATA_DIR")"
-if [ -z "${FOXWARM_BRANCH:-}" ] && [ -d "$FOXWARM_DIR/.git" ]; then
+if [ -z "${FOXWARM_BRANCH:-}" ] && [ -e "$FOXWARM_DIR/.git" ]; then
   FOXWARM_BRANCH="$(git -C "$FOXWARM_DIR" branch --show-current 2>/dev/null || true)"
 fi
 FOXWARM_BRANCH="${FOXWARM_BRANCH:-main}"
@@ -76,11 +76,36 @@ ensure_basic_deps() {
   have node || fail "Node.js 20.19+ (20.x) or 22.12+ is required. Install it from https://nodejs.org/ or your system package manager."
   have npm || fail "npm is required. Install Node.js 20.19+ (20.x) or 22.12+ with npm from https://nodejs.org/ or your system package manager."
   node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit((major === 20 && minor >= 19) || (major === 22 && minor >= 12) || major > 22 ? 0 : 1)' || fail "Node.js 20.19+ (20.x) or 22.12+ is required; found $(node -v 2>/dev/null || echo unknown). Please upgrade Node.js."
+  have dotnet || fail ".NET 10 SDK (or a later SDK supporting net10.0) and the ASP.NET Core 10 runtime are required. Install them, then rerun this script."
+  local sdk
+  sdk="$(dotnet --version 2>/dev/null)" || fail "Cannot select a .NET SDK. Install a net10.0-capable SDK."
+  [ "${sdk%%.*}" -ge 10 ] 2>/dev/null || fail "A net10.0-capable .NET SDK is required; selected $sdk."
+  dotnet --list-runtimes | grep -q '^Microsoft.AspNetCore.App 10\.' || fail "The ASP.NET Core 10 runtime is required to run managed Main."
   have tmux || fail "tmux is required for Foxwarm's normal install start mode. Install tmux with your system package manager, then rerun this script."
 }
 
+ensure_source_build_deps() {
+  # Root npm dependencies still include node-pty; Linux builds it via node-gyp.
+  case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64)
+      have python3 || fail "Python 3 is required for node-gyp and fresh pinned Monty acquisition."
+      have make || fail "make is required to build the retained node-pty npm dependency."
+      have g++ || fail "G++ is required to build the retained node-pty npm dependency."
+      have gcc || fail "GCC and libc/libutil development files are required to build the Linux PTY helper."
+      local probe
+      probe="$(mktemp -d)"
+      if ! printf '#include <pty.h>\nint main(void) { int m, s; return openpty(&m, &s, 0, 0, 0); }\n' | gcc -x c - -lutil -o "$probe/pty"; then
+        rm -rf "$probe"
+        fail "The Linux PTY helper needs GCC, pty.h and libutil development files. Install your distribution's C build prerequisites."
+      fi
+      rm -rf "$probe"
+      ;;
+    *) fail "This managed Main source candidate supports Linux x64 and Windows x64. macOS Main is not qualified; other-platform TypeScript Node clients are unchanged." ;;
+  esac
+}
+
 checkout_repo() {
-  if [ -d "$FOXWARM_DIR/.git" ]; then
+  if [ -e "$FOXWARM_DIR/.git" ]; then
     log "Using existing checkout: $FOXWARM_DIR"
     git -C "$FOXWARM_DIR" fetch origin "$FOXWARM_BRANCH" || warn "Fetch failed; continuing with existing checkout."
     git -C "$FOXWARM_DIR" checkout "$FOXWARM_BRANCH" || git -C "$FOXWARM_DIR" checkout -B "$FOXWARM_BRANCH" "origin/$FOXWARM_BRANCH" || true
@@ -159,6 +184,7 @@ print_next_steps() {
 main() {
   ensure_basic_deps
   checkout_repo
+  ensure_source_build_deps
   start_foxwarm
   print_next_steps
 }

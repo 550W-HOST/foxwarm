@@ -57,7 +57,7 @@
     />
     <Content
       Condition="'$(FoxwarmConsoleEntry)' != 'false'"
-      Include="../../scripts/foxwarm.js;../../scripts/model.js;../../scripts/archive.js;../../scripts/core-cli.js;../../scripts/multicaBridge.js;../../scripts/multicaBridgeHttp.js;../../scripts/multicaBridgeSetup.js"
+      Include="../../scripts/foxwarm.js;../../scripts/model.js;../../scripts/archive.js;../../scripts/core-cli.js;../../scripts/core-executable.js;../../scripts/main.js;../../scripts/multicaBridge.js;../../scripts/multicaBridgeHttp.js;../../scripts/multicaBridgeSetup.js"
       Link="scripts/%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest"
       CopyToPublishDirectory="PreserveNewest"

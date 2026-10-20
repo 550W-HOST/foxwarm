@@ -1,6 +1,6 @@
 # Unit: windows-service-scripts
 
-Files: scripts/windowsService.js, scripts/windowsService.test.js, scripts/start.ps1, scripts/restart.ps1, scripts/stop.ps1, scripts/status.ps1
+Files: scripts/windowsService.js, scripts/windowsService.test.js, scripts/start.ps1, scripts/restart.ps1, scripts/stop.ps1, scripts/status.ps1, dotnet/Foxwarm/WindowsBackgroundControl.cs
 Secondary files: package.json, install-foxwarm.ps1, README.md
 
 ## Purpose
@@ -10,13 +10,17 @@ Provides native Windows build, background start, restart, status, and stop workf
 ## Behavior
 
 - Root builds remove obsolete generated files through Node filesystem APIs so the build command works in both POSIX shells and Windows `cmd.exe`. Full builds use checked-in lock files through `npm ci` and do not rewrite dependency manifests.
-- Windows start and the Windows installer refuse an existing instance before their lockfile install and full build. Restart builds against the installed dependency tree before changing the running service, so loaded native Windows DLLs are not removed by `npm ci`. PowerShell wrappers support `-SkipBuild` for an already-built checkout.
+- Windows start and the Windows installer refuse an existing instance before their lockfile install and full build. Restart stops Main before building against the installed dependency tree, so neither dependency installation nor managed/native output replacement happens over loaded Windows files. PowerShell wrappers support `-SkipBuild` for an already-built checkout.
 - The background launcher resolves the data root with the same environment, pointer-file, and checkout fallback precedence as application configuration.
 - Lifecycle logs are appended under `<data-root>/state/logs/`.
-- A data-root-specific local named pipe reports status and requests shutdown. Shutdown emits `SIGTERM` inside the running Node process so the application executes its existing graceful drain chain.
+- A data-root-specific local named pipe reports status and requests shutdown. The JavaScript start client selects the existing data-root-specific name and detaches the actual managed Main with append log descriptors. Managed `WindowsBackgroundControl` owns that pipe in its private background entry, returns the managed PID/log/status shape and requests `IHostApplicationLifetime.StopApplication` on stop. It remains available through ordinary Main drain, including HTTP-disabled operation. There is no Node in-process signal emulation, HTTP-only replacement, PID ledger or new service principal.
 - A graceful shutdown that exceeds the bounded timeout falls back to terminating the exact PID returned by the control pipe.
-- Both source installers reject unsupported Node.js versions before dependency installation; their build-time check follows the WebUI package engine range, not a new requirement on prebuilt backend or CLI execution.
+- Both [source installers](./source-main-entry.md) also diagnose managed build prerequisites and reject unsupported Node.js versions before dependency installation; their build-time check follows the WebUI package engine range, not a new requirement on prebuilt backend or CLI execution.
 - The Windows installer invokes the same stopped-state guard before dependency installation and uses the same background launcher, so later status, restart, and stop commands manage installer-started processes without installing over a running instance.
+
+## Qualification boundary
+
+Linux pipe-client tests and win-x64 cross-publish do not qualify Windows detachment, named-pipe ownership, loaded-native-file ordering or PowerShell installer execution. Those changed paths require actual independent Windows execution before a Windows runtime claim.
 
 ## Integration
 

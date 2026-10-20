@@ -1,13 +1,15 @@
 # Local tests
 
-Foxwarm's maintained local test baseline uses Node.js 24, npm, Python 3, and one Chromium executable. Install and build both the backend packages and WebUI before running the suites:
+The retained local test baseline uses Node.js 24, npm, Python 3, and one Chromium executable. Managed source-entry tests additionally require a net10.0-capable .NET SDK and ASP.NET Core 10 runtime. Install and build both the backend packages and WebUI before running the suites:
 
 ```bash
 npm ci
 npm --prefix packages/webui ci
 npm run build
-npm --prefix packages/webui run build
+npm run build:reference
 ```
+
+The broad test runner and application harness still target the retained TypeScript oracle in this phase; their CI/application-lane conversion is separate work. Default `npm run build` prepares managed Main and assets, not `lib/`. Managed entry checks run directly with `node --test scripts/main.test.js scripts/tmux-scripts.test.js scripts/windowsService.test.js scripts/source-installer.test.js`; they allocate owned data before imports, and runtime cases require the built managed output. Windows source-start/control/installer execution requires separate Windows qualification; Linux cross-publish is not that proof.
 
 ## Commands
 
