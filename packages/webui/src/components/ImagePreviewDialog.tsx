@@ -179,7 +179,12 @@ function Preview({ src, mimeType, title, onClose, onDownload, downloadPending, d
     </header>
     <div ref={stageRef} className="image-preview-stage" data-actual-size={actualSize || undefined} tabIndex={0} aria-label="Image preview"
       onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerEnd} onPointerCancel={pointerEnd} onLostPointerCapture={pointerEnd}
-      onContextMenu={event => event.preventDefault()}
+      onContextMenu={event => {
+        // Long-press belongs to touch pan/pinch. Mouse/keyboard context menus
+        // must keep the browser's image Copy/Save actions available.
+        const pointerType = (event.nativeEvent as PointerEvent).pointerType
+        if (pointerType === 'touch' || !pointerType && pointers.current.size > 0) event.preventDefault()
+      }}
       onClickCapture={event => { if (suppressClick.current) { event.preventDefault(); event.stopPropagation() } }}
       onClick={event => { if (!actualSize && (event.target === event.currentTarget || event.target === surfaceRef.current)) onClose() }}>
       {failed ? <span role="status">Image unavailable</span> : <>

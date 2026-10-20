@@ -22,7 +22,7 @@ The native dialog traps focus, supports Escape/platform cancellation and restore
 
 [2026-10-17] Touch input pinches the image around the fingers' midpoint and pans the enlarged image with one finger, without zooming or dragging the underlying page. Ending or cancelling a gesture does not toggle the image or dismiss the dialog; a subsequent deliberate tap and the existing fit/actual-size, close and download actions remain available. Mouse and keyboard inspection retain native scrolling.
 
-Image panning follows pointer movement one-to-one in CSS pixels, independent of image magnification or screen pixel density. Subpixel movement accumulates rather than being lost between scroll updates. The viewer disables native text/image selection and touch callouts so holding and then dragging remains an image gesture.
+Image panning follows pointer movement one-to-one in CSS pixels, independent of image magnification or screen pixel density. Subpixel movement accumulates rather than being lost between scroll updates. The viewer disables native text/image selection and touch callouts so holding and then dragging remains an image gesture. Context-menu suppression is limited to touch input; desktop mouse and keyboard image menus retain native Copy/Save actions, and right-click does not toggle zoom.
 
 ## D-reply-file-deliveries
 
