@@ -39,7 +39,9 @@ internal static class Program
             if (interactive is not null)
                 await ConsoleNode.Run(options, interactive, stop.Token);
             else
-                await new NodeClient(options, new NodePaths(Environment.CurrentDirectory)).Run(stop.Token);
+                await new NodeClient(options, new NodePaths(Environment.CurrentDirectory)).Run(
+                    stop.Token
+                );
             return 0;
         }
         catch (Exception error)
@@ -107,17 +109,29 @@ internal static class Program
             throw new InvalidDataException(
                 "Provide --token, or (--auth-token with --id), or --credentials-file with stored node credentials"
             );
-        if (!interactive && (autoAll || values.ContainsKey("--auto-approve") || values.ContainsKey("--timeout")))
+        if (
+            !interactive
+            && (autoAll || values.ContainsKey("--auto-approve") || values.ContainsKey("--timeout"))
+        )
             throw new InvalidDataException("Approval options require --interactive");
-        return (new NodeClientOptions(
-            host,
-            values.GetValueOrDefault("--id"),
-            values.GetValueOrDefault("--token"),
-            values.GetValueOrDefault("--auth-token"),
-            values.GetValueOrDefault("--credentials-file"),
-            localTrigger,
-            TriggerPort(values.GetValueOrDefault("--local-trigger-port"))
-        ), interactive ? new InteractiveOptions(autoAll, values.GetValueOrDefault("--auto-approve"), TriggerPort(values.GetValueOrDefault("--timeout"))) : null);
+        return (
+            new NodeClientOptions(
+                host,
+                values.GetValueOrDefault("--id"),
+                values.GetValueOrDefault("--token"),
+                values.GetValueOrDefault("--auth-token"),
+                values.GetValueOrDefault("--credentials-file"),
+                localTrigger,
+                TriggerPort(values.GetValueOrDefault("--local-trigger-port"))
+            ),
+            interactive
+                ? new InteractiveOptions(
+                    autoAll,
+                    values.GetValueOrDefault("--auto-approve"),
+                    TriggerPort(values.GetValueOrDefault("--timeout"))
+                )
+                : null
+        );
     }
 
     private const string Help = """

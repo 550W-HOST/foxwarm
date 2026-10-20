@@ -4,7 +4,11 @@ using System.Text.RegularExpressions;
 
 namespace Foxwarm.CliNode;
 
-internal sealed record InteractiveOptions(bool AutoApproveAll = false, string? Pattern = null, double Timeout = 0);
+internal sealed record InteractiveOptions(
+    bool AutoApproveAll = false,
+    string? Pattern = null,
+    double Timeout = 0
+);
 
 // CLI presentation state only. Main remains the Session/history/admission owner.
 internal sealed class InteractiveNode : IDisposable
@@ -39,7 +43,12 @@ internal sealed class InteractiveNode : IDisposable
         {
             try
             {
-                pattern = new Regex(options.Pattern, RegexOptions.ECMAScript | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                pattern = new Regex(
+                    options.Pattern,
+                    RegexOptions.ECMAScript
+                        | RegexOptions.IgnoreCase
+                        | RegexOptions.CultureInvariant
+                );
             }
             catch (ArgumentException)
             {
@@ -77,13 +86,17 @@ internal sealed class InteractiveNode : IDisposable
             approval = pending;
             version++;
         }
-        var effective = call.TimeoutMs != 0 && !double.IsNaN(call.TimeoutMs)
-            ? call.TimeoutMs
-            : options.Timeout * 1000;
+        var effective =
+            call.TimeoutMs != 0 && !double.IsNaN(call.TimeoutMs)
+                ? call.TimeoutMs
+                : options.Timeout * 1000;
         try
         {
             return effective > 0
-                ? await pending.Completion.Task.WaitAsync(TimeSpan.FromMilliseconds(Math.Max(1000, effective - 2000)), stop)
+                ? await pending.Completion.Task.WaitAsync(
+                    TimeSpan.FromMilliseconds(Math.Max(1000, effective - 2000)),
+                    stop
+                )
                 : await pending.Completion.Task.WaitAsync(stop);
         }
         catch (TimeoutException)
@@ -167,10 +180,13 @@ internal sealed class InteractiveNode : IDisposable
                 return;
             var previousId = SelectedId;
             sessions = next;
-            var retained = sessions.Select((row, index) => (row, index)).FirstOrDefault(item => Text(item.row, "id") == previousId);
-            selected = previousId is not null && retained.row is not null
-                ? retained.index
-                : Math.Clamp(selected, 0, Math.Max(0, sessions.Count - 1));
+            var retained = sessions
+                .Select((row, index) => (row, index))
+                .FirstOrDefault(item => Text(item.row, "id") == previousId);
+            selected =
+                previousId is not null && retained.row is not null
+                    ? retained.index
+                    : Math.Clamp(selected, 0, Math.Max(0, sessions.Count - 1));
             id = SelectedId;
             if (id != previousId || id is null)
                 ClearHistory();
@@ -182,9 +198,16 @@ internal sealed class InteractiveNode : IDisposable
         var result = await client.GetSessionHistory(id, 30);
         lock (gate)
         {
-            if (!closed && id == SelectedId && selection == selectionVersion && ReferenceEquals(connection, client.SessionConnection))
+            if (
+                !closed
+                && id == SelectedId
+                && selection == selectionVersion
+                && ReferenceEquals(connection, client.SessionConnection)
+            )
             {
-                history = result?["messages"] is JsonArray rows ? (JsonArray)rows.DeepClone() : new();
+                history = result?["messages"] is JsonArray rows
+                    ? (JsonArray)rows.DeepClone()
+                    : new();
                 totalMessages = result?["totalMessages"]?.ToString() ?? "0";
                 notice = "Refreshed " + DateTime.Now.ToString("T", CultureInfo.CurrentCulture);
                 version++;
@@ -209,13 +232,23 @@ internal sealed class InteractiveNode : IDisposable
         var refresh = false;
         lock (gate)
         {
-            if (keys.Any(key => key.Key == ConsoleKey.C && key.Modifiers.HasFlag(ConsoleModifiers.Control)))
+            if (
+                keys.Any(key =>
+                    key.Key == ConsoleKey.C && key.Modifiers.HasFlag(ConsoleModifiers.Control)
+                )
+            )
                 return false;
             if (keys.Count != 1)
             {
                 if (approval is null)
                 {
-                    draft += new string(keys.Where(key => key.KeyChar != '\0' && !key.Modifiers.HasFlag(ConsoleModifiers.Alt)).Select(key => key.KeyChar).ToArray());
+                    draft += new string(
+                        keys.Where(key =>
+                                key.KeyChar != '\0' && !key.Modifiers.HasFlag(ConsoleModifiers.Alt)
+                            )
+                            .Select(key => key.KeyChar)
+                            .ToArray()
+                    );
                     version++;
                 }
                 return true;
@@ -239,7 +272,11 @@ internal sealed class InteractiveNode : IDisposable
                 refresh = true;
             else if (key.Key is ConsoleKey.UpArrow or ConsoleKey.DownArrow)
             {
-                var next = Math.Clamp(selected + (key.Key == ConsoleKey.UpArrow ? -1 : 1), 0, Math.Max(0, sessions.Count - 1));
+                var next = Math.Clamp(
+                    selected + (key.Key == ConsoleKey.UpArrow ? -1 : 1),
+                    0,
+                    Math.Max(0, sessions.Count - 1)
+                );
                 if (next != selected)
                 {
                     selected = next;
@@ -312,30 +349,66 @@ internal sealed class InteractiveNode : IDisposable
             {
                 "foxwarm cli-node " + status,
                 detail,
-                "host: " + host + "  auto: " + (autoAll ? "all" : pattern is null ? "manual" : "/" + options.Pattern + "/"),
+                "host: "
+                    + host
+                    + "  auto: "
+                    + (
+                        autoAll ? "all"
+                        : pattern is null ? "manual"
+                        : "/" + options.Pattern + "/"
+                    ),
                 "Bound sessions (" + sessions.Count + ")",
             };
             var start = Math.Max(0, selected - 7);
-            foreach (var (row, index) in sessions.Select((row, index) => (row, index)).Skip(start).Take(8))
-                lines.Add((index == selected ? "> " : "  ") + Text(row, "id") + " — " + Text(row, "displayName") + " (" + (row?["messageCount"]?.ToString() ?? "0") + ")" + (row?["busy"]?.ToString() == "true" ? " busy" : ""));
+            foreach (
+                var (row, index) in sessions
+                    .Select((row, index) => (row, index))
+                    .Skip(start)
+                    .Take(8)
+            )
+                lines.Add(
+                    (index == selected ? "> " : "  ")
+                        + Text(row, "id")
+                        + " — "
+                        + Text(row, "displayName")
+                        + " ("
+                        + (row?["messageCount"]?.ToString() ?? "0")
+                        + ")"
+                        + (row?["busy"]?.ToString() == "true" ? " busy" : "")
+                );
             if (sessions.Count == 0)
                 lines.Add("No sessions bound to this node yet");
             lines.Add("History: " + SelectedId + " (" + history.Count + "/" + totalMessages + ")");
             foreach (var row in history.TakeLast(12))
-                lines.Add(row?["index"] + ". " + Text(row, "role") + ": " + ConsoleNode.Text(Text(row, "text") ?? "", 500));
+                lines.Add(
+                    row?["index"]
+                        + ". "
+                        + Text(row, "role")
+                        + ": "
+                        + ConsoleNode.Text(Text(row, "text") ?? "", 500)
+                );
             if (approval is { } pending)
             {
                 lines.Add("Tool call pending for " + pending.Call.SessionId);
-                lines.Add(pending.Call.Tool + " " + ConsoleNode.Text(pending.Call.Args?.ToJsonString() ?? "null", 260));
+                lines.Add(
+                    pending.Call.Tool
+                        + " "
+                        + ConsoleNode.Text(pending.Call.Args?.ToJsonString() ?? "null", 260)
+                );
                 lines.Add("Y/Enter approve, N/Esc reject, A toggle future auto-approval");
             }
             lines.Add((SelectedId is { } id ? "Send to " + id + ": " : "No session: ") + draft);
-            lines.Add(notice.Length > 0 ? notice : "Up/Down select • Enter send • Ctrl+R refresh • Ctrl+C/q quit");
+            lines.Add(
+                notice.Length > 0
+                    ? notice
+                    : "Up/Down select • Enter send • Ctrl+R refresh • Ctrl+C/q quit"
+            );
             return (version, lines);
         }
     }
 
-    private static string? Text(JsonNode? row, string key) => row is JsonObject obj ? NodeFileTools.Text(obj[key]) : null;
+    private static string? Text(JsonNode? row, string key) =>
+        row is JsonObject obj ? NodeFileTools.Text(obj[key]) : null;
 
     public void Dispose()
     {

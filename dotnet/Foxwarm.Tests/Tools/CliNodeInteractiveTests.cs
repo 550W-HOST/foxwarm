@@ -7,7 +7,8 @@ public sealed class CliNodeInteractiveTests
     private static NodeToolCall Call(string tool, string id = "one", double timeout = 0) =>
         new(tool, null, "main/one", id, timeout);
 
-    private static ConsoleKeyInfo Key(char text) => new(text, ConsoleKey.NoName, false, false, false);
+    private static ConsoleKeyInfo Key(char text) =>
+        new(text, ConsoleKey.NoName, false, false, false);
 
     [Theory]
     [InlineData("^(READ|write|apply_patch)$", "read", true)]
@@ -17,7 +18,11 @@ public sealed class CliNodeInteractiveTests
     [InlineData("\\bexec\\b", "exec", true)]
     [InlineData("^read\\.json$", "read", false)]
     [InlineData("", "write", false)]
-    public async Task Native_pattern_matches_only_the_tool_name(string pattern, string tool, bool matches)
+    public async Task Native_pattern_matches_only_the_tool_name(
+        string pattern,
+        string tool,
+        bool matches
+    )
     {
         using var state = new InteractiveNode(new(Pattern: pattern));
         var decision = state.Intercept(Call(tool), CancellationToken.None);
@@ -36,10 +41,16 @@ public sealed class CliNodeInteractiveTests
         using var firstStop = new CancellationTokenSource();
         var first = state.Intercept(Call("write", "first"), firstStop.Token);
         Assert.Equal(ToolApproval.Busy, await state.Intercept(Call("exec", "busy"), default));
-        Assert.Equal(ToolApproval.Approved, await state.Intercept(Call("read", "pattern"), default));
+        Assert.Equal(
+            ToolApproval.Approved,
+            await state.Intercept(Call("read", "pattern"), default)
+        );
         state.Input([Key('A')]);
         Assert.False(first.IsCompleted);
-        Assert.Equal(ToolApproval.Approved, await state.Intercept(Call("write", "future"), default));
+        Assert.Equal(
+            ToolApproval.Approved,
+            await state.Intercept(Call("write", "future"), default)
+        );
         state.Input([Key('a')]);
         firstStop.Cancel();
         Assert.Equal(ToolApproval.Cancelled, await first);
@@ -55,7 +66,10 @@ public sealed class CliNodeInteractiveTests
     {
         using var state = new InteractiveNode(new(Timeout: 60));
         var start = System.Diagnostics.Stopwatch.StartNew();
-        Assert.Equal(ToolApproval.Timeout, await state.Intercept(Call("write", timeout: 10), default));
+        Assert.Equal(
+            ToolApproval.Timeout,
+            await state.Intercept(Call("write", timeout: 10), default)
+        );
         Assert.InRange(start.ElapsedMilliseconds, 900, 5000);
         using var untimed = new InteractiveNode(new());
         var waiting = untimed.Intercept(Call("write"), default);

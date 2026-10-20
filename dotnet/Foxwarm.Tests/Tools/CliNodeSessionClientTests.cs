@@ -23,7 +23,9 @@ public sealed class CliNodeSessionClientTests
 
         internal string Root => temp.Path;
 
-        internal async Task Start(Func<NodeToolCall, CancellationToken, Task<ToolApproval>>? intercept = null)
+        internal async Task Start(
+            Func<NodeToolCall, CancellationToken, Task<ToolApproval>>? intercept = null
+        )
         {
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [] });
             builder.Logging.ClearProviders();
@@ -139,22 +141,31 @@ public sealed class CliNodeSessionClientTests
     {
         await using var peer = new Peer();
         var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var lateApproval = new TaskCompletionSource<ToolApproval>(TaskCreationOptions.RunContinuationsAsynchronously);
-        await peer.Start((call, _) =>
-        {
-            if (call.CallId != "stopped")
-                return Task.FromResult(ToolApproval.Approved);
-            waiting.TrySetResult();
-            return lateApproval.Task; // Deliberately ignores its cancellation token.
-        });
+        var lateApproval = new TaskCompletionSource<ToolApproval>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        await peer.Start(
+            (call, _) =>
+            {
+                if (call.CallId != "stopped")
+                    return Task.FromResult(ToolApproval.Approved);
+                waiting.TrySetResult();
+                return lateApproval.Task; // Deliberately ignores its cancellation token.
+            }
+        );
         var never = Path.Combine(peer.Root, "never-launched");
-        await peer.Send(new JsonObject
-        {
-            ["type"] = "tool_call", ["callId"] = "stopped", ["tool"] = "exec",
-            ["sessionId"] = "main/one", ["agentName"] = "main",
-            ["sessionCwd"] = peer.Root,
-            ["args"] = new JsonObject { ["command"] = "touch '" + never + "'" },
-        });
+        await peer.Send(
+            new JsonObject
+            {
+                ["type"] = "tool_call",
+                ["callId"] = "stopped",
+                ["tool"] = "exec",
+                ["sessionId"] = "main/one",
+                ["agentName"] = "main",
+                ["sessionCwd"] = peer.Root,
+                ["args"] = new JsonObject { ["command"] = "touch '" + never + "'" },
+            }
+        );
         await waiting.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await peer.Send(new JsonObject { ["type"] = "tool_call_cancel", ["callId"] = "other" });
         Assert.False(lateApproval.Task.IsCompleted);
@@ -165,12 +176,17 @@ public sealed class CliNodeSessionClientTests
         Assert.Contains("not executed", rejected["error"]!["message"]!.ToString());
         lateApproval.SetResult(ToolApproval.Approved);
         var admitted = Path.Combine(peer.Root, "admitted");
-        await peer.Send(new JsonObject
-        {
-            ["type"] = "tool_call", ["callId"] = "admitted", ["tool"] = "write",
-            ["sessionId"] = "main/one", ["agentName"] = "main",
-            ["args"] = new JsonObject { ["filePath"] = admitted, ["content"] = "one" },
-        });
+        await peer.Send(
+            new JsonObject
+            {
+                ["type"] = "tool_call",
+                ["callId"] = "admitted",
+                ["tool"] = "write",
+                ["sessionId"] = "main/one",
+                ["agentName"] = "main",
+                ["args"] = new JsonObject { ["filePath"] = admitted, ["content"] = "one" },
+            }
+        );
         Assert.Equal("tool_call_response", (await peer.Next())["type"]!.ToString());
         Assert.Equal("one", await File.ReadAllTextAsync(admitted));
         Assert.False(File.Exists(never));
@@ -181,15 +197,27 @@ public sealed class CliNodeSessionClientTests
     {
         await using var peer = new Peer();
         var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var lateApproval = new TaskCompletionSource<ToolApproval>(TaskCreationOptions.RunContinuationsAsynchronously);
-        await peer.Start((_, _) => { waiting.TrySetResult(); return lateApproval.Task; });
+        var lateApproval = new TaskCompletionSource<ToolApproval>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        await peer.Start(
+            (_, _) =>
+            {
+                waiting.TrySetResult();
+                return lateApproval.Task;
+            }
+        );
         var never = Path.Combine(peer.Root, "never-written");
-        await peer.Send(new JsonObject
-        {
-            ["type"] = "tool_call", ["callId"] = "lost", ["tool"] = "write",
-            ["sessionId"] = "main/one",
-            ["args"] = new JsonObject { ["filePath"] = never, ["content"] = "never" },
-        });
+        await peer.Send(
+            new JsonObject
+            {
+                ["type"] = "tool_call",
+                ["callId"] = "lost",
+                ["tool"] = "write",
+                ["sessionId"] = "main/one",
+                ["args"] = new JsonObject { ["filePath"] = never, ["content"] = "never" },
+            }
+        );
         await waiting.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await peer.Close();
         // Dispose must finish without a cooperative interceptor or a human response.

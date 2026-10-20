@@ -119,7 +119,9 @@ internal sealed partial class NodeClient
                         {
                             ["type"] = Authenticated ? "node_register" : "pair_request",
                             ["nodeType"] = "cli-node",
-                            ["capabilities"] = Capabilities(options.ToolCallInterceptor is not null),
+                            ["capabilities"] = Capabilities(
+                                options.ToolCallInterceptor is not null
+                            ),
                             ["nodeProtocol"] = new JsonObject { ["min"] = 1, ["max"] = 3 },
                             ["requestedName"] = Authenticated ? null : requestedName,
                         }
@@ -621,7 +623,9 @@ internal sealed partial class NodeClient
     {
         internal ClientWebSocket Socket { get; } = new();
         internal CancellationTokenSource ApprovalStop { get; } = new();
+
         internal void CloseApprovals() => CancelWait(ApprovalStop);
+
         internal int Protocol { get; set; } = 1;
         private readonly object sendGate = new();
         private Task sending = Task.CompletedTask;
