@@ -62,6 +62,9 @@ internal sealed class MainLog : IDisposable
         {
             output.Finish();
             error.Finish();
+            // Channel ingress can finish a diagnostic concurrently with shutdown.
+            // A writer reference already obtained by that callback must stay harmless.
+            failed = true;
             Console.SetOut(stdout);
             Console.SetError(stderr);
             try { file.Dispose(); }
