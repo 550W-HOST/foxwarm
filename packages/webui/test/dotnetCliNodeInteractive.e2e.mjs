@@ -19,7 +19,7 @@ let sessions = Array.from({ length: 11 }, (_, index) => ({ id: 'main/session-' +
 let holdHistory, heldHistory, rejectSend = false, serial = 0
 const exists = path => access(path).then(() => true, () => false)
 const answer = (socket, request, result, error) => socket.send(JSON.stringify({ type: 'cli_response', requestId: request.requestId, ok: !error, result, error }))
-const history = id => ({ messages: Array.from({ length: 30 }, (_, index) => ({ index: index + 20, role: 'user', text: 'HISTORY-' + id + '-' + index + ' \u001b[2J\u009b31m 雪😀' })), totalMessages: 50 })
+const history = id => ({ messages: Array.from({ length: 30 }, (_, index) => ({ index: index + 20, role: 'user', text: 'HISTORY-' + id + '-' + index + ' \u001b[2J\u009b31m 雪😀' + (index === 29 ? 'long-' + 'x'.repeat(600) + '-AFTER-PREVIEW' : '') })), totalMessages: 50 })
 peer.on('connection', (socket, request) => {
   const id = new URL(request.url, host).searchParams.get('id')
   sockets.add(socket); socket.on('close', () => sockets.delete(socket)); socket.on('error', () => {})
@@ -70,6 +70,7 @@ async function navigationAndInput(ui) {
   await ui.wait(handle => handle.screen().includes('HISTORY-main/session-9-29'), 'selected history')
   assert(ui.screen().includes('\\u001b[2J')); assert(ui.screen().includes('\\u009b31m'))
   assert(!ui.screen().includes('HISTORY-main/session-9-17 ')); assert(ui.screen().includes('(30/50)'))
+  ui.resize(700, 48); await ui.wait(handle => handle.screen().includes('HISTORY-main/session-9-29'), 'wide bounded history'); await sleep(50); assert(!ui.screen().includes('-AFTER-PREVIEW')); assert(ui.screen().includes('…')); ui.resize(120, 42)
   await sleep(3200); assert(ui.screen().includes('Send to main/session-9:'))
   sessions = [...sessions].reverse(); ui.write('\x12')
   await ui.wait(handle => handle.screen().includes('> main/session-9'), 'selection survives reorder')
@@ -91,6 +92,7 @@ async function navigationAndInput(ui) {
   sessions = sessions.filter(row => row.id !== 'main/session-6'); ui.write('\x12')
   await ui.wait(handle => !handle.screen().includes('Send to main/session-6:'), 'removed selection clamped')
   ui.resize(42, 10); await sleep(80); ui.resize(120, 42)
+  const previousSessions = sessions; sessions = []; ui.write('\x12'); await ui.wait(handle => handle.screen().includes('No sessions bound') && !handle.screen().includes('HISTORY-'), 'empty list clears selected history'); sessions = previousSessions; ui.write('\x12'); await ui.wait(handle => handle.screen().includes('Send to main/'), 'sessions return after empty list')
 }
 async function decisions(ui) {
   const path = name => join(ui.cwd, name)
@@ -100,14 +102,16 @@ async function decisions(ui) {
   assert(!records(ui).some(frame => frame.callId === rejected.callId)); assert(ui.screen().includes('Tool call pending'))
   await decide(ui, rejected, 'n', false); assert(!await exists(path('rejected'))); assert(ui.screen().includes('saved draft'))
   for (let index = 0; index < 'saved draft'.length; index++) { ui.write('\x7f'); await sleep(25) }
-  const approved = await tool(ui, 'write', { filePath: path('approved'), content: 'actual Unicode 雪😀' })
-  await decide(ui, approved, 'Y', true); assert.equal(await readFile(path('approved'), 'utf8'), 'actual Unicode 雪😀')
+  const original = 'actual Unicode ' + '雪😀'.repeat(400) + '\u001b[2J'
+  const approved = await tool(ui, 'write', { filePath: path('approved'), content: original })
+  await pending(ui, approved); assert(ui.screen().includes('…')); await decide(ui, approved, 'Y', true); assert.equal(await readFile(path('approved'), 'utf8'), original)
   const exec = await tool(ui, 'exec', { command: 'printf launched > approved-exec', timeout: 2 })
   await decide(ui, exec, '\r', true); assert.equal(await readFile(path('approved-exec'), 'utf8'), 'launched')
   const noexec = await tool(ui, 'exec', { command: 'touch rejected-exec' })
   assert.equal((await decide(ui, noexec, '\x1b', false)).execStarted, false); assert(!await exists(path('rejected-exec')))
   const held = await tool(ui, 'write', { filePath: path('held'), content: 'held' })
   await pending(ui, held)
+  ui.resize(40, 8); await ui.wait(handle => handle.screen().includes('Y/Enter approve, N/Esc reject') && handle.screen().includes('Send to '), 'approval actions and draft remain visible in a short terminal'); ui.resize(120, 42); await pending(ui, held)
   const busy = await tool(ui, 'write', { filePath: path('busy'), content: 'never' })
   assert.match((await busy.result()).error.message, /another interactive tool call/); assert(!await exists(path('busy')))
   // Fixed services and transfers stay outside the manual slot.
@@ -183,6 +187,9 @@ try {
     redirected.write('q'); await redirected.stopped()
   }
   const inputPipe = await consoleClient(join(root, 'redirected-input'), ['--host', host, '--id', 'redirected-input', '--auth-token', 'synthetic', '--no-local-trigger'], { stdinFile: '/dev/null' }); clients.push(inputPipe); await inputPipe.stopped(1); assert(inputPipe.output.includes('--interactive needs console input'))
+  holdHistory = 'main/session-0'; heldHistory = null
+  const rpcShutdown = await launch('pending-rpc-shutdown'); await until(() => heldHistory, 'pending history RPC during shutdown'); await rpcShutdown.signal(); await rpcShutdown.stopped(); holdHistory = null; heldHistory = null
+  const startupFailure = await consoleClient(join(root, 'startup-failure'), ['--host', 'not-a-websocket-origin', '--id', 'startup-failure', '--auth-token', 'synthetic', '--no-local-trigger']); clients.push(startupFailure); await startupFailure.stopped(1)
   const source = await launch('source-input', [], true)
   source.write('qPaste 雪😀é'); await sleep(100); source.write('\r')
   await until(() => records(source).some(frame => frame.type === 'session_send_message'), 'actual Source paste send')
