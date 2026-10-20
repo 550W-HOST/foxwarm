@@ -42,14 +42,29 @@ internal sealed class ToolRegistry(
         var name =
             SessionWait.Text(definition["name"])
             ?? throw new InvalidDataException("Tool definition requires a name.");
-        entries.Add(name, new((JsonObject)definition.DeepClone(), source, inject, async (owner, args, token) => await handler(owner, args, token)));
+        entries.Add(
+            name,
+            new(
+                (JsonObject)definition.DeepClone(),
+                source,
+                inject,
+                async (owner, args, token) => await handler(owner, args, token)
+            )
+        );
     }
 
     internal void RegisterBrowser(JsonObject definition)
     {
         var name = SessionWait.Text(definition["name"])!;
-        entries.Add(name, new((JsonObject)definition.DeepClone(), "node", false,
-            (owner, args, _) => owner.Browser.Execute(name, args)));
+        entries.Add(
+            name,
+            new(
+                (JsonObject)definition.DeepClone(),
+                "node",
+                false,
+                (owner, args, _) => owner.Browser.Execute(name, args)
+            )
+        );
     }
 
     internal JsonArray ModelDefinitions() =>

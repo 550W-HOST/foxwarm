@@ -14,9 +14,13 @@ internal sealed class MainBrowserTools : IAsyncDisposable
     private readonly object gate = new();
     private readonly OrderedDictionary<string, Tab> tabs = new();
     private int nextTabId = 1;
+
     private sealed record Tab(IPage Page, string Url, string Title);
-    private const string Webdriver = "() => Object.defineProperty(navigator, 'webdriver', {get: () => false})";
-    private const string UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+    private const string Webdriver =
+        "() => Object.defineProperty(navigator, 'webdriver', {get: () => false})";
+    private const string UserAgent =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
     private async Task<IBrowser> EnsureBrowser()
     {
@@ -25,12 +29,22 @@ internal sealed class MainBrowserTools : IAsyncDisposable
         {
             if (browser is null)
             {
-                browser = await Puppeteer.LaunchAsync(new LaunchOptions
-                {
-                    ExecutablePath = "/usr/bin/chromium",
-                    Headless = true,
-                    Args = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--disable-blink-features=AutomationControlled", "--disable-features=IsolateOrigins,site-per-process"],
-                });
+                browser = await Puppeteer.LaunchAsync(
+                    new LaunchOptions
+                    {
+                        ExecutablePath = "/usr/bin/chromium",
+                        Headless = true,
+                        Args =
+                        [
+                            "--no-sandbox",
+                            "--disable-setuid-sandbox",
+                            "--disable-dev-shm-usage",
+                            "--disable-gpu",
+                            "--disable-blink-features=AutomationControlled",
+                            "--disable-features=IsolateOrigins,site-per-process",
+                        ],
+                    }
+                );
                 foreach (var page in await browser.PagesAsync())
                     await page.EvaluateFunctionOnNewDocumentAsync(Webdriver);
             }
@@ -48,11 +62,14 @@ internal sealed class MainBrowserTools : IAsyncDisposable
     private static string Required(JsonObject args, string key) =>
         ToolRegistry.Text(args, key) ?? throw new InvalidDataException(key + " is required.");
 
-    private static bool Truthy(JsonNode? value) => value is not null && (
-        value is JsonObject or JsonArray
-        || SessionWait.Text(value) is { Length: > 0 }
-        || value is JsonValue flag && flag.TryGetValue<bool>(out var boolean) && boolean
-        || SessionWait.Number(value) is double number && number != 0 && !double.IsNaN(number));
+    private static bool Truthy(JsonNode? value) =>
+        value is not null
+        && (
+            value is JsonObject or JsonArray
+            || SessionWait.Text(value) is { Length: > 0 }
+            || value is JsonValue flag && flag.TryGetValue<bool>(out var boolean) && boolean
+            || SessionWait.Number(value) is double number && number != 0 && !double.IsNaN(number)
+        );
 
     internal async Task<JsonNode?> Execute(string tool, JsonObject args)
     {
@@ -72,7 +89,16 @@ internal sealed class MainBrowserTools : IAsyncDisposable
         if (tool == "browse_list")
         {
             lock (gate)
-                return JsonValue.Create(tabs.Count == 0 ? "No tabs open" : string.Join("\n\n", tabs.Select(pair => pair.Key + ": " + pair.Value.Title + "\n  URL: " + pair.Value.Url)));
+                return JsonValue.Create(
+                    tabs.Count == 0
+                        ? "No tabs open"
+                        : string.Join(
+                            "\n\n",
+                            tabs.Select(pair =>
+                                pair.Key + ": " + pair.Value.Title + "\n  URL: " + pair.Value.Url
+                            )
+                        )
+                );
         }
         if (tool == "browse_open")
         {
@@ -95,7 +121,9 @@ internal sealed class MainBrowserTools : IAsyncDisposable
         var tabId = Required(args, "tabId");
         Tab tab;
         lock (gate)
-            tab = tabs.TryGetValue(tabId, out var found) ? found : throw new InvalidDataException("Tab " + tabId + " not found");
+            tab = tabs.TryGetValue(tabId, out var found)
+                ? found
+                : throw new InvalidDataException("Tab " + tabId + " not found");
         if (tool == "browse_close")
         {
             await tab.Page.CloseAsync();
@@ -106,8 +134,12 @@ internal sealed class MainBrowserTools : IAsyncDisposable
         if (tool == "browse_get")
         {
             if (!Truthy(args["screenshot"]))
-                return JsonValue.Create(await tab.Page.EvaluateExpressionAsync<string>("document.body.innerText"));
-            var bytes = await tab.Page.ScreenshotDataAsync(new ScreenshotOptions { Type = ScreenshotType.Png, FullPage = false });
+                return JsonValue.Create(
+                    await tab.Page.EvaluateExpressionAsync<string>("document.body.innerText")
+                );
+            var bytes = await tab.Page.ScreenshotDataAsync(
+                new ScreenshotOptions { Type = ScreenshotType.Png, FullPage = false }
+            );
             if (SessionWait.Text(args["screenshot"]) is string path && path.StartsWith('/'))
             {
                 // Source's raw browser capability: no ordinary file resolver, mkdir, sidecar or image grant.
@@ -119,7 +151,11 @@ internal sealed class MainBrowserTools : IAsyncDisposable
                 ["output"] = "[Screenshot of " + tabId + "]",
                 ["mimeType"] = "image/png",
                 ["sizeBytes"] = bytes.Length,
-                ["inlineData"] = new JsonObject { ["data"] = Convert.ToBase64String(bytes), ["mimeType"] = "image/png" },
+                ["inlineData"] = new JsonObject
+                {
+                    ["data"] = Convert.ToBase64String(bytes),
+                    ["mimeType"] = "image/png",
+                },
             };
         }
         var action = Required(args, "action");
@@ -130,7 +166,10 @@ internal sealed class MainBrowserTools : IAsyncDisposable
             case "click":
                 var selector = Required(parameters, "selector");
                 await tab.Page.ClickAsync(selector);
-                try { await tab.Page.WaitForNavigationAsync(Navigation(5000)); }
+                try
+                {
+                    await tab.Page.WaitForNavigationAsync(Navigation(5000));
+                }
                 catch (Exception error) when (error is PuppeteerException or TimeoutException) { }
                 output = "Clicked: " + selector;
                 break;
@@ -143,7 +182,11 @@ internal sealed class MainBrowserTools : IAsyncDisposable
             case "fill":
                 selector = Required(parameters, "selector");
                 text = Required(parameters, "text");
-                await tab.Page.EvaluateFunctionAsync("(selector,text) => { const el=document.querySelector(selector); if(!el) throw new Error(`Selector not found: ${selector}`); el.value=text; el.dispatchEvent(new Event('input',{bubbles:true})); }", selector, text);
+                await tab.Page.EvaluateFunctionAsync(
+                    "(selector,text) => { const el=document.querySelector(selector); if(!el) throw new Error(`Selector not found: ${selector}`); el.value=text; el.dispatchEvent(new Event('input',{bubbles:true})); }",
+                    selector,
+                    text
+                );
                 output = "Filled " + selector + " with \"" + text + "\"";
                 break;
             case "press":
@@ -158,12 +201,23 @@ internal sealed class MainBrowserTools : IAsyncDisposable
                 break;
             case "wait":
                 selector = Required(parameters, "selector");
-                var timeout = Truthy(parameters["timeout"]) ? SessionWait.Number(parameters["timeout"]) ?? 5000 : 5000;
-                await using (await tab.Page.WaitForSelectorAsync(selector, new WaitForSelectorOptions { Timeout = (int)timeout })) { }
+                var timeout = Truthy(parameters["timeout"])
+                    ? SessionWait.Number(parameters["timeout"]) ?? 5000
+                    : 5000;
+                await using (
+                    await tab.Page.WaitForSelectorAsync(
+                        selector,
+                        new WaitForSelectorOptions { Timeout = (int)timeout }
+                    )
+                ) { }
                 output = "Waited for: " + selector;
                 break;
             case "evaluate":
-                await using (var value = await tab.Page.EvaluateExpressionHandleAsync(Required(parameters, "code")))
+                await using (
+                    var value = await tab.Page.EvaluateExpressionHandleAsync(
+                        Required(parameters, "code")
+                    )
+                )
                     output = "Evaluated: " + await BrowserEvaluation.StringifyResult(value);
                 break;
             case "goto":

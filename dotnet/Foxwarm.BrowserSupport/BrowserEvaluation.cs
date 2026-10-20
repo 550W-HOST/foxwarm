@@ -36,5 +36,4 @@ internal static class BrowserEvaluation
             return "null";
         return BrowserCloneJson.Stringify(cloned.Value);
     }
-
 }

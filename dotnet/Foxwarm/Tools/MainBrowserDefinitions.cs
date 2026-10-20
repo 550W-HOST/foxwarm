@@ -4,9 +4,18 @@ namespace Foxwarm.Tools;
 
 internal static class MainBrowserDefinitions
 {
-    internal static bool Contains(string name) => name is "browse_open" or "browse_list" or "browse_get" or "browse_close" or "browse_interact";
+    internal static bool Contains(string name) =>
+        name
+            is "browse_open"
+                or "browse_list"
+                or "browse_get"
+                or "browse_close"
+                or "browse_interact";
 
-    internal static JsonArray All() => JsonNode.Parse("""
+    internal static JsonArray All() =>
+        JsonNode
+            .Parse(
+                """
 [
   {
     "name": "browse_open",
@@ -141,5 +150,7 @@ internal static class MainBrowserDefinitions
     }
   }
 ]
-""")!.AsArray();
+"""
+            )!
+            .AsArray();
 }

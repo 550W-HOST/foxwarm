@@ -361,8 +361,12 @@ internal sealed partial class SessionManager
             )
                 continue;
             if (
-                !tools.Entries.Any(entry => entry.Source == "node" && !entry.DefaultInject && SessionWait.Text(entry.Definition["name"]) == name)
-                && ToolVisible(owner, "node", name, node: node))
+                !tools.Entries.Any(entry =>
+                    entry.Source == "node"
+                    && !entry.DefaultInject
+                    && SessionWait.Text(entry.Definition["name"]) == name
+                ) && ToolVisible(owner, "node", name, node: node)
+            )
                 definitions.Add(ToolCallControls.ForModel(definition));
         }
         return new JsonArray(definitions.ToArray());

@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
-using PuppeteerSharp;
 using Foxwarm.BrowserSupport;
+using PuppeteerSharp;
 
 namespace Foxwarm.CliNode;
 
