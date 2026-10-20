@@ -1333,18 +1333,21 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
   }, [sendSessionCommand])
 
   const handleCreateStreamingTranscriber = useCallback(async ({
+    signal,
     draftText,
     onPartial,
     onFinal,
     onError,
     onDebug,
   }: {
+    signal: AbortSignal
     draftText: string
     onPartial: (text: string) => void
     onFinal: (text: string) => void
     onError: (message: string) => void
     onDebug: (message: string) => void
   }): Promise<StreamingAsrSession> => {
+    if (signal.aborted) throw new DOMException('Recording cancelled', 'AbortError')
     const context = buildAsrContext(activeMessages, draftText)
 
     return await new Promise<StreamingAsrSession>((resolve, reject) => {
@@ -1353,9 +1356,25 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       let settled = false
       let terminal = false
 
+      const cleanup = () => signal.removeEventListener('abort', cancel)
+      const cancel = () => {
+        if (terminal) return
+        terminal = true
+        cleanup()
+        onDebug('ws cancel called')
+        if (!settled) {
+          settled = true
+          reject(new DOMException('Recording cancelled', 'AbortError'))
+        }
+        try {
+          socket.close()
+        } catch {}
+      }
+
       const fail = (message: string) => {
         if (terminal) return
         terminal = true
+        cleanup()
         onError(message)
         if (!settled) {
           settled = true
@@ -1368,6 +1387,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
         } catch {}
       }
 
+      signal.addEventListener('abort', cancel, { once: true })
+      if (signal.aborted) { cancel(); return }
       socket.binaryType = 'arraybuffer'
 
       socket.onopen = () => {
@@ -1408,13 +1429,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
                   onDebug(`ws stop sent; chunkCount=${chunkCount} totalBytes=${totalBytes}`)
                 }
               },
-              cancel: () => {
-                terminal = true
-                onDebug('ws cancel called')
-                try {
-                  socket.close()
-                } catch {}
-              },
+              cancel,
             })
             return
           }
@@ -1427,6 +1442,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
 
           if (payload.type === 'final') {
             terminal = true
+            cleanup()
             onDebug(`ws final received; textLength=${typeof payload.text === 'string' ? payload.text.length : 0}`)
             onFinal(typeof payload.text === 'string' ? payload.text : '')
             try {
@@ -1451,6 +1467,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       }
 
       socket.onclose = () => {
+        cleanup()
         onDebug(`ws closed; resolved=${String(resolved)} settled=${String(settled)} terminal=${String(terminal)}`)
         if (terminal) return
         if (resolved) fail('Streaming ASR connection closed before the final transcript')
