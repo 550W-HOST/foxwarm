@@ -122,6 +122,8 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 
 `webuiSessionsRoute.test.ts` starts each owned `HttpServer` on port zero and reads the actual bound port after startup. HTTP, SSE, and WebSocket assertions use that same live listener; no random fixed range or reserve-and-reopen socket is involved. Route behavior and production listening configuration remain unchanged.
 
+`webuiTerminalStream.test.ts` advances Node test-runner interval mocks to verify repeated keepalive pings, authentication/attachment ordering, and close/error cleanup without wall-clock sleeps or changing PTY close semantics.
+
 ## Design decisions
 
 ### D-webui-message-tool-args-transport
