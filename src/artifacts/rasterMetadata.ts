@@ -1,5 +1,5 @@
 import sharp from 'sharp';
-import { IMAGE_ARTIFACT_MAX_BYTES, validateImageDocument, type ImageDocument } from './image';
+import { IMAGE_ARTIFACT_MAX_BYTES, validateImageDocument, type ImageDocument } from '../../packages/shared/dist/artifacts/image';
 /** Verify raster bytes before they become an inline resource; no SVG/HTML sniffing fallback. */
 export async function describeImage(bytes: Buffer, title: string, alt?: string): Promise<ImageDocument> {
   if (!bytes.length || bytes.length > IMAGE_ARTIFACT_MAX_BYTES) throw new Error('Image must be at most 12 MiB');

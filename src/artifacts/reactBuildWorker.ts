@@ -1,6 +1,6 @@
-/** Source IPC transport for the shared data-only compiler. */
+/** Source IPC transport for the Main data-only compiler. */
 import path from 'node:path';
-import { compileReact } from '../../packages/shared/dist/artifacts/reactCompiler';
+import { compileReact } from './reactCompiler';
 const runtimeRoot = path.resolve(__dirname, '../../packages/webui/node_modules');
 process.once('message', async (input: unknown) => {
   try {

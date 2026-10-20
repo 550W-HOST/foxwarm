@@ -16,9 +16,7 @@ internal sealed class ArtifactPreparer
             entry
             ?? Path.Combine(
                 AppContext.BaseDirectory,
-                "packages",
-                "shared",
-                "dist",
+                "lib",
                 "artifacts",
                 "managedPrepare.js"
             );

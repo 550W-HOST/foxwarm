@@ -1,7 +1,7 @@
 /** Compiles authored files as data; never evaluates the output. */
 import path from 'node:path';
 import { build } from 'esbuild';
-import { validateReactDocument } from './react';
+import { validateReactDocument } from '../../packages/shared/dist/artifacts/react';
 export async function compileReact(input: unknown, runtimeRoot: string): Promise<string> {
   const doc = validateReactDocument(input);
     const entry = `import React from 'react'; import {createRoot} from 'react-dom/client'; import App from './${doc.entry}'; createRoot(document.getElementById('root')).render(React.createElement(App));`;

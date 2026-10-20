@@ -1,10 +1,10 @@
 # Unit: Shared artifact contracts
 
-Files: packages/shared/src/artifacts/types.ts, packages/shared/src/artifacts/registry.ts, packages/shared/src/artifacts/chart.ts, packages/shared/src/artifacts/react.ts, packages/shared/src/artifacts/image.ts, packages/shared/src/artifacts/marker.ts, packages/shared/src/artifacts/reactCompiler.ts, packages/shared/src/artifacts/rasterMetadata.ts, packages/shared/src/artifacts/managedPrepare.ts
+Files: packages/shared/src/artifacts/types.ts, packages/shared/src/artifacts/registry.ts, packages/shared/src/artifacts/chart.ts, packages/shared/src/artifacts/react.ts, packages/shared/src/artifacts/image.ts, packages/shared/src/artifacts/marker.ts
 
 ## Purpose
 
-Defines the common display receipt and closed, independently versioned authoring schemas. Canonical decisions: [interactive artifacts](../threads/webui-artifacts.md).
+Defines the common display receipt and closed, independently versioned authoring schemas. This package builds with its own declared dependency closure, including the Node bootstrap source fallback; Main-only esbuild/sharp preparation belongs to [Main artifacts](./src-artifacts.md), not the whole-source Shared compilation. Canonical decisions: [interactive artifacts](../threads/webui-artifacts.md).
 
 ## Symbols
 
@@ -14,9 +14,6 @@ Defines the common display receipt and closed, independently versioned authoring
 - `validateChartDocument`: bounded rows, fields, layers, supported marks/encodings and host control/metric definitions; no URL/transform/expression execution.
 - `validateReactDocument`: virtual source filenames, entry and per-package/per-file bounds.
 - `validateImageDocument`: bounded raster metadata with no source URL/path.
-- `compileReact`: shared data-only esbuild operation and virtual-file/fixed-runtime resolver; Source IPC and managed stdin transports call the same operation.
-- `describeImage`: original raster metadata inspection using sharp, including format, pixel/frame and total-animation limits; never optimizes resource bytes.
-- `managedPrepare`: one bounded data request per managed child for validation, raster metadata or React compilation. It has no Session, tool, filesystem-source or HTTP authority.
 - `parseArtifactMarker`, `formatArtifactMarker`: strict ID/revision reference syntax, independent of access checks.
 - `object`, `keys`, `text`, `baseDocument`: reusable validation primitives.
 

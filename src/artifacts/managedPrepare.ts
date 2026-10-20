@@ -1,6 +1,6 @@
 /** One data request per bounded managed child. No Session, paths or tool authority. */
 import path from 'node:path';
-import { validateArtifactDocument } from './registry';
+import { validateArtifactDocument } from '../../packages/shared/dist/artifacts/registry';
 import { compileReact } from './reactCompiler';
 import { describeImage } from './rasterMetadata';
 async function main() {
@@ -12,7 +12,7 @@ async function main() {
   }
   const request = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   if (request.action === 'validate') return { document: validateArtifactDocument(request.document) };
-  if (request.action === 'react') return { compiled: await compileReact(request.document, path.resolve(__dirname, '../../../webui/node_modules')) };
+  if (request.action === 'react') return { compiled: await compileReact(request.document, path.resolve(__dirname, '../../packages/webui/node_modules')) };
   if (request.action === 'image') return { document: await describeImage(Buffer.from(request.bytes, 'base64'), request.title, request.alt) };
   throw new Error('Unsupported artifact preparation request');
 }
