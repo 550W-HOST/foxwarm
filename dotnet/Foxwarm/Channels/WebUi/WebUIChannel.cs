@@ -455,7 +455,9 @@ internal sealed partial class WebUIChannel(
                 context.Response.Headers.CacheControl = "no-cache";
                 context.Response.Headers["X-Accel-Buffering"] = "no";
                 using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(
-                    context.RequestAborted, app.Lifetime.ApplicationStopping);
+                    context.RequestAborted,
+                    app.Lifetime.ApplicationStopping
+                );
                 var (subscriptionId, reader) = hosted.Subscribe();
                 try
                 {
@@ -513,8 +515,7 @@ internal sealed partial class WebUIChannel(
                 {
                     context.Abort();
                 }
-                catch (OperationCanceledException)
-                    when (lifetime.IsCancellationRequested) { }
+                catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
                 catch (IOException) when (context.RequestAborted.IsCancellationRequested) { }
                 finally
                 {

@@ -95,9 +95,10 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
     // Browser command suggestions and downloaded-script defaults have different owners.
     internal static string OnboardingBaseUrl(JsonObject body, string? configured)
     {
-        var raw = body.ContainsKey("baseUrl")
-            ? body["baseUrl"]
-            : configured is not null ? JsonValue.Create(configured) : body["fallbackUrl"];
+        var raw =
+            body.ContainsKey("baseUrl") ? body["baseUrl"]
+            : configured is not null ? JsonValue.Create(configured)
+            : body["fallbackUrl"];
         if (raw is not JsonValue value || !value.TryGetValue<string>(out var text))
             throw new InvalidDataException("Enter an address reachable from the new Node.");
         return NormalizeBaseUrl(text);
@@ -111,7 +112,11 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
             || url.Contains('\\')
             || url.Contains('?')
             || url.Contains('#')
-            || !System.Text.RegularExpressions.Regex.IsMatch(url, "^https?://", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+            || !System.Text.RegularExpressions.Regex.IsMatch(
+                url,
+                "^https?://",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase
+            )
             || !Uri.TryCreate(url, UriKind.Absolute, out var parsed)
             || parsed.Host.Length == 0
             || parsed.UserInfo.Length > 0
@@ -124,12 +129,22 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
 
     internal static string InferRequestBaseUrl(HttpRequest request)
     {
-        static string? First(string? value) => value?.Split(',')[0].Trim() is { Length: > 0 } first ? first : null;
-        static string? Protocol(string? value) => value?.ToLowerInvariant() is "http" or "https" ? value.ToLowerInvariant() : null;
-        var host = First(request.Headers["X-Forwarded-Host"].FirstOrDefault()) ?? First(request.Headers.Host.FirstOrDefault());
-        if (host is null || !System.Text.RegularExpressions.Regex.IsMatch(host, "^[A-Za-z0-9.\\-:\\[\\]]+$"))
+        static string? First(string? value) =>
+            value?.Split(',')[0].Trim() is { Length: > 0 } first ? first : null;
+        static string? Protocol(string? value) =>
+            value?.ToLowerInvariant() is "http" or "https" ? value.ToLowerInvariant() : null;
+        var host =
+            First(request.Headers["X-Forwarded-Host"].FirstOrDefault())
+            ?? First(request.Headers.Host.FirstOrDefault());
+        if (
+            host is null
+            || !System.Text.RegularExpressions.Regex.IsMatch(host, "^[A-Za-z0-9.\\-:\\[\\]]+$")
+        )
             return "";
-        var protocol = Protocol(First(request.Headers["X-Forwarded-Proto"].FirstOrDefault())) ?? Protocol(request.Scheme) ?? "http";
+        var protocol =
+            Protocol(First(request.Headers["X-Forwarded-Proto"].FirstOrDefault()))
+            ?? Protocol(request.Scheme)
+            ?? "http";
         return protocol + "://" + host;
     }
 
@@ -182,7 +197,10 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
                         : "text/plain; charset=utf-8";
                     var text = await File.ReadAllTextAsync(path, context.RequestAborted);
                     await context.Response.WriteAsync(
-                        text.Replace("__FOXWARM_DEFAULT_BASE_URL__", InferRequestBaseUrl(context.Request)),
+                        text.Replace(
+                            "__FOXWARM_DEFAULT_BASE_URL__",
+                            InferRequestBaseUrl(context.Request)
+                        ),
                         context.RequestAborted
                     );
                 }

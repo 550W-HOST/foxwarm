@@ -80,11 +80,12 @@ internal sealed partial class SessionOwner
         }
         // This terminal Session notice is also the public text-only client failure signal.
         // Compaction notices and already-published provider retry notices keep their owners.
-        var details = source == "session"
-            ? error is ModelRequestException
-                ? "⚠️ LLM request failed: " + error.Message
-                : "Error: " + error.Message
-            : error.Message;
+        var details =
+            source == "session"
+                ? error is ModelRequestException
+                    ? "⚠️ LLM request failed: " + error.Message
+                    : "Error: " + error.Message
+                : error.Message;
         var message = SessionNotices.Create(
             source,
             source == "compaction" ? "Compaction failed" : "Run failed",
