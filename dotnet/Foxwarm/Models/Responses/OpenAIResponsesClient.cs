@@ -733,7 +733,10 @@ public static class ResponsesCanonicalConverter
                 $"Responses output item {type ?? "unknown"}"
             );
         }
-        if (generatedFailures is { Count: > 0 } && (successfulImageCount ?? generatedParts?.Count ?? 0) > 0)
+        if (
+            generatedFailures is { Count: > 0 }
+            && (successfulImageCount ?? generatedParts?.Count ?? 0) > 0
+        )
             parts.Add(
                 new JsonObject
                 {

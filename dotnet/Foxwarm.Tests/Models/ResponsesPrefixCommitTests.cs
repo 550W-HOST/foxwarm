@@ -114,8 +114,15 @@ public sealed class ResponsesPrefixCommitTests
         // own a fresh raw pair, not only a new semantic journal identity.
         var rawRequests = Directory.GetFiles(owner.RecentLogs, "*_req.json");
         Assert.Equal(2, rawRequests.Length);
-        var recaptured = Assert.Single(rawRequests, path => File.ReadAllText(path).Contains("retained-prefix", StringComparison.Ordinal));
-        var rawResponse = JsonNode.Parse(await File.ReadAllTextAsync(recaptured.Replace("_req.json", "_res.json", StringComparison.Ordinal)))!;
+        var recaptured = Assert.Single(
+            rawRequests,
+            path => File.ReadAllText(path).Contains("retained-prefix", StringComparison.Ordinal)
+        );
+        var rawResponse = JsonNode.Parse(
+            await File.ReadAllTextAsync(
+                recaptured.Replace("_req.json", "_res.json", StringComparison.Ordinal)
+            )
+        )!;
         Assert.Contains("retry-final", rawResponse["body"]!.ToJsonString());
         Assert.Null(rawResponse["attempts"]);
         var rows = owner.Visible;
@@ -493,34 +500,56 @@ public sealed class ResponsesPrefixCommitTests
     [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(true, true)]
-    public async Task Failed_image_suffix_uses_the_attempt_image_success_not_prior_commentary(bool websocket, bool successfulImage)
+    public async Task Failed_image_suffix_uses_the_attempt_image_success_not_prior_commentary(
+        bool websocket,
+        bool successfulImage
+    )
     {
-        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
-        var committed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        static JsonObject Image(string id, string data) => new()
-        {
-            ["type"] = "image_generation_call", ["id"] = id, ["status"] = "completed", ["output_format"] = "png", ["result"] = data,
-        };
-        await using var peer = await StreamingModelPeer.StartAsync(websocket, async (context, _) =>
-        {
-            var output = new List<JsonObject>();
-            if (successfulImage)
-                output.Add(Image("first", png));
-            output.Add(Commentary("Generating images now"));
-            for (var i = 0; i < output.Count; i++)
-                await context.Send(Done(i, (JsonObject)output[i].DeepClone()));
-            await committed.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            output.Add(Image("failed-suffix", "invalid-base64!"));
-            await context.Send(Done(output.Count - 1, (JsonObject)output[^1].DeepClone()));
-            await context.Send(Completed(output.ToArray()));
-        });
+        const string png =
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+        var committed = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        static JsonObject Image(string id, string data) =>
+            new()
+            {
+                ["type"] = "image_generation_call",
+                ["id"] = id,
+                ["status"] = "completed",
+                ["output_format"] = "png",
+                ["result"] = data,
+            };
+        await using var peer = await StreamingModelPeer.StartAsync(
+            websocket,
+            async (context, _) =>
+            {
+                var output = new List<JsonObject>();
+                if (successfulImage)
+                    output.Add(Image("first", png));
+                output.Add(Commentary("Generating images now"));
+                for (var i = 0; i < output.Count; i++)
+                    await context.Send(Done(i, (JsonObject)output[i].DeepClone()));
+                await committed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                output.Add(Image("failed-suffix", "invalid-base64!"));
+                await context.Send(Done(output.Count - 1, (JsonObject)output[^1].DeepClone()));
+                await context.Send(Completed(output.ToArray()));
+            }
+        );
         await using var owner = new Owner(peer.Uri, websocket, generated: true);
-        owner.Entry.AssistantCommitted = _ => { committed.TrySetResult(); return Task.CompletedTask; };
+        owner.Entry.AssistantCommitted = _ =>
+        {
+            committed.TrySetResult();
+            return Task.CompletedTask;
+        };
         await owner.Run();
         Assert.Single(peer.Requests); // A failed, possibly billed generation must never retry.
-        var rows = (await owner.Store.LoadAsync("s"))!.History.Materialize()
-            .Where(row => row["modelVisible"]?.GetValue<bool>() != false).ToArray();
-        var images = rows.SelectMany(row => row["parts"]!.AsArray()).Where(part => part?["inlineDataRef"] is not null).ToArray();
+        var rows = (await owner.Store.LoadAsync("s"))!
+            .History.Materialize()
+            .Where(row => row["modelVisible"]?.GetValue<bool>() != false)
+            .ToArray();
+        var images = rows.SelectMany(row => row["parts"]!.AsArray())
+            .Where(part => part?["inlineDataRef"] is not null)
+            .ToArray();
         Assert.Equal(successfulImage ? 1 : 0, images.Length);
         Assert.DoesNotContain(png, string.Concat(rows.Select(row => row.ToJsonString())));
         if (successfulImage)
@@ -528,16 +557,26 @@ public sealed class ResponsesPrefixCommitTests
             Assert.Null(owner.Entry.LastBackgroundProcessorFailure);
             Assert.Equal(3, rows.Length);
             Assert.Contains("failed-suffix", rows[2].ToJsonString());
-            Assert.Contains("image generation did not produce a usable image", rows[2].ToJsonString());
+            Assert.Contains(
+                "image generation did not produce a usable image",
+                rows[2].ToJsonString()
+            );
             Assert.DoesNotContain("inlineDataRef", rows[2].ToJsonString());
-            Assert.Equal(3, owner.Entry.Snapshot().AuthorityEnvelope["stats"]!["totalOutputTokens"]!.GetValue<double>());
+            Assert.Equal(
+                3,
+                owner.Entry.Snapshot().AuthorityEnvelope["stats"]![
+                    "totalOutputTokens"
+                ]!.GetValue<double>()
+            );
             Assert.Equal(3, rows[2]["__meta"]!["usage"]!["outputTokens"]!.GetValue<long>());
         }
         else
         {
             Assert.Equal(2, rows.Length); // Retain commentary, not a false empty success.
             var journal = Assert.Single(await owner.Journal.ListAsync("s", null, null, null, 10));
-            var restored = await owner.Journal.ReconstructAsync(journal!["requestId"]!.GetValue<string>());
+            var restored = await owner.Journal.ReconstructAsync(
+                journal!["requestId"]!.GetValue<string>()
+            );
             Assert.Contains("failed-suffix", restored.ToJsonString());
             Assert.Contains("\"retryable\":false", restored.ToJsonString());
             Assert.Contains("\"countable\":false", restored.ToJsonString());

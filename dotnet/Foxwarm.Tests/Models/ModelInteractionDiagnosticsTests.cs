@@ -438,7 +438,9 @@ public sealed class ModelInteractionDiagnosticsTests
     [Theory]
     [InlineData("openai-responses")]
     [InlineData("anthropic")]
-    public async Task Bounded_HTTP_error_redacts_a_credential_cut_by_the_existing_collector(string protocol)
+    public async Task Bounded_HTTP_error_redacts_a_credential_cut_by_the_existing_collector(
+        string protocol
+    )
     {
         using var temp = new TempDirectory();
         var fragment = OldToken[..^1];
@@ -446,9 +448,12 @@ public sealed class ModelInteractionDiagnosticsTests
         using var handler = new DiagnosticHandler((_, _) => (HttpStatusCode.BadRequest, body));
         using var http = new HttpClient(handler);
         var uri = new Uri("http://unused.invalid");
-        await Assert.ThrowsAsync<ModelRequestException>(() => Request(
-            new(http, Options(uri), new ModelRouting(), diagnostics: new(temp.Path)),
-            HostModels.Parse(Catalog(uri, protocol), new JsonObject())));
+        await Assert.ThrowsAsync<ModelRequestException>(() =>
+            Request(
+                new(http, Options(uri), new ModelRouting(), diagnostics: new(temp.Path)),
+                HostModels.Parse(Catalog(uri, protocol), new JsonObject())
+            )
+        );
         Assert.Single(handler.Bodies);
         var log = await ReadResponse(temp.Path);
         var captured = log["attempts"]![0]!["body"]!.GetValue<string>();
@@ -462,17 +467,32 @@ public sealed class ModelInteractionDiagnosticsTests
     [InlineData("", false)]
     [InlineData("\\u00", false)]
     [InlineData("\\u00", true)]
-    public async Task Malformed_escaped_credentials_are_redacted_at_a_block_or_interruption_boundary(string ending, bool partial)
+    public async Task Malformed_escaped_credentials_are_redacted_at_a_block_or_interruption_boundary(
+        string ending,
+        bool partial
+    )
     {
         using var temp = new TempDirectory();
         var encoded = "\\u0073" + (partial ? OldToken[1..^1] : OldToken[1..]);
-        var raw = "data: {\"type\":\"response.vendor\",\"business\":{\"result\":\"keep-evidence\"},\"message\":\"" + encoded + ending;
+        var raw =
+            "data: {\"type\":\"response.vendor\",\"business\":{\"result\":\"keep-evidence\"},\"message\":\""
+            + encoded
+            + ending;
         using var handler = new DiagnosticHandler((_, _) => (HttpStatusCode.OK, raw));
         using var http = new HttpClient(handler);
         var uri = new Uri("http://unused.invalid");
-        await Assert.ThrowsAsync<ModelRequestException>(() => Request(
-            new(http, Options(uri), new ModelRouting(), (_, _) => Task.CompletedTask, diagnostics: new(temp.Path)),
-            HostModels.Parse(Catalog(uri), new JsonObject())));
+        await Assert.ThrowsAsync<ModelRequestException>(() =>
+            Request(
+                new(
+                    http,
+                    Options(uri),
+                    new ModelRouting(),
+                    (_, _) => Task.CompletedTask,
+                    diagnostics: new(temp.Path)
+                ),
+                HostModels.Parse(Catalog(uri), new JsonObject())
+            )
+        );
         Assert.Equal(6, handler.Bodies.Count);
         var log = await ReadResponse(temp.Path);
         foreach (var attempt in log["attempts"]!.AsArray())
@@ -487,17 +507,34 @@ public sealed class ModelInteractionDiagnosticsTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Observed_image_output_omits_raw_escaped_fields_and_unterminated_first_events(bool interrupted)
+    public async Task Observed_image_output_omits_raw_escaped_fields_and_unterminated_first_events(
+        bool interrupted
+    )
     {
         using var temp = new TempDirectory();
         var raw = interrupted
-            ? "data: {\"type\":\"response.image_generation_call.partial_image\",\"partial_image_b64\":\"" + ImageBytes + "\"}"
-            : Sse(ResponsesPrefixCommitTests.Completed(Answer())).Replace("\"usage\":", "\"opaque\":{\"partial\\u005fimage_b64\":\"" + ImageBytes + "\"},\"usage\":", StringComparison.Ordinal);
+            ? "data: {\"type\":\"response.image_generation_call.partial_image\",\"partial_image_b64\":\""
+                + ImageBytes
+                + "\"}"
+            : Sse(ResponsesPrefixCommitTests.Completed(Answer()))
+                .Replace(
+                    "\"usage\":",
+                    "\"opaque\":{\"partial\\u005fimage_b64\":\"" + ImageBytes + "\"},\"usage\":",
+                    StringComparison.Ordinal
+                );
         using var handler = new DiagnosticHandler((_, _) => (HttpStatusCode.OK, raw));
         using var http = new HttpClient(handler);
         var uri = new Uri("http://unused.invalid");
-        var call = Request(new(http, Options(uri), new ModelRouting(), (_, _) => Task.CompletedTask, diagnostics: new(temp.Path)),
-            HostModels.Parse(Catalog(uri), new JsonObject()));
+        var call = Request(
+            new(
+                http,
+                Options(uri),
+                new ModelRouting(),
+                (_, _) => Task.CompletedTask,
+                diagnostics: new(temp.Path)
+            ),
+            HostModels.Parse(Catalog(uri), new JsonObject())
+        );
         if (interrupted)
             await Assert.ThrowsAsync<ModelRequestException>(() => call);
         else
@@ -516,72 +553,173 @@ public sealed class ModelInteractionDiagnosticsTests
     public async Task Native_image_replay_with_tool_disabled_keeps_structural_only_raw_capture()
     {
         using var temp = new TempDirectory();
-        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+        const string png =
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
         var images = new Foxwarm.Images.ImageBlobStore(temp.Path);
-        var normalized = await HostedResponsesTools.ExternalizeAsync(new JsonArray(new JsonObject
+        var normalized = await HostedResponsesTools.ExternalizeAsync(
+            new JsonArray(
+                new JsonObject
+                {
+                    ["type"] = "image_generation_call",
+                    ["id"] = "replayed",
+                    ["status"] = "completed",
+                    ["output_format"] = "png",
+                    ["result"] = png,
+                }
+            ),
+            images,
+            "a/m",
+            default
+        );
+        var history = new[]
         {
-            ["type"] = "image_generation_call", ["id"] = "replayed", ["status"] = "completed", ["output_format"] = "png", ["result"] = png,
-        }), images, "a/m", default);
-        var history = new[] { new JsonObject { ["role"] = "model", ["parts"] = new JsonArray(normalized.Parts[0]) } };
-        using var handler = new DiagnosticHandler((_, body) =>
-        {
-            var wire = JsonNode.Parse(body)!;
-            Assert.Contains(wire["input"]!.AsArray(), item => item?["type"]?.GetValue<string>() == "image_generation_call");
-            Assert.DoesNotContain(wire["tools"]?.AsArray() ?? [], item => item?["type"]?.GetValue<string>() == "image_generation");
-            return (HttpStatusCode.OK, ": unrelated provider evidence\n\n" + Sse(ResponsesPrefixCommitTests.Completed(Answer())));
-        });
+            new JsonObject { ["role"] = "model", ["parts"] = new JsonArray(normalized.Parts[0]) },
+        };
+        using var handler = new DiagnosticHandler(
+            (_, body) =>
+            {
+                var wire = JsonNode.Parse(body)!;
+                Assert.Contains(
+                    wire["input"]!.AsArray(),
+                    item => item?["type"]?.GetValue<string>() == "image_generation_call"
+                );
+                Assert.DoesNotContain(
+                    wire["tools"]?.AsArray() ?? [],
+                    item => item?["type"]?.GetValue<string>() == "image_generation"
+                );
+                return (
+                    HttpStatusCode.OK,
+                    ": unrelated provider evidence\n\n"
+                        + Sse(ResponsesPrefixCommitTests.Completed(Answer()))
+                );
+            }
+        );
         using var http = new HttpClient(handler);
         var uri = new Uri("http://unused.invalid");
-        var owner = new ModelRequestOwner(http, Options(uri), new ModelRouting(), images: images, diagnostics: new(temp.Path));
-        await owner.RequestAsync("s", HostModels.Parse(Catalog(uri), new JsonObject()), "a/m", null, "cache", "turn", history,
-            (_, _) => Task.FromResult("prompt"), null, null, null, null, default);
+        var owner = new ModelRequestOwner(
+            http,
+            Options(uri),
+            new ModelRouting(),
+            images: images,
+            diagnostics: new(temp.Path)
+        );
+        await owner.RequestAsync(
+            "s",
+            HostModels.Parse(Catalog(uri), new JsonObject()),
+            "a/m",
+            null,
+            "cache",
+            "turn",
+            history,
+            (_, _) => Task.FromResult("prompt"),
+            null,
+            null,
+            null,
+            null,
+            default
+        );
         var log = await ReadResponse(temp.Path);
         Assert.True(log["rawStream"]!["contentOmitted"]?.GetValue<bool>() == true);
         Assert.Null(log["rawStream"]!["body"]);
-        Assert.DoesNotContain(png, await File.ReadAllTextAsync(Assert.Single(Directory.GetFiles(Recent(temp.Path), "*_req.json"))));
+        Assert.DoesNotContain(
+            png,
+            await File.ReadAllTextAsync(
+                Assert.Single(Directory.GetFiles(Recent(temp.Path), "*_req.json"))
+            )
+        );
     }
 
     [Theory]
     [InlineData("history")]
     [InlineData("context")]
     [InlineData("unchanged")]
-    public async Task Canonical_retry_raw_pairs_follow_the_existing_logical_context_identity(string change)
+    public async Task Canonical_retry_raw_pairs_follow_the_existing_logical_context_identity(
+        string change
+    )
     {
         using var temp = new TempDirectory();
-        using var handler = new DiagnosticHandler((number, _) => number == 1
-            ? (HttpStatusCode.ServiceUnavailable, "retry evidence")
-            : (HttpStatusCode.OK, Sse(ResponsesPrefixCommitTests.Completed(Answer()))));
+        using var handler = new DiagnosticHandler(
+            (number, _) =>
+                number == 1
+                    ? (HttpStatusCode.ServiceUnavailable, "retry evidence")
+                    : (HttpStatusCode.OK, Sse(ResponsesPrefixCommitTests.Completed(Answer())))
+        );
         using var http = new HttpClient(handler);
         var uri = new Uri("http://unused.invalid");
-        var owner = new ModelRequestOwner(http, Options(uri), new ModelRouting(), (_, _) => Task.CompletedTask, diagnostics: new(temp.Path));
-        static JsonObject User(string text) => new() { ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["text"] = text }) };
+        var owner = new ModelRequestOwner(
+            http,
+            Options(uri),
+            new ModelRouting(),
+            (_, _) => Task.CompletedTask,
+            diagnostics: new(temp.Path)
+        );
+        static JsonObject User(string text) =>
+            new()
+            {
+                ["role"] = "user",
+                ["parts"] = new JsonArray(new JsonObject { ["text"] = text }),
+            };
         var context = false;
-        await owner.RequestAsync("s", HostModels.Parse(Catalog(uri), new JsonObject()), "a/m", null, "cache", "turn", [User("original")],
-            (_, _) => Task.FromResult("prompt"), null, null, null, null, default, ModelRequestScope.Canonical,
+        await owner.RequestAsync(
+            "s",
+            HostModels.Parse(Catalog(uri), new JsonObject()),
+            "a/m",
+            null,
+            "cache",
+            "turn",
+            [User("original")],
+            (_, _) => Task.FromResult("prompt"),
+            null,
+            null,
+            null,
+            null,
+            default,
+            ModelRequestScope.Canonical,
             prepareRetry: _ =>
             {
                 context = true;
-                return Task.FromResult<IReadOnlyList<JsonObject>?>(change == "history" ? [User("original"), User("new-input")] : null);
+                return Task.FromResult<IReadOnlyList<JsonObject>?>(
+                    change == "history" ? [User("original"), User("new-input")] : null
+                );
             },
-            requestContext: () => Task.FromResult<IReadOnlyList<JsonObject>>(change == "context" && context ? [User("new-input")] : []));
+            requestContext: () =>
+                Task.FromResult<IReadOnlyList<JsonObject>>(
+                    change == "context" && context ? [User("new-input")] : []
+                )
+        );
         Assert.Equal(2, handler.Bodies.Count);
         var paths = Directory.GetFiles(Recent(temp.Path), "*_req.json");
         Assert.Equal(change == "unchanged" ? 1 : 2, paths.Length);
         if (change != "unchanged")
         {
             Assert.Contains("new-input", handler.Bodies[1]);
-            var current = Assert.Single(paths, path => File.ReadAllText(path).Contains("new-input", StringComparison.Ordinal));
-            var response = JsonNode.Parse(await File.ReadAllTextAsync(current.Replace("_req.json", "_res.json", StringComparison.Ordinal)))!;
+            var current = Assert.Single(
+                paths,
+                path => File.ReadAllText(path).Contains("new-input", StringComparison.Ordinal)
+            );
+            var response = JsonNode.Parse(
+                await File.ReadAllTextAsync(
+                    current.Replace("_req.json", "_res.json", StringComparison.Ordinal)
+                )
+            )!;
             Assert.Contains("answer", response["body"]!.ToJsonString());
             Assert.Null(response["attempts"]);
             var previous = Assert.Single(paths, path => path != current);
-            Assert.Contains("retry evidence", await File.ReadAllTextAsync(previous.Replace("_req.json", "_res.json", StringComparison.Ordinal)));
+            Assert.Contains(
+                "retry evidence",
+                await File.ReadAllTextAsync(
+                    previous.Replace("_req.json", "_res.json", StringComparison.Ordinal)
+                )
+            );
         }
         else
         {
             var response = await ReadResponse(temp.Path);
             Assert.Single(response["attempts"]!.AsArray());
-            Assert.Equal(JsonNode.Parse(handler.Bodies[0])!.ToJsonString(), JsonNode.Parse(handler.Bodies[1])!.ToJsonString());
+            Assert.Equal(
+                JsonNode.Parse(handler.Bodies[0])!.ToJsonString(),
+                JsonNode.Parse(handler.Bodies[1])!.ToJsonString()
+            );
         }
     }
 
@@ -589,25 +727,52 @@ public sealed class ModelInteractionDiagnosticsTests
     public async Task Unchanged_virtual_failover_updates_the_current_raw_request_and_keeps_its_selections()
     {
         using var temp = new TempDirectory();
-        using var handler = new DiagnosticHandler((number, _) => number == 1
-            ? (HttpStatusCode.ServiceUnavailable, "first leaf failed")
-            : (HttpStatusCode.OK, Sse(ResponsesPrefixCommitTests.Completed(Answer()))));
+        using var handler = new DiagnosticHandler(
+            (number, _) =>
+                number == 1
+                    ? (HttpStatusCode.ServiceUnavailable, "first leaf failed")
+                    : (HttpStatusCode.OK, Sse(ResponsesPrefixCommitTests.Completed(Answer())))
+        );
         using var http = new HttpClient(handler);
         var uri = new Uri("http://unused.invalid");
         var config = Catalog(uri);
         config["providers"]!["b"] = config["providers"]!["a"]!.DeepClone();
         config["providers"]!["route"] = new JsonObject
         {
-            ["providerType"] = "failover", ["targets"] = new JsonArray("a/m", "b/m"), ["failureThreshold"] = 1,
+            ["providerType"] = "failover",
+            ["targets"] = new JsonArray("a/m", "b/m"),
+            ["failureThreshold"] = 1,
         };
-        var owner = new ModelRequestOwner(http, Options(uri), new ModelRouting(), (_, _) => Task.CompletedTask, diagnostics: new(temp.Path));
-        await owner.RequestAsync("s", HostModels.Parse(config, new JsonObject()), "route", null, "cache", "turn", [],
-            (leaf, _) => Task.FromResult("prompt " + leaf.Key), null, null, null, null, default);
+        var owner = new ModelRequestOwner(
+            http,
+            Options(uri),
+            new ModelRouting(),
+            (_, _) => Task.CompletedTask,
+            diagnostics: new(temp.Path)
+        );
+        await owner.RequestAsync(
+            "s",
+            HostModels.Parse(config, new JsonObject()),
+            "route",
+            null,
+            "cache",
+            "turn",
+            [],
+            (leaf, _) => Task.FromResult("prompt " + leaf.Key),
+            null,
+            null,
+            null,
+            null,
+            default
+        );
         var path = Assert.Single(Directory.GetFiles(Recent(temp.Path), "*_req.json"));
         var raw = JsonNode.Parse(await File.ReadAllTextAsync(path))!;
         Assert.Equal("route", raw["virtualModelKey"]!.GetValue<string>());
         Assert.Equal("b/m", raw["selectedModelId"]!.GetValue<string>());
-        Assert.Equal(new[] { "a/m", "b/m" }, raw["selections"]!.AsArray().Select(item => item!["modelId"]!.GetValue<string>()));
+        Assert.Equal(
+            new[] { "a/m", "b/m" },
+            raw["selections"]!.AsArray().Select(item => item!["modelId"]!.GetValue<string>())
+        );
         Assert.Contains("prompt b/m", raw["request"]!.ToJsonString());
         var response = await ReadResponse(temp.Path);
         Assert.Single(response["attempts"]!.AsArray());
@@ -618,35 +783,77 @@ public sealed class ModelInteractionDiagnosticsTests
     public async Task Effective_image_configuration_omits_raw_content_even_when_purpose_filters_the_tool()
     {
         using var temp = new TempDirectory();
-        using var handler = new DiagnosticHandler((_, body) =>
-        {
-            Assert.DoesNotContain("image_generation", body);
-            return (HttpStatusCode.OK, Sse(ResponsesPrefixCommitTests.Completed(Answer())));
-        });
+        using var handler = new DiagnosticHandler(
+            (_, body) =>
+            {
+                Assert.DoesNotContain("image_generation", body);
+                return (HttpStatusCode.OK, Sse(ResponsesPrefixCommitTests.Completed(Answer())));
+            }
+        );
         using var http = new HttpClient(handler);
         var uri = new Uri("http://unused.invalid");
         var config = Catalog(uri);
         config["providers"]!["a"]!["imageGeneration"] = new JsonObject { ["enabled"] = true };
-        var owner = new ModelRequestOwner(http, Options(uri), new ModelRouting(), diagnostics: new(temp.Path));
-        await owner.RequestAsync("s", HostModels.Parse(config, new JsonObject()), "a/m", null, "cache", "turn", [],
-            (_, _) => Task.FromResult("prompt"), null, null, null, null, default, journalPurpose: "compact-plan");
+        var owner = new ModelRequestOwner(
+            http,
+            Options(uri),
+            new ModelRouting(),
+            diagnostics: new(temp.Path)
+        );
+        await owner.RequestAsync(
+            "s",
+            HostModels.Parse(config, new JsonObject()),
+            "a/m",
+            null,
+            "cache",
+            "turn",
+            [],
+            (_, _) => Task.FromResult("prompt"),
+            null,
+            null,
+            null,
+            null,
+            default,
+            journalPurpose: "compact-plan"
+        );
         var raw = (await ReadResponse(temp.Path))["rawStream"]!;
         Assert.True(raw["contentOmitted"]?.GetValue<bool>() == true);
         Assert.Null(raw["body"]);
     }
 
-    private static async Task<JsonObject> ReadResponse(string root) => JsonNode.Parse(await File.ReadAllTextAsync(
-        Assert.Single(Directory.GetFiles(Path.Combine(root, "state", "logs"), "*_res.json", SearchOption.AllDirectories))))!.AsObject();
+    private static async Task<JsonObject> ReadResponse(string root) =>
+        JsonNode
+            .Parse(
+                await File.ReadAllTextAsync(
+                    Assert.Single(
+                        Directory.GetFiles(
+                            Path.Combine(root, "state", "logs"),
+                            "*_res.json",
+                            SearchOption.AllDirectories
+                        )
+                    )
+                )
+            )!
+            .AsObject();
 
-    private sealed class DiagnosticHandler(Func<int, string, (HttpStatusCode Status, string Body)> reply) : HttpMessageHandler
+    private sealed class DiagnosticHandler(
+        Func<int, string, (HttpStatusCode Status, string Body)> reply
+    ) : HttpMessageHandler
     {
         internal readonly List<string> Bodies = [];
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken token
+        )
         {
             var body = await request.Content!.ReadAsStringAsync(token);
             Bodies.Add(body);
             var result = reply(Bodies.Count, body);
-            return new HttpResponseMessage(result.Status) { Content = new StringContent(result.Body, Encoding.UTF8, "text/event-stream") };
+            return new HttpResponseMessage(result.Status)
+            {
+                Content = new StringContent(result.Body, Encoding.UTF8, "text/event-stream"),
+            };
         }
     }
 

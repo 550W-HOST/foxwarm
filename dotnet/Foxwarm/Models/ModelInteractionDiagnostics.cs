@@ -217,7 +217,8 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                 VirtualModel = virtualModel is null ? null : SafeText(virtualModel);
                 raw = new RawCapture(
                     model.ProviderType is "openai" or "openai-responses" or "openai-ws"
-                    && model.Configuration["imageGeneration"]?["enabled"]?.GetValue<bool>() == true
+                        && model.Configuration["imageGeneration"]?["enabled"]?.GetValue<bool>()
+                            == true
                 );
             }
 
@@ -237,7 +238,11 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                 BestEffortAsync(() =>
                 {
                     // The serializer has now prepared the actual native replay input.
-                    if ((payload["input"] as JsonArray)?.OfType<JsonObject>().Any(HostedResponsesTools.IsGeneratedImage) == true)
+                    if (
+                        (payload["input"] as JsonArray)
+                            ?.OfType<JsonObject>()
+                            .Any(HostedResponsesTools.IsGeneratedImage) == true
+                    )
                         lock (rawGate)
                             raw.OmitContent();
                     return interaction.PreparedAsync(this, payload);
@@ -272,7 +277,12 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                 }
             }
 
-            internal void Response(string status, JsonObject headers, JsonNode? body, bool truncated = false)
+            internal void Response(
+                string status,
+                JsonObject headers,
+                JsonNode? body,
+                bool truncated = false
+            )
             {
                 try
                 {
@@ -400,7 +410,9 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                     string? decoded = null;
                     try
                     {
-                        decoded = JsonSerializer.Deserialize<string>(closed ? literal : literal + "\"");
+                        decoded = JsonSerializer.Deserialize<string>(
+                            closed ? literal : literal + "\""
+                        );
                     }
                     catch (JsonException) { }
                     string? replacement = null;
@@ -532,7 +544,11 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                 try
                 {
                     var value = JsonSerializer.Deserialize<string>(match.Value);
-                    if (value is "b64_json" or "partial_image_b64" || value?.Contains("image_generation_call", StringComparison.Ordinal) == true)
+                    if (
+                        value is "b64_json" or "partial_image_b64"
+                        || value?.Contains("image_generation_call", StringComparison.Ordinal)
+                            == true
+                    )
                         return true;
                 }
                 catch (JsonException) { }

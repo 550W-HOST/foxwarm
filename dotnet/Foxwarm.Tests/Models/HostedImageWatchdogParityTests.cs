@@ -206,27 +206,52 @@ public sealed class HostedImageWatchdogParityTests
         var clock = new ManualWsClock();
         var answer = new JsonObject
         {
-            ["type"] = "message", ["role"] = "assistant", ["phase"] = "final_answer",
-            ["content"] = new JsonArray(new JsonObject { ["type"] = "output_text", ["text"] = "final" }),
+            ["type"] = "message",
+            ["role"] = "assistant",
+            ["phase"] = "final_answer",
+            ["content"] = new JsonArray(
+                new JsonObject { ["type"] = "output_text", ["text"] = "final" }
+            ),
         };
         var bytes = System.Text.Encoding.UTF8.GetBytes(
             "data: " + ResponsesPrefixCommitTests.Completed(answer).ToJsonString() + "\n\n"
         );
         using var stream = new CompletedOpenStream(bytes);
-        using var http = new HttpClient(new CompletedOpenHandler(stream)) { Timeout = Timeout.InfiniteTimeSpan };
+        using var http = new HttpClient(new CompletedOpenHandler(stream))
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
         using var stop = new CancellationTokenSource();
-        var options = new ResponsesClientOptions(new Uri("http://unused.invalid"), "m", "a/m", "", "", 713,
-            StreamInactivityTimeoutMs: 60000)
+        var options = new ResponsesClientOptions(
+            new Uri("http://unused.invalid"),
+            "m",
+            "a/m",
+            "",
+            "",
+            713,
+            StreamInactivityTimeoutMs: 60000
+        )
         {
             Clock = clock,
             HardTimeoutMs = end == "hard-deadline" ? 10000 : null,
         };
-        var models = HostModels.Parse(new JsonObject
-        {
-            ["providers"] = new JsonObject { ["a"] = new JsonObject
-                { ["providerType"] = "openai-responses", ["baseUrl"] = "http://unused.invalid", ["models"] = new JsonArray("m") } },
-        }, new JsonObject());
-        var request = ConfiguredModelRequests.CreatePreparedService(http, models.Resolve("a/m"), options, "cache")
+        var models = HostModels.Parse(
+            new JsonObject
+            {
+                ["providers"] = new JsonObject
+                {
+                    ["a"] = new JsonObject
+                    {
+                        ["providerType"] = "openai-responses",
+                        ["baseUrl"] = "http://unused.invalid",
+                        ["models"] = new JsonArray("m"),
+                    },
+                },
+            },
+            new JsonObject()
+        );
+        var request = ConfiguredModelRequests
+            .CreatePreparedService(http, models.Resolve("a/m"), options, "cache")
             .ChatAsync("s", [], stop.Token);
         await stream.Waiting.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.False(request.IsCompleted);
@@ -236,7 +261,9 @@ public sealed class HostedImageWatchdogParityTests
             clock.Advance(TimeSpan.FromMilliseconds(end == "hard-deadline" ? 10001 : 86400000));
         try
         {
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => request.WaitAsync(TimeSpan.FromSeconds(5)));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                request.WaitAsync(TimeSpan.FromSeconds(5))
+            );
         }
         finally
         {
@@ -246,15 +273,27 @@ public sealed class HostedImageWatchdogParityTests
 
     private sealed class CompletedOpenHandler(Stream stream) : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) =>
-            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StreamContent(stream) });
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken token
+        ) =>
+            Task.FromResult(
+                new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StreamContent(stream),
+                }
+            );
     }
 
     private sealed class CompletedOpenStream(byte[] prefix) : Stream
     {
         private int offset;
         internal readonly TaskCompletionSource Waiting = Signal();
-        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken token = default)
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken token = default
+        )
         {
             if (offset < prefix.Length)
             {
@@ -267,16 +306,29 @@ public sealed class HostedImageWatchdogParityTests
             await Task.Delay(Timeout.InfiniteTimeSpan, token);
             return 0;
         }
+
         public override bool CanRead => true;
         public override bool CanSeek => false;
         public override bool CanWrite => false;
         public override long Length => throw new NotSupportedException();
-        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
-        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+
         public override void Flush() => throw new NotSupportedException();
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) =>
+            throw new NotSupportedException();
+
         public override void SetLength(long value) => throw new NotSupportedException();
-        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
     }
 
     private static Foxwarm.Sessions.IChatService Service(
