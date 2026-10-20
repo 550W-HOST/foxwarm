@@ -5,7 +5,7 @@ description: "Use and maintain layered project code indexes: architecture overvi
 
 # Code Index
 
-A **code index** is a layered, agent-oriented map of a source repository. It helps development agents orient themselves before editing code, but it is not the source of truth. Verify important claims against current source before making risky changes.
+A **code index** is a layered, agent-oriented map of a source repository. It locates code and records current contracts and their rationale; it does not establish requirements merely by describing an implementation. Confirmed design decisions and supported compatibility contracts constrain changes. Source and tests provide evidence of actual behavior; report conflicts instead of silently changing a contract to fit the code.
 
 ## Resolve the Index Root
 
@@ -20,7 +20,7 @@ In the rest of this skill, `<index-root>` means that resolved directory.
 
 ```text
 <index-root>/
-├── overview.md          # Project-wide architecture, principles, navigation
+├── overview.md          # Project entry, architecture, principles, local conventions
 ├── threads/             # Cross-module end-to-end contracts and flows
 ├── modules/             # Module/subtree summaries
 ├── units/               # Bottom-level semantic unit summaries
@@ -33,22 +33,22 @@ Before inspecting or modifying code:
 
 1. Resolve the index root. A fresh Session must read relevant Code Index context before changing source or assigning implementation; a source search alone does not replace this step.
 2. Start at the smallest entry that covers the task. Read `overview.md` when the repository or subsystem is unfamiliar; otherwise use the relevant module, thread, or unit directly.
-3. Read the governing decisions and follow dependencies when the change crosses a boundary or leaves a material question unresolved. Do not visit every index layer merely to complete a sequence.
+3. Identify the few governing contracts and reasons relevant to the task. Follow dependencies when a boundary or material question needs clarification; do not visit every index layer merely to complete a sequence.
 4. Reuse relevant context already read in this Session when it is still current. Read the affected sections after a branch change, conflicting evidence, or new scope; a new small edit does not by itself require rereading unchanged documents.
-5. Verify material claims against source. If the index is missing or stale, say so and use source evidence; correct affected index content with the change.
+5. Verify material claims against source. For translation or replacement, compare the original caller path from entry to observable effects with the new path; a feature summary or the new implementation's own tests cannot establish parity. If source and a recorded contract disagree, identify whether the code or documentation needs correction rather than assuming either is correct.
 
 After changing source:
 
-1. Update the affected unit's current file ownership, purpose, behavior, exports, stable-symbol function index, tests, and integration notes as applicable.
-2. Update affected module/thread/overview navigation and current behavior or contracts.
-3. Before writing any decision, choose its one canonical owner. Updating several related docs does **not** mean appending the same decision to every layer.
-4. Run available code-index checks and review the diff for stale or duplicated material.
+1. Update only changed contracts, responsibilities, and navigation. Preserve useful source-entry and stable-symbol references; do not narrate every helper, branch, or test run.
+2. Update a parent or thread only when its own boundary, interface, flow, or navigation changes. A file split may need only ownership and symbol-reference updates.
+3. Choose one canonical owner for each decision. Replace superseded text and remove redundant detail instead of appending another account of the change.
+4. Run available index checks and review the documentation diff. Structural checks do not prove behavioral correctness or parity.
 
 ## Document Roles and Ownership
 
 ### `overview.md`
 
-Project-wide overview: what the project is, module map, core principles, tech stack, project-wide invariants, and where to start reading.
+The project entry point: architecture, project-wide principles, module/thread navigation, and necessary repository-specific conventions. Avoid a separate governance entry that readers must discover; do not copy the full generic skill into the overview.
 
 ### `modules/{name}.md`
 
@@ -60,7 +60,7 @@ A cross-module end-to-end contract or flow, such as request lifecycle, state per
 
 ### `units/{name}.md`
 
-A bottom-level semantic unit: one file, a small related file group, or one large-file section/class/export. Explain purpose, parent context, stable symbols, dependencies/callers, behavior, side effects, edge cases, tests, and integration.
+A bottom-level semantic unit: one file, a small related file group, or one large-file section/class/export. Keep the contracts, caller boundaries, side effects, and source/test entry points needed to change it correctly. Do not turn the unit into a line-by-line account of its implementation.
 
 Each source file should have at most one unit claiming **primary ownership**. A unit may list other files as **secondary/integration references**, but must not imply that it owns them. Prefer stable symbols and section names over brittle line numbers; add line numbers only when they materially help and are likely to remain useful.
 
@@ -81,12 +81,12 @@ Translate user-confirmed Design Decisions accurately into English. Preserve the 
 
 ## Design Decision Governance
 
-The index is an **active map**, not an append-only changelog.
+The index is an **active map**, not an append-only changelog. Lead each page with its important constraints and useful rationale, or links to their canonical owners, before implementation detail. Use existing headings where suitable; this is an information priority, not a mandatory template or another checklist.
 
 - Keep only the currently effective, user-confirmed contract and useful rationale.
 - Replace or remove superseded text; Git history preserves old versions.
 - Put unconfirmed ideas in `## Open Questions`, explicitly labeled `Unconfirmed`, rather than in `## Design Decisions`.
-- Curate or split a document when decision density makes it hard to navigate.
+- Remove stale, duplicated, or incidental detail first; split by responsibility when the remaining useful content is still hard to navigate. Do not drop effective contracts merely to shorten a page.
 
 Every decision has exactly one canonical owner:
 
@@ -103,7 +103,7 @@ Exception: a critical security, data-integrity, persisted-data, or external-cont
 
 ## Maintenance Quality Checks
 
-Keep docs concise and navigational. Prefer practical coding guidance and stable terminology over exhaustive prose. Do not routinely regenerate a curated index; use targeted updates, and correct docs whenever they conflict with source.
+Keep docs concise and navigational. Retain details that explain an implementation constraint, prevent a known regression, or locate relevant code. Do not routinely regenerate a curated index. Resolve discrepancies with source under the contract/evidence distinction above, then update the affected content.
 
 Use project-provided lint/check scripts when available. Otherwise review or automate checks for:
 
