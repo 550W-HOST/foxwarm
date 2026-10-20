@@ -22,6 +22,7 @@ import { resolveImageBlobPath } from '../imageBlobs';
 import { writeArchiveMessages } from '../session/archiveStore';
 import { WebSocket } from 'ws';
 import { once } from 'node:events';
+import http from 'node:http';
 
 function makeSessionId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -56,6 +57,77 @@ function createSseDataReader(body: ReadableStream<Uint8Array>) {
     cancel: () => reader.cancel(),
   };
 }
+
+test('WebUI Session creation consumes length-bearing and chunked JSON with the same identity and root ordering', async () => {
+  const agentId = makeSessionId('framing_agent');
+  const token = 'synthetic-framing-admin';
+  const server = new HttpServer(0, token);
+  setHttpServer(server);
+  new WebUIChannel({ router: {} as any, token, enableTrigger: false, enableWebUI: true });
+  await server.start();
+  const port = ((server as any).httpServer.address() as { port: number }).port;
+  const frames: Array<{ length?: string; transfer?: string }> = [];
+  (server as any).httpServer.on('request', (request: http.IncomingMessage) => {
+    if (request.method === 'POST' && request.url === '/api/sessions') frames.push({ length: request.headers['content-length'], transfer: request.headers['transfer-encoding'] });
+  });
+  const request = (method: string, route: string, text?: string, chunked = false, authenticated = true): Promise<{ status: number; text: string }> => new Promise((resolve, reject) => {
+    const headers: Record<string, string | number> = { 'Content-Type': 'application/json' };
+    if (authenticated) headers.Authorization = `Bearer ${token}`;
+    if (chunked) headers['Transfer-Encoding'] = 'chunked';
+    else if (text !== undefined) headers['Content-Length'] = Buffer.byteLength(text);
+    const outgoing = http.request({ hostname: '127.0.0.1', port, method, path: route, headers }, response => {
+      let body = '';
+      response.setEncoding('utf8'); response.on('data', part => body += part);
+      response.on('end', () => resolve({ status: response.statusCode!, text: body }));
+    });
+    outgoing.on('error', reject);
+    if (text) { const split = Math.max(1, Math.floor(text.length / 2)); outgoing.write(text.slice(0, split)); outgoing.write(text.slice(split)); }
+    outgoing.end();
+  });
+  const roots = async () => {
+    const response = await request('GET', '/api/session-list/sidebar?limit=50');
+    assert.equal(response.status, 200);
+    return (JSON.parse(response.text).sessions as any[]).map(row => row.id as string);
+  };
+  const created: string[] = [];
+  try {
+    const agent = await request('POST', '/api/agents', JSON.stringify({ agentId }));
+    assert.equal(agent.status, 201); created.push(`${agentId}/main`);
+    for (const chunked of [false, true]) {
+      let before = await roots();
+      const sessionId = chunked ? 'chunked' : 'length';
+      const response = await request('POST', '/api/sessions', JSON.stringify({ agentId, sessionId }), chunked);
+      assert.equal(response.status, 200);
+      assert.deepEqual(JSON.parse(response.text), { success: true, sessionId: `${agentId}/${sessionId}` });
+      created.push(`${agentId}/${sessionId}`);
+      const frame = frames.at(-1)!;
+      assert.equal(frame.transfer, chunked ? 'chunked' : undefined);
+      assert.equal(frame.length !== undefined, !chunked);
+      assert.deepEqual(await roots(), [`${agentId}/${sessionId}`, ...before]);
+      const catalog = JSON.parse((await request('GET', '/api/sessions')).text).sessions;
+      assert.ok(catalog.some((row: any) => row.id === `${agentId}/${sessionId}`));
+      assert.equal((await request('GET', `/api/sessions/${encodeURIComponent(`${agentId}/${sessionId}`)}/history`)).status, 200);
+      for (const empty of [undefined, '', '{}']) {
+        before = await roots();
+        const result = await request('POST', '/api/sessions', empty, chunked);
+        assert.equal(result.status, 200);
+        const id = JSON.parse(result.text).sessionId; created.push(id);
+        assert.ok(!before.includes(id)); assert.deepEqual(await roots(), [id, ...before]);
+      }
+      before = await roots();
+      for (const malformed of ['{', ' \n ', 'null']) {
+        assert.equal((await request('POST', '/api/sessions', malformed, chunked)).status, 400);
+        assert.deepEqual(await roots(), before);
+      }
+      assert.equal((await request('POST', '/api/sessions', JSON.stringify({ agentId, sessionId: 'denied' }), chunked, false)).status, 401);
+      assert.deepEqual(await roots(), before);
+    }
+  } finally {
+    await server.stop(); setHttpServer(null);
+    for (const id of created.reverse()) await sessionManager.deleteSession(id).catch(() => {});
+    await fs.remove(getAgentDir(agentId));
+  }
+});
 
 test('WebUI creation routes create agents and random or custom sessions', async () => {
   const agentId = makeSessionId('webui_agent').replace(/[^a-zA-Z0-9_-]/g, '_');

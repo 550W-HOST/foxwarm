@@ -286,12 +286,24 @@ internal sealed partial class WebUIChannel
                 try
                 {
                     JsonObject? body = null;
-                    if (request.ContentLength is > 0)
-                        body =
-                            await JsonNode.ParseAsync(request.Body) as JsonObject
-                            ?? throw new InvalidDataException(
-                                "Session creation must be an object."
-                            );
+                    if (
+                        request.ContentLength is > 0
+                        || request.Headers.ContainsKey("Transfer-Encoding")
+                    )
+                    {
+                        // A zero-byte chunked JSON stream is the same as a bodyless request.
+                        using var input = new MemoryStream();
+                        await request.Body.CopyToAsync(input);
+                        if (input.Length > 0)
+                        {
+                            input.Position = 0;
+                            body =
+                                await JsonNode.ParseAsync(input) as JsonObject
+                                ?? throw new InvalidDataException(
+                                    "Session creation must be an object."
+                                );
+                        }
+                    }
                     SessionOwner hosted;
                     if (body is null || body.Count == 0)
                         hosted = await sessions.CreateAsync();

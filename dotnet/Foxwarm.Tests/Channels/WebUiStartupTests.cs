@@ -241,7 +241,7 @@ public sealed partial class WebUiStartupTests
         File.CreateSymbolicLink(Path.Combine(directory, "foxwarm.log"), "/dev/full");
         h.Start();
         await h.Ready();
-        var response = await h.Client.PostAsJsonAsync("/api/sessions", new { agent = "main" });
+        var response = await h.Client.PostAsJsonAsync("/api/sessions", new { });
         Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
         var created = await response.Content.ReadFromJsonAsync<JsonObject>();
         Assert.NotNull(created?["id"] ?? created?["sessionId"] ?? created?["session"]?["id"]);
@@ -711,11 +711,11 @@ public sealed partial class WebUiStartupTests
                 new { agentId = "main", sessionId = "ranked-" + index }
             );
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-            ids.Add(
-                (await response.Content.ReadFromJsonAsync<JsonObject>())![
-                    "sessionId"
-                ]!.GetValue<string>()
-            );
+            var requested = (await response.Content.ReadFromJsonAsync<JsonObject>())![
+                "sessionId"
+            ]!.GetValue<string>();
+            Assert.Equal("ranked-" + index, requested);
+            ids.Add(requested);
         }
         foreach (var id in ids.Take(2))
         {
