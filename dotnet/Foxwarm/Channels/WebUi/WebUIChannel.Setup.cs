@@ -29,7 +29,7 @@ internal sealed partial class WebUIChannel
                             {
                                 ["managedChannels"] = configuration.ManagedChannels is not null,
                                 ["externalChannelMessage"] =
-                                    "Telegram, Matrix, Weixin and WeWork are supported; QQ is not implemented on this server.",
+                                    "External channels are not running in this host.",
                             },
                         }
                     );
