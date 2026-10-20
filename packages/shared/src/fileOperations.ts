@@ -98,14 +98,16 @@ export async function fileOperationPathExists(operations: FileOperations, filePa
 }
 
 /** Read a complete file through bounded primitive requests. */
-export async function readWholeFile(operations: FileOperations, filePath: string, chunkSize = 64 * 1024): Promise<Buffer> {
+export async function readWholeFile(operations: FileOperations, filePath: string, chunkSize = 64 * 1024, maxBytes?: number): Promise<Buffer> {
+  if (maxBytes !== undefined && (!Number.isSafeInteger(maxBytes) || maxBytes < 0)) throw new Error('File byte limit must be a nonnegative safe integer.');
   const chunks: Buffer[] = [];
   let offset = 0;
   while (true) {
-    const chunk = await operations.read(filePath, offset, chunkSize);
+    const chunk = await operations.read(filePath, offset, maxBytes === undefined ? chunkSize : Math.min(chunkSize, maxBytes - offset + 1));
     if (chunk.length === 0) break;
-    chunks.push(chunk);
     offset += chunk.length;
+    if (maxBytes !== undefined && offset > maxBytes) throw new Error(`Source file exceeds ${maxBytes} bytes.`);
+    chunks.push(chunk);
     if (chunk.length < chunkSize) break;
   }
   return Buffer.concat(chunks);

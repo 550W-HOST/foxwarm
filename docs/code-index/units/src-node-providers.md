@@ -23,7 +23,7 @@ Production has fixed master/authenticated-remote adapters plus startup-configure
 | `NodeProvider` | Optional describe, filesystem, start/poll and lifecycle methods; historical complete tools belong only to resident authenticated transports |
 | `NodeProviderRegistry.initialize()` / `shutdown()` | Shared ordered initialization, reverse rollback and reverse idempotent shutdown |
 | `listNodes()` / `resolveNode()` | Global duplicate detection, fixed-provider-first deferred lookup and exact ownership |
-| `invokeTool()` / `readFile()` | Ready-capability checks and canonical composition; complete source reads never consume truncated model display |
+| `invokeTool()` / `readFile()` | Ready-capability checks and canonical composition; complete source reads never consume truncated model display; optional primitive-source byte bounds reject from stat and cap ranged reads, while resident CLI reads retain their existing full-read behavior |
 | `readTransferFile()` / `writeTransferFile()` | Same exact registry endpoints for primitive binary transfer and unchanged Main/resident transfer adapters |
 | `execBackend()` | Rebind a persisted provider ID/Node ID directly to the same configured provider and target log filesystem |
 | `inspectProvider()` / `listProviders()` | Structured discovery, including providers with no lifecycle; parameter schemas belong to full inspection |

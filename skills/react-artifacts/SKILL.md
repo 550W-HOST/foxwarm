@@ -17,7 +17,7 @@ Up to 24 source files, 200,000 characters/file, 2 MiB/manifest. No filesystem pa
 
 ## Runtime contract
 
-The user starts the preview. It runs in opaque-origin sandbox frames without Foxwarm credentials or host APIs. Networking, external resources, popups, forms, browser workers and nested frames are disabled. Store interaction state in React memory. Stop/Reset and background-tab suspension discard that state; reopening begins from the initial state. Do not promise durable user edits.
+The user starts the preview. It runs in opaque-origin sandbox frames without Foxwarm credentials or host APIs. The sandbox restricts ordinary resource loading, popups, forms, browser workers and nested frames, but it does not guarantee complete network isolation. Store interaction state in React memory. Stop/Reset and background-tab suspension discard that state; reopening begins from the initial state. Do not promise durable user edits.
 
 Use inline SVG, HTML and CSS. Theme variables: `--artifact-bg`, `--artifact-text`, `--artifact-accent`, `--artifact-accent-text`. Design for a narrow phone and a resizable expanded view. Label controls and support keyboard input. Respect `prefers-reduced-motion`; use explicit Play/Pause, speed and Reset for animations. Clear intervals/animation frames on unmount. Avoid unbounded computation; this is a browser preview, not a secure compute service.
 

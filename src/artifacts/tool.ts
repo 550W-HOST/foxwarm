@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { isCoreNodeId } from '../../packages/shared/dist/nodeIdentity';
 import path from 'node:path';
 import { STATE_DIR } from '../config';
 import { readNodeFile } from '../nodeExecution';
@@ -26,7 +27,7 @@ export async function tool_artifact(args: ToolArgs, ctx: ToolContext) {
   if (!['publish', 'prepare'].includes(args.action)) throw new Error('Supported actions: prepare, publish, get');
   if (Object.keys(args).some(k => !['action', 'filePath', 'node', 'artifactId', 'expectedRevision', 'type', 'title', 'alt'].includes(k))) throw new Error('Unsupported artifact argument');
   if (typeof args.filePath !== 'string' || !args.filePath || args.filePath.length > 4096) throw new Error('A bounded filePath is required');
-  if (args.node !== undefined && (typeof args.node !== 'string' || !args.node || args.node.length > 128)) throw new Error('Invalid source Node');
+  if (args.node !== undefined && !isCoreNodeId(args.node)) throw new Error('Invalid source Node');
   if (args.type !== undefined && args.type !== 'image') throw new Error('type is only needed for raster image files; other types come from the manifest');
   if (args.type !== 'image' && (args.title !== undefined || args.alt !== undefined)) throw new Error('title and alt apply only to raster image files');
   const limit = args.type === 'image' ? IMAGE_ARTIFACT_MAX_BYTES : MAX_ARTIFACT_BYTES;
@@ -44,9 +45,9 @@ export async function tool_artifact(args: ToolArgs, ctx: ToolContext) {
     } finally { await handle.close(); }
   } else if (args.type === 'image') {
     await requireNodeExecutionAccess(ctx.sessionId, nodeId);
-    bytes = await nodeProviderRegistry.readFile({ sourceSessionId: ctx.sessionId, nodeId, toolName: 'read', args: { filePath: args.filePath }, context: { agent: ctx.session.agent || 'main', currentNode: nodeId, ...(cwd !== undefined ? { cwd } : {}) } }, { signal: ctx.signal });
+    bytes = await nodeProviderRegistry.readFile({ sourceSessionId: ctx.sessionId, nodeId, toolName: 'read', args: { filePath: args.filePath }, context: { agent: ctx.session.agent || 'main', currentNode: nodeId, ...(cwd !== undefined ? { cwd } : {}) } }, { signal: ctx.signal, maxBytes: limit });
   } else {
-    const content = await readNodeFile(ctx.sessionId, nodeId, args.filePath, { currentNode: nodeId, ...(cwd !== undefined ? { cwd } : {}) }, ctx.signal);
+    const content = await readNodeFile(ctx.sessionId, nodeId, args.filePath, { currentNode: nodeId, ...(cwd !== undefined ? { cwd } : {}) }, ctx.signal, limit);
     if (Buffer.byteLength(content, 'utf8') > MAX_ARTIFACT_BYTES) throw new Error('Artifact exceeds 2 MiB');
     bytes = Buffer.from(content, 'utf8');
   }

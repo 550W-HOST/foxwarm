@@ -9,7 +9,7 @@ Owns source ingestion, immutable persistent snapshots, module preparation and au
 
 ## Symbols
 
-- `tool_artifact`: current-Session-only preparation/publication; checks read authorization, resolves Main real paths and isolated-agent boundary, or uses the existing authorized Node file-read service with a captured source CWD. Returns a preparation reference without auto-display, or a display receipt after publication. Raster input uses verified original bytes and the same source authorization.
+- `tool_artifact`: current-Session-only preparation/publication; checks read authorization, resolves Main real paths and isolated-agent boundary, or uses the existing authorized Node file-read service with a captured source CWD. Primitive Provider sources reject an oversized stat before reading and cap total ranged reads at the limit plus one byte to detect growth. Resident CLI sources retain their canonical approval/read and complete-transfer behavior; that legacy path still checks the artifact size only after the complete read. Returns a preparation reference without auto-display, or a display receipt after publication. Raster input uses verified original bytes and the same source authorization.
 - `artifactStore`, `ArtifactStore.publish/read/resource/latestRevision`: Main state store, per-artifact serialization, expected-revision conflicts, type/owner invariants and atomic exclusive final-file linking. Content-addressed resources are complete before the revision link and verified on read; temporary files are removed on failure.
 - `describeImage`: safe raster magic/header, pixel/frame bounds and canonical metadata.
 - `prepareArtifact`, `ArtifactPreparer`: registered preparation adapters; charts need no compilation.
@@ -22,4 +22,4 @@ Publication runs through the existing Main-management RPC facade, including Sess
 
 ## Verification
 
-`artifacts.test.ts` covers schemas, source imports, no execution, old snapshot preservation, concurrent revisions, ownership and HTTP scope. `artifactTools.test.ts` verifies direct/unified/ToolScript dispatch, the reverse-source fence and remote source CWD capture. Tests use temporary data roots, never the live state store. The React compiler requires backend and WebUI dependencies to be installed.
+`artifacts.test.ts` covers schemas, source imports, no execution, old snapshot preservation, concurrent revisions, ownership and HTTP scope. `artifactTools.test.ts` verifies direct/unified/ToolScript dispatch, the reverse-source fence and remote source CWD capture. The primitive ingestion regression uses honest 8 MiB manifest and 16 MiB image sources, read accounting, a growing source, denied read policy and a 193-character qualified Node ID. Tests use temporary data roots, never the live state store. The React compiler requires backend and WebUI dependencies to be installed.
