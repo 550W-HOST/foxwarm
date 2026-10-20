@@ -2,9 +2,9 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 
-namespace Foxwarm.CliNode;
+namespace Foxwarm.BrowserSupport;
 
-// Stringify the return-by-value clone in the CLI, never in the page's mutable realm.
+// Stringify the return-by-value clone in the host, never in the page's mutable realm.
 internal static class BrowserCloneJson
 {
     internal static string Stringify(JsonElement clone)

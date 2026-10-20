@@ -32,6 +32,7 @@ internal sealed partial class SessionToolExecutor(
     private readonly List<string> explicitWaitIds = [];
     private readonly List<string> handoffTargets = [];
     internal SessionOwner Hosted => hosted;
+    internal MainBrowserTools Browser => sessions.Browser;
     internal bool HandoffConfirmationEnabled => sessions.HandoffConfirmationEnabled;
     private SessionManager Manager => sessions;
     private readonly AsyncLocal<TurnToolInvocation?> invocation = new();
@@ -929,6 +930,8 @@ internal sealed partial class SessionToolExecutor(
                 handlers[name]
             );
         }
+        foreach (var definition in MainBrowserDefinitions.All().OfType<JsonObject>())
+            registry.RegisterBrowser(definition);
         return registry;
     }
 }

@@ -606,6 +606,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         return hosted;
     }
 
+    internal MainBrowserTools Browser { get; } = new();
+
     private Task? shutdown;
 
     public Task ShutdownAsync()
@@ -677,6 +679,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await waitLiveness.DisposeAsync();
         await ToolScript.DisposeAsync();
         await executor.DisposeAsync();
+        await Browser.DisposeAsync();
         await mcp.DisposeAsync();
         Nodes.Dispose();
         await websockets.DisposeAsync();

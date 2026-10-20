@@ -41,6 +41,7 @@ The [outbound MCP client](../units/mcp.md) receives an actual trusted Session ow
 
 - [Unified tools](../units/tools-registry.md)
 - [Authorization](../units/tool-authorization.md)
+- [Main browser and shared evaluation](../units/dotnet-main-browser.md)
 - [Local I/O](../units/tools-local-io.md)
 - [MCP](../units/mcp.md)
 - [Remote Node compatibility](./remote-node-compatibility.md)

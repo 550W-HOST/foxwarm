@@ -22,6 +22,8 @@ The non-default setter is `set_config` with required `target` (`config`, `models
 
 The captured `${workspace}` base is the configured Agents directory for canonical installs. Retained main-at-workspace callers keep their original policy scope. The isolated-main nested `agents` exclusion applies only to that retained layout, where it protects sibling Agent directories; a canonical main Agent may use an ordinary `main/agents` subdirectory. Generic path rules, physical resolution and isolated own-directory checks remain independent of membership and startup layout.
 
+The [Main browser boundary](./dotnet-main-browser.md#exact-isolated-agent-compatibility) preserves Source's exact isolated master capability opt-in for the five `browse_*` tools only. Generic denial still wins. This includes the raw slash-prefixed screenshot write without ordinary file-path facts; it is not constrained by the normal own-Agent file resolver. Unrelated bound-Node, exec, selection and structural guards remain unchanged.
+
 ## Policy selectors and authoritative facts
 
 Version-1 rules accept either legacy `match` or top-level selectors, never both. Omitted IDs become position-based `rule-N` diagnostics. Top-level Session/Node identity selectors use bounded literal `*` patterns; legacy `match.session`, scalar/argument matchers, ordered first-match evaluation and external-default-deny remain unchanged. Node selectors also accept caller-current or exact Provider IDs: native Main is `master`, authenticated native remotes are `authenticated-remote`. The matcher syntax does not create a Provider backend or widen native Node registration.

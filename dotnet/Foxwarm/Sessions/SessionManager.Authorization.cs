@@ -149,7 +149,7 @@ internal sealed partial class SessionManager
         {
             if (toolScriptSourceRead && resolved.ExecutionNode == "master")
                 RequireFileNodeBoundary(owner, resolved.ExecutionNode);
-            else
+            else if (!IsMasterBrowser(resolved.Source, resolved.Name, resolved.ExecutionNode))
                 RequireNodeBoundary(owner, resolved.ExecutionNode);
         }
         if (resolved.Source == "builtin" && resolved.Name is "run_script" or "start_toolscript_run")
@@ -259,6 +259,11 @@ internal sealed partial class SessionManager
             );
     }
 
+    // This exception reaches generic policy and the existing exact isolated capability check.
+    // It does not grant selection, exec, file export or any other off-bound-Node authority.
+    private static bool IsMasterBrowser(string source, string name, string node) =>
+        source == "node" && node == "master" && MainBrowserDefinitions.Contains(name);
+
     internal bool ToolVisible(
         SessionOwner owner,
         string source,
@@ -292,6 +297,7 @@ internal sealed partial class SessionManager
             source == "node"
             && AgentIsolated(owner.Agent)
             && targetNode != (RecordedIsolationNode(owner.Agent) ?? "master")
+            && !IsMasterBrowser(source, name, targetNode)
         )
             return false;
         var request = AuthorizationRequest(owner, source, name, server, new(), [], targetNode);
@@ -354,7 +360,9 @@ internal sealed partial class SessionManager
                 )
             )
                 continue;
-            if (ToolVisible(owner, "node", name, node: node))
+            if (
+                !tools.Entries.Any(entry => entry.Source == "node" && !entry.DefaultInject && SessionWait.Text(entry.Definition["name"]) == name)
+                && ToolVisible(owner, "node", name, node: node))
                 definitions.Add(ToolCallControls.ForModel(definition));
         }
         return new JsonArray(definitions.ToArray());

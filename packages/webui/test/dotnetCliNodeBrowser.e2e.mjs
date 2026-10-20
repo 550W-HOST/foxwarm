@@ -13,7 +13,8 @@ const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
 const { processRoot: root } = initializeTestEnvironment()
 const modes = ['source', 'candidate']
-const evaluateOnly = process.argv.includes('--evaluate-only')
+const sharedOnly = process.argv.includes('--shared-only')
+const evaluateOnly = sharedOnly || process.argv.includes('--evaluate-only')
 const servers = [], sockets = new Map(), replies = [], children = [], evidence = {}
 const site = createServer((req, res) => {
   if (req.url === '/redirect') { res.writeHead(302, { location: '/one' }); res.end(); return }
@@ -112,6 +113,12 @@ async function corpus(mode){
     '(()=>{Object.prototype.toJSON=()=>"page-prototype-hook";return {a:1}})()',
     '(()=>{delete Object.prototype.toJSON;return {a:1}})()'
   ]) assert.equal((await evalJS(code)).output,'Evaluated: {"a":1}')
+  if(sharedOnly) {
+    await act('wait',{selector:'aria/Click'})
+    await act('wait',{selector:'::-p-aria(Item):nth-of-type(2)'})
+    await act('click',{selector:'::-p-aria(Item):nth-of-type(2)'})
+    assert.equal((await evalJS('window.item')).output,'Evaluated: 2')
+  }
   if(evaluateOnly) await success('browse_close',{tabId})
   else {
     await act('fill',{selector:'#entry',text:'replacement'});assert.equal((await evalJS('({value:document.querySelector("#entry").value,inputs,changes})')).output,'Evaluated: {"value":"replacement","inputs":1,"changes":0}')
@@ -147,7 +154,7 @@ async function corpus(mode){
   await writeFile(join(root,mode+'-maps.txt'),maps)
   await writeFile(join(root,mode+'-processes.json'),JSON.stringify({active:evidence[mode].activeGroupProcesses,afterLastTab:processes},null,2))
   const exited=once(item.child,'exit');item.child.kill('SIGTERM');await exited
-  console.log(JSON.stringify({mode,operations:rows.length,evaluateOnly,hostCloneSerialization:true,allElevenActions:!evaluateOnly,ariaSingleAndQueryAll:!evaluateOnly,pngAndMetadata:!evaluateOnly,reconnect:!evaluateOnly,native:!!process.env.FOXWARM_CLI_EXECUTABLE && mode==='candidate',noClr:!/libcoreclr|libhostfxr/.test(maps),browser:execFileSync(process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium',['--version'],{encoding:'utf8'}).trim(),processes:processes.map(p=>({pid:p.pid,kind:p.command.match(/--type=([^ ]+)/)?.[1] || (p.command.includes('chromium')?'browser':'cli')}))}))
+  console.log(JSON.stringify({mode,operations:rows.length,evaluateOnly,hostCloneSerialization:true,allElevenActions:!evaluateOnly,ariaSingleAndQueryAll:sharedOnly || !evaluateOnly,pngAndMetadata:!evaluateOnly,reconnect:!evaluateOnly,native:!!process.env.FOXWARM_CLI_EXECUTABLE && mode==='candidate',noClr:!/libcoreclr|libhostfxr/.test(maps),browser:execFileSync(process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium',['--version'],{encoding:'utf8'}).trim(),processes:processes.map(p=>({pid:p.pid,kind:p.command.match(/--type=([^ ]+)/)?.[1] || (p.command.includes('chromium')?'browser':'cli')}))}))
 }
 try { for(const mode of modes) await corpus(mode) }
 catch(error){evidence.error=error.stack;throw error}

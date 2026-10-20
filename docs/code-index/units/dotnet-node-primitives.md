@@ -24,7 +24,7 @@ Main keeps authorization, Session/cwd policy, cached-write references, interpret
 | `NativeProcessFacts.ReadIdentity`, `Access` | Native process identity and directory readability/searchability syscalls, without Session or launch policy. |
 | `ExactReplacement.Apply` | Ordinal nonoverlapping match counting and literal unique replacement; callers retain replacement-string and error policies. |
 | `WorkspacePatch.Parse`, `Update` | Source envelope/action parsing, matching/anchor/EOF semantics, line-ending restoration and bounded failed-hunk diagnostics, without effects. |
-| `JsonStringQuoting.Append`, `Quote` | JSON.stringify-compatible string quoting, including lone surrogates; consumed by Main journal/download identity code and CLI browser clone output. |
+| `JsonStringQuoting.Append`, `Quote` | JSON.stringify-compatible string quoting, including lone surrogates; consumed by Main journal/download identity code and shared browser clone output. |
 | `EcmaNumber.Format` | Finite binary64 JSON number formatting shared by Main and CLI; caller-owned Archive validation and browser nonfinite-to-null policy stay separate. |
 | `RasterImageMime.Detect` | Signature-only PNG/JPEG/WebP/GIF/BMP classification from at most twelve bytes. |
 | `TargetFileStat` | Neutral file/directory entry values for shared read formatting; no Provider dependency. |

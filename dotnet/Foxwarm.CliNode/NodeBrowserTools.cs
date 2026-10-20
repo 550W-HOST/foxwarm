@@ -1,9 +1,7 @@
 using System.Security.Cryptography;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using PuppeteerSharp;
-using PuppeteerSharp.Cdp;
-using PuppeteerSharp.Cdp.Messaging;
+using Foxwarm.BrowserSupport;
 
 namespace Foxwarm.CliNode;
 
@@ -187,7 +185,7 @@ internal sealed class NodeBrowserTools : IAsyncDisposable
                         NodeFileTools.Text(parameters["code"])!
                     )
                 )
-                    output = "Evaluated: " + await StringifyResult(value);
+                    output = "Evaluated: " + await BrowserEvaluation.StringifyResult(value);
                 break;
             case "goto":
                 var url = NodeFileTools.Text(parameters["url"])!;
@@ -212,36 +210,6 @@ internal sealed class NodeBrowserTools : IAsyncDisposable
                 throw new InvalidDataException("Unknown action: " + action);
         }
         return new JsonObject { ["output"] = output };
-    }
-
-    // Preserve Puppeteer's return-by-value clone before JavaScript JSON.stringify.
-    // Directly stringifying the live handle would call Date.toJSON and differ from Source.
-    private static async Task<string> StringifyResult(IJSHandle value)
-    {
-        var remote = ((ICdpHandle)value).RemoteObject;
-        if (remote.Type == RemoteObjectType.Undefined)
-            return "undefined";
-        if (remote.Type == RemoteObjectType.Bigint)
-            throw new InvalidDataException("Do not know how to serialize a BigInt");
-        if (remote.UnserializableValue is not null)
-            return remote.UnserializableValue == "-0" ? "0" : "null";
-        JsonElement? cloned;
-        try
-        {
-            cloned = await value.JsonValueAsync<JsonElement?>();
-        }
-        catch (PuppeteerException error)
-            when (error.Message.Contains(
-                    "Could not serialize referenced object",
-                    StringComparison.Ordinal
-                )
-            )
-        {
-            return "undefined";
-        }
-        if (cloned is null)
-            return "null";
-        return BrowserCloneJson.Stringify(cloned.Value);
     }
 
     private static JsonObject Metadata(string id, Tab tab) =>
