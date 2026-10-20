@@ -97,7 +97,7 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
     {
         var raw =
             body.ContainsKey("baseUrl") ? body["baseUrl"]
-            : configured is not null ? JsonValue.Create(configured)
+            : configured is { Length: > 0 } ? JsonValue.Create(configured)
             : body["fallbackUrl"];
         if (raw is not JsonValue value || !value.TryGetValue<string>(out var text))
             throw new InvalidDataException("Enter an address reachable from the new Node.");
