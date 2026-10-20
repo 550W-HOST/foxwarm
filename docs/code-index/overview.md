@@ -1,6 +1,13 @@
 # Foxwarm Code Index
 
-See [README.md](./README.md) for governance, canonical ownership, and publication rules.
+This is the entry point for the project map and repository-specific index conventions. The `code-index` skill (`skills/code-index/SKILL.md`) describes the general reading and maintenance method.
+
+## Reading and changing the code
+
+- Start with the entry relevant to the task. Use this overview for unfamiliar architecture; familiar work may start at a module, thread, or unit without traversing every layer.
+- Identify the governing contracts and their rationale before choosing an implementation. Confirmed design decisions and supported compatibility contracts constrain changes; source and tests show actual behavior. Report a discrepancy rather than rewriting a contract to match an accidental implementation.
+- For translation or replacement, trace the relevant original caller path from entry to observable effects and compare it with the new path. Index summaries and tests written only for the new implementation do not establish parity.
+- Put important constraints and their rationale near the beginning of their owning page, before implementation detail. Each decision has one canonical owner; other pages provide a short summary and link. Unconfirmed proposals belong in `Open Questions`, not among effective decisions.
 
 ## Overview
 
@@ -37,7 +44,6 @@ Nodes, providers, and authenticated CLI Node runtime
 - **Distributed execution:** Nodes expose environment capabilities through Main-owned provider resolution without becoming the source of session state; authenticated remote transport and the bounded executable protocol are provider implementations.
 - **Indexed Main catalog:** identity/topology/list projections use the narrow Main-owned catalog boundary defined by [D-main-catalog-indexed-boundary](./threads/main-catalog-storage-and-indexed-queries.md#d-main-catalog-indexed-boundary).
 - **Sandboxed automation:** ToolScript runs in a constrained VM and can suspend at safe host-call boundaries.
-- **Source-first documentation:** this index is a public-safe active map; source and tests remain authoritative.
 
 ## Technology map
 
@@ -89,3 +95,36 @@ Nodes, providers, and authenticated CLI Node runtime
 | [session lifecycle](./threads/session-lifecycle.md) | Creation, persistence, compaction, fork lineage, recovery, and deletion |
 | [streaming pipeline](./threads/streaming-pipeline.md) | Provider deltas through session streams to WebUI rendering |
 | [tool dispatch](./threads/tool-dispatch.md) | Builtin, MCP, and node tool resolution with isolation enforcement |
+
+## Maintaining this index
+
+### Scope and ownership
+
+Keep final text in English and public-safe: no credentials, private deployment details, personal filesystem paths, or agent-private collaboration notes. Compatibility literals from source or persisted data may be quoted when necessary and identified as such.
+
+Use the narrowest owner that covers a contract: a unit for one semantic unit, a module for several units in that subsystem, a thread for a cross-module flow, or this overview for a project-wide principle. Keep the full decision and rationale only there; use stable headings for links. A critical security, data-integrity, persistence, or external-contract invariant may repeat the same short sentence at an execution boundary with its canonical ID and link; rationale stays at the owner.
+
+Distinguish observed behavior from required invariants. Compatibility notes describe retained persisted-data readers or external contracts, including the old shape read and the new shape written. Replace superseded decisions rather than keeping an implementation chronology.
+
+Unit headers declare source ownership:
+
+```text
+Files: path/to/primary.ts, path/to/primary.test.ts
+Secondary files: package.json, path/to/integration.test.ts
+```
+
+Each source file has at most one primary unit owner. Secondary references do not claim ownership; modules and threads link to units rather than declaring file ownership themselves.
+
+### Targeted updates and checks
+
+Update only changed contracts, responsibilities, and navigation. Keep useful entry points and stable-symbol references, not a prose inventory of every helper, branch, or test run. Update a parent or thread when its own boundary or flow changes, not merely because a child changed.
+
+Remove stale, repeated, or incidental detail before splitting a page by responsibility. Preserve effective contracts and useful rationale; Git history retains superseded material. Do not regenerate the whole index for a local change.
+
+Run from the repository root:
+
+```bash
+npm run quality:code-index
+```
+
+The audit checks links, primary file existence and ownership, public-safety patterns, English-only text, decision density, and likely duplicated decisions. Review warnings and resolve errors. Files above 24 KiB produce a size warning; files above 48 KiB produce an error. These are structural checks, not evidence of behavioral correctness or translation parity. The audit's own tests run with `npm run test:code-index-audit`.
