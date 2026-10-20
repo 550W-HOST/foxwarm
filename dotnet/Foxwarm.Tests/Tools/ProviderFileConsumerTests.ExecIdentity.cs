@@ -23,7 +23,9 @@ public sealed partial class ProviderFileConsumerTests
         var starting = Path.Combine(f.Work, "native-started");
         var launchRelease = Path.Combine(f.Work, "launch-release");
         var release = native ? Path.Combine(f.Work, "release") : f.FilePath("release");
-        var effect = native ? Path.Combine(f.Work, "identity-effect") : f.FilePath("identity-effect");
+        var effect = native
+            ? Path.Combine(f.Work, "identity-effect")
+            : f.FilePath("identity-effect");
         Task<JsonObject>? pending = null;
         try
         {
@@ -42,7 +44,10 @@ public sealed partial class ProviderFileConsumerTests
 
             pending = f.Call(
                 "exec",
-                Exec("printf x >> identity-effect; while [ ! -f release ]; do sleep .05; done; printf '  retained output\\n'", 1)
+                Exec(
+                    "printf x >> identity-effect; while [ ! -f release ]; do sleep .05; done; printf '  retained output\\n'",
+                    1
+                )
             );
             if (native)
                 await Until(() => Task.FromResult(File.Exists(starting)));
@@ -78,7 +83,10 @@ public sealed partial class ProviderFileConsumerTests
             {
                 Assert.Equal(f.Node, record["nodeId"]!.GetValue<string>());
                 Assert.NotNull(record["backend"]?["ref"]);
-                Assert.Single(await f.Requests(), request => request["operation"]!.GetValue<string>() == "exec-start");
+                Assert.Single(
+                    await f.Requests(),
+                    request => request["operation"]!.GetValue<string>() == "exec-start"
+                );
             }
 
             await File.WriteAllTextAsync(release, "finish");
@@ -88,7 +96,10 @@ public sealed partial class ProviderFileConsumerTests
                 return ExecRecords(f.Data).Length == 0;
             });
             Assert.Equal("x", await File.ReadAllTextAsync(effect));
-            Assert.Contains("background-process-finished", JsonSerializer.Serialize(f.Owner.Entry.Snapshot()));
+            Assert.Contains(
+                "background-process-finished",
+                JsonSerializer.Serialize(f.Owner.Entry.Snapshot())
+            );
             var read = await f.Call("read", new JsonObject { ["filePath"] = log });
             Success(read);
             Assert.StartsWith("  retained output\n", read["output"]!.GetValue<string>());
@@ -105,9 +116,29 @@ public sealed partial class ProviderFileConsumerTests
                 await pending;
             // Keep owned files until the detached command has published its actual finish.
             if (native)
-                await Until(() => Task.FromResult(Directory.GetFiles(originalAgentDirectory, "*.exit.json", SearchOption.AllDirectories).Length > 0));
+                await Until(() =>
+                    Task.FromResult(
+                        Directory
+                            .GetFiles(
+                                originalAgentDirectory,
+                                "*.exit.json",
+                                SearchOption.AllDirectories
+                            )
+                            .Length > 0
+                    )
+                );
             else
-                await Until(() => Task.FromResult(Directory.GetFiles(Path.Combine(f.Target, "exec"), "status.json", SearchOption.AllDirectories).Length > 0));
+                await Until(() =>
+                    Task.FromResult(
+                        Directory
+                            .GetFiles(
+                                Path.Combine(f.Target, "exec"),
+                                "status.json",
+                                SearchOption.AllDirectories
+                            )
+                            .Length > 0
+                    )
+                );
         }
     }
 }
