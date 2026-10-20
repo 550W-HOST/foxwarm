@@ -45,8 +45,10 @@
     "build:assets": "npm run build:node && npm --prefix packages/webui run build && npm --prefix packages/vscode-web/foxwarm-fs run build && npm --prefix packages/vscode-web/foxwarm-scm run build && npm --prefix packages/vscode-web/foxwarm-webui run build && npm --prefix packages/vscode-web/foxwarm-terminal run build",
     "build:delivery": "npm run build:assets && dotnet build dotnet/Foxwarm/Foxwarm.csproj -p:FoxwarmDelivery=true",
     "publish:core": "npm run build:assets && dotnet publish dotnet/Foxwarm/Foxwarm.csproj -c Release --self-contained false",
-    "test:reference": "node scripts/test/run-tests.mjs unit",
-    "build:node": "npm --prefix packages/shared run build && npm --prefix packages/cli-node run build"
+    "test:reference": "node scripts/test/run-tests.mjs reference",
+    "build:node": "npm --prefix packages/shared run build && npm --prefix packages/cli-node run build",
+    "test:managed": "node scripts/test/run-tests.mjs managed",
+    "test:published": "node scripts/test/run-tests.mjs published"
   },
   "keywords": [
     "ai",

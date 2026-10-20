@@ -1,7 +1,5 @@
 **/node_modules/
-packages/webui/dist/
-packages/shared/dist/
-packages/cli-node/dist/
+**/dist/
 dotnet/**/bin/
 dotnet/**/obj/
 packages/vscode-web/.cache/
@@ -24,3 +22,14 @@ coverage/
 .git/
 docs/
 test/
+
+# Local installations, owned test data and dependency/tool caches are never inputs.
+foxwarm-data/
+sandbox-workspace/
+workspace/
+data_dir
+.nuget/
+**/.temp/
+**/__pycache__/
+**/*.pyc
+**/.venv/

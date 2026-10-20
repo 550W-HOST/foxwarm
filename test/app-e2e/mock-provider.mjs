@@ -1,4 +1,5 @@
 import http from 'node:http'
+import fs from 'node:fs/promises'
 import { WebSocketServer } from 'ws'
 import sharp from 'sharp'
 
@@ -205,7 +206,7 @@ export async function startMockProvider({ toolFile, log, readyDelayMs = 0, enfor
       const outputs = Array.isArray(body.input) ? body.input.filter(item => item?.type === 'function_call_output') : []
       await log(`responses TOOL outputs=${JSON.stringify(outputs.map(item => ({ callId: item.call_id, output: JSON.stringify(item.output).slice(0, 160) })))}\n`)
       if (outputs.length === 0) sse(res, responseTool('resp-write', 'call_app_write', 'write', { filePath: toolFile, content: 'app e2e tool payload' }))
-      else if (outputs.length === 1 && outputs[0].call_id === 'call_app_write' && JSON.stringify(outputs[0].output).includes('File written successfully')) {
+      else if (outputs.length === 1 && outputs[0].call_id === 'call_app_write' && await fs.readFile(toolFile, 'utf8').catch(() => '') === 'app e2e tool payload') {
         sse(res, responseTool('resp-read', 'call_app_read', 'read', { filePath: toolFile }))
       } else if (outputs.length === 2
         && outputs[0].call_id === 'call_app_write'
@@ -244,7 +245,7 @@ export async function startMockProvider({ toolFile, log, readyDelayMs = 0, enfor
       if (toolMessages.length === 0) sse(res, chatTool('chat-tool', 'call_chat_write', 'write', { filePath: `${toolFile}.chat`, content: 'chat tool payload' }))
       else if (toolMessages.length === 1
         && toolMessages[0].tool_call_id === 'call_chat_write'
-        && JSON.stringify(toolMessages[0].content).includes('File written successfully')) {
+        && await fs.readFile(`${toolFile}.chat`, 'utf8').catch(() => '') === 'chat tool payload') {
         sse(res, chatText('chat-final', ['chat ', 'tool complete']), { delayMs: 100 })
       } else {
         unexpected = 'Chat tool result was missing or not paired to call_chat_write'

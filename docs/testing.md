@@ -1,6 +1,6 @@
 # Local tests
 
-The retained local test baseline uses Node.js 24, npm, Python 3, and one Chromium executable. Managed source-entry tests additionally require a net10.0-capable .NET SDK and ASP.NET Core 10 runtime. Install and build both the backend packages and WebUI before running the suites:
+The retained local test baseline uses Node.js 24, npm, Python 3, and one Chromium executable. Managed tests require a net10.0-capable .NET SDK and ASP.NET Core 10 runtime, Python 3 for fresh pinned Monty acquisition and Linux native-build prerequisites. The full managed suite also exercises the optional pinned HEIC decoder: build it into an owned directory using `dotnet/build-image-decoder.sh` and supply `prefix/lib` through `LD_LIBRARY_PATH`. CI does this in runner-temporary storage; the ordinary production image does not require or include that optional codec. Install and build both the backend packages and WebUI before running the suites:
 
 ```bash
 npm ci
@@ -9,7 +9,7 @@ npm run build
 npm run build:reference
 ```
 
-The broad test runner and application harness still target the retained TypeScript oracle in this phase; their CI/application-lane conversion is separate work. Default `npm run build` prepares managed Main and assets, not `lib/`. Managed entry checks run directly with `node --test scripts/main.test.js scripts/tmux-scripts.test.js scripts/windowsService.test.js scripts/source-installer.test.js`; they allocate owned data before imports, and runtime cases require the built managed output. Windows source-start/control/installer execution requires separate Windows qualification; Linux cross-publish is not that proof.
+Default unit tests run the managed solution plus retained Source/package tests. The application under test in full-application E2E is managed Main through the package entry; the explicit Source build remains necessary for Archive seeding and differential/reference fixtures. Default `npm run build` prepares managed Main and assets, not `lib/`. Managed entry checks run directly with `node --test scripts/main.test.js scripts/tmux-scripts.test.js scripts/windowsService.test.js scripts/source-installer.test.js`; they allocate owned data before imports, and runtime cases require the built managed output. Windows source-start/control/installer execution requires separate Windows qualification; Linux cross-publish is not that proof.
 
 ## Commands
 
@@ -17,10 +17,19 @@ The broad test runner and application harness still target the retained TypeScri
 # Show every discovered test group and its owner.
 npm run test:inventory
 
-# Backend, package, WebUI unit, Python, and standalone self-tests.
+# Managed solution, Source reference, packages, WebUI unit, Python and self-tests.
 npm test
 # Equivalent after the build prerequisite:
 npm run test:unit
+
+# Retained Source/package unit groups only.
+npm run test:reference
+
+# Managed solution only (includes optional HEIC coverage with its prerequisite).
+npm run test:managed
+
+# Publish complete managed Main into owned artifacts and prove original App delivery.
+FOXWARM_E2E_CHROMIUM=/path/to/chromium npm run test:published
 
 # Local disposable WebUI browser fixtures, Chromium only.
 FOXWARM_E2E_CHROMIUM=/path/to/chromium npm run test:webui:e2e
@@ -28,7 +37,7 @@ FOXWARM_E2E_CHROMIUM=/path/to/chromium npm run test:webui:e2e
 # Real disposable Foxwarm application, scripted loopback LLM, and Chromium.
 FOXWARM_E2E_CHROMIUM=/path/to/chromium npm run test:app:e2e
 
-# Unit, local component-browser, and full-application groups in one run.
+# Unit, managed publish, local component-browser and full-application groups.
 FOXWARM_E2E_CHROMIUM=/path/to/chromium npm run test:local
 ```
 
@@ -38,7 +47,7 @@ Launcher fixtures resolve required local utilities from the invocation `PATH` be
 
 Backend test shards default to `FOXWARM_SYNC_FILE_LOG=1` so short-lived test processes do not wait on an asynchronous logging transport during teardown. Their subprocesses inherit this setting unless a fixture clears it; the dedicated async logger fixture does so and still tests asynchronous writes and natural exit. An explicitly supplied `FOXWARM_SYNC_FILE_LOG` value overrides the backend default. The application logger's production default is unchanged.
 
-The full-application harness starts the real compiled server and built WebUI against a generated data root, synthetic token, seeded authority files, and ephemeral ports. Clients use loopback URLs and the mock provider binds loopback. The application retains its production `0.0.0.0` listener, so run this synthetic-token fixture in a private development or CI environment rather than exposing its port to an untrusted network. A local scripted server implements OpenAI Responses SSE, Chat Completions SSE, and Responses WebSocket exchanges; only the provider network boundary is mocked. Session routing, tools, persistence, authentication, realtime delivery, and browser rendering remain production paths. Expected provider steps have exact order and counts, invalid or extra requests fail, and missing steps fail final harness verification. Explicit controls release one held incremental response and close one idle WebSocket so timing and reconnect behavior do not depend on sleeps. Failures retain application/provider/test logs plus a diagnostic screenshot and browser console.
+The full-application harness starts managed Main through `node .` and verifies its authenticated managed health result. It uses the real compiled server and built WebUI against a generated data root, synthetic token, seeded authority files, and ephemeral ports. Clients use loopback URLs and the mock provider binds loopback. The application retains its production `0.0.0.0` listener, so run this synthetic-token fixture in a private development or CI environment rather than exposing its port to an untrusted network. A local scripted server implements OpenAI Responses SSE, Chat Completions SSE, and Responses WebSocket exchanges; only the provider network boundary is mocked. Session routing, tools, persistence, authentication, realtime delivery, and browser rendering remain production paths. Expected provider steps have exact order and counts, invalid or extra requests fail, and missing steps fail final harness verification. Explicit controls release one held incremental response and close one idle WebSocket so timing and reconnect behavior do not depend on sleeps. Failures retain application/provider/test logs plus a diagnostic screenshot and browser console.
 
 Scenario files run in order, and the harness can stop and restart the application between them against the same data root, which the hosted image generation coverage uses to prove persisted images and canonical replay survive a real process restart. `FOXWARM_APP_E2E_FILES` or positional repository-relative scenario paths select files for focused work; a targeted run relaxes only the global request-order check and still fails on any unexpected request.
 
@@ -49,7 +58,7 @@ FOXWARM_E2E_CHROMIUM=/path/to/chromium npm --prefix packages/webui run test:sess
 FOXWARM_E2E_CHROMIUM=/path/to/chromium node test/app-e2e/run-app-e2e.mjs packages/webui/test/systemTabs.e2e.mjs
 ```
 
-Running a scenario file with raw `node --test` instead fails before reading a token or making a request unless it receives the harness's owned-runtime context. `FOXWARM_E2E_URL` and `FOXWARM_E2E_TOKEN_FILE` alone no longer select a runtime. The harness sanitizes configuration paths for archive seeding as well as application/scenario children.
+Running a scenario file with raw `node --test` instead fails before reading a token or making a request unless it receives the harness's owned-runtime context. `FOXWARM_E2E_URL` and `FOXWARM_E2E_TOKEN_FILE` alone no longer select a runtime. The harness sanitizes configuration paths, managed installation/experiment settings, ports and lifetime pipes for Archive seeding as well as application/scenario children. Source `lib/session/archiveStore` is the explicit migration/seed oracle, never the application under test. Mock tool continuations require the exact paired call IDs and observed file effects rather than a particular implementation's success wording.
 
 `node --test scripts/test/test-isolation.test.mjs` verifies the formerly unsafe configuration writers in a copied synthetic installation, with pre-existing config/models canaries at the checkout, `data_dir` pointer, and inherited environment paths. It exercises direct and preloaded entries, including `node --test lib/channels/webuiAccess.test.js lib/configHotApply.test.js`, checks that no installation state files were added, and confirms that raw browser invocations do not contact a supplied listener. It requires the normal backend build. Rebuild before invoking `lib` tests after updating source isolation imports: previously compiled JavaScript does not change with the TypeScript source.
 
@@ -77,10 +86,10 @@ The backend suite has one expected non-Windows skip for the PowerShell launcher.
 
 `.github/workflows/tests.yml` runs the maintained commands in three independent Ubuntu 24.04 jobs:
 
-- **Core, packages, and quality** builds from the root and WebUI lockfiles, runs `npm run test:unit`, then runs the Code Index and unused-code checks.
-- **Chromium fixtures** installs the Chrome for Testing build pinned for the repository's Puppeteer Core version, builds both trees, and runs `npm run test:webui:e2e`.
-- **Real app with mock LLM** uses the same browser/build preparation and runs `npm run test:app:e2e`.
+- **Core, packages, and quality** sets up .NET 10, builds managed delivery plus the explicit Source reference, prepares the optional pinned HEIF test prerequisite, runs `npm run test:unit` (managed solution and retained reference/package tests), then runs Code Index and unused-code checks.
+- **Chromium fixtures** sets up .NET 10 and the pinned Chrome for Testing build, builds managed delivery and Source reference, runs `npm run test:published` against an owned complete publish, then `npm run test:webui:e2e`. The publish proof covers original login/Setup, packaged Node archive/resources, real native ToolScript and Main browser screenshot/image references, plus ordinary stop/restart with preserved data.
+- **Real app with mock LLM** sets up .NET 10 and the same browser/build preparation and runs `npm run test:app:e2e`.
 
-All jobs use Node.js 24.21.0. The workflow runs for pull requests and pushes to `testing` or `main`. Superseded runs for the same workflow and pull request or ref are cancelled. It also declares manual and daily 03:17 UTC triggers; GitHub registers and executes those triggers from the default branch, so pushing the workflow only to `testing` exercises the push event immediately but does not make the scheduled/manual definition available until a later authorized promotion to the default branch.
+All jobs use Node.js 24.21.0 and the official SHA-pinned setup-dotnet action for the .NET 10 SDK channel. CI Chrome is a test fixture pin, not the production Docker browser update policy. The workflow runs for pull requests and pushes to `testing` or `main`. Superseded runs for the same workflow and pull request or ref are cancelled. It also declares manual and daily 03:17 UTC triggers; GitHub registers and executes those triggers from the default branch, so pushing the workflow only to `testing` exercises the push event immediately but does not make the scheduled/manual definition available until a later authorized promotion to the default branch.
 
 On failure or cancellation, each job retains seven-day diagnostics from its visible runner-temporary artifact parent: the runner inventory/summary, runner logs, explicit screenshots, and, for full-application E2E, its nested application/provider/test logs and screenshots. The upload patterns do not include disposable data roots, Session state, model/token configuration, request journals, browser profiles, dependencies, or the workspace.

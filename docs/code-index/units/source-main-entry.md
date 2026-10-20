@@ -13,7 +13,7 @@ Foreground package execution replaces an earlier in-process Main. A spawn withou
 
 ## Build and controls
 
-Default `build` prepares [complete delivery resources](./core-delivery-cli.md#build-and-resource-boundary); `build-all` installs root/WebUI lockfiles first. Plain .NET builds remain independent of npm. `build:reference` retains the TS Main oracle explicitly. Existing broad unit/app runners and default CI still need that lane until their separate conversion. `build:node`, `node`, `cli-node` and `Dockerfile.node` use Shared/TS CLI builds without .NET or a native CLI replacement.
+Default `build` prepares [complete delivery resources](./core-delivery-cli.md#build-and-resource-boundary); `build-all` installs root/WebUI lockfiles first. Plain .NET builds remain independent of npm. `build:reference` retains the TS Main oracle explicitly. Broad reference/package tests and Source Archive seeding still require that explicit build; default unit tests also run the managed solution, and the full-application harness starts managed Main. `build:node`, `node`, `cli-node` and `Dockerfile.node` use Shared/TS CLI builds without .NET or a native CLI replacement.
 
 Tmux start refuses an exact existing session. Restart chooses the exact dedicated window/active pane or creates it; stable pane IDs survive renaming. Input is literal with Enter separate. Relevant path/config/runtime environment is supplied from the invocation rather than inherited from a stale tmux server. Restart sends Ctrl+C and waits for the foreground process group to return the terminal to its shell before sending startup, with a bounded failure instead of overlapping Main. Stop also uses exact session/window selection. Tests use only private sockets/servers.
 
@@ -21,7 +21,7 @@ Both source installers preserve checkout/branch selection, external data directo
 
 ## Supported candidate boundary
 
-This source entry is not a public promotion, deployment, production/test Docker migration or full CI/test-lane cutover. Linux x64 and Windows x64 are candidate targets; cross-publish is not Windows execution qualification and macOS Main is not qualified here. Other-platform TS Node clients and retained reference code remain supported boundaries. Main TUI is not implemented: explicit `--tui` fails before startup, while persisted `bot.enableTUI` logs an ignored/unsupported diagnostic. Worker/controller configuration and records are retained without new global rejection/migration or claims that those hosts exist. Native Source exec adoption remains a separate drain-versus-adopt decision before a real cutover.
+This entry and the shared production/test Docker delivery remain a candidate, not a public promotion or deployment. Managed/default CI and application-lane ownership are mapped in [test runner](./test-runner.md) and [full-application E2E](./full-app-e2e.md). Linux x64 and Windows x64 are candidate targets; cross-publish is not Windows execution qualification and macOS Main is not qualified here. Other-platform TS Node clients and retained reference code remain supported boundaries. Main TUI is not implemented: explicit `--tui` fails before startup, while persisted `bot.enableTUI` logs an ignored/unsupported diagnostic. Worker/controller configuration and records are retained without new global rejection/migration or claims that those hosts exist. Native Source exec adoption remains a separate drain-versus-adopt decision before a real cutover.
 
 ## Evidence
 

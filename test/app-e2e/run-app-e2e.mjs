@@ -84,7 +84,7 @@ async function seedData() {
     }, null, 2))
   }
   await fs.writeFile(path.join(stateRoot, 'sessions.json'), JSON.stringify({ sessions }, null, 2))
-  // Seed the same immutable raw records that normal Session appends create.
+  // Use the retained Source writer as the migration/Archive oracle, not the application under test.
   await promisify(execFile)(process.execPath, ['-e', `
     const fs = require('fs-extra');
     const path = require('node:path');
@@ -152,7 +152,7 @@ async function spawnApplication(logName) {
   }
   appLog = createdAppLog
   throwIfCancelled()
-  app = spawn(process.execPath, ['lib/index.js'], {
+  app = spawn(process.execPath, ['.'], {
     cwd: repoRoot,
     detached: process.platform !== 'win32',
     env: {
@@ -174,6 +174,7 @@ async function spawnApplication(logName) {
 // the written config file, so the existing base URL stays valid.
 async function restartApplication() {
   await stopOwnedProcess(app)
+  assert.equal(app.exitCode, 0, 'Managed Main must drain normally before restart')
   app = undefined
   if (appLog) {
     await appLog.close().catch(() => {})
@@ -241,7 +242,11 @@ async function waitForReady(baseUrl) {
     if (app.exitCode !== null) throw new Error(`Foxwarm app exited during startup with code ${app.exitCode}`)
     try {
       const response = await fetch(`${baseUrl}/api/setup/status`, { headers: { Authorization: `Bearer ${token}` } })
-      if (response.ok) return
+      if (response.ok) {
+        const health = await fetch(`${baseUrl}/health`, { headers: { Authorization: `Bearer ${token}` } })
+        assert.equal((await health.json()).status, 'ready', 'Application under test must be managed Main')
+        return
+      }
     } catch {}
     await new Promise(resolve => setTimeout(resolve, 100))
   }

@@ -32,7 +32,7 @@ A live instance needs a SQLite-consistent online backup. A simpler option is to 
 
 ## Managed source-candidate boundary
 
-Source startup now selects managed Main; this does not adopt TypeScript native running exec jobs. Before a real cutover, choose whether to drain those jobs or implement separately specified adoption. Preserve Worker/controller configuration and records, but do not treat their hosts as implemented by this candidate. Production/test Docker delivery and default CI/test-lane conversion remain separate work.
+Source startup now selects managed Main; this does not adopt TypeScript native running exec jobs. Before a real cutover, choose whether to drain those jobs or implement separately specified adoption. Preserve Worker/controller configuration and records, but do not treat their hosts as implemented by this candidate. The root production recipe and test Compose consumer now share managed delivery. That build and its tests do not authorize a public release promotion or a live-installation switch.
 
 ## Upgrade
 

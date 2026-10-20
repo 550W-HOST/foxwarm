@@ -18,7 +18,7 @@ import testEnvironment from './test-process-env.cjs'
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(scriptDir, '../..')
 const target = process.argv[2] || 'unit'
-const validTargets = new Set(['inventory', 'unit', 'browser', 'app', 'all'])
+const validTargets = new Set(['inventory', 'unit', 'reference', 'managed', 'published', 'browser', 'app', 'all'])
 if (!validTargets.has(target)) {
   console.error(`Usage: node scripts/test/run-tests.mjs <${[...validTargets].join('|')}>`)
   process.exit(2)
@@ -88,6 +88,30 @@ function directStep(name, command, args, timeoutMs = 180_000, env = {}) {
 
 function chunks(values, size) {
   return Array.from({ length: Math.ceil(values.length / size) }, (_, index) => values.slice(index * size, (index + 1) * size))
+}
+
+function managedGroup() {
+  return {
+    name: 'managed',
+    steps: [directStep('dotnet', 'dotnet', ['test', 'dotnet/Foxwarm.sln', '--logger', 'console;verbosity=minimal'], 1_200_000)],
+    env: { FOXWARM_TS_ROOT: repoRoot },
+  }
+}
+
+function publishedGroup() {
+  const payload = path.join(runBase, 'published-core')
+  return {
+    name: 'published-core',
+    steps: [
+      directStep('publish', 'dotnet', ['publish', 'dotnet/Foxwarm/Foxwarm.csproj', '-c', 'Release', '--self-contained', 'false', '-o', payload], 600_000),
+      directStep('original-app', process.execPath, ['packages/webui/test/publishedCore.e2e.mjs'], 240_000),
+    ],
+    env: {
+      FOXWARM_PUBLISHED_CORE: payload,
+      FOXWARM_CHROMIUM: findChromium(),
+      FOXWARM_TEST_KEEP_SYSTEM_TMP: '1',
+    },
+  }
 }
 
 function unitGroups() {
@@ -260,7 +284,9 @@ async function runStep(group, step, log) {
 }
 
 const groups = [
-  ...(target === 'unit' || target === 'all' ? unitGroups() : []),
+  ...(target === 'managed' || target === 'unit' || target === 'all' ? [managedGroup()] : []),
+  ...(target === 'published' || target === 'all' ? [publishedGroup()] : []),
+  ...(target === 'unit' || target === 'reference' || target === 'all' ? unitGroups() : []),
   ...(target === 'browser' || target === 'all' ? [browserGroup()] : []),
   ...(target === 'app' || target === 'all' ? [appGroup()] : []),
 ]

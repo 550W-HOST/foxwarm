@@ -429,9 +429,12 @@ With a .NET 10 SDK selected:
 export DOTNET_ROOT=/path/to/private/dotnet-sdk-10
 export PATH="$DOTNET_ROOT:$PATH"
 dotnet restore dotnet/Foxwarm.sln
-npm run build # actual TypeScript persistence oracle dependencies
-FOXWARM_TS_ROOT="$PWD" dotnet test dotnet/Foxwarm.sln --no-restore
+npm run build # managed Main and delivery assets
+npm run build:reference # explicit TypeScript persistence oracle dependencies
+npm run test:managed # same managed suite used by test:unit and CI
 ```
+
+The full managed suite also checks the optional HEIC decoder. Prepare its pinned test-only prerequisite with `dotnet/build-image-decoder.sh` in an owned directory and supply its `prefix/lib` via `LD_LIBRARY_PATH`; see [native prerequisites](native-image-prerequisites.md). This does not make HEIC a required default runtime feature. CI builds that prerequisite in runner-temporary storage, not the production image. `npm run test:published` creates an owned complete publish and exercises the original App, Setup, Node archive and native ToolScript with Chromium. See [the maintained runners](../docs/testing.md) and [shared public Docker recipe](../test/README.md).
 
 ## Session persistence C1/C2/D experiment
 

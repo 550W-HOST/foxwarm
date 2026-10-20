@@ -23,3 +23,5 @@ The current Setup does not expose Authorizations. The normal host retains [outbo
 Agent creation and PUT updates accept existing `isolatedNode` metadata through the [external Node unit](./external-nodes.md). Binding changes use the established owner/save lane; they do not create a remote environment.
 
 The real authenticated Weixin QR start/wait routes and confirmed-owner merge use the existing Setup/HTTP boundary; [Matrix/Weixin](./dotnet-matrix-weixin.md) owns their source files, wire contract and selected-command versus reload-all distinction.
+
+WebUI `POST /api/sessions` places the created root before its current root siblings through the existing catalog presentation mechanism before success acknowledgement. This caller-specific order matches Source and keeps the new Session visible in the bounded initial Sidebar window even after prior ranking/moves. It does not change general Session creation defaults or paging limits; ordinary creation and presentation failures retain their existing partial-effect boundaries. `WebUiStartupTests` covers more than 50 ranked roots, prior moves and persisted order after restart.

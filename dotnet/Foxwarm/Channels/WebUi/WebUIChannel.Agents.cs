@@ -325,6 +325,12 @@ internal sealed partial class WebUIChannel
                                     null
                                 );
                     }
+                    runtime.ChangePresentation(catalog =>
+                        catalog.Move(
+                            hosted.Id,
+                            new JsonObject { ["parentSessionId"] = null, ["position"] = "first" }
+                        )
+                    );
                     return Results.Ok(new { success = true, sessionId = hosted.Id });
                 }
                 catch (CommittedSessionCreationException error)

@@ -8,7 +8,7 @@ Foxwarm is a self-hosted runtime for AI agents. It combines persistent conversat
 
 This branch selects the .NET Main host at the existing package/directory, npm, tmux and Windows background entries. `npm run build` prepares its complete resources; source builds need a net10.0-capable .NET SDK and the ASP.NET Core 10 runtime in addition to Node/npm. The public `foxwarm` bin still shows help with no arguments and retains its one-shot `model` and `archive` commands. Missing managed output never falls back to TypeScript.
 
-This is a source-entry candidate, not a public release or live-installation cutover. Production/test Docker delivery and default CI/test-lane conversion remain separate work. Main TUI is not implemented (`--tui` fails clearly); Session Worker hosting and managed ToolScript/controllers remain outside this candidate. Retained TypeScript source and other-platform Node clients remain available. See [build, publish and runtime prerequisites](dotnet/README.md#build-publish-and-public-cli) for the Linux x64 / Windows x64 boundary; macOS Main is not qualified.
+This is a source-entry candidate, not a public release or live-installation cutover. The root Docker recipe and both Compose consumers also select managed Main; default tests run the managed suite alongside explicit TypeScript reference tests. The real-application harness runs managed Main, and CI includes an owned complete-publish proof. Main TUI is not implemented (`--tui` fails clearly); Session Worker hosting and managed ToolScript/controllers remain outside this candidate. Retained TypeScript source and other-platform Node clients remain available. See [build, publish and runtime prerequisites](dotnet/README.md#build-publish-and-public-cli) for the Linux x64 / Windows x64 boundary; macOS Main is not qualified.
 
 ## What you can do
 
@@ -79,6 +79,10 @@ Start with the [documentation site](https://foxwarm.550w.host/docs/) for install
 - [Long conversations and history search](https://foxwarm.550w.host/docs/history-search/)
 - [External MCP clients](website/src/content/docs/docs/mcp-inbound.md)
 - [ToolScript examples](skills/toolscript-automation/examples/README.md)
+
+## Docker
+
+The source-built Linux x64 candidate uses Node 24 on Debian 13, Microsoft's ASP.NET Core 10 runtime and distro Chromium. Node and the existing operator tools remain available for JavaScript and stdio MCP consumers. Runtime data stays in `/data`; the default listener is port 3001. Optional Code workbench assets and HEIC prerequisites are not bundled. See [Docker build, data and qualification boundaries](test/README.md) before replacing an installation.
 
 ## Development
 

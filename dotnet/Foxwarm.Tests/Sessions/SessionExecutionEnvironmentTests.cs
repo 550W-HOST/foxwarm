@@ -34,9 +34,10 @@ public sealed class SessionExecutionEnvironmentTests
     [InlineData("master", "workspace", true)]
     [InlineData("master", "/different", true)]
     [InlineData("remote", "C:\\remote\\project", true)]
-    [InlineData("Master", null, false)]
+    [InlineData("Master", null, true)]
+    [InlineData("provider/instance", "relative", true)]
     [InlineData("\u0085master", null, false)]
-    public void Master_admission_keeps_raw_cwd_for_effect_resolution_and_retains_exact_source_node_boundary(
+    public void Master_admission_keeps_raw_cwd_for_effect_resolution_and_retains_case_sensitive_and_qualified_node_boundaries(
         string? node,
         string? cwd,
         bool supported
@@ -77,14 +78,17 @@ public sealed class SessionExecutionEnvironmentTests
         );
     }
 
-    [Fact]
-    public async Task Offline_remote_session_admits_history_and_allows_Main_owned_deletion()
+    [Theory]
+    [InlineData("remote")]
+    [InlineData("Master")]
+    [InlineData("provider/instance")]
+    public async Task Offline_remote_session_admits_history_and_allows_Main_owned_deletion(string node)
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
         var work = Path.Combine(temp.Path, "work");
         Directory.CreateDirectory(work);
-        await Seed(data, "foreign", new JsonObject { ["currentNode"] = "remote" });
+        await Seed(data, "foreign", new JsonObject { ["currentNode"] = node });
         var file = Path.Combine(data, "state", "sessions", "foreign.json");
         var original = await File.ReadAllTextAsync(file);
         await using var manager = new SessionManager(
@@ -95,11 +99,11 @@ public sealed class SessionExecutionEnvironmentTests
         );
         await manager.LoadAsync();
         Assert.Empty(manager.Owners());
-        Assert.Equal("remote", manager.Catalog.Get("foreign")!["currentNode"]!.GetValue<string>());
+        Assert.Equal(node, manager.Catalog.Get("foreign")!["currentNode"]!.GetValue<string>());
         await new SessionRuntime(manager).UpdateDisplayNameAsync("foreign", "Inspectable metadata");
         var owner = await manager.RequiredAsync("foreign");
-        Assert.Equal("remote", manager.CurrentNode(owner));
-        Assert.False(manager.Nodes.Online("remote"));
+        Assert.Equal(node, manager.CurrentNode(owner));
+        Assert.False(manager.Nodes.Online(node));
         Assert.Equal(original, await File.ReadAllTextAsync(file));
         Assert.Equal("exact", manager.Catalog.Resolve("foreign")["kind"]!.GetValue<string>());
         Assert.Same(owner, await manager.RequiredAsync("foreign"));
@@ -115,7 +119,7 @@ public sealed class SessionExecutionEnvironmentTests
         var work = Path.Combine(temp.Path, "work");
         Directory.CreateDirectory(work);
         await Seed(data, "deadline", new JsonObject());
-        await Seed(data, "foreign", new JsonObject { ["currentNode"] = "remote/invalid" });
+        await Seed(data, "foreign", new JsonObject { ["currentNode"] = "provider/instance/invalid" });
         var file = Path.Combine(data, "state", "sessions", "deadline.json");
         var raw = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
         raw["meta"]!["wait"] = new JsonObject

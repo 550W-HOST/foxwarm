@@ -1,30 +1,32 @@
+# Build Main and its delivery resources from source. No host build output is used.
 FROM node:24.17.0-trixie AS build
 
-WORKDIR /app
+RUN curl -fsSLo /tmp/packages-microsoft-prod.deb https://packages.microsoft.com/config/debian/13/packages-microsoft-prod.deb \
+    && dpkg -i /tmp/packages-microsoft-prod.deb \
+    && rm /tmp/packages-microsoft-prod.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends dotnet-sdk-10.0 python3 \
+    && rm -rf /var/lib/apt/lists/*
 
+WORKDIR /src
 COPY package.json package-lock.json ./
-COPY packages/shared/package.json packages/shared/tsconfig.json ./packages/shared/
 COPY packages/webui/package.json packages/webui/package-lock.json ./packages/webui/
-COPY packages/cli-node/package.json packages/cli-node/package-lock.json ./packages/cli-node/
+RUN npm ci && npm --prefix packages/webui ci
 
-RUN npm ci && npm --prefix packages/webui ci && npm --prefix packages/cli-node ci
-
-COPY tsconfig.json ./
-COPY src ./src
+COPY dotnet ./dotnet
 COPY templates ./templates
 COPY skills ./skills
-COPY scripts/start-sandbox-node.sh ./scripts/start-sandbox-node.sh
+COPY scripts ./scripts
 COPY packages/shared ./packages/shared
 COPY packages/webui ./packages/webui
 COPY packages/cli-node ./packages/cli-node
 COPY packages/cli-node-runtime ./packages/cli-node-runtime
-
-RUN npm run build && npm --prefix packages/webui run build
-RUN rm -rf /app/packages/shared/node_modules /app/packages/cli-node/node_modules /app/packages/cli-node-runtime/node_modules
-
-# Code workbench assets are optional; extension bundles are always present.
 COPY packages/vscode-web ./packages/vscode-web
-RUN mkdir -p /app/packages/vscode-web/assets/vscode-web
+COPY LICENSE ./LICENSE
+
+# Delivery.targets is the only collector for runtime assets and notices.
+RUN npm run build:assets \
+    && dotnet publish dotnet/Foxwarm/Foxwarm.csproj -c Release --self-contained false -o /out
 
 FROM node:24.17.0-trixie-slim AS runtime
 
@@ -55,35 +57,25 @@ RUN apt-get update \
         zip \
         build-essential \
         pkg-config \
+    && curl -fsSLo /tmp/packages-microsoft-prod.deb https://packages.microsoft.com/config/debian/13/packages-microsoft-prod.deb \
+    && dpkg -i /tmp/packages-microsoft-prod.deb \
+    && rm /tmp/packages-microsoft-prod.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends aspnetcore-runtime-10.0 \
     && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production \
+    ASPNETCORE_ENVIRONMENT=Production \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 WORKDIR /app
-
+# Keep the existing JS/stdio MCP and operator tool environment, independently
+# of Main's managed runtime. The retained public JS bins use this lockfile.
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
-
-COPY --from=build /app/lib ./lib
-COPY --from=build /app/templates ./templates
-COPY --from=build /app/skills ./skills
-COPY --from=build /app/scripts/start-sandbox-node.sh ./scripts/start-sandbox-node.sh
-COPY --from=build /app/packages/shared ./packages/shared
-COPY --from=build /app/packages/cli-node ./packages/cli-node
-COPY --from=build /app/packages/cli-node-runtime ./packages/cli-node-runtime
-COPY --from=build /app/packages/webui/dist ./packages/webui/dist
-COPY --from=build /app/packages/webui/public ./packages/webui/public
-COPY --from=build /app/packages/vscode-web/foxwarm-fs ./packages/vscode-web/foxwarm-fs
-COPY --from=build /app/packages/vscode-web/foxwarm-terminal ./packages/vscode-web/foxwarm-terminal
-COPY --from=build /app/packages/vscode-web/foxwarm-scm ./packages/vscode-web/foxwarm-scm
-COPY --from=build /app/packages/vscode-web/foxwarm-webui ./packages/vscode-web/foxwarm-webui
-COPY --from=build /app/packages/vscode-web/assets ./packages/vscode-web/assets
-
-RUN mkdir -p /data
+COPY --from=build /out ./
+RUN mkdir -p /data /app/packages/vscode-web/assets/vscode-web
 
 ENV FOXWARM_DATA_DIR=/data
-
 EXPOSE 3001
-
-CMD ["node", "lib/index.js"]
+CMD ["dotnet", "Foxwarm.dll"]

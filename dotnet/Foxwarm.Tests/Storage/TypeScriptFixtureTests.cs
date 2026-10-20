@@ -90,6 +90,7 @@ public sealed class TypeScriptFixtureTests
             [
                 "archive_blocks",
                 "archive_branches",
+                "archive_checkpoints",
                 "archive_messages",
                 "archive_session_id_reservations",
             ],

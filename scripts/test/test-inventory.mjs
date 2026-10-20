@@ -45,7 +45,9 @@ function normalize(value) {
 
 function classify(file) {
   if (manualGroups.has(file)) return manualGroups.get(file)
+  if (file.startsWith('dotnet/Foxwarm.Tests/') && file.endsWith('.cs')) return 'managed'
   if (!testLike.test(file)) return null
+  if (file === 'packages/webui/test/publishedCore.e2e.mjs') return 'managed-delivery'
   if (/^(?:lib|packages\/[^/]+\/dist)\/.*\.test\.js$/.test(file)) return 'generated-test-artifact'
   if (/^src\/.*\.test\.ts$/.test(file)) return 'backend'
   if (/^packages\/shared\/src\/.*\.test\.ts$/.test(file)) return 'shared'
@@ -104,6 +106,8 @@ export const routineUnitGroups = [
 ]
 
 export const deferredGroups = {
+  'managed': 'Compiled and executed by dotnet test through test:managed or test:unit.',
+  'managed-delivery': 'Complete owned publish and original App proof through test:published.',
   'generated-test-artifact': 'Covered through its classified source test.',
   'vscode-assets-e2e': 'Requires prepared VS Code and YAML extension assets.',
   'website-owned': 'Owned by the website test workflow.',

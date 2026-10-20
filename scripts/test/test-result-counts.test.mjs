@@ -33,3 +33,11 @@ test('counts standalone explicit PASS lines', () => {
     tests: 2, pass: 2, fail: 0, cancelled: 0, skipped: 0, todo: 0,
   })
 })
+
+test('counts completed managed test runs, including failures and skips', () => {
+  assert.deepEqual(parseTestResultCounts('Passed!  - Failed: 0, Passed: 7, Skipped: 1, Total: 8, Duration: 1 s\n' +
+    'Failed!  - Failed: 2, Passed: 1, Skipped: 0, Total: 3, Duration: 1 s'), {
+    tests: 11, pass: 8, fail: 2, cancelled: 0, skipped: 1, todo: 0,
+  })
+  assert.equal(parseTestResultCounts('Passed! - Failed: 0, Passed: 7, Skipped: 1, Total: 9'), null)
+})

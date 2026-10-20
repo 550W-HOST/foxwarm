@@ -448,6 +448,53 @@ public sealed class WebUiStartupTests
     }
 
     [Fact]
+    public async Task WebUI_created_root_precedes_ranked_siblings_beyond_the_initial_window_and_survives_restart()
+    {
+        await using var h = new Host();
+        await File.WriteAllTextAsync(h.TokenPath, h.Token);
+        await File.AppendAllTextAsync(h.ConfigPath, "vector: false\n");
+        h.Start();
+        await h.Ready();
+        var ids = new List<string>();
+        for (var index = 0; index < 53; index++)
+        {
+            var response = await h.Client.PostAsJsonAsync(
+                "/api/sessions",
+                new { agentId = "main", sessionId = "ranked-" + index }
+            );
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            ids.Add((await response.Content.ReadFromJsonAsync<JsonObject>())!["sessionId"]!.GetValue<string>());
+        }
+        foreach (var id in ids.Take(2))
+        {
+            var response = await h.Client.PostAsJsonAsync(
+                "/api/sessions/" + id + "/move",
+                new { parentSessionId = (string?)null, position = "first" }
+            );
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+        async Task<string[]> Roots(int limit)
+        {
+            var page = await h.Client.GetFromJsonAsync<JsonObject>(
+                "/api/session-list/sidebar?limit=" + limit
+            );
+            return page!["sessions"]!.AsArray().Select(row => row!["id"]!.GetValue<string>()).ToArray();
+        }
+        var previous = await Roots(100);
+        var create = await h.Client.PostAsJsonAsync("/api/sessions", new { });
+        Assert.Equal(HttpStatusCode.OK, create.StatusCode);
+        var created = (await create.Content.ReadFromJsonAsync<JsonObject>())!["sessionId"]!.GetValue<string>();
+        Assert.Equal(created, (await Roots(50))[0]);
+        Assert.Equal(new[] { created }.Concat(previous), await Roots(100));
+        await h.Stop();
+        h.Start();
+        await h.Ready();
+        Assert.Equal(created, (await Roots(50))[0]);
+        Assert.Equal(new[] { created }.Concat(previous), await Roots(100));
+        await h.Stop();
+    }
+
+    [Fact]
     public async Task Actual_authenticated_user_task_routes_support_create_assign_release_and_comment()
     {
         await using var h = new Host();

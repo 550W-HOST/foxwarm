@@ -22,6 +22,17 @@ export function parseTestResultCounts(output) {
   }
   if (Object.keys(tap).length) return tap
 
+  const managed = [...output.matchAll(/^(?:Passed!|Failed!)\s*-\s*Failed:\s*(\d+),\s*Passed:\s*(\d+),\s*Skipped:\s*(\d+),\s*Total:\s*(\d+)/gm)]
+  if (managed.length) {
+    const result = { tests: 0, pass: 0, fail: 0, cancelled: 0, skipped: 0, todo: 0 }
+    for (const match of managed) {
+      const [fail, pass, skipped, total] = match.slice(1).map(Number)
+      if (fail + pass + skipped !== total) return null
+      result.tests += total; result.pass += pass; result.fail += fail; result.skipped += skipped
+    }
+    return result
+  }
+
   const runs = [...output.matchAll(/^Ran (\d+) tests?.*$/gm)]
   if (runs.length) {
     const terminal = [...output.matchAll(/^(OK|FAILED)(?: \(([^\n]*)\))?$/gm)]

@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-This branch is a managed Main source-entry candidate, not a public release switch. Linux x64 and Windows x64 are the candidate targets; Windows launch/installer execution requires independent qualification. macOS Main is not qualified here, and other-platform TypeScript Node clients are unchanged. Main TUI, Session Worker hosting and managed ToolScript/controllers are outside this candidate. Explicit `--tui` fails; persisted `bot.enableTUI` logs an ignored diagnostic.
+This branch is a managed Main delivery candidate, not a public release switch. Linux x64 and Windows x64 are the candidate targets; Linux x64 and Windows x64 source startup/control have been qualified separately; Linux image success does not qualify other container architectures. macOS Main is not qualified here, and other-platform TypeScript Node clients are unchanged. Main TUI, Session Worker hosting and managed ToolScript/controllers are outside this candidate. Explicit `--tui` fails; persisted `bot.enableTUI` logs an ignored diagnostic.
 
 The installer creates `./foxwarm` for the program and `./foxwarm-data` for runtime data. It builds and starts the app, then prints a WebUI URL containing the login token.
 
@@ -85,7 +85,7 @@ Logs are under `state/logs/` in the data directory. See [upgrades and backups](/
 
 ## Docker Compose
 
-The production Docker recipe is not yet migrated to the managed source build. These retained release commands are not qualification of this candidate; Docker delivery is a separate phase. For a compatible released checkout:
+The source-built Linux x64 candidate runs managed Main on Debian 13 with ASP.NET Core 10, retaining Node 24 and the existing operator tools for JavaScript and stdio MCP workloads. Chromium follows Debian's ordinary package updates. This does not promote the candidate to the public release branch or authorize replacing a live installation. On the intended candidate checkout:
 
 ```bash
 git clone https://github.com/550W-HOST/foxwarm.git foxwarm
@@ -95,6 +95,8 @@ docker compose up -d --build foxwarm
 ```
 
 Open `http://localhost:3001/` and read the token from `foxwarm-data/state/token`. The Compose service mounts that host directory at `/data` inside the container. First-run model setup works the same way as a local installation.
+
+The image builds its WebUI, Node archive, native helpers, resources and notices from source; host build outputs, installation data and private caches are not inputs. Large optional Code workbench assets and the separately pinned optional HEIC decoder are not bundled.
 
 This command starts only the `foxwarm` service. The repository also defines an optional paired sandbox client; you do not need it to try the WebUI.
 

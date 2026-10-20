@@ -25,12 +25,23 @@ await writeFile(join(data, 'state/config.yaml'), `bot:\n  httpPort: ${port}\nvec
 const env = { ...process.env }
 for (const key of Object.keys(env)) if (key.startsWith('FOXWARM_') || ['CONFIG_PATH', 'MCP_CONFIG_PATH', 'ASPNETCORE_URLS'].includes(key)) delete env[key]
 env.FOXWARM_BIND_ADDRESS = '127.0.0.1'
-const child = spawn(join(process.env.DOTNET_ROOT, 'dotnet'), [join(payload, 'Foxwarm.dll')], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
-let output = '', browser, token, browserErrors = []
-child.stdout.on('data', bytes => { output += bytes }); child.stderr.on('data', bytes => { output += bytes })
+env.NODE_OPTIONS = ''
+let child, output = '', browser, token, browserErrors = []
+function startHost() {
+  output = ''
+  child = spawn(join(process.env.DOTNET_ROOT, 'dotnet'), [join(payload, 'Foxwarm.dll')], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
+  child.stdout.on('data', bytes => { output += bytes }); child.stderr.on('data', bytes => { output += bytes })
+}
+startHost()
 const requests = []
 const peer = createServer(async (request, response) => {
   try {
+    if (request.method === 'GET' && request.url === '/browser-fixture') {
+      response.writeHead(200, { 'content-type': 'text/html' })
+      response.end('<!doctype html><title>Packaged browser</title><h1>Published Main browser fixture</h1>')
+      return
+    }
+    if (request.method === 'GET') { response.writeHead(204).end(); return }
     let raw = ''; for await (const chunk of request) raw += chunk
     const body = JSON.parse(raw); requests.push(body)
     const outputRows = requests.length === 1
@@ -38,6 +49,10 @@ const peer = createServer(async (request, response) => {
         code: "skill = call_tool('skill', {'action':'load','skillName':'code-index'})\nresource = call_tool('read', {'filePath': args['resource']})\ncall_tool('write', {'filePath':'packaged-native-effect.txt','content':'native packaged worker'})\nreturn {'skill':skill,'resource':resource,'answer':6*7}\n",
         args: { resource: join(payload, 'skills/code-index/INITIALIZATION.md') },
       }) }]
+      : requests.length === 2
+      ? [{ type: 'function_call', call_id: 'packaged-browser-open', name: 'browse_open', arguments: JSON.stringify({ url: `http://127.0.0.1:${peer.address().port}/browser-fixture` }) }]
+      : requests.length === 3
+      ? [{ type: 'function_call', call_id: 'packaged-browser-image', name: 'browse_get', arguments: JSON.stringify({ tabId: 'tab1', screenshot: true }) }]
       : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'PACKAGED-NATIVE-DONE' }] }]
     response.writeHead(200, { 'content-type': 'text/event-stream' })
     response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { id: 'published-' + requests.length, output: outputRows, usage: { input_tokens: 20, output_tokens: 4 } } }) + '\n\n')
@@ -113,7 +128,17 @@ try {
   assert(id, JSON.stringify(created))
   assert.equal((await api('POST', '/api/sessions/' + encodeURIComponent(id) + '/message', { text: 'Run the owned delivery qualification.' })).status, 202)
   await until(async () => JSON.stringify((await api('GET', '/api/sessions/' + encodeURIComponent(id) + '/history')).body).includes('PACKAGED-NATIVE-DONE'), 'ordinary packaged native ToolScript')
-  assert.equal(requests.length, 2)
+  assert.equal(requests.length, 4)
+  assert.match(JSON.stringify(requests[2].input), /Tab opened: tab1/)
+  assert.match(JSON.stringify(requests[3].input), /input_image/)
+  const authority = JSON.parse(await readFile(join(data, 'state/sessions', id + '.json'), 'utf8'))
+  const image = authority.history.flatMap(row => row.parts || []).find(part => part.inlineDataRef && part.toolUseId === 'packaged-browser-image')
+  assert(image, 'Canonical browser screenshot must retain its paired durable image reference')
+  assert(!image.inlineData, 'Canonical history does not store inline screenshot bytes')
+  const blob = '/api/blobs/' + image.inlineDataRef.blobId
+  assert.equal((await fetch(origin + blob)).status, 401)
+  const bytes = Buffer.from(await (await fetch(origin + blob, { headers: { authorization: 'Bearer ' + token } })).arrayBuffer())
+  assert.equal(bytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a')
   const effects = JSON.stringify(requests[1].input)
   assert.match(effects, /completed/); assert.match(effects, /42/); assert.match(effects, /Source: global/); assert.match(effects, /INITIALIZATION.md/)
   assert.equal(await readFile(join(data, 'agents/main/packaged-native-effect.txt'), 'utf8'), 'native packaged worker')
@@ -124,7 +149,17 @@ try {
   assert.equal((await api('POST', '/admin/shutdown')).status, 202)
   const [code, signal] = await exited
   assert.deepEqual({ code, signal }, { code: 0, signal: null }, output)
-  console.log(JSON.stringify({ published: true, browserLogin: true, noModelSetup: true, implicitSessions: 0, nodeArchive: true, extensionBundles: 4, nativeToolScript: true, globalSkillResource: true, vectorDisabledLazy: true, requests: requests.length }))
+  startHost()
+  await until(() => { assert.equal(child.exitCode, null, output); return output.includes('Main HTTP listening: ' + origin) }, 'restarted published Core listening')
+  assert.equal((await readFile(join(data, 'state/token'), 'utf8')).trim(), token)
+  assert.match(JSON.stringify((await api('GET', '/api/sessions/' + encodeURIComponent(id) + '/history')).body), /PACKAGED-NATIVE-DONE/)
+  assert.equal(await readFile(join(data, 'agents/main/packaged-native-effect.txt'), 'utf8'), 'native packaged worker')
+  assert.equal(requests.length, 4, 'Restart must not replay a completed tool turn')
+  const stopped = once(child, 'exit')
+  child.kill('SIGTERM')
+  const [restartCode, restartSignal] = await stopped
+  assert.deepEqual({ code: restartCode, signal: restartSignal }, { code: 0, signal: null }, output)
+  console.log(JSON.stringify({ published: true, mainBrowserImage: true, restartPreserved: true, browserLogin: true, noModelSetup: true, implicitSessions: 0, nodeArchive: true, extensionBundles: 4, nativeToolScript: true, globalSkillResource: true, vectorDisabledLazy: true, requests: requests.length }))
 } finally {
   await browser?.close().catch(() => {})
   if (child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL'); await once(child, 'exit').catch(() => {}) }

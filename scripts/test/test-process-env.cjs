@@ -31,8 +31,17 @@ function initializeTestEnvironment() {
 // Do not carry installation path overrides into a fixture, including children
 // whose explicit data root differs from the parent test's root.
 function isolatedApplicationEnv(dataRoot, inherited = process.env) {
+  const environment = { ...inherited };
+  // Managed entry settings must not override the owned paths, ports or lifetime.
+  for (const key of Object.keys(environment)) {
+    if (key.startsWith('FOXWARM_EXPERIMENT_') || [
+      'FOXWARM_APP_ROOT', 'FOXWARM_HTTP_PORT', 'FOXWARM_BIND_ADDRESS',
+      'FOXWARM_MAIN_LIFETIME_PIPE', 'FOXWARM_WINDOWS_CONTROL_PIPE',
+      'FOXWARM_CLI_LIFETIME_PIPE', 'FOXWARM_PUBLIC_BASE_URL', 'ASPNETCORE_URLS',
+    ].includes(key)) delete environment[key];
+  }
   return {
-    ...inherited,
+    ...environment,
     FOXWARM_DATA_DIR: dataRoot,
     FOXWARM_CONFIG_PATH: '', CONFIG_PATH: '', MCP_CONFIG_PATH: '',
     FOXWARM_AGENT_DIR: '', FOXWARM_AGENTS_DIR: path.join(dataRoot, 'agents'),
