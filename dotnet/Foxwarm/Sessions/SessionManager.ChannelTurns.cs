@@ -306,7 +306,8 @@ internal sealed partial class SessionManager
                 return;
             var parts = (message["parts"] as JsonArray ?? []).OfType<JsonObject>().ToArray();
             var final =
-                !parts.Any(part => part["functionCall"] is not null)
+                message["__meta"]?["llmSegment"]?["complete"]?.GetValue<bool>() != false
+                && !parts.Any(part => part["functionCall"] is not null)
                 && !owner.Entry.WithState(state => state.Queue.Any(SessionCompactor.Ordinary));
             await BroadcastChannelTextAsync(
                 owner,

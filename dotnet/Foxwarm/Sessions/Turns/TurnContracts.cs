@@ -55,6 +55,14 @@ public interface ISessionChatService : IChatService
         Func<CancellationToken, Task<bool>> prepareRetry,
         CancellationToken cancellationToken
     );
+
+    Task<ChatResult> ChatAsync(
+        string sessionId,
+        SessionHistory history,
+        Func<CancellationToken, Task<bool>> prepareRetry,
+        Func<JsonObject, bool, Task<JsonObject>> commitAssistantSegment,
+        CancellationToken cancellationToken
+    ) => ChatAsync(sessionId, history, prepareRetry, cancellationToken);
 }
 
 public interface ITurnToolExecutor
@@ -113,6 +121,7 @@ public sealed record ChatResult(
 )
 {
     internal HistoryAppendFinalizer? HistoryAppend { get; init; }
+    internal IReadOnlyList<JsonObject> CommittedSegments { get; init; } = [];
     internal bool Terminal { get; init; }
     internal bool Suspended { get; init; }
     internal string? TruncatedStopReason { get; init; }

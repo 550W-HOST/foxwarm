@@ -92,9 +92,11 @@ internal sealed partial class SessionManager
             "setup-model-test",
             cancellationToken
         );
+        var interaction = diagnostics.Begin();
         var attemptStarted = false;
         options = options with
         {
+            Diagnostics = interaction.StartAttempt(model, options, 1),
             AttemptPrepared = async payload =>
             {
                 await Journal.AppendAttemptStartAsync(
@@ -137,6 +139,7 @@ internal sealed partial class SessionManager
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            await interaction.MoveToErrorAsync().ConfigureAwait(false);
             if (attemptStarted)
                 try
                 {
@@ -159,6 +162,7 @@ internal sealed partial class SessionManager
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            await interaction.MoveToErrorAsync().ConfigureAwait(false);
             if (attemptStarted)
                 try
                 {
@@ -189,6 +193,7 @@ internal sealed partial class SessionManager
         }
         catch (Exception error)
         {
+            await interaction.MoveToErrorAsync().ConfigureAwait(false);
             if (attemptStarted)
                 try
                 {

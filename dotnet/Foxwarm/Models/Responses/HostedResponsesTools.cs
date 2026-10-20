@@ -12,6 +12,13 @@ internal sealed record GeneratedImageNormalization(
     IReadOnlyDictionary<string, byte[]> ReplayBytes
 );
 
+internal sealed class GeneratedImageBudget
+{
+    internal readonly HashSet<string> UsedIds = new(StringComparer.Ordinal);
+    internal int UsedBytes;
+    internal int Success;
+}
+
 internal static class HostedResponsesTools
 {
     internal const int MaxImageBytes = 32 * 1024 * 1024;
@@ -70,29 +77,33 @@ internal static class HostedResponsesTools
         JsonArray output,
         ImageBlobStore images,
         string sourceModelId,
-        CancellationToken token
+        CancellationToken token,
+        GeneratedImageBudget? budget = null,
+        int outputStart = 0
     )
     {
         var parts = new Dictionary<int, JsonObject>();
         var failures = new List<string>();
-        var usedIds = new HashSet<string>(StringComparer.Ordinal);
-        var usedBytes = 0;
+        budget ??= new GeneratedImageBudget();
         var success = 0;
         var replayBytes = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         for (var index = 0; index < output.Count; index++)
         {
             if (output[index] is not JsonObject item || !IsGeneratedImage(item))
                 continue;
-            var imageId = ImageId(Text(item["id"]), index);
-            while (!usedIds.Add(imageId))
+            var imageId = ImageId(Text(item["id"]), outputStart + index);
+            while (!budget.UsedIds.Add(imageId))
                 imageId +=
-                    "_" + (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    "_"
+                    + (outputStart + index + 1).ToString(
+                        System.Globalization.CultureInfo.InvariantCulture
+                    );
             if (!IsCompletedGeneratedImage(item))
             {
                 failures.Add(imageId + ": image generation result was missing or incomplete.");
                 continue;
             }
-            if (success >= MaxImages)
+            if (budget.Success >= MaxImages)
             {
                 failures.Add(imageId + ": response exceeded the image limit.");
                 continue;
@@ -100,7 +111,7 @@ internal static class HostedResponsesTools
             try
             {
                 var bytes = DecodeBase64(Text(item["result"])!, MaxImageBytes);
-                if (usedBytes + bytes.Length > MaxResponseBytes)
+                if (budget.UsedBytes + bytes.Length > MaxResponseBytes)
                     throw new InvalidDataException(
                         "response exceeded the generated image byte budget."
                     );
@@ -148,7 +159,8 @@ internal static class HostedResponsesTools
                         },
                     },
                 };
-                usedBytes += bytes.Length;
+                budget.UsedBytes += bytes.Length;
+                budget.Success++;
                 success++;
                 if (Text(reference["blobId"]) is string blobId)
                     replayBytes[blobId] = bytes;

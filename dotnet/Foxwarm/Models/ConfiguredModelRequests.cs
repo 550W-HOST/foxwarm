@@ -34,14 +34,6 @@ internal static class ConfiguredModelRequests
         var imageDeclared = imageEnabled && !featurePurpose;
         if (responses)
         {
-            if (
-                model.Configuration["keepReasoningOnError"] is JsonValue keep
-                && keep.TryGetValue<bool>(out var recovery)
-                && recovery
-            )
-                throw new InvalidDataException(
-                    "Responses keepReasoningOnError recovery is not implemented."
-                );
             var extra = model.Configuration["extraFields"] as JsonObject;
             if (imageDeclared && extra?["tools"] is JsonArray)
                 throw new InvalidDataException(
@@ -88,6 +80,8 @@ internal static class ConfiguredModelRequests
         }
         return defaults with
         {
+            KeepReasoningOnError =
+                model.Configuration["keepReasoningOnError"]?.GetValue<bool>() == true,
             BaseUri = model.BaseUri,
             RequestModel = model.ModelId,
             MaxOutputTokens = model.MaxOutput,
@@ -139,6 +133,19 @@ internal static class ConfiguredModelRequests
         ModelRequestScope scope = ModelRequestScope.LowLevel
     )
     {
+        if (options.Diagnostics is { } diagnostics)
+        {
+            var prepared = options.AttemptPrepared;
+            options = options with
+            {
+                AttemptPrepared = async payload =>
+                {
+                    if (prepared is not null)
+                        await prepared(payload).ConfigureAwait(false);
+                    await diagnostics.PreparedAsync(payload).ConfigureAwait(false);
+                },
+            };
+        }
         IChatService service =
             model.ProviderType == "openai-ws"
                 ? new ResponsesWsChatService(
@@ -165,13 +172,22 @@ internal static class ConfiguredModelRequests
             : throw new InvalidDataException(
                 "Unsupported providerType: " + model.ProviderType + "."
             );
-        return options.HardTimeoutMs is > 0
-            ? new AttemptTimeoutService(service, options.HardTimeoutMs.Value)
+        if (options.HardTimeoutMs is > 0)
+            service = new AttemptTimeoutService(
+                service,
+                options.HardTimeoutMs.Value,
+                options.Clock
+            );
+        return options.Diagnostics is { } capture
+            ? new DiagnosticChatService(service, capture)
             : service;
     }
 
-    private sealed class AttemptTimeoutService(IChatService service, double timeoutMs)
-        : IChatService
+    private sealed class AttemptTimeoutService(
+        IChatService service,
+        double timeoutMs,
+        TimeProvider? clock
+    ) : IChatService
     {
         public async Task<ChatResult> ChatAsync(
             string sessionId,
@@ -179,8 +195,14 @@ internal static class ConfiguredModelRequests
             CancellationToken token
         )
         {
-            using var attempt = CancellationTokenSource.CreateLinkedTokenSource(token);
-            attempt.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs));
+            using var deadline = new CancellationTokenSource(
+                TimeSpan.FromMilliseconds(timeoutMs),
+                clock ?? TimeProvider.System
+            );
+            using var attempt = CancellationTokenSource.CreateLinkedTokenSource(
+                token,
+                deadline.Token
+            );
             return await service.ChatAsync(sessionId, history, attempt.Token);
         }
     }

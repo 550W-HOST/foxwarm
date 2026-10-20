@@ -51,58 +51,50 @@ internal sealed class ResponsesWsChatService(
             headers[key] = SessionWait.Text(value) ?? (value?.ToJsonString() ?? "");
         var started = Stopwatch.GetTimestamp();
         WsPendingCompletion? pending = null;
+        using var attempt = new ResponsesAttempt(
+            options,
+            token,
+            update => progress?.Invoke(sessionId, update)
+        );
         try
         {
-            pending = await transport
-                .RequestAsync(
-                    options.ResponsesUri,
-                    headers,
-                    options.ConcreteModelId,
-                    body,
-                    new ResponsesStreamCallbacks
-                    {
-                        OnProgress = update => progress?.Invoke(sessionId, update),
-                    },
-                    options.StreamInactivityTimeoutMs,
-                    token,
-                    sessionId,
-                    scope
-                            is ModelRequestScope.CompactPlan
-                                or ModelRequestScope.BackgroundCompactPlan
-                            ? "compact-plan"
-                        : scope == ModelRequestScope.Canonical ? "chat"
-                        : scope == ModelRequestScope.Btw ? "btw"
-                        : "low-level"
+            try
+            {
+                pending = await transport
+                    .RequestAsync(
+                        options.ResponsesUri,
+                        headers,
+                        options.ConcreteModelId,
+                        body,
+                        attempt.Callbacks,
+                        options.StreamInactivityTimeoutMs,
+                        attempt.Token,
+                        sessionId,
+                        scope
+                                is ModelRequestScope.CompactPlan
+                                    or ModelRequestScope.BackgroundCompactPlan
+                                ? "compact-plan"
+                            : scope == ModelRequestScope.Canonical ? "chat"
+                            : scope == ModelRequestScope.Btw ? "btw"
+                            : "low-level",
+                        token
+                    )
+                    .ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                await attempt.FailedAsync(error).ConfigureAwait(false);
+                throw;
+            }
+            options.Diagnostics?.Response("101 WebSocket", new JsonObject(), pending.Response);
+            var result = await attempt
+                .CompleteAsync(
+                    pending.Response,
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    Stopwatch.GetElapsedTime(started).TotalMilliseconds
                 )
                 .ConfigureAwait(false);
-            GeneratedImageNormalization? generated = null;
-            if (options.Images is not null && pending.Response["output"] is JsonArray output)
-            {
-                generated = await HostedResponsesTools.ExternalizeAsync(
-                    output,
-                    options.Images,
-                    options.ConcreteModelId,
-                    token
-                );
-                if (
-                    generated.SuccessfulCount == 0
-                    && generated.Failures.Count > 0
-                    && !HasOtherUsableOutput(output)
-                )
-                    throw ModelAttemptFailure.GeneratedImageFailure(
-                        HostedResponsesTools.FailureNote(generated.Failures)
-                    );
-            }
-            var assistant = ResponsesCanonicalConverter.ConvertAssistant(
-                pending.Response,
-                options.ConcreteModelId,
-                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                generated?.Parts,
-                generated?.Failures
-            );
-            if (options.DisallowEmptyResponse && !OpenAIHttp.HasMeaningfulAssistant(assistant))
-                throw ModelAttemptFailure.Empty();
+            var assistant = result.AssistantMessage;
             var captured = pending;
             var unsafeReplay =
                 (pending.Response["output"] as JsonArray)
@@ -133,12 +125,15 @@ internal sealed class ResponsesWsChatService(
                         captured.Finalize(null);
                         return;
                     }
-                    var prepared = ConcreteRequestHistory.Prepare(rows, options.ConcreteModelId);
+                    var prepared = ConcreteRequestHistory.Prepare(
+                        attempt.Committed.Concat(rows).ToArray(),
+                        options.ConcreteModelId
+                    );
                     var replay = ResponsesRequestSerializer.ConvertHistoryWithImages(
                         prepared,
                         options.ConcreteModelId,
                         options.Images,
-                        generated?.ReplayBytes
+                        attempt.ReplayBytes
                     );
                     captured.Finalize(replay.Select(item => item?.DeepClone()).ToArray());
                 }
@@ -148,13 +143,7 @@ internal sealed class ResponsesWsChatService(
                     throw;
                 }
             });
-            var result = new ChatResult(
-                assistant,
-                ResponsesCanonicalConverter.BuildUsage(pending.Response["usage"] as JsonObject)
-            )
-            {
-                HistoryAppend = finalizer,
-            };
+            result = result with { HistoryAppend = finalizer };
             if (scope == ModelRequestScope.LowLevel || ownsTransport)
                 result.FinalizeHistory(null);
             return result;
@@ -170,23 +159,4 @@ internal sealed class ResponsesWsChatService(
                 await transport.DisposeAsync().ConfigureAwait(false);
         }
     }
-
-    private static bool HasOtherUsableOutput(JsonArray output) =>
-        output
-            .OfType<JsonObject>()
-            .Any(item =>
-                !HostedResponsesTools.IsGeneratedImage(item)
-                && (
-                    SessionWait.Text(item["type"]) == "function_call"
-                    || SessionWait.Text(item["type"]) == "message"
-                        && (item["content"] as JsonArray)
-                            ?.OfType<JsonObject>()
-                            .Any(content =>
-                                SessionWait.Text(content["text"]) is string text
-                                    && OpenAIRequestText.Trim(text).Length > 0
-                                || SessionWait.Text(content["refusal"]) is string refusal
-                                    && OpenAIRequestText.Trim(refusal).Length > 0
-                            ) == true
-                )
-            );
 }

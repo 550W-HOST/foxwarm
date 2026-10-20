@@ -74,6 +74,7 @@ function peer(id, authorization = "", transport, notifications = false) {
       }
       if (args.kind === 'credential') { await record({ kind: 'effect', id, tag: args.tag }); return { content: [text(authorization)] }; }
       if (args.kind === 'large') { await record({ kind: 'effect', id, tag: args.tag }); return { content: [text('é'.repeat(args.length))] }; }
+      if (args.kind === 'environment') return { content: [text(Object.fromEntries(args.names.map(name => [name, process.env[name] ?? null])))] };
       if (args.kind === 'ordinary') return { content: [text({ command: 'printf ordinary', cwd: '/ordinary/path', env: args.value })] };
       return result(args.kind);
     }

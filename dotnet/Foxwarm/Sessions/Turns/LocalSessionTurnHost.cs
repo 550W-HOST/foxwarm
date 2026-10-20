@@ -126,7 +126,13 @@ public sealed partial class LocalSessionTurnHost
                 var history = entry.WithState(state => state.History.Snapshot());
                 var result = chat is ISessionChatService ordinary
                     ? await ordinary
-                        .ChatAsync(entry.State.Id, history, PrepareRetryAsync, registered.Token)
+                        .ChatAsync(
+                            entry.State.Id,
+                            history,
+                            PrepareRetryAsync,
+                            CommitAssistantSegmentAsync,
+                            registered.Token
+                        )
                         .ConfigureAwait(false)
                     : await chat.ChatAsync(entry.State.Id, history.Materialize(), registered.Token)
                         .ConfigureAwait(false);
@@ -345,6 +351,23 @@ public sealed partial class LocalSessionTurnHost
             else
                 requestCts.Dispose();
         }
+    }
+
+    private async Task<JsonObject> CommitAssistantSegmentAsync(JsonObject message, bool deliver)
+    {
+        AssertCanContinue();
+        var rows = await AppendHistoryMessageStrictAsync(message).ConfigureAwait(false);
+        var committed = rows[^1];
+        if (deliver && entry.AssistantCommitted is { } present)
+            try
+            {
+                await present(committed).ConfigureAwait(false);
+            }
+            catch (Exception error)
+            {
+                entry.RecordBestEffortFailure(error);
+            }
+        return committed;
     }
 
     private string? ParentSessionId() =>

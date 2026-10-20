@@ -17,7 +17,8 @@ internal static class OpenAIHttp
         Action<string, ResponsesStreamProgress>? progress,
         string? userAgent,
         Func<Stream, CancellationToken, ResponsesStreamCallbacks, Task<JsonObject>> collect,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ResponsesStreamCallbacks? output = null
     )
     {
         var headers = new Dictionary<string, string>();
@@ -27,28 +28,28 @@ internal static class OpenAIHttp
             headers["Authorization"] = "Bearer " + options.Token;
         using var request = ProviderHttpRequest.Create(endpoint, body, options, headers);
         using var activity = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        if (options.StreamInactivityTimeoutMs is not null)
-            activity.CancelAfter(180000);
+        using var watchdog = new StreamActivityWatchdog(
+            activity,
+            options.StreamInactivityTimeoutMs,
+            options.Clock
+        );
         var token = activity.Token;
-        var effectiveInactivity = options.StreamInactivityTimeoutMs;
         var callbacks = new ResponsesStreamCallbacks
         {
-            OnProgress = update => progress?.Invoke(sessionId, update),
-            OnMeaningfulProgress = () =>
+            OnProgress = update =>
             {
-                if (effectiveInactivity is int timeout)
-                    activity.CancelAfter(timeout);
+                if (output?.OnProgress is { } publish)
+                    publish(update);
+                else
+                    progress?.Invoke(sessionId, update);
             },
-            OnImageGenerationActivity = () =>
-            {
-                if (effectiveInactivity is int timeout)
-                    activity.CancelAfter(timeout);
-            },
-            OnSafetyBuffering = _ =>
-            {
-                effectiveInactivity = Math.Max(effectiveInactivity ?? 60000, 600000);
-                activity.CancelAfter(effectiveInactivity.Value);
-            },
+            OnDecodedChunk = text => options.Diagnostics?.Chunk(text),
+            OnSseBlock = block => options.Diagnostics?.Block(block),
+            OnOutputItemDone = output?.OnOutputItemDone,
+            OnResponseCompleted = output?.OnResponseCompleted,
+            OnMeaningfulProgress = watchdog.Progress,
+            OnImageGenerationActivity = watchdog.ExtendedActivity,
+            OnSafetyBuffering = _ => watchdog.ExtendedActivity(),
         };
         var started = Stopwatch.GetTimestamp();
         using var response = await http.SendAsync(
@@ -61,12 +62,29 @@ internal static class OpenAIHttp
         {
             var (error, truncated) = await ReadBoundedAsync(response.Content, token)
                 .ConfigureAwait(false);
+            options.Diagnostics?.Response(
+                $"{(int)response.StatusCode} {response.ReasonPhrase}",
+                ProviderHttpRequest.ResponseHeaders(response),
+                JsonValue.Create(error),
+                truncated
+            );
             throw new ResponsesHttpException(response.StatusCode, error, truncated);
         }
         await using var stream = await response
             .Content.ReadAsStreamAsync(token)
             .ConfigureAwait(false);
+        options.Diagnostics?.Response(
+            $"{(int)response.StatusCode} {response.ReasonPhrase}",
+            ProviderHttpRequest.ResponseHeaders(response),
+            null
+        );
         var payload = await collect(stream, token, callbacks).ConfigureAwait(false);
+        watchdog.Finish();
+        options.Diagnostics?.Response(
+            $"{(int)response.StatusCode} {response.ReasonPhrase}",
+            ProviderHttpRequest.ResponseHeaders(response),
+            payload
+        );
         return new Completed(
             payload,
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),

@@ -143,6 +143,11 @@ internal sealed partial class SessionOwner
         {
             if (draft is null)
                 return;
+            if (
+                draft["committedThrough"]?.GetValue<int>() is int through
+                && progress.Parts is not null
+            )
+                progress = ProjectDraft(progress, through);
             var previousText = draft["text"]?.GetValue<string>() ?? "";
             var previousReasoning = draft["reasoning"]?.GetValue<string>() ?? "";
             var hasParts = progress.Parts is not null || draft["parts"] is JsonArray;
@@ -307,8 +312,97 @@ internal sealed partial class SessionOwner
         return result;
     }
 
+    private static ResponsesStreamProgress ProjectDraft(
+        ResponsesStreamProgress progress,
+        int through
+    )
+    {
+        var parts = (progress.Parts ?? []).Where(part => part.OutputIndex >= through).ToArray();
+        return new ResponsesStreamProgress(
+            string.Join(
+                "\n",
+                parts
+                    .Where(part => part.Kind == "reasoning")
+                    .Select(part => part.Text)
+                    .Where(text => !string.IsNullOrEmpty(text))
+            ),
+            string.Concat(
+                parts.Where(part => part.Kind is "text" or "refusal").Select(part => part.Text)
+            ),
+            progress.ToolCalls.Where(call => call.Index >= through).ToArray(),
+            parts
+        );
+    }
+
+    private void TrimCommittedDraft(JsonObject message, int through)
+    {
+        JsonObject? envelope = null;
+        lock (draftGate)
+        {
+            if (
+                draft is null
+                || SessionWait.Text(draft["llmRequestId"])
+                    != SessionWait.Text(message["__meta"]?["llmRequestId"])
+            )
+                return;
+            var parts = (draft["parts"] as JsonArray ?? [])
+                .OfType<JsonObject>()
+                .Where(part => part["outputIndex"]!.GetValue<int>() >= through)
+                .ToArray();
+            var text = string.Concat(
+                parts
+                    .Where(part => SessionWait.Text(part["kind"]) is "text" or "refusal")
+                    .Select(part => SessionWait.Text(part["text"]))
+            );
+            var reasoning = string.Join(
+                "\n",
+                parts
+                    .Where(part => SessionWait.Text(part["kind"]) == "reasoning")
+                    .Select(part => SessionWait.Text(part["text"]))
+                    .Where(value => !string.IsNullOrEmpty(value))
+            );
+            var sequence = draft["sequence"]!.GetValue<int>() + 1;
+            envelope = new JsonObject
+            {
+                ["type"] = "model-stream-update",
+                ["streamVersion"] = 2,
+                ["streamId"] = draft["streamId"]!.DeepClone(),
+                ["iteration"] = 1,
+                ["sequenceStart"] = sequence,
+                ["sequence"] = sequence,
+                ["startedAt"] = draft["startedAt"]!.DeepClone(),
+                ["llmRequestId"] = draft["llmRequestId"]!.DeepClone(),
+                ["trimBeforeOutputIndex"] = through,
+                ["textDelta"] = Delta(SessionWait.Text(draft["text"]) ?? "", text),
+                ["reasoningDelta"] = Delta(SessionWait.Text(draft["reasoning"]) ?? "", reasoning),
+            };
+            draft["sequence"] = sequence;
+            draft["committedThrough"] = through;
+            draft["text"] = text;
+            draft["reasoning"] = reasoning;
+            draft["parts"] = new JsonArray(parts.Select(part => part.DeepClone()).ToArray());
+            draft["toolCalls"] = new JsonArray(
+                (draft["toolCalls"] as JsonArray ?? [])
+                    .OfType<JsonObject>()
+                    .Where(call => call["index"]!.GetValue<int>() >= through)
+                    .Select(call => call.DeepClone())
+                    .ToArray()
+            );
+        }
+        Emit(SessionEventKind.ModelStream, envelope);
+        Emit(SessionEventKind.DraftChanged);
+    }
+
     public void ClearCommittedDraft(JsonObject message)
     {
+        if (
+            message["__meta"]?["llmSegment"] is JsonObject segment
+            && segment["complete"]?.GetValue<bool>() == false
+        )
+        {
+            TrimCommittedDraft(message, segment["outputEndExclusive"]!.GetValue<int>());
+            return;
+        }
         var requestId = message["__meta"]?["llmRequestId"]?.GetValue<string>();
         if (requestId is null)
             return;
@@ -381,12 +475,29 @@ internal sealed class RequestChatService(IChatService inner, SessionOwner hosted
         CancellationToken cancellationToken
     ) => ChatCoreAsync(sessionId, null, prepareRetry, cancellationToken, history);
 
+    public Task<ChatResult> ChatAsync(
+        string sessionId,
+        SessionHistory history,
+        Func<CancellationToken, Task<bool>> prepareRetry,
+        Func<JsonObject, bool, Task<JsonObject>> commitAssistantSegment,
+        CancellationToken cancellationToken
+    ) =>
+        ChatCoreAsync(
+            sessionId,
+            null,
+            prepareRetry,
+            cancellationToken,
+            history,
+            commitAssistantSegment
+        );
+
     private async Task<ChatResult> ChatCoreAsync(
         string sessionId,
         IReadOnlyList<JsonObject>? history,
         Func<CancellationToken, Task<bool>>? prepareRetry,
         CancellationToken cancellationToken,
-        SessionHistory? snapshot = null
+        SessionHistory? snapshot = null,
+        Func<JsonObject, bool, Task<JsonObject>>? commitAssistantSegment = null
     )
     {
         string? requestId = null;
@@ -403,7 +514,15 @@ internal sealed class RequestChatService(IChatService inner, SessionOwner hosted
                 inner is ISessionChatService ordinary
                 && prepareRetry is not null
                 && snapshot is not null
-                    ? await ordinary.ChatAsync(sessionId, snapshot, Prepare, cancellationToken)
+                    ? commitAssistantSegment is null
+                        ? await ordinary.ChatAsync(sessionId, snapshot, Prepare, cancellationToken)
+                        : await ordinary.ChatAsync(
+                            sessionId,
+                            snapshot,
+                            Prepare,
+                            commitAssistantSegment,
+                            cancellationToken
+                        )
                     : await inner.ChatAsync(
                         sessionId,
                         history ?? snapshot!.Materialize(),
