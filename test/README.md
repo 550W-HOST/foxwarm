@@ -86,6 +86,9 @@ A source-built image needs its own managed default startup, original App/auth/
 Setup, Node source archive/resources, actual image Chromium/browser/image tool
 path, normal stop/drain/restart and preserved owned-data proof. Historical
 private-image or host-browser results do not qualify a new public recipe.
+The managed WebUI Logs surface remains missing: the original required Logs
+application scenario is enabled and fails. Successful image/publish proofs do
+not establish complete default App/CI qualification or authorize a deployment.
 Linux image evidence does not imply ARM, macOS, Windows container or Main AOT
 support. Windows source/control qualification is separate. Default CI uses the
 [maintained test runners](../docs/testing.md), not an existing installation's

@@ -37,3 +37,7 @@ GitHub Actions uses those same public commands in separate core/unit-quality, Ch
 ## Integration
 
 The runner consumes managed solution tests, complete-publish/browser proof, compiled Source backend/package tests, source WebUI and browser fixtures, Python tests, standalone self-test executables, and the synthetic full-application harness. Build/install prerequisites remain separate so a single build can feed repeated focused runs. Full-application ownership, including its exact scripted provider expectations, is documented in [full-application E2E](./full-app-e2e.md).
+
+## Current managed application gap
+
+The required full-application Logs scenario remains enabled. Managed Main has no equivalent fixed-file history/time endpoint or realtime Logs topic yet; passing solution/reference/publish or image checks is not complete default App/CI qualification. The retained [WebUI Logs contract](./webui-logs.md) owns the follow-up surface, not a reason to filter its original application scenario.

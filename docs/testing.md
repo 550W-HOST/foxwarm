@@ -11,6 +11,8 @@ npm run build:reference
 
 Default unit tests run the managed solution plus retained Source/package tests. The application under test in full-application E2E is managed Main through the package entry; the explicit Source build remains necessary for Archive seeding and differential/reference fixtures. Default `npm run build` prepares managed Main and assets, not `lib/`. Managed entry checks run directly with `node --test scripts/main.test.js scripts/tmux-scripts.test.js scripts/windowsService.test.js scripts/source-installer.test.js`; they allocate owned data before imports, and runtime cases require the built managed output. Windows source-start/control/installer execution requires separate Windows qualification; Linux cross-publish is not that proof.
 
+Managed WebUI Logs (fixed-file history/time lookup and its realtime topic) is not implemented at this checkpoint. The required original Logs application scenario stays enabled and currently fails against managed Main. Passing managed solution, reference, publish or image proofs does not make the complete default App/CI lane green.
+
 ## Commands
 
 ```bash
