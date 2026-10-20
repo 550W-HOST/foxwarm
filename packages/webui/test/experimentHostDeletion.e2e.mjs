@@ -235,26 +235,27 @@ try {
   await writeFile(fileFor('partial-restart'), restartBytes); const repaired = await remove('partial-restart'); assert.equal(repaired.continuedSameHost, undefined)
 
   // Launched shell/output are preserved while only exact tracking/callback ownership retires.
+  const execRecords = async () => JSON.parse(await readFile(join(state, 'running-exec.json'), 'utf8')).execs
   async function launch(id) {
     await send(id, id); const current = await saved(id)
     const result = current.history.flatMap(row => row.parts || []).map(part => part.functionResponse?.response?.output || '').find(value => value.includes('execId:'))
     const execId = result?.match(/execId: ([a-z-]+)/)?.[1]
-    assert(execId); const folder = join(state, 'exec', 'id_' + Buffer.from(id).toString('base64url'), execId)
-    const meta = JSON.parse(await readFile(join(folder, 'meta.json'), 'utf8')); shells.push(meta.Pid)
-    await access(join(folder, 'tracking.json')); return folder
+    assert(execId)
+    const record = (await execRecords()).find(record => record.id === execId && record.sessionId === id)
+    assert(record); shells.push(record.pid); return record
   }
   const liveFolder = await launch('exec-live'), finishedFolder = await launch('exec-finished')
-  await remove('exec-live'); assert.equal(await access(join(liveFolder, 'tracking.json')).then(() => true, () => false), false); await access(join(liveFolder, 'output.log'))
+  await remove('exec-live'); assert.equal((await execRecords()).some(record => record.id === liveFolder.id), false); await access(liveFolder.logPath)
   socket.close(); await fixture.stop(); await writeFile(join(fixture.work, 'exec-finished-release'), '')
-  await until(() => access(join(finishedFolder, 'status.json')).then(() => true, () => false), 'one shell naturally finishes with no host')
+  await until(() => access(finishedFolder.statusPath).then(() => true, () => false), 'one shell naturally finishes with no host')
   const prior = records.length; await fixture.start(); await until(() => counts.get('exec-finished') === 3, 'only real retained recipient receives completion')
-  await writeFile(join(fixture.work, 'exec-live-release'), ''); await until(() => access(join(liveFolder, 'status.json')).then(() => true, () => false), 'deleted recipient shell is not killed or replayed')
+  await writeFile(join(fixture.work, 'exec-live-release'), ''); await until(() => access(liveFolder.statusPath).then(() => true, () => false), 'deleted recipient shell is not killed or replayed')
   assert.equal(counts.get('exec-live'), 2); assert.equal(await dto('exec-live'), null); assert(records.length > prior); await remove('exec-finished')
   const badFolder = await launch('exec-bad'); await message('wait-sibling', 'CASE:wait-sibling')
   await until(async () => (await saved('wait-sibling')).meta.wait && !(await dto('wait-sibling')).busy, 'actual persisted wait declaration')
   await fixture.stop(); const execAuthority = await readFile(fileFor('exec-bad'), 'utf8'); await unlink(fileFor('exec-bad')); await writeFile(join(fixture.work, 'exec-bad-release'), '')
-  await until(() => access(join(badFolder, 'status.json')).then(() => true, () => false), 'bad recipient shell naturally finishes'); await sleep(2100)
-  const beforeFailure = records.length; await assert.rejects(fixture.start(), /missing|authority|Authority/); assert.equal(records.length, beforeFailure); await access(join(badFolder, 'tracking.json'))
+  await until(() => access(badFolder.statusPath).then(() => true, () => false), 'bad recipient shell naturally finishes'); await sleep(2100)
+  const beforeFailure = records.length; await assert.rejects(fixture.start(), /missing|authority|Authority/); assert.equal(records.length, beforeFailure); assert((await execRecords()).some(record => record.id === badFolder.id))
   await writeFile(fileFor('exec-bad'), execAuthority); await fixture.start(); await until(() => counts.get('exec-bad') === 3 && counts.get('wait-sibling') === 2, 'only all-validated restart resumes deadline and exec delivery')
   await until(async () => !(await dto('exec-bad')).busy && !(await dto('wait-sibling')).busy, 'final resumed recipients idle')
   const executed = (await readFile(join(fixture.work, 'deletion-executions'), 'utf8')).trim().split('\n').sort(); assert.deepEqual(executed, ['exec-bad', 'exec-finished', 'exec-live'])

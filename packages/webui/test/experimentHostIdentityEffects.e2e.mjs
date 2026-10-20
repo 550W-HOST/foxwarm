@@ -8,10 +8,10 @@ import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
 import { writeModelFixture } from './experimentModelFixture.mjs'
 const owned = await createHostFixture('identity-effects'), requests = [], failures = [], counts = new Map(), processes = []
 const route = id => '/api/sessions/' + encodeURIComponent(id)
-const segment = id => 'id_' + Buffer.from(id).toString('base64url')
+const execRecords = async () => JSON.parse(await readFile(join(owned.data, 'state/running-exec.json'), 'utf8')).execs
 const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
 const final = text => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
-let backgroundId
+let backgroundId, backgroundLog
 const preparationControl = process.env.IDENTITY_PREPARATION_CONTROL === '1', concreteControl = process.env.IDENTITY_CONCRETE_CONTROL === '1', deniedLate = preparationControl || concreteControl
 const segmentCommand = index => `printf '${index}\\n' >> ${JSON.stringify(join(owned.work, 'segment-launches'))}; while [ ! -f ${JSON.stringify(join(owned.work, 'segment-release'))} ]; do sleep 0.05; done; printf '${index}:'; pwd`
 const peer = createServer(async (request, response) => {
@@ -25,7 +25,7 @@ const peer = createServer(async (request, response) => {
       call('new-file', 'write', { filePath: 'new-workspace.txt', content: 'Future file effect uses the actual destination Agent.' }),
       call('new-segment', 'exec', { command: 'pwd; printf once >> new-segment.txt', timeout: 15 })])
     else if (key === 'background' && n === 0) output = [call('background-exec', 'exec', { command: 'printf once >> background-launches; while [ ! -f background-release ]; do sleep 0.05; done; printf BACKGROUND-OLD-ARTIFACT', timeout: 1 })]
-    else if (key === 'read' && n === 0) output = [call('historical-exec', 'read_exec', { execId: backgroundId })]
+    else if (key === 'read' && n === 0) output = [call('original-log', 'read', { filePath: backgroundLog })]
     else if (key === 'waiter' && n === 0) output = [call('declared-wait', 'wait', { reason: 'One original absolute deadline.', wakeIfNoActivityAfterSeconds: 2 })]
     else output = final('DONE-EFFECT-' + key)
     response.writeHead(200, { 'content-type': 'text/event-stream' }); response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { id: 'effects-' + requests.length, output, usage: { input_tokens: 20, output_tokens: 3 } } }) + '\n\n')
@@ -45,7 +45,7 @@ try {
   await until(async () => (await readFile(join(owned.work, 'segment-launches'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).length === 4, 'four real held sibling shells')
   assert.equal((await authority('busy')).busy, true); const before = await authority('busy')
   await move('busy', 'destination/moved'); assert.equal((await authority('destination/moved')).busy, true); assert.equal((await authority('destination/moved')).promptCacheKey, before.promptCacheKey)
-  const dir = join(owned.data, 'state/exec', segment('busy')); for (const id of await readdir(dir)) { const meta = JSON.parse(await readFile(join(dir, id, 'meta.json'), 'utf8')); if (meta.Pid) processes.push(meta.Pid) }
+  for (const record of await execRecords()) if (record.sessionId === 'busy' && record.pid) processes.push(record.pid)
   await writeFile(join(owned.work, 'segment-release'), 'release')
   await until(() => hasFinal('destination/moved', 'DONE-EFFECT-busy'), 'moved busy owner full model-order pairs and final')
   const saved = await authority('destination/moved'), pairs = saved.history.flatMap(row => row.parts || []).filter(part => part.functionResponse).map(part => part.functionResponse)
@@ -63,13 +63,13 @@ try {
   await until(() => hasFinal('background', 'DONE-EFFECT-background'), 'real shell background result')
   const background = await authority('background'), result = background.history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === 'background-exec').functionResponse.response.output
   backgroundId = /execId: ([a-z]+-[a-z]+)/.exec(result)[1]
-  const oldPath = join(owned.data, 'state/exec', segment('background'), backgroundId), metadata = JSON.parse(await readFile(join(oldPath, 'meta.json'), 'utf8')); processes.push(metadata.Pid)
+  const metadata = (await execRecords()).find(record => record.id === backgroundId); backgroundLog = metadata.logPath; processes.push(metadata.pid)
   await move('background', 'background-current'); await writeFile(join(owned.work, 'background-release'), 'release')
   await until(async () => (await authority('background-current')).history.some(row => JSON.stringify(row).includes(backgroundId) && JSON.stringify(row).includes('background-process-finished')), 'historical process once-only current-owner completion')
-  assert.equal(await readFile(join(owned.work, 'background-launches'), 'utf8'), 'once'); assert.equal(JSON.parse(await readFile(join(oldPath, 'meta.json'), 'utf8')).SessionId, 'background')
+  assert.equal(await readFile(join(owned.work, 'background-launches'), 'utf8'), 'once'); assert.equal(await readFile(backgroundLog, 'utf8'), 'BACKGROUND-OLD-ARTIFACT')
   assert.equal((await owned.api('POST', route('background-current') + '/message', { text: 'EFFECT-CASE:read' })).status, 202)
-  await until(() => hasFinal('background-current', 'DONE-EFFECT-read'), 'historical output read through committed lifetime evidence')
-  assert((await authority('background-current')).history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === 'historical-exec').functionResponse.response.output.includes('BACKGROUND-OLD-ARTIFACT'))
+  await until(() => hasFinal('background-current', 'DONE-EFFECT-read'), 'original log path remains readable after identity move')
+  assert((await authority('background-current')).history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === 'original-log').functionResponse.response.output.includes('BACKGROUND-OLD-ARTIFACT'))
   const completions = (await authority('background-current')).history.filter(row => JSON.stringify(row).includes('background-process-finished')).length; assert.equal(completions, 1)
 
   await create('waiter'); await owned.api('POST', route('waiter') + '/message', { text: 'EFFECT-CASE:waiter' })

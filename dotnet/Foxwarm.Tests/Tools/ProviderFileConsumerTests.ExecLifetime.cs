@@ -6,53 +6,6 @@ namespace Foxwarm.Tests;
 
 public sealed partial class ProviderFileConsumerTests
 {
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Native_and_provider_read_exec_keep_bounded_display_and_original_byte_offsets(
-        bool provider
-    )
-    {
-        if (!OperatingSystem.IsLinux())
-            return;
-        await using var f = await Fixture.Create();
-        var backend = provider
-            ? await f.Manager.NodeProviders.AdmitExecAsync(f.Node, default)
-            : null;
-        var value = await f.Owner.Executor.ExecuteAsync(
-            f.Owner.Id,
-            Exec("python3 -c 'import sys;sys.stdout.buffer.write(bytes([0])*5000)'"),
-            default,
-            paths: MainNativePaths.Default(f.Work),
-            backend: backend
-        );
-        Success(value);
-        var id = System
-            .Text.RegularExpressions.Regex.Match(
-                value["output"]!.GetValue<string>(),
-                "execId: ([a-z]+-[a-z]+)"
-            )
-            .Groups[1]
-            .Value;
-        Assert.NotEmpty(id);
-        var first = await f.Owner.Executor.ReadAsync(
-            f.Owner.Id,
-            new JsonObject { ["execId"] = id }
-        );
-        Assert.Equal(16384, first["output"]!.GetValue<string>().Length);
-        Assert.Equal(4096, first["nextOffset"]!.GetValue<long>());
-        Assert.Equal(5000, first["totalBytes"]!.GetValue<long>());
-        var second = await f.Owner.Executor.ReadAsync(
-            f.Owner.Id,
-            new JsonObject { ["execId"] = id, ["offset"] = 4096L }
-        );
-        Assert.Equal(
-            string.Concat(Enumerable.Repeat("\\x00", 904)),
-            second["output"]!.GetValue<string>()
-        );
-        Assert.Null(second["nextOffset"]);
-    }
-
     [Fact]
     public async Task Final_launch_fence_has_no_effect_and_independent_hard_cancel_has_unknown_receipt_without_killing_target()
     {
@@ -99,11 +52,7 @@ public sealed partial class ProviderFileConsumerTests
             value => value["operation"]!.GetValue<string>() == "exec-start"
         );
         Assert.Empty(
-            Directory.GetFiles(
-                Path.Combine(f.Data, "state/exec"),
-                "tracking.json",
-                SearchOption.AllDirectories
-            )
+            ExecRecords(f.Data)
         );
     }
 
@@ -146,22 +95,13 @@ public sealed partial class ProviderFileConsumerTests
         Success(value);
         await Until(() => Task.FromResult(Volatile.Read(ref attempts) > 0));
         Assert.Single(
-            Directory.GetFiles(
-                Path.Combine(data, "state/exec"),
-                "tracking.json",
-                SearchOption.AllDirectories
-            )
+            ExecRecords(data)
         );
         Volatile.Write(ref accept, true);
         await delivered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await Until(() =>
             Task.FromResult(
-                !Directory
-                    .GetFiles(
-                        Path.Combine(data, "state/exec"),
-                        "tracking.json",
-                        SearchOption.AllDirectories
-                    )
+                !ExecRecords(data)
                     .Any()
             )
         );
@@ -174,11 +114,7 @@ public sealed partial class ProviderFileConsumerTests
         );
         await manager.RetireSessionAsync(f.Owner.Id);
         Assert.Empty(
-            Directory.GetFiles(
-                Path.Combine(data, "state/exec"),
-                "tracking.json",
-                SearchOption.AllDirectories
-            )
+            ExecRecords(data)
         );
         await Until(() => Task.FromResult(File.Exists(f.FilePath("retired-effect"))));
         Assert.Equal(deliveredCount, Volatile.Read(ref attempts));
@@ -207,12 +143,10 @@ public sealed partial class ProviderFileConsumerTests
                 default,
                 backend: backend
             );
-        var path = Directory
-            .GetFiles(Path.Combine(data, "state/exec"), "meta.json", SearchOption.AllDirectories)
-            .Single();
-        var meta = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
-        meta["StartedAt"] = DateTimeOffset.UtcNow.AddHours(-25).ToUnixTimeMilliseconds();
-        await File.WriteAllTextAsync(path, meta.ToJsonString());
+        var path = Path.Combine(data, "state", "running-exec.json");
+        var registry = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
+        registry["execs"]![0]!["startedAt"] = DateTimeOffset.UtcNow.AddHours(-25).ToUnixTimeMilliseconds();
+        await File.WriteAllTextAsync(path, registry.ToJsonString());
         var queries = (await f.Requests()).Count(value =>
             value["operation"]!.GetValue<string>() == "exec-poll"
         );
@@ -234,12 +168,7 @@ public sealed partial class ProviderFileConsumerTests
             await recovered.InitializeAsync(id => id == f.Owner.Id);
             await Until(() =>
                 Task.FromResult(
-                    !Directory
-                        .GetFiles(
-                            Path.Combine(data, "state/exec"),
-                            "tracking.json",
-                            SearchOption.AllDirectories
-                        )
+                    !ExecRecords(data)
                         .Any()
                 )
             );

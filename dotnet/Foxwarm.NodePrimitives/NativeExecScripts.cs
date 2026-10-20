@@ -1,8 +1,8 @@
-namespace Foxwarm.CliNode;
+namespace Foxwarm.Tools;
 
-internal sealed partial class NodeExecManager
+internal static class NativeExecScripts
 {
-    private static string UnixScript =>
+    internal static string Unix(string selfCommand) =>
         """
             #!/usr/bin/env bash
             set +e
@@ -22,7 +22,7 @@ internal sealed partial class NodeExecManager
               paths_tmp="${FOXWARM_EXEC_PATHS_PATH}.tmp.$$"
             """
         + "\n  "
-        + ExecNative.SelfCommand
+        + selfCommand
         + " --exec-paths \"$paths_tmp\" \"$log_path\" \"$status_path\" \"$cwd_path\"\n"
         + """
               mv "$paths_tmp" "$FOXWARM_EXEC_PATHS_PATH"
@@ -37,7 +37,7 @@ internal sealed partial class NodeExecManager
               mv "$cwd_tmp" "$FOXWARM_EXEC_CWD_PATH"
             """
         + "\n  "
-        + ExecNative.SelfCommand
+        + selfCommand
         + " --exec-status \"$status_tmp\" \"$exit_code\"\n"
         + """
               mv "$status_tmp" "$FOXWARM_EXEC_STATUS_PATH"
@@ -46,7 +46,7 @@ internal sealed partial class NodeExecManager
             set +e
             """;
 
-    private const string WindowsScript = """
+    internal const string Windows = """
         $ErrorActionPreference = "Continue"
         chcp 65001 | Out-Null
         $basePath = Join-Path $env:FOXWARM_EXEC_LOG_DIR ("{0}_pid{1}" -f $env:FOXWARM_EXEC_TIME_TOKEN, $PID)
@@ -74,13 +74,14 @@ internal sealed partial class NodeExecManager
         if ($null -ne $global:LASTEXITCODE) { $EXIT_CODE = [int]$global:LASTEXITCODE }
         elseif ($foxwarmExecSucceeded) { $EXIT_CODE = 0 }
         else { $EXIT_CODE = 1 }
+        $finished = [DateTime]::UtcNow.ToString("o")
         $cwdTmp = "$cwdPath.tmp.$PID"
         $statusTmp = "$statusPath.tmp.$PID"
-        (Get-Location).Path | Set-Content -LiteralPath $cwdTmp -NoNewline
+        (Get-Location).Path | Set-Content -LiteralPath $cwdTmp -Encoding UTF8 -NoNewline
         Move-Item -LiteralPath $cwdTmp -Destination $cwdPath -Force
-        @{ exitCode = $EXIT_CODE; finishedAt = [DateTime]::UtcNow.ToString("o") } | ConvertTo-Json -Compress | Set-Content -LiteralPath $statusTmp
-        Move-Item -LiteralPath $statusTmp -Destination $statusPath -Force
         Stop-Transcript | Out-Null
+        @{ exitCode = $EXIT_CODE; finishedAt = $finished } | ConvertTo-Json -Compress | Set-Content -LiteralPath $statusTmp -Encoding UTF8
+        Move-Item -LiteralPath $statusTmp -Destination $statusPath -Force
         exit $EXIT_CODE
         """;
 }

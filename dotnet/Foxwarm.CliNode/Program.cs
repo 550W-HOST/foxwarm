@@ -1,3 +1,4 @@
+using Foxwarm.Tools;
 using System.Runtime.InteropServices;
 
 namespace Foxwarm.CliNode;

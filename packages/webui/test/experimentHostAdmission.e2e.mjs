@@ -72,12 +72,13 @@ const token = 'synthetic-admission-app-api'
 async function connect() { const frames = [], ws = new WebSocket(fixture.origin.replace('http:', 'ws:') + '/api/webui/stream', { headers: { authorization: 'Bearer ' + token } }); sockets.push(ws); ws.on('message', raw => frames.push(JSON.parse(String(raw)))); await once(ws, 'open'); return { ws, frames } }
 function subscribe(client, revision, semantic = [], listed = []) { client.ws.send(JSON.stringify({ type: 'set-subscriptions', revision, sessionIds: semantic, sessionListIds: listed, sessionListActive: true })) }
 const trackedExec = new Map()
+const execRecords = async () => JSON.parse(await readFile(join(state, 'running-exec.json'), 'utf8')).execs
 async function launch(id) {
   const reply = await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: id }); assert.equal(reply.status, 200)
   await send(id, 'CASE:' + id); await done(id, id)
   const tool = (await history(id)).flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === 'shell-' + id)
   const exec = tool.functionResponse.response.output.match(/execId:\s*([\w-]+)/)[1]; trackedExec.set(id, exec)
-  await access(join(state, 'exec', 'id_' + Buffer.from(id).toString('base64url'), exec, 'tracking.json'))
+  assert((await execRecords()).some(record => record.id === exec && record.sessionId === id))
 }
 try {
   await fixture.start()
@@ -160,9 +161,9 @@ try {
   assert.equal((await fixture.api('GET', route('cold-0001') + '/history')).status, 200); assert.equal(counts.get('ordinary'), undefined)
   assert.deepEqual(errors, [])
   await launch('exec-bad'); await fixture.stop()
-  const retainedExec = join(state, 'exec', 'id_' + Buffer.from('exec-bad').toString('base64url'), trackedExec.get('exec-bad'))
+  const retainedExec = (await execRecords()).find(record => record.id === trackedExec.get('exec-bad'))
   const originalExecAuthority = await readFile(join(sessions, 'exec-bad.json'), 'utf8')
-  await writeFile(join(fixture.work, 'exec-bad-release'), 'release'); await until(() => access(join(retainedExec, 'status.json')).then(() => true, () => false), 'finished exec without an active recipient')
+  await writeFile(join(fixture.work, 'exec-bad-release'), 'release'); await until(() => access(retainedExec.statusPath).then(() => true, () => false), 'finished exec without an active recipient')
   await writeFile(join(sessions, 'exec-bad.json'), '{bad')
   const expired = { id: 'original-boot-deadline', startedAt: Date.now() - 5000, timeoutSeconds: 0.01, declarationVersion: 1 }
   await writeFile(join(sessions, 'cold-0003.json'), JSON.stringify(authority('cold-0003', { meta: { messageCount: 0, lastMessageTime: 0, wait: expired } })))
@@ -170,11 +171,11 @@ try {
   const beforeFailure = requests.length
   await assert.rejects(fixture.start(), /authority|Authority|JSON|Json|invalid|Invalid/)
   await sleep(400); assert.equal(requests.length, beforeFailure); assert.deepEqual((await saved('cold-0003')).meta.wait, expired)
-  await access(join(retainedExec, 'tracking.json')) // A failed recipient never acknowledges the completion.
+  assert((await execRecords()).some(record => record.id === retainedExec.id)) // A failed recipient never acknowledges the completion.
   await writeFile(join(sessions, 'exec-bad.json'), originalExecAuthority); await fixture.start()
   await until(() => requests.slice(beforeFailure).some(row => inputText(row.body).includes('wait-timeout')), 'only fully validated restart activates the original expired deadline')
   await until(() => (counts.get('exec-bad') || 0) === 3, 'finished completion delivered only after actual owner admission')
-  await until(() => access(join(retainedExec, 'tracking.json')).then(() => false, () => true), 'strict completion acknowledgement')
+  await until(async () => !(await execRecords()).some(record => record.id === retainedExec.id), 'strict completion acknowledgement')
   assert.deepEqual((await readFile(join(fixture.work, 'executions'), 'utf8')).trim().split('\n').sort(), ['exec-bad', 'exec-finished', 'exec-live'])
   await fixture.stop()
   console.log(JSON.stringify({ ok: true, syntheticProviderRequests: requests.length, coldMembers: rows.length, sameIdRead: 1, creationRead: 0, cleanHosts: 3, mandatoryReadinessFailure: true, deadlineAfterAllValidation: true, failedExecNoAcknowledgement: true, zeroOwnerMetadata: true, requiredMainStartupRead: 1, lostHintExactNoActivation: true, realExecNoReplay: true, persistedOnbootQueue: true, oldCompactWakeNoPlanner: true, hostPids: fixture.hostPids, peerPid: process.pid, root: fixture.root }))

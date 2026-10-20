@@ -37,6 +37,11 @@ public sealed partial class ProviderFileConsumerTests
         )["request"]!.AsObject();
     }
 
+    private static JsonObject[] ExecRecords(string data) =>
+        File.Exists(Path.Combine(data, "state", "running-exec.json"))
+            ? (JsonNode.Parse(File.ReadAllText(Path.Combine(data, "state", "running-exec.json")))!["execs"] as JsonArray ?? []).OfType<JsonObject>().ToArray()
+            : [];
+
     [Fact]
     public async Task Provider_exec_direct_unified_native_ToolScript_retains_raw_output_exact_cwd_and_real_status()
     {
@@ -49,13 +54,17 @@ public sealed partial class ProviderFileConsumerTests
         Success(value);
         var output = value["output"]!.GetValue<string>();
         Assert.StartsWith("  \n\tend  \n---\nExit code: 7", output);
-        Assert.Contains("does not end with a newline", output);
+        Assert.Contains("had no trailing newline", output);
         Assert.DoesNotContain("Duration: unknown", output);
         Assert.Equal(
             "opaque://root/next  ",
             f.Owner.Entry.Snapshot().AuthorityEnvelope["cwd"]!.GetValue<string>()
         );
         Assert.DoesNotContain("/proc/", output);
+        var firstOutputReads = (await f.Requests()).Where(value => value["operation"]!.GetValue<string>() == "filesystem"
+            && value["request"]!["path"]!.GetValue<string>().StartsWith("opaque://logs/", StringComparison.Ordinal)).ToArray();
+        Assert.NotEmpty(firstOutputReads);
+        Assert.All(firstOutputReads, value => Assert.Null(value["request"]!["context"]!["cwd"]));
         var raw = await f.Call(
             "run_script",
             new JsonObject
@@ -86,26 +95,9 @@ public sealed partial class ProviderFileConsumerTests
                     request["request"]!.AsObject().Select(pair => pair.Key)
                 )
         );
-        var id = Directory
-            .GetFiles(
-                Path.Combine(f.Data, "state", "exec"),
-                "meta.json",
-                SearchOption.AllDirectories
-            )
-            .Select(path => JsonNode.Parse(File.ReadAllText(path))!)
-            .First()["Id"]!.GetValue<string>();
-        var page = await f.Call("read_exec", new JsonObject { ["execId"] = id });
-        Success(page);
-        Assert.Equal("finished", page["status"]!.GetValue<string>());
-        Assert.False(
-            Directory
-                .GetFiles(
-                    Path.Combine(f.Data, "state", "exec"),
-                    "tracking.json",
-                    SearchOption.AllDirectories
-                )
-                .Any()
-        );
+        Assert.Empty(ExecRecords(f.Data));
+        Assert.False(Directory.Exists(Path.Combine(f.Data, "state", "exec")));
+
     }
 
     [Fact]
@@ -122,7 +114,7 @@ public sealed partial class ProviderFileConsumerTests
             stop.Cancel();
             var value = await pending;
             Success(value);
-            Assert.Contains("Foreground wait ended", value["output"]!.GetValue<string>());
+            Assert.Contains("ended this call's wait", value["output"]!.GetValue<string>());
             Assert.Contains("output unavailable", value["output"]!.GetValue<string>());
             await Until(() => Task.FromResult(File.Exists(f.FilePath("effect"))));
             Assert.Equal("x", await File.ReadAllTextAsync(f.FilePath("effect")));
@@ -142,13 +134,7 @@ public sealed partial class ProviderFileConsumerTests
                 await f.Requests(),
                 value => value["operation"]!.GetValue<string>() == "exec-start"
             );
-            Assert.Empty(
-                Directory.GetFiles(
-                    Path.Combine(f.Data, "state", "exec"),
-                    "tracking.json",
-                    SearchOption.AllDirectories
-                )
-            );
+            Assert.Empty(ExecRecords(f.Data));
         }
     }
 
@@ -164,20 +150,7 @@ public sealed partial class ProviderFileConsumerTests
         var slow = await f.Call("exec", Exec("sleep 2; printf slow", 1));
         Success(slow);
         Assert.True(clock.Elapsed < TimeSpan.FromSeconds(3), clock.Elapsed.ToString());
-        var metadata = Directory
-            .GetFiles(Path.Combine(f.Data, "state/exec"), "meta.json", SearchOption.AllDirectories)
-            .Single();
-        var slowId = JsonNode.Parse(await File.ReadAllTextAsync(metadata))![
-            "Id"
-        ]!.GetValue<string>();
-        using var readStop = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
-        var stoppedRead = await f.Call(
-            "read_exec",
-            new JsonObject { ["execId"] = slowId },
-            readStop.Token
-        );
-        Assert.Equal("unknown", stoppedRead["status"]!.GetValue<string>());
-        Assert.Contains("unavailable", stoppedRead["output"]!.GetValue<string>());
+        var slowId = Assert.Single(ExecRecords(f.Data))["id"]!.GetValue<string>();
         var fast = await f.Call(
             "call_tool",
             new JsonObject
@@ -187,6 +160,8 @@ public sealed partial class ProviderFileConsumerTests
             }
         );
         Success(fast);
+        await Task.Delay(500);
+        var reconciliation = f.Owner.Executor.ReconcileNowAsync();
         await Until(
             () =>
                 Task.FromResult(
@@ -196,17 +171,12 @@ public sealed partial class ProviderFileConsumerTests
                 ),
             2500
         );
+        await reconciliation;
         var calls = await f.Requests();
         Assert.Single(calls, value => value["operation"]!.GetValue<string>() == "exec-poll");
         var history = JsonSerializer.Serialize(f.Owner.Entry.Snapshot());
         Assert.Contains("background-process-finished", history);
-        Assert.Single(
-            Directory.GetFiles(
-                Path.Combine(f.Data, "state", "exec"),
-                "tracking.json",
-                SearchOption.AllDirectories
-            )
-        );
+        Assert.Single(ExecRecords(f.Data));
     }
 
     [Fact]
@@ -220,38 +190,15 @@ public sealed partial class ProviderFileConsumerTests
         var waiting = await f.Call("exec", Exec("printf retained", 1));
         Success(waiting);
         Assert.Contains("Switched to background", waiting["output"]!.GetValue<string>());
-        Assert.Single(
-            Directory.GetFiles(
-                Path.Combine(f.Data, "state", "exec"),
-                "tracking.json",
-                SearchOption.AllDirectories
-            )
-        );
+        Assert.Single(ExecRecords(f.Data));
         Assert.DoesNotContain(
             "background-process-finished",
             JsonSerializer.Serialize(f.Owner.Entry.Snapshot())
         );
-        var tracked = Directory
-            .GetFiles(Path.Combine(f.Data, "state/exec"), "meta.json", SearchOption.AllDirectories)
-            .Single();
-        var execId = JsonNode.Parse(await File.ReadAllTextAsync(tracked))![
-            "Id"
-        ]!.GetValue<string>();
-        var uncertain = await f.Call("read_exec", new JsonObject { ["execId"] = execId });
-        Assert.Equal("unknown", uncertain["status"]!.GetValue<string>());
-        Assert.Equal("retained", uncertain["output"]!.GetValue<string>());
+        Assert.Single(ExecRecords(f.Data));
         File.Delete(Path.Combine(f.Target, "poll-error"));
-        await Until(() =>
-            Task.FromResult(
-                !Directory
-                    .GetFiles(
-                        Path.Combine(f.Data, "state", "exec"),
-                        "tracking.json",
-                        SearchOption.AllDirectories
-                    )
-                    .Any()
-            )
-        );
+        await f.Owner.Executor.ReconcileNowAsync();
+        Assert.Empty(ExecRecords(f.Data));
         await File.WriteAllTextAsync(Path.Combine(f.Target, "poll-lost"), "");
         var lost = await f.Call("exec", Exec("sleep .3; printf real"));
         Success(lost);
@@ -299,7 +246,7 @@ public sealed partial class ProviderFileConsumerTests
                 length <= 1048576 ? length : (int?)null,
                 result["length"]?.GetValue<int>()
             );
-            Assert.True(result["displayLength"]!.GetValue<int>() < 18000);
+            Assert.True(result["displayLength"]!.GetValue<int>() < 22000);
         }
         await File.WriteAllTextAsync(Path.Combine(f.Target, "slow-output"), "");
         var clock = Stopwatch.StartNew();
@@ -309,96 +256,48 @@ public sealed partial class ProviderFileConsumerTests
         Assert.Contains("output unavailable", blocked["output"]!.GetValue<string>());
         // A later ordinary read uses a fresh observation, not the expired foreground token.
         File.Delete(Path.Combine(f.Target, "slow-output"));
-        var id = JsonNode.Parse(
-            await File.ReadAllTextAsync(
-                Directory
-                    .GetFiles(
-                        Path.Combine(f.Data, "state", "exec"),
-                        "tracking.json",
-                        SearchOption.AllDirectories
-                    )
-                    .Single()
-                    .Replace("tracking.json", "meta.json")
-            )
-        )!["Id"]!.GetValue<string>();
+        var logPath = Assert.Single(ExecRecords(f.Data))["logPath"]!.GetValue<string>();
         await Task.Delay(700);
-        var page = await f.Call("read_exec", new JsonObject { ["execId"] = id });
-        Assert.Equal("late", page["output"]!.GetValue<string>());
+        var page = await f.Call("read", new JsonObject { ["filePath"] = logPath });
+        Assert.Contains("late", page["output"]!.GetValue<string>());
+
     }
 
     [Theory]
-    [InlineData(0, 4096, false)]
-    [InlineData(0, 4097, true)]
-    [InlineData(0, 16384, true)]
-    [InlineData(0, 16385, true)]
-    [InlineData(255, 4097, true)]
-    [InlineData(92, 4097, true)]
-    [InlineData(65, 16384, false)]
-    [InlineData(65, 16385, true)]
-    public async Task Provider_foreground_display_is_bounded_after_byte_rendering(
-        int value,
-        int length,
-        bool shortened
-    )
+    [InlineData(20000, false)]
+    [InlineData(20001, true)]
+    public async Task Provider_foreground_uses_Source_display_limit_and_original_log(int length, bool shortened)
     {
-        if (!OperatingSystem.IsLinux())
-            return;
+        if (!OperatingSystem.IsLinux()) return;
         await using var f = await Fixture.Create();
         Success(await f.Manager.SelectNodeAsync(f.Owner, f.Node));
-        var response = await f.Call(
-            "exec",
-            Exec($"python3 -c 'import sys;sys.stdout.buffer.write(bytes([{value}])*{length})'")
-        );
+        var response = await f.Call("exec", Exec($"python3 -c 'import sys;sys.stdout.write(chr(65)*{length})'"));
         Success(response);
         var display = response["output"]!.GetValue<string>();
-        Assert.True(display.Length < 18000, $"Rendered display length: {display.Length}");
+        Assert.True(display.Length < 22000);
         Assert.Equal(shortened, display.Contains("shortened for inline display"));
         Assert.Contains("Exit code: 0", display);
-        Assert.Contains("does not end with a newline", display);
-        if (!shortened)
-            Assert.StartsWith(
-                string.Concat(Enumerable.Repeat(value == 0 ? "\\x00" : "A", length)),
-                display
-            );
+        Assert.Contains("had no trailing newline", display);
         var log = Assert.Single(Directory.GetFiles(Path.Combine(f.Target, "fs/logs"), "*.log"));
-        Assert.Equal(Enumerable.Repeat((byte)value, length), await File.ReadAllBytesAsync(log));
+        Assert.Equal(new string('A', length), await File.ReadAllTextAsync(log));
     }
 
     [Fact]
-    public async Task Provider_rendered_excerpt_preserves_complete_programmatic_content_and_byte_pages()
+    public async Task Provider_programmatic_capture_retains_original_control_bytes_without_display_parsing()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
+        if (!OperatingSystem.IsLinux()) return;
         await using var f = await Fixture.Create();
         Success(await f.Manager.SelectNodeAsync(f.Owner, f.Node));
-        var response = await f.Call(
-            "run_script",
-            new JsonObject
-            {
-                ["code"] =
-                    "x = call_tool('exec', {'command': \"python3 -c 'import sys;sys.stdout.buffer.write(bytes([0])*4097)'\"})\n"
-                    + "return {'execId':x['execId'], 'sizeBytes':x['sizeBytes'], 'truncated':x['truncated'], 'complete':x['content'] == '\\u0000'*4097, 'displayLength':len(x['output'])}",
-            }
-        );
+        var response = await f.Call("run_script", new JsonObject
+        {
+            ["code"] = "x = call_tool('exec', {'command': \"python3 -c 'import sys;sys.stdout.buffer.write(bytes([0])*4097)'\"})\n"
+                + "return {'sizeBytes':x['sizeBytes'], 'truncated':x['truncated'], 'complete':x['content'] == '\\u0000'*4097}",
+        });
         Success(response);
         var result = response["result"]!;
         Assert.Equal(4097, result["sizeBytes"]!.GetValue<long>());
         Assert.False(result["truncated"]!.GetValue<bool>());
         Assert.True(result["complete"]!.GetValue<bool>());
-        Assert.True(result["displayLength"]!.GetValue<int>() < 18000);
-        var id = result["execId"]!.GetValue<string>();
-        var first = await f.Call("read_exec", new JsonObject { ["execId"] = id });
-        Success(first);
-        Assert.Equal(16384, first["output"]!.GetValue<string>().Length);
-        Assert.Equal(4096, first["nextOffset"]!.GetValue<long>());
-        Assert.Equal(4097, first["totalBytes"]!.GetValue<long>());
-        var last = await f.Call(
-            "read_exec",
-            new JsonObject { ["execId"] = id, ["offset"] = 4096L }
-        );
-        Success(last);
-        Assert.Equal("\\x00", last["output"]!.GetValue<string>());
-        Assert.Null(last["nextOffset"]);
     }
 
     [Fact]

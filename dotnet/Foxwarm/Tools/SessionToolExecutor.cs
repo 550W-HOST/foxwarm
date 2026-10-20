@@ -546,6 +546,7 @@ internal sealed partial class SessionToolExecutor(
 
     private async Task<JsonObject> ExecuteExecAsync(JsonObject args, CancellationToken token)
     {
+        await hosted.Entry.SaveLane.SaveStrictAsync();
         string? initial = null;
         string? observed = null;
         var response = await hosted.Executor.ExecuteAsync(
@@ -559,7 +560,12 @@ internal sealed partial class SessionToolExecutor(
                 observed = end;
             },
             programmatic: ScriptBudget,
-            cancellationSource: () => hosted.Entry.ToolCancellationSource
+            cancellationSource: () => hosted.Entry.ToolCancellationSource,
+            beforeLaunch: () =>
+            {
+                hosted.Entry.RequireIdentityAuthority();
+                hosted.Registry.Runner.AssertCanContinue();
+            }
         );
         if (observed is null)
             return response;
@@ -753,8 +759,6 @@ internal sealed partial class SessionToolExecutor(
         foreach (var name in new[] { "read", "write", "edit", "apply_patch" })
             handlers[name] = (owner, args, token) => owner.ExecuteWorkspaceAsync(name, args, token);
         handlers["exec"] = (owner, args, token) => owner.ExecuteExecAsync(args, token);
-        handlers["read_exec"] = (owner, args, token) =>
-            owner.Hosted.Executor.ReadAsync(owner.Hosted.Id, args, token);
         handlers["artifact"] = (owner, args, token) => owner.ExecuteArtifactAsync(args, token);
         handlers["recall"] = (owner, args, token) =>
             ArchiveRecallTool.ExecuteAsync(owner.Manager, owner.Hosted, args, token);

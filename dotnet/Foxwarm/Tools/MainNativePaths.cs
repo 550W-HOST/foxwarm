@@ -48,7 +48,7 @@ internal sealed record MainNativePaths(
     internal string ExecCwd(string? explicitValue)
     {
         string? Expand(string? value) =>
-            value is null ? null : SessionGoalTrim(ExpandAgentToken(value, AgentDirectory));
+            value is null ? null : ExpandAgentToken(SessionGoalTrim(value), AgentDirectory);
         var declared = Expand(explicitValue);
         var stored = Expand(SessionCwd);
         var explicitCwd = declared?.Length > 0 ? declared : null;

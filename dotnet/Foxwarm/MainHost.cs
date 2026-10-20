@@ -13,6 +13,7 @@ internal sealed class MainHost : IAsyncDisposable
     private readonly McpInboundHttp? inboundMcp;
     private readonly IHost host;
     private readonly MainLog? log;
+    private readonly LogRotation rotation;
     internal WebApplication App =>
         host as WebApplication
         ?? throw new InvalidOperationException("HTTP is disabled for this host.");
@@ -39,6 +40,7 @@ internal sealed class MainHost : IAsyncDisposable
             // Startup retains ownership until cancellation and cleanup have settled.
             await startup;
         }
+        rotation.Start();
     }
 
     private readonly object lifecycle = new();
@@ -49,7 +51,8 @@ internal sealed class MainHost : IAsyncDisposable
         TerminalRegistry terminals,
         IHost host,
         McpInboundHttp? inboundMcp,
-        MainLog? log
+        MainLog? log,
+        string dataRoot
     )
     {
         this.sessions = sessions;
@@ -57,6 +60,7 @@ internal sealed class MainHost : IAsyncDisposable
         this.inboundMcp = inboundMcp;
         this.host = host;
         this.log = log;
+        rotation = new LogRotation(Path.Combine(dataRoot, "state", "logs"), sessions.ExecLogRoots);
         if (log is not null)
             Lifetime.ApplicationStarted.Register(() =>
                 Console.WriteLine(
@@ -160,7 +164,7 @@ internal sealed class MainHost : IAsyncDisposable
                 headless
                     .Services.GetRequiredService<IHostApplicationLifetime>()
                     .ApplicationStopping.Register(sessions.BeginShutdown);
-                return new MainHost(sessions, terminals, headless, null, log);
+                return new MainHost(sessions, terminals, headless, null, log, dataRoot);
             }
             server = new HttpServer(
                 args,
@@ -179,7 +183,7 @@ internal sealed class MainHost : IAsyncDisposable
                 new WebUIChannel(sessions, runtime, router, terminals, server.Downloads).Register(
                     server.App
                 );
-            return new MainHost(sessions, terminals, server.App, server.InboundMcp, log);
+            return new MainHost(sessions, terminals, server.App, server.InboundMcp, log, dataRoot);
         }
         catch
         {
@@ -243,6 +247,7 @@ internal sealed class MainHost : IAsyncDisposable
             await asyncHost.DisposeAsync().ConfigureAwait(false);
         else
             host.Dispose();
+        await rotation.DisposeAsync().ConfigureAwait(false);
         await sessions.DisposeAsync().ConfigureAwait(false);
         if (log is not null)
             Console.WriteLine("Main stopped.");

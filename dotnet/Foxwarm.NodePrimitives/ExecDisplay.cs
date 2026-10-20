@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 
-namespace Foxwarm.CliNode;
+namespace Foxwarm.Tools;
 
 // Source's exec display contract; raw programmatic capture never passes through this formatter.
 internal static class ExecDisplay

@@ -20,13 +20,13 @@ await writeFile(env.FOXWARM_CONFIG_PATH, JSON.stringify({
 }))
 const cases = [
   { byte: 0, length: 4096, shortened: false },
-  { byte: 0, length: 4097, shortened: true },
-  { byte: 0, length: 16384, shortened: true },
-  { byte: 0, length: 16385, shortened: true },
-  { byte: 255, length: 4097, shortened: true },
-  { byte: 92, length: 4097, shortened: true },
-  { byte: 65, length: 16384, shortened: false },
-  { byte: 65, length: 16385, shortened: true }
+  { byte: 0, length: 4097, shortened: false },
+  { byte: 0, length: 20000, shortened: false },
+  { byte: 0, length: 20001, shortened: true },
+  { byte: 255, length: 4097, shortened: false },
+  { byte: 92, length: 4097, shortened: false },
+  { byte: 65, length: 20000, shortened: false },
+  { byte: 65, length: 20001, shortened: true }
 ]
 let current = 0
 const results = [], failures = []
@@ -40,12 +40,12 @@ const model = createServer(async (request, response) => {
       const command = `python3 -c 'import sys;sys.stdout.buffer.write(bytes([${cases[current].byte}])*${cases[current].length})'`
       output = [{ type: 'function_call', call_id: callId, name: 'exec', arguments: JSON.stringify({ command, timeout: 15 }) }]
     } else {
-      const text = typeof result.output === 'string' ? result.output : JSON.stringify(result.output)
+      const text = typeof result.output === 'string' ? result.output : result.output.map(part => part.text).join('\n')
       assert(!text.includes('outputFullPath') && !text.includes('.temp/tool-output'), 'Foreground output reached the generic artifact guard.')
       assert(text.length < 40000, 'Unexpectedly expanded wire output: ' + text.length)
       assert.equal(text.includes('shortened for inline display'), cases[current].shortened)
       assert(text.includes('Exit code: 0'))
-      assert(text.includes('does not end with a newline'))
+      assert(text.includes('had no trailing newline'))
       results.push({ ...cases[current], wireLength: text.length, genericArtifact: false })
       output = [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'OUTPUT-COMPLETED-' + current }] }]
     }

@@ -144,6 +144,14 @@ internal sealed partial class AgentCatalog
                 .ToArray();
     }
 
+    internal IEnumerable<string> ExecLogRoots()
+    {
+        if (!canonicalLayout) yield return Path.Combine(workspaceRoot, ".temp", "exec");
+        foreach (var path in Directory.EnumerateFileSystemEntries(agentRoot))
+            if ((File.GetAttributes(path) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == FileAttributes.Directory)
+                yield return Path.Combine(path, ".temp", "exec");
+    }
+
     public string AgentDirectory(string name)
     {
         if (!Exists(name))

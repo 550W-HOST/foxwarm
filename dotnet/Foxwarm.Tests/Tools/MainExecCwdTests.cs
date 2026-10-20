@@ -66,14 +66,8 @@ public sealed class MainExecCwdTests
             Path.Combine(work, "tmp"),
             owner.Entry.Snapshot().AuthorityEnvelope["cwd"]!.GetValue<string>()
         );
-        var directories = Directory.GetDirectories(
-            Path.Combine(data, "state", "exec", SessionIdentity.ExecDirectorySegment("exec"))
-        );
-        Assert.Single(directories);
-        Assert.Equal(
-            Path.Combine(work, "tmp"),
-            (await File.ReadAllTextAsync(Path.Combine(directories[0], "cwd.txt"))).Trim()
-        );
+        var cwdFile = Assert.Single(Directory.GetFiles(Path.Combine(work, ".temp", "exec"), "*.cwd.txt", SearchOption.AllDirectories));
+        Assert.Equal(Path.Combine(work, "tmp"), (await File.ReadAllTextAsync(cwdFile)).Trim());
         Assert.True(
             JsonNode.DeepEquals(
                 before.AuthorityEnvelope["promptCacheKey"],
@@ -191,17 +185,13 @@ public sealed class MainExecCwdTests
         Assert.True(result.Response!["error"] is null, result.Response.ToJsonString());
         Assert.Equal(first, owner.Entry.Snapshot().AuthorityEnvelope["cwd"]!.GetValue<string>());
         await owner.UpdateCwdAsync(work);
-        var directory = Directory
-            .GetDirectories(
-                Path.Combine(data, "state", "exec", SessionIdentity.ExecDirectorySegment("exec"))
-            )
-            .Single();
-        for (var i = 0; i < 150 && !File.Exists(Path.Combine(directory, "status.json")); i++)
-            await Task.Delay(25);
-        Assert.True(File.Exists(Path.Combine(directory, "status.json")));
+        var record = Assert.Single(JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(data, "state", "running-exec.json")))!["execs"]!.AsArray());
+        var statusPath = record!["statusPath"]!.GetValue<string>();
+        for (var i = 0; i < 150 && !File.Exists(statusPath); i++) await Task.Delay(20);
+        Assert.True(File.Exists(statusPath));
         Assert.Equal(
             later,
-            (await File.ReadAllTextAsync(Path.Combine(directory, "cwd.txt"))).Trim()
+            (await File.ReadAllTextAsync(record!["cwdPath"]!.GetValue<string>())).Trim()
         );
         await Task.Delay(100);
         Assert.Equal(work, owner.Entry.Snapshot().AuthorityEnvelope["cwd"]!.GetValue<string>());

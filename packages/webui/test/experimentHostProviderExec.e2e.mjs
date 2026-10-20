@@ -46,10 +46,9 @@ model.listen(0, '127.0.0.1'); await once(model, 'listening')
 await writeFile(fixture.modelPath, JSON.stringify({ default: 'local/wire', providers: { local: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${model.address().port}`, models: ['wire'] } } }))
 const calls = async () => (await readFile(join(target, 'calls.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(JSON.parse)
 const starts = async () => (await calls()).filter(row => row.operation === 'exec-start')
-const tracking = async () => {
-  const base = join(fixture.data, 'state/exec')
-  return (await readdir(base, { recursive: true }).catch(() => [])).filter(path => path.endsWith('tracking.json'))
-}
+const registryPath = join(fixture.data, 'state/running-exec.json')
+const tracking = async () => JSON.parse(await readFile(registryPath, 'utf8').catch(() => '{"execs":[]}')).execs
+
 try {
   await fixture.start()
   const created = await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'provider-exec' })
@@ -71,15 +70,11 @@ try {
   }, 'background command and persisted wait')
   // The Session now selects Main, but the admitted job retains its exact original provider and Node.
   assert.equal((await fixture.api('POST', route + '/node', { nodeId: 'master' })).status, 200)
-  const metaPath = join(fixture.data, 'state/exec', (await tracking())[0].replace('tracking.json', 'meta.json'))
-  const meta = JSON.parse(await readFile(metaPath, 'utf8'))
-  assert.equal(meta.ProviderId, 'external'); assert.equal(meta.NodeId, 'external/target')
-  assert.equal(meta.Cwd, 'opaque://root'); assert.equal(typeof meta.Reference, 'string')
-  assert.equal(meta.LogPath, 'opaque://logs/' + meta.Reference + '.log')
-  assert.equal(meta.Pid, 0) // Target PID is never Main process authority.
-  const sourceRegistry = join(fixture.data, 'state/running-exec.json')
-  const unrelated = JSON.stringify({ execs: [], recentExecIds: ['retained-source-record'] })
-  await writeFile(sourceRegistry, unrelated)
+  const meta = (await tracking())[0]
+  assert.equal(meta.backend.providerId, 'external'); assert.equal(meta.nodeId, 'external/target')
+  assert.equal(meta.initialCwd, 'opaque://root'); assert.equal(typeof meta.backend.ref, 'string')
+  assert.equal(meta.logPath, 'opaque://logs/' + meta.backend.ref + '.log')
+  assert(meta.pid > 0) // Target PID remains metadata; never Main process authority.
   await fixture.stop()
   assert.equal(await readFile(join(target, 'fs/root/restart-effect'), 'utf8').catch(() => ''), '')
   await configure(false)
@@ -101,10 +96,10 @@ try {
   assert.equal((await starts()).length, 2, 'recovery never starts again')
   assert.equal((await tracking()).length, 0)
   const recovered = (await calls()).slice(before)
-  assert(recovered.some(call => call.operation === 'exec-poll' && call.request.ref === meta.Reference))
+  assert(recovered.some(call => call.operation === 'exec-poll' && call.request.ref === meta.backend.ref))
   assert(!recovered.some(call => call.operation === 'list'), 'admitted job observations do not rediscover directories')
-  assert.equal(await readFile(sourceRegistry, 'utf8'), unrelated)
-  assert(!(await readdir(join(fixture.data, 'state/exec'), { recursive: true })).some(path => path.endsWith('output.log')))
+  assert.equal((await readdir(join(fixture.data, 'state'))).includes('exec'), false)
+  assert.equal(JSON.parse(await readFile(registryPath, 'utf8')).recentExecIds.includes(restartId), true)
   await fixture.stop()
   assert.equal(new Set(fixture.hostPids).size, 3)
   assert.deepEqual(failures, [])

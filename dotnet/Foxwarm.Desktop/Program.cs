@@ -7,6 +7,11 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+        if (Foxwarm.Tools.ExecNative.Helper(args) is int helperExit)
+        {
+            Environment.ExitCode = helperExit;
+            return;
+        }
         if (Foxwarm.Vector.VectorChild.TryRunAsync(args).GetAwaiter().GetResult())
             return;
         if (Foxwarm.Terminal.NativeHelperEntry.TryRunAsync(args).GetAwaiter().GetResult())

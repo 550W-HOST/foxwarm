@@ -564,7 +564,7 @@ public sealed partial class ToolAuthorizationSourceTests
                 ("builtin", "get_session_messages", new()),
                 ("builtin", "delete_session", new()),
                 ("builtin", "set_config", Obj("""{"target":"tool-rules","filePath":"own"}""")),
-                ("builtin", "read_exec", new()),
+
                 ("mcp", "read", Obj("""{"filePath":"own"}""")),
             }
         )

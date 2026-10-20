@@ -10,7 +10,7 @@ const options = { env: {} }, owned = await createHostFixture('native-paths', opt
 const home = join(owned.root, 'home'), changed = join(owned.root, 'changed'), relative = join(owned.root, 'relative')
 for (const directory of [home, changed, join(relative, 'relative')]) await mkdir(directory, { recursive: true })
 options.cwd = owned.root
-options.env = { HOME: home, fw_agentdir: 'inherited-lower-wrong', fw_tmp: 'inherited-lower-wrong', FW_AGENTDIR: 'owned-upper-sentinel', OPENAI_API_KEY: 'owned-provider-sentinel' }
+options.env = { HOME: home, fw_agentdir: 'inherited-lower-wrong', fw_tmp: 'inherited-lower-wrong', FW_AGENTDIR: 'owned-upper-sentinel', OPENAI_API_KEY: 'owned-provider-sentinel', FOXWARM_API_TOKEN: 'owned-api-sentinel' }
 const route = id => '/api/sessions/' + encodeURIComponent(id), authority = async id => JSON.parse(await readFile(join(owned.data, 'state/sessions', id + '.json'), 'utf8'))
 const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
 const final = text => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
@@ -65,12 +65,12 @@ try {
   assert.equal((await owned.api('POST', route('main') + '/cwd', { cwd: 'relative' })).status, 200); await turn('main', 'relative')
   assert.equal(await readFile(join(relative, 'note'), 'utf8'), 'file base'); assert(result(await authority('main'), 'relative-exec').response.output.includes(join(relative, 'relative') + '\n'))
   assert.equal((await owned.api('POST', route('main') + '/cwd', { cwd: changed })).status, 200); await turn('main', 'exec')
-  const env = result(await authority('main'), 'env').response.output; assert(env.includes([home, owned.work, join(owned.work, 'tmp')].join('\n'))); assert(env.includes('<><><>')); assert(!env.includes('sentinel')); assert(!env.includes('inherited-lower-wrong'))
+  const env = result(await authority('main'), 'env').response.output; assert(env.includes([home, owned.work, join(owned.work, 'tmp')].join('\n'))); assert(env.includes('<owned-upper-sentinel><owned-api-sentinel><owned-provider-sentinel>')); assert(!env.includes('inherited-lower-wrong'))
   assert.equal((await authority('main')).cwd, join(owned.work, 'tmp')); await turn('main', 'segment'); assert.equal((await authority('main')).cwd, home); assert.equal(await readFile(join(home, 'after-segment.txt'), 'utf8'), 'model ordered'); const status = result(await authority('main'), 'cwd-status').response.output; assert(status.includes(home)); assert(status.includes('master'))
   assert.equal((await owned.api('POST', route('main') + '/cwd', { cwd: owned.work })).status, 200); await turn('main', 'live'); assert.equal((await authority('main')).cwd, changed)
   assert.equal((await owned.api('POST', route('main') + '/cwd', { cwd: owned.work })).status, 200)
-  const execRoot = join(owned.data, 'state/exec', 'id_' + Buffer.from('main').toString('base64url'))
-  await until(async () => { for (const id of await readdir(execRoot)) { const path = join(execRoot, id); const cwd = await readFile(join(path, 'cwd.txt'), 'utf8').catch(() => ''); if (cwd.trim() === home && (await readFile(join(path, 'output.log'), 'utf8')).includes('LIVE-FINISHED')) return true } return false }, 'actual background final sidecar')
+  const liveRecord = JSON.parse(await readFile(join(owned.data, 'state/running-exec.json'), 'utf8')).execs.find(record => record.command.includes('LIVE-FINISHED'))
+  await until(async () => (await readFile(liveRecord.cwdPath, 'utf8').catch(() => '')).trim() === home && (await readFile(liveRecord.logPath, 'utf8')).includes('LIVE-FINISHED'), 'actual background final sidecar')
   await sleep(150); assert.equal((await authority('main')).cwd, owned.work)
   assert.equal((await authority('main')).promptCacheKey, originalCache); assert.equal((await authority('main')).persistentMemorySnapshot, originalSnapshot)
   assert.equal((await owned.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'compact-cwd' })).status, 200)

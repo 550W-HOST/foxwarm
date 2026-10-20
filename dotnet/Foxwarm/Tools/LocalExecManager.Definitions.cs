@@ -40,34 +40,6 @@ internal sealed partial class LocalExecManager
                     ["required"] = new JsonArray("command"),
                 },
                 ["strict"] = false,
-            },
-            new JsonObject
-            {
-                ["type"] = "function",
-                ["name"] = "read_exec",
-                ["description"] =
-                    "Inspect an execution from the current session and read a bounded portion of its captured output. Use nextOffset from the result to read the next portion. Offsets count bytes in the original log.",
-                ["parameters"] = new JsonObject
-                {
-                    ["type"] = "object",
-                    ["additionalProperties"] = false,
-                    ["properties"] = new JsonObject
-                    {
-                        ["execId"] = new JsonObject
-                        {
-                            ["type"] = "string",
-                            ["description"] = "Execution ID returned by exec in this session.",
-                        },
-                        ["offset"] = new JsonObject
-                        {
-                            ["type"] = "integer",
-                            ["minimum"] = 0,
-                            ["description"] = "Byte offset in the captured log. Defaults to 0.",
-                        },
-                    },
-                    ["required"] = new JsonArray("execId"),
-                },
-                ["strict"] = false,
             }
         );
 }

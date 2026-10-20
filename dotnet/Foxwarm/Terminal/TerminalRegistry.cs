@@ -79,7 +79,7 @@ internal sealed partial class TerminalRegistry : IAsyncDisposable
             : "";
         var shell =
             configuredShell.Length > 0 && File.Exists(configuredShell) ? configuredShell
-            : OperatingSystem.IsWindows() ? Foxwarm.Tools.LocalExecManager.WindowsPowerShell
+            : OperatingSystem.IsWindows() ? Foxwarm.Tools.ExecNative.WindowsPowerShell
             : "/bin/bash";
         if (!File.Exists(shell))
             throw new FileNotFoundException("A usable terminal shell is unavailable.", shell);

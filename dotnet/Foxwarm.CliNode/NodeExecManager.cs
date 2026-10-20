@@ -262,13 +262,14 @@ internal sealed partial class NodeExecManager(
             if (windows)
                 await File.WriteAllTextAsync(
                     userScript,
-                    command + (command.EndsWith('\n') ? "" : "\n")
+                    command + (command.EndsWith('\n') ? "" : "\n"),
+                    new System.Text.UTF8Encoding(true)
                 );
             await File.WriteAllTextAsync(
                 script,
                 windows
-                    ? WindowsScript
-                    : UnixScript + "\n" + command + (command.EndsWith('\n') ? "" : "\n")
+                    ? NativeExecScripts.Windows
+                    : NativeExecScripts.Unix(ExecNative.SelfCommand) + "\n" + command + (command.EndsWith('\n') ? "" : "\n")
             );
             if (!windows)
                 File.SetUnixFileMode(
