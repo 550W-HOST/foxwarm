@@ -189,13 +189,17 @@ public sealed class WebUiRealtimeRevisionTests
         };
         using var stopped = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var socket = new ProbeSocket();
-        var running = new WebUiRealtime(new SessionRuntime(manager)).RunAsync(
+        var logPath = Path.Combine(temp.Path, "main.log");
+        await File.WriteAllTextAsync(logPath, "independent initialization\n");
+        using var logs = new WebUiLogFile(logPath, 10);
+        var running = new WebUiRealtime(new SessionRuntime(manager), logs).RunAsync(
             socket,
             stopped.Token
         );
-        socket.SetSubscriptions(1, "one");
+        socket.SetSubscriptions(1, "one", logsId: "unchanged");
         await reached.Task.WaitAsync(stopped.Token);
-        socket.SetSubscriptions(2, null, ["one"]);
+        Assert.Equal(0, logs.SubscriberCount);
+        socket.SetSubscriptions(2, null, ["one"], logsId: "unchanged");
         await Until(
             () =>
                 socket.Frames.Any(frame =>
@@ -204,6 +208,8 @@ public sealed class WebUiRealtimeRevisionTests
                 ),
             stopped.Token
         );
+        await Until(() => socket.Frames.Any(f => f["type"]?.ToString() == "logs-snapshot"), stopped.Token);
+        Assert.Single(socket.Frames, f => f["type"]?.ToString() == "logs-snapshot");
         Assert.Empty(manager.Owners());
         Assert.DoesNotContain(
             socket.Frames,
@@ -217,6 +223,7 @@ public sealed class WebUiRealtimeRevisionTests
         );
         stopped.Cancel();
         await running;
+        Assert.Equal(0, logs.SubscriberCount);
         release.TrySetResult();
         var owner = await manager.RequiredAsync("one").WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal("one", owner.Id);
@@ -407,6 +414,55 @@ public sealed class WebUiRealtimeRevisionTests
         }
     }
 
+    [Fact]
+    public async Task Logs_uses_the_existing_sender_byte_backlog_and_stops_only_its_topic()
+    {
+        using var temp = new TempDirectory();
+        var path = Path.Combine(temp.Path, "main.log");
+        await File.WriteAllTextAsync(path, "initial\n");
+        var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
+        await using var manager = new SessionManager(Path.Combine(temp.Path, "data"), Path.Combine(temp.Path, "work"), options, HostModels.ForTest(options));
+        await manager.LoadAsync();
+        using var logs = new WebUiLogFile(path, 10);
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var socket = new ProbeSocket();
+        var reached = Signal();
+        var release = Signal();
+        socket.BeforeSend = async (frame, token) =>
+        {
+            if (frame["type"]?.ToString() != "logs-snapshot") return;
+            reached.TrySetResult();
+            await release.Task.WaitAsync(token);
+        };
+        var running = new WebUiRealtime(new SessionRuntime(manager), logs).RunAsync(socket, stop.Token);
+        try
+        {
+            socket.SetLogs(1, "slow");
+            await reached.Task.WaitAsync(stop.Token);
+            // The blocked actual SendAsync leaves the normal output queue observable.
+            // Each chunk is below catch-up size; the socket backlog, not a file gap,
+            // is what must stop this one topic from accumulating further windows.
+            for (var index = 0; index < 20; index++)
+            {
+                await File.AppendAllTextAsync(path, new string('x', 70 * 1024));
+                await Task.Delay(40, stop.Token);
+            }
+            release.TrySetResult();
+            await Until(() => socket.Frames.Any(f => f["type"]?.ToString() == "logs-gap"), stop.Token);
+            Assert.Single(socket.Frames, f => f["type"]?.ToString() == "logs-gap");
+            Assert.True(socket.Frames.Where(f => f["type"]?.ToString() == "logs-delta").Sum(f => f["window"]!["text"]!.ToString().Length) <= WebUiLogFile.SocketBufferBytes + WebUiLogFile.WindowBytes);
+            Assert.Equal(0, logs.SubscriberCount);
+            socket.SetLogs(2, "slow");
+            await Until(() => socket.Frames.Any(f => f["type"]?.ToString() == "subscriptions-applied" && f["revision"]?.ToString() == "2"), stop.Token);
+            Assert.Single(socket.Frames, f => f["type"]?.ToString() == "logs-snapshot");
+            socket.SetLogs(3, "fresh");
+            await Until(() => socket.Frames.Any(f => f["type"]?.ToString() == "logs-snapshot" && f["logsId"]?.ToString() == "fresh"), stop.Token);
+            socket.SetLogs(4, null);
+            await Until(() => logs.SubscriberCount == 0, stop.Token);
+        }
+        finally { release.TrySetResult(); stop.Cancel(); await running; }
+    }
+
     private static TaskCompletionSource Signal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -421,14 +477,21 @@ public sealed class WebUiRealtimeRevisionTests
         private readonly Channel<byte[]> incoming = Channel.CreateUnbounded<byte[]>();
         private WebSocketState state = WebSocketState.Open;
         public ConcurrentQueue<JsonObject> Frames { get; } = new();
+        internal Func<JsonObject, CancellationToken, Task>? BeforeSend { get; set; }
+        internal void SetLogs(long revision, string? id) => incoming.Writer.TryWrite(Encoding.UTF8.GetBytes(new JsonObject {
+            ["type"] = "set-subscriptions", ["revision"] = revision, ["sessionListActive"] = false,
+            ["sessionIds"] = new JsonArray(), ["sessionListIds"] = new JsonArray(),
+            ["logs"] = id is null ? null : new JsonObject { ["id"] = id }
+        }.ToJsonString()));
 
-        public void SetSubscriptions(long revision, string? id, string[]? list = null) =>
+        public void SetSubscriptions(long revision, string? id, string[]? list = null, string? logsId = null) =>
             incoming.Writer.TryWrite(
                 Encoding.UTF8.GetBytes(
                     new JsonObject
                     {
                         ["type"] = "set-subscriptions",
                         ["revision"] = revision,
+                        ["logs"] = logsId is null ? null : new JsonObject { ["id"] = logsId },
                         ["sessionListActive"] = true,
                         ["sessionIds"] = id is null ? new JsonArray() : new JsonArray(id),
                         ["sessionListIds"] = new JsonArray(
@@ -492,15 +555,16 @@ public sealed class WebUiRealtimeRevisionTests
             return new WebSocketReceiveResult(bytes.Length, WebSocketMessageType.Text, true);
         }
 
-        public override Task SendAsync(
+        public override async Task SendAsync(
             ArraySegment<byte> buffer,
             WebSocketMessageType type,
             bool end,
             CancellationToken token
         )
         {
-            Frames.Enqueue(JsonNode.Parse(buffer.AsSpan())!.AsObject());
-            return Task.CompletedTask;
+            var frame = JsonNode.Parse(buffer.AsSpan())!.AsObject();
+            if (BeforeSend is { } before) await before(frame, token);
+            Frames.Enqueue(frame);
         }
     }
 }

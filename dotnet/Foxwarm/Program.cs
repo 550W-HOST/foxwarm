@@ -39,15 +39,6 @@ if (launcher?.StopRequested.IsCancellationRequested == true)
 
 var configuration = new ModelConfiguration(HostPaths.Capture());
 var paths = configuration.Paths;
-if (
-    configuration
-        .AppConfiguration["bot"]
-        ?["enableTUI"]?.ToString()
-        .Equals("true", StringComparison.OrdinalIgnoreCase) == true
-)
-    Console.Error.WriteLine(
-        "Configured bot.enableTUI is ignored: Main TUI is not implemented by the managed host."
-    );
 var http = await HttpServerSettings.CaptureAsync(configuration, paths.DataRoot);
 var distRoot = Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_WEBUI_DIST");
 if (distRoot is not null)
@@ -70,15 +61,7 @@ if (
     )
 )
     throw new InvalidOperationException("Configured WebUI dist needs index.html and assets/.");
-await using var host = await MainHost.CreateAsync(args, configuration, http, distRoot);
-host.Lifetime.ApplicationStarted.Register(() =>
-{
-    Console.WriteLine(
-        host.HttpEnabled
-            ? "Main HTTP listening: " + string.Join(", ", host.App.Urls)
-            : "Main started without HTTP."
-    );
-});
+await using var host = await MainHost.CreateAsync(args, configuration, http, distRoot, captureDiagnostics: true);
 if (launcher?.StopRequested.IsCancellationRequested == true)
     return;
 await using var control = WindowsBackgroundControl.Start(background, paths.DataRoot, host.Lifetime);

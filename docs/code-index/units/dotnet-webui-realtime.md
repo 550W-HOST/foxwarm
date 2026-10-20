@@ -16,6 +16,8 @@ Realtime is a notification/projection boundary, not Session authority. A stream 
 
 Scoped clients retain role-safe state/message projections and current exact/Agent bindings across initial snapshots and queued sends. Catalog/log subscriptions are rejected; affected credential/scope changes and stale canonical moves close only those connections. The [shared access unit](./dotnet-access-identities.md) owns the authority and revocation contract.
 
+The administrator-only file-backed Logs topic shares the same physical socket and sender, with an independent logical lifetime, reconnect cursor and bounded outbound backlog. It never enters the Session initialization pending list or restarts for an unrelated revision. The [managed Main Logs unit](./dotnet-webui-logs.md) owns reader/tail/producer behavior and queue accounting. Existing Session/list revision and queue policies remain unchanged.
+
 ## Tests
 
 `WebUiRealtimeRevisionTests.cs`; `WebUiAccessTests.cs`; stream/list/task/terminal event tests.

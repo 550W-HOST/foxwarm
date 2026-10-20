@@ -11,6 +11,7 @@ The .NET HTTP/WebSocket surface consumed by the React WebUI. `HttpServer` owns a
 - [WebUI tasks, relations, and architecture actions](../units/dotnet-webui-tasks-relations.md)
 - [WebUI Agent, setup, and model configuration routes](../units/dotnet-webui-agents-setup.md)
 - [WebUI deletion and terminal routes](../units/dotnet-webui-lifecycle-terminal.md)
+- [Managed Main Logs and file diagnostics](../units/dotnet-webui-logs.md)
 - [WebUI realtime event publisher](../units/dotnet-webui-realtime.md)
 
 ## Cross-module contracts

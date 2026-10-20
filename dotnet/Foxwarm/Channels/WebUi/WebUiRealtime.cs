@@ -7,7 +7,7 @@ using Foxwarm.Sessions;
 namespace Foxwarm.Channels.WebUi;
 
 /// <summary>Revisioned list/session subscription union, installed before acknowledged snapshots and buffered events.</summary>
-internal sealed class WebUiRealtime(SessionRuntime runtime)
+internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs = null)
 {
     // Optional scheduling seam for the focused transport test; normal hosts leave it unset.
     internal Func<JsonObject, CancellationToken, Task>? BeforeQueuedSend { get; init; }
@@ -30,7 +30,18 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
         var listActive = false;
         var initializing = false;
         var pending = new List<JsonObject>();
-        var output = Channel.CreateUnbounded<(long Revision, JsonObject Data)>();
+        long queuedBytes = 0;
+        string? logsId = null;
+        Action? stopLogs = null;
+        LogSubscription? requestedLogs = null;
+        var output = Channel.CreateUnbounded<(long? Revision, JsonObject Data, int Bytes, string? LogsId)>();
+        void Queue(long? expected, JsonObject data, string? topic = null)
+        {
+            var bytes = Encoding.UTF8.GetByteCount(data.ToJsonString());
+            Interlocked.Add(ref queuedBytes, bytes);
+            if (!output.Writer.TryWrite((expected, data, bytes, topic)))
+                Interlocked.Add(ref queuedBytes, -bytes);
+        }
         void Deliver(JsonObject data)
         {
             lock (gate)
@@ -38,7 +49,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
                 if (initializing)
                     pending.Add(data);
                 else
-                    output.Writer.TryWrite((revision, data));
+                    Queue(revision, data);
             }
         }
         void Changed(SessionRuntimeEvent entry)
@@ -107,12 +118,33 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
         {
             await foreach (var item in output.Reader.ReadAllAsync(lifetime.Token))
             {
-                lock (gate)
-                    if (item.Revision != revision)
-                        continue;
-                if (BeforeQueuedSend is { } pause)
-                    await pause(item.Data, lifetime.Token);
-                await Send(item.Data, item.Revision);
+                try
+                {
+                    lock (gate)
+                        if ((item.Revision is long expected && expected != revision)
+                            || (item.LogsId is not null && item.LogsId != logsId))
+                            continue;
+                    if (BeforeQueuedSend is { } pause)
+                        await pause(item.Data, lifetime.Token);
+                    await Send(item.Data, item.Revision, item.LogsId, queued: true);
+                    // Logs starts behind the existing applied barrier, never in pending
+                    // Session initialization. An unchanged logical ID survives revisions.
+                    if (item.Data["type"]?.GetValue<string>() == "subscriptions-applied")
+                    {
+                        lock (gate)
+                        {
+                            if (item.Revision == revision && requestedLogs is { } request && logsId is null)
+                            {
+                                logsId = request.Id;
+                                stopLogs = logs!.Subscribe(request,
+                                    frame => { if (Volatile.Read(ref logsId) == request.Id) Queue(null, frame, request.Id); },
+                                    () => !lifetime.IsCancellationRequested && socket.State == WebSocketState.Open
+                                        && Interlocked.Read(ref queuedBytes) < WebUiLogFile.SocketBufferBytes);
+                            }
+                        }
+                    }
+                }
+                finally { Interlocked.Add(ref queuedBytes, -item.Bytes); }
             }
         }
         var pumping = Pump();
@@ -169,6 +201,10 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
                     await ProtocolError(error.Message);
                     break;
                 }
+                LogSubscription? logRequest;
+                try { logRequest = ParseLogs(input["logs"]); }
+                catch (FormatException error) { await ProtocolError(error.Message); break; }
+                if (logRequest is not null && logs is null) { await ProtocolError("Logs are unavailable."); break; }
                 if (
                     scoped is not null
                     && (
@@ -200,6 +236,8 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
                     .ToArray();
                 lock (gate)
                 {
+                    if (logsId != logRequest?.Id) { stopLogs?.Invoke(); stopLogs = null; logsId = null; }
+                    requestedLogs = logRequest;
                     revision = requested;
                     initializing = true;
                     pending.Clear();
@@ -260,6 +298,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
             runtime.Changed -= Changed;
             runtime.TopologyChanged -= Invalidated;
             lifetime.Cancel();
+            lock (gate) { stopLogs?.Invoke(); stopLogs = null; logsId = null; }
             output.Writer.TryComplete();
             Task[] work;
             lock (gate)
@@ -454,18 +493,9 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
                     if (revision != requested || attempt.IsCancellationRequested)
                         return;
                     foreach (var data in pending)
-                        output.Writer.TryWrite((requested, data));
+                        Queue(requested, data);
                     pending.Clear();
-                    output.Writer.TryWrite(
-                        (
-                            requested,
-                            new JsonObject
-                            {
-                                ["type"] = "subscriptions-applied",
-                                ["revision"] = requested,
-                            }
-                        )
-                    );
+                    Queue(requested, new JsonObject { ["type"] = "subscriptions-applied", ["revision"] = requested });
                     initializing = false;
                 }
             }
@@ -506,7 +536,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
                 attempt.Dispose();
             }
         }
-        async Task Send(JsonObject data, long? expectedRevision = null)
+        async Task Send(JsonObject data, long? expectedRevision = null, string? expectedLogsId = null, bool queued = false)
         {
             scoped?.Require();
             if (scoped is not null && SessionCatalog.Text(data["sessionId"]) is { } scopedId)
@@ -518,12 +548,16 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
             var bytes = Encoding.UTF8.GetBytes(
                 Foxwarm.Images.ImageTransport.Project(data)!.ToJsonString()
             );
+            if (!queued) Interlocked.Add(ref queuedBytes, bytes.Length);
+            try
+            {
             await sendGate.WaitAsync(lifetime.Token);
             try
             {
                 // Recheck at the same barrier that orders snapshots and actual writes.
                 lock (gate)
-                    if (expectedRevision is long expected && expected != revision)
+                    if ((expectedRevision is long expected && expected != revision)
+                        || (expectedLogsId is not null && expectedLogsId != logsId))
                         return;
                 scoped?.Require();
                 if (socket.State == WebSocketState.Open)
@@ -533,12 +567,30 @@ internal sealed class WebUiRealtime(SessionRuntime runtime)
             {
                 sendGate.Release();
             }
+            }
+            finally { if (!queued) Interlocked.Add(ref queuedBytes, -bytes.Length); }
         }
         async Task ProtocolError(string message)
         {
             await Send(new JsonObject { ["type"] = "protocol-error", ["message"] = message });
             await socket.CloseAsync(WebSocketCloseStatus.PolicyViolation, message, lifetime.Token);
         }
+    }
+
+    private static LogSubscription? ParseLogs(JsonNode? raw)
+    {
+        if (raw is null) return null;
+        if (raw is not JsonObject obj || obj["id"] is not JsonValue id || !id.TryGetValue<string>(out var text) || text.Length is 0 or > 128)
+            throw new FormatException("Invalid logs subscription.");
+        LogCursor? cursor = null;
+        if (obj.ContainsKey("cursor"))
+        {
+            if (obj["cursor"] is not JsonObject value || value["fileId"] is not JsonValue file || !file.TryGetValue<string>(out var fileId)
+                || fileId.Length is 0 or > 256 || value["offset"] is not JsonValue position || !position.TryGetValue<long>(out var offset) || offset < 0 || offset > 9007199254740991L)
+                throw new FormatException("Invalid logs cursor.");
+            cursor = new(fileId, offset);
+        }
+        return new(text, cursor);
     }
 
     private static async Task<JsonObject?> Receive(WebSocket socket, CancellationToken token)

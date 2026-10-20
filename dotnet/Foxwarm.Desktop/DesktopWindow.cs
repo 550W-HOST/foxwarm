@@ -88,7 +88,8 @@ internal sealed class DesktopWindow : Form
                     work,
                     new ModelConfiguration(data),
                     http,
-                    dist
+                    dist,
+                    captureDiagnostics: true
                 );
                 try
                 {

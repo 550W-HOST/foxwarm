@@ -7,6 +7,8 @@ Secondary files: src/common.ts, src/channels/webuiChannel.ts, src/channels/webui
 
 Provides the authenticated Main WebUI's read-only logger viewer: one Logs workbench tab, bounded byte-addressed history, an optional file-backed live topic on the existing realtime WebSocket, and approximate date/time navigation. It is not a general file browser, Session execution-log viewer, model tool, or external MCP surface.
 
+The managed Main implementation is owned by [managed Main Logs and file diagnostics](./dotnet-webui-logs.md), using these same Source contracts and unchanged production frontend.
+
 ## Key exports and function index
 
 | Symbol | Responsibility |

@@ -16,7 +16,8 @@ internal sealed partial class WebUIChannel(
     WebUiDownloadSignatures downloads
 )
 {
-    private readonly WebUiRealtime realtime = new(runtime);
+    private readonly WebUiLogFile logs = new(MainLog.Destination(sessions.Models.ConfigurationOwner, sessions.DataRoot));
+    private WebUiRealtime realtime = null!;
     private readonly Foxwarm.Terminal.TerminalRouter terminalRouter = new(
         terminals,
         sessions.Nodes
@@ -24,6 +25,9 @@ internal sealed partial class WebUIChannel(
 
     public void Register(WebApplication app)
     {
+        realtime = new WebUiRealtime(runtime, logs);
+        app.Lifetime.ApplicationStopped.Register(logs.Dispose);
+        RegisterLogRoutes(app);
         sessions.ChannelRegistry.Register(
             "webui",
             (conversation, message, token) =>

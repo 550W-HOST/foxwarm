@@ -12,6 +12,7 @@ internal sealed class MainHost : IAsyncDisposable
     private readonly TerminalRegistry terminals;
     private readonly McpInboundHttp? inboundMcp;
     private readonly IHost host;
+    private readonly MainLog? log;
     internal WebApplication App =>
         host as WebApplication
         ?? throw new InvalidOperationException("HTTP is disabled for this host.");
@@ -47,20 +48,26 @@ internal sealed class MainHost : IAsyncDisposable
         SessionManager sessions,
         TerminalRegistry terminals,
         IHost host,
-        McpInboundHttp? inboundMcp
+        McpInboundHttp? inboundMcp,
+        MainLog? log
     )
     {
         this.sessions = sessions;
         this.terminals = terminals;
         this.inboundMcp = inboundMcp;
         this.host = host;
+        this.log = log;
+        if (log is not null)
+            Lifetime.ApplicationStarted.Register(() => Console.WriteLine(HttpEnabled
+                ? "Main HTTP listening: " + string.Join(", ", App.Urls) : "Main started without HTTP."));
     }
 
     internal static Task<MainHost> CreateAsync(
         string[] args,
         ModelConfiguration configuration,
         HttpServerSettings http,
-        string? distRoot = null
+        string? distRoot = null,
+        bool captureDiagnostics = false
     ) =>
         CreateAsync(
             args,
@@ -69,7 +76,8 @@ internal sealed class MainHost : IAsyncDisposable
             configuration,
             http,
             distRoot,
-            configuration.Paths
+            configuration.Paths,
+            captureDiagnostics: captureDiagnostics
         );
 
     internal static async Task<MainHost> CreateAsync(
@@ -80,7 +88,8 @@ internal sealed class MainHost : IAsyncDisposable
         HttpServerSettings http,
         string? distRoot,
         HostPaths? paths = null,
-        Foxwarm.Channels.ChannelTransportDependencies? channelDependencies = null
+        Foxwarm.Channels.ChannelTransportDependencies? channelDependencies = null,
+        bool captureDiagnostics = false
     )
     {
         if (http.HttpEnabled)
@@ -93,7 +102,11 @@ internal sealed class MainHost : IAsyncDisposable
             Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_INSTRUCTIONS") ?? "",
             configuration.MaxOutput
         );
-        var sessions = new SessionManager(
+        var log = captureDiagnostics ? new MainLog(configuration) : null;
+        SessionManager sessions;
+        try
+        {
+        sessions = new SessionManager(
             dataRoot,
             workspaceRoot,
             options,
@@ -102,6 +115,14 @@ internal sealed class MainHost : IAsyncDisposable
                 ?? Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_SKILLS_ROOT"),
             paths
         );
+        }
+        catch
+        {
+            log?.Dispose();
+            throw;
+        }
+        if (log is not null && configuration.AppConfiguration["bot"]?["enableTUI"]?.ToString().Equals("true", StringComparison.OrdinalIgnoreCase) == true)
+            Console.Error.WriteLine("Configured bot.enableTUI is ignored: Main TUI is not implemented by the managed host.");
         TerminalRegistry? terminals = null;
         HttpServer? server = null;
         IHost? headless = null;
@@ -126,7 +147,7 @@ internal sealed class MainHost : IAsyncDisposable
                 headless
                     .Services.GetRequiredService<IHostApplicationLifetime>()
                     .ApplicationStopping.Register(sessions.BeginShutdown);
-                return new MainHost(sessions, terminals, headless, null);
+                return new MainHost(sessions, terminals, headless, null, log);
             }
             server = new HttpServer(
                 args,
@@ -145,7 +166,7 @@ internal sealed class MainHost : IAsyncDisposable
                 new WebUIChannel(sessions, runtime, router, terminals, server.Downloads).Register(
                     server.App
                 );
-            return new MainHost(sessions, terminals, server.App, server.InboundMcp);
+            return new MainHost(sessions, terminals, server.App, server.InboundMcp, log);
         }
         catch
         {
@@ -162,6 +183,7 @@ internal sealed class MainHost : IAsyncDisposable
             if (terminals is not null)
                 await terminals.DisposeAsync();
             await sessions.DisposeAsync();
+            log?.Dispose();
             throw;
         }
     }
@@ -209,5 +231,7 @@ internal sealed class MainHost : IAsyncDisposable
         else
             host.Dispose();
         await sessions.DisposeAsync().ConfigureAwait(false);
+        if (log is not null) Console.WriteLine("Main stopped.");
+        log?.Dispose();
     }
 }
