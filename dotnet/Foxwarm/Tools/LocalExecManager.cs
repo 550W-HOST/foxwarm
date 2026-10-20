@@ -424,6 +424,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
         }
         else if (cwd is { Length: 0 })
             return Error("invalid_tool_arguments", "Exec cwd must be a non-empty string.");
+        // A supported identity move may commit while reservation or start is awaiting a receipt.
+        var agent = agentForSession(sessionId);
         var id = await ReserveAsync(sessionId);
         ExecRecord record;
         try
@@ -431,6 +433,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             record = backend is null
                 ? await StartNativeAsync(
                     sessionId,
+                    agent,
                     id,
                     command,
                     cwd!,
@@ -441,6 +444,7 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
                 )
                 : await StartProviderAsync(
                     sessionId,
+                    agent,
                     id,
                     command,
                     cwd,

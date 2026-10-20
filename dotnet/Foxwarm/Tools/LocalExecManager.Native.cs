@@ -11,6 +11,7 @@ internal sealed partial class LocalExecManager
 {
     private async Task<ExecRecord> StartNativeAsync(
         string session,
+        string agent,
         string id,
         string command,
         string cwd,
@@ -88,7 +89,7 @@ internal sealed partial class LocalExecManager
             id,
             command,
             cwd,
-            agentForSession(session),
+            agent,
             "master",
             discovered is null ? log : Text(discovered, "logPath")!,
             started,

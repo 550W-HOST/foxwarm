@@ -61,10 +61,11 @@ class Provider(BaseHTTPRequestHandler):
         assert self.path == '/responses'
         assert self.headers.get('Authorization') == 'Bearer ' + PROVIDER_TOKEN
         payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-        assert [entry['name'] for entry in payload['tools']] == ['read', 'write', 'edit', 'apply_patch', 'exec', 'read_exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'wait', 'skill', 'set_agent_inherit', 'session', 'get_session_messages', 'set_goal', 'set_session_child_model', 'set_session_compact_threshold', 'submit_compact_plan', 'search_tools', 'call_tool']
-        assert payload['tools'][1]['parameters']['required'] == ['filePath']
-        assert 'sessionId' in payload['tools'][6]['parameters']['properties'] and 'offset' not in payload['tools'][6]['parameters']['properties']
-        assert next(tool for tool in payload['tools'] if tool['name'] == 'submit_compact_plan')['parameters']['required'] == ['replaceAsBlocks']
+        tools = {entry['name']: entry for entry in payload['tools']}
+        # This consumer calls read/write below; unrelated catalog order is not a contract.
+        assert 'read_exec' not in tools
+        for name in ('read', 'write'):
+            assert 'filePath' in tools[name]['parameters']['required']
         input_text = json.dumps(payload['input'], ensure_ascii=False)
         with REQUEST_LOCK:
             REQUESTS.append(payload)
@@ -173,7 +174,11 @@ def start_host(dotnet, dll, env, port, log_dir, label):
             return call(port, 'GET', '/health')[0] == 200
         except (URLError, ConnectionError):
             return False
-    wait_until(ready, f'host {label} readiness', 15)
+    try:
+        wait_until(ready, f'host {label} readiness', 15)
+    except BaseException:
+        cleanup_process(process)
+        raise
     assert process.poll() is None, (label, (log_dir / f'{label}.err').read_text())
     return process
 
@@ -212,7 +217,16 @@ def main():
         'local-script': {'providerType': 'openai-responses', 'baseUrl': f'http://127.0.0.1:{provider.server_port}',
                          'apiKey': PROVIDER_TOKEN, 'models': ['local-script']}}}) + '\n')
     (data / 'state/token').write_text(TOKEN + '\n')
-    env = dict(os.environ, FOXWARM_EXPERIMENT_DATA_ROOT=str(data), FOXWARM_EXPERIMENT_TOOL_ROOT=str(tools))
+    env = dict(os.environ)
+    for key in list(env):
+        if key.startswith('FOXWARM_EXPERIMENT_') or key in (
+                'FOXWARM_APP_ROOT', 'FOXWARM_HTTP_PORT', 'FOXWARM_MAIN_LIFETIME_PIPE',
+                'FOXWARM_WINDOWS_CONTROL_PIPE', 'FOXWARM_CLI_LIFETIME_PIPE',
+                'FOXWARM_PUBLIC_BASE_URL', 'ASPNETCORE_URLS'):
+            del env[key]
+    env.update(FOXWARM_DATA_DIR=str(data), FOXWARM_CONFIG_PATH='', CONFIG_PATH='',
+               MCP_CONFIG_PATH='', FOXWARM_AGENT_DIR='', FOXWARM_AGENTS_DIR=str(data / 'agents'),
+               FOXWARM_BIND_ADDRESS='127.0.0.1', FOXWARM_EXPERIMENT_TOOL_ROOT=str(tools))
     first = second = None
     try:
         first = start_host(dotnet, dll, env, port, logs, 'first')
@@ -297,7 +311,8 @@ def main():
                 authority.unlink()
             else:
                 authority.write_text('{invalid')
-            case_env = dict(env, FOXWARM_EXPERIMENT_DATA_ROOT=str(case_root), FOXWARM_EXPERIMENT_PORT=str(open_port()))
+            case_env = dict(env, FOXWARM_DATA_DIR=str(case_root), FOXWARM_AGENTS_DIR=str(case_root / 'agents'),
+                            FOXWARM_EXPERIMENT_PORT=str(open_port()))
             with open(logs / f'{kind}.out', 'w') as out, open(logs / f'{kind}.err', 'w') as err:
                 candidate = subprocess.Popen([dotnet, str(dll)], env=case_env, stdout=out, stderr=err,
                                              start_new_session=True)

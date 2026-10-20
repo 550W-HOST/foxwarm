@@ -13,6 +13,7 @@ internal sealed partial class LocalExecManager
 
     private async Task<ExecRecord> StartProviderAsync(
         string session,
+        string agent,
         string id,
         string command,
         string? cwd,
@@ -27,7 +28,7 @@ internal sealed partial class LocalExecManager
             id,
             command,
             receipt.Cwd,
-            agentForSession(session),
+            agent,
             backend.NodeId,
             receipt.OutputPath,
             receipt.StartedAt,
