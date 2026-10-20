@@ -187,7 +187,7 @@ internal sealed class NodeBrowserTools : IAsyncDisposable
                         NodeFileTools.Text(parameters["code"])!
                     )
                 )
-                    output = "Evaluated: " + await StringifyResult(tab.Page, value);
+                    output = "Evaluated: " + await StringifyResult(value);
                 break;
             case "goto":
                 var url = NodeFileTools.Text(parameters["url"])!;
@@ -216,7 +216,7 @@ internal sealed class NodeBrowserTools : IAsyncDisposable
 
     // Preserve Puppeteer's return-by-value clone before JavaScript JSON.stringify.
     // Directly stringifying the live handle would call Date.toJSON and differ from Source.
-    private static async Task<string> StringifyResult(IPage page, IJSHandle value)
+    private static async Task<string> StringifyResult(IJSHandle value)
     {
         var remote = ((ICdpHandle)value).RemoteObject;
         if (remote.Type == RemoteObjectType.Undefined)
@@ -241,10 +241,7 @@ internal sealed class NodeBrowserTools : IAsyncDisposable
         }
         if (cloned is null)
             return "null";
-        return await page.EvaluateFunctionAsync<string>(
-            "text => JSON.stringify(JSON.parse(text))",
-            cloned.Value.GetRawText()
-        );
+        return BrowserCloneJson.Stringify(cloned.Value);
     }
 
     private static JsonObject Metadata(string id, Tab tab) =>

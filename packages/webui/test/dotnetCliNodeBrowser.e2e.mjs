@@ -13,9 +13,18 @@ const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
 const { processRoot: root } = initializeTestEnvironment()
 const modes = ['source', 'candidate']
+const evaluateOnly = process.argv.includes('--evaluate-only')
 const servers = [], sockets = new Map(), replies = [], children = [], evidence = {}
 const site = createServer((req, res) => {
   if (req.url === '/redirect') { res.writeHead(302, { location: '/one' }); res.end(); return }
+  if (req.url === '/page-stringify' || req.url === '/page-prototype') {
+    const hook = req.url === '/page-stringify'
+      ? 'window.savedStringify=JSON.stringify;JSON.stringify=()=>"page-overrode-stringify"'
+      : 'Object.prototype.toJSON=()=>"page-prototype-hook"'
+    res.setHeader('content-type', 'text/html')
+    res.end(`<!doctype html><title>Page hooks</title><script>${hook}</script>`)
+    return
+  }
   const title = req.url === '/two' ? 'Two' : 'One'
   res.setHeader('content-type', 'text/html')
   res.end(`<!doctype html><html><head><title>${title}</title></head><body style="margin:0;min-height:1800px"><h1>${title}</h1><input id="entry" value="seed"><button id="button" onclick="window.clicked++">Click</button><div><button onclick="window.item=1">Item</button><button onclick="window.item=2">Item</button></div><a id="link" href="/two">Next</a><div hidden id="hidden">hidden</div><script>window.clicked=0;window.inputs=0;window.changes=0;document.querySelector('#entry').addEventListener('input',()=>inputs++);document.querySelector('#entry').addEventListener('change',()=>changes++);setTimeout(()=>{const x=document.createElement('div');x.id='later';document.body.append(x)},100);</script></body></html>`)
@@ -71,38 +80,74 @@ async function corpus(mode){
   // Retain evidence for less ordinary clone/stringification consequences too.
   for(const [code,expected] of [['new Date(0)','{}'],['({date:new Date(0),nan:NaN,missing:undefined})','{"date":{},"nan":null}'],['(()=>{const x={};x.self=x;return x})()','undefined']])assert.equal((await evalJS(code)).output,'Evaluated: '+expected)
   const err=await take('browse_interact',{tabId,action:'evaluate',params:{code:'(()=>{throw new Error("owned-js-error")})()'}});assert.equal(err.type,'tool_call_error')
-  await act('fill',{selector:'#entry',text:'replacement'});assert.equal((await evalJS('({value:document.querySelector("#entry").value,inputs,changes})')).output,'Evaluated: {"value":"replacement","inputs":1,"changes":0}')
-  await act('type',{selector:'#entry',text:'APPEND'});assert.equal((await evalJS('document.querySelector("#entry").value')).output,'Evaluated: "replacementAPPEND"')
-  await act('press',{key:'End'});await act('press',{key:'X'});assert.equal((await evalJS('document.querySelector("#entry").value')).output,'Evaluated: "replacementAPPENDX"')
-  const clickAt=Date.now();await act('click',{selector:'#button'});assert(Date.now()-clickAt>=4800);assert.equal((await evalJS('clicked')).output,'Evaluated: 1')
-  await act('scroll',{y:350});assert.equal((await evalJS('window.scrollY')).output,'Evaluated: 350');await act('scroll',{y:0})
-  await act('wait',{selector:'#later'});await act('wait',{selector:'#hidden',timeout:0});await act('wait',{selector:'aria/Click'})
-  // This compound selector invokes the distinct built-in ARIA query-all binding.
-  await act('wait',{selector:'::-p-aria(Item):nth-of-type(2)'})
-  await act('click',{selector:'::-p-aria(Item):nth-of-type(2)'})
-  assert.equal((await evalJS('window.item')).output,'Evaluated: 2')
-  const fullHeight=Number((await evalJS('Math.max(document.documentElement.scrollHeight,document.body.scrollHeight)')).output.slice('Evaluated: '.length))
-  for(const screenshot of [true,'full',join(root,mode,'must-not-write.png')]){
-    const image=await success('browse_get',{tabId,screenshot}),bytes=Buffer.from(image.inlineData.data,'base64'),meta=await sharp(bytes).metadata()
-    assert.equal(image.mimeType,'image/png');assert.equal(image.sizeBytes,bytes.length);assert.equal(meta.width,800);assert.equal(meta.height,screenshot==='full'?fullHeight:600)
-    rows.at(-1).dimensions={width:meta.width,height:meta.height};delete image.inlineData.data
-    await assert.rejects(access(join(root,mode,'must-not-write.png')))
+  // These strings exercise the host writer, including escaped UTF-16 units in keys.
+  for(const value of ['"\\/\b\f\n\r\t\u0000\u0001<>&é\u2028\u2029', '\ud800', '\udfff', '\ud83d\ude00', '\\ud800']) {
+    assert.equal((await evalJS(JSON.stringify(value))).output, 'Evaluated: '+JSON.stringify(value))
   }
-  await evalJS('document.title="Changed"');assert.equal((await success('browse_list',{}))[0].title,'One');assert.equal((await success('browse_get',{tabId})).title,'Changed')
-  await act('goto',{url:origin+'/two'});await act('back');assert.equal((await success('browse_list',{}))[0].url,origin+'/two');assert.equal((await success('browse_get',{tabId})).url,origin+'/one')
-  await act('forward');assert.equal((await success('browse_list',{}))[0].url,origin+'/one');await act('reload');assert.equal((await success('browse_get',{tabId})).url,origin+'/two')
-  const original=sockets.get(mode);original.terminate();await until(()=>sockets.get(mode)!==original,mode+' same-process reconnect',12000);assert.equal((await success('browse_list',{}))[0].id,tabId)
-  const second=await success('browse_open',{url:origin+'/one'});assert.deepEqual((await success('browse_list',{})).map(t=>t.id),[tabId,second.tabId])
-  for(const name of ['browse_get','browse_close','browse_interact'])assert.equal((await take(name,{tabId:'missing',action:'reload'})).type,'tool_call_error')
-  await success('browse_close',{tabId});await success('browse_close',{tabId:second.tabId});assert.deepEqual(await success('browse_list',{}),[])
-  const reopened=await success('browse_open',{url:origin+'/one'});await success('browse_close',{tabId:reopened.tabId})
+  const keyed = {'\ud800':'high','\udfff':'low','😀':'pair','\\ud800':'literal'}
+  assert.equal((await evalJS('('+JSON.stringify(keyed)+')')).output,'Evaluated: '+JSON.stringify(keyed))
+  const numbers = [1e-7,1e-6,1e20,1e21,1000000000000000128,Number.MIN_VALUE,Number.MAX_VALUE,-0]
+  assert.equal((await evalJS('['+numbers.map(String).join(',')+']')).output,'Evaluated: '+JSON.stringify(numbers))
+  assert.equal((await evalJS('(()=>{const x={b:1,"10":10,"2":2,"01":3,"4294967295":4,"4294967294":5};Object.defineProperty(x,"__proto__",{value:{safe:true},enumerable:true});x.constructor="own";return x})()')).output,'Evaluated: {"2":2,"10":10,"4294967294":5,"b":1,"01":3,"4294967295":4,"__proto__":{"safe":true},"constructor":"own"}')
+  assert.equal((await evalJS('[undefined,NaN,Infinity,-Infinity,-0,new Date(0)]')).output,'Evaluated: [null,null,null,null,0,{}]')
+  const bigint=await take('browse_interact',{tabId,action:'evaluate',params:{code:'1n'}});assert.equal(bigint.type,'tool_call_error');assert.match(bigint.error.message,/BigInt/)
+  // The loaded page, not the caller expression, installs each hook.
+  assert.equal((await evalJS('({a:1})')).output,'Evaluated: {"a":1}')
+  for(const hook of ['stringify','prototype']) {
+    const hooked=await success('browse_open',{url:origin+'/page-'+hook})
+    const evaluate=code=>success('browse_interact',{tabId:hooked.tabId,action:'evaluate',params:{code}})
+    assert.equal((await evaluate('({a:1})')).output,'Evaluated: {"a":1}')
+    const hookCall=hook==='stringify'?'JSON.stringify({})':'({}).toJSON()'
+    const hookResult=hook==='stringify'?'page-overrode-stringify':'page-prototype-hook'
+    assert.equal((await evaluate(hookCall)).output,'Evaluated: '+JSON.stringify(hookResult))
+    const restore=hook==='stringify'?'JSON.stringify=window.savedStringify':'delete Object.prototype.toJSON'
+    assert.equal((await evaluate('(()=>{'+restore+';return 42})()')).output,'Evaluated: 42')
+    assert.equal((await evaluate('({a:1})')).output,'Evaluated: {"a":1}')
+    await success('browse_close',{tabId:hooked.tabId})
+  }
+  // Also retain the original mutable-page reproductions and restored controls.
+  for(const code of [
+    '(()=>{window.savedStringify=JSON.stringify;JSON.stringify=()=>"page-overrode-stringify";return {a:1}})()',
+    '(()=>{JSON.stringify=window.savedStringify;return {a:1}})()',
+    '(()=>{Object.prototype.toJSON=()=>"page-prototype-hook";return {a:1}})()',
+    '(()=>{delete Object.prototype.toJSON;return {a:1}})()'
+  ]) assert.equal((await evalJS(code)).output,'Evaluated: {"a":1}')
+  if(evaluateOnly) await success('browse_close',{tabId})
+  else {
+    await act('fill',{selector:'#entry',text:'replacement'});assert.equal((await evalJS('({value:document.querySelector("#entry").value,inputs,changes})')).output,'Evaluated: {"value":"replacement","inputs":1,"changes":0}')
+    await act('type',{selector:'#entry',text:'APPEND'});assert.equal((await evalJS('document.querySelector("#entry").value')).output,'Evaluated: "replacementAPPEND"')
+    await act('press',{key:'End'});await act('press',{key:'X'});assert.equal((await evalJS('document.querySelector("#entry").value')).output,'Evaluated: "replacementAPPENDX"')
+    const clickAt=Date.now();await act('click',{selector:'#button'});assert(Date.now()-clickAt>=4800);assert.equal((await evalJS('clicked')).output,'Evaluated: 1')
+    await act('scroll',{y:350});assert.equal((await evalJS('window.scrollY')).output,'Evaluated: 350');await act('scroll',{y:0})
+    await act('wait',{selector:'#later'});await act('wait',{selector:'#hidden',timeout:0});await act('wait',{selector:'aria/Click'})
+    // This compound selector invokes the distinct built-in ARIA query-all binding.
+    await act('wait',{selector:'::-p-aria(Item):nth-of-type(2)'})
+    await act('click',{selector:'::-p-aria(Item):nth-of-type(2)'})
+    assert.equal((await evalJS('window.item')).output,'Evaluated: 2')
+    const fullHeight=Number((await evalJS('Math.max(document.documentElement.scrollHeight,document.body.scrollHeight)')).output.slice('Evaluated: '.length))
+    for(const screenshot of [true,'full',join(root,mode,'must-not-write.png')]){
+      const image=await success('browse_get',{tabId,screenshot}),bytes=Buffer.from(image.inlineData.data,'base64'),meta=await sharp(bytes).metadata()
+      assert.equal(image.mimeType,'image/png');assert.equal(image.sizeBytes,bytes.length);assert.equal(meta.width,800);assert.equal(meta.height,screenshot==='full'?fullHeight:600)
+      rows.at(-1).dimensions={width:meta.width,height:meta.height};delete image.inlineData.data
+      await assert.rejects(access(join(root,mode,'must-not-write.png')))
+    }
+    await evalJS('document.title="Changed"');assert.equal((await success('browse_list',{}))[0].title,'One');assert.equal((await success('browse_get',{tabId})).title,'Changed')
+    await act('goto',{url:origin+'/two'});await act('back');assert.equal((await success('browse_list',{}))[0].url,origin+'/two');assert.equal((await success('browse_get',{tabId})).url,origin+'/one')
+    await act('forward');assert.equal((await success('browse_list',{}))[0].url,origin+'/one');await act('reload');assert.equal((await success('browse_get',{tabId})).url,origin+'/two')
+    const original=sockets.get(mode);original.terminate();await until(()=>sockets.get(mode)!==original,mode+' same-process reconnect',12000);assert.equal((await success('browse_list',{}))[0].id,tabId)
+    const second=await success('browse_open',{url:origin+'/one'});assert.deepEqual((await success('browse_list',{})).map(t=>t.id),[tabId,second.tabId])
+    for(const name of ['browse_get','browse_close','browse_interact'])assert.equal((await take(name,{tabId:'missing',action:'reload'})).type,'tool_call_error')
+    await success('browse_close',{tabId});await success('browse_close',{tabId:second.tabId});assert.deepEqual(await success('browse_list',{}),[])
+    const reopened=await success('browse_open',{url:origin+'/one'});await success('browse_close',{tabId:reopened.tabId})
+  }
+  if(evaluateOnly) await writeFile(join(root,mode+'-evaluate-results.json'),JSON.stringify(rows,null,2))
   const maps=await readFile(`/proc/${item.child.pid}/maps`,'utf8')
   if(mode==='candidate' && process.env.FOXWARM_CLI_EXECUTABLE)assert(!/libcoreclr|libhostfxr/.test(maps),'actual native process has no CLR mapping')
   const processes=await groupProcesses()
   await writeFile(join(root,mode+'-maps.txt'),maps)
   await writeFile(join(root,mode+'-processes.json'),JSON.stringify({active:evidence[mode].activeGroupProcesses,afterLastTab:processes},null,2))
   const exited=once(item.child,'exit');item.child.kill('SIGTERM');await exited
-  console.log(JSON.stringify({mode,operations:rows.length,allElevenActions:true,ariaSingleAndQueryAll:true,pngAndMetadata:true,reconnect:true,native:!!process.env.FOXWARM_CLI_EXECUTABLE && mode==='candidate',noClr:!/libcoreclr|libhostfxr/.test(maps),browser:execFileSync(process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium',['--version'],{encoding:'utf8'}).trim(),processes:processes.map(p=>({pid:p.pid,kind:p.command.match(/--type=([^ ]+)/)?.[1] || (p.command.includes('chromium')?'browser':'cli')}))}))
+  console.log(JSON.stringify({mode,operations:rows.length,evaluateOnly,hostCloneSerialization:true,allElevenActions:!evaluateOnly,ariaSingleAndQueryAll:!evaluateOnly,pngAndMetadata:!evaluateOnly,reconnect:!evaluateOnly,native:!!process.env.FOXWARM_CLI_EXECUTABLE && mode==='candidate',noClr:!/libcoreclr|libhostfxr/.test(maps),browser:execFileSync(process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium',['--version'],{encoding:'utf8'}).trim(),processes:processes.map(p=>({pid:p.pid,kind:p.command.match(/--type=([^ ]+)/)?.[1] || (p.command.includes('chromium')?'browser':'cli')}))}))
 }
 try { for(const mode of modes) await corpus(mode) }
 catch(error){evidence.error=error.stack;throw error}

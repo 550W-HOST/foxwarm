@@ -253,7 +253,7 @@ internal static class OpenAIRequestText
     {
         var seconds = Math.Max(0, duration) / 1000;
         if (seconds >= 1e21)
-            return Foxwarm.Sessions.EcmaNumber.Format(seconds);
+            return EcmaNumber.Format(seconds);
         var bits = (ulong)BitConverter.DoubleToInt64Bits(seconds);
         var exponentBits = (int)((bits >> 52) & 2047);
         var significand = new BigInteger(bits & ((1UL << 52) - 1));

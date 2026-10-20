@@ -10,6 +10,7 @@ Defines and durably writes the active per-Session JSON authority. `SessionAuthor
 
 - `SessionAuthorityDocument.Parse`, `FromNode`, `Load`, `CloneRoot`, and `ValidateMessage` validate version, history, queue, metadata, waits, images, context-block shape, and unsupported catalog/worker fields.
 - `ValidateMessageContent` shares role/parts content checks with historical Archive readers, without active metadata admission. `ValidateMessage` still requires and validates active message metadata, sequence and timestamp. Archive writer admission uses it separately from historical reading and additionally checks row/inner timestamp equality.
+- `EcmaJson` keeps Archive finite/exact-integer admission, CLR decimal rejection, property normalization and writer failure contracts here; only pure finite binary64 formatting is shared through [NodePrimitives](./dotnet-node-primitives.md).
 - `LinuxAtomicJsonFile.Write` and `WritePayload` are the only atomic-file publication primitives used by the authority store. `AtomicJsonWriteStage` is the testable boundary for pre-rename versus post-rename failure classification.
 - `AuthorityCommittedException.AuthorityCommitted` tells callers that the rename happened even if directory sync or a later projection step failed.
 
