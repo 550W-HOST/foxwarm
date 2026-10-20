@@ -796,10 +796,9 @@ function App() {
 
   useEffect(() => {
     const trimmedInstanceName = webUiSettings.instanceName.trim()
-    const titleIcon = webUiSettings.tabIcon.trim() || '🦊'
-    const baseTitle = trimmedInstanceName ? `${trimmedInstanceName} · Foxwarm` : `${titleIcon} Foxwarm`
+    const baseTitle = trimmedInstanceName ? `${trimmedInstanceName} · Foxwarm` : 'Foxwarm'
     document.title = busyCount > 0 ? `[${busyCount} busy] ${baseTitle}` : baseTitle
-  }, [busyCount, webUiSettings.instanceName, webUiSettings.tabIcon])
+  }, [busyCount, webUiSettings.instanceName])
 
   useEffect(() => {
     applyCustomTabIcon(webUiSettings.tabIcon)

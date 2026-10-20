@@ -26,8 +26,6 @@ class FakeSocket extends EventEmitter {
   }
 }
 
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
 function request(terminalId = 'term_test'): http.IncomingMessage {
   return { url: `/api/terminals/stream?terminalId=${terminalId}` } as http.IncomingMessage;
 }
@@ -49,7 +47,8 @@ function dependencies(overrides: Record<string, any> = {}) {
   };
 }
 
-test('terminal stream starts protocol pings only after authentication and successful attach', async () => {
+test('terminal stream starts protocol pings only after authentication and successful attach', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
   const unauthorized = new FakeSocket();
   let unauthorizedAttachCalls = 0;
   await handleTerminalStreamWebSocket(unauthorized as any, request(), dependencies({
@@ -59,7 +58,7 @@ test('terminal stream starts protocol pings only after authentication and succes
       throw new Error('must not attach');
     },
   }));
-  await wait(12);
+  t.mock.timers.tick(15);
   assert.equal(unauthorizedAttachCalls, 0);
   assert.equal(unauthorized.pings, 0);
   assert.deepEqual(unauthorized.closes, [{ code: 1008, reason: 'Unauthorized' }]);
@@ -68,7 +67,7 @@ test('terminal stream starts protocol pings only after authentication and succes
   await handleTerminalStreamWebSocket(failedAttach as any, request(), dependencies({
     attachClient: async () => { throw new Error('missing terminal'); },
   }));
-  await wait(12);
+  t.mock.timers.tick(15);
   assert.equal(failedAttach.pings, 0);
   assert.deepEqual(failedAttach.closes, [{ code: 1008, reason: 'missing terminal' }]);
 
@@ -78,15 +77,15 @@ test('terminal stream starts protocol pings only after authentication and succes
   const handling = handleTerminalStreamWebSocket(delayedAttach as any, request(), dependencies({
     attachClient: () => attachResult,
   }));
-  await wait(12);
+  t.mock.timers.tick(15);
   assert.equal(delayedAttach.pings, 0, 'keepalive must wait for successful attachment');
   finishAttach({
     terminal: { id: 'term_test', nodeId: 'master', shell: '/bin/bash', cwd: '/tmp', cols: 80, rows: 24, createdAt: 1, pid: 2 },
     backlog: '',
   });
   await handling;
-  await wait(12);
-  assert.ok(delayedAttach.pings >= 1);
+  t.mock.timers.tick(15);
+  assert.equal(delayedAttach.pings, 3);
   delayedAttach.emit('close');
 
   const closedDuringAttach = new FakeSocket();
@@ -104,12 +103,13 @@ test('terminal stream starts protocol pings only after authentication and succes
     backlog: '',
   });
   await closedHandling;
-  await wait(12);
+  t.mock.timers.tick(15);
   assert.equal(closedDuringAttach.pings, 0);
   assert.equal(detachCalls, 1, 'a socket closed during attach detaches after attach completes');
 });
 
-test('terminal stream periodically pings an open socket and close detaches without killing the PTY', async () => {
+test('terminal stream periodically pings an open socket and close detaches without killing the PTY', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
   const socket = new FakeSocket();
   let detachCalls = 0;
   let closeCalls = 0;
@@ -123,19 +123,24 @@ test('terminal stream periodically pings an open socket and close detaches witho
   }));
 
   assert.equal(socket.sent[0].type, 'ready');
-  await wait(18);
-  assert.ok(socket.pings >= 2, `expected periodic protocol pings, received ${socket.pings}`);
+  t.mock.timers.tick(4);
+  assert.equal(socket.pings, 0, 'keepalive waits for its first interval');
+  t.mock.timers.tick(1);
+  assert.equal(socket.pings, 1);
+  t.mock.timers.tick(5);
+  assert.equal(socket.pings, 2, 'keepalive repeats on the next interval');
 
   socket.emit('close');
   socket.emit('error', new Error('late duplicate event'));
   const pingsAtClose = socket.pings;
-  await wait(12);
+  t.mock.timers.tick(15);
   assert.equal(socket.pings, pingsAtClose);
   assert.equal(detachCalls, 1);
   assert.equal(closeCalls, 0, 'transport close must not kill the backend PTY');
 });
 
-test('terminal stream error stops keepalive, closed sockets are skipped, and explicit close keeps kill semantics', async () => {
+test('terminal stream error stops keepalive, closed sockets are skipped, and explicit close keeps kill semantics', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
   const closedSocket = new FakeSocket();
   let detachCalls = 0;
   await handleTerminalStreamWebSocket(closedSocket as any, request(), dependencies({
@@ -143,7 +148,7 @@ test('terminal stream error stops keepalive, closed sockets are skipped, and exp
   }));
 
   closedSocket.readyState = WebSocket.CLOSED;
-  await wait(12);
+  t.mock.timers.tick(15);
   assert.equal(closedSocket.pings, 0, 'a closed socket must not be pinged');
   closedSocket.emit('close');
 
@@ -155,12 +160,11 @@ test('terminal stream error stops keepalive, closed sockets are skipped, and exp
   }));
 
   socket.emit('message', Buffer.from(JSON.stringify({ type: 'close' })));
-  await wait(0);
   assert.deepEqual(closeReasons, ['ws-close-message']);
 
   socket.emit('error', new Error('transport failed'));
   const pingsAtError = socket.pings;
-  await wait(12);
+  t.mock.timers.tick(15);
   assert.equal(socket.pings, pingsAtError);
   assert.equal(detachCalls, 2, 'each attached socket detaches exactly once');
 });

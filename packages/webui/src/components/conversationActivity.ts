@@ -102,7 +102,9 @@ export function buildConversationActivitySummary(messages: readonly Message[], h
         const tool = call ? target(call) : { source: 'builtin', name: response.name, args: undefined }
         if (tool.source !== 'builtin') continue
         const output = typeof response.response?.output === 'string' ? response.response.output : ''
-        const sentNotifications = tool.name === 'task' ? argsObject(output)?.sentNotifications : response.response?.sentNotifications
+        // Persisted historical Task receipts keep this fact in a JSON output envelope.
+        const sentNotifications = response.response?.sentNotifications
+          ?? (tool.name === 'task' ? argsObject(output)?.sentNotifications : undefined)
         if (tool.name === 'task') sent += numberFact(sentNotifications)
         if (tool.name === 'create_child_session' && /^Child session created: `[^`]+`/.test(output)) {
           created++

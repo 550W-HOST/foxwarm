@@ -78,8 +78,8 @@ test('Monty assignment preserves caller handoff fields and verifies actual Task 
   }, request => {
     calls.push(request);
     if (request.name === 'create_child_session') return { output: 'Native child receipt', sentNotifications: 1 };
-    if (request.args.action === 'create') return { output: JSON.stringify({ taskId: task.id, sentNotifications: 0 }) };
-    return { output: JSON.stringify({ task }) };
+    if (request.args.action === 'create') return { taskId: task.id, sentNotifications: 0 };
+    return { task };
   });
   assert.equal(result.status, 'completed');
   assert.equal(result.taskId, task.id);

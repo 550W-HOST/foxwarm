@@ -751,14 +751,7 @@ export class WebUIChannel implements Channel {
   hasPresentationSubscribers(sessionId: string): boolean {
     return (this.sseClients.get(sessionId)?.length || 0) > 0 || !!this.realtimeHub?.hasSessionSubscribers(sessionId);
   }
-  private globalSseClients: express.Response[] = []; // Global clients for session list updates
-  private globalSseSessionIds = new WeakMap<express.Response, Set<string>>();
-  private globalSseInitialization = new WeakMap<express.Response, {
-    pending: Map<string, { sessions: any[]; deletedIds: string[] }>;
-    invalidation: string | null;
-    initializing: boolean;
-  }>();
-  private globalSseInvalidationEventId = 0;
+  private sessionListInvalidationEventId = 0;
 
   private async getAuthContext(req: express.Request): Promise<HttpAuthContext | null> {
     return httpServer.getAuthContext(req);
@@ -2739,87 +2732,6 @@ export class WebUIChannel implements Channel {
         }
       });
 
-      // Global SSE endpoint for session list updates
-      httpServerInstance.addRoute({
-        path: '/api/sessions/stream',
-        method: 'GET',
-        handler: async (req: express.Request, res: express.Response) => {
-          // Check token
-          if (!httpServer.checkToken(req)) {
-            logger.warn('Global SSE token validation failed');
-            res.status(401).json({ error: 'Unauthorized' });
-            return;
-          }
-          
-          // Set SSE headers
-          res.setHeader('Content-Type', 'text/event-stream');
-          res.setHeader('Cache-Control', 'no-cache');
-          res.setHeader('Connection', 'keep-alive');
-          res.setHeader('X-Accel-Buffering', 'no');
-          res.flushHeaders();
-          
-          // Add to global clients
-          this.globalSseClients.push(res);
-          const rawSessionIds = req.query.sessionId;
-          const requestedSessionIds = (Array.isArray(rawSessionIds) ? rawSessionIds : rawSessionIds === undefined ? [] : [rawSessionIds])
-            .filter((value): value is string => typeof value === 'string' && !!value && value.length <= 512).slice(0, 100);
-          const subscribedIds = new Set(requestedSessionIds);
-          for (const requestedId of requestedSessionIds) {
-            const resolution = sessionCatalogStore.resolveId(requestedId);
-            if (resolution.kind === 'exact' || resolution.kind === 'alias') subscribedIds.add(resolution.sessionId);
-          }
-          this.globalSseSessionIds.set(res, subscribedIds);
-          const initialization: { pending: Map<string, { sessions: any[]; deletedIds: string[] }>; invalidation: string | null; initializing: boolean } = {
-            pending: new Map(), invalidation: null, initializing: true,
-          };
-          this.globalSseInitialization.set(res, initialization);
-          let closed = false;
-          let keepAliveInterval: NodeJS.Timeout | null = null;
-          req.on('close', () => {
-            if (closed) return;
-            closed = true;
-            if (keepAliveInterval) clearInterval(keepAliveInterval);
-            const index = this.globalSseClients.indexOf(res);
-            if (index !== -1) this.globalSseClients.splice(index, 1);
-          });
-          
-          // Send initial ping
-          res.write('data: {"type":"connected"}\n\n');
-          if (requestedSessionIds.length) {
-            const initial = await queryExactSessions(requestedSessionIds, false);
-            if (closed) return;
-            const mappedInitial = mapBoundedSessionListQueryPayload(initial);
-            const sessions = mappedInitial.results.flatMap((item: any) => item.session ? [item.session] : []);
-            const deletedIds = initial.results.filter(item => !item.session).map(item => item.requestedId);
-            const canonicalSubscriptions = this.globalSseSessionIds.get(res)!;
-            for (const session of sessions) if (typeof session.id === 'string') canonicalSubscriptions.add(session.id);
-            res.write(`data: ${JSON.stringify({ type: 'session-list-delta', sessions, deletedIds })}\n\n`);
-          }
-          initialization.initializing = false;
-          for (const [pendingSessionId, pending] of initialization.pending) {
-            if (!this.globalSseSessionIds.get(res)?.has(pendingSessionId)) continue;
-            res.write(`data: ${JSON.stringify({ type: 'session-list-delta', ...pending })}\n\n`);
-          }
-          initialization.pending.clear();
-          if (initialization.invalidation) {
-            res.write(`data: ${initialization.invalidation}\n\n`);
-            initialization.invalidation = null;
-          }
-          
-          // Keep-alive ping
-          if (closed) return;
-          keepAliveInterval = setInterval(() => {
-            try {
-              res.write(': keep-alive\n\n');
-            } catch (e) {
-              if (keepAliveInterval) clearInterval(keepAliveInterval);
-            }
-          }, 30000);
-          
-          res;
-        },
-      });
-
       // Upload file
       httpServerInstance.addRoute({
         path: '/api/upload',
@@ -3373,19 +3285,6 @@ export class WebUIChannel implements Channel {
 
     const listDelta = session ? [buildWebUiSessionListProjection(runtimeSession === undefined
       ? buildSessionRuntimeSessionDto(session as Session) : session as SessionRuntimeSessionDto)] : [];
-    for (const client of this.globalSseClients) {
-      const initialization = this.globalSseInitialization.get(client);
-      if (initialization?.initializing) {
-        if (this.globalSseSessionIds.get(client)?.has(sessionId)) {
-          initialization.pending.set(sessionId, { sessions: listDelta, deletedIds: session ? [] : [sessionId] });
-        }
-        continue;
-      }
-      if (!this.globalSseSessionIds.get(client)?.has(sessionId)) continue;
-      try { client.write(`data: ${JSON.stringify({ type: 'session-list-delta', sessions: listDelta,
-        deletedIds: session ? [] : [sessionId] })}\n\n`); }
-      catch (e) { logger.error({ err: e, sessionId }, 'Failed to send bounded global Session delta'); }
-    }
     this.realtimeHub?.broadcastSessionListDelta(sessionId, {
       type: 'session-list-delta',
       sessions: listDelta,
@@ -3393,22 +3292,11 @@ export class WebUIChannel implements Channel {
     });
   }
 
-  // Broadcast session list update to all global SSE clients
+  // Invalidate the current WebSocket list consumers without an all-row payload.
   broadcastSessionListUpdate() {
-    if (this.globalSseClients.length > 0 || (this.realtimeHub?.getConnectionCount() || 0) > 0) {
-      const payload = { type: 'sessions-updated', catalogInvalidated: true,
-        eventId: ++this.globalSseInvalidationEventId, presentationRevision: sessionCatalogStore.getPresentationRevision() };
-      const data = JSON.stringify(payload);
-      this.globalSseClients.forEach(client => {
-        const initialization = this.globalSseInitialization.get(client);
-        if (initialization?.initializing) { initialization.invalidation = data; return; }
-        try {
-          client.write(`data: ${data}\n\n`);
-        } catch (e) {
-          logger.error({ err: e }, 'Failed to send session list update');
-        }
-      });
-      this.realtimeHub?.broadcastSessionListInvalidation(payload);
+    if ((this.realtimeHub?.getConnectionCount() || 0) > 0) {
+      this.realtimeHub?.broadcastSessionListInvalidation({ type: 'sessions-updated', catalogInvalidated: true,
+        eventId: ++this.sessionListInvalidationEventId, presentationRevision: sessionCatalogStore.getPresentationRevision() });
     }
   }
 

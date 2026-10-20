@@ -14,8 +14,9 @@ import { executeMainManagementTool, resetMainManagementToolsForTests, shutdownMa
 import { tool_create_child_session as directCreateChildSession } from '../toolsSessionAgent/interSession';
 import { parseToolAuthorizationPolicyBytes, setToolAuthorizationPolicyForTests } from '../toolAuthorization';
 import { parseFoxwarmWrappedContent } from '../utils/promptWrappers';
-
-const readResult = (result: { output: string }): any => JSON.parse(result.output);
+import { convertToAnthropicFormat } from '../llm';
+import { convertToOpenAIFormat, convertToOpenAIResponsesFormat } from '../llmProviders/openai';
+import { formatToolResponsePayload, formatCompactObjectPreview } from '../../packages/shared/dist/toolResponseFormatting';
 
 test('one task builtin has the action enum, no caller-supplied identity, and Main ownership', () => {
   const matches = definitions.filter(def => def.name === 'task');
@@ -44,41 +45,41 @@ test('direct, unified and Worker task calls use exact context identity through M
   let taskId: string;
   try {
     await assert.rejects(() => task({ action: 'list' }, undefined), /active source session/);
-    const created = readResult(await callTool('task', { action: 'create', title: 'Exercise shared task' }, creatorCtx));
+    const created = await callTool('task', { action: 'create', title: 'Exercise shared task' }, creatorCtx);
     taskId = created.taskId;
     assert.equal(created.status, 'open');
     assert.equal(created.ownerSessionId, null);
-    assert.equal(readResult(await task({ action: 'get', taskId }, creatorCtx)).task.createdBySessionId, creator.id);
-    const claimed = readResult(await call_tool({ source: 'builtin', name: 'task', args: { action: 'claim', taskId } }, ownerCtx));
+    assert.equal((await task({ action: 'get', taskId }, creatorCtx)).task.createdBySessionId, creator.id);
+    const claimed = await call_tool({ source: 'builtin', name: 'task', args: { action: 'claim', taskId } }, ownerCtx);
     assert.equal(claimed.ownerSessionId, owner.id);
     assert.equal(claimed.status, 'active');
-    const ownerOnlyTask = readResult(await task({ action: 'create', title: 'Only visible to owner or wider scope' }, ownerCtx)).taskId;
-    const creatorDefaultList = readResult(await task({ action: 'list' }, creatorCtx));
+    const ownerOnlyTask = (await task({ action: 'create', title: 'Only visible to owner or wider scope' }, ownerCtx)).taskId;
+    const creatorDefaultList = await task({ action: 'list' }, creatorCtx);
     assert.deepEqual(creatorDefaultList.tasks.map((entry: any) => entry.id), [taskId], 'direct list defaults to the current Session');
     for (const extra of [{ title: 'unused' }, { taskId: 'unused' }, { ownerSessionId: owner.id }]) {
       await assert.rejects(() => task({ action: 'list', ...extra } as any, creatorCtx), /is not allowed for task list/);
     }
-    const ownerSessionList = readResult(await call_tool({ source: 'builtin', name: 'task', args: { action: 'list', scope: 'current-session' } }, ownerCtx));
+    const ownerSessionList = await call_tool({ source: 'builtin', name: 'task', args: { action: 'list', scope: 'current-session' } }, ownerCtx);
     assert.ok(ownerSessionList.tasks.some((entry: any) => entry.id === taskId));
     assert.ok(ownerSessionList.tasks.some((entry: any) => entry.id === ownerOnlyTask));
-    const unifiedAllList = readResult(await call_tool({ source: 'builtin', name: 'task', args: { action: 'list', scope: 'all' } }, creatorCtx));
+    const unifiedAllList = await call_tool({ source: 'builtin', name: 'task', args: { action: 'list', scope: 'all' } }, creatorCtx);
     assert.ok(unifiedAllList.tasks.some((entry: any) => entry.id === ownerOnlyTask), 'unified list supports the global scope');
     assert.equal(creator.agent, owner.agent, 'the Sessions in this fixture share an Agent');
-    const workerAgentList = readResult(await call_tool({ source: 'builtin', name: 'task', args: { action: 'list', scope: 'current-agent' } }, ownerCtx));
+    const workerAgentList = await call_tool({ source: 'builtin', name: 'task', args: { action: 'list', scope: 'current-agent' } }, ownerCtx);
     assert.ok(workerAgentList.tasks.some((entry: any) => entry.id === taskId));
     assert.ok(workerAgentList.tasks.some((entry: any) => entry.id === ownerOnlyTask), 'Worker list resolves actual Agent catalog membership');
     await task({ action: 'update', taskId, note: 'Creator progress note', notifySession: true }, creatorCtx);
     await task({ action: 'update', taskId, note: 'Working' }, ownerCtx);
     assert.equal(JSON.stringify(creator), creatorBefore);
-    const result = readResult(await task({ action: 'complete', taskId, result: 'Done' }, ownerCtx));
+    const result = await task({ action: 'complete', taskId, result: 'Done' }, ownerCtx);
     assert.equal(result.status, 'completed');
     assert.equal(result.sentNotifications, 1);
-    const inspected = readResult(await task({ action: 'get', taskId }, creatorCtx));
+    const inspected = await task({ action: 'get', taskId }, creatorCtx);
     assert.equal(inspected.task.result, 'Done');
     assert.equal(inspected.notes.find((note: any) => note.text === 'Working').sessionId, owner.id);
     assert.equal(JSON.stringify(creator.history), '[]');
     assert.equal(creator.queue.length, 1);
-    assert.equal(readResult(await task({ action: 'get', taskId }, ownerCtx)).task.completionNotificationStatus, 'sent');
+    assert.equal((await task({ action: 'get', taskId }, ownerCtx)).task.completionNotificationStatus, 'sent');
     assert.equal(JSON.stringify(owner.history), JSON.stringify(JSON.parse(ownerBefore).history));
     assert.equal(owner.queue.length, 1, 'the owner receives the note notification through its queue');
     setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`
@@ -111,10 +112,10 @@ test('shared description edits cross Agent boundaries but task update policy sti
   const outsiderCtx: any = { sessionId: outsider.id, session: outsider, sessionPlacement: 'session-worker', persistCurrentSession: async () => { throw new Error('Task must not persist Session state'); } };
   try {
     assert.notEqual(sessionManager.getSessionCatalog(outsider.id).agent, creator.agent);
-    const taskId = readResult(await task({ action: 'create', title: 'Shared scope', description: 'Original', ownerSessionId: owner.id }, creatorCtx)).taskId;
+    const taskId = (await task({ action: 'create', title: 'Shared scope', description: 'Original', ownerSessionId: owner.id }, creatorCtx)).taskId;
     await task({ action: 'update', taskId, description: 'Creator revision' }, creatorCtx);
     assert.equal(taskService.get(taskId).task.description, 'Creator revision');
-    assert.equal(readResult(await task({ action: 'list' }, outsiderCtx)).tasks.some((entry: any) => entry.id === taskId), false, 'list scope is not an authorization boundary');
+    assert.equal((await task({ action: 'list' }, outsiderCtx)).tasks.some((entry: any) => entry.id === taskId), false, 'list scope is not an authorization boundary');
     await callTool('task', { action: 'update', taskId, description: 'Other Agent revision' }, { sessionId: outsider.id });
     assert.equal(taskService.get(taskId).task.description, 'Other Agent revision');
     const update = { action: 'update', taskId, description: 'Worker revision', note: 'Scope clarified' };
@@ -139,7 +140,7 @@ rules:
     await assert.rejects(() => call_tool({ source: 'builtin', name: 'task', args: update }, outsiderCtx), /denies/i);
     await assert.rejects(() => executeMainManagementTool('task', update, outsiderCtx), /denies/i);
     assert.deepEqual(taskService.get(taskId), before, 'denied calls do not change persisted task fields or notes');
-    assert.equal(readResult(await task({ action: 'get', taskId }, creatorCtx)).task.description, 'Worker revision', 'the action-specific rule does not deny get');
+    assert.equal((await task({ action: 'get', taskId }, creatorCtx)).task.description, 'Worker revision', 'the action-specific rule does not deny get');
   } finally {
     setToolAuthorizationPolicyForTests(undefined);
     await shutdownMainManagementTools();
@@ -155,7 +156,7 @@ test('create_child_session taskId assigns or transfers the real child before del
   const ctx: any = { sessionId: parent.id, session: parent, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
   const children: string[] = [];
   try {
-    const taskId = readResult(await task({ action: 'create', title: 'Child work', description: 'Complete the full child task description.' }, ctx)).taskId;
+    const taskId = (await task({ action: 'create', title: 'Child work', description: 'Complete the full child task description.' }, ctx)).taskId;
     const result: any = await create_child_session({ suffix: 'executor', taskId, message: 'Use the approved implementation path.', afterSend: 'wait' }, ctx);
     const childId = String(result.output ?? result).match(/`([^`]+)`/)![1];
     assert.equal(result.sentNotifications, 1);
@@ -173,8 +174,8 @@ test('create_child_session taskId assigns or transfers the real child before del
     assert.match(assignment.content, /Complete the full child task description\./);
     assert.match(assignment.content, /Use the approved implementation path\./);
     assert.doesNotMatch(assignment.content, /inter-agent/);
-    assert.equal(readResult(await task({ action: 'get', taskId }, ctx)).task.ownerSessionId, childId);
-    assert.match(readResult(await task({ action: 'get', taskId }, ctx)).notes[0].text, new RegExp(childId));
+    assert.equal((await task({ action: 'get', taskId }, ctx)).task.ownerSessionId, childId);
+    assert.match((await task({ action: 'get', taskId }, ctx)).notes[0].text, new RegExp(childId));
     const transferredResult: any = await create_child_session({ suffix: 'replacement', fork: true, taskId, message: 'Continue the transferred task.' }, ctx);
     const transferredId = String(transferredResult.output ?? transferredResult).match(/`([^`]+)`/)![1];
     assert.equal(transferredResult.sentNotifications, 2);
@@ -187,7 +188,7 @@ test('create_child_session taskId assigns or transfers the real child before del
     assert.equal(oldChild.queue[1].trigger, false, 'transferred old owner receives passive ingress');
     assert.equal(replacement.queue.length, 1);
     assert.match(replacement.queue[0].parts?.[0].system || '', new RegExp(`taskId="${taskId}"`));
-    assert.equal(readResult(await task({ action: 'get', taskId }, ctx)).task.ownerSessionId, transferredId);
+    assert.equal((await task({ action: 'get', taskId }, ctx)).task.ownerSessionId, transferredId);
     const count = sessionManager.getAllSessions().size;
     await assert.rejects(() => create_child_session({ suffix: 'forbidden', taskId }, { sessionId: outsider.id, session: outsider }), /creator or owner required/);
     await assert.rejects(() => create_child_session({ suffix: 'missing', taskId: 'missing' }, ctx), /not found/);
@@ -195,7 +196,10 @@ test('create_child_session taskId assigns or transfers the real child before del
     const completion = await executeTools([{ id: 'child-task-complete', name: 'task', args: { action: 'complete', taskId, result: 'Finished delegated work' } }],
       { sessionId: replacement.id, session: replacement }, replacement);
     assert.deepEqual(completion.postActions, { successfulSendToSessionTargets: [parent.id], completedLinkedTask: { taskId, attachedSessionId: transferredId } });
-    assert.equal(readResult(await task({ action: 'get', taskId }, ctx)).task.status, 'completed');
+    assert.deepEqual(completion.message.parts[0].functionResponse.response, {
+      taskId, status: 'completed', ownerSessionId: transferredId, sentNotifications: 1,
+    });
+    assert.equal((await task({ action: 'get', taskId }, ctx)).task.status, 'completed');
     await assert.rejects(() => create_child_session({ suffix: 'terminal', taskId }, ctx), /terminal/);
     assert.equal(sessionManager.getAllSessions().size, count);
   } finally {
@@ -236,19 +240,19 @@ test('real Session moves preserve task owner/creator/attached identities, notifi
   let child: Awaited<ReturnType<typeof sessionManager.getExistingSession>>;
   let raw: DatabaseSync;
   try {
-    const taskId = readResult(await task({ action: 'create', title: 'Linked work across Session moves' }, { sessionId: creator.id })).taskId;
+    const taskId = (await task({ action: 'create', title: 'Linked work across Session moves' }, { sessionId: creator.id })).taskId;
     await task({ action: 'assign', taskId, ownerSessionId: parent.id }, { sessionId: creator.id });
     const created = await create_child_session({ suffix: 'executor', taskId }, { sessionId: parent.id, session: parent });
     child = await sessionManager.getExistingSession(String((created as any).output ?? created).match(/`([^`]+)`/)![1]);
     const ctx = { sessionId: child.id, session: child };
-    const selfId = readResult(await task({ action: 'create', title: 'Self-owned work across rename' }, ctx)).taskId;
+    const selfId = (await task({ action: 'create', title: 'Self-owned work across rename' }, ctx)).taskId;
     await task({ action: 'claim', taskId: selfId }, ctx);
     const legacy = taskService.store.migrateLegacyGoal(child.id, 'Full legacy Goal across rename', 1);
     raw = new DatabaseSync(taskService.store.filePath, { readOnly: true });
     const refs = (id: string): any => raw.prepare('SELECT createdBySessionId,ownerSessionId,attachedSessionId,reminderLastSeq FROM tasks WHERE id=?').get(id);
     const anchor = refs(selfId).reminderLastSeq;
     taskService.store.taskContext(child.id, Array.from({ length: 29 }, (_, i) => anchor + i + 1), false);
-    const transferId = readResult(await task({ action: 'create', title: 'Transfer across aliases' }, { sessionId: creator.id })).taskId;
+    const transferId = (await task({ action: 'create', title: 'Transfer across aliases' }, { sessionId: creator.id })).taskId;
     await task({ action: 'assign', taskId: transferId, ownerSessionId: child.id }, { sessionId: creator.id });
     const oldCreator = creator.id;
     const oldChild = child.id;
@@ -258,7 +262,7 @@ test('real Session moves preserve task owner/creator/attached identities, notifi
     const currentCreator = await sessionManager.getExistingSession(`${prefix}_creator_moved`);
     assert.equal(sessionManager.getSessionCatalog(oldChild)?.id, child.id, 'real old ID remains an alias');
     const currentCtx = { sessionId: child.id, session: child };
-    const projected = readResult(await task({ action: 'get', taskId }, currentCtx));
+    const projected = await task({ action: 'get', taskId }, currentCtx);
     assert.equal(projected.task.createdBySessionId, currentCreator.id);
     assert.equal(projected.task.ownerSessionId, child.id);
     assert.equal(projected.task.attachedSessionId, child.id);
@@ -273,7 +277,7 @@ test('real Session moves preserve task owner/creator/attached identities, notifi
     assert.equal(refs(selfId).ownerSessionId, child.id);
     assert.equal(taskService.store.migrateLegacyGoal(child.id, 'Full legacy Goal across rename', 1).id, legacy.id, 'legacy map is retry-safe across aliases');
     await task({ action: 'assign', taskId: transferId, ownerSessionId: oldCreator, notifySession: true }, { sessionId: currentCreator.id });
-    const transfer = readResult(await task({ action: 'get', taskId: transferId }, { sessionId: currentCreator.id })).task;
+    const transfer = (await task({ action: 'get', taskId: transferId }, { sessionId: currentCreator.id })).task;
     assert.equal(transfer.ownerSessionId, currentCreator.id, 'creator actor and new owner aliases resolve before permission checks');
     assert.equal(transfer.previousOwnerSessionId, child.id);
     assert.equal(transfer.assignmentNotificationStatus, 'skipped');
@@ -309,7 +313,7 @@ test('actual Task notices classify assignment/transfer/release/completion separa
   const triggered: string[] = [];
   sessionManager.setSessionTriggerCallback(id => { triggered.push(id); });
   try {
-    const taskId = readResult(await task({ action: 'create', title: 'Task notifications', ownerSessionId: first.id, notifySession: true }, { sessionId: creator.id })).taskId;
+    const taskId = (await task({ action: 'create', title: 'Task notifications', ownerSessionId: first.id, notifySession: true }, { sessionId: creator.id })).taskId;
     const notice = (session: typeof creator, index: number, event: string, assignment = false): void => {
       const text = session.queue[index].parts[0].system;
       assert.match(text, /^<foxwarm-message type="task"/);
@@ -364,24 +368,24 @@ test('model task mutation receipts stay minimal across direct, unified, Worker a
     return value.taskId as string;
   };
   try {
-    const created = readResult(await task({ action: 'create', title: 'Hidden detail', description: 'Private detail' }, directCtx));
+    const created = await task({ action: 'create', title: 'Hidden detail', description: 'Private detail' }, directCtx);
     const taskId = assertReceipt(created, 'open', null);
-    const claimed = readResult(await call_tool({ source: 'builtin', name: 'task', args: { action: 'claim', taskId } }, workerCtx));
+    const claimed = await call_tool({ source: 'builtin', name: 'task', args: { action: 'claim', taskId } }, workerCtx);
     assertReceipt(claimed, 'active', owner.id);
-    const updated = readResult(await task({ action: 'update', taskId, note: 'Private note' }, workerCtx));
+    const updated = await task({ action: 'update', taskId, note: 'Private note' }, workerCtx);
     assertReceipt(updated, 'active', owner.id);
-    const details = readResult(await task({ action: 'get', taskId }, directCtx));
+    const details = await task({ action: 'get', taskId }, directCtx);
     assert.equal(details.task.title, 'Hidden detail');
     assert.equal(details.task.description, 'Private detail');
     assert.equal(details.notes[0].text, 'Private note');
     await sessionManager.deleteSession(creator.id);
-    const completed = readResult(await task({ action: 'complete', taskId, result: 'Private result' }, workerCtx));
+    const completed = await task({ action: 'complete', taskId, result: 'Private result' }, workerCtx);
     assert.equal(completed.taskId, taskId);
     assert.equal(completed.status, 'completed');
     assert.equal(completed.ownerSessionId, owner.id);
     assert.match(completed.warning, /completion notification could not be delivered/);
     assert.equal(completed.title, undefined);
-    const completedDetails = readResult(await task({ action: 'get', taskId }, workerCtx));
+    const completedDetails = await task({ action: 'get', taskId }, workerCtx);
     assert.equal(completedDetails.task.result, 'Private result');
     assert.equal(completedDetails.task.completionNotificationStatus, 'failed');
   } finally {
@@ -412,19 +416,19 @@ test('owned Task matcher uses canonical Main ownership for direct, Worker, unifi
     ] })));
     const local = { sessionId: owner.id, session: owner };
     const worker: any = { ...local, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
-    assert.equal(readResult(await callTool('task', { action: 'get', taskId: ownedId }, local)).task.ownerSessionId, owner.id);
-    assert.equal(readResult(await task({ action: 'get', taskId: ownedId }, worker)).task.id, ownedId);
-    assert.equal(readResult(await call_tool({ toolId: 'builtin:task', args: { action: 'get', taskId: ownedId } }, worker)).task.id, ownedId);
+    assert.equal((await callTool('task', { action: 'get', taskId: ownedId }, local)).task.ownerSessionId, owner.id);
+    assert.equal((await task({ action: 'get', taskId: ownedId }, worker)).task.id, ownedId);
+    assert.equal((await call_tool({ toolId: 'builtin:task', args: { action: 'get', taskId: ownedId } }, worker)).task.id, ownedId);
     const scripted = await callTool('run_script', { code: `return call_tool("builtin:task", {"action":"get","taskId":"${ownedId}"})` }, worker);
     assert.equal(scripted.status, 'completed');
-    assert.equal(JSON.parse(scripted.result.output).task.id, ownedId);
+    assert.equal(scripted.result.task.id, ownedId);
     for (const taskId of [unownedId, otherId, 'task_missing']) {
       await assert.rejects(() => callTool('task', { action: 'get', taskId }, worker), /authorization rule denies/);
       await assert.rejects(() => callTool('task', { action: 'update', taskId, description: 'must not change' }, worker), /authorization rule denies/);
     }
     await assert.rejects(() => callTool('task', { action: 'claim', taskId: unownedId }, worker), /authorization rule denies/);
     await assert.rejects(() => callTool('task', { action: 'list' }, worker), /authorization rule denies/);
-    const ownedList = readResult(await callTool('task', { action: 'list', scope: 'owned' }, worker));
+    const ownedList = await callTool('task', { action: 'list', scope: 'owned' }, worker);
     assert.deepEqual(ownedList.tasks.map((entry: any) => entry.id), [ownedId]);
     await callTool('task', { action: 'update', taskId: ownedId, note: 'Owner progress' }, worker);
     assert.equal(taskService.get(ownedId).notes.at(-1).text, 'Owner progress');
@@ -434,5 +438,39 @@ test('owned Task matcher uses canonical Main ownership for direct, Worker, unifi
     setToolAuthorizationPolicyForTests(undefined);
     await shutdownMainManagementTools().catch(() => {}); resetMainManagementToolsForTests();
     for (const id of [creator.id, owner.id, outsider.id]) await sessionManager.deleteSession(id).catch(() => false);
+  }
+});
+
+test('native Task receipt, get and list use the standard provider and WebUI YAML presentation', async () => {
+  const session = await sessionManager.getSession(`task_presentation_${Date.now()}`);
+  const ctx = { sessionId: session.id, session };
+  try {
+    const created = await executeTools([{ id: 'task-create', name: 'task', args: {
+      action: 'create', title: 'Structured result', description: 'Detail available through get',
+    } }], ctx, session);
+    const receipt: any = created.message.parts[0].functionResponse.response;
+    assert.deepEqual(Object.keys(receipt).sort(), ['ownerSessionId', 'sentNotifications', 'status', 'taskId']);
+    const inspected = await executeTools([{ id: 'task-get', name: 'call_tool', args: {
+      toolId: 'builtin:task', args: { action: 'get', taskId: receipt.taskId },
+    } }], ctx, session);
+    const listed = await executeTools([{ id: 'task-list', name: 'task', args: { action: 'list' } }], ctx, session);
+    assert.equal((inspected.message.parts[0].functionResponse.response as any).task.description, 'Detail available through get');
+    assert.equal((listed.message.parts[0].functionResponse.response as any).tasks[0].id, receipt.taskId);
+    for (const batch of [created, inspected, listed]) {
+      const response: any = batch.message.parts[0].functionResponse.response;
+      assert.equal(response.output, undefined);
+      assert.equal(response.__toolPostAction, undefined);
+      const text = formatToolResponsePayload(response);
+      assert.match(text, /^[a-zA-Z]+:/, 'native objects use YAML keys, not JSON text');
+      assert.match(text, /\n/);
+      assert.equal(formatCompactObjectPreview(response), text, 'WebUI default preview uses the same structured value');
+      assert.equal(convertToOpenAIFormat([batch.message])[0].content, text);
+      assert.equal(convertToOpenAIResponsesFormat([batch.message])[0].output, text);
+      assert.equal((convertToAnthropicFormat([batch.message], {} as any)[0].content[0] as any).content, text);
+    }
+  } finally {
+    await shutdownMainManagementTools();
+    resetMainManagementToolsForTests();
+    await sessionManager.deleteSession(session.id);
   }
 });
