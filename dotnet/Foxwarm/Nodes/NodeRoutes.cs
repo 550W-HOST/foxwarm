@@ -28,6 +28,8 @@ internal static class NodeRoutes
         );
         var bootstrap = sessions.Bootstrap = new NodeBootstrap(hub, address);
         bootstrap.Register(app);
+        var configuredBaseUrl = Environment.GetEnvironmentVariable("FOXWARM_PUBLIC_BASE_URL")
+            ?? SessionWait.Text(sessions.Models.ConfigurationOwner?.AppConfiguration["url"]);
         app.Map("/node_ws", hub.HandleAsync);
         hub.RegisterShellRoutes(app);
         app.MapGet(
@@ -73,7 +75,7 @@ internal static class NodeRoutes
             (body, _) =>
                 Task.FromResult(
                     bootstrap.Commands(
-                        Text(body, "baseUrl"),
+                        NodeBootstrap.OnboardingBaseUrl(body, configuredBaseUrl),
                         Text(body, "nodeId"),
                         Text(body, "installDir") ?? "/opt/foxwarm-node"
                     )
@@ -113,7 +115,7 @@ internal static class NodeRoutes
             {
                 var id = Required(body, "nodeId");
                 // Validate the URL before issuing a one-time credential.
-                var commands = bootstrap.Commands(Text(body, "baseUrl"), id);
+                var commands = bootstrap.Commands(NodeBootstrap.OnboardingBaseUrl(body, configuredBaseUrl), id);
                 var created = hub.Registry.Create(id);
                 return Task.FromResult(
                     new JsonObject

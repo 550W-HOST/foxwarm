@@ -35,19 +35,7 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
         string directory = "/opt/foxwarm-node"
     )
     {
-        var url = (baseUrl ?? address.BaseUrl).TrimEnd('/');
-        if (
-            !Uri.TryCreate(url, UriKind.Absolute, out var parsed)
-            || parsed.Scheme is not ("http" or "https")
-            || parsed.UserInfo.Length > 0
-            || parsed.Query.Length > 0
-            || parsed.Fragment.Length > 0
-            || url.Contains('\n')
-            || url.Contains('\r')
-        )
-            throw new InvalidDataException(
-                "Enter an HTTP(S) Node host address without credentials, query or fragment."
-            );
+        var url = NormalizeBaseUrl(baseUrl ?? address.BaseUrl);
         var shellId = id ?? "my-shell";
         id ??= "my-node";
         ApprovedNodeRegistry.ValidateId(id);
@@ -104,6 +92,47 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
         };
     }
 
+    // Browser command suggestions and downloaded-script defaults have different owners.
+    internal static string OnboardingBaseUrl(JsonObject body, string? configured)
+    {
+        var raw = body.ContainsKey("baseUrl")
+            ? body["baseUrl"]
+            : configured is not null ? JsonValue.Create(configured) : body["fallbackUrl"];
+        if (raw is not JsonValue value || !value.TryGetValue<string>(out var text))
+            throw new InvalidDataException("Enter an address reachable from the new Node.");
+        return NormalizeBaseUrl(text);
+    }
+
+    private static string NormalizeBaseUrl(string input)
+    {
+        var url = input.Trim();
+        if (
+            url.Any(c => c <= '\x1f' || c == '\x7f')
+            || url.Contains('\\')
+            || url.Contains('?')
+            || url.Contains('#')
+            || !System.Text.RegularExpressions.Regex.IsMatch(url, "^https?://", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+            || !Uri.TryCreate(url, UriKind.Absolute, out var parsed)
+            || parsed.Host.Length == 0
+            || parsed.UserInfo.Length > 0
+        )
+            throw new InvalidDataException(
+                "Enter an HTTP or HTTPS address without a username, password, query, or fragment."
+            );
+        return parsed.AbsoluteUri.TrimEnd('/');
+    }
+
+    internal static string InferRequestBaseUrl(HttpRequest request)
+    {
+        static string? First(string? value) => value?.Split(',')[0].Trim() is { Length: > 0 } first ? first : null;
+        static string? Protocol(string? value) => value?.ToLowerInvariant() is "http" or "https" ? value.ToLowerInvariant() : null;
+        var host = First(request.Headers["X-Forwarded-Host"].FirstOrDefault()) ?? First(request.Headers.Host.FirstOrDefault());
+        if (host is null || !System.Text.RegularExpressions.Regex.IsMatch(host, "^[A-Za-z0-9.\\-:\\[\\]]+$"))
+            return "";
+        var protocol = Protocol(First(request.Headers["X-Forwarded-Proto"].FirstOrDefault())) ?? Protocol(request.Scheme) ?? "http";
+        return protocol + "://" + host;
+    }
+
     internal string ShellCommand(string url, string id, string auth) =>
         "curl -fsSL "
         + Quote(url.TrimEnd('/') + "/node/run-shell.sh")
@@ -153,7 +182,7 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
                         : "text/plain; charset=utf-8";
                     var text = await File.ReadAllTextAsync(path, context.RequestAborted);
                     await context.Response.WriteAsync(
-                        text.Replace("__FOXWARM_DEFAULT_BASE_URL__", address.BaseUrl.TrimEnd('/')),
+                        text.Replace("__FOXWARM_DEFAULT_BASE_URL__", InferRequestBaseUrl(context.Request)),
                         context.RequestAborted
                     );
                 }
