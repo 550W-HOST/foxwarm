@@ -15,6 +15,10 @@ or .NET runtime is bundled.
    **Foxwarm.Desktop.exe**. Keep the DLLs, native assets, templates and `webui-dist`
    directory together. Configure a model/provider in the WebUI's Setup page.
 
+To prepare image, chart or React artifacts, also install Node.js and make `node`
+available on PATH before starting Desktop. The package includes the collected
+compiler and image dependencies, but not the Node runtime itself.
+
 Microsoft downloads:
 - https://dotnet.microsoft.com/download/dotnet/10.0
 - https://developer.microsoft.com/microsoft-edge/webview2/
@@ -52,14 +56,19 @@ The existing WebUI and .NET host provide native Windows PowerShell execution,
 ConPTY terminals and ordinary Monty 0.0.19 ToolScript. Independent exec commands
 survive normal Main shutdown; interactive terminals belong to Main and close
 with it. The same Desktop executable serves the private Code helper before
-UI/single-instance startup. No console apphost/runtimeconfig, Node installation,
-WSL or alternate backend is required. Native Code drive paths use the existing
+UI/single-instance startup. These native tools require no console apphost/runtimeconfig,
+Node installation, WSL or alternate backend. Native Code drive paths use the existing
 Code URI mapping; UNC/device paths are not supported. Connected Nodes retain
 their own capabilities. Chat, setup, file tools and persistent history remain
 available.
 Linux directory-fsync durability is not claimed on Windows. Code workbench
 assets, optional external tools/services and optional HEIF support are not
 supplied by this package. There is no updater, autostart or installer.
+
+Artifact preparation uses a short-lived Node process for validation, raster
+inspection and React compilation. Its Windows esbuild/sharp dependencies and
+fixed WebUI React runtime come from the shared delivery collector. They do not
+host a TypeScript Main backend or execute authored React during compilation.
 
 Optional Vector indexing/search includes the pinned LanceDB native dependency,
 not an embedding service. Configure a compatible embedding endpoint to enable
@@ -90,8 +99,10 @@ the shared assets, publishes Desktop, and removes console-only entry files:
 bash dotnet/scripts/publish-desktop.sh desktop-publish
 ```
 
-The Core project supplies the same WebUI, public skills, templates, Node bootstrap
-and tracked extension resources to Desktop. Missing required built assets fail
+The Core project supplies the same WebUI, public skills, templates, Node bootstrap,
+artifact runtime and tracked extension resources to Desktop. Missing required built assets fail
 publish; a backend-only C# build does not build the frontend. Desktop does not
 ship the console Core CLI or its apphost/runtimeconfig. Do not package application state,
-private configuration, `node_modules`, or .NET runtimes in the desktop ZIP.
+private configuration, source dependency caches or .NET runtimes. Preserve the
+artifact resources selected by the delivery collector, including their required
+`node_modules` directories; do not replace them with the source dependency tree.
