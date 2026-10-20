@@ -58,8 +58,13 @@ internal sealed class MainHost : IAsyncDisposable
         this.host = host;
         this.log = log;
         if (log is not null)
-            Lifetime.ApplicationStarted.Register(() => Console.WriteLine(HttpEnabled
-                ? "Main HTTP listening: " + string.Join(", ", App.Urls) : "Main started without HTTP."));
+            Lifetime.ApplicationStarted.Register(() =>
+                Console.WriteLine(
+                    HttpEnabled
+                        ? "Main HTTP listening: " + string.Join(", ", App.Urls)
+                        : "Main started without HTTP."
+                )
+            );
     }
 
     internal static Task<MainHost> CreateAsync(
@@ -106,23 +111,31 @@ internal sealed class MainHost : IAsyncDisposable
         SessionManager sessions;
         try
         {
-        sessions = new SessionManager(
-            dataRoot,
-            workspaceRoot,
-            options,
-            configuration.Models,
-            paths?.SkillsRoot
-                ?? Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_SKILLS_ROOT"),
-            paths
-        );
+            sessions = new SessionManager(
+                dataRoot,
+                workspaceRoot,
+                options,
+                configuration.Models,
+                paths?.SkillsRoot
+                    ?? Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_SKILLS_ROOT"),
+                paths
+            );
         }
         catch
         {
             log?.Dispose();
             throw;
         }
-        if (log is not null && configuration.AppConfiguration["bot"]?["enableTUI"]?.ToString().Equals("true", StringComparison.OrdinalIgnoreCase) == true)
-            Console.Error.WriteLine("Configured bot.enableTUI is ignored: Main TUI is not implemented by the managed host.");
+        if (
+            log is not null
+            && configuration
+                .AppConfiguration["bot"]
+                ?["enableTUI"]?.ToString()
+                .Equals("true", StringComparison.OrdinalIgnoreCase) == true
+        )
+            Console.Error.WriteLine(
+                "Configured bot.enableTUI is ignored: Main TUI is not implemented by the managed host."
+            );
         TerminalRegistry? terminals = null;
         HttpServer? server = null;
         IHost? headless = null;
@@ -231,7 +244,8 @@ internal sealed class MainHost : IAsyncDisposable
         else
             host.Dispose();
         await sessions.DisposeAsync().ConfigureAwait(false);
-        if (log is not null) Console.WriteLine("Main stopped.");
+        if (log is not null)
+            Console.WriteLine("Main stopped.");
         log?.Dispose();
     }
 }

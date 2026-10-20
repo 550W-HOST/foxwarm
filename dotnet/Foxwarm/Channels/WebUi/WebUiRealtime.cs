@@ -34,7 +34,12 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
         string? logsId = null;
         Action? stopLogs = null;
         LogSubscription? requestedLogs = null;
-        var output = Channel.CreateUnbounded<(long? Revision, JsonObject Data, int Bytes, string? LogsId)>();
+        var output = Channel.CreateUnbounded<(
+            long? Revision,
+            JsonObject Data,
+            int Bytes,
+            string? LogsId
+        )>();
         void Queue(long? expected, JsonObject data, string? topic = null)
         {
             var bytes = Encoding.UTF8.GetByteCount(data.ToJsonString());
@@ -121,8 +126,10 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                 try
                 {
                     lock (gate)
-                        if ((item.Revision is long expected && expected != revision)
-                            || (item.LogsId is not null && item.LogsId != logsId))
+                        if (
+                            (item.Revision is long expected && expected != revision)
+                            || (item.LogsId is not null && item.LogsId != logsId)
+                        )
                             continue;
                     if (BeforeQueuedSend is { } pause)
                         await pause(item.Data, lifetime.Token);
@@ -133,18 +140,34 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                     {
                         lock (gate)
                         {
-                            if (item.Revision == revision && requestedLogs is { } request && logsId is null)
+                            if (
+                                item.Revision == revision
+                                && requestedLogs is { } request
+                                && logsId is null
+                            )
                             {
                                 logsId = request.Id;
-                                stopLogs = logs!.Subscribe(request,
-                                    frame => { if (Volatile.Read(ref logsId) == request.Id) Queue(null, frame, request.Id); },
-                                    () => !lifetime.IsCancellationRequested && socket.State == WebSocketState.Open
-                                        && Interlocked.Read(ref queuedBytes) < WebUiLogFile.SocketBufferBytes);
+                                stopLogs = logs!.Subscribe(
+                                    request,
+                                    frame =>
+                                    {
+                                        if (Volatile.Read(ref logsId) == request.Id)
+                                            Queue(null, frame, request.Id);
+                                    },
+                                    () =>
+                                        !lifetime.IsCancellationRequested
+                                        && socket.State == WebSocketState.Open
+                                        && Interlocked.Read(ref queuedBytes)
+                                            < WebUiLogFile.SocketBufferBytes
+                                );
                             }
                         }
                     }
                 }
-                finally { Interlocked.Add(ref queuedBytes, -item.Bytes); }
+                finally
+                {
+                    Interlocked.Add(ref queuedBytes, -item.Bytes);
+                }
             }
         }
         var pumping = Pump();
@@ -202,9 +225,20 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                     break;
                 }
                 LogSubscription? logRequest;
-                try { logRequest = ParseLogs(input["logs"]); }
-                catch (FormatException error) { await ProtocolError(error.Message); break; }
-                if (logRequest is not null && logs is null) { await ProtocolError("Logs are unavailable."); break; }
+                try
+                {
+                    logRequest = ParseLogs(input["logs"]);
+                }
+                catch (FormatException error)
+                {
+                    await ProtocolError(error.Message);
+                    break;
+                }
+                if (logRequest is not null && logs is null)
+                {
+                    await ProtocolError("Logs are unavailable.");
+                    break;
+                }
                 if (
                     scoped is not null
                     && (
@@ -236,7 +270,12 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                     .ToArray();
                 lock (gate)
                 {
-                    if (logsId != logRequest?.Id) { stopLogs?.Invoke(); stopLogs = null; logsId = null; }
+                    if (logsId != logRequest?.Id)
+                    {
+                        stopLogs?.Invoke();
+                        stopLogs = null;
+                        logsId = null;
+                    }
                     requestedLogs = logRequest;
                     revision = requested;
                     initializing = true;
@@ -298,7 +337,12 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
             runtime.Changed -= Changed;
             runtime.TopologyChanged -= Invalidated;
             lifetime.Cancel();
-            lock (gate) { stopLogs?.Invoke(); stopLogs = null; logsId = null; }
+            lock (gate)
+            {
+                stopLogs?.Invoke();
+                stopLogs = null;
+                logsId = null;
+            }
             output.Writer.TryComplete();
             Task[] work;
             lock (gate)
@@ -495,7 +539,14 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                     foreach (var data in pending)
                         Queue(requested, data);
                     pending.Clear();
-                    Queue(requested, new JsonObject { ["type"] = "subscriptions-applied", ["revision"] = requested });
+                    Queue(
+                        requested,
+                        new JsonObject
+                        {
+                            ["type"] = "subscriptions-applied",
+                            ["revision"] = requested,
+                        }
+                    );
                     initializing = false;
                 }
             }
@@ -536,7 +587,12 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                 attempt.Dispose();
             }
         }
-        async Task Send(JsonObject data, long? expectedRevision = null, string? expectedLogsId = null, bool queued = false)
+        async Task Send(
+            JsonObject data,
+            long? expectedRevision = null,
+            string? expectedLogsId = null,
+            bool queued = false
+        )
         {
             scoped?.Require();
             if (scoped is not null && SessionCatalog.Text(data["sessionId"]) is { } scopedId)
@@ -548,27 +604,39 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
             var bytes = Encoding.UTF8.GetBytes(
                 Foxwarm.Images.ImageTransport.Project(data)!.ToJsonString()
             );
-            if (!queued) Interlocked.Add(ref queuedBytes, bytes.Length);
+            if (!queued)
+                Interlocked.Add(ref queuedBytes, bytes.Length);
             try
             {
-            await sendGate.WaitAsync(lifetime.Token);
-            try
-            {
-                // Recheck at the same barrier that orders snapshots and actual writes.
-                lock (gate)
-                    if ((expectedRevision is long expected && expected != revision)
-                        || (expectedLogsId is not null && expectedLogsId != logsId))
-                        return;
-                scoped?.Require();
-                if (socket.State == WebSocketState.Open)
-                    await socket.SendAsync(bytes, WebSocketMessageType.Text, true, lifetime.Token);
+                await sendGate.WaitAsync(lifetime.Token);
+                try
+                {
+                    // Recheck at the same barrier that orders snapshots and actual writes.
+                    lock (gate)
+                        if (
+                            (expectedRevision is long expected && expected != revision)
+                            || (expectedLogsId is not null && expectedLogsId != logsId)
+                        )
+                            return;
+                    scoped?.Require();
+                    if (socket.State == WebSocketState.Open)
+                        await socket.SendAsync(
+                            bytes,
+                            WebSocketMessageType.Text,
+                            true,
+                            lifetime.Token
+                        );
+                }
+                finally
+                {
+                    sendGate.Release();
+                }
             }
             finally
             {
-                sendGate.Release();
+                if (!queued)
+                    Interlocked.Add(ref queuedBytes, -bytes.Length);
             }
-            }
-            finally { if (!queued) Interlocked.Add(ref queuedBytes, -bytes.Length); }
         }
         async Task ProtocolError(string message)
         {
@@ -579,14 +647,28 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
 
     private static LogSubscription? ParseLogs(JsonNode? raw)
     {
-        if (raw is null) return null;
-        if (raw is not JsonObject obj || obj["id"] is not JsonValue id || !id.TryGetValue<string>(out var text) || text.Length is 0 or > 128)
+        if (raw is null)
+            return null;
+        if (
+            raw is not JsonObject obj
+            || obj["id"] is not JsonValue id
+            || !id.TryGetValue<string>(out var text)
+            || text.Length is 0 or > 128
+        )
             throw new FormatException("Invalid logs subscription.");
         LogCursor? cursor = null;
         if (obj.ContainsKey("cursor"))
         {
-            if (obj["cursor"] is not JsonObject value || value["fileId"] is not JsonValue file || !file.TryGetValue<string>(out var fileId)
-                || fileId.Length is 0 or > 256 || value["offset"] is not JsonValue position || !position.TryGetValue<long>(out var offset) || offset < 0 || offset > 9007199254740991L)
+            if (
+                obj["cursor"] is not JsonObject value
+                || value["fileId"] is not JsonValue file
+                || !file.TryGetValue<string>(out var fileId)
+                || fileId.Length is 0 or > 256
+                || value["offset"] is not JsonValue position
+                || !position.TryGetValue<long>(out var offset)
+                || offset < 0
+                || offset > 9007199254740991L
+            )
                 throw new FormatException("Invalid logs cursor.");
             cursor = new(fileId, offset);
         }

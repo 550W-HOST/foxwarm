@@ -16,19 +16,42 @@ internal static class AppendLogFile
         else if (OperatingSystem.IsWindows())
             handle = CreateFile(path, 4, 7, IntPtr.Zero, 4, 0x80, IntPtr.Zero);
         else
-            throw new PlatformNotSupportedException("Main file logging is supported on Linux and Windows.");
+            throw new PlatformNotSupportedException(
+                "Main file logging is supported on Linux and Windows."
+            );
         if (handle.IsInvalid)
         {
             var error = Marshal.GetLastPInvokeError();
             handle.Dispose();
             throw new IOException(new Win32Exception(error).Message);
         }
-        try { return new FileStream(handle, FileAccess.Write, 1, isAsync: false); }
-        catch { handle.Dispose(); throw; }
+        try
+        {
+            return new FileStream(handle, FileAccess.Write, 1, isAsync: false);
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
+        }
     }
 
     [DllImport("libc", EntryPoint = "open", SetLastError = true)]
     private static extern int OpenLinux(string path, int flags, uint mode);
-    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern SafeFileHandle CreateFile(string path, uint access, uint share, IntPtr security, uint creation, uint attributes, IntPtr template);
+
+    [DllImport(
+        "kernel32.dll",
+        EntryPoint = "CreateFileW",
+        CharSet = CharSet.Unicode,
+        SetLastError = true
+    )]
+    private static extern SafeFileHandle CreateFile(
+        string path,
+        uint access,
+        uint share,
+        IntPtr security,
+        uint creation,
+        uint attributes,
+        IntPtr template
+    );
 }

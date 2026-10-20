@@ -22,16 +22,30 @@ internal sealed class MainLog : IDisposable
     internal static string Destination(ModelConfiguration? configuration, string? dataRoot = null)
     {
         var name = configuration?.AppConfiguration["bot"]?["name"]?.ToString();
-        return Path.Join(configuration?.Paths.DataRoot ?? dataRoot!, "state", "logs", (string.IsNullOrEmpty(name) ? "foxwarm" : name) + ".log");
+        return Path.Join(
+            configuration?.Paths.DataRoot ?? dataRoot!,
+            "state",
+            "logs",
+            (string.IsNullOrEmpty(name) ? "foxwarm" : name) + ".log"
+        );
     }
 
     internal MainLog(ModelConfiguration configuration)
     {
         var path = Destination(configuration);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        file = new StreamWriter(Foxwarm.Tools.AppendLogFile.Open(path), new UTF8Encoding(false)) { AutoFlush = true };
-        var suppress = json || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("FOXWARM_NO_CONSOLE_LOG"));
-        var console = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("FOXWARM_LOG_STDERR")) ? stderr : stdout;
+        file = new StreamWriter(Foxwarm.Tools.AppendLogFile.Open(path), new UTF8Encoding(false))
+        {
+            AutoFlush = true,
+        };
+        var suppress =
+            json
+            || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("FOXWARM_NO_CONSOLE_LOG"));
+        var console = !string.IsNullOrEmpty(
+            Environment.GetEnvironmentVariable("FOXWARM_LOG_STDERR")
+        )
+            ? stderr
+            : stdout;
         output = new Capture(this, suppress ? null : console, false);
         error = new Capture(this, suppress ? null : stderr, true);
         Console.SetOut(output);
@@ -40,13 +54,31 @@ internal sealed class MainLog : IDisposable
 
     private void Record(string line, bool isError)
     {
-        if (failed) return;
+        if (failed)
+            return;
         try
         {
             var now = DateTimeOffset.Now;
-            file.WriteLine(json
-                ? JsonSerializer.Serialize(new { level = isError ? 50 : 30, time = now.ToUnixTimeMilliseconds(), pid = Environment.ProcessId, hostname = Environment.MachineName, msg = line })
-                : "[" + now.ToString("yyyy-MM-dd HH:mm:ss.fff ", CultureInfo.InvariantCulture) + now.ToString("zzz", CultureInfo.InvariantCulture).Replace(":", "") + "] " + (isError ? "ERROR" : "INFO") + ": " + line);
+            file.WriteLine(
+                json
+                    ? JsonSerializer.Serialize(
+                        new
+                        {
+                            level = isError ? 50 : 30,
+                            time = now.ToUnixTimeMilliseconds(),
+                            pid = Environment.ProcessId,
+                            hostname = Environment.MachineName,
+                            msg = line,
+                        }
+                    )
+                    : "["
+                        + now.ToString("yyyy-MM-dd HH:mm:ss.fff ", CultureInfo.InvariantCulture)
+                        + now.ToString("zzz", CultureInfo.InvariantCulture).Replace(":", "")
+                        + "] "
+                        + (isError ? "ERROR" : "INFO")
+                        + ": "
+                        + line
+            );
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -67,8 +99,14 @@ internal sealed class MainLog : IDisposable
             failed = true;
             Console.SetOut(stdout);
             Console.SetError(stderr);
-            try { file.Dispose(); }
-            catch (IOException ex) { stderr.WriteLine("Main file logging failed: " + ex.Message); }
+            try
+            {
+                file.Dispose();
+            }
+            catch (IOException ex)
+            {
+                stderr.WriteLine("Main file logging failed: " + ex.Message);
+            }
         }
     }
 
@@ -76,6 +114,7 @@ internal sealed class MainLog : IDisposable
     {
         private readonly StringBuilder pending = new();
         public override Encoding Encoding => Encoding.UTF8;
+
         public override void Write(char value)
         {
             lock (owner.gate)
@@ -86,18 +125,33 @@ internal sealed class MainLog : IDisposable
                     owner.Record(pending.ToString().TrimEnd('\r'), isError);
                     pending.Clear();
                 }
-                else pending.Append(value);
+                else
+                    pending.Append(value);
             }
         }
+
         public override void Write(string? value)
         {
-            if (value is null) return;
-            lock (owner.gate) foreach (var character in value) Write(character);
+            if (value is null)
+                return;
+            lock (owner.gate)
+                foreach (var character in value)
+                    Write(character);
         }
-        public override void Flush() { lock (owner.gate) console?.Flush(); }
+
+        public override void Flush()
+        {
+            lock (owner.gate)
+                console?.Flush();
+        }
+
         internal void Finish()
         {
-            if (pending.Length > 0) { owner.Record(pending.ToString(), isError); pending.Clear(); }
+            if (pending.Length > 0)
+            {
+                owner.Record(pending.ToString(), isError);
+                pending.Clear();
+            }
             console?.Flush();
         }
     }

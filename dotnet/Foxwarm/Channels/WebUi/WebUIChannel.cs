@@ -16,7 +16,9 @@ internal sealed partial class WebUIChannel(
     WebUiDownloadSignatures downloads
 )
 {
-    private readonly WebUiLogFile logs = new(MainLog.Destination(sessions.Models.ConfigurationOwner, sessions.DataRoot));
+    private readonly WebUiLogFile logs = new(
+        MainLog.Destination(sessions.Models.ConfigurationOwner, sessions.DataRoot)
+    );
     private WebUiRealtime realtime = null!;
     private readonly Foxwarm.Terminal.TerminalRouter terminalRouter = new(
         terminals,

@@ -115,25 +115,27 @@ public sealed class WebUiStartupTests
         {
             if (!quiet)
             {
-            var exited = Process.WaitForExitAsync();
-            await Task.WhenAny(listening.Task, exited).WaitAsync(TimeSpan.FromSeconds(20));
-            if (Process.HasExited || !listening.Task.IsCompletedSuccessfully)
-                throw new InvalidOperationException(await Output());
-            Assert.Equal(
-                Client.BaseAddress!.GetLeftPart(UriPartial.Authority),
-                await listening.Task
-            );
+                var exited = Process.WaitForExitAsync();
+                await Task.WhenAny(listening.Task, exited).WaitAsync(TimeSpan.FromSeconds(20));
+                if (Process.HasExited || !listening.Task.IsCompletedSuccessfully)
+                    throw new InvalidOperationException(await Output());
+                Assert.Equal(
+                    Client.BaseAddress!.GetLeftPart(UriPartial.Authority),
+                    await listening.Task
+                );
             }
             else
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
                 while (true)
                 {
-                    if (Process.HasExited) throw new InvalidOperationException(await Output());
+                    if (Process.HasExited)
+                        throw new InvalidOperationException(await Output());
                     try
                     {
                         using var ping = await Client.GetAsync("/health", timeout.Token);
-                        if (ping.StatusCode is HttpStatusCode.OK or HttpStatusCode.Unauthorized) break;
+                        if (ping.StatusCode is HttpStatusCode.OK or HttpStatusCode.Unauthorized)
+                            break;
                     }
                     catch (HttpRequestException) { }
                     await Task.Delay(25, timeout.Token);
@@ -191,30 +193,41 @@ public sealed class WebUiStartupTests
     [InlineData("FOXWARM_SYNC_FILE_LOG")]
     [InlineData("FOXWARM_NO_CONSOLE_LOG")]
     [InlineData("FOXWARM_LOG_STDERR")]
-    public async Task Real_Main_file_logging_preserves_console_flags_and_natural_final_record(string flag)
+    public async Task Real_Main_file_logging_preserves_console_flags_and_natural_final_record(
+        string flag
+    )
     {
         await using var h = new Host();
         await File.WriteAllTextAsync(h.TokenPath, h.Token);
         h.Start(new() { [flag] = "1" });
         await h.Ready(quiet: true);
         await h.Stop();
-        var text = await File.ReadAllTextAsync(Path.Combine(h.Data, "state", "logs", "foxwarm.log"));
+        var text = await File.ReadAllTextAsync(
+            Path.Combine(h.Data, "state", "logs", "foxwarm.log")
+        );
         if (flag == "FOXWARM_SYNC_FILE_LOG")
         {
-            var records = text.TrimEnd().Split('\n').Select(line => JsonNode.Parse(line)!).ToArray();
+            var records = text.TrimEnd()
+                .Split('\n')
+                .Select(line => JsonNode.Parse(line)!)
+                .ToArray();
             Assert.All(records, record => Assert.True(record["time"]!.GetValue<long>() > 0));
             Assert.Equal("Main stopped.", records[^1]["msg"]!.ToString());
         }
-        else Assert.EndsWith("Main stopped.\n", text);
+        else
+            Assert.EndsWith("Main stopped.\n", text);
         var output = await h.Output();
-        if (flag == "FOXWARM_LOG_STDERR") Assert.Contains("Main HTTP listening:", output);
-        else Assert.DoesNotContain("Main HTTP listening:", output);
+        if (flag == "FOXWARM_LOG_STDERR")
+            Assert.Contains("Main HTTP listening:", output);
+        else
+            Assert.DoesNotContain("Main HTTP listening:", output);
     }
 
     [Fact]
     public async Task Diagnostic_write_failure_does_not_fail_a_committed_http_effect_or_normal_shutdown()
     {
-        if (!OperatingSystem.IsLinux()) return; // Linux's ordinary failing character device.
+        if (!OperatingSystem.IsLinux())
+            return; // Linux's ordinary failing character device.
         await using var h = new Host();
         await File.WriteAllTextAsync(h.TokenPath, h.Token);
         var directory = Path.Combine(h.Data, "state", "logs");
@@ -235,22 +248,51 @@ public sealed class WebUiStartupTests
     {
         await using var h = new Host();
         await File.WriteAllTextAsync(h.TokenPath, h.Token);
-        await File.WriteAllTextAsync(h.ConfigPath, "bot: {name: producer, httpPort: " + h.Port + ", enableTUI: true}\naccess:\n  identities: {alice: {token: synthetic-alice, surfaces: {webui: {sessions: [chat]}}}}\n");
+        await File.WriteAllTextAsync(
+            h.ConfigPath,
+            "bot: {name: producer, httpPort: "
+                + h.Port
+                + ", enableTUI: true}\naccess:\n  identities: {alice: {token: synthetic-alice, surfaces: {webui: {sessions: [chat]}}}}\n"
+        );
         h.Start();
         await h.Ready();
         var destination = Path.Combine(h.Data, "state", "logs", "producer.log");
         var produced = await File.ReadAllTextAsync(destination);
-        Assert.Matches(@"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [+-]\d{4}\] INFO: Main HTTP listening:", produced);
+        Assert.Matches(
+            @"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [+-]\d{4}\] INFO: Main HTTP listening:",
+            produced
+        );
         Assert.Contains("bot.enableTUI is ignored", produced);
-        Assert.True(!produced.Contains("\u001b"), System.Text.Json.JsonSerializer.Serialize(produced));
+        Assert.True(
+            !produced.Contains("\u001b"),
+            System.Text.Json.JsonSerializer.Serialize(produced)
+        );
         using (var denied = new HttpClient { BaseAddress = h.Client.BaseAddress })
         {
-            Assert.Equal(HttpStatusCode.Unauthorized, (await denied.GetAsync("/api/webui/logs")).StatusCode);
+            Assert.Equal(
+                HttpStatusCode.Unauthorized,
+                (await denied.GetAsync("/api/webui/logs")).StatusCode
+            );
             denied.DefaultRequestHeaders.Authorization = new("Bearer", "synthetic-alice");
-            Assert.Equal(HttpStatusCode.Forbidden, (await denied.GetAsync("/api/webui/logs")).StatusCode);
+            Assert.Equal(
+                HttpStatusCode.Forbidden,
+                (await denied.GetAsync("/api/webui/logs")).StatusCode
+            );
         }
-        foreach (var query in new[] { "path=other", "offset=1&offset=2", "direction=before", "offset=9007199254740992", "time=invalid&fileId=stale" })
-            Assert.Equal(HttpStatusCode.BadRequest, (await h.Client.GetAsync("/api/webui/logs?" + query)).StatusCode);
+        foreach (
+            var query in new[]
+            {
+                "path=other",
+                "offset=1&offset=2",
+                "direction=before",
+                "offset=9007199254740992",
+                "time=invalid&fileId=stale",
+            }
+        )
+            Assert.Equal(
+                HttpStatusCode.BadRequest,
+                (await h.Client.GetAsync("/api/webui/logs?" + query)).StatusCode
+            );
         var initial = (await h.Client.GetFromJsonAsync<JsonObject>("/api/webui/logs"))!["window"]!;
         Assert.Contains("Main HTTP listening:", initial["text"]!.ToString());
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -258,14 +300,38 @@ public sealed class WebUiStartupTests
         {
             var socket = new System.Net.WebSockets.ClientWebSocket();
             socket.Options.SetRequestHeader("Authorization", "Bearer " + token);
-            await socket.ConnectAsync(new Uri(h.Client.BaseAddress!.ToString().Replace("http:", "ws:") + "api/webui/stream"), timeout.Token);
+            await socket.ConnectAsync(
+                new Uri(
+                    h.Client.BaseAddress!.ToString().Replace("http:", "ws:") + "api/webui/stream"
+                ),
+                timeout.Token
+            );
             return socket;
         }
-        async Task Subscribe(System.Net.WebSockets.ClientWebSocket socket, long revision, string id, JsonNode? cursor = null)
+        async Task Subscribe(
+            System.Net.WebSockets.ClientWebSocket socket,
+            long revision,
+            string id,
+            JsonNode? cursor = null
+        )
         {
-            var frame = new JsonObject { ["type"] = "set-subscriptions", ["revision"] = revision, ["sessionListActive"] = false, ["sessionListIds"] = new JsonArray(), ["sessionIds"] = new JsonArray(), ["logs"] = new JsonObject { ["id"] = id } };
-            if (cursor is not null) frame["logs"]!["cursor"] = cursor.DeepClone();
-            await socket.SendAsync(Encoding.UTF8.GetBytes(frame.ToJsonString()), System.Net.WebSockets.WebSocketMessageType.Text, true, timeout.Token);
+            var frame = new JsonObject
+            {
+                ["type"] = "set-subscriptions",
+                ["revision"] = revision,
+                ["sessionListActive"] = false,
+                ["sessionListIds"] = new JsonArray(),
+                ["sessionIds"] = new JsonArray(),
+                ["logs"] = new JsonObject { ["id"] = id },
+            };
+            if (cursor is not null)
+                frame["logs"]!["cursor"] = cursor.DeepClone();
+            await socket.SendAsync(
+                Encoding.UTF8.GetBytes(frame.ToJsonString()),
+                System.Net.WebSockets.WebSocketMessageType.Text,
+                true,
+                timeout.Token
+            );
         }
         async Task<JsonObject> Frame(System.Net.WebSockets.ClientWebSocket socket, string type)
         {
@@ -274,9 +340,14 @@ public sealed class WebUiStartupTests
                 using var body = new MemoryStream();
                 var buffer = new byte[8192];
                 System.Net.WebSockets.WebSocketReceiveResult part;
-                do { part = await socket.ReceiveAsync(buffer, timeout.Token); body.Write(buffer, 0, part.Count); } while (!part.EndOfMessage);
+                do
+                {
+                    part = await socket.ReceiveAsync(buffer, timeout.Token);
+                    body.Write(buffer, 0, part.Count);
+                } while (!part.EndOfMessage);
                 var frame = JsonNode.Parse(body.ToArray())!.AsObject();
-                if (frame["type"]!.ToString() == type) return frame;
+                if (frame["type"]!.ToString() == type)
+                    return frame;
             }
         }
         using (var scoped = await Connect("synthetic-alice"))
@@ -291,9 +362,16 @@ public sealed class WebUiStartupTests
             var snapshot = await Frame(socket, "logs-snapshot");
             await File.AppendAllTextAsync(destination, "external writer\n");
             var delta = await Frame(socket, "logs-delta");
-            Assert.Equal(snapshot["window"]!["endOffset"]!.ToString(), delta["window"]!["startOffset"]!.ToString());
+            Assert.Equal(
+                snapshot["window"]!["endOffset"]!.ToString(),
+                delta["window"]!["startOffset"]!.ToString()
+            );
             Assert.Equal("external writer\n", delta["window"]!["text"]!.ToString());
-            frontier = new JsonObject { ["fileId"] = delta["window"]!["fileId"]!.DeepClone(), ["offset"] = delta["window"]!["endOffset"]!.DeepClone() };
+            frontier = new JsonObject
+            {
+                ["fileId"] = delta["window"]!["fileId"]!.DeepClone(),
+                ["offset"] = delta["window"]!["endOffset"]!.DeepClone(),
+            };
             await Subscribe(socket, 2, "logical");
             await Frame(socket, "subscriptions-applied");
             await File.AppendAllTextAsync(destination, "same lifetime\n");
@@ -306,11 +384,22 @@ public sealed class WebUiStartupTests
         using (var resumed = await Connect(h.Token))
         {
             await Subscribe(resumed, 1, "resumed", frontier);
-            Assert.Equal("disconnected\n", (await Frame(resumed, "logs-delta"))["window"]!["text"]!.ToString());
+            Assert.Equal(
+                "disconnected\n",
+                (await Frame(resumed, "logs-delta"))["window"]!["text"]!.ToString()
+            );
             File.Move(destination, destination + ".old");
             await File.WriteAllTextAsync(destination, "replacement\n");
             await Frame(resumed, "logs-reset");
-            Assert.Equal(HttpStatusCode.Conflict, (await h.Client.GetAsync("/api/webui/logs?direction=after&offset=0&fileId=" + Uri.EscapeDataString(frontier["fileId"]!.ToString()))).StatusCode);
+            Assert.Equal(
+                HttpStatusCode.Conflict,
+                (
+                    await h.Client.GetAsync(
+                        "/api/webui/logs?direction=after&offset=0&fileId="
+                            + Uri.EscapeDataString(frontier["fileId"]!.ToString())
+                    )
+                ).StatusCode
+            );
             resumed.Abort();
         }
         await h.Stop();

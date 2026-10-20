@@ -61,7 +61,13 @@ if (
     )
 )
     throw new InvalidOperationException("Configured WebUI dist needs index.html and assets/.");
-await using var host = await MainHost.CreateAsync(args, configuration, http, distRoot, captureDiagnostics: true);
+await using var host = await MainHost.CreateAsync(
+    args,
+    configuration,
+    http,
+    distRoot,
+    captureDiagnostics: true
+);
 if (launcher?.StopRequested.IsCancellationRequested == true)
     return;
 await using var control = WindowsBackgroundControl.Start(background, paths.DataRoot, host.Lifetime);
