@@ -128,3 +128,5 @@ Theme package/selection, layout, navigation, and Code launch choices stay browse
 App stages a selected desktop Chat before replacing its preview, and supplies readable already-loaded Session names to communication cards. See [Session navigation](../threads/webui-session-navigation.md) and [Session messages](./webui-session-messages.md).
 
 Code target parsing/preferences and commit markers use the shared Core Node identity grammar, preserving qualified Provider IDs through encoded workspace/file/commit URLs rather than silently selecting master. This does not add Code capabilities to primitive providers. See [generic Node namespaces](../threads/tool-dispatch-node-execution.md#d-dispatch-generic-node-providers).
+
+Empty browser startup does not invent a `main` Session. With no explicit route, restored tabs or remembered Session, the workbench stays empty; normal explicit/remembered navigation is unchanged. Covered by the fresh-browser native fixture.

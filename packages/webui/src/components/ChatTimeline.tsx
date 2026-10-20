@@ -1,3 +1,5 @@
+import ArtifactView from '../artifacts/ArtifactView'
+import { buildArtifactGroups } from '../artifacts/projection'
 import SessionMessageCard from './SessionMessageCard'
 import SystemEventCard from './SystemEventCard'
 import { getSessionNotice } from '../sessionNotices'
@@ -365,11 +367,12 @@ const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callC
   )
 })
 
-const MarkdownContent = memo(function MarkdownContent({ text, className }: { text: string; className: string }) {
-  const segments = useMemo(() => renderAssistantMarkdownSegments(text), [text])
+const MarkdownContent = memo(function MarkdownContent({ text, className, artifactSessionId, streaming }: { text: string; className: string; artifactSessionId?: string; streaming?: boolean }) {
+  const segments = useMemo(() => renderAssistantMarkdownSegments(text, { enabled: !!artifactSessionId, streaming }), [text, artifactSessionId, streaming])
   return (
     <div className={`min-w-0 max-w-full ${className}`} onClick={handleMarkdownLinkClick}>
       {segments.map((segment) => {
+        if (segment.kind === 'artifact') return artifactSessionId ? <div key={`markdown-token-${segment.tokenIndex}-${segment.reference.artifactId}-${segment.reference.revision}`} data-search-exclude className="not-prose"><ArtifactView reference={segment.reference} sessionId={artifactSessionId} /></div> : null
         if (segment.kind === 'html') {
           return <MarkdownHtmlSegment key={`markdown-token-${segment.tokenIndex}`} html={segment.html} />
         }
@@ -823,7 +826,7 @@ const WebSearchCitationLinks = memo(function WebSearchCitationLinks({ annotation
   )
 })
 
-const AssistantTextCard = memo(function AssistantTextCard({ text, message, annotations, onOpenCodeCommit, searchReveal = false, searchPartIndex, conversation = false, reasoningBadges }: { reasoningBadges?: readonly ReasoningBadgeInfo[]; conversation?: boolean; text: string; message: Message; annotations?: OpenAIResponsesAnnotation[]; onOpenCodeCommit?: OpenCodeCommitHandler; searchReveal?: boolean; searchPartIndex?: number }) {
+const AssistantTextCard = memo(function AssistantTextCard({ text, message, sessionId, annotations, onOpenCodeCommit, searchReveal = false, searchPartIndex, conversation = false, reasoningBadges }: { reasoningBadges?: readonly ReasoningBadgeInfo[]; conversation?: boolean; text: string; message: Message; sessionId: string; annotations?: OpenAIResponsesAnnotation[]; onOpenCodeCommit?: OpenCodeCommitHandler; searchReveal?: boolean; searchPartIndex?: number }) {
   const mobileUi = useMobileChatViewport()
   const [viewMode, setViewMode] = useState<ViewMode>('rendered')
   const displayedViewMode = searchReveal ? 'rendered' : viewMode
@@ -890,6 +893,8 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, annot
               <MarkdownContent
                 key={`markdown-${index}`}
                 text={segment.text}
+                artifactSessionId={sessionId}
+                streaming={!!message.__meta?.streaming}
                 className="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-fw-assistant-code-surface prose-pre:text-fw-assistant-code-text prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
               />
             ) : segment.kind === 'commit' ? (
@@ -1105,7 +1110,7 @@ const MessageRow = memo(function MessageRow({
               if (contextBlock && partIndex === firstTextPartIndex && part.text) {
                 return <ContextBlockCard key={`ctx-block-${contextBlock.id}`} sessionId={sessionId} messageKey={messageKey} block={contextBlock} text={part.text} nestedDepth={nestedDepth} renderNestedMessages={renderNestedMessages} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'ctx' && rowSearchTarget.partIndex === partIndex} />
               }
-              return <AssistantTextCard reasoningBadges={!hideMetrics && row.reasoningPresentation[partIndex]?.target === 'text' ? row.reasoningPresentation[partIndex]?.badges : undefined} conversation={conversationDetails || row.conversationPartIndex !== undefined} key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
+              return <AssistantTextCard sessionId={sessionId} reasoningBadges={!hideMetrics && row.reasoningPresentation[partIndex]?.target === 'text' ? row.reasoningPresentation[partIndex]?.badges : undefined} conversation={conversationDetails || row.conversationPartIndex !== undefined} key={`assistant-text-${partIdx}`} text={part.text || ''} message={msg} annotations={part.providerMeta?.openaiResponses?.annotations} onOpenCodeCommit={onOpenCodeCommit} searchPartIndex={partIndex} searchReveal={rowSearchTarget?.surface === 'model' && rowSearchTarget.partIndex === partIndex} />
             })}
             {(surface !== 'grouped' || msg.role !== 'model') && <ImageParts imageParts={imageParts} keyPrefix={`message-${messageKey}`} />}
             {row.conversationPartIndex === undefined && surface !== 'ordinary' && !collapsedGroup && (interleavedToolGroup && pairedToolResponse ? <InterleavedToolGroup {...toolDisclosure} runningTool={runningTool} msg={msg} nextMsg={pairedToolResponse} messageKeyPrefix={messageKey} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} /> : <ToolCallsBlock {...toolDisclosure} runningTool={runningTool} msg={msg} onOpenCodeFile={onOpenCodeFile} searchTarget={rowSearchTarget} />)}
@@ -1262,7 +1267,7 @@ const TimelineActivity = memo(function TimelineActivity({ row, identityKey, expa
         <ChevronRight size={13} className="-rotate-90" aria-hidden="true"/>Collapse activity
       </button>}
       {showPreview && <div data-conversation-preview data-search-row={row.key} className="min-w-0">
-        <AssistantTextCard conversation text={preview.message.parts[preview.partIndex].text || ''} message={preview.message} searchPartIndex={preview.partIndex} searchReveal={rowProps.searchTarget?.rowKey === row.key} onOpenCodeCommit={rowProps.onOpenCodeCommit} />
+        <AssistantTextCard sessionId={rowProps.sessionId} conversation text={preview.message.parts[preview.partIndex].text || ''} message={preview.message} searchPartIndex={preview.partIndex} searchReveal={rowProps.searchTarget?.rowKey === row.key} onOpenCodeCommit={rowProps.onOpenCodeCommit} />
       </div>}
     </div>
   )
@@ -1409,6 +1414,23 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
   }, [messages, groupedRows, sessionId, nestedDepth, activityDetails])
   const renderReplyFiles = (slot: number) => (replyFileSlots.get(slot) || []).map(group => <ReplyFileGrid key={group.key} files={group.files} />)
 
+  const artifactSlots = useMemo(() => {
+    const slots = new Map<number, ReturnType<typeof buildArtifactGroups>>()
+    if (nestedDepth > 0 || activityDetails) return slots
+    const indices = new Map(messages.map((message, index) => [message, index]))
+    const ends = groupedRows.map(item => {
+      const owned = item.rows.flatMap(row => row.activity?.sources || [row.msg]).map(m => indices.get(m)).filter((n): n is number => n !== undefined)
+      return owned.length ? Math.max(...owned) : Infinity
+    })
+    let slot = -1
+    for (const group of buildArtifactGroups(messages, sessionId)) {
+      while (slot + 1 < ends.length && ends[slot + 1] <= group.endIndex) slot++
+      slots.set(slot, [...slots.get(slot) || [], group])
+    }
+    return slots
+  }, [messages, groupedRows, sessionId, nestedDepth, activityDetails])
+  const renderArtifacts = (slot: number) => (artifactSlots.get(slot) || []).flatMap(group => group.artifacts.map(receipt => <ArtifactView key={`artifact:${receipt.artifactId}:${receipt.revision}`} receipt={receipt} />))
+
   const lastGroup = groupedRows[groupedRows.length - 1]
   const lastRow = lastGroup?.rows[lastGroup.rows.length - 1]
   const footerAlignment = lastRow?.msg.role === 'user' && !lastRow.systemLikeMessage && !lastRow.activity && !lastGroup.group ? 'right' : 'left'
@@ -1418,6 +1440,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
   return (
     <div className="foxwarm-chat-timeline min-w-0 max-w-full">
       {renderReplyFiles(-1)}
+      {renderArtifacts(-1)}
       {groupedRows.flatMap((item, index) => [
         ...(item.rows[0].timeMarker ? [<TimelineTimeSeparator key={`${item.key}-time`} marker={item.rows[0].timeMarker} />] : []),
         item.rows[0].activity
@@ -1426,6 +1449,7 @@ const SessionTimeline = memo(function SessionTimeline({ sessionId, messages, rea
           ? <TimelineGroup key={item.key} group={item.group} rows={item.rows} rowProps={rowProps} onToggle={handleGroupToggle} />
           : <MessageRow key={item.key} row={item.rows[0]} {...rowProps} />,
         ...renderReplyFiles(index),
+        ...renderArtifacts(index),
       ])}
       {renderMessageFooter?.(footerAlignment)}
     </div>

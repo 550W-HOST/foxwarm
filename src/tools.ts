@@ -37,6 +37,7 @@ import {
     tool_create_child_session,
     tool_list_agents,
     tool_task,
+    tool_artifact,
     tool_create_timer,
     tool_list_timers,
     tool_update_timer,
@@ -200,3 +201,5 @@ export const modelFacingDefinitions = definitions
 
 // Re-export utilities used by other modules
 export { resolveMemorySearchOptions };
+
+export const artifact: typeof tool_artifact = (args, ctx) => tool_artifact(args, ctx);

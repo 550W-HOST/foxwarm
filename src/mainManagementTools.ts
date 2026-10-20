@@ -236,3 +236,5 @@ export function resetMainManagementToolsForTests(): void {
 export async function resolveMainAuthorizationTaskTarget(request: { sourceSessionId: string; taskId: string }): Promise<{ ownerSessionId?: string }> {
   return await (await getClient()).call('resolveAuthorizationTaskTarget', request);
 }
+
+export const tool_artifact = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('artifact', args, ctx);
