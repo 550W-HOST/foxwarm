@@ -314,22 +314,11 @@ public sealed partial class NodeFileTransferTests
     }
 
     [Fact]
-    public async Task Transfer_rejects_oversized_write_before_dispatch_and_source_budget_before_decode()
+    public async Task Transfer_charges_source_budget_before_decode()
     {
         await using var f = new Fixture();
         await f.Start();
         var one = await f.Connect("one");
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
-            f.Manager.Nodes.WriteFileAsync(
-                "one",
-                "large",
-                new byte[NodeConnectionHub.FileLimit + 1],
-                false,
-                f.Owner,
-                false,
-                default
-            )
-        );
         var pending = f.Manager.Nodes.ReadFileAsync(
             "one",
             "source.py",

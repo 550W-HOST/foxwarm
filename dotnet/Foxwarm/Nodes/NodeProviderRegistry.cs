@@ -328,7 +328,7 @@ internal sealed partial class NodeProviderRegistry
         var bytes = await TargetFileContent.ReadAsync(
             operations,
             path,
-            NodeConnectionHub.FileLimit,
+            int.MaxValue,
             token,
             beforeMaterialize,
             requireRegular: true
@@ -387,8 +387,6 @@ internal sealed partial class NodeProviderRegistry
     {
         if (!IsProviderNode(node))
             return await native.WriteFileAsync(node, path, bytes, overwrite, owner, ingress, token);
-        if (bytes.Length > NodeConnectionHub.FileLimit)
-            throw new IOException("File exceeds the 50 MiB transfer limit.");
         owner.Entry.RequireIdentityAuthority();
         var operations = await FileOperationsAsync(node, true, null, token);
         await TargetFileContent.WriteAsync(operations, path, bytes, overwrite, token);

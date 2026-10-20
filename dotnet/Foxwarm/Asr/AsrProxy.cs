@@ -10,7 +10,6 @@ internal sealed partial class AsrProxy : IDisposable
 {
     internal const long AudioLimit = 25L * 1024 * 1024;
     internal const int ControlLimit = 16 * 1024;
-    internal const int FrameLimit = 256 * 1024;
     internal const int OutputLimit = 1024 * 1024;
     private const string ServiceError =
         "Speech service is unavailable. Check the service and try again.";

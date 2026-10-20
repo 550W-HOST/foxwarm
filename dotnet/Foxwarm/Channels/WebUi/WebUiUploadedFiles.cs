@@ -25,7 +25,8 @@ internal sealed class UploadPreparationException(
 internal sealed class WebUiUploadedFiles(SessionManager sessions)
 {
     internal const long Limit = 50L * 1024 * 1024;
-    internal string Root => Path.Combine(sessions.DataRoot, "state", "webui-uploads");
+    internal static string StagingRoot => Path.Combine(Path.GetTempPath(), "foxwarm-uploads");
+    internal string Root => StagingRoot;
     internal Func<SessionOwner, string, Task>? BeforeStage { get; set; }
 
     internal static string Mime(string? declared, string filename)

@@ -10,7 +10,7 @@ namespace Foxwarm.Channels.WebUi;
 internal sealed partial class WebUIChannel
 {
     private const long UploadLimit = 50L * 1024 * 1024;
-    private string UploadRoot => Path.Combine(sessions.DataRoot, "state", "webui-uploads");
+    private static string UploadRoot => WebUiUploadedFiles.StagingRoot;
 
     private static string AttachmentMime(string? declared, string filename) =>
         WebUiUploadedFiles.Mime(declared, filename);
@@ -26,13 +26,21 @@ internal sealed partial class WebUIChannel
                     context.Features.Get<IHttpMaxRequestBodySizeFeature>() is
                     { IsReadOnly: false } limit
                 )
-                    limit.MaxRequestBodySize = UploadLimit + 1024 * 1024;
+                    // Source limits each file, not the complete multipart body.
+                    limit.MaxRequestBodySize = null;
                 if (!context.Request.HasFormContentType)
                     return Results.BadRequest(new { error = "A multipart file is required." });
                 try
                 {
                     var scoped = WebUiAccess.Request(context);
-                    var form = await context.Request.ReadFormAsync(context.RequestAborted);
+                    var form = await context.Request.ReadFormAsync(
+                        new FormOptions
+                        {
+                            MultipartBodyLengthLimit = UploadLimit,
+                            ValueLengthLimit = 1024 * 1024,
+                        },
+                        context.RequestAborted
+                    );
                     var uploadSession =
                         form["sessionId"].Count == 1 ? form["sessionId"].ToString().Trim() : "";
                     if (scoped is not null)
@@ -57,7 +65,7 @@ internal sealed partial class WebUIChannel
                     var path = Path.Combine(
                         UploadRoot,
                         Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16))
-                            + (extension.Length <= 16 ? extension : "")
+                            + extension
                     );
                     try
                     {
@@ -74,11 +82,9 @@ internal sealed partial class WebUIChannel
                         {
                             await file.CopyToAsync(output, context.RequestAborted);
                             await output.FlushAsync(context.RequestAborted);
-                            output.Flush(true);
                         }
                         scoped?.Require(uploadSession);
                         scoped?.RegisterUpload(uploadSession, path);
-                        LinuxAtomicJsonFile.LinuxDirectorySync.Sync(UploadRoot);
                     }
                     catch
                     {

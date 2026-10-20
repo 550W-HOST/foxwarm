@@ -8,6 +8,9 @@ namespace Foxwarm.Nodes;
 
 internal sealed partial class NodeConnectionHub : IDisposable
 {
+    // Source's ws server uses its default 100 MiB message budget, including file envelopes.
+    private const int NodeMessageLimit = 100 * 1024 * 1024;
+
     private readonly object gate = new();
     private readonly Dictionary<string, Connection> nodes = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, Connection> pending = new(StringComparer.Ordinal);
@@ -503,7 +506,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
                         return;
                     if (
                         read.MessageType != WebSocketMessageType.Text
-                        || stream.Length + read.Count > FileFrameLimit
+                        || stream.Length + read.Count > NodeMessageLimit
                     )
                         throw new InvalidDataException("Invalid Node message.");
                     stream.Write(buffer, 0, read.Count);

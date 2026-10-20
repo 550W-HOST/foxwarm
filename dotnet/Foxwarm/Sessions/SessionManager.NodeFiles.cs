@@ -100,16 +100,12 @@ internal sealed partial class SessionManager
         );
         if (!WorkspaceTools.RegularFileHandle(stream, path))
             throw new InvalidDataException("Not a regular file: " + raw);
-        if (stream.Length > NodeConnectionHub.FileLimit)
-            throw new InvalidDataException("File exceeds the 50 MiB transfer limit.");
         beforeMaterialize?.Invoke(stream.Length);
         using var buffer = new MemoryStream();
         var chunk = new byte[65536];
         int read;
         while ((read = await stream.ReadAsync(chunk, token)) > 0)
         {
-            if (buffer.Length + read > NodeConnectionHub.FileLimit)
-                throw new InvalidDataException("File exceeds the 50 MiB transfer limit.");
             buffer.Write(chunk, 0, read);
         }
         return new(buffer.ToArray(), path, Path.GetFileName(path));
@@ -125,8 +121,6 @@ internal sealed partial class SessionManager
         CancellationToken token
     )
     {
-        if (bytes.Length > NodeConnectionHub.FileLimit)
-            throw new InvalidDataException("File exceeds the 50 MiB transfer limit.");
         if (node != "master")
         {
             var result = await NodeProviders.WriteFileAsync(
