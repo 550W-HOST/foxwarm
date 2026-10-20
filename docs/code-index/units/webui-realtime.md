@@ -50,7 +50,7 @@ Logs starts after ordinary subscription initialization and does not enter the Se
 
 ## Compatibility
 
-Legacy `/api/sessions/stream` and `/api/sessions/:sessionId/stream` SSE routes remain available for older clients. Current WebUI components do not construct `EventSource`; compatibility SSE does not participate in the page connection-budget guarantee.
+`/api/sessions/:sessionId/stream` remains a public SSE surface used by the shipped Multica bridge, with the ordinary WebUI state and committed `message` envelopes. Current WebUI components do not construct `EventSource`; per-Session SSE does not participate in the page connection-budget guarantee. The obsolete global Session-list SSE route is retired: refreshable WebUI consumers use the multiplexed WebSocket rather than an additional compatibility transport.
 
 ## Tests
 
