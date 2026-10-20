@@ -269,7 +269,10 @@ internal sealed partial class NodeExecManager(
                 script,
                 windows
                     ? NativeExecScripts.Windows
-                    : NativeExecScripts.Unix(ExecNative.SelfCommand) + "\n" + command + (command.EndsWith('\n') ? "" : "\n")
+                    : NativeExecScripts.Unix(ExecNative.SelfCommand)
+                        + "\n"
+                        + command
+                        + (command.EndsWith('\n') ? "" : "\n")
             );
             if (!windows)
                 File.SetUnixFileMode(

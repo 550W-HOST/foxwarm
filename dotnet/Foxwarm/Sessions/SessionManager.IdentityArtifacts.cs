@@ -26,5 +26,4 @@ internal sealed partial class SessionManager
             );
         return canonical;
     }
-
 }

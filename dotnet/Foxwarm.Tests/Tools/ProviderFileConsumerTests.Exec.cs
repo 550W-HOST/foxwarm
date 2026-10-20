@@ -39,7 +39,14 @@ public sealed partial class ProviderFileConsumerTests
 
     private static JsonObject[] ExecRecords(string data) =>
         File.Exists(Path.Combine(data, "state", "running-exec.json"))
-            ? (JsonNode.Parse(File.ReadAllText(Path.Combine(data, "state", "running-exec.json")))!["execs"] as JsonArray ?? []).OfType<JsonObject>().ToArray()
+            ? (
+                JsonNode.Parse(File.ReadAllText(Path.Combine(data, "state", "running-exec.json")))![
+                    "execs"
+                ] as JsonArray
+                ?? []
+            )
+                .OfType<JsonObject>()
+                .ToArray()
             : [];
 
     [Fact]
@@ -61,8 +68,14 @@ public sealed partial class ProviderFileConsumerTests
             f.Owner.Entry.Snapshot().AuthorityEnvelope["cwd"]!.GetValue<string>()
         );
         Assert.DoesNotContain("/proc/", output);
-        var firstOutputReads = (await f.Requests()).Where(value => value["operation"]!.GetValue<string>() == "filesystem"
-            && value["request"]!["path"]!.GetValue<string>().StartsWith("opaque://logs/", StringComparison.Ordinal)).ToArray();
+        var firstOutputReads = (await f.Requests())
+            .Where(value =>
+                value["operation"]!.GetValue<string>() == "filesystem"
+                && value["request"]!["path"]!
+                    .GetValue<string>()
+                    .StartsWith("opaque://logs/", StringComparison.Ordinal)
+            )
+            .ToArray();
         Assert.NotEmpty(firstOutputReads);
         Assert.All(firstOutputReads, value => Assert.Null(value["request"]!["context"]!["cwd"]));
         var raw = await f.Call(
@@ -97,7 +110,6 @@ public sealed partial class ProviderFileConsumerTests
         );
         Assert.Empty(ExecRecords(f.Data));
         Assert.False(Directory.Exists(Path.Combine(f.Data, "state", "exec")));
-
     }
 
     [Fact]
@@ -260,18 +272,24 @@ public sealed partial class ProviderFileConsumerTests
         await Task.Delay(700);
         var page = await f.Call("read", new JsonObject { ["filePath"] = logPath });
         Assert.Contains("late", page["output"]!.GetValue<string>());
-
     }
 
     [Theory]
     [InlineData(20000, false)]
     [InlineData(20001, true)]
-    public async Task Provider_foreground_uses_Source_display_limit_and_original_log(int length, bool shortened)
+    public async Task Provider_foreground_uses_Source_display_limit_and_original_log(
+        int length,
+        bool shortened
+    )
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux())
+            return;
         await using var f = await Fixture.Create();
         Success(await f.Manager.SelectNodeAsync(f.Owner, f.Node));
-        var response = await f.Call("exec", Exec($"python3 -c 'import sys;sys.stdout.write(chr(65)*{length})'"));
+        var response = await f.Call(
+            "exec",
+            Exec($"python3 -c 'import sys;sys.stdout.write(chr(65)*{length})'")
+        );
         Success(response);
         var display = response["output"]!.GetValue<string>();
         Assert.True(display.Length < 22000);
@@ -285,14 +303,19 @@ public sealed partial class ProviderFileConsumerTests
     [Fact]
     public async Task Provider_programmatic_capture_retains_original_control_bytes_without_display_parsing()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux())
+            return;
         await using var f = await Fixture.Create();
         Success(await f.Manager.SelectNodeAsync(f.Owner, f.Node));
-        var response = await f.Call("run_script", new JsonObject
-        {
-            ["code"] = "x = call_tool('exec', {'command': \"python3 -c 'import sys;sys.stdout.buffer.write(bytes([0])*4097)'\"})\n"
-                + "return {'sizeBytes':x['sizeBytes'], 'truncated':x['truncated'], 'complete':x['content'] == '\\u0000'*4097}",
-        });
+        var response = await f.Call(
+            "run_script",
+            new JsonObject
+            {
+                ["code"] =
+                    "x = call_tool('exec', {'command': \"python3 -c 'import sys;sys.stdout.buffer.write(bytes([0])*4097)'\"})\n"
+                    + "return {'sizeBytes':x['sizeBytes'], 'truncated':x['truncated'], 'complete':x['content'] == '\\u0000'*4097}",
+            }
+        );
         Success(response);
         var result = response["result"]!;
         Assert.Equal(4097, result["sizeBytes"]!.GetValue<long>());

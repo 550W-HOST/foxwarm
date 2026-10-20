@@ -8,7 +8,13 @@ namespace Foxwarm.Tools;
 // Helpers run before ordinary client startup, from the same managed or native executable.
 internal static class ExecNative
 {
-    internal static string WindowsPowerShell => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
+    internal static string WindowsPowerShell =>
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe"
+        );
 
     internal static bool Supported => OperatingSystem.IsLinux() || OperatingSystem.IsWindows();
     internal static string SelfCommand => Command(SelfStart());
@@ -16,21 +22,30 @@ internal static class ExecNative
     internal static string Command(ProcessStartInfo start) =>
         string.Join(" ", new[] { start.FileName }.Concat(start.ArgumentList).Select(Quote));
 
-    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("SingleFile", "IL3000", Justification = "Embedded hosts supply an on-disk managed owner; deployed single-file entries use their actual executable.")]
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage(
+        "SingleFile",
+        "IL3000",
+        Justification = "Embedded hosts supply an on-disk managed owner; deployed single-file entries use their actual executable."
+    )]
     internal static ProcessStartInfo SelfStart(System.Reflection.Assembly? owner = null)
     {
-        var process = Environment.ProcessPath
-            ?? throw new IOException("Cannot locate the executable.");
+        var process =
+            Environment.ProcessPath ?? throw new IOException("Cannot locate the executable.");
         var entry = System.Reflection.Assembly.GetEntryAssembly();
         var isOwner = owner is null || entry == owner || entry?.GetName().Name == "Foxwarm.Desktop";
         var dotnet = Path.GetFileNameWithoutExtension(process)
             .Equals("dotnet", StringComparison.OrdinalIgnoreCase);
         var apphost = isOwner && !dotnet;
-        var start = new ProcessStartInfo(apphost || dotnet ? process
-            : Environment.GetEnvironmentVariable("DOTNET_HOST_PATH")
-                ?? Path.Combine(Environment.GetEnvironmentVariable("DOTNET_ROOT")
-                    ?? throw new IOException("The .NET host path is unavailable."),
-                    OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet"));
+        var start = new ProcessStartInfo(
+            apphost || dotnet
+                ? process
+                : Environment.GetEnvironmentVariable("DOTNET_HOST_PATH")
+                    ?? Path.Combine(
+                        Environment.GetEnvironmentVariable("DOTNET_ROOT")
+                            ?? throw new IOException("The .NET host path is unavailable."),
+                        OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet"
+                    )
+        );
         if (!apphost)
             start.ArgumentList.Add(isOwner ? Environment.GetCommandLineArgs()[0] : owner!.Location);
         return start;
@@ -112,12 +127,14 @@ internal static class ExecNative
         }
     }
 
-    internal static ProcessStartInfo Launcher(string script, string cwd, ProcessStartInfo? self = null)
+    internal static ProcessStartInfo Launcher(
+        string script,
+        string cwd,
+        ProcessStartInfo? self = null
+    )
     {
         self ??= SelfStart();
-        var start = OperatingSystem.IsWindows()
-            ? new ProcessStartInfo("powershell.exe")
-            : self;
+        var start = OperatingSystem.IsWindows() ? new ProcessStartInfo("powershell.exe") : self;
         start.UseShellExecute = false;
         start.WorkingDirectory = cwd;
         start.CreateNoWindow = true;

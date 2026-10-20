@@ -146,9 +146,15 @@ internal sealed partial class AgentCatalog
 
     internal IEnumerable<string> ExecLogRoots()
     {
-        if (!canonicalLayout) yield return Path.Combine(workspaceRoot, ".temp", "exec");
+        if (!canonicalLayout)
+            yield return Path.Combine(workspaceRoot, ".temp", "exec");
         foreach (var path in Directory.EnumerateFileSystemEntries(agentRoot))
-            if ((File.GetAttributes(path) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == FileAttributes.Directory)
+            if (
+                (
+                    File.GetAttributes(path)
+                    & (FileAttributes.Directory | FileAttributes.ReparsePoint)
+                ) == FileAttributes.Directory
+            )
                 yield return Path.Combine(path, ".temp", "exec");
     }
 

@@ -5,7 +5,8 @@ using System.Text.RegularExpressions;
 namespace Foxwarm;
 
 // The Source date-directory policy is independent of exec tracking and command lifetime.
-internal sealed class LogRotation(string logsRoot, Func<IEnumerable<string>> execRoots) : IAsyncDisposable
+internal sealed class LogRotation(string logsRoot, Func<IEnumerable<string>> execRoots)
+    : IAsyncDisposable
 {
     private readonly CancellationTokenSource stopping = new();
     private Task? schedule;
@@ -18,7 +19,8 @@ internal sealed class LogRotation(string logsRoot, Func<IEnumerable<string>> exe
         using var timer = new PeriodicTimer(TimeSpan.FromHours(10));
         try
         {
-            while (await timer.WaitForNextTickAsync(stopping.Token)) await RunAsync();
+            while (await timer.WaitForNextTickAsync(stopping.Token))
+                await RunAsync();
         }
         catch (OperationCanceledException) when (stopping.IsCancellationRequested) { }
     }
@@ -28,7 +30,8 @@ internal sealed class LogRotation(string logsRoot, Func<IEnumerable<string>> exe
         await RotateDatedLogsAsync(logsRoot);
         try
         {
-            foreach (var root in execRoots()) await RotateDatedLogsAsync(root);
+            foreach (var root in execRoots())
+                await RotateDatedLogsAsync(root);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
@@ -36,15 +39,31 @@ internal sealed class LogRotation(string logsRoot, Func<IEnumerable<string>> exe
         }
     }
 
-    internal static async Task RotateDatedLogsAsync(string root, int keepDirectories = 3, int keepArchives = 7)
+    internal static async Task RotateDatedLogsAsync(
+        string root,
+        int keepDirectories = 3,
+        int keepArchives = 7
+    )
     {
         try
         {
-            if (!Directory.Exists(root)) return;
-            var dates = Directory.EnumerateFileSystemEntries(root)
-                .Where(path => Regex.IsMatch(Path.GetFileName(path), "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", RegexOptions.CultureInvariant)
-                    && (File.GetAttributes(path) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == FileAttributes.Directory)
-                .OrderByDescending(Path.GetFileName, StringComparer.Ordinal).ToArray();
+            if (!Directory.Exists(root))
+                return;
+            var dates = Directory
+                .EnumerateFileSystemEntries(root)
+                .Where(path =>
+                    Regex.IsMatch(
+                        Path.GetFileName(path),
+                        "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                        RegexOptions.CultureInvariant
+                    )
+                    && (
+                        File.GetAttributes(path)
+                        & (FileAttributes.Directory | FileAttributes.ReparsePoint)
+                    ) == FileAttributes.Directory
+                )
+                .OrderByDescending(Path.GetFileName, StringComparer.Ordinal)
+                .ToArray();
             foreach (var directory in dates.Skip(keepDirectories))
             {
                 var archives = Path.Combine(root, "archives");
@@ -68,12 +87,21 @@ internal sealed class LogRotation(string logsRoot, Func<IEnumerable<string>> exe
                 Directory.Delete(directory, recursive: true);
             }
             var archiveRoot = Path.Combine(root, "archives");
-            if (!Directory.Exists(archiveRoot)) return;
-            var retained = Directory.EnumerateFileSystemEntries(archiveRoot)
-                .Where(path => Path.GetFileName(path).EndsWith(".tar.gz", StringComparison.Ordinal)
-                    && (File.GetAttributes(path) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0)
-                .OrderByDescending(Path.GetFileName, StringComparer.Ordinal).ToArray();
-            foreach (var archive in retained.Skip(keepArchives)) File.Delete(archive);
+            if (!Directory.Exists(archiveRoot))
+                return;
+            var retained = Directory
+                .EnumerateFileSystemEntries(archiveRoot)
+                .Where(path =>
+                    Path.GetFileName(path).EndsWith(".tar.gz", StringComparison.Ordinal)
+                    && (
+                        File.GetAttributes(path)
+                        & (FileAttributes.Directory | FileAttributes.ReparsePoint)
+                    ) == 0
+                )
+                .OrderByDescending(Path.GetFileName, StringComparer.Ordinal)
+                .ToArray();
+            foreach (var archive in retained.Skip(keepArchives))
+                File.Delete(archive);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
@@ -84,7 +112,8 @@ internal sealed class LogRotation(string logsRoot, Func<IEnumerable<string>> exe
     public async ValueTask DisposeAsync()
     {
         stopping.Cancel();
-        if (schedule is not null) await schedule;
+        if (schedule is not null)
+            await schedule;
         stopping.Dispose();
     }
 }

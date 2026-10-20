@@ -23,7 +23,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly AgentMemory memory;
     private readonly Skills skills;
     private readonly LocalExecManager executor;
+
     internal IEnumerable<string> ExecLogRoots() => agents.ExecLogRoots();
+
     private readonly SessionDeletionChannels deletionChannels;
     private readonly CommittedArchiveIdentity archiveIdentities;
     private readonly HttpClient http = new()
@@ -179,7 +181,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
                     current.Registry.Trigger(sessionId);
             },
             ResolveExecLifetime,
-            sessionId => SessionCatalog.Text(Catalog.Get(sessionId)?["agent"]) ?? throw new InvalidDataException("Exec Session membership is missing.")
+            sessionId =>
+                SessionCatalog.Text(Catalog.Get(sessionId)?["agent"])
+                ?? throw new InvalidDataException("Exec Session membership is missing.")
         );
         executor.ResolveProviderBackend = NodeProviders.ResolveExecBackend;
         executor.RemoteIdentityReserved = (session, id) =>

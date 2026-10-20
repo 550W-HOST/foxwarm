@@ -66,7 +66,13 @@ public sealed class MainExecCwdTests
             Path.Combine(work, "tmp"),
             owner.Entry.Snapshot().AuthorityEnvelope["cwd"]!.GetValue<string>()
         );
-        var cwdFile = Assert.Single(Directory.GetFiles(Path.Combine(work, ".temp", "exec"), "*.cwd.txt", SearchOption.AllDirectories));
+        var cwdFile = Assert.Single(
+            Directory.GetFiles(
+                Path.Combine(work, ".temp", "exec"),
+                "*.cwd.txt",
+                SearchOption.AllDirectories
+            )
+        );
         Assert.Equal(Path.Combine(work, "tmp"), (await File.ReadAllTextAsync(cwdFile)).Trim());
         Assert.True(
             JsonNode.DeepEquals(
@@ -185,9 +191,14 @@ public sealed class MainExecCwdTests
         Assert.True(result.Response!["error"] is null, result.Response.ToJsonString());
         Assert.Equal(first, owner.Entry.Snapshot().AuthorityEnvelope["cwd"]!.GetValue<string>());
         await owner.UpdateCwdAsync(work);
-        var record = Assert.Single(JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(data, "state", "running-exec.json")))!["execs"]!.AsArray());
+        var record = Assert.Single(
+            JsonNode.Parse(
+                await File.ReadAllTextAsync(Path.Combine(data, "state", "running-exec.json"))
+            )!["execs"]!.AsArray()
+        );
         var statusPath = record!["statusPath"]!.GetValue<string>();
-        for (var i = 0; i < 150 && !File.Exists(statusPath); i++) await Task.Delay(20);
+        for (var i = 0; i < 150 && !File.Exists(statusPath); i++)
+            await Task.Delay(20);
         Assert.True(File.Exists(statusPath));
         Assert.Equal(
             later,

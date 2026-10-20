@@ -22,12 +22,15 @@ internal static class ExecOutput
 
     internal const string MissingStatusError = "Process exited but no status file was written.";
 
-    internal static string? Text(JsonObject entry, string key) => entry[key] is JsonValue scalar && scalar.TryGetValue<string>(out var text) ? text : null;
+    internal static string? Text(JsonObject entry, string key) =>
+        entry[key] is JsonValue scalar && scalar.TryGetValue<string>(out var text) ? text : null;
 
-    internal static double Number(JsonNode? value) => value is not JsonValue scalar ? double.NaN
+    internal static double Number(JsonNode? value) =>
+        value is not JsonValue scalar ? double.NaN
         : scalar.TryGetValue<double>(out var number) ? number
         : scalar.TryGetValue<long>(out var integer) ? integer
-        : scalar.TryGetValue<int>(out var small) ? small : double.NaN;
+        : scalar.TryGetValue<int>(out var small) ? small
+        : double.NaN;
 
     private const int FullCaptureBytes = 1048576;
     private const string ConversionNote =
@@ -50,22 +53,64 @@ internal static class ExecOutput
             : (seconds, null);
     }
 
-    internal sealed record Files(Func<string, Task<long>> Size, Func<string, long, int, Task<byte[]>> Read);
+    internal sealed record Files(
+        Func<string, Task<long>> Size,
+        Func<string, long, int, Task<byte[]>> Read
+    );
 
     internal static readonly Files NativeFiles = new(
         path => Task.FromResult(new FileInfo(path).Length),
         async (path, offset, count) =>
         {
-            await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 65536, FileOptions.Asynchronous);
+            await using var file = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite,
+                65536,
+                FileOptions.Asynchronous
+            );
             file.Position = offset;
             var bytes = new byte[count];
             await file.ReadExactlyAsync(bytes);
             return bytes;
-        });
+        }
+    );
 
-    private static string TrimSpace(string value) => value.Trim('\u0009', '\u000a', '\u000b', '\u000c', '\u000d', '\u0020', '\u00a0', '\u1680', '\u2000', '\u2001', '\u2002', '\u2003', '\u2004', '\u2005', '\u2006', '\u2007', '\u2008', '\u2009', '\u200a', '\u2028', '\u2029', '\u202f', '\u205f', '\u3000', '\ufeff');
+    private static string TrimSpace(string value) =>
+        value.Trim(
+            '\u0009',
+            '\u000a',
+            '\u000b',
+            '\u000c',
+            '\u000d',
+            '\u0020',
+            '\u00a0',
+            '\u1680',
+            '\u2000',
+            '\u2001',
+            '\u2002',
+            '\u2003',
+            '\u2004',
+            '\u2005',
+            '\u2006',
+            '\u2007',
+            '\u2008',
+            '\u2009',
+            '\u200a',
+            '\u2028',
+            '\u2029',
+            '\u202f',
+            '\u205f',
+            '\u3000',
+            '\ufeff'
+        );
 
-    private static async Task<Capture> CaptureLog(JsonObject entry, bool partial, Files? files = null)
+    private static async Task<Capture> CaptureLog(
+        JsonObject entry,
+        bool partial,
+        Files? files = null
+    )
     {
         try
         {
@@ -148,8 +193,15 @@ internal static class ExecOutput
                 excerpt.Notes
             );
         }
-        catch (Exception error) when (files is not null && !ReferenceEquals(files, NativeFiles)
-            && error is IOException or InvalidOperationException or OperationCanceledException or System.Text.Json.JsonException)
+        catch (Exception error)
+            when (files is not null
+                && !ReferenceEquals(files, NativeFiles)
+                && error
+                    is IOException
+                        or InvalidOperationException
+                        or OperationCanceledException
+                        or System.Text.Json.JsonException
+            )
         {
             return new("(Command output unavailable)", true, false, true);
         }
@@ -240,7 +292,13 @@ internal static class ExecOutput
             lines.Add(warning);
         lines.Add("execId: " + Text(entry, "id"));
         lines.Add(
-            "Elapsed: " + (ExecDuration.Format((now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) - Number(entry["startedAt"])) ?? "unknown")
+            "Elapsed: "
+                + (
+                    ExecDuration.Format(
+                        (now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+                            - Number(entry["startedAt"])
+                    ) ?? "unknown"
+                )
         );
         if (Text(entry, "nodeId") is { Length: > 0 } node && node != "master")
             lines.Add($"Node: `{node}`");
@@ -316,12 +374,21 @@ internal static class ExecOutput
                 }
             }
         }
-        catch (Exception error) when (!charging && files is not null && !ReferenceEquals(files, NativeFiles)
-            && error is IOException or InvalidOperationException or OperationCanceledException or System.Text.Json.JsonException)
+        catch (Exception error)
+            when (!charging
+                && files is not null
+                && !ReferenceEquals(files, NativeFiles)
+                && error
+                    is IOException
+                        or InvalidOperationException
+                        or OperationCanceledException
+                        or System.Text.Json.JsonException
+            )
         {
             result["truncated"] = true;
         }
-        catch (Exception error) when (!charging && error is FileNotFoundException or DirectoryNotFoundException)
+        catch (Exception error)
+            when (!charging && error is FileNotFoundException or DirectoryNotFoundException)
         {
             result["truncated"] = true;
         }

@@ -51,9 +51,7 @@ public sealed partial class ProviderFileConsumerTests
             await f.Requests(),
             value => value["operation"]!.GetValue<string>() == "exec-start"
         );
-        Assert.Empty(
-            ExecRecords(f.Data)
-        );
+        Assert.Empty(ExecRecords(f.Data));
     }
 
     [Fact]
@@ -94,17 +92,10 @@ public sealed partial class ProviderFileConsumerTests
         );
         Success(value);
         await Until(() => Task.FromResult(Volatile.Read(ref attempts) > 0));
-        Assert.Single(
-            ExecRecords(data)
-        );
+        Assert.Single(ExecRecords(data));
         Volatile.Write(ref accept, true);
         await delivered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await Until(() =>
-            Task.FromResult(
-                !ExecRecords(data)
-                    .Any()
-            )
-        );
+        await Until(() => Task.FromResult(!ExecRecords(data).Any()));
         var deliveredCount = Volatile.Read(ref attempts);
         await manager.ExecuteAsync(
             f.Owner.Id,
@@ -113,9 +104,7 @@ public sealed partial class ProviderFileConsumerTests
             backend: backend
         );
         await manager.RetireSessionAsync(f.Owner.Id);
-        Assert.Empty(
-            ExecRecords(data)
-        );
+        Assert.Empty(ExecRecords(data));
         await Until(() => Task.FromResult(File.Exists(f.FilePath("retired-effect"))));
         Assert.Equal(deliveredCount, Volatile.Read(ref attempts));
         Assert.Equal("retired", await File.ReadAllTextAsync(f.FilePath("retired-effect")));
@@ -145,7 +134,9 @@ public sealed partial class ProviderFileConsumerTests
             );
         var path = Path.Combine(data, "state", "running-exec.json");
         var registry = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
-        registry["execs"]![0]!["startedAt"] = DateTimeOffset.UtcNow.AddHours(-25).ToUnixTimeMilliseconds();
+        registry["execs"]![0]!["startedAt"] = DateTimeOffset
+            .UtcNow.AddHours(-25)
+            .ToUnixTimeMilliseconds();
         await File.WriteAllTextAsync(path, registry.ToJsonString());
         var queries = (await f.Requests()).Count(value =>
             value["operation"]!.GetValue<string>() == "exec-poll"
@@ -166,12 +157,7 @@ public sealed partial class ProviderFileConsumerTests
         )
         {
             await recovered.InitializeAsync(id => id == f.Owner.Id);
-            await Until(() =>
-                Task.FromResult(
-                    !ExecRecords(data)
-                        .Any()
-                )
-            );
+            await Until(() => Task.FromResult(!ExecRecords(data).Any()));
             Assert.Equal(
                 queries,
                 (await f.Requests()).Count(value =>

@@ -29,14 +29,19 @@ public sealed class ExecDurationTests
             new JsonObject { ["command"] = "sleep 0.2; printf done" },
             default
         );
-        while (!File.Exists(Path.Combine(temp.Path, "state", "running-exec.json"))) await Task.Delay(5);
-        var meta = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(temp.Path, "state", "running-exec.json")))!["execs"]![0]!;
+        while (!File.Exists(Path.Combine(temp.Path, "state", "running-exec.json")))
+            await Task.Delay(5);
+        var meta = JsonNode.Parse(
+            await File.ReadAllTextAsync(Path.Combine(temp.Path, "state", "running-exec.json"))
+        )!["execs"]![0]!;
         var result = await execution;
         var output = result["output"]!.GetValue<string>();
         var match = Regex.Match(output, @"Duration: (\d+)ms");
         Assert.True(match.Success, output);
         Assert.InRange(int.Parse(match.Groups[1].Value), 180, 950);
-        var status = JsonNode.Parse(await File.ReadAllTextAsync(meta["statusPath"]!.GetValue<string>()))!;
+        var status = JsonNode.Parse(
+            await File.ReadAllTextAsync(meta["statusPath"]!.GetValue<string>())
+        )!;
         var measured =
             DateTimeOffset.Parse(status["finishedAt"]!.GetValue<string>()).ToUnixTimeMilliseconds()
             - meta["startedAt"]!.GetValue<long>();

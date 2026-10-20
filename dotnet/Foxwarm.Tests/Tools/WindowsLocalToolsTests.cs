@@ -29,7 +29,13 @@ public sealed class WindowsLocalToolsTests
         );
         Assert.Contains("snow 雪", first["output"]!.GetValue<string>());
         Assert.Contains("Exit code: 7", first["output"]!.GetValue<string>());
-        var completed = Assert.Single(Directory.GetFiles(Path.Combine(agent, ".temp", "exec"), "*.cwd.txt", SearchOption.AllDirectories));
+        var completed = Assert.Single(
+            Directory.GetFiles(
+                Path.Combine(agent, ".temp", "exec"),
+                "*.cwd.txt",
+                SearchOption.AllDirectories
+            )
+        );
         Assert.Equal(Path.Combine(agent, "tmp"), (await File.ReadAllTextAsync(completed)).Trim());
 
         var marker = Path.Combine(agent, "once.txt");
@@ -64,7 +70,8 @@ public sealed class WindowsLocalToolsTests
             .Value;
         Assert.NotEmpty(execId);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        while (!File.Exists(marker)) await Task.Delay(50, deadline.Token);
+        while (!File.Exists(marker))
+            await Task.Delay(50, deadline.Token);
         await reopened.ReconcileNowAsync();
         Assert.Equal(new[] { "once" }, await File.ReadAllLinesAsync(marker));
     }

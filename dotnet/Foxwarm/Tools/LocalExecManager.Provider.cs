@@ -6,15 +6,36 @@ namespace Foxwarm.Tools;
 internal sealed partial class LocalExecManager
 {
     private ProviderExecBackend ProviderBackend(ExecRecord record) =>
-        (ResolveProviderBackend ?? throw new InvalidOperationException("Execution provider is unavailable."))(record.ProviderId!, record.NodeId);
+        (
+            ResolveProviderBackend
+            ?? throw new InvalidOperationException("Execution provider is unavailable.")
+        )(record.ProviderId!, record.NodeId);
 
-    private async Task<ExecRecord> StartProviderAsync(string session, string id, string command, string? cwd,
-        ProviderExecBackend backend, Action beforeLaunch, CancellationToken hardCancellation)
+    private async Task<ExecRecord> StartProviderAsync(
+        string session,
+        string id,
+        string command,
+        string? cwd,
+        ProviderExecBackend backend,
+        Action beforeLaunch,
+        CancellationToken hardCancellation
+    )
     {
         var receipt = await backend.StartAsync(command, cwd, beforeLaunch, hardCancellation);
-        return new ExecRecord(session, id, command, receipt.Cwd, agentForSession(session), backend.NodeId,
-            receipt.OutputPath, receipt.StartedAt, false, receipt.Pid,
-            ProviderId: backend.ProviderId, Reference: receipt.Reference);
+        return new ExecRecord(
+            session,
+            id,
+            command,
+            receipt.Cwd,
+            agentForSession(session),
+            backend.NodeId,
+            receipt.OutputPath,
+            receipt.StartedAt,
+            false,
+            receipt.Pid,
+            ProviderId: backend.ProviderId,
+            Reference: receipt.Reference
+        );
     }
 
     private Task<JsonObject?> ProviderStatusAsync(ExecRecord record)
@@ -33,10 +54,16 @@ internal sealed partial class LocalExecManager
         try
         {
             var observation = await ProviderBackend(record).PollAsync(record.Reference!);
-            if (observation.Cwd is not null) record.Observation.Cwd = observation.Cwd;
+            if (observation.Cwd is not null)
+                record.Observation.Cwd = observation.Cwd;
             return observation.Status;
         }
-        catch (Exception error) when (error is IOException or InvalidOperationException or System.Text.Json.JsonException)
+        catch (Exception error)
+            when (error
+                    is IOException
+                        or InvalidOperationException
+                        or System.Text.Json.JsonException
+            )
         {
             // An unavailable observation is neither an exit nor permission to replay the command.
             return null;
@@ -56,6 +83,7 @@ internal sealed partial class LocalExecManager
             {
                 token.ThrowIfCancellationRequested();
                 return await files.ReadAsync(path, offset, count, token).WaitAsync(token);
-            });
+            }
+        );
     }
 }

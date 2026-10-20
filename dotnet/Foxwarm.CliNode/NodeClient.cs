@@ -1,6 +1,6 @@
-using Foxwarm.Tools;
 using System.Net.WebSockets;
 using System.Text.Json.Nodes;
+using Foxwarm.Tools;
 
 namespace Foxwarm.CliNode;
 
