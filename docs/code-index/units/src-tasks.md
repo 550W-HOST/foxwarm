@@ -44,7 +44,7 @@ One builtin `task` is default-injected through the existing per-Session authoriz
 
 Exact tool description:
 
-> Create and track a small task shared by Foxwarm Sessions. Use one action at a time to create, list, inspect, claim, update, complete, or cancel a task. The current Session is recorded automatically as the creator and actor; do not use ownerSessionId to identify the caller. When creating a task, you may set ownerSessionId to assign it immediately; use assign only to transfer or release an existing task owner.
+> Create, list, inspect, claim, update, complete, or cancel a shared task. Prefer combining task bookkeeping with related work rather than spending a separate model turn on it. Put independent calls in the same tool batch; use run_script for dependencies, especially creating a task and passing its returned taskId to create_child_session. The current Session supplies the actor identity and is the creator of new tasks; ownerSessionId selects the assignee, not the caller. Set ownerSessionId during create for immediate assignment; use assign to transfer or release an existing owner.
 
 | Parameter | Exact model-facing description |
 |-----------|--------------------------------|

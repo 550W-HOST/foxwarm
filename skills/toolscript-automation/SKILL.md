@@ -5,7 +5,7 @@ description: Use ToolScript when you want one script to orchestrate multiple too
 
 # ToolScript automation
 
-ToolScript runs a constrained Python-like script that drives Foxwarm tools. Use it for a verified, repeatable tool flow with local branching or data handling. Use the normal agent tool loop for short one-off work or when the tool path is not understood yet.
+ToolScript runs a constrained Python-like script that drives Foxwarm tools. Use it for a verified, repeatable tool flow with local branching or data handling. Use the normal agent tool loop for unfamiliar or exploratory work.
 
 ## Quick start
 
@@ -328,6 +328,6 @@ Default VM limits include:
 
 Monty does not expose an allocation-count limit. Memory, recursion, and execution-duration limits remain enforced in its isolated worker process.
 
-ToolScript can repeat side effects quickly. Review paths, commands, write targets, node selection, and retry behavior before running a script. Prefer the normal tool loop when the flow is exploratory or only needs one or two calls.
+ToolScript can repeat side effects quickly. Review paths, commands, write targets, node selection, and retry behavior before running a script. Use ordinary tool calls for a single operation or exploratory work; use a short script when known calls depend on each other, including task creation followed by child creation.
 
 ToolScript does not provide a direct `ask_user(...)` API. Use `ask_agent(...)` and let the owning agent decide how to interact with the user.
