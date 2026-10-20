@@ -158,10 +158,10 @@ and agent-filtered windows. Lifecycle dialogs fetch recursive count/busy
 summaries from the descendant preview route rather than traversing a partial
 client tree.
 
-The global Session SSE remains a catalog invalidation stream and additionally
-accepts a capped repeated exact-ID watch set. It sends immediate bounded list
-projections and later state/deletion deltas only for those IDs; no all-row SSE
-payload or browser-resident complete mirror is introduced. Catalog invalidation
+Multiplexed WebSocket list subscriptions receive bounded initial projections
+and subsequent state/deletion deltas for their subscribed IDs, together with
+catalog invalidations. No all-row payload or browser-resident complete mirror
+is introduced. Catalog invalidation
 refetches the current root/expanded windows through the existing fixed
 1-second-visible/10-second-hidden non-overlap scheduler. Independent request
 generations prevent stale root, child, exact, or search responses from replacing
@@ -171,7 +171,7 @@ Root and expanded-branch windows are replayed atomically through backend page
 caps (100 roots; 20 children and 20 parents per child request). A cursor reset
 or any presentation-revision mismatch across root pages, child batches, or the
 root-to-branch boundary restarts the whole bounded replay from page one, including requested depths
-beyond one page, before any structural publish. Per-row in-memory SSE epochs and
+beyond one page, before any structural publish. Per-row in-memory stream epochs and
 tombstones prevent older HTTP responses from overwriting or reviving newer
 deltas. Exact current/open/watch sets are chunked rather than truncated, for
 both by-ID HTTP queries and multiplexed WebSocket list subscriptions. Ordinary busy-descendant badges

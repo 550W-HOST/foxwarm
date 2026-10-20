@@ -61,7 +61,7 @@ This physical-connection boundary is required for correctness, not only efficien
 - [2026-06-25] Streaming diagnostics should capture provider raw SSE without changing parsing semantics: collectors expose raw chunk/block callbacks, while the request/logging layer decides how much to retain and where to serialize it.
 - [2026-06-04] WebUI `model-stream-update` remains WebUI/SSE-oriented and should not be reused directly for WeWork stream-card updates. WeWork uses lower-frequency turn-level `channelTurnProgress` broadcasts resolved against its adapter-local latest active conversation card, so card updates can show `🤔 thinking` and batch tool status without token-level churn or history pollution.
 - [2026-06-05] For WeWork stream cards, an LLM response that has both model text and tool calls should be emitted as one turn-level progress/card update carrying both text and `⌛️` running tools. This avoids a separate text update being delayed ahead of the tool-status update, especially in WebSocket mode where stream pushes are ack-serialized.
-- [2026-07-15] WebUI's per-session stream carries both transient model/tool events and canonical session-state snapshots. Initial history plus the subscription-time snapshot closes the fetch/subscribe race; reconnect re-fetches only that session, while global session-list SSE remains independent.
+- [2026-07-15] WebUI's per-session stream carries both transient model/tool events and canonical session-state snapshots. Initial history plus the subscription-time snapshot closes the fetch/subscribe race; reconnect re-fetches only that session. Session-list updates have their own logical subscriptions on the page WebSocket.
 
 ### D-streaming-delta-and-bootstrap
 
