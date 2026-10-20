@@ -2849,7 +2849,11 @@ export class WebUIChannel implements Channel {
 
             const declaredSessionId = typeof req.query?.sessionId === 'string' ? req.query.sessionId.trim() : '';
             const preAuth = await this.getAuthContext(req);
-            if (preAuth?.role === 'webui' && declaredSessionId && !this.webUiCanAccessSession(preAuth, declaredSessionId)) {
+            if (!preAuth || (preAuth.role === 'webui' && !declaredSessionId)) {
+              res.status(!preAuth ? 401 : 400).json({ error: 'WebUI identity upload requires a bound sessionId.' });
+              return;
+            }
+            if (preAuth.role === 'webui' && !this.webUiCanAccessSession(preAuth, declaredSessionId)) {
               res.status(403).json({ error: 'Forbidden: WebUI identity is not bound to this session', code: 'WEBUI_SESSION_NOT_ALLOWED' });
               return;
             }

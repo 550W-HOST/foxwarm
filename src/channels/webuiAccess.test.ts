@@ -180,15 +180,38 @@ test('authenticated multipart uploads preserve files and clean rejected or inter
     await withWebUiServer(accessConfig, async (baseUrl, _adminToken, webUiToken) => {
       const upload = (token: string | undefined, sessionId: string, field = 'file') => {
         const form = new FormData();
-        form.append('sessionId', sessionId);
         form.append(field, new Blob(['attachment contents']), '中文附件.txt');
-        return fetch(`${baseUrl}/api/upload`, {
+        return fetch(`${baseUrl}/api/upload?sessionId=${encodeURIComponent(sessionId)}`, {
           method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form,
         });
       };
       assert.equal((await upload(undefined, bound)).status, 401);
       assert.equal((await upload(webUiToken, 'unbound-session')).status, 403);
       assert.equal((await upload(webUiToken, bound, 'unexpected')).status, 400);
+      const legacyForm = new FormData();
+      legacyForm.append('sessionId', bound);
+      legacyForm.append('file', new Blob(['legacy attachment']), 'legacy.txt');
+      assert.equal((await fetch(`${baseUrl}/api/upload`, {
+        method: 'POST', headers: { Authorization: `Bearer ${webUiToken}` }, body: legacyForm,
+      })).status, 400);
+      const headersOnly = (query: string, contentLength: number) => new Promise<number>((resolve, reject) => {
+        const request = http.request(`${baseUrl}/api/upload${query}`, {
+          method: 'POST', headers: {
+            Authorization: `Bearer ${webUiToken}`,
+            'Content-Type': 'multipart/form-data; boundary=upload-test-boundary',
+            'Content-Length': contentLength,
+          },
+        }, response => {
+          response.resume();
+          response.on('end', () => { resolve(response.statusCode!); request.destroy(); });
+        });
+        request.on('error', reject);
+        request.setTimeout(2000, () => request.destroy(new Error('Upload waited for body before rejecting headers')));
+        request.flushHeaders();
+      });
+      assert.equal(await headersOnly('?sessionId=unbound-session', 1024), 403);
+      assert.equal(await headersOnly('', 1024), 400);
+      assert.equal(await headersOnly(`?sessionId=${encodeURIComponent(bound)}`, 1024 ** 3 + 1), 413);
       assert.deepEqual((await fs.readdir(uploadDir)).sort(), originalFiles);
 
       const accepted = await upload(webUiToken, bound);
@@ -202,7 +225,7 @@ test('authenticated multipart uploads preserve files and clean rejected or inter
         await fs.remove(file.path);
       }
 
-      const request = http.request(`${baseUrl}/api/upload`, {
+      const request = http.request(`${baseUrl}/api/upload?sessionId=${encodeURIComponent(bound)}`, {
         method: 'POST', headers: {
           Authorization: `Bearer ${webUiToken}`,
           'Content-Type': 'multipart/form-data; boundary=upload-test-boundary',
