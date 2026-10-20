@@ -177,7 +177,7 @@ test('authenticated multipart uploads preserve files and clean rejected or inter
     assert.fail('Upload files did not settle');
   };
   try {
-    await withWebUiServer(accessConfig, async (baseUrl, _adminToken, webUiToken) => {
+    await withWebUiServer(accessConfig, async (baseUrl, adminToken, webUiToken) => {
       const upload = (token: string | undefined, sessionId: string, field = 'file') => {
         const form = new FormData();
         form.append(field, new Blob(['attachment contents']), '中文附件.txt');
@@ -211,8 +211,27 @@ test('authenticated multipart uploads preserve files and clean rejected or inter
       });
       assert.equal(await headersOnly('?sessionId=unbound-session', 1024), 403);
       assert.equal(await headersOnly('', 1024), 400);
+      assert.equal(await headersOnly('?sessionId=a&sessionId=b', 1024), 400);
       assert.equal(await headersOnly(`?sessionId=${encodeURIComponent(bound)}`, 1024 ** 3 + 1), 413);
       assert.deepEqual((await fs.readdir(uploadDir)).sort(), originalFiles);
+
+      // Administrators keep the Session-less path used by the current Chat.
+      const adminForm = new FormData();
+      adminForm.append('file', new Blob(['administrator attachment']), 'admin.txt');
+      const adminUpload = await fetch(`${baseUrl}/api/upload`, {
+        method: 'POST', headers: { Authorization: `Bearer ${adminToken}` }, body: adminForm,
+      });
+      assert.equal(adminUpload.status, 200);
+      const adminFile = await adminUpload.json() as { path: string };
+      await fs.remove(adminFile.path);
+
+      // A multipart field cannot override or supply the query's authority.
+      const spoofedForm = new FormData();
+      spoofedForm.append('sessionId', bound);
+      spoofedForm.append('file', new Blob(['attachment']), 'spoofed.txt');
+      assert.equal((await fetch(`${baseUrl}/api/upload?sessionId=unbound-session`, {
+        method: 'POST', headers: { Authorization: `Bearer ${webUiToken}` }, body: spoofedForm,
+      })).status, 403);
 
       const accepted = await upload(webUiToken, bound);
       assert.equal(accepted.status, 200);

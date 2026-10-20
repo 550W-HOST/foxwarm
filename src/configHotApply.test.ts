@@ -2,6 +2,7 @@ import './testEnvironment';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'fs-extra';
+import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -157,7 +158,38 @@ test('Setup and Worker set_config share live WebUI/MCP identities without resett
     sockets.push(alphaSocket);
     const rotatedClose = once(alphaSocket, 'close');
     const oldMcpSession = alpha.transport.sessionId!;
-    await save(raw('rotated-token', [bound]));
+    // Hold a real multipart request open across token rotation. Preauthorization
+    // does not replace the existing authorization check after body ingestion.
+    const spoolDir = path.join(os.tmpdir(), 'foxwarm-uploads');
+    const existingSpool = new Set(await fs.readdir(spoolDir));
+    const inFlightUpload = http.request(`${base}/api/upload?sessionId=${encodeURIComponent(bound)}`, {
+      method: 'POST', headers: {
+        ...headers('alpha-token'), 'Content-Type': 'multipart/form-data; boundary=revoked-upload',
+      },
+    });
+    const inFlightResponse = new Promise<number>((resolve, reject) => {
+      inFlightUpload.once('error', reject);
+      inFlightUpload.once('response', response => {
+        response.resume();
+        response.once('end', () => resolve(response.statusCode!));
+      });
+    });
+    try {
+      inFlightUpload.write('--revoked-upload\r\nContent-Disposition: form-data; name="file"; filename="in-flight.txt"\r\n\r\n');
+      inFlightUpload.write(Buffer.alloc(64 * 1024, 'a'));
+      const deadline = Date.now() + 5000;
+      while (!(await fs.readdir(spoolDir)).some(name => !existingSpool.has(name))) {
+        assert.ok(Date.now() < deadline, 'Multipart upload did not reach the owned spool');
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      await save(raw('rotated-token', [bound]));
+      inFlightUpload.end('\r\n--revoked-upload--\r\n');
+      assert.equal(await inFlightResponse, 401);
+      const remainingSpool = [...existingSpool].filter(name => name !== path.basename(uploadedFile.path)).sort();
+      assert.deepEqual((await fs.readdir(spoolDir)).sort(), remainingSpool, 'Rotation removes completed uploads and rejects the in-flight file');
+    } finally {
+      inFlightUpload.destroy();
+    }
     await rotatedClose;
     assert.equal((await history('alpha-token', bound)).status, 401);
     assert.equal((await history('rotated-token', bound)).status, 200);
