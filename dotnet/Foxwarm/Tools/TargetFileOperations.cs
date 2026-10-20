@@ -55,7 +55,9 @@ internal static class TargetFileContent
         var offset = 0;
         while (true)
         {
-            var requested = boundRequests ? (int)Math.Min(chunkSize, limit + 1 - offset) : chunkSize;
+            var requested = boundRequests
+                ? (int)Math.Min(chunkSize, limit + 1 - offset)
+                : chunkSize;
             var chunk = await operations.ReadAsync(path, offset, requested, token);
             if (chunk.Length > bytes.Length - offset)
                 throw new IOException("Source file changed or returned incomplete data.");

@@ -152,7 +152,11 @@ internal sealed partial class SessionManager
             else if (!IsMasterBrowser(resolved.Source, resolved.Name, resolved.ExecutionNode))
                 RequireNodeBoundary(owner, resolved.ExecutionNode);
         }
-        if (resolved.Source == "builtin" && resolved.Name == "artifact" && ToolRegistry.ArtifactFileSource(resolved.Args))
+        if (
+            resolved.Source == "builtin"
+            && resolved.Name == "artifact"
+            && ToolRegistry.ArtifactFileSource(resolved.Args)
+        )
             RequireFileNodeBoundary(owner, resolved.ExecutionNode);
         if (resolved.Source == "builtin" && resolved.Name is "run_script" or "start_toolscript_run")
             RequireFileNodeBoundary(owner, resolved.ExecutionNode);
@@ -165,7 +169,9 @@ internal sealed partial class SessionManager
             resolved.ExecutionNode != "master"
             && (
                 resolved.Source == "node"
-                || resolved.Source == "builtin" && resolved.Name == "artifact" && ToolRegistry.ArtifactFileSource(resolved.Args)
+                || resolved.Source == "builtin"
+                    && resolved.Name == "artifact"
+                    && ToolRegistry.ArtifactFileSource(resolved.Args)
                 || resolved.Source == "builtin"
                     && resolved.Name
                         is "send_file"
@@ -177,8 +183,15 @@ internal sealed partial class SessionManager
             resolved.Source == "builtin" && resolved.Name == "copy_between_nodes"
                 ? CopyAuthorizationPaths(owner, resolved.Args)
             : remote ? RemoteAuthorizationPaths(resolved)
-            : resolved.Source == "builtin" && resolved.Name == "artifact" && ToolRegistry.ArtifactFileSource(resolved.Args)
-                ? (files ?? throw new NotSupportedException("This executor has no physical path resolver.")).AuthorizationFacts("read", resolved.Args)
+            : resolved.Source == "builtin"
+            && resolved.Name == "artifact"
+            && ToolRegistry.ArtifactFileSource(resolved.Args)
+                ? (
+                    files
+                    ?? throw new NotSupportedException(
+                        "This executor has no physical path resolver."
+                    )
+                ).AuthorizationFacts("read", resolved.Args)
             : resolved.Source == "node"
                 && resolved.Name is "read" or "write" or "edit" or "apply_patch" or "exec"
             || resolved.Source == "builtin"

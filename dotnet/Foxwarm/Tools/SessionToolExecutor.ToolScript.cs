@@ -150,8 +150,14 @@ internal sealed partial class SessionToolExecutor
                             new System.Text.UTF8Encoding(false, true).GetString(sourceBytes)
                         );
                     }
-                    var transferred = await ReadResidentSourceAsync(node, file, cwd, files, currentToken,
-                        size => budget.Charge(checked(8L * size)));
+                    var transferred = await ReadResidentSourceAsync(
+                        node,
+                        file,
+                        cwd,
+                        files,
+                        currentToken,
+                        size => budget.Charge(checked(8L * size))
+                    );
                     return (
                         transferred.Path,
                         new System.Text.UTF8Encoding(false, true).GetString(transferred.Bytes)

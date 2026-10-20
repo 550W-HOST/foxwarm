@@ -24,7 +24,8 @@ internal sealed partial class SessionToolExecutor(
             resolved,
             resolved.Name is "run_script" or "start_toolscript_run"
                     ? invocation.Value?.ScriptSource?.Files ?? Files
-                : resolved.Name == "artifact" && ToolRegistry.ArtifactFileSource(resolved.Args) ? ArtifactFiles(resolved.ExecutionNode)
+                : resolved.Name == "artifact" && ToolRegistry.ArtifactFileSource(resolved.Args)
+                    ? ArtifactFiles(resolved.ExecutionNode)
                 : resolved.Name == "exec" ? ExecFiles
                 : Files,
             token

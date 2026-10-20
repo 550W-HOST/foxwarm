@@ -4,7 +4,10 @@ namespace Foxwarm.Tools;
 
 internal static class ArtifactToolDefinition
 {
-    internal static JsonObject Definition() => JsonNode.Parse("""
+    internal static JsonObject Definition() =>
+        JsonNode
+            .Parse(
+                """
 {
   "name": "artifact",
   "description": "Prepare or publish an immutable image, chart or sandboxed React artifact in the current Session. prepare returns a marker for insertion between prose paragraphs without showing a separate card; publish shows a standalone reply card; send_file remains a separate file-delivery action. Load data-visualization or react-artifacts skill for manifest formats. The manifest JSON contains all data/source files; no external URLs or arbitrary dependencies. Revisions leave prior replies unchanged.",
@@ -65,5 +68,7 @@ internal static class ArtifactToolDefinition
     ]
   }
 }
-""")!.AsObject();
+"""
+            )!
+            .AsObject();
 }
