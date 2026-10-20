@@ -92,7 +92,8 @@ public sealed class WebUiUploadedFilesTests
         public async ValueTask DisposeAsync()
         {
             await Manager.DisposeAsync();
-            if (Directory.Exists(Staging)) Directory.Delete(Staging, recursive: true);
+            if (Directory.Exists(Staging))
+                Directory.Delete(Staging, recursive: true);
             Temp.Dispose();
         }
     }

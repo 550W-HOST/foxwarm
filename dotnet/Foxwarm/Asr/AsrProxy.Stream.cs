@@ -50,7 +50,9 @@ internal sealed partial class AsrProxy
                 var frame = await downstream.ReceiveAsync(buffer, lifetime.Token);
                 if (frame.MessageType == WebSocketMessageType.Close)
                     return;
-                pending.Writer.TryWrite(new(frame.MessageType, buffer[..frame.Count], frame.EndOfMessage));
+                pending.Writer.TryWrite(
+                    new(frame.MessageType, buffer[..frame.Count], frame.EndOfMessage)
+                );
             }
         }
         var fromClient = ReceiveClient();
@@ -65,7 +67,10 @@ internal sealed partial class AsrProxy
                 {
                     await upstream.SendAsync(frame.Bytes, frame.Type, frame.End, lifetime.Token);
                 }
-                finally { upstreamWrites.Release(); }
+                finally
+                {
+                    upstreamWrites.Release();
+                }
             }
         }
         async Task ReceiveService()
@@ -80,9 +85,17 @@ internal sealed partial class AsrProxy
                 await downstreamWrites.WaitAsync(lifetime.Token);
                 try
                 {
-                    await downstream.SendAsync(buffer.AsMemory(0, frame.Count), frame.MessageType, frame.EndOfMessage, lifetime.Token);
+                    await downstream.SendAsync(
+                        buffer.AsMemory(0, frame.Count),
+                        frame.MessageType,
+                        frame.EndOfMessage,
+                        lifetime.Token
+                    );
                 }
-                finally { downstreamWrites.Release(); }
+                finally
+                {
+                    downstreamWrites.Release();
+                }
             }
         }
         var toService = SendToService();
@@ -99,7 +112,8 @@ internal sealed partial class AsrProxy
                 closeReason = upstream.CloseStatusDescription;
             }
         }
-        catch (Exception error) when (error is HttpRequestException or WebSocketException or OperationCanceledException)
+        catch (Exception error)
+            when (error is HttpRequestException or WebSocketException or OperationCanceledException)
         {
             if (!context.RequestAborted.IsCancellationRequested && !stopped.IsCancellationRequested)
             {
@@ -111,7 +125,12 @@ internal sealed partial class AsrProxy
         {
             // This is only a bounded close handshake, never a recording/finalization deadline.
             using var closing = new CancellationTokenSource(TimeSpan.FromSeconds(1));
-            async Task CloseOutput(WebSocket socket, SemaphoreSlim writes, WebSocketCloseStatus status, string? reason)
+            async Task CloseOutput(
+                WebSocket socket,
+                SemaphoreSlim writes,
+                WebSocketCloseStatus status,
+                string? reason
+            )
             {
                 try
                 {
@@ -121,9 +140,13 @@ internal sealed partial class AsrProxy
                         if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
                             await socket.CloseOutputAsync(status, reason, closing.Token);
                     }
-                    finally { writes.Release(); }
+                    finally
+                    {
+                        writes.Release();
+                    }
                 }
-                catch (Exception error) when (error is WebSocketException or OperationCanceledException) { }
+                catch (Exception error)
+                    when (error is WebSocketException or OperationCanceledException) { }
             }
             await Task.WhenAll(
                 CloseOutput(downstream, downstreamWrites, closeStatus, closeReason),
@@ -133,8 +156,16 @@ internal sealed partial class AsrProxy
             pending.Writer.TryComplete();
             upstream.Abort();
             downstream.Abort();
-            try { await Task.WhenAll(fromClient, toService, fromService); }
-            catch (Exception error) when (error is HttpRequestException or WebSocketException or OperationCanceledException) { }
+            try
+            {
+                await Task.WhenAll(fromClient, toService, fromService);
+            }
+            catch (Exception error)
+                when (error
+                        is HttpRequestException
+                            or WebSocketException
+                            or OperationCanceledException
+                ) { }
         }
     }
 }

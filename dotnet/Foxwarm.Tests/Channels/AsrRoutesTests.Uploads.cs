@@ -18,17 +18,30 @@ public sealed partial class AsrRoutesTests
         var path = upload["path"]!.ToString();
         try
         {
-            Assert.Equal(Path.Combine(Path.GetTempPath(), "foxwarm-uploads"), Path.GetDirectoryName(path));
+            Assert.Equal(
+                Path.Combine(Path.GetTempPath(), "foxwarm-uploads"),
+                Path.GetDirectoryName(path)
+            );
             Assert.Equal(".abcdefghijklmnopqrstuvwx", Path.GetExtension(path));
             Assert.False(Directory.Exists(Path.Combine(f.Data, "state", "webui-uploads")));
             var owner = await f.Manager.CreateNamedAsync("main", "upload", null, null);
             var files = new Foxwarm.Channels.WebUi.WebUiUploadedFiles(f.Manager);
             using var admission = f.Manager.BeginFileIngress(owner);
-            var result = await files.PrepareAsync(new JsonObject { ["uploadedFiles"] = new JsonArray(upload.DeepClone()) }, owner, default);
-            Assert.Equal(new byte[] {1,2,3}, await File.ReadAllBytesAsync(result.SavedFiles.Single()["path"]!.ToString()));
+            var result = await files.PrepareAsync(
+                new JsonObject { ["uploadedFiles"] = new JsonArray(upload.DeepClone()) },
+                owner,
+                default
+            );
+            Assert.Equal(
+                new byte[] { 1, 2, 3 },
+                await File.ReadAllBytesAsync(result.SavedFiles.Single()["path"]!.ToString())
+            );
             Assert.False(File.Exists(path));
         }
-        finally { File.Delete(path); }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     [Fact]
@@ -50,15 +63,26 @@ public sealed partial class AsrRoutesTests
             }
             Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
             var path = (await Json(response))["path"]!.ToString();
-            try { Assert.Equal(length, new FileInfo(path).Length); }
-            finally { File.Delete(path); }
+            try
+            {
+                Assert.Equal(length, new FileInfo(path).Length);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
         }
     }
+
     [Fact]
     public async Task Real_scoped_upload_remains_identity_session_owned_and_revocation_removes_only_its_staging()
     {
-        await using var f = await Fixture.Create(url => $"asrService:\n  url: {url}\n  key: {Fixture.Key}\naccess:\n  identities:\n    alice:\n      token: synthetic-alice\n      surfaces:\n        webui:\n          sessions: [chat, other]\n    bob:\n      token: synthetic-bob\n      surfaces:\n        webui:\n          sessions: [chat]\n");
-        await Assert.ThrowsAsync<System.Net.WebSockets.WebSocketException>(() => f.Connect(credential: "synthetic-alice"));
+        await using var f = await Fixture.Create(url =>
+            $"asrService:\n  url: {url}\n  key: {Fixture.Key}\naccess:\n  identities:\n    alice:\n      token: synthetic-alice\n      surfaces:\n        webui:\n          sessions: [chat, other]\n    bob:\n      token: synthetic-bob\n      surfaces:\n        webui:\n          sessions: [chat]\n"
+        );
+        await Assert.ThrowsAsync<System.Net.WebSockets.WebSocketException>(() =>
+            f.Connect(credential: "synthetic-alice")
+        );
         Assert.Equal(0, f.Requests);
         var chat = await f.Manager.CreateNamedAsync("main", "chat", null, null);
         var other = await f.Manager.CreateNamedAsync("main", "other", null, null);
@@ -74,14 +98,29 @@ public sealed partial class AsrRoutesTests
         {
             var input = new JsonObject { ["uploadedFiles"] = new JsonArray(upload.DeepClone()) };
             f.Client.DefaultRequestHeaders.Authorization = new("Bearer", "synthetic-bob");
-            Assert.Equal(HttpStatusCode.Forbidden, (await f.Client.PostAsJsonAsync("/api/sessions/" + chat.Id + "/message", input)).StatusCode);
+            Assert.Equal(
+                HttpStatusCode.Forbidden,
+                (
+                    await f.Client.PostAsJsonAsync("/api/sessions/" + chat.Id + "/message", input)
+                ).StatusCode
+            );
             f.Client.DefaultRequestHeaders.Authorization = new("Bearer", "synthetic-alice");
-            Assert.Equal(HttpStatusCode.Forbidden, (await f.Client.PostAsJsonAsync("/api/sessions/" + other.Id + "/message", input)).StatusCode);
+            Assert.Equal(
+                HttpStatusCode.Forbidden,
+                (
+                    await f.Client.PostAsJsonAsync("/api/sessions/" + other.Id + "/message", input)
+                ).StatusCode
+            );
             Assert.True(File.Exists(path));
-            await f.Manager.Models.ConfigurationOwner!.Access.ApplyAsync(Foxwarm.AccessConfiguration.Normalize(null, false));
+            await f.Manager.Models.ConfigurationOwner!.Access.ApplyAsync(
+                Foxwarm.AccessConfiguration.Normalize(null, false)
+            );
             Assert.False(File.Exists(path));
             Assert.False(Directory.Exists(Path.Combine(f.Work, ".temp", "channel-files")));
         }
-        finally { File.Delete(path); }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 }

@@ -12,9 +12,23 @@ public sealed partial class AsrRoutesTests
         await using var f = await Fixture.Create(prefix: true);
         using var socket = await f.Connect("/prefix/api/asr/stream", "https://public.example");
         var context = new string('c', 2500) + "LATEST-DRAFT-TAIL-SENTINEL";
-        await Send(socket, new { type = "start", context, language = " English ", extension = "retained" });
+        await Send(
+            socket,
+            new
+            {
+                type = "start",
+                context,
+                language = " English ",
+                extension = "retained",
+            }
+        );
         Assert.Equal("ready", (await Json(socket))["type"]!.ToString());
-        await socket.SendAsync(new byte[] { 1, 0, 255 }, WebSocketMessageType.Binary, false, default);
+        await socket.SendAsync(
+            new byte[] { 1, 0, 255 },
+            WebSocketMessageType.Binary,
+            false,
+            default
+        );
         await socket.SendAsync(new byte[] { 127 }, WebSocketMessageType.Binary, true, default);
         Assert.Equal("long hypothesis", (await Json(socket))["text"]!.ToString());
         Assert.Equal("short", (await Json(socket))["text"]!.ToString());
@@ -45,10 +59,22 @@ public sealed partial class AsrRoutesTests
         var messages = new[]
         {
             new Received(WebSocketMessageType.Binary, new byte[] { 1, 2, 3 }),
-            new Received(WebSocketMessageType.Text, Encoding.UTF8.GetBytes("{not parsed " + new string('x', 17000))),
-            new Received(WebSocketMessageType.Text, Encoding.UTF8.GetBytes("{\"type\":\"final\",\"text\":\"\",\"extension\":true}")),
-            new Received(WebSocketMessageType.Binary, Enumerable.Repeat((byte)91, 26 * 1024 * 1024).ToArray()),
-            new Received(WebSocketMessageType.Text, Encoding.UTF8.GetBytes("still open after final")),
+            new Received(
+                WebSocketMessageType.Text,
+                Encoding.UTF8.GetBytes("{not parsed " + new string('x', 17000))
+            ),
+            new Received(
+                WebSocketMessageType.Text,
+                Encoding.UTF8.GetBytes("{\"type\":\"final\",\"text\":\"\",\"extension\":true}")
+            ),
+            new Received(
+                WebSocketMessageType.Binary,
+                Enumerable.Repeat((byte)91, 26 * 1024 * 1024).ToArray()
+            ),
+            new Received(
+                WebSocketMessageType.Text,
+                Encoding.UTF8.GetBytes("still open after final")
+            ),
         };
         foreach (var message in messages)
         {
@@ -74,7 +100,9 @@ public sealed partial class AsrRoutesTests
     [Theory]
     [InlineData(401)]
     [InlineData(307)]
-    public async Task Upstream_rejected_or_redirected_WS_closes_browser_without_replaying_credentials(int status)
+    public async Task Upstream_rejected_or_redirected_WS_closes_browser_without_replaying_credentials(
+        int status
+    )
     {
         await using var f = await Fixture.Create();
         f.StreamStatus = status;
@@ -94,8 +122,14 @@ public sealed partial class AsrRoutesTests
         {
             await Receive(socket, context.RequestAborted);
             admitted.TrySetResult();
-            try { await Receive(socket, context.RequestAborted); }
-            finally { closed.TrySetResult(); }
+            try
+            {
+                await Receive(socket, context.RequestAborted);
+            }
+            finally
+            {
+                closed.TrySetResult();
+            }
         };
         using var client = await f.Connect();
         await Send(client, new { type = "start" });
@@ -110,12 +144,21 @@ public sealed partial class AsrRoutesTests
     {
         await using var f = await Fixture.Create();
         var admitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         f.BeforeStream = async context =>
         {
             admitted.TrySetResult();
-            try { await Task.Delay(Timeout.Infinite, context.RequestAborted); }
-            catch (OperationCanceledException) { cancelled.TrySetResult(); throw; }
+            try
+            {
+                await Task.Delay(Timeout.Infinite, context.RequestAborted);
+            }
+            catch (OperationCanceledException)
+            {
+                cancelled.TrySetResult();
+                throw;
+            }
         };
         using var client = await f.Connect();
         await Send(client, new { type = "start", extension = "pending" });
@@ -131,7 +174,11 @@ public sealed partial class AsrRoutesTests
         f.Stream = async (socket, context) =>
         {
             await Receive(socket, context.RequestAborted);
-            await socket.CloseAsync(WebSocketCloseStatus.PolicyViolation, "service reason", context.RequestAborted);
+            await socket.CloseAsync(
+                WebSocketCloseStatus.PolicyViolation,
+                "service reason",
+                context.RequestAborted
+            );
         };
         using var client = await f.Connect();
         await Send(client, new { type = "start" });
@@ -151,7 +198,16 @@ public sealed partial class AsrRoutesTests
             await Receive(socket, context.RequestAborted);
             // Exercise the removed thirty-second product cutoff once, not a ten-minute recording sleep.
             await Task.Delay(TimeSpan.FromSeconds(31), context.RequestAborted);
-            await Send(socket, new { type = "final", text = "late final", extension = 713 }, context.RequestAborted);
+            await Send(
+                socket,
+                new
+                {
+                    type = "final",
+                    text = "late final",
+                    extension = 713,
+                },
+                context.RequestAborted
+            );
             await Receive(socket, context.RequestAborted);
         };
         using var client = await f.Connect();

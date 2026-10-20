@@ -209,7 +209,11 @@ public sealed partial class AsrRoutesTests
                 lock (Controls)
                     Controls.Add(body);
                 if (body["type"]!.ToString() == "start")
-                    await Send(socket, new { type = "ready", extension = "service extension" }, token);
+                    await Send(
+                        socket,
+                        new { type = "ready", extension = "service extension" },
+                        token
+                    );
                 if (body["type"]!.ToString() == "stop")
                 {
                     await Send(

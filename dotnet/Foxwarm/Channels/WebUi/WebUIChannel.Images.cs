@@ -64,8 +64,7 @@ internal sealed partial class WebUIChannel
                     var extension = Path.GetExtension(original);
                     var path = Path.Combine(
                         UploadRoot,
-                        Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16))
-                            + extension
+                        Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16)) + extension
                     );
                     try
                     {

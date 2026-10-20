@@ -47,13 +47,8 @@ internal sealed partial class NodeConnectionHub
                 : encoded.EndsWith('=') ? 1
                 : 0
             );
-        if (
-            encoded.Length % 4 != 0
-            || SessionWait.Number(file["sizeBytes"]) != decodedLength
-        )
-            throw new InvalidDataException(
-                "Node file size is invalid."
-            );
+        if (encoded.Length % 4 != 0 || SessionWait.Number(file["sizeBytes"]) != decodedLength)
+            throw new InvalidDataException("Node file size is invalid.");
         // Charge the encoded payload's actual materialization, not an untrusted reported size.
         beforeMaterialize?.Invoke(decodedLength);
         byte[] bytes;

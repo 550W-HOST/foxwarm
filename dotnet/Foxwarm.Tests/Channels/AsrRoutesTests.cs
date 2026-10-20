@@ -236,8 +236,14 @@ public sealed partial class AsrRoutesTests
         var saved = await Json(response);
         Assert.Equal("audio/wav", saved["mimeType"]!.ToString());
         var path = saved["path"]!.ToString();
-        try { Assert.Equal(AsrProxy.AudioLimit + 1, new FileInfo(path).Length); }
-        finally { File.Delete(path); }
+        try
+        {
+            Assert.Equal(AsrProxy.AudioLimit + 1, new FileInfo(path).Length);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
         Assert.Equal(0, f.Requests);
         Assert.Equal(0, f.Uploads);
     }
