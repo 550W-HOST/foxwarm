@@ -71,10 +71,6 @@ def builtin(name, arguments):
     return call_tool({"source": "builtin", "name": name, "args": arguments})
 
 
-def decoded(receipt):
-    return json.loads(receipt["output"])
-
-
 def completed(value, phase):
     if value.get("status") != "completed" or value.get("phase") != phase:
         raise ValueError("A completed " + phase + " result is required")
@@ -157,7 +153,7 @@ def main(args):
             if args.get("taskId"):
                 task_id = required(args, "taskId")
                 state["taskId"] = task_id
-                task = decoded(builtin("task", {"action": "get", "taskId": task_id}))["task"]
+                task = builtin("task", {"action": "get", "taskId": task_id})["task"]
             else:
                 task = args["task"]
                 title = required(task, "title")
@@ -169,7 +165,7 @@ def main(args):
                 state["stage"] = "create task"
                 receipt = builtin("task", {"action": "create", "title": title, "description": brief})
                 state["taskReceipt"] = receipt
-                task_id = decoded(receipt)["taskId"]
+                task_id = receipt["taskId"]
                 state["taskId"] = task_id
             # Keep real caller-written review fields intact and confirmation last.
             confirmation = child.pop("handoffConfirmation", None)
@@ -180,7 +176,7 @@ def main(args):
                 child["handoffConfirmation"] = confirmation
             state["stage"] = "create child"
             state["childReceipt"] = builtin("create_child_session", child)
-            state["taskState"] = decoded(builtin("task", {"action": "get", "taskId": task_id}))["task"]
+            state["taskState"] = builtin("task", {"action": "get", "taskId": task_id})["task"]
             delivered = state["childReceipt"].get("sentNotifications", 0) > 0
             confirmed = state["taskState"].get("assignmentNotificationStatus") == "sent"
             state["status"] = "completed" if delivered and confirmed else "needs-verification"

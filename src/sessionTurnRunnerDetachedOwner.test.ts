@@ -1643,7 +1643,7 @@ async function assertLinkedChildCompletion(scripted: boolean): Promise<void> {
   const originalChat = llm.chat;
   let requests = 0;
   try {
-    const created = JSON.parse((await tool_task({ action: 'create', title: 'Linked work' }, { sessionId: creator.id, session: creator } as any)).output);
+    const created = await tool_task({ action: 'create', title: 'Linked work' }, { sessionId: creator.id, session: creator } as any);
     await tool_task({ action: 'assign', taskId: created.taskId, ownerSessionId: parent.id }, { sessionId: creator.id, session: creator } as any);
     const attached = await create_child_session({ suffix: 'task-link-child', taskId: created.taskId }, { sessionId: parent.id, session: parent } as any);
     const attachedText = typeof attached === 'string' ? attached : String((attached as any)?.output ?? attached);
@@ -1673,7 +1673,7 @@ async function assertLinkedChildCompletion(scripted: boolean): Promise<void> {
     assert.equal(child.queue.length, 0);
     assert.equal(parent.queue.length, 0, 'no fabricated successful parent send or duplicate routine report');
     assert.match(JSON.stringify(creator.queue), /Task completed.*Finished/);
-    const completed = JSON.parse((await tool_task({ action: 'get', taskId: created.taskId }, { sessionId: creator.id, session: creator } as any)).output);
+    const completed = await tool_task({ action: 'get', taskId: created.taskId }, { sessionId: creator.id, session: creator } as any);
     assert.equal(completed.task.attachedSessionId, child.id);
     assert.equal(completed.task.completionNotificationStatus, 'sent');
   } finally {

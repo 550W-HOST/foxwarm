@@ -1891,7 +1891,7 @@ test('a real Task completion receipt belongs only to the ToolScript slice that p
   const creator = await sessionManager.getSession(makeId('script_task_creator'));
   let child: Session;
   try {
-    const taskId = JSON.parse((await tools.task({ action: 'create', title: 'Complete before pause' }, { sessionId: creator.id, session: creator })).output).taskId;
+    const taskId = (await tools.task({ action: 'create', title: 'Complete before pause' }, { sessionId: creator.id, session: creator })).taskId;
     const created = await tools.create_child_session({ suffix: 'script-task-child', taskId }, { sessionId: creator.id, session: creator });
     child = await sessionManager.getExistingSession(String((created as any).output ?? created).match(/`([^`]+)`/)![1]);
     const ctx = { sessionId: child.id, session: child };
@@ -1918,14 +1918,13 @@ test('nested ToolScript task mutation exposes the same compact receipt fields', 
       code: 'return call_tool({"toolId": "builtin:task", "args": {"action": "create", "title": "Script detail", "description": "Not echoed"}})',
     } }], { sessionId, session }, session);
     const response: any = toolMessage.message.parts[0].functionResponse?.response;
-    const output = response?.result?.output;
-    const receipt = typeof output === 'string' ? JSON.parse(output) : output;
+    const receipt = response?.result;
     assert.deepEqual(Object.keys(receipt).sort(), ['ownerSessionId', 'sentNotifications', 'status', 'taskId']);
     assert.equal(receipt.status, 'open');
     assert.equal(receipt.ownerSessionId, null);
     assert.equal(receipt.title, undefined);
     const taskId = receipt.taskId;
-    const details = JSON.parse((await tools.task({ action: 'get', taskId }, { sessionId, session })).output);
+    const details = await tools.task({ action: 'get', taskId }, { sessionId, session });
     assert.equal(details.task.description, 'Not echoed');
   } finally {
     await resetToolScriptRunsForTests();
