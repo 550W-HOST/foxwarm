@@ -14,12 +14,7 @@ internal sealed class ArtifactPreparer
     internal ArtifactPreparer(string? entry = null) =>
         this.entry =
             entry
-            ?? Path.Combine(
-                AppContext.BaseDirectory,
-                "lib",
-                "artifacts",
-                "managedPrepare.js"
-            );
+            ?? Path.Combine(AppContext.BaseDirectory, "lib", "artifacts", "managedPrepare.js");
 
     internal async Task<JsonObject> ValidateAsync(JsonObject document, CancellationToken token) =>
         (
