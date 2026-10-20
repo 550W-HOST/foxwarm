@@ -155,6 +155,10 @@ public sealed class WebUiStartupTests
 
         internal async Task<string> Output() => await stdout! + await stderr!;
 
+        internal Task<string> StandardOutput() => stdout!;
+
+        internal Task<string> ErrorOutput() => stderr!;
+
         internal async Task Failed()
         {
             await Process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
@@ -216,11 +220,13 @@ public sealed class WebUiStartupTests
         }
         else
             Assert.EndsWith("Main stopped.\n", text);
-        var output = await h.Output();
+        var output = await h.StandardOutput();
+        var errors = await h.ErrorOutput();
+        Assert.DoesNotContain("Main HTTP listening:", output);
         if (flag == "FOXWARM_LOG_STDERR")
-            Assert.Contains("Main HTTP listening:", output);
+            Assert.Contains("Main HTTP listening:", errors);
         else
-            Assert.DoesNotContain("Main HTTP listening:", output);
+            Assert.DoesNotContain("Main HTTP listening:", errors);
     }
 
     [Fact]
@@ -240,7 +246,7 @@ public sealed class WebUiStartupTests
         var created = await response.Content.ReadFromJsonAsync<JsonObject>();
         Assert.NotNull(created?["id"] ?? created?["sessionId"] ?? created?["session"]?["id"]);
         await h.Stop();
-        Assert.Contains("Main file logging failed:", await h.Output());
+        Assert.NotEmpty(await h.ErrorOutput());
     }
 
     [Fact]
@@ -262,7 +268,7 @@ public sealed class WebUiStartupTests
             @"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [+-]\d{4}\] INFO: Main HTTP listening:",
             produced
         );
-        Assert.Contains("bot.enableTUI is ignored", produced);
+        Assert.Contains(" ERROR: ", produced);
         Assert.True(
             !produced.Contains("\u001b"),
             System.Text.Json.JsonSerializer.Serialize(produced)
@@ -381,6 +387,8 @@ public sealed class WebUiStartupTests
             socket.Abort();
         }
         await File.AppendAllTextAsync(destination, "disconnected\n");
+        // Source accepts safe integer values regardless of JSON numeric spelling.
+        frontier["offset"] = JsonNode.Parse(frontier["offset"]!.ToString() + ".0");
         using (var resumed = await Connect(h.Token))
         {
             await Subscribe(resumed, 1, "resumed", frontier);

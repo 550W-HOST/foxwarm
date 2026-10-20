@@ -665,12 +665,14 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                 || !file.TryGetValue<string>(out var fileId)
                 || fileId.Length is 0 or > 256
                 || value["offset"] is not JsonValue position
-                || !position.TryGetValue<long>(out var offset)
+                || !position.TryGetValue<double>(out var offset)
+                || !double.IsFinite(offset)
+                || Math.Truncate(offset) != offset
                 || offset < 0
                 || offset > 9007199254740991L
             )
                 throw new FormatException("Invalid logs cursor.");
-            cursor = new(fileId, offset);
+            cursor = new(fileId, (long)offset);
         }
         return new(text, cursor);
     }

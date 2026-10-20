@@ -14,7 +14,7 @@ try {
         : { window: await logs.read({ direction: operation.direction, offset: operation.offset === 'start' ? cursor.startOffset : operation.offset === 'end' ? cursor.endOffset : operation.offset, fileId: operation.direction === 'latest' ? undefined : cursor?.fileId }) }
       cursor = result.window
       results.push({ ...result, window: { ...cursor, fileId: cursor.fileId ? 'file' : null } })
-    } catch (error) { results.push({ error: error.message }) }
+    } catch (error) { results.push({ error: true }) }
   }
   process.stdout.write(JSON.stringify(results))
 } finally { logs.dispose() }

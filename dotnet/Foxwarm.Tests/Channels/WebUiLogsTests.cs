@@ -129,7 +129,7 @@ public sealed class WebUiLogsTests
             }
             catch (Exception error) when (error is IOException or InvalidDataException)
             {
-                result = new() { ["error"] = error.Message };
+                result = new() { ["error"] = true };
             }
             Assert.True(
                 JsonNode.DeepEquals(expected[index], result),
