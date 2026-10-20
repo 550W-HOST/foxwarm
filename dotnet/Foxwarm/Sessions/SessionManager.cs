@@ -25,10 +25,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly LocalExecManager executor;
     private readonly SessionDeletionChannels deletionChannels;
     private readonly CommittedArchiveIdentity archiveIdentities;
-    private readonly HttpClient http = new()
-    {
-        Timeout = System.Threading.Timeout.InfiniteTimeSpan,
-    };
+    private readonly HttpClient http = ProviderHttpRequest.CreateClient();
     private readonly Foxwarm.McpClient mcp;
     internal Foxwarm.McpClient OutboundMcp => mcp;
     internal Foxwarm.Channels.ChannelRegistry ChannelRegistry { get; } = new();
@@ -36,6 +33,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     internal Foxwarm.Nodes.NodeProviderRegistry NodeProviders { get; }
     internal Foxwarm.Nodes.NodeBootstrap? Bootstrap { get; set; }
     private readonly ModelRouting modelRouting = new();
+    private readonly ModelInteractionDiagnostics diagnostics;
     internal LlmRequestJournalStore Journal { get; }
     internal Foxwarm.Vector.VectorService Vector { get; }
     private readonly Foxwarm.Persistence.SqliteWriterOwners.Lease archiveWriter;
@@ -68,6 +66,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         ToolScript = new(root);
         HandoffConfirmationEnabled = models.HandoffConfirmationEnabled;
         this.root = Path.GetFullPath(root);
+        diagnostics = new(this.root);
         Nodes = new(this.root);
         NodeProviders = new(
             Nodes,
@@ -537,7 +536,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
             modelRouting,
             websockets: websockets,
             images: Images,
-            journal: Journal
+            journal: Journal,
+            diagnostics: diagnostics
         );
         var chat = new SessionChatService(
             requests,

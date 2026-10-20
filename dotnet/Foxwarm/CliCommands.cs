@@ -75,7 +75,7 @@ internal static class CliCommands
         var root = configuration.Paths.DataRoot;
         await using var journal = new LlmRequestJournalStore(root);
         await SqliteOnlyArchivesMigration.RunAsync(root, journal);
-        using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        using var http = ProviderHttpRequest.CreateClient();
         await using var websockets = new ResponsesWsTransport();
         var defaults = new ResponsesClientOptions(
             new Uri("http://localhost"),
@@ -94,7 +94,8 @@ internal static class CliCommands
             defaults,
             new ModelRouting(),
             websockets: websockets,
-            journal: journal
+            journal: journal,
+            diagnostics: new ModelInteractionDiagnostics(root)
         );
         var result = await owner.RequestAsync(
             "",

@@ -435,13 +435,7 @@ internal sealed partial class McpClient
         IClientTransport transport;
         if (SessionWait.Text(config["transport"]) == "stdio")
         {
-            var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
-            foreach (var key in new[] { "HOME", "LOGNAME", "PATH", "SHELL", "TERM", "USER" })
-                if (
-                    Environment.GetEnvironmentVariable(key) is string value
-                    && !value.StartsWith("()", StringComparison.Ordinal)
-                )
-                    environment[key] = value;
+            var environment = StdioClientTransportOptions.GetDefaultEnvironmentVariables();
             if (config["env"] is JsonObject additions)
                 foreach (var (key, value) in additions)
                     environment[key] = SessionWait.Text(value);

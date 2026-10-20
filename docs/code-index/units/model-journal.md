@@ -5,7 +5,7 @@ Secondary files: `dotnet/Foxwarm.NodePrimitives/JsonStringQuoting.cs`
 
 ## Purpose
 
-Persists a reconstructable request manifest plus attempt-start/result metadata for provider diagnostics and retry provenance. It is not active Session history, a provider wire-body archive, or a child-handoff receipt consumer.
+Persists a reconstructable request manifest plus attempt-start/result metadata for provider diagnostics and retry provenance. It is not active Session history, a provider wire-body archive, or a child-handoff receipt consumer. Bounded [raw interaction diagnostics](./model-raw-diagnostics.md) retain the separate debugging surface; the semantic digest is not a substitute.
 
 ## Stable methods and callers
 

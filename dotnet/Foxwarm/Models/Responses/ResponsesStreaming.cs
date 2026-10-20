@@ -47,6 +47,8 @@ public sealed record ResponsesStreamProgress(
 public sealed class ResponsesStreamCallbacks
 {
     public Action<ResponsesStreamProgress>? OnProgress { get; init; }
+    public Action<int, JsonObject>? OnOutputItemDone { get; init; }
+    public Action? OnResponseCompleted { get; init; }
     public Action? OnMeaningfulProgress { get; init; }
     public Action? OnImageGenerationActivity { get; init; }
     public Action<JsonObject>? OnSafetyBuffering { get; init; }
@@ -141,6 +143,8 @@ public sealed class ResponsesEventAccumulator
                     )
                         callbacks?.OnImageGenerationActivity?.Invoke();
                     EmitProgress();
+                    if (type == "response.output_item.done")
+                        callbacks?.OnOutputItemDone?.Invoke(outputIndex.Value, BuildOutputEntries().Single(entry => entry.Index == outputIndex.Value).Item);
                 }
                 return;
             case "response.image_generation_call.in_progress":
@@ -364,6 +368,7 @@ public sealed class ResponsesEventAccumulator
             case "response.completed":
                 if (eventNode["response"] is JsonObject response)
                 {
+                    callbacks?.OnResponseCompleted?.Invoke();
                     completedResponse = (JsonObject)response.DeepClone();
                     completedResponse["output"] = MergeCompletedOutputItems(
                         completedResponse["output"]

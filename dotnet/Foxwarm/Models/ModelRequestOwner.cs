@@ -11,7 +11,8 @@ internal sealed class ModelRequestOwner(
     Func<int, CancellationToken, Task>? delay = null,
     ResponsesWsTransport? websockets = null,
     Foxwarm.Images.ImageBlobStore? images = null,
-    LlmRequestJournalStore? journal = null
+    LlmRequestJournalStore? journal = null,
+    ModelInteractionDiagnostics? diagnostics = null
 )
 {
     internal static int RetryDelay(int failedAttempt) =>
@@ -160,7 +161,8 @@ internal sealed class ModelRequestOwner(
             bool,
             CancellationToken,
             Task<RequestHistory?>
-        >? adoptSelection = null
+        >? adoptSelection = null,
+        Func<JsonObject, bool, Task<JsonObject>>? commitAssistantSegment = null
     )
     {
         var catalog = captured.Catalog;
@@ -172,6 +174,7 @@ internal sealed class ModelRequestOwner(
         string? journalRequestId = null;
         var journalAttempt = 0;
         Task manifestCompletion = Task.CompletedTask;
+        var interaction = diagnostics?.Begin(journalIteration);
         var baseHistory = history;
         var retainedContext = requestContext is null
             ? Array.Empty<JsonObject>()
@@ -254,7 +257,11 @@ internal sealed class ModelRequestOwner(
                     turnId,
                     journalPurpose
                 );
-                options = options with { Images = images };
+                options = options with
+                {
+                    Images = images,
+                    Diagnostics = interaction?.StartAttempt(leaf, options, attempt, request is null ? null : route.Key),
+                };
                 if (journal is not null && journalRequestId is null)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -281,6 +288,19 @@ internal sealed class ModelRequestOwner(
                 var attemptPrepared = false;
                 options = options with
                 {
+                    CommitAssistantSegment = scope == ModelRequestScope.Canonical && commitAssistantSegment is not null
+                        ? async (message, deliver) =>
+                        {
+                            var meta = message["__meta"]!.AsObject();
+                            if (currentJournalRequestId is not null)
+                                meta["llmRequestId"] = currentJournalRequestId;
+                            meta["llmAttempt"] = currentJournalAttempt;
+                            meta["modelId"] = leaf.Key;
+                            if (request is not null)
+                                meta["virtualModelKey"] = route.Key;
+                            return await commitAssistantSegment(message, deliver).ConfigureAwait(false);
+                        }
+                        : null,
                     AttemptPrepared = async payload =>
                     {
                         // Serializers call this only after the complete semantic body exists.
@@ -356,6 +376,8 @@ internal sealed class ModelRequestOwner(
                             ["durationMs"] = duration,
                         };
                         meta["modelId"] = leaf.Key;
+                        if (result.Usage is not null)
+                            meta["usage"] = result.Usage.DeepClone();
                         if (request is null)
                             meta.Remove("virtualModelKey");
                         else
@@ -376,7 +398,7 @@ internal sealed class ModelRequestOwner(
                                 .AppendChatResultAsync(
                                     currentJournalRequestId,
                                     currentJournalAttempt,
-                                    result,
+                                    JournalResult(result),
                                     cancellationToken
                                 )
                                 .ConfigureAwait(false);
@@ -573,6 +595,8 @@ internal sealed class ModelRequestOwner(
         }
         catch (Exception preparationOrRequestError)
         {
+            if (interaction is not null)
+                await interaction.MoveToErrorAsync().ConfigureAwait(false);
             // Local preparation can fail before the accepted manifest settles. Resolve it before returning.
             try
             {
@@ -595,6 +619,21 @@ internal sealed class ModelRequestOwner(
             }
             throw;
         }
+    }
+
+    private static ChatResult JournalResult(ChatResult result)
+    {
+        if (result.CommittedSegments.Count == 0)
+            return result;
+        var assistant = result.AssistantMessage is null
+            ? new JsonObject { ["role"] = "model" }
+            : (JsonObject)result.AssistantMessage.DeepClone();
+        assistant["parts"] = new JsonArray(result.CommittedSegments
+            .Append(result.AssistantMessage)
+            .Where(message => message is not null)
+            .SelectMany(message => message!["parts"] as JsonArray ?? [])
+            .Select(part => part?.DeepClone()).ToArray());
+        return result with { AssistantMessage = assistant };
     }
 
     private static async Task JournalAttemptStartAsync(

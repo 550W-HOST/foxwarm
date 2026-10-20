@@ -6,6 +6,20 @@ namespace Foxwarm.Models;
 
 internal static class ProviderHttpRequest
 {
+    internal static HttpClient CreateClient() =>
+        new(new ProviderResponseDecodingHandler(new HttpClientHandler { UseCookies = false }))
+        {
+            Timeout = System.Threading.Timeout.InfiniteTimeSpan,
+        };
+
+    internal static JsonObject ResponseHeaders(HttpResponseMessage response)
+    {
+        var headers = new JsonObject();
+        foreach (var (name, values) in response.Headers.Concat(response.Content.Headers))
+            headers[name] = string.Join(", ", values);
+        return headers;
+    }
+
     internal static HttpRequestMessage Create(
         Uri endpoint,
         JsonObject body,
@@ -58,6 +72,7 @@ internal static class ProviderHttpRequest
                     request.Content.Headers.TryAddWithoutValidation(name, value);
                 }
             }
+            Set("Accept-Encoding", "gzip, compress, deflate, br");
             foreach (var (name, value) in defaults)
                 Set(name, value);
             if (options.ExtraHeaders is not null)

@@ -46,7 +46,8 @@ internal sealed partial class SessionManager
                 modelRouting,
                 websockets: websockets,
                 images: Images,
-                journal: Journal
+                journal: Journal,
+            diagnostics: diagnostics
             );
             var history = RequestHistory
                 .FromSnapshot(snapshot.History)

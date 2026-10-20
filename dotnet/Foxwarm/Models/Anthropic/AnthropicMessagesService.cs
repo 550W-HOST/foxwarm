@@ -82,6 +82,9 @@ internal sealed class AnthropicMessagesService(
                 catch { }
             });
             JsonNode? payload;
+            var responseHeaders = ProviderHttpRequest.ResponseHeaders(response);
+            var responseStatus = $"{(int)response.StatusCode} {response.ReasonPhrase}";
+            options.Diagnostics?.Response(responseStatus, responseHeaders, null);
             var success = response.StatusCode == HttpStatusCode.OK;
             if (streaming && success)
             {
@@ -96,6 +99,8 @@ internal sealed class AnthropicMessagesService(
                         new ResponsesStreamCallbacks
                         {
                             OnProgress = update => progress?.Invoke(sessionId, update),
+                            OnDecodedChunk = text => options.Diagnostics?.Chunk(text),
+                            OnSseBlock = block => options.Diagnostics?.Block(block),
                             OnMeaningfulProgress = ScheduleInactivity,
                         },
                         active =>
@@ -120,6 +125,7 @@ internal sealed class AnthropicMessagesService(
             }
             cancellationToken.ThrowIfCancellationRequested();
             activity.Token.ThrowIfCancellationRequested();
+            options.Diagnostics?.Response(responseStatus, responseHeaders, payload);
             var assistant = AnthropicCanonicalConverter.ConvertAssistant(
                 payload,
                 options.ConcreteModelId,
@@ -223,7 +229,10 @@ internal sealed class AnthropicMessagesService(
         if (text.StartsWith('\uFEFF'))
             text = text[1..];
         if (!success)
+        {
+            options.Diagnostics?.ResponseBody(JsonValue.Create(text));
             throw ModelAttemptFailure.Http(statusCode, text);
+        }
         try
         {
             return JsonNode.Parse(text);

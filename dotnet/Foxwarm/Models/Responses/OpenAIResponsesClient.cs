@@ -25,6 +25,10 @@ public sealed record ResponsesClientOptions(
 )
 {
     internal double? HardTimeoutMs { get; init; }
+    internal TimeProvider? Clock { get; init; }
+    internal bool KeepReasoningOnError { get; init; }
+    internal ModelInteractionDiagnostics.Interaction.Attempt? Diagnostics { get; init; }
+    internal Func<JsonObject, bool, Task<JsonObject>>? CommitAssistantSegment { get; init; }
     internal string? ProviderPromptCacheKey { get; init; }
     internal Func<JsonNode, Task>? AttemptPrepared { get; init; }
     internal JsonObject? WebSearch { get; init; }
@@ -980,67 +984,21 @@ public sealed class ResponsesChatService : IChatService
         var body = ResponsesRequestPlan.Build(history, options);
         if (options.AttemptPrepared is not null)
             await options.AttemptPrepared(body).ConfigureAwait(false);
-        var completed = await OpenAIHttp
-            .RequestAsync(
-                httpClient,
-                options.ResponsesUri,
-                body,
-                options,
-                sessionId,
-                progress,
-                null,
-                (stream, token, callbacks) =>
-                    ResponsesSseCollector.CollectAsync(stream, token, callbacks),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        GeneratedImageNormalization? generated = null;
-        if (options.Images is not null && completed.Payload["output"] is JsonArray output)
+        using var attempt = new ResponsesAttempt(options, cancellationToken,
+            update => progress?.Invoke(sessionId, update));
+        OpenAIHttp.Completed completed;
+        try
         {
-            generated = await HostedResponsesTools.ExternalizeAsync(
-                output,
-                options.Images,
-                options.ConcreteModelId,
-                cancellationToken
-            );
-            var hasImageFailure = generated.Failures.Count > 0;
-            if (generated.SuccessfulCount == 0 && hasImageFailure && !HasOtherUsableOutput(output))
-                throw ModelAttemptFailure.GeneratedImageFailure(
-                    HostedResponsesTools.FailureNote(generated.Failures)
-                );
+            completed = await OpenAIHttp.RequestAsync(
+                httpClient, options.ResponsesUri, body, options, sessionId, null, null,
+                (stream, token, callbacks) => ResponsesSseCollector.CollectAsync(stream, token, callbacks),
+                attempt.Token, attempt.Callbacks).ConfigureAwait(false);
         }
-        var assistant = ResponsesCanonicalConverter.ConvertAssistant(
-            completed.Payload,
-            options.ConcreteModelId,
-            completed.CompletedAt,
-            completed.DurationMs,
-            generated?.Parts,
-            generated?.Failures
-        );
-        if (options.DisallowEmptyResponse && !OpenAIHttp.HasMeaningfulAssistant(assistant))
-            throw ModelAttemptFailure.Empty();
-        return new ChatResult(
-            assistant,
-            ResponsesCanonicalConverter.BuildUsage(completed.Payload["usage"] as JsonObject)
-        );
+        catch (Exception error)
+        {
+            await attempt.FailedAsync(error).ConfigureAwait(false);
+            throw;
+        }
+        return await attempt.CompleteAsync(completed.Payload, completed.CompletedAt, completed.DurationMs).ConfigureAwait(false);
     }
-
-    private static bool HasOtherUsableOutput(JsonArray output) =>
-        output
-            .OfType<JsonObject>()
-            .Any(item =>
-                HostedResponsesTools.IsGeneratedImage(item) == false
-                && (
-                    SessionWait.Text(item["type"]) == "function_call"
-                    || SessionWait.Text(item["type"]) == "message"
-                        && (item["content"] as JsonArray)
-                            ?.OfType<JsonObject>()
-                            .Any(content =>
-                                SessionWait.Text(content["text"]) is string text
-                                    && OpenAIRequestText.Trim(text).Length > 0
-                                || SessionWait.Text(content["refusal"]) is string refusal
-                                    && OpenAIRequestText.Trim(refusal).Length > 0
-                            ) == true
-                )
-            );
 }

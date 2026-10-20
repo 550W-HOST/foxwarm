@@ -225,7 +225,8 @@ internal sealed class ResponsesWsTransport(
         int? inactivityMs,
         CancellationToken caller,
         string? sessionId = null,
-        string purpose = "low-level"
+        string purpose = "low-level",
+        CancellationToken? lifetimeCaller = null
     )
     {
         caller.ThrowIfCancellationRequested();
@@ -254,28 +255,27 @@ internal sealed class ResponsesWsTransport(
         var fingerprint = ResponsesWsState.Fingerprint(body);
         var matched = Take(connection, fingerprint);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(caller);
-        if (inactivityMs is not null)
-            deadline.CancelAfter(180000);
-        var effective = inactivityMs;
+        using var watchdog = new StreamActivityWatchdog(deadline, inactivityMs, Clock);
         var watched = new ResponsesStreamCallbacks
         {
             OnProgress = callbacks.OnProgress,
+            OnOutputItemDone = callbacks.OnOutputItemDone,
+            OnResponseCompleted = callbacks.OnResponseCompleted,
+            OnDecodedChunk = callbacks.OnDecodedChunk,
+            OnSseBlock = callbacks.OnSseBlock,
             OnMeaningfulProgress = () =>
             {
-                if (effective is int timeout)
-                    deadline.CancelAfter(timeout);
+                watchdog.Progress();
                 callbacks.OnMeaningfulProgress?.Invoke();
             },
             OnImageGenerationActivity = () =>
             {
-                if (effective is int timeout)
-                    deadline.CancelAfter(timeout);
+                watchdog.ExtendedActivity();
                 callbacks.OnImageGenerationActivity?.Invoke();
             },
             OnSafetyBuffering = value =>
             {
-                effective = Math.Max(effective ?? 60000, 600000);
-                deadline.CancelAfter(effective.Value);
+                watchdog.ExtendedActivity();
                 callbacks.OnSafetyBuffering?.Invoke(value);
             },
         };
@@ -333,8 +333,8 @@ internal sealed class ResponsesWsTransport(
             }
             var lease = resource.Begin(
                 watched,
-                caller,
-                () => deadline.CancelAfter(Timeout.Infinite)
+                lifetimeCaller ?? caller,
+                watchdog.Finish
             );
             using var abortDeadline = deadline.Token.Register(() =>
                 resource.Abort("attempt-timeout-or-abort")
@@ -409,7 +409,7 @@ internal sealed class ResponsesWsTransport(
                         captured.Abort("replay-failure");
                         throw;
                     }
-                    if (items is null || caller.IsCancellationRequested || !captured.Release(lease))
+                    if (items is null || (lifetimeCaller ?? caller).IsCancellationRequested || !captured.Release(lease))
                     {
                         captured.Abort("finalizer-discard");
                         return;

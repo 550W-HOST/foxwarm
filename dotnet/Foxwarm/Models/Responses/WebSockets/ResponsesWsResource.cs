@@ -94,7 +94,7 @@ internal sealed class ResponsesWsResource(
         Action completed
     )
     {
-        var value = new WsLease(new ResponsesEventAccumulator(callbacks), completed);
+        var value = new WsLease(new ResponsesEventAccumulator(callbacks), completed, callbacks);
         lock (gate)
         {
             if (phase == WsPhase.Closed || socket.State != WebSocketState.Open)
@@ -265,6 +265,7 @@ internal sealed class ResponsesWsResource(
                     frames++;
                     frameBytes += Encoding.UTF8.GetByteCount(text);
                 }
+                active.RawFrame(text);
                 JsonObject input;
                 try
                 {
@@ -328,10 +329,15 @@ internal sealed class ResponsesWsResource(
     }
 }
 
-internal sealed class WsLease(ResponsesEventAccumulator accumulator, Action completed)
+internal sealed class WsLease(ResponsesEventAccumulator accumulator, Action completed, ResponsesStreamCallbacks callbacks)
 {
     internal ResponsesEventAccumulator Accumulator { get; } = accumulator;
     internal Action Completed { get; } = completed;
+    internal void RawFrame(string text)
+    {
+        callbacks.OnDecodedChunk?.Invoke(text + "\n");
+        callbacks.OnSseBlock?.Invoke(text);
+    }
     internal TaskCompletionSource<JsonObject> Completion { get; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 }

@@ -15,6 +15,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Anthropic and Chat Completions adapters](../units/model-anthropic-completions.md)
 - [Responses HTTP and WebSocket adapters](../units/model-responses.md)
 - [LLM request journal](../units/model-journal.md)
+- [Bounded raw interaction diagnostics](../units/model-raw-diagnostics.md)
 - [.NET developer tools](../units/devtools.md)
 - [Image blobs, codecs, and transport](../units/images.md)
 

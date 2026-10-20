@@ -35,11 +35,20 @@ internal sealed class SessionChatService(
             cancellationToken
         );
 
+    public Task<ChatResult> ChatAsync(
+        string sessionId,
+        SessionHistory history,
+        Func<CancellationToken, Task<bool>> prepareRetry,
+        Func<JsonObject, bool, Task<JsonObject>> commitAssistantSegment,
+        CancellationToken cancellationToken
+    ) => ChatCoreAsync(sessionId, RequestHistory.FromSnapshot(history), prepareRetry, cancellationToken, commitAssistantSegment);
+
     private async Task<ChatResult> ChatCoreAsync(
         string sessionId,
         RequestHistory history,
         Func<CancellationToken, Task<bool>>? prepareRetry,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Func<JsonObject, bool, Task<JsonObject>>? commitAssistantSegment = null
     )
     {
         var catalog = models.Capture();
@@ -56,6 +65,7 @@ internal sealed class SessionChatService(
         var cacheKey = await hosted.Entry.SaveLane.EnsurePromptCacheKeyAsync();
         var notice = new ModelRetryNotice(hosted);
         var attempts = 0;
+        var committedPrefix = false;
         var retainedTaskIds = new List<string>();
         async Task<IReadOnlyList<JsonObject>> RequestContext()
         {
@@ -139,8 +149,10 @@ internal sealed class SessionChatService(
                     ? null
                     : async token =>
                     {
-                        if (!await prepareRetry(token))
+                        var changed = await prepareRetry(token);
+                        if (!changed && !committedPrefix)
                             return null;
+                        committedPrefix = false;
                         return hosted.Entry.WithState(state =>
                             RequestHistory.FromSnapshot(state.History.Snapshot())
                         );
@@ -193,6 +205,12 @@ internal sealed class SessionChatService(
                             RequestHistory.FromSnapshot(state.History.Snapshot())
                         )
                         : null;
+                },
+                commitAssistantSegment is null ? null : async (message, deliver) =>
+                {
+                    var committed = await commitAssistantSegment(message, deliver).ConfigureAwait(false);
+                    committedPrefix = true;
+                    return committed;
                 }
             );
         }
