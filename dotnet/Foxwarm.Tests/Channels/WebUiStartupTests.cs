@@ -9,7 +9,7 @@ using Foxwarm.Models;
 
 namespace Foxwarm.Tests;
 
-public sealed class WebUiStartupTests
+public sealed partial class WebUiStartupTests
 {
     private sealed class Host : IAsyncDisposable
     {

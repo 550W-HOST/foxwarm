@@ -13,7 +13,7 @@
   <ItemGroup>
     <ProjectReference
       Include="../Foxwarm/Foxwarm.csproj"
-      AdditionalProperties="FoxwarmConsoleEntry=false"
+      AdditionalProperties="FoxwarmConsoleEntry=false;ArtifactTargetRid=$(RuntimeIdentifier)"
     />
     <PackageReference
       Include="Microsoft.Web.WebView2"

@@ -8,7 +8,7 @@ using SkiaSharp;
 
 namespace Foxwarm.Tests;
 
-public sealed class MainLocalToolsTests
+public sealed partial class MainLocalToolsTests
 {
     private static string? Error(JsonObject result) => SessionWait.Text(result["error"]?["type"]);
 
@@ -41,6 +41,9 @@ public sealed class MainLocalToolsTests
             f.Owner = await f.Manager.CreateNamedAsync("main", "tools", null, null);
             f.mcp = new(Path.Combine(f.Temp.Path, "data"));
             var defs = MainLocalToolDefinitions.Definitions();
+            defs.Add(ArtifactToolDefinition.Definition());
+            foreach (var definition in ToolScriptToolDefinitions.Definitions())
+                defs.Add(definition?.DeepClone());
             foreach (var definition in ObservationToolDefinitions.Definitions())
                 defs.Add(definition.DeepClone());
             foreach (var definition in WorkspaceTools.Definitions().OfType<JsonObject>())

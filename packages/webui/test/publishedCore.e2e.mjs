@@ -54,6 +54,8 @@ const peer = createServer(async (request, response) => {
       ? [{ type: 'function_call', call_id: 'packaged-browser-open', name: 'browse_open', arguments: JSON.stringify({ url: `http://127.0.0.1:${peer.address().port}/browser-fixture` }) }]
       : requests.length === 3
       ? [{ type: 'function_call', call_id: 'packaged-browser-image', name: 'browse_get', arguments: JSON.stringify({ tabId: 'tab1', screenshot: true }) }]
+      : requests.length === 4
+      ? [{ type: 'function_call', call_id: 'packaged-react-artifact', name: 'artifact', arguments: JSON.stringify({ action: 'publish', filePath: join(payload, 'skills/react-artifacts/examples/sorting.json') }) }]
       : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'PACKAGED-NATIVE-DONE' }] }]
     response.writeHead(200, { 'content-type': 'text/event-stream' })
     response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { id: 'published-' + requests.length, output: outputRows, usage: { input_tokens: 20, output_tokens: 4 } } }) + '\n\n')
@@ -74,7 +76,7 @@ try {
   const page = await browser.newPage(); page.on('pageerror', error => browserErrors.push(error.message))
   await page.goto(origin, { waitUntil: 'networkidle0' })
   await page.waitForSelector('input[type="password"]'); await page.type('input[type="password"]', token); await page.click('button[type="submit"]')
-  await page.waitForSelector('.foxwarm-chat-root'); await waitForWebUiReady(page)
+  await waitForWebUiReady(page)
   assert.equal((await api('GET', '/api/setup/status')).body.oobe, true)
   assert.deepEqual((await api('GET', '/api/sessions')).body.sessions, [])
   assert.equal(requests.length, 0)
@@ -129,9 +131,21 @@ try {
   assert(id, JSON.stringify(created))
   assert.equal((await api('POST', '/api/sessions/' + encodeURIComponent(id) + '/message', { text: 'Run the owned delivery qualification.' })).status, 202)
   await until(async () => JSON.stringify((await api('GET', '/api/sessions/' + encodeURIComponent(id) + '/history')).body).includes('PACKAGED-NATIVE-DONE'), 'ordinary packaged native ToolScript')
-  assert.equal(requests.length, 4)
+  assert.equal(requests.length, 5)
   assert.match(JSON.stringify(requests[2].input), /Tab opened: tab1/)
   assert.match(JSON.stringify(requests[3].input), /input_image/)
+  const history = (await api('GET', '/api/sessions/' + encodeURIComponent(id) + '/history')).body
+  const artifactIds = [...new Set(JSON.stringify(history).match(/art_[a-f0-9]{32}/g) || [])]
+  assert.equal(artifactIds.length, 1)
+  const artifact = await api('GET', `/api/sessions/${encodeURIComponent(id)}/artifacts/${artifactIds[0]}/1`)
+  assert.equal(artifact.status, 200)
+  assert.equal(artifact.body.receipt.type, 'react')
+  assert.match(artifact.body.compiled, /Insertion sort/)
+  await page.evaluate(session => window.foxwarmTest.switchToSession(session), id)
+  await page.waitForSelector('.artifact-run-placeholder')
+  assert.equal(await page.$('.artifact-react iframe'), null)
+  await page.click('.artifact-run-placeholder')
+  await page.waitForFunction(() => !!document.querySelector('iframe[data-ready="true"]'), { timeout: 15000 })
   const authority = JSON.parse(await readFile(join(data, 'state/sessions', id + '.json'), 'utf8'))
   const image = authority.history.flatMap(row => row.parts || []).find(part => part.inlineDataRef && part.toolUseId === 'packaged-browser-image')
   assert(image, 'Canonical browser screenshot must retain its paired durable image reference')
@@ -155,12 +169,12 @@ try {
   assert.equal((await readFile(join(data, 'state/token'), 'utf8')).trim(), token)
   assert.match(JSON.stringify((await api('GET', '/api/sessions/' + encodeURIComponent(id) + '/history')).body), /PACKAGED-NATIVE-DONE/)
   assert.equal(await readFile(join(data, 'agents/main/packaged-native-effect.txt'), 'utf8'), 'native packaged worker')
-  assert.equal(requests.length, 4, 'Restart must not replay a completed tool turn')
+  assert.equal(requests.length, 5, 'Restart must not replay a completed tool turn')
   const stopped = once(child, 'exit')
   child.kill('SIGTERM')
   const [restartCode, restartSignal] = await stopped
   assert.deepEqual({ code: restartCode, signal: restartSignal }, { code: 0, signal: null }, output)
-  console.log(JSON.stringify({ published: true, mainBrowserImage: true, restartPreserved: true, browserLogin: true, noModelSetup: true, implicitSessions: 0, nodeArchive: true, extensionBundles: 4, nativeToolScript: true, globalSkillResource: true, vectorDisabledLazy: true, requests: requests.length }))
+  console.log(JSON.stringify({ published: true, collectedReactCompiler: true, originalArtifactRun: true, mainBrowserImage: true, restartPreserved: true, browserLogin: true, noModelSetup: true, implicitSessions: 0, nodeArchive: true, extensionBundles: 4, nativeToolScript: true, globalSkillResource: true, vectorDisabledLazy: true, requests: requests.length }))
 } finally {
   await browser?.close().catch(() => {})
   if (child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL'); await once(child, 'exit').catch(() => {}) }

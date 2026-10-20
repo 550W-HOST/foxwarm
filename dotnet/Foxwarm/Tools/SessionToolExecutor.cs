@@ -24,6 +24,7 @@ internal sealed partial class SessionToolExecutor(
             resolved,
             resolved.Name is "run_script" or "start_toolscript_run"
                     ? invocation.Value?.ScriptSource?.Files ?? Files
+                : resolved.Name == "artifact" && ToolRegistry.ArtifactFileSource(resolved.Args) ? ArtifactFiles(resolved.ExecutionNode)
                 : resolved.Name == "exec" ? ExecFiles
                 : Files,
             token
@@ -753,6 +754,7 @@ internal sealed partial class SessionToolExecutor(
         handlers["exec"] = (owner, args, token) => owner.ExecuteExecAsync(args, token);
         handlers["read_exec"] = (owner, args, token) =>
             owner.Hosted.Executor.ReadAsync(owner.Hosted.Id, args, token);
+        handlers["artifact"] = (owner, args, token) => owner.ExecuteArtifactAsync(args, token);
         handlers["recall"] = (owner, args, token) =>
             ArchiveRecallTool.ExecuteAsync(owner.Manager, owner.Hosted, args, token);
         handlers["get_archived_messages"] = (owner, args, token) =>
@@ -903,7 +905,8 @@ internal sealed partial class SessionToolExecutor(
                 source,
                 name
                     is not (
-                        "mcp_config"
+                        "artifact"
+                        or "mcp_config"
                         or "mcp_notifications"
                         or "set_agent_isolated"
                         or "node_create_auth_token"

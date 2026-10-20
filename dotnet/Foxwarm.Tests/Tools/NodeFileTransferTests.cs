@@ -12,7 +12,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Foxwarm.Tests;
 
-public sealed class NodeFileTransferTests
+public sealed partial class NodeFileTransferTests
 {
     private sealed class Fixture : IAsyncDisposable
     {

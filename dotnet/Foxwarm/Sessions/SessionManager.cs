@@ -14,6 +14,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly string root;
     private readonly HostPaths? hostPaths;
     internal Foxwarm.Images.ImageBlobStore Images { get; }
+    internal Foxwarm.Artifacts.ArtifactStore Artifacts { get; }
+    internal Foxwarm.Artifacts.ArtifactPreparer ArtifactPreparation { get; } = new();
     private readonly ResponsesClientOptions clientOptions;
     private readonly HostModels models;
     internal readonly SessionCatalog Catalog;
@@ -62,6 +64,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
     {
         this.hostPaths = hostPaths;
         Images = new(root);
+        Artifacts = new(Path.Combine(root, "state", "artifacts"), ArtifactPreparation);
         ToolScript = new(root);
         HandoffConfirmationEnabled = models.HandoffConfirmationEnabled;
         this.root = Path.GetFullPath(root);
@@ -190,6 +193,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         if (LocalExecManager.IsSupported)
             foreach (var definition in LocalExecManager.Definitions())
                 definitions.Add(definition?.DeepClone());
+        definitions.Add(ArtifactToolDefinition.Definition());
         definitions.Add(ArchiveRecallTool.Definition());
         foreach (var definition in ArchiveControlTools.Definitions())
             definitions.Add(definition?.DeepClone());

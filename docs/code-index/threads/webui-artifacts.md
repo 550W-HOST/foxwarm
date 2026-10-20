@@ -4,7 +4,7 @@
 
 [2026-10-18] Interactive content uses a common versioned envelope, immutable resource snapshots and a frontend host, with separate trusted modules for image snapshot/preview, chart validation/rendering and React preparation/sandboxing. Skills teach authoring and publication; they do not install renderers or grant execution authority. Adding a module registers a validator, preparation adapter and lazy renderer rather than adding content-type branches throughout ChatTimeline. Protocol version, module schema version and artifact revision are independent.
 
-Implementation: [shared contract](../units/shared-artifacts.md), [TypeScript Main publication](../units/src-artifacts.md), [WebUI rendering](../units/webui-artifacts.md). Managed Main implementation status is owned by the [.NET WebUI boundary](./dotnet-webui-boundary.md#current-gaps); shared rendering does not supply its missing backend services.
+Implementation: [shared contract](../units/shared-artifacts.md), [TypeScript Main publication](../units/src-artifacts.md), [WebUI rendering](../units/webui-artifacts.md). Managed Main publication is mapped in [managed artifacts](../units/dotnet-artifacts.md); both producers use the same validators, raster metadata operation, data-only React compiler and unchanged WebUI consumer.
 
 ## D-artifact-publication
 

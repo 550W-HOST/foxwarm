@@ -150,38 +150,8 @@ internal sealed partial class SessionToolExecutor
                             new System.Text.UTF8Encoding(false, true).GetString(sourceBytes)
                         );
                     }
-                    string? resolvedPath = null;
-                    await sessions.Nodes.ExecuteAsync(
-                        node,
-                        "read",
-                        new JsonObject { ["filePath"] = file },
-                        hosted.Id,
-                        hosted.Agent,
-                        node,
-                        cwd,
-                        true,
-                        currentToken,
-                        hosted,
-                        value =>
-                        {
-                            resolvedPath = SessionWait.Text(value?["filePath"]);
-                            if (
-                                resolvedPath is null
-                                && value?["__foxwarmResolvedToolPaths"] is JsonArray paths
-                                && paths.Count == 1
-                                && SessionWait.Text(paths[0]?["raw"]) == file
-                            )
-                                resolvedPath = SessionWait.Text(paths[0]?["resolved"]);
-                        }
-                    );
-                    var transferred = await sessions.ReadNodeFileAsync(
-                        hosted,
-                        node,
-                        resolvedPath ?? RemoteSourcePath(file, cwd),
-                        files,
-                        currentToken,
-                        size => budget.Charge(checked(8L * size))
-                    );
+                    var transferred = await ReadResidentSourceAsync(node, file, cwd, files, currentToken,
+                        size => budget.Charge(checked(8L * size)));
                     return (
                         transferred.Path,
                         new System.Text.UTF8Encoding(false, true).GetString(transferred.Bytes)
@@ -200,7 +170,7 @@ internal sealed partial class SessionToolExecutor
                     currentToken,
                     toolScriptSourceRead: true
                 );
-                sessions.RequireToolScriptPath(hosted, actual);
+                sessions.RequireMainFileSourcePath(hosted, actual);
                 if (!WorkspaceTools.RegularFile(actual))
                     throw new FileNotFoundException(
                         "ToolScript source must be a regular file.",

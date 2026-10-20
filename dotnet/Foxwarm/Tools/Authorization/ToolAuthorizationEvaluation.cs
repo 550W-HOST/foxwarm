@@ -472,6 +472,8 @@ internal static class ToolAuthorizationNodeEffects
             return Valid(targetNode) ? [targetNode!] : null;
         if (source != "builtin")
             return null;
+        if (name == "artifact" && ToolRegistry.ArtifactFileSource(args))
+            return Valid(targetNode) ? [targetNode!] : null;
         if (name == "copy_between_nodes")
         {
             var endpoints = new[]

@@ -11,9 +11,9 @@ Owns source ingestion, immutable persistent snapshots, module preparation and au
 
 - `tool_artifact`: current-Session-only preparation/publication; checks read authorization, resolves Main real paths and isolated-agent boundary, or uses the existing authorized Node file-read service with a captured source CWD. Primitive Provider sources reject an oversized stat before reading and cap total ranged reads at the limit plus one byte to detect growth. Resident CLI sources retain their canonical approval/read and complete-transfer behavior; that legacy path still checks the artifact size only after the complete read. Returns a preparation reference without auto-display, or a display receipt after publication. Raster input uses verified original bytes and the same source authorization.
 - `artifactStore`, `ArtifactStore.publish/read/resource/latestRevision`: Main state store, per-artifact serialization, expected-revision conflicts, type/owner invariants and atomic exclusive final-file linking. Content-addressed resources are complete before the revision link and verified on read; temporary files are removed on failure.
-- `describeImage`: safe raster magic/header, pixel/frame bounds and canonical metadata.
+- `describeImage`: re-exports the shared original raster magic/header, pixel/frame bounds and canonical metadata operation.
 - `prepareArtifact`, `ArtifactPreparer`: registered preparation adapters; charts need no compilation.
-- `reactBuildWorker`: a child-process compilation entry. Virtual source import resolution plus trusted fixed React packages; no evaluation of artifact code. Parent bounds duration and output.
+- `reactBuildWorker`: a child-process compilation entry. Calls the shared `compileReact` operation with the fixed WebUI runtime root; virtual source import resolution plus trusted fixed React packages; no evaluation of artifact code. Parent bounds duration and output.
 - `registerArtifactRoutes`: Session-scoped metadata/resource routes, injectable store for tests, no-store JSON response and unavailable fallback without leaking private paths.
 
 ## Ownership and persistence

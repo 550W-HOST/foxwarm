@@ -40,7 +40,8 @@ internal static class TargetFileContent
         CancellationToken token,
         Action<long>? beforeMaterialize = null,
         int chunkSize = ChunkBytes,
-        bool requireRegular = false
+        bool requireRegular = false,
+        bool boundRequests = false
     )
     {
         RequirePath(path);
@@ -54,12 +55,13 @@ internal static class TargetFileContent
         var offset = 0;
         while (true)
         {
-            var chunk = await operations.ReadAsync(path, offset, chunkSize, token);
+            var requested = boundRequests ? (int)Math.Min(chunkSize, limit + 1 - offset) : chunkSize;
+            var chunk = await operations.ReadAsync(path, offset, requested, token);
             if (chunk.Length > bytes.Length - offset)
                 throw new IOException("Source file changed or returned incomplete data.");
             chunk.CopyTo(bytes, offset);
             offset += chunk.Length;
-            if (chunk.Length < chunkSize)
+            if (chunk.Length < requested)
                 break;
         }
         if (offset != bytes.Length)

@@ -106,6 +106,8 @@ internal sealed class WebUiAccess(SessionRuntime runtime, AccessConfiguration co
                 "/api/auth/session"
                     or "/api/sessions"
                     or "/api/webui/stream"
+                    or "/api/sessions/{id}/artifacts/{artifactId}/{revision}"
+                    or "/api/sessions/{id}/artifacts/{artifactId}/{revision}/resources/{resource}"
                     or "/api/sessions/{id}/history"
                     or "/api/sessions/{id}/history/continuous"
                     or "/api/sessions/{id}/stream"

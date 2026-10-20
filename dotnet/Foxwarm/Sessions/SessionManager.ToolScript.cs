@@ -7,7 +7,7 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionManager
 {
-    internal void RequireToolScriptPath(SessionOwner owner, string path)
+    internal void RequireMainFileSourcePath(SessionOwner owner, string path)
     {
         if (!AgentIsolated(owner.Agent))
             return;
@@ -23,7 +23,7 @@ internal sealed partial class SessionManager
                 )
         )
             throw new ToolAuthorizationDeniedException(
-                "Isolated Agent can only read ToolScript source within its own directory."
+                "Isolated Agent can only read source files within its own directory."
             );
     }
 

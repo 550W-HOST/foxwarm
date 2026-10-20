@@ -358,17 +358,20 @@ internal sealed partial class NodeProviderRegistry
         string path,
         string? cwd,
         CancellationToken token,
-        Action<long> beforeMaterialize
+        Action<long>? beforeMaterialize = null,
+        int limit = int.MaxValue,
+        bool boundRequests = false
     )
     {
         var operations = await FileOperationsAsync(node, false, cwd, token);
         return await TargetFileContent.ReadAsync(
             operations,
             path,
-            int.MaxValue,
+            limit,
             token,
             beforeMaterialize,
-            chunkSize: 65536
+            chunkSize: 65536,
+            boundRequests: boundRequests
         );
     }
 

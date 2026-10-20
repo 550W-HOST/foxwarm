@@ -400,9 +400,9 @@ public sealed class CanonicalPathsTests
             )
         );
         // Canonical main/agents is ordinary own content, unlike the retained sibling-Agent tree.
-        manager.RequireToolScriptPath(owner, Path.Combine(own, "agents", "script.py"));
+        manager.RequireMainFileSourcePath(owner, Path.Combine(own, "agents", "script.py"));
         Assert.Throws<ToolAuthorizationDeniedException>(() =>
-            manager.RequireToolScriptPath(owner, Path.Combine(data, "outside.py"))
+            manager.RequireMainFileSourcePath(owner, Path.Combine(data, "outside.py"))
         );
         var request = new ToolAuthorizationRequest(
             "node",

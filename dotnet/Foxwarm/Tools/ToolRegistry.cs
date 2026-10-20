@@ -104,6 +104,8 @@ internal sealed class ToolRegistry(
                 ExecutionNode: direct.Source == "node" ? currentNode
                     : invocation is "run_script" or "start_toolscript_run"
                         ? ToolScriptSourceNode(args, currentNode) ?? "master"
+                    : invocation == "artifact" && ArtifactFileSource(args)
+                        ? ArtifactSourceNode(args, currentNode)
                     : invocation is "send_file" or "image_write_to_file"
                         ? TargetNode(Text(args, "node"), currentNode)
                     : "master"
@@ -183,6 +185,8 @@ internal sealed class ToolRegistry(
             ExecutionNode: source == "node" ? targetNode
                 : name is "run_script" or "start_toolscript_run"
                     ? ToolScriptSourceNode(targetArgs, currentNode) ?? "master"
+                : name == "artifact" && ArtifactFileSource(targetArgs)
+                    ? ArtifactSourceNode(targetArgs, currentNode)
                 : name is "send_file" or "image_write_to_file"
                     ? TargetNode(Text(targetArgs, "node"), currentNode)
                 : "master"
@@ -247,6 +251,16 @@ internal sealed class ToolRegistry(
             owner.CurrentCallId,
             owner.ToolScriptExecution
         );
+    }
+
+    internal static bool ArtifactFileSource(JsonObject args) => SessionWait.Text(args["action"]) is "prepare" or "publish";
+
+    internal static string ArtifactSourceNode(JsonObject args, string currentNode)
+    {
+        var node = Text(args, "node") ?? currentNode;
+        if (!System.Text.RegularExpressions.Regex.IsMatch(node, @"^(?:[A-Za-z0-9._:-]{1,128}|[A-Za-z0-9][A-Za-z0-9._:-]{0,63}/[A-Za-z0-9][A-Za-z0-9._:-]{0,127})$"))
+            throw new InvalidDataException("Invalid source Node");
+        return node;
     }
 
     internal static string? ToolScriptSourceNode(JsonObject args, string currentNode)

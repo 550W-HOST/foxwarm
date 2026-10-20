@@ -152,6 +152,8 @@ internal sealed partial class SessionManager
             else if (!IsMasterBrowser(resolved.Source, resolved.Name, resolved.ExecutionNode))
                 RequireNodeBoundary(owner, resolved.ExecutionNode);
         }
+        if (resolved.Source == "builtin" && resolved.Name == "artifact" && ToolRegistry.ArtifactFileSource(resolved.Args))
+            RequireFileNodeBoundary(owner, resolved.ExecutionNode);
         if (resolved.Source == "builtin" && resolved.Name is "run_script" or "start_toolscript_run")
             RequireFileNodeBoundary(owner, resolved.ExecutionNode);
         if (resolved.Source == "builtin" && resolved.Name is "send_file" or "image_write_to_file")
@@ -163,6 +165,7 @@ internal sealed partial class SessionManager
             resolved.ExecutionNode != "master"
             && (
                 resolved.Source == "node"
+                || resolved.Source == "builtin" && resolved.Name == "artifact" && ToolRegistry.ArtifactFileSource(resolved.Args)
                 || resolved.Source == "builtin"
                     && resolved.Name
                         is "send_file"
@@ -174,6 +177,8 @@ internal sealed partial class SessionManager
             resolved.Source == "builtin" && resolved.Name == "copy_between_nodes"
                 ? CopyAuthorizationPaths(owner, resolved.Args)
             : remote ? RemoteAuthorizationPaths(resolved)
+            : resolved.Source == "builtin" && resolved.Name == "artifact" && ToolRegistry.ArtifactFileSource(resolved.Args)
+                ? (files ?? throw new NotSupportedException("This executor has no physical path resolver.")).AuthorizationFacts("read", resolved.Args)
             : resolved.Source == "node"
                 && resolved.Name is "read" or "write" or "edit" or "apply_patch" or "exec"
             || resolved.Source == "builtin"
@@ -279,7 +284,8 @@ internal sealed partial class SessionManager
         if (
             source == "builtin"
             && name
-                is "run_script"
+                is "artifact"
+                    or "run_script"
                     or "start_toolscript_run"
                     or "send_file"
                     or "image_write_to_file"

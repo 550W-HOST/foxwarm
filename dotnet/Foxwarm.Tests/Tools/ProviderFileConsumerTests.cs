@@ -70,6 +70,7 @@ public sealed partial class ProviderFileConsumerTests
             f.Owner = await f.Manager.CreateNamedAsync("main", "provider", null, null);
             f.mcp = new(f.Data);
             var definitions = WorkspaceTools.Definitions();
+            definitions.Add(ArtifactToolDefinition.Definition());
             foreach (
                 var item in FileDeliveryDefinitions
                     .Definitions()
