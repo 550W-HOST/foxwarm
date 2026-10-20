@@ -200,6 +200,71 @@ test('script registration is owner-only, replacement clears old payload, and fir
   });
 });
 
+test('public padded-ID script replacement cannot cross the executable timer owner boundary', async () => {
+  await fixture(async ({ root, session, create }) => {
+    const foreign = await sessionManager.getSession(`${session.id}_foreign`);
+    try {
+      const trustedOutput = path.join(root, 'trusted-check');
+      const foreignOutput = path.join(root, 'foreign-check');
+      const id = await create({ code: 'return call_tool("write", args)', args: { filePath: trustedOutput, content: 'owner check' } });
+      const before = await fs.readJson(path.join(root, 'timers.json'));
+      for (const timerId of [id, ` \t${id}\n`]) {
+        await assert.rejects(() => tools.call_tool({ toolId: 'builtin:update_timer', args: {
+          timerId, sessionId: session.id,
+          // Omitted action inherits toolscript only after identifying the record.
+          script: { code: 'return call_tool("write", args)', args: { filePath: foreignOutput, content: 'foreign replacement' } },
+        } }, { sessionId: foreign.id, session: foreign }), /Only the owner Session/);
+      }
+      assert.deepEqual(await fs.readJson(path.join(root, 'timers.json')), before);
+      assert.deepEqual(timers.listTimers(session.id)[0].script, before.timers[0].script);
+      assert.equal(await fs.pathExists(trustedOutput), false);
+      assert.equal(await fs.pathExists(foreignOutput), false);
+      await timers.fireTimerForTests(id);
+      assert.equal(await fs.readFile(trustedOutput, 'utf8'), 'owner check');
+      assert.equal(await fs.pathExists(foreignOutput), false, 'the rejected replacement never executed as the owner');
+    } finally { await sessionManager.deleteSession(foreign.id); }
+  });
+});
+
+test('completion or failure of an old message delivery preserves its accepted message-to-script replacement', async () => {
+  await fixture(async ({ root, session, ctx }) => {
+    const originalQueue = sessionManager.queueSessionSystemEvent;
+    for (const failDelivery of [false, true]) {
+      let entered!: () => void; let release!: () => void;
+      const reached = new Promise<void>(resolve => { entered = resolve; });
+      const held = new Promise<void>(resolve => { release = resolve; });
+      let firing: Promise<void> | undefined;
+      (sessionManager as any).queueSessionSystemEvent = async (...args: Parameters<typeof originalQueue>) => {
+        entered(); await held;
+        if (failDelivery) throw new Error('injected message delivery failure');
+        return originalQueue(...args);
+      };
+      try {
+        const receipt = await tools.call_tool({ toolId: 'builtin:create_timer', args: { message: 'old message', afterSeconds: 3600 } }, ctx);
+        const id = /Timer `([^`]+)` created/.exec(receipt)![1];
+        firing = timers.fireTimerForTests(id); await reached;
+        const output = path.join(root, `replacement-${failDelivery}`);
+        await tools.call_tool({ toolId: 'builtin:update_timer', args: {
+          timerId: id, action: 'toolscript', afterSeconds: 7200,
+          script: { code: 'return call_tool("write", args)', args: { filePath: output, content: 'accepted replacement' } },
+        } }, ctx);
+        const replacement = timers.listTimers(session.id).find(timer => timer.id === id)!;
+        assert.equal(replacement.action, 'toolscript');
+        release(); await firing;
+        assert.deepEqual(timers.listTimers(session.id).find(timer => timer.id === id), replacement);
+        assert.equal((await fs.readJson(path.join(root, 'timers.json'))).timers.find((timer: any) => timer.id === id).action, 'toolscript');
+        assert.equal(await fs.pathExists(output), false);
+        await timers.fireTimerForTests(id);
+        assert.equal(await fs.readFile(output, 'utf8'), 'accepted replacement');
+        assert.equal(timers.listTimers(session.id).some(timer => timer.id === id), false);
+      } finally {
+        release(); await firing;
+        (sessionManager as any).queueSessionSystemEvent = originalQueue;
+      }
+    }
+  });
+});
+
 test('one slice per timer skips overlap and in-flight self update/delete cannot consume a replacement', { timeout: 20000 }, async () => {
   await fixture(async ({ root, session, ctx }) => {
     const originalCall = tools.call_tool;

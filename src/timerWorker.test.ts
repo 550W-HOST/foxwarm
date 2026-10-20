@@ -90,6 +90,15 @@ test('registered Worker timers use exact process owner, cooperative busy safe po
     assert.equal(stub.history.length, 0, 'Main remained catalog-only');
     await fs.writeFile(path.join(STATE_DIR, 'timer-provider-2-release'), '1');
     await busy;
+    await waitFor(() => fs.pathExists(path.join(STATE_DIR, 'timer-extra-wake-started')), 'detached reverse-delivery wake');
+    assert.equal((await fs.readJson(getSessionHistoryFilePath(id))).busy, true,
+      'the original submit can complete while the detached empty wake still owns busy');
+    const ownership = store.findOwnership(id)!;
+    // This existing serialized owner read is a completion barrier for both the
+    // original submit and the processing wake admitted by reverse self-delivery.
+    const idle = supervisor.idleStatusActivated(id, { generation: ownership.generation, incarnationId: ownership.incarnationId! });
+    await fs.writeFile(path.join(STATE_DIR, 'timer-extra-wake-release'), '1');
+    assert.deepEqual(await idle, { busy: false, queueLength: 0, runningExecCount: 0 });
     const final = await fs.readJson(getSessionHistoryFilePath(id));
     assert.equal(final.busy, false);
     assert.equal(JSON.stringify(final.history).split('WORKER_TIMER_ALERT').length - 1, 1);
@@ -97,6 +106,7 @@ test('registered Worker timers use exact process owner, cooperative busy safe po
   } finally {
     await fs.writeFile(path.join(STATE_DIR, 'timer-provider-1-release'), '1');
     await fs.writeFile(path.join(STATE_DIR, 'timer-provider-2-release'), '1');
+    await fs.writeFile(path.join(STATE_DIR, 'timer-extra-wake-release'), '1');
     await Promise.allSettled([busy, tick]);
     await timers.shutdownTimers();
     timers.resetTimersForTests();

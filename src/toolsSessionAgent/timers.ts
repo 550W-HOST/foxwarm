@@ -83,13 +83,14 @@ export async function tool_update_timer(args: ToolArgs, ctx: ToolContext) {
     sessionPrefix: args.sessionPrefix,
   });
 
-  const { timerId } = args;
+  const timerId = typeof args.timerId === 'string' ? args.timerId.trim() : '';
   const targetSessionId = args.sessionId || ctx.sessionId;
 
-  if (!timerId || typeof timerId !== 'string') {
+  if (!timerId) {
     throw new Error('timerId is required');
   }
 
+  // Authorization and mutation must select the same canonical record.
   const existing = timers.listTimers().find(timer => timer.id === timerId);
   if ((args.action === 'toolscript' || existing?.action === 'toolscript')
       && (!existing || existing.sessionId !== ctx.sessionId || targetSessionId !== ctx.sessionId)) {

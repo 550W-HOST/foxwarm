@@ -294,7 +294,7 @@ async function fireTimer(timerId: string, modelsConfigOverride?: ModelsConfig): 
   } catch (err) {
     logger.error({ err, timerId, sessionId: timer.sessionId }, 'Timer delivery failed');
 
-    if (!isCronTimer(timer)) {
+    if (timers.get(timer.id) === timer && !isCronTimer(timer)) {
       cancelTimerJob(timer.id);
       timers.delete(timer.id);
       await saveTimers();
@@ -302,6 +302,8 @@ async function fireTimer(timerId: string, modelsConfigOverride?: ModelsConfig): 
     return;
   }
 
+  // Delivery awaited; an accepted update/delete now owns this ID, not the old firing.
+  if (timers.get(timer.id) !== timer) return;
   timer.lastTriggeredAt = firedAt.getTime();
 
   if (isCronTimer(timer)) {
