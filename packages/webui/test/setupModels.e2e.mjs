@@ -3,8 +3,9 @@ import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { createServer } from 'node:net'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import puppeteer from 'puppeteer-core'
@@ -18,6 +19,7 @@ const firefoxPath = process.env.FOXWARM_E2E_FIREFOX || '/usr/bin/firefox-esr'
 const selectedBrowser = process.env.FOXWARM_E2E_BROWSER || 'chromium'
 
 let vite
+let viteCacheDir
 let preview
 let productionBaseUrl
 let browser
@@ -314,6 +316,10 @@ async function attachRequestMocks(targetPage, options = {}) {
       void respondJson(request, { sessions: [] })
       return
     }
+    if (url.pathname.endsWith('/api/session-list/architecture')) {
+      void respondJson(request, { summary: options.globalSummary ?? { total: 0, busy: 0 } })
+      return
+    }
     if (url.pathname.endsWith('/api/agents')) {
       void respondJson(request, { agents: [] })
       return
@@ -499,20 +505,29 @@ async function dragMonacoSelection(targetPage, modelUri, start, end) {
 
 before(async () => {
   const viteBin = path.join(webuiRoot, 'node_modules/.bin/vite')
-  await waitForProcess(spawn(viteBin, ['build'], {
+  await waitForProcess(spawn(viteBin, ['build', '--configLoader', 'runner'], {
     cwd: webuiRoot,
     stdio: ['ignore', 'ignore', 'inherit'],
   }), 'production WebUI build')
 
   const previewPort = await getFreePort()
   productionBaseUrl = `http://127.0.0.1:${previewPort}/production/foxwarm`
-  preview = spawn(viteBin, ['preview', '--base', '/production/foxwarm/', '--host', '127.0.0.1', '--port', String(previewPort), '--strictPort'], {
+  preview = spawn(viteBin, ['preview', '--configLoader', 'runner', '--base', '/production/foxwarm/', '--host', '127.0.0.1', '--port', String(previewPort), '--strictPort'], {
     cwd: webuiRoot,
     stdio: ['ignore', 'ignore', 'inherit'],
   })
   await waitForServer(`${productionBaseUrl}/`)
 
-  vite = spawn(viteBin, ['--host', '127.0.0.1', '--port', String(port)], {
+  viteCacheDir = await mkdtemp(path.join(process.env.FOXWARM_TEST_TEMP_ROOT || tmpdir(), 'fw-setup-'))
+  vite = spawn(process.execPath, ['--input-type=module', '-e', `
+    import { createServer } from 'vite'
+    const server = await createServer({
+      configLoader: 'runner',
+      cacheDir: ${JSON.stringify(viteCacheDir)},
+      server: { host: '127.0.0.1', port: ${port}, strictPort: true },
+    })
+    await server.listen()
+  `], {
     cwd: webuiRoot,
     stdio: ['ignore', 'ignore', 'inherit'],
   })
@@ -535,7 +550,13 @@ before(async () => {
 
 after(async () => {
   await browser?.close()
-  vite?.kill('SIGTERM')
+  if (vite && vite.exitCode === null) {
+    await new Promise(resolve => {
+      vite.once('exit', resolve)
+      vite.kill('SIGTERM')
+    })
+  }
+  if (viteCacheDir) await rm(viteCacheDir, { recursive: true, force: true })
   preview?.kill('SIGTERM')
 })
 
@@ -671,6 +692,7 @@ test('Appearance owns browser name and tab icon editing with save, cancel, and s
     assert.equal(brandingText.includes('Change tab icon'), true)
     assert.equal(await brandingPage.$eval('#webui-instance-name', input => input.value), 'Fixture Foxwarm')
     assert.equal(await brandingPage.$eval('#webui-tab-icon', input => input.value), '🧪')
+    assert.equal(await brandingPage.title(), 'Fixture Foxwarm · Foxwarm')
 
     await brandingPage.click('#webui-instance-name', { clickCount: 3 })
     await brandingPage.type('#webui-instance-name', 'Unsaved name')
@@ -682,6 +704,7 @@ test('Appearance owns browser name and tab icon editing with save, cancel, and s
     await brandingPage.click('button::-p-text(Save name)')
     await brandingPage.waitForFunction(() => document.querySelector('#webui-instance-name')?.value === 'Renamed fixture')
     assert.deepEqual(webUiSettingsRequests.at(-1), { instanceName: 'Renamed fixture' })
+    assert.equal(await brandingPage.title(), 'Renamed fixture · Foxwarm')
 
     webUiSettingsError = 'Tab icon is too long'
     await brandingPage.click('#webui-tab-icon', { clickCount: 3 })
@@ -692,6 +715,54 @@ test('Appearance owns browser name and tab icon editing with save, cancel, and s
     webUiSettingsError = null
   } finally {
     await brandingPage.close()
+  }
+})
+
+test('browser tab title leaves branding icons in the favicon and preserves named and busy titles', async (t) => {
+  const originalSettings = webUiSettings
+  const titlePage = await browser.newPage()
+  const options = { globalSummary: { total: 5, busy: 0 } }
+  await attachRequestMocks(titlePage, options)
+  try {
+    for (const scenario of [
+      { label: 'missing name with custom icon', settings: { tabIcon: '🧪' }, busy: 0, title: 'Foxwarm' },
+      { label: 'whitespace name while busy', settings: { instanceName: '  \t ', tabIcon: '🧪' }, busy: 3, title: '[3 busy] Foxwarm' },
+      { label: 'deliberate emoji in trimmed custom name while busy', settings: { instanceName: '  🦊 Lab  ', tabIcon: '🧪' }, busy: 3, title: '[3 busy] 🦊 Lab · Foxwarm' },
+      { label: 'empty name and default icon while idle', settings: { instanceName: '', tabIcon: '' }, busy: 0, title: 'Foxwarm' },
+    ]) {
+      await t.test(scenario.label, async () => {
+        webUiSettings = scenario.settings
+        options.globalSummary.busy = scenario.busy
+        await titlePage.goto(`${productionBaseUrl}/?titleCase=${encodeURIComponent(scenario.label)}#setup`, { waitUntil: 'networkidle2' })
+        await waitForWebUiReady(titlePage)
+        await titlePage.waitForSelector('[data-webui-branding-settings]')
+        assert.equal(await titlePage.title(), scenario.title)
+        const icons = await titlePage.$$eval('link[rel~="icon"]', links => links.map(link => ({ id: link.id, href: link.getAttribute('href') })))
+        if (scenario.settings.tabIcon) {
+          assert.ok(icons.some(icon => icon.id === 'foxwarm-custom-favicon'))
+          for (const icon of icons) assert.ok(decodeURIComponent(icon.href).includes('>🧪</text>'))
+        } else {
+          assert.equal(icons.some(icon => icon.id === 'foxwarm-custom-favicon'), false)
+          assert.ok(icons.some(icon => icon.href === './favicon.svg'))
+        }
+        t.diagnostic(`${scenario.label}: ${await titlePage.title()}; ${icons.length} favicon candidates`)
+      })
+    }
+  } finally {
+    webUiSettings = originalSettings
+    await titlePage.close()
+  }
+})
+
+test('initial HTML browser title is Foxwarm before App starts', async () => {
+  const initialPage = await browser.newPage()
+  try {
+    await initialPage.setJavaScriptEnabled(false)
+    await initialPage.goto(`${productionBaseUrl}/`, { waitUntil: 'load' })
+    assert.equal(await initialPage.title(), 'Foxwarm')
+    assert.ok(await initialPage.$('link[rel="icon"][href="./favicon.svg"]'))
+  } finally {
+    await initialPage.close()
   }
 })
 
