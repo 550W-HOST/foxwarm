@@ -28,13 +28,8 @@ internal sealed class WindowsBackgroundControl : IAsyncDisposable
         server = ServeAsync();
     }
 
-    private NamedPipeServerStream CreatePipe() => new(
-            pipeName,
-            PipeDirection.InOut,
-            2,
-            PipeTransmissionMode.Byte,
-            PipeOptions.Asynchronous
-        );
+    private NamedPipeServerStream CreatePipe() =>
+        new(pipeName, PipeDirection.InOut, 2, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
 
     internal static WindowsBackgroundControl? Start(
         bool enabled,
@@ -71,32 +66,32 @@ internal sealed class WindowsBackgroundControl : IAsyncDisposable
                 next = CreatePipe();
                 try
                 {
-                using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
-                var command = await reader.ReadLineAsync(stopping.Token);
-                var logs = Path.Combine(dataRoot, "state", "logs");
-                object response = command switch
-                {
-                    "status" => new
+                    using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
+                    var command = await reader.ReadLineAsync(stopping.Token);
+                    var logs = Path.Combine(dataRoot, "state", "logs");
+                    object response = command switch
                     {
-                        ok = true,
-                        pid = Environment.ProcessId,
-                        stopping = lifetime.ApplicationStopping.IsCancellationRequested,
-                        logDir = logs,
-                        stdoutLog = Path.Combine(logs, "foxwarm.stdout.log"),
-                        stderrLog = Path.Combine(logs, "foxwarm.stderr.log"),
-                    },
-                    "stop" => new { ok = true, pid = Environment.ProcessId },
-                    _ => new { ok = false, error = "unknown command" },
-                };
-                var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(response));
-                await pipe.WriteAsync(bytes, stopping.Token);
-                await pipe.FlushAsync(stopping.Token);
-                // Source socket.end completes with EOF. DisconnectNamedPipe instead
-                // forces the client off with EPIPE, even after it received valid JSON.
-                if (OperatingSystem.IsWindows())
-                    pipe.WaitForPipeDrain();
-                if (command == "stop")
-                    lifetime.StopApplication();
+                        "status" => new
+                        {
+                            ok = true,
+                            pid = Environment.ProcessId,
+                            stopping = lifetime.ApplicationStopping.IsCancellationRequested,
+                            logDir = logs,
+                            stdoutLog = Path.Combine(logs, "foxwarm.stdout.log"),
+                            stderrLog = Path.Combine(logs, "foxwarm.stderr.log"),
+                        },
+                        "stop" => new { ok = true, pid = Environment.ProcessId },
+                        _ => new { ok = false, error = "unknown command" },
+                    };
+                    var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(response));
+                    await pipe.WriteAsync(bytes, stopping.Token);
+                    await pipe.FlushAsync(stopping.Token);
+                    // Source socket.end completes with EOF. DisconnectNamedPipe instead
+                    // forces the client off with EPIPE, even after it received valid JSON.
+                    if (OperatingSystem.IsWindows())
+                        pipe.WaitForPipeDrain();
+                    if (command == "stop")
+                        lifetime.StopApplication();
                 }
                 catch (OperationCanceledException) when (stopping.IsCancellationRequested)
                 {

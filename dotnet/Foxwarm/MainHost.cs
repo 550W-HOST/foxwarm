@@ -24,8 +24,12 @@ internal sealed class MainHost : IAsyncDisposable
         await host.StartAsync();
         if (sessions.ManagedChannels is { } channels)
         {
-            var stopping = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var registration = Lifetime.ApplicationStopping.Register(() => stopping.TrySetResult());
+            var stopping = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            using var registration = Lifetime.ApplicationStopping.Register(() =>
+                stopping.TrySetResult()
+            );
             if (Lifetime.ApplicationStopping.IsCancellationRequested)
                 return;
             var startup = channels.ReloadAsync();

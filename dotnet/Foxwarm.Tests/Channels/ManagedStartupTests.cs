@@ -25,7 +25,9 @@ public sealed class ManagedStartupTests
             replied.TrySetResult();
             return Results.Json(new { versions = new[] { "v1.4" } });
         };
-        await using var f = await ExternalChannelFixture.CreateAsync(new JsonObject { ["alpha"] = peer.Matrix() });
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            new JsonObject { ["alpha"] = peer.Matrix() }
+        );
         var channels = f.Manager.ManagedChannels!;
         var startup = channels.ReloadAsync();
         try
@@ -40,7 +42,12 @@ public sealed class ManagedStartupTests
             release.TrySetResult();
             await replied.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Null(f.Manager.ChannelRegistry.Get("alpha"));
-            Assert.DoesNotContain(peer.Calls, call => call.Path.EndsWith("/sync", StringComparison.Ordinal) || call.Path.EndsWith("/capabilities", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                peer.Calls,
+                call =>
+                    call.Path.EndsWith("/sync", StringComparison.Ordinal)
+                    || call.Path.EndsWith("/capabilities", StringComparison.Ordinal)
+            );
             await Assert.ThrowsAsync<InvalidOperationException>(() => channels.ReloadAsync());
         }
         finally
@@ -69,9 +76,23 @@ public sealed class ManagedStartupTests
         var work = Path.Combine(temp.Path, "work");
         Directory.CreateDirectory(Path.Combine(data, "state"));
         Directory.CreateDirectory(work);
-        await File.WriteAllTextAsync(Path.Combine(data, "state", "config.yaml"), new JsonObject { ["vector"] = false, ["channels"] = new JsonObject { ["alpha"] = peer.Matrix() } }.ToJsonString());
+        await File.WriteAllTextAsync(
+            Path.Combine(data, "state", "config.yaml"),
+            new JsonObject
+            {
+                ["vector"] = false,
+                ["channels"] = new JsonObject { ["alpha"] = peer.Matrix() },
+            }.ToJsonString()
+        );
         var settings = await HttpServerSettings.CaptureDesktopAsync(data);
-        await using var host = await MainHost.CreateAsync([], data, work, new ModelConfiguration(data), settings, null);
+        await using var host = await MainHost.CreateAsync(
+            [],
+            data,
+            work,
+            new ModelConfiguration(data),
+            settings,
+            null
+        );
         var name = "foxwarm-startup-test-" + Guid.NewGuid().ToString("N");
         var previous = Environment.GetEnvironmentVariable("FOXWARM_WINDOWS_CONTROL_PIPE");
         WindowsBackgroundControl control;
@@ -80,7 +101,14 @@ public sealed class ManagedStartupTests
             Environment.SetEnvironmentVariable("FOXWARM_WINDOWS_CONTROL_PIPE", name);
             // Exercise the real protocol owner with .NET's available local named-pipe seam.
             // The production Windows-only Program/Start gate is not changed or qualified here.
-            control = (WindowsBackgroundControl)Activator.CreateInstance(typeof(WindowsBackgroundControl), BindingFlags.Instance | BindingFlags.NonPublic, null, [data, host.Lifetime], null)!;
+            control = (WindowsBackgroundControl)
+                Activator.CreateInstance(
+                    typeof(WindowsBackgroundControl),
+                    BindingFlags.Instance | BindingFlags.NonPublic,
+                    null,
+                    [data, host.Lifetime],
+                    null
+                )!;
         }
         finally
         {
@@ -89,8 +117,13 @@ public sealed class ManagedStartupTests
         await using var ownedControl = control;
         async Task<JsonObject> Command(string command)
         {
-            var script = Path.GetFullPath("../../../../../scripts/windowsService.js", AppContext.BaseDirectory);
-            var address = OperatingSystem.IsWindows() ? @"\\.\pipe\" + name : Path.Combine(Path.GetTempPath(), "CoreFxPipe_" + name);
+            var script = Path.GetFullPath(
+                "../../../../../scripts/windowsService.js",
+                AppContext.BaseDirectory
+            );
+            var address = OperatingSystem.IsWindows()
+                ? @"\\.\pipe\" + name
+                : Path.Combine(Path.GetTempPath(), "CoreFxPipe_" + name);
             var start = new ProcessStartInfo("node")
             {
                 RedirectStandardOutput = true,
@@ -118,13 +151,19 @@ public sealed class ManagedStartupTests
             var status = await Command("status");
             Assert.Equal(Environment.ProcessId, status["pid"]!.GetValue<int>());
             Assert.False(status["stopping"]!.GetValue<bool>());
-            Assert.Equal(Path.Combine(data, "state", "logs", "foxwarm.stdout.log"), status["stdoutLog"]!.GetValue<string>());
+            Assert.Equal(
+                Path.Combine(data, "state", "logs", "foxwarm.stdout.log"),
+                status["stdoutLog"]!.GetValue<string>()
+            );
             Assert.True((await Command("stop"))["ok"]!.GetValue<bool>());
             await host.WaitForShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
             await startup.WaitAsync(TimeSpan.FromSeconds(5));
             using var http = new HttpClient { BaseAddress = new Uri(settings.Address.BaseUrl) };
             http.DefaultRequestHeaders.Authorization = new("Bearer", settings.Token);
-            using var refused = await http.PostAsJsonAsync("api/sessions", new { agentId = "main", sessionId = "after-control-stop" });
+            using var refused = await http.PostAsJsonAsync(
+                "api/sessions",
+                new { agentId = "main", sessionId = "after-control-stop" }
+            );
             Assert.False(refused.IsSuccessStatusCode);
             Assert.True((await Command("status"))["stopping"]!.GetValue<bool>());
             await host.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));

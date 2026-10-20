@@ -30,7 +30,10 @@ internal sealed class ManagedChannels(
         type is "telegram" or "matrix" or "weixin" or "wework" or "qqbot";
 
     private readonly Dictionary<string, IManagedChannel> running = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, (IManagedChannel Channel, TaskCompletionSource Settled)> starting = new(StringComparer.Ordinal);
+    private readonly Dictionary<
+        string,
+        (IManagedChannel Channel, TaskCompletionSource Settled)
+    > starting = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> errors = new(StringComparer.Ordinal);
     private readonly object gate = new();
     private volatile bool closed;
@@ -251,13 +254,13 @@ internal sealed class ManagedChannels(
                 running.Add(id, channel);
                 errors.Remove(id);
                 if (
-                SessionWait.Text(
-                    config[Type(id, config) == "matrix" ? "botUserId" : "mainAttachUser"]
+                    SessionWait.Text(
+                        config[Type(id, config) == "matrix" ? "botUserId" : "mainAttachUser"]
+                    )
+                        is { Length: > 0 } conversation
+                    && sessions.ChannelBinding(id + ":" + conversation) is null
                 )
-                    is { Length: > 0 } conversation
-                && sessions.ChannelBinding(id + ":" + conversation) is null
-            )
-                sessions.AttachConfiguredChannel(id + ":" + conversation, "main");
+                    sessions.AttachConfiguredChannel(id + ":" + conversation, "main");
                 published = true;
             }
             return true;
@@ -316,7 +319,10 @@ internal sealed class ManagedChannels(
         lock (gate)
         {
             closed = true;
-            current = running.Values.Concat(starting.Values.Select(value => value.Channel)).Distinct().ToArray();
+            current = running
+                .Values.Concat(starting.Values.Select(value => value.Channel))
+                .Distinct()
+                .ToArray();
             initializers = starting.Values.Select(value => value.Settled.Task).ToArray();
         }
         await Task.WhenAll(current.Select(channel => channel.StopAsync()));
