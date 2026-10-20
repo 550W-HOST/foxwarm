@@ -14,7 +14,9 @@ public sealed partial class AsrRoutesTests
         var token = timeout.Token;
         await using var f = await Fixture.Create();
         var admitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         f.BeforeStream = async context =>
         {
             admitted.TrySetResult();
@@ -116,7 +118,10 @@ public sealed partial class AsrRoutesTests
         return await observed.Task.WaitAsync(token);
     }
 
-    private static async Task<MessageSizes> ObserveMessages(WebSocket socket, CancellationToken token)
+    private static async Task<MessageSizes> ObserveMessages(
+        WebSocket socket,
+        CancellationToken token
+    )
     {
         var buffer = new byte[64 * 1024];
         var complete = new List<long>();
@@ -137,7 +142,12 @@ public sealed partial class AsrRoutesTests
                 {
                     complete.Add(size);
                     size = 0;
-                    await socket.SendAsync(new byte[] { 5 }, WebSocketMessageType.Binary, true, token);
+                    await socket.SendAsync(
+                        new byte[] { 5 },
+                        WebSocketMessageType.Binary,
+                        true,
+                        token
+                    );
                 }
             }
         }
@@ -175,7 +185,12 @@ public sealed partial class AsrRoutesTests
                     );
                 } while (sent < size);
                 if (emptyEnd)
-                    await socket.SendAsync(ReadOnlyMemory<byte>.Empty, WebSocketMessageType.Binary, true, token);
+                    await socket.SendAsync(
+                        ReadOnlyMemory<byte>.Empty,
+                        WebSocketMessageType.Binary,
+                        true,
+                        token
+                    );
                 var reply = await socket.ReceiveAsync(acknowledgement, token);
                 if (reply.MessageType == WebSocketMessageType.Close)
                 {
@@ -214,10 +229,25 @@ public sealed partial class AsrRoutesTests
         };
         using var client = await f.Connect();
         await admitted.Task.WaitAsync(token);
-        await client.SendAsync(Encoding.UTF8.GetBytes("opa"), WebSocketMessageType.Text, false, token);
-        await client.SendAsync(Encoding.UTF8.GetBytes("que"), WebSocketMessageType.Text, true, token);
+        await client.SendAsync(
+            Encoding.UTF8.GetBytes("opa"),
+            WebSocketMessageType.Text,
+            false,
+            token
+        );
+        await client.SendAsync(
+            Encoding.UTF8.GetBytes("que"),
+            WebSocketMessageType.Text,
+            true,
+            token
+        );
         await client.SendAsync(new byte[] { 1, 2, 3 }, WebSocketMessageType.Binary, true, token);
-        await client.SendAsync(Encoding.UTF8.GetBytes("after"), WebSocketMessageType.Text, true, token);
+        await client.SendAsync(
+            Encoding.UTF8.GetBytes("after"),
+            WebSocketMessageType.Text,
+            true,
+            token
+        );
         release.TrySetResult();
         var first = (await Receive(client, token))!;
         Assert.Equal(WebSocketMessageType.Text, first.Type);
