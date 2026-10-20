@@ -130,3 +130,5 @@ App stages a selected desktop Chat before replacing its preview, and supplies re
 Windows drive paths normalize to the existing slash-based Code URI representation at presentation; stored Session cwd and ordinary tool metadata remain native. See [Code URI ownership](../threads/code-integration.md#d-code-real-path-uri).
 
 Code target parsing/preferences and commit markers use the shared Core Node identity grammar, preserving qualified Provider IDs through encoded workspace/file/commit URLs rather than silently selecting master. This does not add Code capabilities to primitive providers. See [generic Node namespaces](../threads/tool-dispatch-node-execution.md#d-dispatch-generic-node-providers).
+
+Empty browser startup does not invent a `main` Session. With no explicit route, restored tabs or remembered Session, the workbench stays empty; normal explicit/remembered navigation is unchanged. Covered by the fresh-browser native fixture.

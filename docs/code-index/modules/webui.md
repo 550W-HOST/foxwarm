@@ -2,6 +2,8 @@
 
 The React client is shared with the .NET host. Backend-specific access identities and route behavior below describe the retained TypeScript implementation; current .NET authentication and integration gaps are documented in the [.NET WebUI boundary](../threads/dotnet-webui-boundary.md).
 
+- [Interactive artifacts](../threads/webui-artifacts.md) — versioned chart and sandboxed React content, modular publication and rendering.
+
 ## Responsibility
 
 Owns the browser application and WebUI-facing server surface: workbench/session navigation, chat/history streaming, message/tool rendering, composer/ASR, setup/settings, terminal client, and optional Code integration.

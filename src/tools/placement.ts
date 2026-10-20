@@ -11,6 +11,7 @@ export interface ToolPlacementMetadata {
   actionOwners?: Readonly<Record<string, ToolPlacementOwner>>;
   /** Root `node` selects where this tool's own file effect/source lives. */
   nodeArgumentRole?: 'placement' | 'file-source';
+  fileSourceActions?: readonly string[];
 }
 
 export interface ResolvedBuiltinToolPlacement {
@@ -50,6 +51,7 @@ export const BUILTIN_TOOL_PLACEMENTS = {
     },
   },
   task: { owner: 'main-management' },
+  artifact: { owner: 'main-management', nodeArgumentRole: 'file-source', fileSourceActions: ['publish', 'prepare'] },
   list_agents: { owner: 'main-management' },
   skill: { owner: 'session-owner' },
   get_session_messages: { owner: 'dispatcher/container' },
@@ -146,9 +148,10 @@ export function builtinNodeArgumentSelectsPlacement(name: string): boolean {
   return metadata?.nodeArgumentRole === 'placement';
 }
 
-export function builtinNodeArgumentSelectsFileSource(name: string): boolean {
+export function builtinNodeArgumentSelectsFileSource(name: string, args?: Record<string, any>): boolean {
   const metadata = BUILTIN_TOOL_PLACEMENTS[name as RegisteredBuiltinToolName] as ToolPlacementMetadata | undefined;
-  return metadata?.nodeArgumentRole === 'file-source';
+  return metadata?.nodeArgumentRole === 'file-source'
+    && (!args || !metadata.fileSourceActions || metadata.fileSourceActions.includes(args.action));
 }
 
 export function builtinHasOptionalFileNode(name: string): boolean {

@@ -340,6 +340,7 @@ try {
       'test/app-e2e/imageGeneration.e2e.mjs',
       // Runs after a real application restart against the same data root.
       { file: 'test/app-e2e/imageGenerationRestart.e2e.mjs', restartBefore: true },
+      'test/app-e2e/artifacts.e2e.mjs',
     ]
   for (const entry of files) {
     const file = typeof entry === 'string' ? entry : entry.file

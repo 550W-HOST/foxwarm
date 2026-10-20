@@ -1,3 +1,4 @@
+@import "./artifacts/artifacts.css";
 @import './components/FoxLoaders.css';
 
 @tailwind base;

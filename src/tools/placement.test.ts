@@ -91,7 +91,7 @@ test('file Node selectors remain distinct from semantic Node arguments', async (
     .filter(definition => Object.prototype.hasOwnProperty.call(definition.parameters?.properties || {}, 'node'))
     .map(definition => definition.name)
     .sort();
-  assert.deepEqual(rootNodeSchemas, ['create_child_session', 'create_session', 'image_write_to_file', 'run_script', 'send_file', 'start_toolscript_run']);
+  assert.deepEqual(rootNodeSchemas, ['artifact', 'create_child_session', 'create_session', 'image_write_to_file', 'run_script', 'send_file', 'start_toolscript_run']);
   assert.equal(builtinNodeArgumentSelectsPlacement('image_write_to_file'), true);
   assert.equal(builtinNodeArgumentSelectsPlacement('send_file'), true);
   assert.equal(builtinNodeArgumentSelectsPlacement('create_child_session'), false);
@@ -105,6 +105,14 @@ test('file Node selectors remain distinct from semantic Node arguments', async (
   assert.equal(child.permissionNode, 'master');
   assert.equal(child.targetNode, undefined);
   assert.equal(child.args.node, 'child-node');
+
+  const published = await resolveDirectTool('artifact', { action: 'publish', filePath: 'plot.json', node: 'file-node' }, { sessionId: session.id, session });
+  assert.equal(published.executionNode, 'master');
+  assert.equal(published.permissionNode, 'file-node');
+  assert.equal(published.args.node, 'file-node');
+  const inspected = await resolveDirectTool('artifact', { action: 'get', artifactId: 'example' }, { sessionId: session.id, session });
+  assert.equal(inspected.permissionNode, 'master');
+  assert.equal(inspected.args.node, undefined);
 
   const created = await resolveDirectTool('create_session', {
     agentName: 'main', sessionName: 'created', node: 'session-node',

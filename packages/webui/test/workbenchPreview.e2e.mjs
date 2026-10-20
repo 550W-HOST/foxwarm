@@ -49,14 +49,14 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, colorMode = 'light', nodeDirectory = [], taskRows = null, codeNewWindow, responsiveChat = false, chatMessages = null, timelineView = 'grouped', showScrollbar, terminal = null, width = 1400, height = 900, reducedMotion = false, waitForSplash = true } = {}) {
+async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, colorMode = 'light', nodeDirectory = [], taskRows = null, codeNewWindow, responsiveChat = false, chatMessages = null, timelineView = 'grouped', showScrollbar, terminal = null, width = 1400, height = 900, reducedMotion = false, waitForSplash = true } = {}) {
   const page = await browser.newPage()
   if (reducedMotion) await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }])
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
   // Firefox ESR retains its native viewport; Puppeteer orientation emulation is unsupported.
   if (!firefox) await page.setViewport({ width, height })
-  await page.evaluateOnNewDocument(({ initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, colorMode, nodeDirectory, taskRows, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal }) => {
+  await page.evaluateOnNewDocument(({ freshBrowser, initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, colorMode, nodeDirectory, taskRows, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal }) => {
     if (window !== window.top) return
     const tabsById = Object.fromEntries(initialTabs.map(tab => [tab.id, tab]))
     const root = initialLayout || (splitPanes
@@ -70,6 +70,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
       localStorage.setItem('foxwarm_workbench_state_v4', JSON.stringify({ state: { version: 4, tabsById, root, focusedPaneId: 'pane-main' }, version: 1 }))
       localStorage.setItem('foxwarm_last_active_tab_v1', activeId)
       localStorage.setItem('foxwarm_sidebar_collapsed_v1', 'false')
+      if(freshBrowser) for(const key of ['foxwarm_workbench_state_v4','foxwarm_workbench_tabs_v3','foxwarm_last_active_tab_v1','foxwarm_last_visited_session_v1'])localStorage.removeItem(key)
     }
     if (chatMessages) localStorage.setItem('foxwarm_timeline_view_v1', timelineView)
     if (showScrollbar !== undefined) localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', String(showScrollbar))
@@ -183,7 +184,7 @@ async function openFixture({ tabs = [system, chat('e2e-a')], activeTabId = 'chat
     }
     window.__emitRealtime = data => { for (const socket of FixtureWebSocket.instances) socket.onmessage?.({ data: JSON.stringify(data) }) }
     window.WebSocket = FixtureWebSocket
-  }, { initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, colorMode, nodeDirectory, taskRows, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal })
+  }, { freshBrowser, initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, colorMode, nodeDirectory, taskRows, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal })
   await page.goto(`${baseUrl}${hash}`, { waitUntil: 'domcontentloaded' })
   await page.bringToFront()
   await page.waitForFunction(() => !!window.foxwarmTest || !!document.querySelector('[data-foxwarm-popup-root="chat"]'), { timeout: 8_000 }).catch(async error => {
@@ -3737,4 +3738,20 @@ test('rapid Session preview switches retain the latest focus and exact generatio
     assert.deepEqual(requests.filter(request => request.path.endsWith('/by-id')).map(request => JSON.parse(request.body).ids), [['e2e-b'], ['e2e-c']], 'each genuinely changed preview exact set loads once')
     assert.equal(requests.filter(request => request.path.endsWith('/architecture')).length, 0)
   } finally { await page.close() }
+})
+
+test('fresh browsers keep an empty workbench rather than opening implicit main; explicit selection restores normally',async()=>{
+ const page=await openFixture({freshBrowser:true,tabs:[],activeTabId:null,responsiveChat:true})
+ try{
+  await page.waitForFunction(()=>document.body.innerText.includes('e2e-a'))
+  assert.equal(await page.evaluate(()=>location.hash),'')
+  assert.equal(await page.evaluate(()=>window.__fetches.some(r=>r.path.includes('/sessions/main/'))),false)
+  assert.equal(await page.$('[data-chat-session-id="main"]'),null)
+  assert.equal(await page.evaluate(()=>document.body.innerText.includes('Session not found')),false)
+  await page.evaluate(()=>window.foxwarmTest.switchToSession('e2e-a'))
+  await page.waitForFunction(()=>decodeURIComponent(location.hash).includes('chat:e2e-a'))
+  await page.reload();await waitForWebUiReady(page)
+  assert.equal(await page.evaluate(()=>decodeURIComponent(location.hash)),'#tab/chat:e2e-a')
+  assert.equal(await page.evaluate(()=>window.__fetches.some(r=>r.path.includes('/sessions/main/'))),false)
+ }finally{await page.close()}
 })
