@@ -283,10 +283,9 @@ internal sealed class ResponsesAttempt : IDisposable
             foreach (var (id, bytes) in generated.ReplayBytes)
                 replayBytes[id] = bytes;
             if (
-                generated.SuccessfulCount == 0
+                imageBudget.Success == 0
                 && generated.Failures.Count > 0
                 && !HasOtherUsableOutput(output)
-                && committed.Count == 0
             )
                 throw ModelAttemptFailure.GeneratedImageFailure(
                     HostedResponsesTools.FailureNote(generated.Failures)
@@ -298,7 +297,8 @@ internal sealed class ResponsesAttempt : IDisposable
             completedAt ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             durationMs,
             generated?.Parts,
-            generated?.Failures
+            generated?.Failures,
+            imageBudget.Success
         );
     }
 

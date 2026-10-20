@@ -230,7 +230,8 @@ internal sealed class AnthropicMessagesService(
             text = text[1..];
         if (!success)
         {
-            options.Diagnostics?.ResponseBody(JsonValue.Create(text));
+            // This collector stops at the bound without requiring another read.
+            options.Diagnostics?.ResponseBody(JsonValue.Create(text), buffer.Length >= 64 * 1024);
             throw ModelAttemptFailure.Http(statusCode, text);
         }
         try

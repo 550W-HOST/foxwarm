@@ -198,6 +198,7 @@ internal sealed class ModelRequestOwner(
                     request = next.Routing;
                     rawEffort = next.RawEffort;
                     explicitSelectionChanged = true;
+                    interaction = diagnostics?.Begin(journalIteration);
                     requestStarted = null;
                     journalRequestId = null;
                     journalAttempt = 0;
@@ -228,6 +229,7 @@ internal sealed class ModelRequestOwner(
                     {
                         baseHistory = updated;
                         history = baseHistory.WithContext(retainedContext);
+                        interaction = diagnostics?.Begin(journalIteration);
                         requestStarted = null;
                         journalRequestId = null;
                         journalAttempt = 0;
@@ -575,6 +577,7 @@ internal sealed class ModelRequestOwner(
                     {
                         baseHistory = updated;
                         history = baseHistory.WithContext(retainedContext);
+                        interaction = diagnostics?.Begin(journalIteration);
                         requestStarted = null;
                         journalRequestId = null;
                         journalAttempt = 0;
@@ -591,6 +594,7 @@ internal sealed class ModelRequestOwner(
                         {
                             retainedContext = nextContext;
                             history = baseHistory.WithContext(retainedContext);
+                            interaction = diagnostics?.Begin(journalIteration);
                             requestStarted = null;
                             journalRequestId = null;
                             journalAttempt = 0;

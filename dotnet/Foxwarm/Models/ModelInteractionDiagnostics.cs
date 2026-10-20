@@ -215,7 +215,10 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                     .ToArray();
                 ModelId = SafeText(model.Key);
                 VirtualModel = virtualModel is null ? null : SafeText(virtualModel);
-                raw = new RawCapture(options.ImageGeneration?["enabled"]?.GetValue<bool>() == true);
+                raw = new RawCapture(
+                    model.ProviderType is "openai" or "openai-responses" or "openai-ws"
+                    && model.Configuration["imageGeneration"]?["enabled"]?.GetValue<bool>() == true
+                );
             }
 
             private static async Task BestEffortAsync(Func<Task> operation)
@@ -231,7 +234,14 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
             }
 
             internal Task PreparedAsync(JsonNode payload) =>
-                BestEffortAsync(() => interaction.PreparedAsync(this, payload));
+                BestEffortAsync(() =>
+                {
+                    // The serializer has now prepared the actual native replay input.
+                    if ((payload["input"] as JsonArray)?.OfType<JsonObject>().Any(HostedResponsesTools.IsGeneratedImage) == true)
+                        lock (rawGate)
+                            raw.OmitContent();
+                    return interaction.PreparedAsync(this, payload);
+                });
 
             internal Task FinishedAsync(Exception? error) =>
                 BestEffortAsync(() => interaction.FinishedAsync(this, error));
@@ -262,7 +272,7 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                 }
             }
 
-            internal void Response(string status, JsonObject headers, JsonNode? body)
+            internal void Response(string status, JsonObject headers, JsonNode? body, bool truncated = false)
             {
                 try
                 {
@@ -270,7 +280,7 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                     {
                         ["status"] = SafeText(status),
                         ["headers"] = Redact(headers),
-                        ["body"] = Redact(body),
+                        ["body"] = RedactBody(body, truncated),
                     };
                 }
                 catch
@@ -279,12 +289,17 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                 }
             }
 
-            internal void ResponseBody(JsonNode? body)
+            private JsonNode? RedactBody(JsonNode? body, bool truncated) =>
+                truncated && SessionWait.Text(body) is string text
+                    ? JsonValue.Create(SafeText(TrimCredentialSuffix(text)))
+                    : Redact(body);
+
+            internal void ResponseBody(JsonNode? body, bool truncated = false)
             {
                 try
                 {
                     var next = (JsonObject)response.DeepClone();
-                    next["body"] = Redact(body);
+                    next["body"] = RedactBody(body, truncated);
                     response = next;
                 }
                 catch
@@ -335,6 +350,11 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                 // JSON literal cannot be safely decoded for redaction.
                 if (open >= 0)
                     text = text[..open] + "\"[truncated JSON string omitted]\"";
+                return TrimSecretPrefix(text);
+            }
+
+            private string TrimSecretPrefix(string text)
+            {
                 foreach (var secret in secrets)
                     for (
                         var length = Math.Min(secret.Length - 1, text.Length);
@@ -351,27 +371,59 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
 
             internal string SafeText(string text)
             {
-                // Raw event strings may spell credentials with JSON escapes.
-                // Preserve untouched lexemes and all unknown provider fields;
-                // rewrite only literals whose decoded text requires redaction.
-                text = Regex.Replace(
-                    text,
-                    "\"(?:\\\\.|[^\"\\\\])*\"",
-                    match =>
+                // Scan quoted lexemes, including an interrupted final literal or
+                // one terminated by an illegal raw newline in malformed SSE.
+                // Preserve unrelated spelling; only sensitive literals change.
+                var result = new StringBuilder();
+                var copied = 0;
+                for (var start = 0; start < text.Length; start++)
+                {
+                    if (text[start] != '"')
+                        continue;
+                    var end = start + 1;
+                    var escaped = false;
+                    var closed = false;
+                    for (; end < text.Length && text[end] is not ('\r' or '\n'); end++)
                     {
-                        try
+                        if (escaped)
+                            escaped = false;
+                        else if (text[end] == '\\')
+                            escaped = true;
+                        else if (text[end] == '"')
                         {
-                            var decoded = JsonSerializer.Deserialize<string>(match.Value)!;
-                            var safe = ReplaceSecrets(decoded);
-                            return safe == decoded ? match.Value : JsonSerializer.Serialize(safe);
-                        }
-                        catch (JsonException)
-                        {
-                            return match.Value;
+                            closed = true;
+                            end++;
+                            break;
                         }
                     }
-                );
-                return ReplaceSecrets(text);
+                    var literal = text[start..end];
+                    string? decoded = null;
+                    try
+                    {
+                        decoded = JsonSerializer.Deserialize<string>(closed ? literal : literal + "\"");
+                    }
+                    catch (JsonException) { }
+                    string? replacement = null;
+                    if (decoded is not null)
+                    {
+                        var safe = ReplaceSecrets(closed ? decoded : TrimSecretPrefix(decoded));
+                        if (safe != decoded)
+                            replacement = JsonSerializer.Serialize(safe);
+                    }
+                    // An interrupted escape cannot be decoded safely. Omit
+                    // only that literal, retaining the surrounding evidence.
+                    else if (secrets.Length > 0 && literal.Contains('\\'))
+                        replacement = "\"[malformed escaped string omitted]\"";
+                    if (replacement is not null)
+                    {
+                        result.Append(text.AsSpan(copied, start - copied));
+                        result.Append(replacement);
+                        copied = end;
+                    }
+                    start = end - 1;
+                }
+                result.Append(text.AsSpan(copied));
+                return ReplaceSecrets(result.ToString());
             }
 
             private string ReplaceSecrets(string text)
@@ -464,22 +516,37 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
             truncated |= count < text.Length;
         }
 
+        internal void OmitContent()
+        {
+            omitted = true;
+            body.Clear();
+            blocks.Clear();
+        }
+
+        private static bool HasImageOutput(string text)
+        {
+            // Retain conservative detection for malformed event-type literals.
+            if (text.Contains("image_generation_call", StringComparison.Ordinal))
+                return true;
+            foreach (Match match in Regex.Matches(text, "\"(?:\\\\.|[^\"\\\\])*\""))
+                try
+                {
+                    var value = JsonSerializer.Deserialize<string>(match.Value);
+                    if (value is "b64_json" or "partial_image_b64" || value?.Contains("image_generation_call", StringComparison.Ordinal) == true)
+                        return true;
+                }
+                catch (JsonException) { }
+            return false;
+        }
+
         internal void Block(string block)
         {
             if (block.Length == 0)
                 return;
             blockCount++;
             // Unsolicited hosted image output must not leak through the raw lane.
-            if (
-                block.Contains("image_generation_call", StringComparison.Ordinal)
-                || block.Contains("\"b64_json\"", StringComparison.Ordinal)
-                || block.Contains("\"partial_image_b64\"", StringComparison.Ordinal)
-            )
-            {
-                omitted = true;
-                body.Clear();
-                blocks.Clear();
-            }
+            if (HasImageOutput(block))
+                OmitContent();
             foreach (var line in block.Replace("\r", "", StringComparison.Ordinal).Split('\n'))
             {
                 var payload = line.StartsWith("data:", StringComparison.Ordinal)
@@ -513,8 +580,13 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
             truncated |= count < block.Length;
         }
 
-        internal JsonObject Snapshot() =>
-            omitted
+        internal JsonObject Snapshot()
+        {
+            // A stream can end before its first SSE delimiter. Inspect the
+            // bounded captured content, not only completed block callbacks.
+            if (!omitted && HasImageOutput(body.ToString()))
+                OmitContent();
+            return omitted
                 ? new JsonObject
                 {
                     ["format"] = "sse-diagnostics",
@@ -543,6 +615,7 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                     ["truncated"] = truncated,
                     ["maxChars"] = MaxChars,
                 };
+        }
     }
 }
 

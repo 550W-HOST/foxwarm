@@ -46,11 +46,7 @@ internal static class OpenAIHttp
             OnDecodedChunk = text => options.Diagnostics?.Chunk(text),
             OnSseBlock = block => options.Diagnostics?.Block(block),
             OnOutputItemDone = output?.OnOutputItemDone,
-            OnResponseCompleted = () =>
-            {
-                watchdog.Finish();
-                output?.OnResponseCompleted?.Invoke();
-            },
+            OnResponseCompleted = output?.OnResponseCompleted,
             OnMeaningfulProgress = watchdog.Progress,
             OnImageGenerationActivity = watchdog.ExtendedActivity,
             OnSafetyBuffering = _ => watchdog.ExtendedActivity(),
@@ -69,7 +65,8 @@ internal static class OpenAIHttp
             options.Diagnostics?.Response(
                 $"{(int)response.StatusCode} {response.ReasonPhrase}",
                 ProviderHttpRequest.ResponseHeaders(response),
-                JsonValue.Create(error)
+                JsonValue.Create(error),
+                truncated
             );
             throw new ResponsesHttpException(response.StatusCode, error, truncated);
         }
@@ -82,6 +79,7 @@ internal static class OpenAIHttp
             null
         );
         var payload = await collect(stream, token, callbacks).ConfigureAwait(false);
+        watchdog.Finish();
         options.Diagnostics?.Response(
             $"{(int)response.StatusCode} {response.ReasonPhrase}",
             ProviderHttpRequest.ResponseHeaders(response),

@@ -606,7 +606,8 @@ public static class ResponsesCanonicalConverter
         long completedAt,
         double durationMs,
         IReadOnlyDictionary<int, JsonObject>? generatedParts = null,
-        IReadOnlyList<string>? generatedFailures = null
+        IReadOnlyList<string>? generatedFailures = null,
+        int? successfulImageCount = null
     )
     {
         var parts = new JsonArray();
@@ -732,7 +733,7 @@ public static class ResponsesCanonicalConverter
                 $"Responses output item {type ?? "unknown"}"
             );
         }
-        if (generatedFailures is { Count: > 0 } && generatedParts is { Count: > 0 })
+        if (generatedFailures is { Count: > 0 } && (successfulImageCount ?? generatedParts?.Count ?? 0) > 0)
             parts.Add(
                 new JsonObject
                 {
