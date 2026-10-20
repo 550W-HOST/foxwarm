@@ -82,7 +82,9 @@ public sealed class SessionExecutionEnvironmentTests
     [InlineData("remote")]
     [InlineData("Master")]
     [InlineData("provider/instance")]
-    public async Task Offline_remote_session_admits_history_and_allows_Main_owned_deletion(string node)
+    public async Task Offline_remote_session_admits_history_and_allows_Main_owned_deletion(
+        string node
+    )
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
@@ -119,7 +121,11 @@ public sealed class SessionExecutionEnvironmentTests
         var work = Path.Combine(temp.Path, "work");
         Directory.CreateDirectory(work);
         await Seed(data, "deadline", new JsonObject());
-        await Seed(data, "foreign", new JsonObject { ["currentNode"] = "provider/instance/invalid" });
+        await Seed(
+            data,
+            "foreign",
+            new JsonObject { ["currentNode"] = "provider/instance/invalid" }
+        );
         var file = Path.Combine(data, "state", "sessions", "deadline.json");
         var raw = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
         raw["meta"]!["wait"] = new JsonObject

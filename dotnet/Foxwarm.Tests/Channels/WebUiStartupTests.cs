@@ -463,7 +463,11 @@ public sealed class WebUiStartupTests
                 new { agentId = "main", sessionId = "ranked-" + index }
             );
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-            ids.Add((await response.Content.ReadFromJsonAsync<JsonObject>())!["sessionId"]!.GetValue<string>());
+            ids.Add(
+                (await response.Content.ReadFromJsonAsync<JsonObject>())![
+                    "sessionId"
+                ]!.GetValue<string>()
+            );
         }
         foreach (var id in ids.Take(2))
         {
@@ -478,12 +482,17 @@ public sealed class WebUiStartupTests
             var page = await h.Client.GetFromJsonAsync<JsonObject>(
                 "/api/session-list/sidebar?limit=" + limit
             );
-            return page!["sessions"]!.AsArray().Select(row => row!["id"]!.GetValue<string>()).ToArray();
+            return page!["sessions"]!
+                .AsArray()
+                .Select(row => row!["id"]!.GetValue<string>())
+                .ToArray();
         }
         var previous = await Roots(100);
         var create = await h.Client.PostAsJsonAsync("/api/sessions", new { });
         Assert.Equal(HttpStatusCode.OK, create.StatusCode);
-        var created = (await create.Content.ReadFromJsonAsync<JsonObject>())!["sessionId"]!.GetValue<string>();
+        var created = (await create.Content.ReadFromJsonAsync<JsonObject>())![
+            "sessionId"
+        ]!.GetValue<string>();
         Assert.Equal(created, (await Roots(50))[0]);
         Assert.Equal(new[] { created }.Concat(previous), await Roots(100));
         await h.Stop();
