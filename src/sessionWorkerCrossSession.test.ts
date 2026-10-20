@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import * as sessionManager from './sessionManager';
+import { taskService } from './tools/taskTools';
 import { createMainManagementToolServiceHandler, mainManagementToolServiceDescriptor } from './mainManagementToolService';
 import { LocalRpcTransport, RpcClient, RpcServiceRegistry } from './rpc';
 import { getSessionHistoryFilePath, serializeSessionHistoryPayload } from './session/metadataStore';
@@ -458,6 +459,47 @@ test('real Worker calls cross-session recall, agent creation, and node bootstrap
     await fs.remove(getSessionHistoryFilePath(sourceId)).catch(() => {});
     await fs.remove(getAgentDir(agentName)).catch(() => {});
     resetNodeRegistryForTests(); setNodeRegistryStoreForTests(null);
+    await fs.remove(root);
+  }
+});
+
+test('real Worker receives native Task values through direct, unified and nested ToolScript Main calls', async () => {
+  const source = await sessionManager.getSession(`worker_task_${Date.now()}`);
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-task-'));
+  const store = new SessionWorkerStore(path.join(root, 'session-runtime.sqlite'));
+  store.open();
+  const calls = [
+    { name: 'task', args: { action: 'create', title: 'Worker direct receipt' } },
+    { name: 'call_tool', args: { toolId: 'builtin:task', args: { action: 'list' } } },
+    { name: 'run_script', args: { code: 'return call_tool("builtin:task", {"action": "create", "title": "Worker script receipt"})' } },
+  ];
+  const supervisor = new SessionWorkerSupervisor({
+    store, idleMs: 60_000, workerScriptPath: path.join(__dirname, 'sessionWorkerRuntimeTestChild.js'),
+    workerEnv: { FOXWARM_DATA_DIR: root, FOXWARM_TEST_MAIN_TOOLS_BY_SESSION: JSON.stringify({ [source.id]: calls }) },
+  });
+  const ingress = new SessionWorkerIngressCoordinator(store, supervisor, id => id, () => true);
+  const statePath = path.join(root, 'state', 'sessions', `${source.id}.json`);
+  await fs.outputJson(statePath, serializeSessionHistoryPayload(source));
+  try {
+    await supervisor.reconcileStartupOwnerships();
+    await ingress.submitEnsuringWorker(source.id, { type: 'user', parts: [{ text: 'exercise native Task results' }] });
+    const authority = await fs.readJson(statePath);
+    const responses = authority.history.flatMap((message: any) => message.parts)
+      .filter((part: any) => part.functionResponse).map((part: any) => part.functionResponse.response);
+    assert.equal(responses.length, 3);
+    const [direct, listed, scripted] = responses;
+    for (const receipt of [direct, scripted.result]) {
+      assert.deepEqual(Object.keys(receipt).sort(), ['ownerSessionId', 'sentNotifications', 'status', 'taskId']);
+      assert.equal(receipt.status, 'open');
+      assert.equal(taskService.get(receipt.taskId).task.createdBySessionId, source.id, 'Main persisted the exact Worker source');
+    }
+    assert.equal(listed.output, undefined);
+    assert.equal(listed.tasks[0].id, direct.taskId);
+    assert.equal(source.history.length, 0, 'Main never hydrates the Worker history');
+  } finally {
+    await supervisor.shutdown(5_000).catch(() => {});
+    store.close();
+    await sessionManager.deleteSession(source.id);
     await fs.remove(root);
   }
 });

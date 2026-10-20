@@ -46,7 +46,7 @@ export async function tool_task(args: ToolArgs, ctx: ToolContext): Promise<any> 
   const visibleResult = TASK_MUTATION_ACTIONS.has(args.action)
     ? buildTaskMutationReceipt(result)
     : result;
-  return { output: JSON.stringify(visibleResult),
+  return { ...visibleResult,
     ...(sent || linked ? { __toolPostAction: {
       ...(sent ? { successfulSendToSessionTarget: result.task.createdBySessionId } : {}),
       ...(linked ? { completedLinkedTask: { taskId: result.task.id, attachedSessionId: result.task.attachedSessionId } } : {}),

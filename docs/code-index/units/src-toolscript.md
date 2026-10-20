@@ -23,7 +23,7 @@ Host calls inherit only the current invocation signal and check it before anothe
 
 ## Host API
 
-The default-injected `run_script` description includes the Python-subset syntax, synchronous `call_tool` usage with a tool name or tool ID, and a minimal inline example with `args` and `return`. It also identifies the top-level image return fields and the last-host-call condition for a nested wait to affect the calling Session.
+The default-injected `run_script` description recommends combining known dependent calls without extra model turns, using synchronous `call_tool` and native returned values. Its task-creation/child-creation example passes the returned taskId forward and takes complete task and child arguments from `args`. Independent work stays in an outer tool batch: only adjacent direct exec calls may run concurrently; other tools are serial barriers. It also identifies the top-level image return fields and the last-host-call condition for a nested wait to affect the calling Session.
 
 - `call_tool(...)` — normalize shorthand or a unified descriptor, dynamically load `./tools`, and invoke the exported `call_tool` handler with the outer exact `ToolContext`, including its trusted placement/persist hooks and programmatic producer hint.
 - `request_model_without_context(prompt, model?)` — production one-shot model request using the current session's raw effort and optional model selection but not its history; returns the text plus canonical parts (text and Blob-referenced images) without reasoning, function calls, provider metadata, or image bytes.

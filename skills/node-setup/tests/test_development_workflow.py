@@ -54,9 +54,9 @@ class Tools:
             if args["action"] == "create":
                 self.task = {"id": "task_fixture", "title": args["title"],
                              "description": args["description"]}
-                return {"output": json.dumps({"taskId": self.task["id"], "status": "open",
-                                               "ownerSessionId": None, "sentNotifications": 0})}
-            return {"output": json.dumps({"task": self.task})}
+                return {"taskId": self.task["id"], "status": "open",
+                        "ownerSessionId": None, "sentNotifications": 0}
+            return {"task": self.task}
         if name == "create_child_session":
             if self.fail_child:
                 raise RuntimeError("fixture child creation failure")
