@@ -34,5 +34,3 @@ Owns connected Node status and explicitly invoked Node onboarding independently 
 ### D-webui-nodes-workbench
 
 [2026-10-14] Nodes is a separate operational Workbench page for runtime status and Node access/onboarding. Architecture continues to own Session topology and Agent management; Setup continues to own configuration and authorization. Reuse ordinary system-tab and popup navigation instead of adding another dashboard or host protocol.
-
-Node-local data accounting: [scope, service and UI](../threads/node-data-usage.md). It is independent of runtime connectivity and never scans arbitrary Session cwd directories.

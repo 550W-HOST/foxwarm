@@ -121,12 +121,6 @@ async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')
       }
       if (pathname.endsWith('/api/terminals')) return json({ terminals: terminal ? [terminal] : [] })
       if (pathname.endsWith('/api/tasks')) return json({ tasks: [], omitted: 0 })
-      if (/\/api\/nodes\/[^/]+\/data-usage$/.test(pathname)) {
-        const gb=1024**3,id=decodeURIComponent(pathname.split('/').at(-2));
-        if(id==='legacy-node')return json({status:'unsupported'});
-        const workspaces=['main','research','analysis','figures','notes','benchmarks','docs','sandbox'].map(name=>({name,path:'/foxwarm/data/agents/'+name,bytes:gb/2,children:[{name:'project',path:'/foxwarm/data/agents/'+name+'/project',bytes:gb/4},{name:'memory',path:'/foxwarm/data/agents/'+name+'/memory',bytes:gb/4}]}));
-        return json({status:id==='offline-node'?'offline':'ready',report:{totalBytes:8*gb,files:2400,partial:false,skipped:0,measurement:'allocated',measuredAt:Date.now()-120000,categories:{runtime:2*gb,workspaces:4*gb,assets:gb,temporary:gb},workspaces}})
-      }
       if (pathname.endsWith('/api/nodes')) return json({ nodes: nodeDirectory })
       if (pathname.endsWith('/api/agents')) return json({ agents: [] })
       if (pathname.endsWith('/api/webui/settings')) return json({ settings: {} })
@@ -3615,40 +3609,5 @@ test('fresh browsers keep an empty workbench rather than opening implicit main; 
   await page.reload();await waitForWebUiReady(page)
   assert.equal(await page.evaluate(()=>decodeURIComponent(location.hash)),'#tab/chat:e2e-a')
   assert.equal(await page.evaluate(()=>window.__fetches.some(r=>r.path.includes('/sessions/main/'))),false)
- }finally{await page.close()}
-})
-
-test('Node data usage opens a shared bounded drawer with workspace breakdown, keyboard return and phone layout',async()=>{
- for(const width of[1400,390]){
-  const page=await openFixture({tabs:[nodesTab],activeTabId:nodesTab.id,hash:'#tab/system:nodes',width,nodeDirectory:[{id:'legacy-node',displayName:'Legacy worker',type:'cli-node',online:true,services:{}},{id:'offline-node',displayName:'Offline worker',type:'cli-node',online:false,services:{}}]})
-  try{
-   if(width<768){await page.evaluate(()=>{location.hash='#tab/system:nodes'});await page.waitForSelector('[data-node-data-trigger="master"]')}
-   await page.waitForFunction(()=>document.querySelector('[data-node-data-trigger="master"]')?.textContent.includes('8 GiB'))
-   await page.click('[data-node-data-trigger="master"]');await page.waitForSelector('[data-node-data-drawer]:modal')
-   assert.equal(await page.$eval('[data-node-data-drawer]',el=>el.getBoundingClientRect().width),width<768?width:480)
-   await page.type('[aria-label="Search workspaces"]','research')
-   assert.equal((await page.$$('.node-data-workspaces details')).length,1)
-   await page.click('.node-data-workspaces summary');await page.waitForSelector('.node-data-workspaces details[open]')
-   assert.ok((await page.$eval('.node-data-workspaces details',el=>el.textContent)).includes('/foxwarm/data/agents/research'))
-   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true)
-   if(process.env.FOXWARM_E2E_SCREENSHOT_DIR){await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:process.env.FOXWARM_E2E_SCREENSHOT_DIR+`/node-data-${width}.png`})}
-   await page.keyboard.press('Escape');await page.waitForSelector('[data-node-data-drawer]',{hidden:true})
-   assert.equal(await page.evaluate(()=>document.activeElement.getAttribute('data-node-data-trigger')),'master')
-   await page.click('[data-node-data-trigger="legacy-node"]');await page.waitForFunction(()=>document.querySelector('[data-node-data-drawer]')?.textContent.includes('Not supported'))
-   assert.equal(await page.$eval('[aria-label="Refresh storage usage"]',el=>el.disabled),true)
-   await page.keyboard.press('Escape')
-  }finally{await page.close()}
- }
-})
-
-test('Topology uses the same data drawer without replacing the selected Session inspector',async()=>{
- const page=await openFixture({tabs:[system],activeTabId:system.id,hash:'#tab/system:agents'})
- try{
-  await page.waitForSelector('[data-architecture-node-id="master"] [data-node-data-trigger]')
-  await page.click('[data-architecture-node-id="master"] [data-node-data-trigger]');await page.waitForSelector('[data-node-data-drawer]:modal')
-  assert.equal((await state(page)).tabsById[system.id].type,'agents')
-  if(process.env.FOXWARM_E2E_SCREENSHOT_DIR){await page.waitForSelector('.node-data-workspaces details');await page.click('.node-data-workspaces summary');await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:process.env.FOXWARM_E2E_SCREENSHOT_DIR+'/topology-data.png'})}
-  await page.keyboard.press('Escape');await page.waitForSelector('[data-node-data-drawer]',{hidden:true})
-  assert.ok(await page.$('[data-architecture-node-id="master"]'))
  }finally{await page.close()}
 })

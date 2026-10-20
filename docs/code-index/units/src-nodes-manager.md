@@ -86,5 +86,3 @@ Maintains the in-memory authenticated remote-node transport/runtime and routes t
 ## Design Decisions
 
 - [2026-06-24] Administrative node deletion/rename should not leave an online node usable under stale credentials; the manager exposes `disconnectNode` so command flows can unregister the runtime node and close its WebSocket after registry mutation.
-
-Node-local data accounting: [scope, service and UI](../threads/node-data-usage.md). It is independent of runtime connectivity and never scans arbitrary Session cwd directories.

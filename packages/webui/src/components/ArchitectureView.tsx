@@ -1,4 +1,3 @@
-import NodeDataUsage from '../storage/NodeDataUsage'
 import { getSessionRuntimeTone } from '../sessionRuntimeState'
 import { WorkbenchHeaderDragArea, WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import { createPortal } from 'react-dom'
@@ -264,7 +263,6 @@ function NodeLane({ node, rows, selectedSessionId, currentSession, now, onInspec
           </div>
         </div>
         <div className="flex items-center gap-3 text-[11px] text-fw-text-muted">
-          <NodeDataUsage nodeId={node.id} name={node.displayName}/>
           <span>{rows.length} loaded</span>
           <UsagePie usage={usage.count ? usage : undefined} loaded />
           {activeCount > 0 ? <span className="text-fw-accent dark:text-fw-accent">{activeCount} active</span> : null}
