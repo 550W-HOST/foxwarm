@@ -174,7 +174,7 @@ root-to-branch boundary restarts the whole bounded replay from page one, includi
 beyond one page, before any structural publish. Per-row in-memory SSE epochs and
 tombstones prevent older HTTP responses from overwriting or reviving newer
 deltas. Exact current/open/watch sets are chunked rather than truncated, for
-both by-ID HTTP and global SSE subscriptions. Ordinary busy-descendant badges
+both by-ID HTTP queries and multiplexed WebSocket list subscriptions. Ordinary busy-descendant badges
 use a bounded batch active-ancestor projection; destructive dialogs retain exact
 recursive summaries.
 
