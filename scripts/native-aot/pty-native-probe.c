@@ -161,10 +161,20 @@ int main(int argc, char **argv) {
     close(null_fd);
     if (argc == 2 && strcmp(argv[1], "--fallback") == 0) install_filter(0);
     if (argc == 2 && strcmp(argv[1], "--no-close-mechanism") == 0) {
-        install_filter(1);
-        assert(spawn_mode(executable, directory, "exit", &error) == NULL && error == EACCES);
-        assert(fw_owned_fds() == 0);
-        assert(waitpid(-1, NULL, WNOHANG) == -1 && errno == ECHILD);
+        /* A process wrapper may own a live timer child. Run this failure
+         * check in a fresh process, then reap that exact fixture child. */
+        pid_t isolated = fork();
+        assert(isolated >= 0);
+        if (!isolated) {
+            assert(waitpid(-1, NULL, WNOHANG) == -1 && errno == ECHILD);
+            install_filter(1);
+            assert(spawn_mode(executable, directory, "exit", &error) == NULL && error == EACCES);
+            assert(fw_owned_fds() == 0);
+            assert(waitpid(-1, NULL, WNOHANG) == -1 && errno == ECHILD);
+            _exit(0);
+        }
+        int status;
+        assert(waitpid(isolated, &status, 0) == isolated && WIFEXITED(status) && WEXITSTATUS(status) == 0);
         close(low); close(high); rmdir(directory);
         puts("native PTY close-all failure reported and child reaped");
         return 0;
