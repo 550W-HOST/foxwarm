@@ -326,12 +326,12 @@ internal static class AgentToolDefinitions
             ),
             Tool(
                 "send_to_session",
-                "Send a message to another session. Use this to assign work or report results across sessions. For a completed child report, use afterSend=finish; use wait only when you need a later response.",
+                "Send a message to another Session. Self-send is available only from inside ToolScript. Use this to assign work or report results across Sessions. For a completed child report, use afterSend=finish; use wait only when you need a later response.",
                 Parameters(
                     new JsonObject
                     {
                         ["sessionId"] = String(
-                            "Target Session ID. <main> selects this agent's main session; <parent> selects this session's direct parent and requires one to exist."
+                            "Target Session ID. <main> selects this agent's main session; <parent> selects this session's direct parent and requires one to exist. Access is subject to session permissions."
                         ),
                         ["handoffRecall"] = String(
                             "Put handoffRecall before message. Start with the exact opening sentence required for a handoff, then write the actual applicable communication rules, the user's request, and the scope this recipient needs."

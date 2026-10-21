@@ -281,7 +281,8 @@ internal sealed partial class SessionManager
         string message,
         JsonObject? toolArgs = null,
         bool trigger = true,
-        JsonObject? taskNotification = null
+        JsonObject? taskNotification = null,
+        string? toolScriptRunId = null
     )
     {
         var targetId = ResolveSessionReference(source, requestedTarget);
@@ -294,7 +295,8 @@ internal sealed partial class SessionManager
                 semanticCaller.Value ?? CancellationToken.None,
                 target
             );
-        if (source.Id == target.Id)
+        var selfSend = source.Id == target.Id;
+        if (selfSend && string.IsNullOrEmpty(toolScriptRunId))
             throw new InvalidDataException("A Session cannot send to itself.");
         if (!accepting)
             throw new InvalidOperationException("Host is shutting down.");
@@ -317,7 +319,10 @@ internal sealed partial class SessionManager
             taskNotification?["recipient"]?.GetValue<string>() == "new"
                 ? "Task assignment from Foxwarm, not direct user input. Complete this task with the task tool when the assigned work is finished; completion automatically notifies the task creator. Do not send a separate routine completion message."
                 : "task notification from Foxwarm; not direct user input";
-        var wrapper = taskNotification is null
+        var wrapper = selfSend
+            ? $"<foxwarm-message type=\"toolscript\" sourceSessionId=\"{Escape(source.Id)}\" runId=\"{Escape(toolScriptRunId!)}\" time=\"{Escape(time)}\" hint=\"Message queued by a ToolScript in this Session, not direct user input.\">\n"
+                + message + "\n</foxwarm-message>"
+            : taskNotification is null
             ? $"<foxwarm-message type=\"inter-agent\" sourceSessionId=\"{Escape(source.Id)}\" "
                 + $"replyTargetSessionId=\"{Escape(source.Id)}\" replyVia=\"send_to_session\" time=\"{Escape(time)}\" "
                 + "hint=\"inter-agent message from another session, not direct end-user input\">\n"

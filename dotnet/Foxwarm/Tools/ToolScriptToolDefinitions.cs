@@ -44,7 +44,7 @@ internal static class ToolScriptToolDefinitions
             "foreground",
             "background"
           ],
-          "description": "Run mode. Defaults to foreground. Both modes execute the initial segment before returning; agent-input and time-budget pauses require continue_script in either mode."
+          "description": "foreground (default) runs until a result or pause; background starts a run that can continue independently."
         },
         "timeoutSecs": {
           "type": "number",

@@ -62,6 +62,7 @@ internal sealed partial class MainToolScript
                     ).Add(subcall);
                     Emit();
                     var previousDeliveryCapture = context.SessionMessageDelivered;
+                    var previousRunId = context.ToolScriptRunId;
                     JsonNode? result;
                     try
                     {
@@ -71,11 +72,13 @@ internal sealed partial class MainToolScript
                             evidence["id"] = subcall["id"]!.DeepClone();
                             subcall["sessionMessage"] = evidence;
                         };
+                        context.ToolScriptRunId = Required(record, "runId");
                         result = await context.CallTool(wrapper, budget, run.Token);
                     }
                     finally
                     {
                         context.SessionMessageDelivered = previousDeliveryCapture;
+                        context.ToolScriptRunId = previousRunId;
                     }
                     budget.JsonValue(result);
                     (

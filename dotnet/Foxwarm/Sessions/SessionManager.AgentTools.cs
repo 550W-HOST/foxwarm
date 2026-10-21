@@ -11,14 +11,15 @@ internal sealed partial class SessionManager
         string name,
         JsonObject? args,
         CancellationToken cancellationToken = default,
-        Action<string, string>? sessionMessageDelivered = null
+        Action<string, string>? sessionMessageDelivered = null,
+        string? toolScriptRunId = null
     )
     {
         var previous = semanticCaller.Value;
         semanticCaller.Value = cancellationToken;
         try
         {
-            return await ExecuteAgentToolCoreAsync(source, name, args, sessionMessageDelivered);
+            return await ExecuteAgentToolCoreAsync(source, name, args, sessionMessageDelivered, toolScriptRunId);
         }
         finally
         {
@@ -30,7 +31,8 @@ internal sealed partial class SessionManager
         SessionOwner source,
         string name,
         JsonObject? args,
-        Action<string, string>? sessionMessageDelivered
+        Action<string, string>? sessionMessageDelivered,
+        string? toolScriptRunId
     )
     {
         try
@@ -286,7 +288,8 @@ internal sealed partial class SessionManager
                     var target = await SendAsync(
                         source,
                         requested,
-                        RequiredString(args, "message")
+                        RequiredString(args, "message"),
+                        toolScriptRunId: toolScriptRunId
                     );
                     try
                     {

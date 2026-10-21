@@ -125,7 +125,7 @@ internal sealed partial class SessionManager
         }
     }
 
-    private IDisposable BeginMutation(IEnumerable<string> requested, DeleteOperation? owning = null)
+    private IDisposable BeginMutation(IEnumerable<string> requested, DeleteOperation? owning = null, bool acceptedTimer = false)
     {
         var ids = requested.Distinct(StringComparer.Ordinal).ToArray();
         var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -133,6 +133,7 @@ internal sealed partial class SessionManager
         {
             if (
                 !accepting
+                && !acceptedTimer
                 && owning is null
                 && !ids.All(id =>
                     mutationContext.Value?.AlreadyAccepted(id) == true
@@ -181,9 +182,9 @@ internal sealed partial class SessionManager
         return scope;
     }
 
-    private IDisposable BeginOwnerMutation(SessionOwner owner)
+    private IDisposable BeginOwnerMutation(SessionOwner owner, bool acceptedTimer = false)
     {
-        var scope = BeginMutation([owner.Id]);
+        var scope = BeginMutation([owner.Id], acceptedTimer: acceptedTimer);
         if (IsCurrentOwner(owner))
             return scope;
         scope.Dispose();

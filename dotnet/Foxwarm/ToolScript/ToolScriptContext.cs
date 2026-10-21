@@ -18,6 +18,7 @@ internal sealed record ToolScriptContext(
     string? SourceNode = null
 )
 {
+    internal string? ToolScriptRunId { get; set; }
     internal ToolScriptWaitScope WaitScope { get; init; } = new();
     internal Action<JsonObject>? SessionMessageDelivered { get; set; }
 }

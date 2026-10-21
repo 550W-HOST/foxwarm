@@ -23,6 +23,7 @@ internal sealed partial class MainTimers : IAsyncDisposable
     private readonly SemaphoreSlim saveLane = new(1, 1);
     private readonly Dictionary<string, TimerRecord> records = new(StringComparer.Ordinal);
     private readonly HashSet<Task> deliveries = [];
+    private readonly Dictionary<string, Task> scriptInvocations = new(StringComparer.Ordinal);
     private readonly HashSet<Task> clocks = [];
     private JsonObject document = new() { ["timers"] = new JsonArray() };
     private volatile string? unavailable;
@@ -286,7 +287,7 @@ internal sealed partial class MainTimers : IAsyncDisposable
             Row.ContainsKey("waitTimeoutId") || Row.ContainsKey("waitTimeoutSeconds");
         internal bool Ordinary =>
             Text(Row["sessionId"]) is not null
-            && Text(Row["message"]) is not null
+            && (TimerArguments.Script(Row) || Text(Row["message"]) is not null)
             && (Number(Row["at"]) is not null) != Cron;
         internal bool Cron => Text(Row["cron"]) is string cron && SessionGoal.Trim(cron).Length > 0;
         internal CancellationTokenSource StopSource = new();

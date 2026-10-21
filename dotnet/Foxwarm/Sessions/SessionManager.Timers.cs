@@ -66,6 +66,8 @@ internal sealed partial class SessionManager
                 "afterSeconds",
                 "cron",
                 "message",
+                "action",
+                "script",
                 "newSession",
                 "sessionPrefix",
                 "agentName",
@@ -78,6 +80,8 @@ internal sealed partial class SessionManager
                 "afterSeconds",
                 "cron",
                 "message",
+                "action",
+                "script",
                 "newSession",
                 "sessionPrefix",
                 "agentName",
@@ -141,9 +145,12 @@ internal sealed partial class SessionManager
             CheckTimerIsolation(source, args, requested);
             if (authorizeTool)
                 await AuthorizeToolAsync(source, new(name, "builtin", name, args), null, token);
+            if ((TimerArguments.Script(args) || existing is not null && TimerArguments.Script(existing))
+                && (owner.Id != source.Id || existing is not null && requested != source.Id))
+                throw new InvalidDataException("Only the owner Session may configure a ToolScript timer.");
             var target = TimerSnapshot(owner);
             var row = existing is null
-                ? MainTimers.CreateRow(requested, args, target)
+                ? MainTimers.CreateRow(TimerArguments.Script(args) ? owner.Id : requested, args, target)
                 : MainTimers.UpdateRow(existing, args, target);
             if (MainTimers.Flag(row["newSession"]))
             {
@@ -239,6 +246,28 @@ internal sealed partial class SessionManager
 
     private async Task DeliverTimerAsync(JsonObject timer)
     {
+        if (TimerArguments.Script(timer))
+        {
+            var owner = await GetExistingAsync(SessionWait.Text(timer["sessionId"])!, acceptedTimer: true)
+                ?? throw new InvalidDataException("Timer owner Session not found.");
+            using var admitted = BeginOwnerMutation(owner, acceptedTimer: true);
+            await WaitForIdentityMutationAsync(owner.Id);
+            owner.Entry.RequireIdentityAuthority();
+            if (!IsCurrentOwner(owner))
+                throw new InvalidOperationException("Timer owner lifetime is unavailable.");
+            // A separate dispatcher has no foreground batch, wait control or abort slot.
+            var dispatcher = new SessionToolExecutor(
+                new WorkspaceTools(agents.AgentDirectory(owner.Agent), pendingWrites, owner.Id, owner.Agent),
+                owner, this, tools, unattended: true);
+            var outcome = await dispatcher.ExecuteAsync(new JsonObject
+            {
+                ["name"] = "run_script",
+                ["args"] = timer["script"]!.DeepClone(),
+            }, CancellationToken.None);
+            if (outcome is JsonObject result && result["error"] is not null)
+                Console.Error.WriteLine("Timer ToolScript failed: " + SessionWait.Text(timer["id"]) + " " + result.ToJsonString());
+            return;
+        }
         SessionOwner target;
         if (MainTimers.Flag(timer["newSession"]))
             target = await CreateTimerSessionAsync(timer);

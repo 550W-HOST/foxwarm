@@ -12,8 +12,10 @@ internal sealed partial class MainTimers
         var at = Number(row["at"]);
         var cron = Text(row["cron"]);
         var hasCron = cron is not null && SessionGoal.Trim(cron).Length > 0;
-        if (Text(row["sessionId"]) is null || Text(row["message"]) is null)
+        if (Text(row["sessionId"]) is null || !TimerArguments.Script(row) && Text(row["message"]) is null)
             reason = "Unrecognized timer owner or message.";
+        else if (row.ContainsKey("action") && Text(row["action"]) is not ("message" or "toolscript"))
+            reason = "Unrecognized timer action.";
         else if ((at is not null) == hasCron)
             reason = "Unrecognized timer schedule.";
         else if (
@@ -25,6 +27,20 @@ internal sealed partial class MainTimers
             )
         )
             reason = "Unsupported absolute timer date.";
+        if (reason is null && TimerArguments.Script(row))
+        {
+            try
+            {
+                if (row.ContainsKey("waitTimeoutId") || row.ContainsKey("waitTimeoutSeconds"))
+                    throw new InvalidDataException("A wait timeout cannot execute ToolScript.");
+                var normalized = new JsonObject();
+                TimerArguments.PutAction(normalized, row);
+            }
+            catch (Exception error) when (error is InvalidDataException or ArgumentException or System.Text.Json.JsonException or Foxwarm.ToolScript.ToolScriptDataLimitException)
+            {
+                reason = "Unsupported ToolScript timer: " + error.Message;
+            }
+        }
         var record = new TimerRecord(row, reason);
         if (record.Internal)
         {
@@ -74,6 +90,7 @@ internal sealed partial class MainTimers
         var completion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        long first;
         lock (gate)
         {
             if (
@@ -84,23 +101,28 @@ internal sealed partial class MainTimers
                 || !ReferenceEquals(record, current)
             )
                 return;
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            first = record.Cron
+                ? new CronSchedule(Text(record.Row["cron"])!, now).Next()
+                : checked((long)Math.Truncate(Number(record.Row["at"])!.Value));
+            record.Next = first;
             record.Clock = completion.Task;
             clocks.Add(completion.Task);
         }
-        _ = RunClockAsync(record, completion);
+        // Neither registration's model turn nor its mutation/authorization scopes
+        // belong to an independently scheduled invocation.
+        using (ExecutionContext.SuppressFlow())
+            _ = Task.Run(() => RunClockAsync(record, completion, first));
     }
 
-    private async Task RunClockAsync(TimerRecord record, TaskCompletionSource completion)
+    private async Task RunClockAsync(TimerRecord record, TaskCompletionSource completion, long first)
     {
-        // A clock is independent work, not a continuation settling the tool's
-        // foreground turn. Detach before even an already-due timer can deliver.
-        SessionEntry.DetachTurnScope();
         try
         {
             var row = record.Row;
             var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var cron = record.Cron ? new CronSchedule(Text(row["cron"])!, now) : null;
-            var next = cron?.Next() ?? checked((long)Math.Truncate(Number(row["at"])!.Value));
+            var next = first;
             while (!record.StopSource.IsCancellationRequested)
             {
                 lock (gate)
@@ -114,12 +136,22 @@ internal sealed partial class MainTimers
                     );
                     remaining = next - DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 }
+                Task? predecessor;
+                lock (gate)
+                    predecessor = TimerArguments.Script(row) && cron is null
+                        ? scriptInvocations.GetValueOrDefault(record.Id) : null;
+                if (predecessor is not null)
+                {
+                    // An overdue once replacement waits for release, not a dropped clock.
+                    await predecessor.WaitAsync(record.StopSource.Token);
+                    continue;
+                }
                 var exhausted = false;
                 if (cron is not null)
                 {
                     try
                     {
-                        next = cron.Next();
+                        next = new CronSchedule(Text(row["cron"])!, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()).Next();
                     }
                     catch (Exception error)
                         when (error
@@ -142,10 +174,13 @@ internal sealed partial class MainTimers
                         && records.TryGetValue(record.Id, out var current)
                         && ReferenceEquals(current, record)
                         && !record.StopSource.IsCancellationRequested
+                        && (!TimerArguments.Script(row) || !scriptInvocations.ContainsKey(record.Id))
                     )
                     {
                         accepted = new(TaskCreationOptions.RunContinuationsAsynchronously);
                         deliveries.Add(accepted.Task);
+                        if (TimerArguments.Script(row))
+                            scriptInvocations.Add(record.Id, accepted.Task);
                         captured = record.Row;
                         record.Next = cron is null || exhausted ? null : next;
                     }
@@ -192,7 +227,7 @@ internal sealed partial class MainTimers
             {
                 Report("Timer delivery failed: " + record.Id, error);
             }
-            if (!record.Cron || delivered)
+            if (!record.Cron || delivered || TimerArguments.Script(captured))
             {
                 await ChangeAsync(
                     null,
@@ -228,7 +263,11 @@ internal sealed partial class MainTimers
         finally
         {
             lock (gate)
+            {
                 deliveries.Remove(accepted.Task);
+                if (scriptInvocations.GetValueOrDefault(record.Id) == accepted.Task)
+                    scriptInvocations.Remove(record.Id);
+            }
             accepted.TrySetResult();
         }
     }

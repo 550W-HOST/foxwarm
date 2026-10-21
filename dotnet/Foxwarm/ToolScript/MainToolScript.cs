@@ -142,52 +142,31 @@ internal sealed partial class MainToolScript : IAsyncDisposable
     {
         if (closing)
             throw new InvalidOperationException("ToolScript host is closing.");
+        args = NormalizeStartArgs(args, background);
         var supplied = Text(args["code"]);
         var file = Text(args["filePath"]) is { } filePath ? SessionGoal.Trim(filePath) : null;
         var sourceNode = Foxwarm.Tools.ToolRegistry.ToolScriptSourceNode(
             args,
             context.SourceNode
-                ?? SessionManager.ResolveExecutionNode(
-                    context.Owner.Entry.Snapshot().AuthorityEnvelope
-                )
+                ?? SessionManager.ResolveExecutionNode(context.Owner.Entry.Snapshot().AuthorityEnvelope)
         );
         string code;
         string path;
-        if (!string.IsNullOrWhiteSpace(supplied))
+        if (supplied is not null)
         {
             code = supplied;
             path = "<inline>";
         }
         else
-        {
-            if (string.IsNullOrEmpty(file))
-                throw new InvalidDataException("Supply code or filePath for run_script.");
-            (path, code) = await context.ReadSource(file, new ToolScriptDataBudget(), token);
-        }
+            (path, code) = await context.ReadSource(SessionGoal.Trim(file!), new ToolScriptDataBudget(), token);
         var prep = new ToolScriptDataBudget();
         prep.JsonValue(args);
-        JsonNode? input;
-        if (args["args"] is JsonObject primary)
-            input = primary.DeepClone();
-        else if (args.ContainsKey("argsJson"))
-        {
-            var json = Required(args, "argsJson");
-            prep.Charge(System.Text.Encoding.UTF8.GetByteCount(json));
-            input = prep.ParseJson(System.Text.Encoding.UTF8.GetBytes(json));
-            if (input is not JsonObject)
-                throw new InvalidDataException("ToolScript argsJson must parse as an object.");
-        }
-        else if (args.ContainsKey("args"))
-            throw new InvalidDataException(
-                "ToolScript args must be an object, or provide argsJson."
-            );
-        else
-            input = new JsonObject();
+        var input = args["args"]!.DeepClone();
         prep.Charge(8L * System.Text.Encoding.UTF8.GetByteCount(code));
         if (Regex.IsMatch(code, @"^\s*def\s+main\s*\(\s*args\b", RegexOptions.Multiline))
             code = code.TrimEnd() + "\n\nmain(args)\n";
-        var seconds = Timeout(args["timeoutSecs"], 30);
-        var mode = Mode(args, background);
+        var seconds = Number(args["timeoutSecs"], 30);
+        var mode = Text(args["mode"])!;
         while (true)
         {
             var id =
@@ -225,6 +204,46 @@ internal sealed partial class MainToolScript : IAsyncDisposable
                 record["sourceNode"] = sourceNode;
             return await RunAsync(record, context, token, code, input, resume: null);
         }
+    }
+
+    // Shared starter intent normalization. No source reads or owner routing occur here.
+    internal static JsonObject NormalizeStartArgs(JsonObject args, bool background = false)
+    {
+        var mode = Mode(args, background);
+        var timeout = Timeout(args["timeoutSecs"], 30);
+        var budget = new ToolScriptDataBudget();
+        budget.JsonValue(args);
+        JsonNode input;
+        if (args["args"] is JsonObject primary)
+            input = primary.DeepClone();
+        else if (args.ContainsKey("argsJson"))
+        {
+            var json = Required(args, "argsJson");
+            input = budget.ParseJson(System.Text.Encoding.UTF8.GetBytes(json))
+                ?? throw new InvalidDataException("ToolScript argsJson must parse as an object.");
+            if (input is not JsonObject)
+                throw new InvalidDataException("ToolScript argsJson must parse as an object.");
+        }
+        else if (args.ContainsKey("args"))
+            throw new InvalidDataException("ToolScript args must be an object, or provide argsJson.");
+        else
+            input = new JsonObject();
+        _ = Foxwarm.Tools.ToolRegistry.ToolScriptSourceNode(args, "master");
+        var code = Text(args["code"]);
+        var file = Text(args["filePath"]);
+        var inline = !string.IsNullOrWhiteSpace(code);
+        if (!inline && string.IsNullOrWhiteSpace(file))
+            throw new InvalidDataException("Supply code or filePath for run_script.");
+        var normalized = new JsonObject
+        {
+            [inline ? "code" : "filePath"] = inline ? code : file,
+            ["args"] = input,
+            ["mode"] = mode,
+            ["timeoutSecs"] = timeout,
+        };
+        if (!inline && args.ContainsKey("node"))
+            normalized["node"] = args["node"]?.DeepClone();
+        return normalized;
     }
 
     private async Task<JsonObject> ContinueAsync(

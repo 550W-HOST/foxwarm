@@ -7,7 +7,8 @@ internal sealed partial class SessionToolExecutor(
     ITurnToolExecutor workspace,
     SessionOwner hosted,
     SessionManager sessions,
-    ToolRegistry registry
+    ToolRegistry registry,
+    bool unattended = false
 ) : ITurnToolExecutor, ITurnToolControl
 {
     private int finishPending;
@@ -199,7 +200,7 @@ internal sealed partial class SessionToolExecutor(
         try
         {
             var response = await ExecuteCoreAsync(call, token);
-            if (!Programmatic && current.Receipt is not null)
+            if (!unattended && !Programmatic && current.Receipt is not null)
                 turnReceipts.Add(current.Receipt);
             return new(
                 response,
@@ -305,7 +306,7 @@ internal sealed partial class SessionToolExecutor(
     internal void BroadcastVerboseToolStart(JsonObject call)
     {
         if (
-            Programmatic
+            Programmatic || unattended
             || !hosted.Entry.WithState(state =>
                 SessionCatalog.Flag(state.AuthorityEnvelope["verbose"])
             )
@@ -361,7 +362,8 @@ internal sealed partial class SessionToolExecutor(
         var dispatched = false;
         try
         {
-            hosted.Registry.Runner.AssertCanContinue();
+            if (!unattended)
+                hosted.Registry.Runner.AssertCanContinue();
             var name = SessionWait.Text(functionCall["name"]) ?? "";
             var args =
                 functionCall["args"] as JsonObject
@@ -417,10 +419,11 @@ internal sealed partial class SessionToolExecutor(
                     break;
             }
             cancellationToken.ThrowIfCancellationRequested();
-            hosted.Registry.Runner.AssertCanContinue();
+            if (!unattended)
+                hosted.Registry.Runner.AssertCanContinue();
             BroadcastVerboseToolStart(functionCall);
             dispatched = true;
-            var runtimeLease = Programmatic ? null : hosted.BeginTool(ToolRuntime(resolved));
+            var runtimeLease = Programmatic || unattended ? null : hosted.BeginTool(ToolRuntime(resolved));
             var startedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var monotonic = System.Diagnostics.Stopwatch.GetTimestamp();
             try
@@ -564,6 +567,7 @@ internal sealed partial class SessionToolExecutor(
             beforeLaunch: () =>
             {
                 hosted.Entry.RequireIdentityAuthority();
+                if (!unattended)
                 hosted.Registry.Runner.AssertCanContinue();
             }
         );
@@ -597,6 +601,7 @@ internal sealed partial class SessionToolExecutor(
             beforeLaunch: () =>
             {
                 hosted.Entry.RequireIdentityAuthority();
+                if (!unattended)
                 hosted.Registry.Runner.AssertCanContinue();
             },
             hardCancellation: hosted.Entry.IdentityLossToken
@@ -706,15 +711,17 @@ internal sealed partial class SessionToolExecutor(
                 if (body.Length > 32768)
                     delivery["truncated"] = true;
                 current.SessionMessages = new JsonArray(delivery);
-            }
+            },
+            scriptScope.Value?.RunId
         );
-        if (!Programmatic && sessions.ConsumeSuccessfulSendReceipt() is { } receiptTarget)
+        if (!unattended && !Programmatic && sessions.ConsumeSuccessfulSendReceipt() is { } receiptTarget)
             invocation.Value!.Receipt = new TurnToolReceipt(receiptTarget, null, null);
         if (
             response.Remove("__waitTarget", out var target) && SessionWait.Text(target) is string id
         )
-            handoffTargets.Add(id);
-        if (finish)
+            if (!unattended)
+                handoffTargets.Add(id);
+        if (finish && !unattended)
             Interlocked.Exchange(ref finishPending, 1);
         return response;
     }

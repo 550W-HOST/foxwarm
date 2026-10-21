@@ -189,6 +189,33 @@ internal static class TimerArguments
         throw new InvalidDataException("Invalid absolute time.");
     }
 
+    internal static bool Script(JsonObject row) => MainTimers.Text(row["action"]) == "toolscript";
+
+    internal static void PutAction(JsonObject row, JsonObject args)
+    {
+        var action = args.ContainsKey("action") ? MainTimers.Text(args["action"]) : "message";
+        if (action is not ("message" or "toolscript"))
+            throw new InvalidDataException("action must be message or toolscript.");
+        row["action"] = action;
+        row.Remove("script");
+        if (action == "message")
+        {
+            if (args.ContainsKey("script"))
+                throw new InvalidDataException("script requires action=toolscript.");
+            row["message"] = Message(args["message"]);
+            return;
+        }
+        if (args.ContainsKey("message") && MainTimers.Text(args["message"]) != "")
+            throw new InvalidDataException("message requires action=message.");
+        if (MainTimers.Flag(args["newSession"]) || new[] { "sessionPrefix", "agentName", "currentNode", "model" }.Any(key => Optional(args[key]) is not null))
+            throw new InvalidDataException("ToolScript timers run in their owner Session; new-session settings require action=message.");
+        if (args["script"] is not JsonObject script)
+            throw new InvalidDataException("script must be a ToolScript specification.");
+        Foxwarm.Tools.ToolRegistry.Keys(script, ["code", "filePath", "node", "args", "argsJson", "mode", "timeoutSecs"]);
+        row["script"] = Foxwarm.ToolScript.MainToolScript.NormalizeStartArgs(script);
+        row["message"] = "";
+    }
+
     internal static string Message(JsonNode? node)
     {
         var value = MainTimers.Text(node);

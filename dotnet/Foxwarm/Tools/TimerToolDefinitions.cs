@@ -6,32 +6,66 @@ internal static class TimerToolDefinitions
 {
     internal static JsonArray Definitions() =>
         new(
-            Definition(
-                "create_timer",
-                "Schedule a message for a session, once or on a recurring schedule. Choose one of at, afterSeconds, or cron. Timers persist across restarts. Load the timer-automation skill before creating or changing timers.",
-                new JsonObject
-                {
-                    ["sessionId"] = String(
-                        "Session that owns the timer. Defaults to this session."
-                    ),
-                    ["at"] = Absolute(
-                        "One-time trigger time as an ISO date-time string or Unix epoch milliseconds."
-                    ),
-                    ["afterSeconds"] = Number("Seconds from now until a one-time trigger."),
-                    ["cron"] = String("Recurring cron schedule in the host's local time zone."),
-                    ["message"] = String("Message delivered on each trigger."),
-                    ["newSession"] = Boolean(
-                        "Deliver each trigger to a newly created session instead of the owner session."
-                    ),
-                    ["sessionPrefix"] = String(
-                        "Name prefix for newly created sessions. Defaults to timer; applies when newSession is true."
-                    ),
-                    ["agentName"] = String(
-                        "Agent for newly created sessions. Defaults to the owner session's agent; applies when newSession is true."
-                    ),
-                },
-                "message"
-            ),
+            ScriptDefinition("""
+{
+  "name": "create_timer",
+  "description": "Schedule a message or a ToolScript run, once or on a recurring schedule. Choose one of at, afterSeconds, or cron. ToolScript timers run for the calling Session without starting a model turn; the script can send a message when needed. Timers survive restarts. Load the timer-automation skill before creating or changing timers.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "message",
+          "toolscript"
+        ],
+        "description": "What each trigger does. Defaults to message."
+      },
+      "script": {
+        "type": "object",
+        "description": "ToolScript to run on each trigger when action is toolscript."
+      },
+      "sessionId": {
+        "type": "string",
+        "description": "Session that owns the timer. Defaults to this Session. ToolScript timers must belong to the calling Session."
+      },
+      "at": {
+        "type": [
+          "string",
+          "number"
+        ],
+        "description": "One-time trigger time as an ISO date-time string or Unix epoch milliseconds."
+      },
+      "afterSeconds": {
+        "type": "number",
+        "description": "Seconds from now until a one-time trigger."
+      },
+      "cron": {
+        "type": "string",
+        "description": "Cron schedule for recurring triggers."
+      },
+      "message": {
+        "type": "string",
+        "description": "Message delivered on each trigger when action is message."
+      },
+      "newSession": {
+        "type": "boolean",
+        "description": "Deliver each message trigger to a newly created Session instead of the owner Session."
+      },
+      "sessionPrefix": {
+        "type": "string",
+        "description": "Name prefix for newly created Sessions. Defaults to timer; applies to message timers when newSession is true."
+      },
+      "agentName": {
+        "type": "string",
+        "description": "Agent for newly created Sessions. Defaults to the owner Session's Agent; applies to message timers when newSession is true."
+      }
+    },
+    "required": []
+  },
+  "type": "function"
+}
+"""),
             Definition(
                 "list_timers",
                 "List timers owned by a session.",
@@ -40,33 +74,72 @@ internal static class TimerToolDefinitions
                     ["sessionId"] = String("Owner Session ID. Defaults to this session."),
                 }
             ),
-            Definition(
-                "update_timer",
-                "Change an existing timer. Omitted fields keep their current values. To change its schedule, supply exactly one of at, afterSeconds, or cron. Load the timer-automation skill before changing timers.",
-                new JsonObject
-                {
-                    ["timerId"] = String("Timer to update."),
-                    ["sessionId"] = String("Owner Session ID. Defaults to this session."),
-                    ["at"] = Absolute(
-                        "New one-time trigger time as an ISO date-time string or Unix epoch milliseconds."
-                    ),
-                    ["afterSeconds"] = Number(
-                        "Seconds from now until the rescheduled one-time trigger."
-                    ),
-                    ["cron"] = String("New recurring cron schedule in the host's local time zone."),
-                    ["message"] = String("Replacement message for future triggers."),
-                    ["newSession"] = Boolean(
-                        "Use a new session for each trigger when true. Setting false returns delivery to the owner and clears new-session target settings."
-                    ),
-                    ["sessionPrefix"] = String(
-                        "Name prefix for new sessions; applies only when newSession is true."
-                    ),
-                    ["agentName"] = String(
-                        "Agent for new sessions; applies only when newSession is true and defaults to the owner session's agent."
-                    ),
-                },
-                "timerId"
-            ),
+            ScriptDefinition("""
+{
+  "name": "update_timer",
+  "description": "Change an existing timer. Omitted fields keep their current values. To change its schedule, supply exactly one of at, afterSeconds, or cron. A supplied script replaces the complete script specification. Load the timer-automation skill before changing timers.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "message",
+          "toolscript"
+        ],
+        "description": "Replacement trigger action. Supply the message or script required by the new action."
+      },
+      "script": {
+        "type": "object",
+        "description": "Complete replacement ToolScript specification for future triggers."
+      },
+      "timerId": {
+        "type": "string",
+        "description": "Timer to update."
+      },
+      "sessionId": {
+        "type": "string",
+        "description": "Owner Session ID. Defaults to this Session. Only the owner Session may configure a ToolScript timer."
+      },
+      "at": {
+        "type": [
+          "string",
+          "number"
+        ],
+        "description": "New one-time trigger time as an ISO date-time string or Unix epoch milliseconds."
+      },
+      "afterSeconds": {
+        "type": "number",
+        "description": "Seconds from now until the rescheduled one-time trigger."
+      },
+      "cron": {
+        "type": "string",
+        "description": "New recurring cron schedule."
+      },
+      "message": {
+        "type": "string",
+        "description": "Replacement message for future message triggers."
+      },
+      "newSession": {
+        "type": "boolean",
+        "description": "Use a new Session for each message trigger when true. Setting false returns message delivery to the owner and clears new-session target settings."
+      },
+      "sessionPrefix": {
+        "type": "string",
+        "description": "Name prefix for new Sessions; applies to message timers when newSession is true."
+      },
+      "agentName": {
+        "type": "string",
+        "description": "Agent for new Sessions; applies to message timers when newSession is true and defaults to the owner Session's Agent."
+      }
+    },
+    "required": [
+      "timerId"
+    ]
+  },
+  "type": "function"
+}
+"""),
             Definition(
                 "delete_timer",
                 "Delete a timer to stop future triggers. A delivery already in progress is not undone.",
@@ -79,17 +152,16 @@ internal static class TimerToolDefinitions
             )
         );
 
+    private static JsonObject ScriptDefinition(string json)
+    {
+        var definition = JsonNode.Parse(json)!.AsObject();
+        definition["parameters"]!["properties"]!["script"]!["properties"] =
+            ToolScriptToolDefinitions.Definitions()[0]!["parameters"]!["properties"]!.DeepClone();
+        return definition;
+    }
+
     private static JsonObject String(string description) =>
         new() { ["type"] = "string", ["description"] = description };
-
-    private static JsonObject Number(string description) =>
-        new() { ["type"] = "number", ["description"] = description };
-
-    private static JsonObject Boolean(string description) =>
-        new() { ["type"] = "boolean", ["description"] = description };
-
-    private static JsonObject Absolute(string description) =>
-        new() { ["type"] = new JsonArray("string", "number"), ["description"] = description };
 
     private static JsonObject Definition(
         string name,

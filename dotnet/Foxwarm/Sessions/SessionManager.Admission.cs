@@ -52,7 +52,8 @@ internal sealed partial class SessionManager
     internal async Task<SessionOwner?> GetExistingAsync(
         string requestedId,
         CancellationToken cancellationToken = default,
-        bool forDeletion = false
+        bool forDeletion = false,
+        bool acceptedTimer = false
     )
     {
         if (!cancellationToken.CanBeCanceled)
@@ -65,7 +66,7 @@ internal sealed partial class SessionManager
             IdentityMoveOperation? moving;
             lock (lifecycle)
             {
-                if (!accepting)
+                if (!accepting && !acceptedTimer)
                     throw new InvalidOperationException("Host is shutting down.");
                 identityMoveClaims.TryGetValue(requestedId, out moving);
                 identities.TryGetValue(requestedId, out slot);
@@ -93,7 +94,7 @@ internal sealed partial class SessionManager
             bool start = false;
             lock (lifecycle)
             {
-                if (!accepting)
+                if (!accepting && !acceptedTimer)
                     throw new InvalidOperationException("Host is shutting down.");
                 identityMoveClaims.TryGetValue(requestedId, out moving);
                 if (moving is null && canonical is not null)
@@ -127,7 +128,7 @@ internal sealed partial class SessionManager
             if (id is null)
                 return null;
             if (start)
-                _ = LoadOwnerAsync(id, slot!);
+                _ = LoadOwnerAsync(id, slot!, acceptedTimer);
             var admitted = await slot!.Owner.Task.WaitAsync(cancellationToken);
             await WaitForIdentityMutationAsync(admitted.Id, cancellationToken);
             admitted.Entry.RequireIdentityAuthority();
@@ -142,11 +143,11 @@ internal sealed partial class SessionManager
         await GetExistingAsync(id, cancellationToken)
         ?? throw new InvalidDataException($"Session `{id}` not found.");
 
-    private async Task LoadOwnerAsync(string id, IdentitySlot slot)
+    private async Task LoadOwnerAsync(string id, IdentitySlot slot, bool acceptedTimer = false)
     {
         try
         {
-            var token = admissionStop.Token;
+            var token = acceptedTimer ? CancellationToken.None : admissionStop.Token;
             token.ThrowIfCancellationRequested();
             if (BeforeAdmissionRead is { } before)
                 await before(id, token);
@@ -185,7 +186,7 @@ internal sealed partial class SessionManager
             BindMutations(owner);
             if (recoveringBusy)
                 await owner.Entry.SaveLane.SaveStrictAsync(token);
-            PublishOwner(owner, slot);
+            PublishOwner(owner, slot, acceptedTimer);
             if (servicesReady && !IsDeletionClaimed(owner.Id))
                 WaitTransition(owner.Id);
         }
@@ -324,13 +325,13 @@ internal sealed partial class SessionManager
             throw new TimeoutException("Experimental creation publication barrier expired.");
     }
 
-    private void PublishOwner(SessionOwner owner, IdentitySlot slot)
+    private void PublishOwner(SessionOwner owner, IdentitySlot slot, bool acceptedTimer = false)
     {
         lock (lifecycle)
         {
             if (!accepting)
                 owner.Registry.Runner.CloseAdmission();
-            if (!slot.Creating)
+            if (!slot.Creating && !acceptedTimer)
                 admissionStop.Token.ThrowIfCancellationRequested();
             if (
                 !identities.TryGetValue(owner.Id, out var current)

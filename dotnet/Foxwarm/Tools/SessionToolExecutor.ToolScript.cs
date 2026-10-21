@@ -25,7 +25,8 @@ internal sealed partial class SessionToolExecutor
     private sealed record ScriptScope(
         string LiteralOwner,
         ToolScriptDataBudget Budget,
-        ToolScriptWaitScope WaitScope
+        ToolScriptWaitScope WaitScope,
+        string? RunId
     );
 
     private readonly AsyncLocal<ScriptScope?> scriptScope = new();
@@ -49,7 +50,7 @@ internal sealed partial class SessionToolExecutor
             async (wrapper, budget, currentToken) =>
             {
                 var previous = scriptScope.Value;
-                scriptScope.Value = new(literal, budget, waitScope);
+                scriptScope.Value = new(literal, budget, waitScope, context.ToolScriptRunId);
                 try
                 {
                     var resolved = await registry.ResolveAsync(
@@ -226,7 +227,7 @@ internal sealed partial class SessionToolExecutor
             var result = await sessions.ToolScript.ExecuteAsync(name, args, context, token);
             if (SessionWait.Text(result["status"]) != "completed")
                 waitScope.Pending = null;
-            else if (!nested && waitScope.Pending is { } pending)
+            else if (!unattended && !nested && waitScope.Pending is { } pending)
             {
                 waitScope.Pending = null;
                 // Normal builtin resolution, authorization and live source validation own the effect.
