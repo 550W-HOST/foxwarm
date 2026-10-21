@@ -361,6 +361,14 @@ internal static class ArchiveRecallTool
                 )
             );
         }
+        catch (Foxwarm.Vector.VectorUnavailableException error)
+        {
+            var result = UnsupportedTurnToolExecutor.ToolError(error.Code, error.Message);
+            result["code"] = error.Code;
+            if (error.Retryable)
+                result["retryable"] = true;
+            return result;
+        }
         catch (Exception error)
             when (error
                     is InvalidDataException

@@ -2,6 +2,8 @@
 
 Files: `dotnet/Foxwarm/Vector/VectorService.cs`, `dotnet/Foxwarm/Vector/VectorWire.cs`, `dotnet/Foxwarm/Vector/VectorChild.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Vector.cs`
 
+Secondary files: `dotnet/Foxwarm.Tests/Vector/VectorStartupTests.cs`, `dotnet/scripts/qualify-vector-startup.mjs`
+
 ## Purpose
 
 Provides the single enabled Vector owner and the small Main-facing facade used by committed Archive hooks, recall, history search and lifecycle. It is not Session Worker placement, a generic RPC registry, a Node provider or a second Main server.
@@ -10,7 +12,7 @@ Provides the single enabled Vector owner and the small Main-facing facade used b
 
 `VectorService` captures normalized configuration. Disabled operations stay lazy and create no vector/native/lexical owner. With `dbWorkers:false`, one local `VectorRuntime` owns native state. With the default `dbWorkers:true`, one supervised child owns that same runtime and communicates over a private current-user named pipe. Request capacity is 256 in either mode. Failure is bounded `VECTOR_UNAVAILABLE`, never a second in-process native owner or placement fallback.
 
-Main completes authoritative identity/migration work before starting the owner. Child readiness is independent of `WaitForStartupAsync`. Exits reject pending requests for that connection generation; stale connection completion cannot fail a replacement's calls. Restart uses 250 ms to 5 s backoff, and no replacement starts before the previous child confirms exit. Shutdown stops restart/admission, drains accepted requests, closes transport, then uses the existing bounded wait/TERM/KILL phases. Unconfirmed exit retains ownership and reports an error. Parent disconnect has bounded child cleanup, not durable cross-Main fencing.
+Main completes authoritative identity/migration work before starting the owner. `SessionManager.LoadOwnersAsync` catches only the selected Vector start, logs initialization failure and continues with that same unavailable service; authoritative loading stays outside the catch. The [optional startup contract](../threads/process-topology-and-rpc.md#vector-placement) retains placement/configuration, distinguishes retryable unavailability from explicit disabled mode and adds no local retry scheduler. Child readiness is independent of `WaitForStartupAsync`. Exits reject pending requests for that connection generation; stale connection completion cannot fail a replacement's calls. Restart uses 250 ms to 5 s backoff, and no replacement starts before the previous child confirms exit. Shutdown stops restart/admission, drains accepted requests, closes transport, then uses the existing bounded wait/TERM/KILL phases. Unconfirmed exit retains ownership and reports an error. Parent disconnect has bounded child cleanup, not durable cross-Main fencing.
 
 Console and optional Desktop dispatch the private child branch before ordinary Main composition. Desktop dispatch precedes WinForms initialization and its single-instance guard; the same Desktop apphost can own its child without depending on a separately shipped console runtimeconfig. The child starts no HTTP listener, UI, Agent lifecycle or Session owner.
 
@@ -26,5 +28,7 @@ Console and optional Desktop dispatch the private child branch before ordinary M
 ## Tests and limits
 
 `VectorStorageTests` exercises both actual placements, disabled side effects, worker loss with a held request, pending rejection and replacement. `VectorMainCallerTests` invokes ordinary Main append, model tool dispatch, same/cross-Agent move, captured fork, administrator HTTP and `/session index`. `VectorCompactionTests` uses the actual Main planner/commit and verifies drained fact publication after restart.
+
+`VectorStartupTests` opens a real table, truncates its latest manifest, then checks unavailable direct operations and disposal in both placements. `qualify-vector-startup.mjs` reuses the owned Main process fixture for healthy seed, corrupt local/child startup, disabled controls, semantic API/model-tool failure, canonical message/Archive persistence across restart, admin/signal shutdown and fatal corrupt Catalog/Archive controls. No fixture repairs the derived manifest.
 
 These fixtures are separate disposable runtimes. They do not establish Windows Desktop runtime qualification, deployment readiness, stronger parent-loss fencing or a Session Worker platform.

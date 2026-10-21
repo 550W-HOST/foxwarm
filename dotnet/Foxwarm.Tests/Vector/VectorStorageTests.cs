@@ -26,6 +26,7 @@ public sealed class VectorStorageTests
             service.SearchAsync("needle", 5)
         );
         Assert.Equal("VECTOR_DISABLED", error.Code);
+        Assert.False(error.Retryable);
         Assert.Null(service.ChildPid);
         Assert.Equal("disabled", service.Mode);
         Assert.False(Directory.Exists(root));

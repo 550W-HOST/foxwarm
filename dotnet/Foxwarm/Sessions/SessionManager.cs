@@ -356,7 +356,17 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private async Task LoadOwnersAsync(bool startMainServices)
     {
         await EnsureIdentityStartupAsync();
-        await Vector.StartAsync();
+        try
+        {
+            await Vector.StartAsync();
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine(
+                "Vector initialization failed; Main will continue without semantic search: "
+                    + error
+            );
+        }
         await timers.LoadAsync();
         foreach (var row in Catalog.List())
         {

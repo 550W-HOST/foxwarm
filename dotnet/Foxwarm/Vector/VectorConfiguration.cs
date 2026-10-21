@@ -72,4 +72,5 @@ internal sealed class VectorUnavailableException(string code, string message)
     : InvalidOperationException(message)
 {
     internal string Code { get; } = code;
+    internal bool Retryable => Code == "VECTOR_UNAVAILABLE";
 }
