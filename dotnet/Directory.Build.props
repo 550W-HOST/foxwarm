@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <!-- The package version is the product version for every executable. -->
+    <Version>$([System.Text.RegularExpressions.Regex]::Replace($([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../package.json')), '^[\s\S]*?&quot;version&quot;\s*:\s*&quot;([^&quot;]+)&quot;[\s\S]*$', '$1'))</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+</Project>

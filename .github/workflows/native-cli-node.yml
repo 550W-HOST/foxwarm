@@ -1,0 +1,126 @@
+name: Native CLI Node (Linux x64)
+
+on:
+  # A push trigger works before this workflow exists on the default branch.
+  push:
+    branches: [feat/native-cli-downloads]
+    paths:
+      - 'dotnet/**'
+      - 'scripts/native-aot/**'
+      - 'packages/webui/test/dotnetCliNodeAotLinux.e2e.mjs'
+      - 'scripts/test/test-process-env.cjs'
+      - 'package.json'
+      - 'LICENSE'
+      - '.github/workflows/native-cli-node.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: native-cli-downloads
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+      - name: Check packaging and index
+        run: |
+          python3 scripts/native-aot/tests/test_package.py
+          python3 docs/code-index/scripts/audit_index.py --source-root . --fail-on-cjk
+      - name: Build the full static graph and collect redistribution inputs
+        run: |
+          mkdir -p .temp
+          docker build --platform=linux/amd64 --progress=plain \
+            -f scripts/native-aot/cli-linux-musl-x64.Dockerfile \
+            --target distribution --output type=local,dest=.temp/native-publish . \
+            2>&1 | tee .temp/native-build.log
+      - name: Package and measure the complete archive
+        run: |
+          python3 scripts/native-aot/package-cli.py \
+            --publish .temp/native-publish --output .temp/native-cli-downloads \
+            --source-commit "$GITHUB_SHA" --source-epoch "$(git show -s --format=%ct HEAD)" \
+            --build-id "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT"
+          mkdir -p .temp/native-extracted
+          tar -xzf .temp/native-cli-downloads/assets/downloads/native-cli-node-latest-v3.tar.gz \
+            -C .temp/native-extracted
+      - name: Prepare the isolated protocol driver and no-CLR smoke image
+        run: |
+          # Only ws is needed by this fixture, not the Main dependency tree.
+          npm install --prefix "$RUNNER_TEMP/native-driver" --ignore-scripts --no-audit --no-fund ws@8.21.0
+          mkdir -p node_modules .temp/native-cert
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
+            -subj /CN=localhost -addext 'subjectAltName=IP:127.0.0.1,DNS:localhost' \
+            -keyout .temp/native-cert/key.pem -out .temp/native-cert/cert.pem
+          chmod 644 .temp/native-cert/key.pem .temp/native-cert/cert.pem
+          docker build --platform=linux/amd64 --progress=plain \
+            -f scripts/native-aot/cli-linux-smoke.Dockerfile \
+            --build-arg BASE_IMAGE=debian:13-slim --build-arg INSTALL_CHROMIUM=1 \
+            -t native-cli-smoke .
+      - name: Qualify the extracted package, including installed-browser operations
+        run: |
+          docker run --rm --platform=linux/amd64 --network none --read-only \
+            --tmpfs /tmp:rw,exec,mode=1777 --cap-drop ALL --security-opt no-new-privileges \
+            --cpus 2 --memory 2g --memory-swap 2g --pids-limit 512 \
+            -v "$PWD:/repo:ro" -v "$RUNNER_TEMP/native-driver/node_modules:/repo/node_modules:ro" \
+            -v "$PWD/.temp/native-extracted/native-cli-node-linux-x64:/native:ro" \
+            -v "$PWD/.temp/native-cert:/cert:ro" \
+            -e HOME=/tmp -e TMPDIR=/tmp \
+            -e FOXWARM_CLI_EXECUTABLE=/native/Foxwarm.CliNode \
+            -e FOXWARM_TEST_TLS_CERT=/cert/cert.pem -e FOXWARM_TEST_TLS_KEY=/cert/key.pem \
+            -e SSL_CERT_FILE=/cert/cert.pem -e SSL_CERT_DIR=/nonexistent \
+            -e FOXWARM_TEST_EXPECT_STATIC=1 -e PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
+            native-cli-smoke | tee .temp/native-cli-downloads/qualification.json
+          cp .temp/native-build.log .temp/native-cli-downloads/build.log
+      - name: Upload the qualified distribution and build evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-cli-linux-x64-${{ github.sha }}
+          path: .temp/native-cli-downloads/
+          if-no-files-found: error
+          retention-days: 30
+          include-hidden-files: true
+
+  deploy:
+    # Repository variable defaults off. Configure environment protection and
+    # approve the route/origin decision BEFORE enabling it; see the native README.
+    if: github.ref == 'refs/heads/feat/native-cli-downloads' && vars.NATIVE_CLI_PUBLISH == 'true'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: native-cli-downloads
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: native-cli-linux-x64-${{ github.sha }}
+          path: .temp/native-cli-downloads
+      - name: Require publishing configuration and activate only the approved download route
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          NATIVE_CLI_WRANGLER_VERSION: ${{ vars.NATIVE_CLI_WRANGLER_VERSION }}
+        run: |
+          : "${CLOUDFLARE_ACCOUNT_ID:?Configure the publishing account}"
+          : "${CLOUDFLARE_API_TOKEN:?Configure the protected publishing token}"
+          : "${NATIVE_CLI_WRANGLER_VERSION:?Pin a reviewed supported Wrangler version}"
+          [[ "$NATIVE_CLI_WRANGLER_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          npm exec --yes --package="wrangler@$NATIVE_CLI_WRANGLER_VERSION" -- \
+            wrangler deploy --config scripts/native-aot/downloads.wrangler.json

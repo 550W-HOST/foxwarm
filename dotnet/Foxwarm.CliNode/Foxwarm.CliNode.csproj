@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsAotCompatible>true</IsAotCompatible>
+    <EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <EmbeddedResource Include="Capabilities.json" />
+    <ProjectReference Include="../Foxwarm.NodePrimitives/Foxwarm.NodePrimitives.csproj" />
+    <ProjectReference Include="../Foxwarm.BrowserSupport/Foxwarm.BrowserSupport.csproj" />
+  </ItemGroup>
+  <Target
+    Name="ValidateStaticMuslCli"
+    BeforeTargets="PrepareForBuild"
+    Condition="'$(FoxwarmStaticMusl)' == 'true'"
+  >
+    <Error
+      Condition="'$(RuntimeIdentifier)' != 'linux-musl-x64' or '$(PublishAot)' != 'true' or '$(StaticExecutable)' != 'true'"
+      Text="FoxwarmStaticMusl requires a linux-musl-x64 static Native AOT CLI publication."
+    />
+  </Target>
+  <Target
+    Name="PrepareStaticMuslPty"
+    BeforeTargets="ComputeIlcCompileInputs"
+    Condition="'$(FoxwarmStaticMusl)' == 'true'"
+  >
+    <MakeDir Directories="$(IntermediateOutputPath)native" />
+    <Exec Command="gcc -std=c11 -O2 -Wall -Wextra -Werror -fPIC -DFOXWARM_STATIC_MUSL -c -o &quot;$(IntermediateOutputPath)native/foxwarm-pty.o&quot; &quot;$(MSBuildProjectDirectory)/../Foxwarm.NodePrimitives/Terminal/native/foxwarm-pty.c&quot;" />
+    <ItemGroup>
+      <DirectPInvoke Include="libc" />
+      <DirectPInvoke Include="foxwarm-pty" />
+      <NativeLibrary Include="$(IntermediateOutputPath)native/foxwarm-pty.o" />
+    </ItemGroup>
+  </Target>
+</Project>

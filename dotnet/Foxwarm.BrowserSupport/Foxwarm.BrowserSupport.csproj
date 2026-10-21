@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsAotCompatible>true</IsAotCompatible>
+    <!-- Preserve the consuming target RID through the native-resource graph. -->
+    <IsRidAgnostic>false</IsRidAgnostic>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="PuppeteerSharp.Cdp" Version="[25.14.0]" />
+    <ProjectReference Include="../Foxwarm.NodePrimitives/Foxwarm.NodePrimitives.csproj" />
+  </ItemGroup>
+</Project>

@@ -35,6 +35,10 @@ Auto-approve flags are TUI options implemented by the TUI's `toolCallInterceptor
 
 ## Packaging
 
+The separate [native CLI Node](./native-cli-node.md) is an opt-in standalone
+client with a Linux x64 static distribution lane. It does not change these
+TypeScript bootstrap defaults.
+
 - The master build produces `client.bundle.js` and `tui.bundle.js` with esbuild.
 - The bootstrap source archive normally carries those bundles; remote startup does not install master-only dependencies.
 - `packages/cli-node-runtime` isolates official `node-pty`. Loading failure disables only `vscode-pty` on bare metal.

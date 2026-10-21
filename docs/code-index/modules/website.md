@@ -31,4 +31,11 @@ Owns the static public project homepage, user documentation, root installer down
 
 ## Integration notes
 
+The prepared [native CLI downloads lane](../units/native-cli-distribution.md)
+uses a separate assets-only Worker and only the `/downloads/*` route, with
+GitHub Pages retained as the documentation origin. Its manifest and workflow
+are independent of this site build; the website does not acquire or compile
+native packages. DNS proxying and route activation are external prerequisites,
+not effects of source publication. No live download link is added by this lane.
+
 GitHub repository Pages settings and custom-domain configuration are external administrative prerequisites. The workflow assumes Pages is configured for GitHub Actions and does not attempt to create or administer the Pages site.

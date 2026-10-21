@@ -22,3 +22,5 @@ coverage/
 .git/
 docs/
 test/
+dotnet/**/bin/
+dotnet/**/obj/

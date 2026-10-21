@@ -56,6 +56,7 @@ Nodes, providers, and authenticated CLI Node runtime
 | [browser-node](./modules/browser-node.md) | Browser-extension node tools and per-tab/domain permission policy |
 | [channels](./modules/channels.md) | Channel abstraction and concrete platform adapters |
 | [cli-node](./modules/cli-node.md) | Remote node client, tool execution, and operator TUI |
+| [native-cli-node](./modules/native-cli-node.md) | Opt-in standalone .NET CLI graph and Linux x64 native distribution |
 | [infrastructure](./modules/infrastructure.md) | Bootstrap, HTTP, configuration, utilities, skills, timers, and terminals |
 | [llm](./modules/llm.md) | Provider requests, prompt snapshots, streaming, retries, and MCP client |
 | [message-routing](./modules/message-routing.md) | Inbound routing, commands, queue processing, and turn orchestration |

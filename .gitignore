@@ -34,3 +34,8 @@ __pycache__/
 
 # Sandbox runtime incremental compiler cache (runtime artifacts remain tracked)
 /packages/sandbox-node-runtime/dist/.tsbuildinfo
+
+# Standalone native CLI build and distribution output
+/dotnet/**/bin/
+/dotnet/**/obj/
+/.temp/
