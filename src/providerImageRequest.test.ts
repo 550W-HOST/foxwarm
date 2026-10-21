@@ -160,3 +160,77 @@ test('corrupt original image fails locally before HTTP and never retries or sile
     await fs.remove(filename);
   }
 });
+
+test('real over-byte and over-pixel images become files in physical requests without pixel conversion', async () => {
+  const { oversizedVisionImages } = await import('./testFixtures/visionImages');
+  const { putImageBlob, readImageRef } = await import('./imageBlobs');
+  const { requestLlmOnce } = await import('./llm');
+  const { resolveImageBlobPath } = await import('./imageBlobs');
+  const { buildFoxwarmAttachmentText } = await import('../packages/shared/dist/foxwarmMarkup');
+  const { overBytes, overPixels } = await oversizedVisionImages();
+  assert.ok(overBytes.length > 32 * 1024 * 1024);
+  assert.ok(overPixels.length < 32 * 1024 * 1024);
+  for (const source of [overBytes, overPixels]) {
+    assert.equal((await sharp(source, { limitInputPixels: false }).resize(1, 1).raw().toBuffer()).length, 3,
+      'The fixtures really decode, rather than only carrying image MIME');
+  }
+  const pixelMetadata = await sharp(overPixels, { limitInputPixels: false }).metadata();
+  assert.ok(pixelMetadata.width! * pixelMetadata.height! > 64 * 1024 * 1024);
+  const refs = await Promise.all([overBytes, overPixels].map((buffer, index) => putImageBlob({
+    buffer, mimeType: 'image/png', imageId: `large-${index}`,
+  })));
+  const originalPaths = refs.map(ref => resolveImageBlobPath(ref.blobId!));
+  const names = ['large source.png', 'many pixels.png'];
+  const descriptor = (index: number) => buildFoxwarmAttachmentText({
+    kind: 'image', name: names[index], node: 'master', path: originalPaths[index],
+  });
+  const canonical: Message[] = [{ role: 'user', parts: [
+    { text: descriptor(0), inlineDataRef: refs[0] },
+    { text: descriptor(1) }, { inlineDataRef: refs[1] },
+  ] }, { role: 'model', parts: [{ functionCall: { id: 'large-tool', name: 'read', args: {} } }] },
+  { role: 'tool', parts: [
+    { functionResponse: { tool_use_id: 'large-tool', name: 'read', response: { output: 'Original tool result' } } },
+    { inlineDataRef: refs[1], toolUseId: 'large-tool', imageMeta: { imageId: 'large-tool#1', mimeType: 'image/png' } },
+  ] }];
+  const snapshot = structuredClone(canonical);
+  const originalPost = axios.post;
+  const originalToBuffer = sharp.prototype.toBuffer;
+  const originalStats = sharp.prototype.stats;
+  let pixelConversions = 0;
+  try {
+    sharp.prototype.toBuffer = function () { pixelConversions += 1; throw new Error('Oversized image pixel encoding was attempted'); } as any;
+    sharp.prototype.stats = function () { pixelConversions += 1; throw new Error('Oversized image pixel statistics were attempted'); } as any;
+    for (const providerType of ['openai-responses', 'openai-completions', 'anthropic']) {
+      let wire: any;
+      (axios as any).post = async (_url: string, data: any) => {
+        wire = typeof data === 'string' ? JSON.parse(data) : data;
+        return providerType === 'anthropic'
+          ? { status: 200, statusText: 'OK', headers: {}, data: makeAnthropicMessageStream({ content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } }) }
+          : { status: 200, statusText: 'OK', headers: {}, data: providerType === 'openai-completions' ? chatStream() : responseStream() };
+      };
+      await requestLlmOnce({
+        contents: canonical, systemPrompt: '', modelEntryOverride: entry(providerType) as any,
+        toolDefinitions: [], notifySessionEvents: false, registerAbortController: false, maxRetries: 1,
+      });
+      const serialized = JSON.stringify(wire);
+      assert.doesNotMatch(serialized, /data:image|input_image|image_url|"type":"image"|<foxwarm-image\b/);
+      for (let index = 0; index < refs.length; index += 1) {
+        assert.ok(serialized.includes(names[index]), 'Ordinary file names remain available');
+        assert.ok(serialized.includes(originalPaths[index]), 'Original file locators remain available');
+      }
+      assert.equal((serialized.match(/foxwarm-file/g) || []).length, 2);
+      assert.ok(serialized.includes('large-tool#1'));
+      assert.ok(serialized.includes('image_write_to_file'));
+      assert.ok(serialized.includes('Image content was not sent'));
+      assert.ok(serialized.includes('Original tool result'), 'File fallback preserves its associated tool result');
+    }
+    assert.equal(pixelConversions, 0);
+    assert.deepEqual(canonical, snapshot, 'Provider file policy never rewrites canonical image history');
+    assert.deepEqual(await readImageRef(refs[0]), overBytes);
+    assert.deepEqual(await readImageRef(refs[1]), overPixels);
+  } finally {
+    (axios as any).post = originalPost;
+    sharp.prototype.toBuffer = originalToBuffer;
+    sharp.prototype.stats = originalStats;
+  }
+});

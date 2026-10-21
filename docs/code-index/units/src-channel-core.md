@@ -46,7 +46,7 @@ canonical in
 ## Inbound file behavior
 
 - The current session/agent determines whether storage occurs on master or the isolated agent's node.
-- Stored names use sanitized path segments and unique timestamps under the agent's temporary channel-files area. Master buffer/path writes use a unique temporary file followed by atomic rename and cleanup; ordinary isolated remote-node buffer writes continue through the node transfer contract, while path-based QQ media is intentionally Main-hosted only and rejects when that contract would require whole-buffer transfer.
+- Stored names use sanitized path segments and unique timestamps under the agent's temporary channel-files area. Master buffer/path writes use a unique temporary file followed by atomic rename and cleanup; ordinary isolated remote-node buffer writes continue through the node transfer contract, while path-based saves used by Main-hosted WebUI uploads and QQ media remain Main-hosted only and reject when that contract would require whole-buffer transfer.
 - The model-facing attachment descriptor is one ordered self-closing `foxwarm-image` or `foxwarm-file` tag. It uses the shared Foxwarm attribute formatter, retains caption/body text before the tag, and gives node/path facts without prescribing a particular file tool. Canonical grammar: [D-channel-file-descriptor](../modules/channels.md#d-channel-file-descriptor).
 
 ## Runtime behavior

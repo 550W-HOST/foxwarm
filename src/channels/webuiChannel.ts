@@ -17,7 +17,8 @@ import http from 'http';
 import os from 'os';
 import path from 'path';
 import fs from 'fs-extra';
-import { buildSavedFileText, saveInboundSessionFile } from '../channelFiles';
+import { buildSavedFileText, saveInboundSessionFile, saveInboundSessionFileFromPath, isInboundSessionMainHosted } from '../channelFiles';
+import { inspectImageInput } from '../imageInputPolicy';
 import { WebSocket } from 'ws';
 import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
 import { MessageRouter } from '../messageRouter';
@@ -3097,7 +3098,6 @@ export class WebUIChannel implements Channel {
                   const stats = await fs.stat(tempPath);
                   if (!stats.isFile()) continue;
 
-                  const fileBuffer = await fs.readFile(tempPath);
                   const originalName = typeof entry?.filename === 'string' && entry.filename.trim()
                     ? entry.filename.trim()
                     : path.basename(tempPath);
@@ -3109,22 +3109,34 @@ export class WebUIChannel implements Channel {
                       : ext === '.webp' ? 'image/webp'
                       : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg'
                       : 'application/octet-stream');
-                  const isImage = mimeType.startsWith('image/');
-                  const saved = await saveInboundSessionFile({
-                    sessionId: auth.role === 'webui' ? existingSession.id : sessionId,
-                    platform: 'webui',
-                    buffer: fileBuffer,
-                    fileName: originalName,
-                    mimeType,
-                    isImage,
-                  });
+                  let isImage = mimeType.startsWith('image/');
+                  if (isImage) {
+                    try {
+                      isImage = !(await inspectImageInput(tempPath, mimeType, stats.size)).oversized;
+                    } catch {
+                      // Invalid or unsupported metadata is not evidence of an
+                      // oversized image; keep the existing image ingress path.
+                    }
+                  }
+                  const storageSessionId = auth.role === 'webui' ? existingSession.id : sessionId;
+                  const mainHosted = await isInboundSessionMainHosted(storageSessionId, 'webui');
+                  // Main can retain the original spool without materializing a
+                  // large Buffer. Existing remote destinations retain their
+                  // ordinary-file transfer path, not a new transport protocol.
+                  const fileBuffer = isImage || !mainHosted ? await fs.readFile(tempPath) : undefined;
+                  const fileOptions = {
+                    sessionId: storageSessionId, platform: 'webui', fileName: originalName, mimeType, isImage,
+                  };
+                  const saved = mainHosted
+                    ? await saveInboundSessionFileFromPath({ ...fileOptions, sourcePath: tempPath, sizeBytes: stats.size })
+                    : await saveInboundSessionFile({ ...fileOptions, buffer: fileBuffer! });
 
                   finalParts.push({ text: buildSavedFileText(saved, isImage ? 'image' : 'file') });
 
                   if (isImage) {
                     finalParts.push({
                       inlineData: {
-                        data: fileBuffer.toString('base64'),
+                        data: fileBuffer!.toString('base64'),
                         mimeType,
                       }
                     });
