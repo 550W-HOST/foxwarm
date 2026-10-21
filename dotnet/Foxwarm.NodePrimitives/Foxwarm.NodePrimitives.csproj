@@ -6,7 +6,8 @@
     <IsAotCompatible>true</IsAotCompatible>
     <!-- Preserve the consuming target RID through the native-resource graph. -->
     <IsRidAgnostic>false</IsRidAgnostic>
-    <DefineConstants Condition="'$(FoxwarmStaticMusl)' == 'true'">$(DefineConstants);FOXWARM_STATIC_MUSL</DefineConstants>
+    <DefineConstants Condition="'$(FoxwarmStaticMusl)' == 'true'"
+      >$(DefineConstants);FOXWARM_STATIC_MUSL</DefineConstants>
   </PropertyGroup>
   <Target
     Name="PrepareFoxwarmPty"
