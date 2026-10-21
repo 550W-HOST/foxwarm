@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
-using Foxwarm.Sessions;
 using Foxwarm.Channels;
+using Foxwarm.Sessions;
 
 namespace Foxwarm.Tests;
 
@@ -19,25 +19,45 @@ public sealed partial class CommandAdministrationTests
             if (e.Kind == SessionEventKind.CommandReply)
                 replies.Add(e.Data!["parts"]![0]!["text"]!.GetValue<string>());
         };
-        foreach (var script in new[]
-        {
-            new JsonObject { ["code"] = "return 7" },
-            new JsonObject { ["filePath"] = "monitor.py", ["node"] = "master" },
-            new JsonObject { ["filePath"] = "relative.py" },
-        })
-            await f.Manager.ExecuteTimerToolAsync(f.Owner, "create_timer", new JsonObject
+        foreach (
+            var script in new[]
             {
-                ["action"] = "toolscript", ["afterSeconds"] = 600, ["script"] = script,
-            }, default);
+                new JsonObject { ["code"] = "return 7" },
+                new JsonObject { ["filePath"] = "monitor.py", ["node"] = "master" },
+                new JsonObject { ["filePath"] = "relative.py" },
+            }
+        )
+            await f.Manager.ExecuteTimerToolAsync(
+                f.Owner,
+                "create_timer",
+                new JsonObject
+                {
+                    ["action"] = "toolscript",
+                    ["afterSeconds"] = 600,
+                    ["script"] = script,
+                },
+                default
+            );
         var other = await f.Manager.CreateNamedAsync("main", "other-timers", null, null);
-        await f.Manager.ExecuteTimerToolAsync(other, "create_timer", new JsonObject
-        {
-            ["afterSeconds"] = 600, ["message"] = "foreign timer detail",
-        }, default);
+        await f.Manager.ExecuteTimerToolAsync(
+            other,
+            "create_timer",
+            new JsonObject { ["afterSeconds"] = 600, ["message"] = "foreign timer detail" },
+            default
+        );
         var context = new ChannelContext(f.Owner.Id, "webui");
-        await f.Router.HandleMessageAsync(context, new ChannelMessage("/timer after 600 --new-session --prefix watch -- message detail", null));
+        await f.Router.HandleMessageAsync(
+            context,
+            new ChannelMessage(
+                "/timer after 600 --new-session --prefix watch -- message detail",
+                null
+            )
+        );
         replies.Clear();
-        var response = await f.Router.HandleMessageAsync(context, new ChannelMessage("/timer list", null));
+        var response = await f.Router.HandleMessageAsync(
+            context,
+            new ChannelMessage("/timer list", null)
+        );
         Assert.Equal(200, response.Status);
         var listing = Assert.Single(replies);
         Assert.Contains("ToolScript (inline)", listing);
