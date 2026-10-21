@@ -190,7 +190,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   const viewportSessionId = canonicalSessionId || sessionId
   const initialContinuousAnchorSeq = useMemo(() => getChatViewportAnchorSeq(getStoredChatViewportState(viewportSessionId, 'continuous')), [viewportSessionId])
   const {
-    messages: activeMessages, continuousMessages, archivePage, loadArchivePage, queuedMessages, sessionRecord, sessionMissing, sessionBusy, sessionQueueLength,
+    messages: activeMessages, continuousMessages, continuousHistoryReady, archivePage, loadArchivePage, queuedMessages, sessionRecord, sessionMissing, sessionBusy, sessionQueueLength,
     persistentMemorySnapshot, streamingAssistantDraft, toolScriptProgress,
     historyLoaded, isFullHistoryLoaded, earlierHistoryError, connectionState, reconnectCountdown,
     pendingControl, controlFeedback, loading, retryEarlierHistory, sendMessage: handleSend, sendSessionCommand, mergeConfirmedSettings,
@@ -1177,7 +1177,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         return
       }
 
-      if (historyMode === 'continuous' ? !archivePage.loaded : !historyLoaded) return
+      if (historyMode === 'continuous' ? !archivePage.loaded || !continuousHistoryReady : !historyLoaded) return
       const fallbackState: ChatViewportState = { kind: 'bottom' }
       pendingViewportRestoreRef.current = null
       applyViewportState(fallbackState)
@@ -1199,7 +1199,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       return
     }
 
-    if (historyMode === 'active' ? !showFullTimeline || !historyLoaded : !archivePage.loaded) return
+    if (historyMode === 'active' ? !showFullTimeline || !historyLoaded : !archivePage.loaded || !continuousHistoryReady) return
 
     const container = messagesContainerRef.current
     if (!container) return
@@ -1220,7 +1220,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       }
       capturedInteractionVersionRef.current = userInteractionVersionRef.current
     }
-  }, [applyViewportAnchorCandidates, applyViewportState, historyLoaded, messages.length, readCurrentViewportState, setBottomFollow, showFullTimeline, timelineMessages, viewportSessionId, historyMode, archivePage.loaded, continuousWindowStart, continuousWindowKey, continuousProtectedRange, visibleMessages])
+  }, [applyViewportAnchorCandidates, applyViewportState, historyLoaded, messages.length, readCurrentViewportState, setBottomFollow, showFullTimeline, timelineMessages, viewportSessionId, historyMode, archivePage.loaded, continuousHistoryReady, continuousWindowStart, continuousWindowKey, continuousProtectedRange, visibleMessages])
 
   useLayoutEffect(() => {
     const pending = pendingContextScrollbarNavigationRef.current
@@ -1617,7 +1617,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
                 Showing the latest {visibleMessages.length} messages. Scroll upward to load {hiddenMessageCount} earlier messages.
               </div>
             )}
-            {historyMode === 'active' && earlierHistoryError && !isFullHistoryLoaded && (
+            {earlierHistoryError && (!isFullHistoryLoaded || historyMode === 'continuous') && (
               <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-fw-border bg-fw-surface/80 px-3 py-2 text-xs text-fw-text-muted shadow-sm dark:border-fw-border dark:bg-fw-surface/80 dark:text-fw-text">
                 <span>Earlier messages could not be loaded.</span>
                 <button
@@ -1632,7 +1632,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
               </div>
             )}
             {historyMode === 'continuous' && <div className="mb-3 flex items-center justify-between gap-3 text-xs text-fw-text-muted" data-continuous-history>
-              <span>{archivePage.loading ? 'Loading messages…' : archivePage.error ? 'Messages could not be loaded.' : archivePage.hasEarlier || continuousWindowStart > 0 ? 'Scroll up for earlier messages.' : ''}</span>
+              <span>{archivePage.loading || !continuousHistoryReady && !earlierHistoryError ? 'Loading messages…' : archivePage.error ? 'Messages could not be loaded.' : archivePage.hasEarlier || continuousWindowStart > 0 ? 'Scroll up for earlier messages.' : ''}</span>
               {(archivePage.error || archivePage.hasEarlier) && <button type="button" disabled={archivePage.loading} className="text-fw-accent hover:underline" onClick={() => {
                 const state = captureCurrentViewportState()
                 const interactionVersion = userInteractionVersionRef.current

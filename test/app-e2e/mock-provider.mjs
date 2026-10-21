@@ -114,6 +114,7 @@ export async function startMockProvider({ toolFile, log, readyDelayMs = 0, enfor
     'ws:WS_ONE', 'ws:WS_TWO', 'ws:WS_THREE', 'ws:FORK_CHILD',
     'responses:ATTACHMENT', 'responses:LONGPASTE',
     'ws:COMPACT_SYNC', 'ws:COMPACT_BACKGROUND', 'ws:BTW',
+    'responses:AFTER_STOP', // New active conversation after the history scenario clears its fork.
     'responses:IMAGE_ONE', 'responses:IMAGE_EDIT', 'responses:IMAGE_RESTART',
     'responses:ARTIFACT', 'responses:ARTIFACT', 'responses:ARTIFACT', 'responses:ARTIFACT',
   ]

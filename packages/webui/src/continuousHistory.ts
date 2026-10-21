@@ -28,6 +28,41 @@ export function mergeContinuousHistory(loaded: Message[], incoming: Message[]): 
   return mergeHistoryMessages(loaded, incoming.filter(isRawHistoryMessage).map(withArchiveImageProof))
 }
 
+export type ContinuousContextRange = { start: number; end: number }
+
+/** Only message-backed leaves prove membership; higher-level envelopes can contain gaps. */
+export async function resolveContinuousContextRanges(messages: Message[], expandBlock: (id: number) => Promise<Message[]>): Promise<ContinuousContextRange[]> {
+  const ranges = await Promise.all(messages.map(async message => {
+    const block = message.__meta?.contextBlock
+    if (!block) return []
+    if (block.sourceKind === 'block') return resolveContinuousContextRanges(await expandBlock(block.id), expandBlock)
+    return Number.isSafeInteger(block.rawStartSeq) && Number.isSafeInteger(block.rawEndSeq)
+      && block.rawStartSeq! > 0 && block.rawEndSeq! >= block.rawStartSeq!
+      ? [{ start: block.rawStartSeq!, end: block.rawEndSeq! }] : []
+  }))
+  return ranges.flat()
+}
+
+/** Active rows own their payload and absence; surviving CTX members supply older originals. */
+export function projectContinuousHistory(loaded: Message[], active: Message[], resolvedBlocks: ReadonlyMap<number, ContinuousContextRange[]> = new Map()): Message[] {
+  const activeBySeq = new Map(active.filter(isRawHistoryMessage).map(message => [message.__meta!.seq!, message]))
+  const compactedRanges = active.flatMap(message => {
+    const block = message.__meta?.contextBlock
+    if (block?.sourceKind === 'block') return resolvedBlocks.get(block.id) || []
+    return block && Number.isSafeInteger(block.rawStartSeq) && Number.isSafeInteger(block.rawEndSeq)
+      && block.rawStartSeq! > 0 && block.rawEndSeq! >= block.rawStartSeq!
+      ? [{ start: block.rawStartSeq!, end: block.rawEndSeq! }] : []
+  }).sort((left, right) => left.start - right.start)
+  let rangeIndex = 0
+  return loaded.flatMap(original => {
+    const seq = original.__meta!.seq!
+    const current = activeBySeq.get(seq)
+    if (current) return [current]
+    while (rangeIndex < compactedRanges.length && compactedRanges[rangeIndex].end < seq) rangeIndex += 1
+    return rangeIndex < compactedRanges.length && compactedRanges[rangeIndex].start <= seq ? [original] : []
+  })
+}
+
 /** Published canonical deltas cannot replace originals or bridge an unloaded gap. */
 export function appendContinuousCommits(loaded: Message[], committed: Message[]): Message[] {
   if (!loaded.length) return committed.filter(isRawHistoryMessage).map(withArchiveImageProof)

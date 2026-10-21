@@ -1,7 +1,7 @@
 import { CHAT_BOOTSTRAP_TAIL_LENGTH, peekPreparedChatHistory, peekPreparedChatArchive, discardPreparedChatHistory } from '../preparedChatHistory'
 import { createLocalSessionNotice } from '../sessionNotices'
 import { getSessionControlAction, parseSessionControlFeedback, type SessionControlAction, type SessionControlFeedback } from '../../../shared/src/sessionControlFeedback'
-import { appendContinuousCommits, mergeContinuousHistory, type HistoryMode } from '../continuousHistory'
+import { appendContinuousCommits, mergeContinuousHistory, projectContinuousHistory, resolveContinuousContextRanges, type ContinuousContextRange, type HistoryMode } from '../continuousHistory'
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { API_BASE_PATH } from '../config'
 import type { Message, MessagePart, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
@@ -137,6 +137,47 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
   const [timelineState, dispatchTimeline] = useReducer(timelineReducer, { messages: prepared?.messages || [], queuedMessages: prepared?.queuedMessages || [], archiveMessages: preparedArchive ? mergeContinuousHistory([],preparedArchive.messages) : [], archivePendingMessages: [], archiveStatus: preparedArchive ? 'loaded' : 'idle' })
   const messages = timelineState.messages
   const queuedMessages = timelineState.queuedMessages
+  const blockExpansionCache = useMemo(() => new Map<number, Promise<Message[]>>(), [sessionId])
+  const [resolvedContext, setResolvedContext] = useState({ cache: blockExpansionCache, blocks: new Map<number, ContinuousContextRange[]>() })
+  const rememberContextRanges = useCallback((context: typeof resolvedContext) => {
+    // Membership is immutable knowledge, not the active block list. Keep older
+    // entries when a queue-racing snapshot cannot yet replace active history.
+    setResolvedContext(previous => previous.cache === context.cache
+      ? { cache: context.cache, blocks: new Map([...previous.blocks, ...context.blocks]) } : context)
+  }, [])
+  const [contextHistoryError, setContextHistoryError] = useState(false)
+  const [contextHistoryRetry, setContextHistoryRetry] = useState(0)
+  const higherBlocks = messages.filter(message => message.__meta?.contextBlock?.sourceKind === 'block')
+  const historyModeRef = useRef(historyMode)
+  historyModeRef.current = historyMode
+  const loadContextRanges = useCallback(async (snapshot: Message[]) => {
+    const expandBlock = (id: number): Promise<Message[]> => {
+      let request = blockExpansionCache.get(id)
+      if (!request) {
+        request = fetch(`${API_BASE_PATH}/sessions/${encodeURIComponent(sessionId)}/context-blocks/${id}/expand`)
+          .then(async response => {
+            if (!response.ok) throw new Error('History could not be loaded')
+            return (await response.json()).messages as Message[]
+          }).catch(error => { blockExpansionCache.delete(id); throw error })
+        blockExpansionCache.set(id, request)
+      }
+      return request
+    }
+    const entries = await Promise.all(snapshot.filter(message => message.__meta?.contextBlock?.sourceKind === 'block')
+      .map(async message => [message.__meta!.contextBlock!.id, await resolveContinuousContextRanges([message], expandBlock)] as const))
+    return { cache: blockExpansionCache, blocks: new Map(entries) }
+  }, [blockExpansionCache, sessionId])
+  useEffect(() => {
+    if (historyMode !== 'continuous') return
+    let cancelled = false
+    setContextHistoryError(false)
+    void loadContextRanges(messages)
+      .then(context => { if (!cancelled) rememberContextRanges(context) })
+      .catch(() => { if (!cancelled) setContextHistoryError(true) })
+    return () => { cancelled = true }
+    // Snapshots resolve membership before publication. This effect covers entering
+    // continuous mode over an already mounted active history, and explicit Retry.
+  }, [contextHistoryRetry, historyMode, loadContextRanges, rememberContextRanges])
   const [archivePage, setArchivePage] = useState({ loaded: !!preparedArchive, loading: false, error: false, hasEarlier: !!preparedArchive?.hasEarlier, hasLater: !!preparedArchive?.hasLater, direction: 'initial' as ArchivePageDirection })
   const archiveRequestRef = useRef<AbortController | null>(null)
   const archiveBoundaryRef = useRef<{ firstSeq?: number; lastSeq?: number }>({firstSeq:preparedArchive?.firstSeq,lastSeq:preparedArchive?.lastSeq})
@@ -425,6 +466,15 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
         setHistoryLoaded(true)
         return false
       }
+      const prepareSnapshotContext = async (snapshot: Message[]) => {
+        if (historyModeRef.current !== 'continuous') return
+        try {
+          const context = await loadContextRanges(snapshot)
+          if (isCurrent()) { rememberContextRanges(context); setContextHistoryError(false) }
+        } catch {
+          if (isCurrent()) setContextHistoryError(true)
+        }
+      }
       const concurrentMessages = () => historyEventsRef.current
         .filter(entry => entry.version > eventVersionAtStart)
         .map(entry => entry.message)
@@ -563,6 +613,8 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
         if (missing !== null) return missing
         if (!response.ok) throw new Error(data.error || `Failed to fetch history (${response.status})`)
         const snapshotMessages = Array.isArray(data.messages) ? data.messages : []
+        await prepareSnapshotContext(snapshotMessages)
+        if (!isCurrent()) return true
         if (!applyFullSnapshot(data, snapshotMessages)) return true
         maybeClearDraft(snapshotMessages)
         setHistorySnapshotRevision(revision => revision + 1)
@@ -582,6 +634,8 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
           if (missing !== null) return missing
           if (!response.ok) throw new Error(data.error || `Failed to fetch recent history (${response.status})`)
           const tailMessages = Array.isArray(data.messages) ? data.messages : []
+          await prepareSnapshotContext(tailMessages)
+          if (!isCurrent()) return true
           applyMetadata(data)
           const concurrent = concurrentMessages()
           setMessages(currentMessages => mergeHistorySnapshot({
@@ -610,6 +664,8 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
             }
             const prefixMessages = Array.isArray(prefixResult.data.messages) ? prefixResult.data.messages : []
             const assembledSnapshot = [...prefixMessages, ...tailMessages]
+            await prepareSnapshotContext(assembledSnapshot)
+            if (!isCurrent()) return true
             if (!applyFullSnapshot(data, assembledSnapshot)
               && !applySnapshotBeforePendingQueueAppend(data, assembledSnapshot)) return true
           } else {
@@ -699,7 +755,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
       }, 0)
     })
     return requestPromise
-  }, [applySessionState, clearStreamingAssistantDraft, sessionId])
+  }, [applySessionState, clearStreamingAssistantDraft, loadContextRanges, rememberContextRanges, sessionId])
 
   const scheduleAtomicRecovery = useCallback(() => {
     if (atomicRecoveryScheduledRef.current) return
@@ -1148,6 +1204,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
 
   const retryEarlierHistory = useCallback(() => {
     setEarlierHistoryError(false)
+    setContextHistoryRetry(revision => revision + 1)
     return fetchHistory('full')
   }, [fetchHistory])
 
@@ -1161,13 +1218,19 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
   useEffect(() => () => { archiveRequestRef.current?.abort() }, [sessionId])
 
   const continuousMessages = useMemo(() => {
-    const canonicalClientIds = new Set(timelineState.archiveMessages.map(getClientMessageId).filter(Boolean))
-    return [...timelineState.archiveMessages, ...messages.filter(message => message.__meta?.temporary
+    // A bootstrap tail cannot prove absence in its unloaded active prefix.
+    // Wait for that authority before publishing originals, including on remount.
+    const committed = isFullHistoryLoaded ? projectContinuousHistory(timelineState.archiveMessages, messages,
+      resolvedContext.cache === blockExpansionCache ? resolvedContext.blocks : new Map()) : []
+    const canonicalClientIds = new Set(committed.map(getClientMessageId).filter(Boolean))
+    return [...committed, ...messages.filter(message => message.__meta?.temporary
       && (!getClientMessageId(message) || !canonicalClientIds.has(getClientMessageId(message))))]
-  }, [messages, timelineState.archiveMessages])
+  }, [blockExpansionCache, isFullHistoryLoaded, messages, resolvedContext, timelineState.archiveMessages])
 
   return {
     continuousMessages,
+    continuousHistoryReady: isFullHistoryLoaded && resolvedContext.cache === blockExpansionCache
+      && higherBlocks.every(message => resolvedContext.blocks.has(message.__meta!.contextBlock!.id)),
     archivePage,
     loadArchivePage,
     messages,
@@ -1183,7 +1246,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     toolScriptProgress,
     historyLoaded,
     isFullHistoryLoaded,
-    earlierHistoryError,
+    earlierHistoryError: earlierHistoryError || contextHistoryError,
     connectionState,
     reconnectCountdown,
     loading,
