@@ -26,56 +26,88 @@ public sealed class WindowsExecBclInheritanceTests
         var owners = new List<Process>();
         try
         {
-            await using (var main = new LocalExecManager(
-                Path.Combine(temp.Path, "data"),
-                _ => agent,
-                (_, _, _) => Task.CompletedTask
-            ))
-            await using (var node = new NodeExecManager(
-                new NodePaths(agent),
-                Path.Combine(agent, ".temp", "exec", "running-exec.json"),
-                (_, _, _) => Task.CompletedTask
-            ))
+            await using (
+                var main = new LocalExecManager(
+                    Path.Combine(temp.Path, "data"),
+                    _ => agent,
+                    (_, _, _) => Task.CompletedTask
+                )
+            )
+            await using (
+                var node = new NodeExecManager(
+                    new NodePaths(agent),
+                    Path.Combine(agent, ".temp", "exec", "running-exec.json"),
+                    (_, _, _) => Task.CompletedTask
+                )
+            )
             {
                 async Task<JsonObject> StartOwner(int index)
                 {
-                    var command = "while (-not (Test-Path -LiteralPath '"
+                    var command =
+                        "while (-not (Test-Path -LiteralPath '"
                         + release.Replace("'", "''", StringComparison.Ordinal)
                         + "')) { Start-Sleep -Milliseconds 25 }; Write-Output 'finished'";
                     var session = "owner-" + index;
                     if (cli)
-                        return await node.Start(new JsonObject
-                        {
-                            ["sessionId"] = "main/" + session,
-                            ["args"] = new JsonObject { ["command"] = command },
-                        }, "main", "owned", default, () => { });
-                    var result = await main.ExecuteAsync(session,
+                        return await node.Start(
+                            new JsonObject
+                            {
+                                ["sessionId"] = "main/" + session,
+                                ["args"] = new JsonObject { ["command"] = command },
+                            },
+                            "main",
+                            "owned",
+                            default,
+                            () => { }
+                        );
+                    var result = await main.ExecuteAsync(
+                        session,
                         new JsonObject { ["command"] = command, ["timeout"] = 1 },
-                        default, MainNativePaths.Default(agent));
+                        default,
+                        MainNativePaths.Default(agent)
+                    );
                     Assert.Contains("Switched to background", result["output"]!.ToString());
-                    return Assert.Single(main.Tracked, record => record["sessionId"]!.ToString() == session);
+                    return Assert.Single(
+                        main.Tracked,
+                        record => record["sessionId"]!.ToString() == session
+                    );
                 }
                 using var start = new ManualResetEventSlim();
-                var launches = Enumerable.Range(0, 4).Select(index => Task.Run(async () =>
-                {
-                    start.Wait();
-                    return await StartOwner(index);
-                })).ToArray();
+                var launches = Enumerable
+                    .Range(0, 4)
+                    .Select(index =>
+                        Task.Run(async () =>
+                        {
+                            start.Wait();
+                            return await StartOwner(index);
+                        })
+                    )
+                    .ToArray();
                 // This is the same ordinary Process.Start inheritance path used by Git,
                 // not another ExecNative child. Stdin keeps each owned peer alive.
-                var bcl = Enumerable.Range(0, 12).Select(_ => Task.Run(() =>
-                {
-                    start.Wait();
-                    var info = new ProcessStartInfo(Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe")
-                    {
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        RedirectStandardInput = true,
-                    };
-                    foreach (var argument in new[] { "/d", "/q", "/c", "set /p finish= >nul" })
-                        info.ArgumentList.Add(argument);
-                    return Process.Start(info) ?? throw new IOException("Failed to start owned BCL peer.");
-                })).ToArray();
+                var bcl = Enumerable
+                    .Range(0, 12)
+                    .Select(_ =>
+                        Task.Run(() =>
+                        {
+                            start.Wait();
+                            var info = new ProcessStartInfo(
+                                Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe"
+                            )
+                            {
+                                UseShellExecute = false,
+                                CreateNoWindow = true,
+                                RedirectStandardInput = true,
+                            };
+                            foreach (
+                                var argument in new[] { "/d", "/q", "/c", "set /p finish= >nul" }
+                            )
+                                info.ArgumentList.Add(argument);
+                            return Process.Start(info)
+                                ?? throw new IOException("Failed to start owned BCL peer.");
+                        })
+                    )
+                    .ToArray();
                 start.Set();
                 try
                 {
@@ -83,13 +115,26 @@ public sealed class WindowsExecBclInheritanceTests
                 }
                 finally
                 {
-                    records.AddRange(launches.Where(task => task.IsCompletedSuccessfully).Select(task => task.Result));
-                    peers.AddRange(bcl.Where(task => task.IsCompletedSuccessfully).Select(task => task.Result));
+                    records.AddRange(
+                        launches
+                            .Where(task => task.IsCompletedSuccessfully)
+                            .Select(task => task.Result)
+                    );
+                    peers.AddRange(
+                        bcl.Where(task => task.IsCompletedSuccessfully).Select(task => task.Result)
+                    );
                     foreach (var record in records)
                     {
                         try
                         {
-                            owners.Add(Process.GetProcessById(int.Parse(record["pid"]!.ToString(), CultureInfo.InvariantCulture)));
+                            owners.Add(
+                                Process.GetProcessById(
+                                    int.Parse(
+                                        record["pid"]!.ToString(),
+                                        CultureInfo.InvariantCulture
+                                    )
+                                )
+                            );
                         }
                         catch (ArgumentException) { }
                     }
@@ -107,7 +152,12 @@ public sealed class WindowsExecBclInheritanceTests
                 var log = record["logPath"]!.ToString();
                 // Share-delete permits rename/delete even with leaked handles. An exclusive
                 // read open, after the real owner exits, detects retained read/write handles.
-                using var exclusive = File.Open(log, FileMode.Open, FileAccess.Read, FileShare.None);
+                using var exclusive = File.Open(
+                    log,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.None
+                );
                 using var reader = new StreamReader(exclusive);
                 Assert.Contains("finished", await reader.ReadToEndAsync());
             }

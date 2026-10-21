@@ -139,7 +139,9 @@ internal static class ExecNative
         self.UseShellExecute = false;
         self.WorkingDirectory = cwd;
         self.CreateNoWindow = true;
-        self.ArgumentList.Add(OperatingSystem.IsWindows() ? "--exec-launch-windows" : "--exec-launch");
+        self.ArgumentList.Add(
+            OperatingSystem.IsWindows() ? "--exec-launch-windows" : "--exec-launch"
+        );
         self.ArgumentList.Add(script);
         return self;
     }

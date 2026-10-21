@@ -17,14 +17,17 @@ internal static class WindowsExecProcess
         // children started concurrently in Main or CLI cannot inherit those handles.
         helper.RedirectStandardOutput = true;
         helper.StandardOutputEncoding = new UTF8Encoding(false);
-        using var process = Process.Start(helper)
-            ?? throw new IOException("Failed to start exec launch helper.");
+        using var process =
+            Process.Start(helper) ?? throw new IOException("Failed to start exec launch helper.");
         using var output = process.StandardOutput;
         string? receipt;
         try
         {
-            receipt = output.ReadLineAsync()
-                .WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+            receipt = output
+                .ReadLineAsync()
+                .WaitAsync(TimeSpan.FromSeconds(10))
+                .GetAwaiter()
+                .GetResult();
         }
         catch (Exception error) when (error is IOException or TimeoutException)
         {
@@ -57,12 +60,20 @@ internal static class WindowsExecProcess
         {
             WorkingDirectory = Environment.CurrentDirectory,
         };
-        foreach (var argument in new[]
-        {
-            "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script,
-        })
+        foreach (
+            var argument in new[]
+            {
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                script,
+            }
+        )
             start.ArgumentList.Add(argument);
-        var output = Environment.GetEnvironmentVariable("FOXWARM_EXEC_LOG_PATH")
+        var output =
+            Environment.GetEnvironmentVariable("FOXWARM_EXEC_LOG_PATH")
             ?? throw new IOException("Missing exec capture path.");
         JsonObject receipt;
         try
@@ -322,8 +333,13 @@ internal static class WindowsExecProcess
 internal sealed class ExecLaunchUncertainException(string outputPath, Exception? inner = null)
     : IOException(
         "Command launch outcome is uncertain. Do not retry automatically; inspect the execution artifacts."
-            + "\nLog: " + outputPath
-            + "\nStatus: " + outputPath + ".exit.json"
-            + "\nWorking directory: " + outputPath + ".cwd.txt",
+            + "\nLog: "
+            + outputPath
+            + "\nStatus: "
+            + outputPath
+            + ".exit.json"
+            + "\nWorking directory: "
+            + outputPath
+            + ".cwd.txt",
         inner
     );

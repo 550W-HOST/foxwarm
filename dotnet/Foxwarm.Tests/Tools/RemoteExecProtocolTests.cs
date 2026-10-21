@@ -2,10 +2,10 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.CliNode;
-using Foxwarm.Tools;
 using Foxwarm.Models;
 using Foxwarm.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Tools;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Logging;
@@ -436,7 +436,9 @@ public sealed class RemoteExecProtocolTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Native_helper_failure_preserves_definite_rejection_versus_unknown_effect(bool uncertain)
+    public async Task Native_helper_failure_preserves_definite_rejection_versus_unknown_effect(
+        bool uncertain
+    )
     {
         await using var fixture = new Fixture();
         await fixture.Start();
