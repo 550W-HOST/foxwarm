@@ -335,10 +335,15 @@ async function start() {
     await nodeExecution.initializeNodeExecution();
     await mcpExternal.initializeMcpExternalService();
 
-    // Initialize the vector owner locally or in its configured child process.
-    // Startup readiness means the table is open; archive backfill continues in
-    // the background in either placement.
-    await vector.init({ enabled: VECTOR_ENABLED, useWorker: DB_WORKERS_ENABLED });
+    // Vector is derived, optional storage. Keep its selected owner/failure
+    // fence intact, but do not let initialization failure stop unrelated Main
+    // services. Authoritative session/archive initialization above stays fatal.
+    try {
+        await vector.init({ enabled: VECTOR_ENABLED, useWorker: DB_WORKERS_ENABLED });
+    } catch (err) {
+        logger.error({ err, vectorMode: DB_WORKERS_ENABLED ? 'worker' : 'local' },
+            'Vector initialization failed; Main will continue without semantic search');
+    }
 
     await initializeExecManager();
 

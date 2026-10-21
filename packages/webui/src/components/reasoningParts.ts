@@ -46,6 +46,7 @@ export interface ReasoningBadgeInfo {
 
 export interface ReasoningPartPresentation {
   hidden?: boolean
+  /** Source-attributed values; the recipient badge sums known values for display only. */
   badges?: ReasoningBadgeInfo[]
   target?: 'text' | 'tool'
 }

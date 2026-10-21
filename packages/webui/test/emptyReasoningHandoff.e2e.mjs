@@ -15,7 +15,18 @@ const retry = (seq, final = false) => ({ role: 'model', modelVisible: false, par
   seq, timestamp: 1700000000000 + seq, noticeType: 'llm-retry',
   retry: { attempt: 1, maxRetries: 6, ...(final ? { final: true } : { nextAttempt: 2, delayMs: 1000, final: false }), kind: 'http-error', reason: 'Service unavailable', status: '503' },
 } })
+const hosted = id => ({ providerMeta: { openaiResponses: { outputItem: { id, type: 'web_search_call', status: 'completed', action: { type: 'search', query: `Public fixture query ${id}` } } } } })
+const hostedHandoffs = (values, recipient = { text: 'Search results are ready.', phase: 'final_answer' }) => [
+  ...values.map((tokens, index) => model([empty, hosted(`search-${index}`)], 100 + index, tokens)),
+  model([empty, recipient], 100 + values.length),
+]
 const scenarios = {
+  hostedUnknown: hostedHandoffs([undefined, undefined]),
+  hostedMixed: hostedHandoffs([12, undefined]),
+  hostedSummed: hostedHandoffs([12, 23]),
+  hostedZero: hostedHandoffs([undefined, 0]),
+  hostedSingleMessage: [model([empty, hosted('single-a'), empty, hosted('single-b'), empty, { text: 'One message owns its token value only once.' }], 110, 42)],
+  aggregate: [],
   tool: [model([empty, call('first'), call('second')], 1, 42), result('first')],
   text: [model([empty, { text: 'The result is ready. This answer remains readable beside its reasoning information.' }], 2, 128)],
   longText: [model([empty, { text: 'The opening line leaves room for reasoning information, while later lines return to the full reading width. '.repeat(8) }], 31, 128)],
@@ -49,9 +60,9 @@ before(async () => {
       setThemeSelection({themeId:'foxwarm.default', colorMode:'light'})
       const scenarios = ${JSON.stringify(scenarios)}
       const roots = new Map()
-      window.renderScenario = (id, messages = scenarios[id], view = id.includes('Conversation') || id === 'conversation' ? 'conversation' : id === 'grouped' ? 'grouped' : 'detailed', running = false) => {
+      window.renderScenario = (id, messages = scenarios[id], view = id.includes('Conversation') || id === 'conversation' ? 'conversation' : id === 'grouped' ? 'grouped' : 'detailed', running = false, showUsageBadge = false) => {
         if (!roots.has(id)) roots.set(id, createRoot(document.getElementById(id)))
-        roots.get(id).render(React.createElement(ChatTimeline, {sessionId:'fixture/'+id, messages, isMobile:window.innerWidth < 640, timelineView:view, showUsageBadge:false, isRunningTool:running}))
+        roots.get(id).render(React.createElement(ChatTimeline, {sessionId:'fixture/'+id, messages, isMobile:window.innerWidth < 640, timelineView:view, showUsageBadge, isRunningTool:running}))
       }
       window.renderStream = (stage, target = 'text') => {
         const draft = {streamId:'empty-reasoning', llmRequestId:'stream-request', reasoning:'', text:'', toolCalls:[], parts:[{outputIndex:0,kind:'reasoning',summaryIndex:0,text:''}]}
@@ -188,6 +199,90 @@ test('Grouped and expanded Conversation reuse ownership, including a reply outsi
   }
   assert.deepEqual((await state('conversation')).tokens, ['51 tokens', '77 tokens'])
   assert.deepEqual((await state('mixedConversation')).tokens, ['78 tokens'])
+})
+
+const handoffDetails = id => page.$eval(`#${id}`, root => [...root.querySelectorAll('[data-reasoning-handoff]')].map(el => ({
+  icons: el.querySelectorAll('svg').length,
+  labels: [...el.querySelectorAll('[role="img"]')].map(image => image.getAttribute('aria-label')),
+  numbers: [...el.querySelectorAll('[data-reasoning-tokens]')].map(number => number.textContent),
+  tool: !!el.closest('.foxwarm-tool-card'),
+})))
+
+test('hosted search interleaving yields one icon and only the known sum at a text recipient', async () => {
+  for (const [id, tokens] of [['hostedUnknown', undefined], ['hostedMixed', 12], ['hostedSummed', 35], ['hostedZero', 0], ['hostedSingleMessage', 42]]) {
+    assert.equal((await state(id)).cards, 0, id)
+    assert.deepEqual(await handoffDetails(id), [{
+      icons: 1, labels: [tokens === undefined ? 'Reasoning' : `Reasoning: ${tokens} tokens`],
+      numbers: tokens === undefined ? [] : [`${tokens} tokens`], tool: false,
+    }], id)
+    assert.equal(await page.$$eval(`#${id} .foxwarm-web-search-card`, els => els.length), 2)
+    assert.equal(await page.$$eval(`#${id} .foxwarm-web-search-card [data-reasoning-handoff]`, els => els.length), 0)
+    if (process.env.FOXWARM_E2E_SCREENSHOT_DIR) {
+      await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR, { recursive: true })
+      await (await page.$(`[data-case="${id}"]`)).screenshot({ path: path.join(process.env.FOXWARM_E2E_SCREENSHOT_DIR, `${id}.png`) })
+    }
+  }
+})
+
+test('Detailed, Grouped and expanded Conversation share summed text/tool badges without adding them to usage', async () => {
+  const directory = process.env.FOXWARM_E2E_SCREENSHOT_DIR
+  if (directory) await mkdir(directory, { recursive: true })
+  for (const view of ['detailed', 'grouped', 'conversation']) {
+    for (const target of ['text', 'tool']) {
+      const messages = hostedHandoffs([12, 23], target === 'tool' ? call('aggregate-tool') : { text: 'Search results are ready.', phase: 'final_answer' })
+      // Recorded output already includes reasoning. The handoff's 35 must never become extra usage.
+      for (const message of messages) Object.assign(message.__meta.usage ||= {}, { cachedTokens: 2, inputTokens: 10, outputTokens: 100 })
+      if (target === 'tool') messages.push(result('aggregate-tool'), model([{ text: 'Tool work is complete.', phase: 'final_answer' }], 120))
+      await page.evaluate(({ messages, view }) => window.renderScenario('aggregate', messages, view, false, true), { messages, view })
+      await page.waitForFunction(target => document.querySelector('#aggregate')?.textContent.includes(target === 'tool' ? 'Tool work is complete.' : 'Search results are ready.'), {}, target)
+      if (view === 'grouped' && target === 'tool') {
+        await page.$eval('#aggregate [aria-label="Expand tool group"]', el => el.click())
+      }
+      if (view === 'conversation') {
+        assert.equal(await page.$eval('#aggregate [aria-label="Show process usage"]', el => el.textContent), target === 'tool' ? '336 tokens · partial' : '336 tokens')
+        await page.$eval('#aggregate [aria-label="Show process usage"]', el => el.click())
+        assert.deepEqual(await page.$$eval('#aggregate [data-conversation-usage-details] > div', rows => rows.slice(0, 4).map(row => row.textContent)), [target === 'tool' ? 'Requests4 · 1 unavailable' : 'Requests3', 'Cached6', 'Input30', 'Output300'])
+        await page.$eval('#aggregate [aria-label="Expand activity"]', el => el.click())
+        await page.waitForSelector('#aggregate [data-activity-details]')
+      } else {
+        const usage = await page.$$eval('#aggregate [data-usage-badge-toggle]', buttons => {
+          const totals = { C: 0, I: 0, O: 0 }
+          for (const button of buttons) for (const row of button.children) {
+            const [label, value] = [...row.children].map(child => child.textContent)
+            if (label in totals) totals[label] += Number(value)
+          }
+          return totals
+        })
+        assert.deepEqual(usage, { C: 6, I: 30, O: 300 })
+      }
+      await page.waitForSelector('#aggregate [data-reasoning-handoff]')
+      assert.equal((await state('aggregate')).cards, 0)
+      assert.deepEqual(await handoffDetails('aggregate'), [{ icons: 1, labels: ['Reasoning: 35 tokens'], numbers: ['35 tokens'], tool: target === 'tool' }])
+      await page.waitForFunction(() => [...document.querySelectorAll('#aggregate .foxwarm-tool-card, #aggregate [data-tool-group], #aggregate [data-timeline-activity]')].every(el => !el.style.height))
+      if (directory) await page.$eval('#aggregate', (root, label) => root.previousElementSibling.textContent = label, `${view}: hosted-search handoffs to ${target}`)
+      if (directory) await (await page.$('[data-case="aggregate"]')).screenshot({ path: path.join(directory, `reasoning-total-${view}-${target}.png`) })
+      if (view === 'conversation') {
+        await page.$eval('#aggregate [aria-label="Hide process usage"]', el => el.click())
+        await page.$eval('#aggregate [aria-label="Collapse activity"]', el => el.click())
+        await page.waitForFunction(() => !document.querySelector('#aggregate [data-activity-details]'))
+      }
+    }
+  }
+})
+
+test('each text/tool recipient retains its own handoff instead of sharing a global sum', async () => {
+  const messages = [
+    ...hostedHandoffs([12, 23]),
+    ...hostedHandoffs([7, undefined], call('separate-tool')).map((message, index) => ({ ...message, __meta: { ...message.__meta, seq: 130 + index } })),
+    result('separate-tool'), model([empty, { text: 'An independent zero.', phase: 'final_answer' }], 140, 0),
+  ]
+  await page.evaluate(messages => window.renderScenario('aggregate', messages, 'detailed'), messages)
+  await page.waitForFunction(() => document.querySelectorAll('#aggregate [data-reasoning-handoff]').length === 3)
+  assert.deepEqual(await handoffDetails('aggregate'), [
+    { icons: 1, labels: ['Reasoning: 35 tokens'], numbers: ['35 tokens'], tool: false },
+    { icons: 1, labels: ['Reasoning: 7 tokens'], numbers: ['7 tokens'], tool: true },
+    { icons: 1, labels: ['Reasoning: 0 tokens'], numbers: ['0 tokens'], tool: false },
+  ])
 })
 
 test('wide and narrow prose wraps a right float while original hover controls overlay it without moving', async () => {
