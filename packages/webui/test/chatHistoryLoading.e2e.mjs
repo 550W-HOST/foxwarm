@@ -1,10 +1,11 @@
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { readFile, readdir } from 'node:fs/promises'
+import { mkdir, readFile, readdir } from 'node:fs/promises'
 import { build } from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
 const chatEntry = fileURLToPath(new URL('../src/components/Chat.tsx', import.meta.url))
@@ -38,6 +39,21 @@ async function buildFixtureBundle() {
       return seq % 2 ? { role: 'tool', parts: [{ functionResponse: { name: 'exec', tool_use_id: id, response: { output: 'Synthetic tool output. '.repeat(seq % 17 + 1) } } }], __meta: meta }
         : { role: 'model', parts: [{ functionCall: { name: 'exec', id, args: { command: 'synthetic command ' + seq } } }, ...(seq === 102 ? [{ text: 'Earlier process checkpoint 102' }] : [])], __meta: meta }
     })
+    if (new URLSearchParams(location.search).has('bufferedProcesses')) window.fixtureArchive = Array.from({ length: 600 }, (_, index) => {
+      const seq = index + 1
+      const meta = { seq, timestamp: 1700000000000 + index }
+      if (seq === 1) return { role: 'user', parts: [{ text: 'Start the first process.' }], __meta: meta }
+      if (seq === 250 || seq === 500) return { role: 'model', parts: [{ text: 'Buffered process outcome ' + seq }], __meta: meta }
+      if (seq === 251) return { role: 'user', parts: [{ text: 'Buffered tall user input.\\n\\n' + 'Ordinary paragraph in the protected reading area.\\n\\n'.repeat(24) }], __meta: meta }
+      if (seq > 500) return { role: seq % 2 ? 'user' : 'model', parts: [{ text: 'Buffered ordinary message ' + seq }], __meta: meta }
+      const id = 'buffered-call-' + Math.floor(seq / 2)
+      return seq % 2 ? { role: 'tool', parts: [{ functionResponse: { name: 'exec', tool_use_id: id, response: { output: 'Buffered process output' } } }], __meta: meta }
+        : { role: 'model', parts: [{ functionCall: { name: 'exec', id, args: { command: 'buffered command ' + seq } } }], __meta: meta }
+    })
+    if (new URLSearchParams(location.search).has('multiPartHistory')) window.fixtureArchive = window.fixtureArchive.map(message => message.__meta.seq === 500 ? { ...message, role: 'model', parts: [
+      { text: 'First body paragraph.\\n\\n'.repeat(80) },
+      { text: 'MULTIPART_READER\\n\\n' + 'Second body paragraph.\\n\\n'.repeat(80) },
+    ] } : message)
     window.fixtureArchiveRequests = []
     window.fixtureFailArchive = false
     window.fixtureDelayArchive = false
@@ -270,6 +286,7 @@ async function fixtureStartupStage(name, operation) {
 }
 
 before(async () => {
+  if (process.env.FOXWARM_E2E_SCREENSHOT_DIR) await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR, { recursive: true })
   const bundle = await fixtureStartupStage('esbuild-bundle', buildFixtureBundle)
   const assets = new URL('../dist/assets/', import.meta.url)
   const cssAsset = (await readdir(assets)).find(name => /^index-.*\.css$/.test(name))
@@ -2424,10 +2441,12 @@ test('continuous Chat requests history within 500px and mounts a slow reply at t
     await chatPage.mouse.wheel({ deltaY: 70 })
     await chatPage.waitForFunction(() => document.querySelector('.foxwarm-chat-messages').scrollTop > 450)
     const reading = await readingAnchor(chatPage)
+    const protectedSurfaces = await protectedHistorySurfaces(chatPage)
     await sampleHistoryFrames(chatPage, reading.key)
     await chatPage.evaluate(() => { window.fixtureDelayArchive = false; window.resolveFixtureArchive() })
     await chatPage.waitForFunction(() => window.fixtureHistoryFrames.length === 26)
     const frames = await chatPage.evaluate(() => window.fixtureHistoryFrames)
+    await assertProtectedHistorySurfaces(chatPage, protectedSurfaces)
     console.log('SLOW_HISTORY_CURRENT_READER_FRAMES', JSON.stringify(frames))
     assert.ok(frames.some(frame => frame.first === 'seq-local-401'), 'a successful page mounts even after the reader changed direction and stopped')
     assert.ok(frames.every(frame => frame.offset !== null && Math.abs(frame.offset - reading.offset) < 3), 'every sampled paint retains the current reading point, not the request-time point')
@@ -2470,10 +2489,12 @@ test('continuous Chat replaces variable-height windows without a displaced frame
     await chatPage.mouse.wheel({ deltaY: 70 })
     await chatPage.waitForFunction(() => document.querySelector('.foxwarm-chat-messages').scrollTop > 450)
     const reading = await readingAnchor(chatPage)
+    const protectedSurfaces = await protectedHistorySurfaces(chatPage)
     await sampleHistoryFrames(chatPage, reading.key)
     await chatPage.evaluate(() => { window.fixtureDelayArchive = false; window.resolveFixtureArchive() })
     await chatPage.waitForFunction(() => window.fixtureHistoryFrames.length === 26)
     const frames = await chatPage.evaluate(() => window.fixtureHistoryFrames)
+    await assertProtectedHistorySurfaces(chatPage, protectedSurfaces)
     console.log('VARIABLE_HEIGHT_REPLACEMENT_FRAMES', JSON.stringify(frames))
     assert.ok(frames.some(frame => frame.first === 'seq-local-301'))
     assert.ok(frames.every(frame => frame.offset !== null && Math.abs(frame.offset - reading.offset) < 3))
@@ -2543,5 +2564,142 @@ test('continuous Chat keeps loaded Search navigation authoritative after extendi
       return row.getBoundingClientRect().bottom > container.getBoundingClientRect().top && row.getBoundingClientRect().top < container.getBoundingClientRect().bottom
     }), true)
     assert.equal(await chatPage.evaluate(() => window.fixtureArchiveRequests.length), requests)
+  } finally { await chatPage.close() }
+})
+
+
+async function protectedHistorySurfaces(chatPage) {
+  return chatPage.evaluate(() => {
+    const container = document.querySelector('.foxwarm-chat-messages')
+    const viewport = container.getBoundingClientRect()
+    return [...container.querySelectorAll('[data-chat-history-start-key], [data-chat-message-anchor-key]')].flatMap(element => {
+      const rect = element.getBoundingClientRect()
+      if (rect.bottom <= viewport.top - 500 || rect.top >= viewport.bottom + 500) return []
+      const seq = key => Number(key?.replace('seq-local-', ''))
+      const startKey = element.dataset.chatHistoryStartKey || element.dataset.chatMessageAnchorKey
+      return [{
+        activity: element.hasAttribute('data-timeline-activity'),
+        start: seq(startKey),
+        end: seq(element.dataset.chatHistoryEndKey || startKey),
+        top: rect.top - viewport.top,
+        bottom: rect.bottom - viewport.top,
+      }]
+    })
+  })
+}
+
+async function assertProtectedHistorySurfaces(chatPage, surfaces, tolerance = 3) {
+  const after = await protectedHistorySurfaces(chatPage)
+  for (const before of surfaces) {
+    const retained = after.find(surface => surface.activity === before.activity && surface.start <= before.start && surface.end >= before.end)
+    assert.ok(retained, 'retains protected sources ' + JSON.stringify(before) + ' in ' + JSON.stringify(after))
+    assert.ok(Math.abs(retained.top - before.top) < tolerance && Math.abs(retained.bottom - before.bottom) < tolerance,
+      'no protected surface jump: ' + JSON.stringify({ before, retained }))
+  }
+}
+
+test('continuous Chat protects folded processes 500px above and below the viewport while advancing either direction', async () => {
+  const chatPage = await openContinuousChat('&bufferedProcesses=1')
+  try {
+    await observeNativeHistoryInput(chatPage)
+    for (const first of [401, 301, 201, 101, 1]) {
+      await chatPage.mouse.wheel({ deltaY: -100000 })
+      await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-' + first + '"]')
+    }
+    await chatPage.click('[aria-label="Find in chat"]')
+    await chatPage.type('[aria-label="Search messages"]', 'Buffered process outcome 250')
+    await chatPage.waitForFunction(() => document.querySelector('[role="search"] [aria-live]')?.textContent === '1/1')
+    await chatPage.keyboard.press('Enter')
+    await chatPage.click('[aria-label="Close search"]')
+    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-230"]')
+    await chatPage.evaluate(() => {
+      const container = document.querySelector('.foxwarm-chat-messages')
+      const process = [...container.querySelectorAll('[data-timeline-activity]')].at(-1)
+      container.scrollTop += process.getBoundingClientRect().top - container.getBoundingClientRect().bottom - 240
+    })
+    await chatPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    const before = await protectedHistorySurfaces(chatPage)
+    const viewportHeight = await chatPage.$eval('.foxwarm-chat-messages', element => element.clientHeight)
+    assert.ok(before.some(surface => surface.end === 250 && surface.bottom < 0 && surface.bottom > -500), JSON.stringify(before))
+    assert.ok(before.some(surface => surface.start === 252 && surface.top > viewportHeight && surface.top < viewportHeight + 500), JSON.stringify(before))
+    const requests = await chatPage.evaluate(() => window.fixtureArchiveRequests.length)
+    await observeNativeHistoryInput(chatPage)
+    await sampleHistoryFrames(chatPage, 'seq-local-251')
+    await chatPage.mouse.wheel({ deltaY: 1 })
+    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-500"]', { timeout: 5000 })
+    await chatPage.waitForFunction(() => window.fixtureHistoryFrames.length === 26)
+    let frames = await chatPage.evaluate(() => window.fixtureHistoryFrames)
+    assert.ok(frames.every(frame => frame.offset !== null && Math.abs(frame.offset - frames[0].offset) < 3), JSON.stringify(frames))
+    await assertProtectedHistorySurfaces(chatPage, before)
+    assert.equal(await chatPage.evaluate(() => window.fixtureArchiveRequests.length), requests, 'advances cached rows, not Archive requests')
+    if (process.env.FOXWARM_E2E_SCREENSHOT_DIR) await chatPage.screenshot({ path: join(process.env.FOXWARM_E2E_SCREENSHOT_DIR, 'conversation-buffer-later.png') })
+    const later = await protectedHistorySurfaces(chatPage)
+    await sampleHistoryFrames(chatPage, 'seq-local-251')
+    await chatPage.mouse.wheel({ deltaY: -1 })
+    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-130"]', { timeout: 5000 })
+    await chatPage.waitForFunction(() => window.fixtureHistoryFrames.length === 26)
+    frames = await chatPage.evaluate(() => window.fixtureHistoryFrames)
+    assert.ok(frames.every(frame => frame.offset !== null && Math.abs(frame.offset - frames[0].offset) < 3), JSON.stringify(frames))
+    await assertProtectedHistorySurfaces(chatPage, later)
+    if (process.env.FOXWARM_E2E_SCREENSHOT_DIR) await chatPage.screenshot({ path: join(process.env.FOXWARM_E2E_SCREENSHOT_DIR, 'conversation-buffer-earlier.png') })
+  } finally { await chatPage.close() }
+})
+
+test('continuous Chat advances cached ordinary messages within 500px of the bottom and preserves both buffers', async () => {
+  const chatPage = await openContinuousChat('&variedHistory=1')
+  try {
+    await observeNativeHistoryInput(chatPage)
+    for (const first of [401, 301]) {
+      await chatPage.mouse.wheel({ deltaY: -100000 })
+      await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-' + first + '"]')
+    }
+    const beforeNavigation = await chatPage.evaluate(() => {
+      const container = document.querySelector('.foxwarm-chat-messages')
+      container.scrollTop = container.scrollHeight - container.clientHeight - 350
+      return container.scrollTop
+    })
+    await chatPage.waitForFunction(top => Math.abs(document.querySelector('.foxwarm-chat-messages').scrollTop - top) < 2, {}, beforeNavigation)
+    await chatPage.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    const before = await protectedHistorySurfaces(chatPage)
+    const first = await chatPage.$eval('[data-chat-message-anchor-key]', node => node.dataset.chatMessageAnchorKey)
+    await chatPage.mouse.wheel({ deltaY: 1 })
+    await chatPage.waitForFunction(first => document.querySelector('[data-chat-message-anchor-key]')?.dataset.chatMessageAnchorKey !== first, { timeout: 5000 }, first)
+    await assertProtectedHistorySurfaces(chatPage, before)
+    assert.ok(await chatPage.$$eval('[data-chat-message-anchor-key]', nodes => nodes.length <= 200), 'ordinary rows retain a bounded display window')
+    if (process.env.FOXWARM_E2E_SCREENSHOT_DIR) await chatPage.screenshot({ path: join(process.env.FOXWARM_E2E_SCREENSHOT_DIR, 'conversation-buffer-ordinary.png') })
+  } finally { await chatPage.close() }
+})
+
+
+test('continuous Chat protects later body parts when their sole message anchor is outside the 500px buffer', async () => {
+  const chatPage = await openContinuousChat('&multiPartHistory=1')
+  try {
+    await observeNativeHistoryInput(chatPage)
+    for (const first of [401, 301]) {
+      await chatPage.mouse.wheel({ deltaY: -100000 })
+      await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-' + first + '"]')
+    }
+    await chatPage.evaluate(() => { window.fixtureDelayArchive = true })
+    await wheelHistoryTo(chatPage, 400)
+    await chatPage.waitForFunction(() => window.fixtureArchiveRequests.length === 4)
+    await chatPage.click('[aria-label="Find in chat"]')
+    await chatPage.type('[aria-label="Search messages"]', 'MULTIPART_READER')
+    await chatPage.waitForFunction(() => document.querySelector('[role="search"] [aria-live]')?.textContent === '1/1')
+    await chatPage.keyboard.press('Enter')
+    await chatPage.click('[aria-label="Close search"]')
+    await observeNativeHistoryInput(chatPage)
+    await chatPage.mouse.wheel({ deltaY: 900 })
+    await chatPage.waitForFunction(() => {
+      const container = document.querySelector('.foxwarm-chat-messages')
+      return container.querySelector('[data-chat-message-anchor-key="seq-local-500"]').getBoundingClientRect().bottom < container.getBoundingClientRect().top - 500
+    })
+    const before = await protectedHistorySurfaces(chatPage)
+    assert.ok(before.some(surface => surface.start === 500), JSON.stringify(before))
+    await sampleHistoryFrames(chatPage, 'seq-local-500-part-1', 'data-search-row')
+    await chatPage.evaluate(() => { window.fixtureDelayArchive = false; window.resolveFixtureArchive() })
+    await chatPage.waitForFunction(() => window.fixtureHistoryFrames.length === 26)
+    const frames = await chatPage.evaluate(() => window.fixtureHistoryFrames)
+    assert.ok(frames.every(frame => frame.offset !== null && Math.abs(frame.offset - frames[0].offset) < 3), JSON.stringify(frames))
+    await assertProtectedHistorySurfaces(chatPage, before)
   } finally { await chatPage.close() }
 })

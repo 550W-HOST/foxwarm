@@ -1,3 +1,4 @@
+import { isCoreNodeId } from '../../../shared/src/nodeIdentity';
 import * as vscode from 'vscode';
 import { normalizeGitRelativePath, parseFoxwarmUri } from './foxwarmUri';
 
@@ -35,7 +36,6 @@ export type CommitDetails = {
   files: CommitFile[];
 };
 
-const NODE_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
 const SHORT_OID_RE = /^[0-9a-f]{7,64}$/i;
 const FULL_OID_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 const activeCommitPanels = new Map<string, vscode.WebviewPanel>();
@@ -57,7 +57,7 @@ export function normalizeCommitOpenRequest(value: unknown): CommitOpenRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Commit request must be an object.');
   const request = value as Partial<CommitOpenRequest>;
   if (request.kind !== 'openCommit') throw new Error('Expected an openCommit request.');
-  if (typeof request.nodeId !== 'string' || !NODE_ID_RE.test(request.nodeId)) throw new Error('Commit node id is invalid.');
+  if (typeof request.nodeId !== 'string' || !isCoreNodeId(request.nodeId)) throw new Error('Commit node id is invalid.');
   if (typeof request.commitId !== 'string' || !SHORT_OID_RE.test(request.commitId)) throw new Error('Commit id must contain 7 to 64 hexadecimal characters.');
   return { kind: 'openCommit', nodeId: request.nodeId, path: normalizeAbsolutePath(request.path), commitId: request.commitId.toLowerCase() };
 }

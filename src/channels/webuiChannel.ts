@@ -1,4 +1,5 @@
 import { registerArtifactRoutes } from '../artifacts/routes';
+import { nodeProviderRegistry } from '../nodes/providers';
 import { parseSessionControlFeedback, getSessionControlAction } from '../../packages/shared/dist/sessionControlFeedback';
 import { readContinuousHistoryPage } from './webuiContinuousHistory';
 import { registerWebUiFileDownloads, registerWebUiBlobDownloads } from './webuiFileDownloads';
@@ -1626,7 +1627,7 @@ export class WebUIChannel implements Channel {
             const labels = new Map(approved.map(node => [node.nodeId, node.displayName || node.requestedName || node.nodeId]));
             const nodes = topology.map(node => ({
               id: node.id,
-              label: labels.get(node.id) || node.id,
+              label: node.label || labels.get(node.id) || node.id,
               selectable: !boundNode && node.availability === 'ready',
               reason: lockedReason || (node.availability === 'ready' ? null
                 : node.protocolCompatibility?.status === 'upgrade-required' ? 'Update this node to connect.'
@@ -1675,29 +1676,23 @@ export class WebUIChannel implements Channel {
         method: 'GET',
         handler: async (_req: express.Request, res: express.Response) => {
           try {
-            const approvedNodes = await listApprovedNodes();
+            const approvedNodes = new Map((await listApprovedNodes()).map(node => [node.nodeId, node]));
             const runtimeNodes = new Map(nodesManager.listNodeServiceSummaries().map(node => [node.id, node]));
-            const nodes = [
-              {
-                id: 'master',
-                type: 'master',
-                displayName: 'master',
-                online: true,
-                services: {},
-              },
-              ...approvedNodes.map((approved) => {
-                const runtime = runtimeNodes.get(approved.nodeId);
-                return {
-                  id: approved.nodeId,
-                  type: runtime?.type || approved.nodeType,
-                  displayName: approved.displayName || approved.requestedName || approved.nodeId,
-                  online: !!runtime,
-                  lastSeenAt: approved.lastSeenAt,
-                  services: pickWebUiNodeLaunchServices(runtime?.services || approved.capabilities?.services),
-                  protocolCompatibility: runtime?.protocolCompatibility || approved.protocolCompatibility,
-                };
-              }),
-            ];
+            const topology = await nodeProviderRegistry.listNodes();
+            const nodes = topology.map(node => {
+              const approved = approvedNodes.get(node.id);
+              const runtime = runtimeNodes.get(node.id);
+              return {
+                id: node.id, type: node.type,
+                displayName: node.label || approved?.displayName || approved?.requestedName || node.id,
+                online: node.availability === 'ready' || !!runtime,
+                ...(node.id === 'master' ? {} : { availability: node.availability, provider: node.provider }),
+                ...(approved?.lastSeenAt === undefined ? {} : { lastSeenAt: approved.lastSeenAt }),
+                services: pickWebUiNodeLaunchServices(runtime?.services || approved?.capabilities?.services),
+                ...(node.protocolCompatibility || approved?.protocolCompatibility
+                  ? { protocolCompatibility: node.protocolCompatibility || approved?.protocolCompatibility } : {}),
+              };
+            });
             res.json({ nodes });
           } catch (e: any) {
             logger.error({ err: e }, 'Failed to list WebUI nodes');

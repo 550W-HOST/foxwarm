@@ -3,7 +3,7 @@ import * as mcpExternal from '../mcpExternalService';
 import { nodesManager } from '../nodes/manager';
 import { listNodeTopology } from '../nodeExecution';
 import { buildUnifiedToolId, executeResolvedTool, resolveUnifiedTool } from './resolvedTools';
-import { builtinHasOptionalFileNode, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './placement';
+import { builtinHasOptionalFileNode, builtinHasNodeEffectSelector, NODE_ENVIRONMENT_BUILTIN_NAMES, resolveBuiltinToolPlacement } from './placement';
 import { definitions } from './definitions';
 import { isToolVisibleForSession } from '../isolatedCheck';
 import * as sessionManager from '../sessionManager';
@@ -199,7 +199,7 @@ function schemaType(schema: unknown, depth = 0): string {
 }
 
 function isSafeBareToolId(toolId: string): boolean {
-    return /^(?:builtin:[A-Za-z0-9_.:-]+|(?:mcp|node):[A-Za-z0-9_.:-]+\/[A-Za-z0-9_.:-]+)$/u.test(toolId);
+    return /^(?:builtin:[A-Za-z0-9_.:-]+|mcp:[A-Za-z0-9_.:-]+\/[A-Za-z0-9_.:-]+|node:[A-Za-z0-9_.:-]+(?:\/[A-Za-z0-9_.:-]+)?\/[A-Za-z0-9_.:-]+)$/u.test(toolId);
 }
 
 function explicitToolDescriptor(tool: SearchToolResult): string | undefined {
@@ -242,7 +242,9 @@ function toolDeclaration(tool: SearchToolResult, index: number, includeSchema: b
     const description = sanitizeComment(tool.description);
     const suffix = description ? ` // ${description}` : '';
     let declaration: string;
-    if (isSafeBareToolId(toolId)) {
+    const bareIdentity = isSafeBareToolId(toolId)
+        && !(tool.source === 'node' && typeof tool.name === 'string' && tool.name.includes('/'));
+    if (bareIdentity) {
         declaration = `${toolId}(${argsText});${suffix}`;
     } else {
         const descriptor = explicitToolDescriptor(tool);
@@ -424,7 +426,7 @@ async function collectBuiltinUnifiedSearchResults(query: string, includeSchema: 
         .filter(def => !isPermissionNeutralBuiltinDispatcher(def.name))
         .filter(def => isToolVisibleForSession(session, { source: 'builtin', tool: def.name },
             resolveBuiltinToolPlacement(def.name, undefined, session?.currentNode || 'master').executionNode,
-            { targetNodeUnknown: builtinHasOptionalFileNode(def.name) }))
+            { targetNodeUnknown: builtinHasOptionalFileNode(def.name), nodeTargetsUnknown: builtinHasNodeEffectSelector(def.name) }))
         .map(def => ({ def, score: scoreUnifiedToolQuery(query, [def.name, def.description]) }))
         .filter(entry => entry.score >= 0)
         .map(def => ({

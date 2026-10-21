@@ -1,3 +1,4 @@
+import './testEnvironment';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { once } from 'node:events';

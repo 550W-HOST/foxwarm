@@ -1,3 +1,4 @@
+import { isCoreNodeId, MAX_CORE_NODE_ID_LENGTH } from '../packages/shared/dist/nodeIdentity';
 import {
   defineRpcService,
   rpcMethod,
@@ -5,9 +6,9 @@ import {
   RpcServiceHandler,
 } from './rpc';
 import * as sessionManager from './sessionManager';
-import { nodesManager } from './nodes/manager';
 import {
   NodeLifecycleAction,
+  type NodeProviderSummary,
   NodeLifecycleResult,
   NodeProviderError,
   NodeProviderRegistry,
@@ -15,12 +16,14 @@ import {
 import { nodeProviderRegistry } from './nodes/providers';
 import type { Session } from './types';
 import { getAgentDir } from './config';
-import { checkToolPermission, checkToolPermissionForSession, isToolVisibleForSession } from './isolatedCheck';
+import { checkToolPermissionForSession, checkGenericToolAuthorizationForSession, isToolVisibleForSession } from './isolatedCheck';
 import { decodeNodeTransferFile } from './nodeFileTransfer';
 import type { NodeProtocolCompatibility } from '../packages/shared/dist/nodeProtocol';
 
 export type NodeExecutionRoutingSnapshot = {
   currentNode: string;
+  /** Exact owner selection; currentNode above may instead identify a captured source cwd. */
+  callerCurrentNode?: string;
   cwd?: string;
   deferSessionCwdSync?: boolean;
 };
@@ -43,18 +46,19 @@ export type NodeTopologyListResponse = { nodes: Array<{
   kind: 'master' | 'remote' | 'sandbox';
   provider: string;
   type: string;
+  label?: string;
   availability: 'ready' | 'unavailable' | 'offline' | 'error';
   lastActivity?: number;
   tools: Array<{ name: string; description?: string; parameters?: unknown }>;
   unavailable?: { code: string; message: string; retryable: boolean };
   protocolCompatibility?: NodeProtocolCompatibility;
 }> };
-export type NodeSelectRequest = { sourceSessionId: string; nodeId: string };
+export type NodeSelectRequest = { sourceSessionId: string; nodeId: string; callerCurrentNode?: string };
 export type NodeSelectResponse = { nodeId: string; defaultCwd: string };
-export type NodeCopyRequest = { sourceSessionId: string; sourceNode: string; sourcePath: string; targetNode: string; targetPath: string; overwrite?: boolean };
+export type NodeCopyRequest = { sourceSessionId: string; sourceNode: string; sourcePath: string; targetNode: string; targetPath: string; overwrite?: boolean; callerCurrentNode?: string };
 export type NodeCopyResponse = { sourceNode: string; sourcePath: string; targetNode: string; targetPath: string; sizeBytes: number; sha256: string; overwritten: boolean; absolutePath?: string };
-export type NodeLifecycleProvidersRequest = { sourceSessionId: string };
-export type NodeLifecycleProvidersResponse = { providers: Array<{ id: string; actions: NodeLifecycleAction[] }> };
+export type NodeProvidersRequest = { sourceSessionId: string };
+export type NodeProvidersResponse = { providers: NodeProviderSummary[] };
 export type NodeLifecycleRequest = {
   sourceSessionId: string;
   action: NodeLifecycleAction;
@@ -62,16 +66,17 @@ export type NodeLifecycleRequest = {
   nodeId?: string;
   parameters?: Record<string, unknown>;
   confirmation?: string;
+  callerCurrentNode?: string;
 };
 export type NodeLifecycleResponse = { result: NodeLifecycleResult };
 
-export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 7, {
+export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 9, {
   readFile: rpcMethod<NodeFileReadRequest, NodeFileReadResponse>(),
   execute: rpcMethod<NodeExecutionRequest, NodeExecutionResponse>({ cancellation: 'settle' }),
   list: rpcMethod<NodeTopologyListRequest, NodeTopologyListResponse>(),
   select: rpcMethod<NodeSelectRequest, NodeSelectResponse>(),
   copy: rpcMethod<NodeCopyRequest, NodeCopyResponse>(),
-  lifecycleProviders: rpcMethod<NodeLifecycleProvidersRequest, NodeLifecycleProvidersResponse>(),
+  providersList: rpcMethod<NodeProvidersRequest, NodeProvidersResponse>(),
   lifecycle: rpcMethod<NodeLifecycleRequest, NodeLifecycleResponse>(),
 });
 
@@ -163,12 +168,11 @@ function normalizeRequestedLifecycleNodeId(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'string'
     || value.length < 1
-    || value.length > 128
-    || !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value)
+    || !isCoreNodeId(value)
     || value.toLowerCase() === 'master') {
     throw new RpcError(
       'NODE_LIFECYCLE_INVALID_NODE_ID',
-      'create/ensure nodeId must be 1-128 ASCII characters matching [A-Za-z0-9][A-Za-z0-9._:-]* and cannot be reserved `master`.',
+      'create/ensure nodeId must be a valid Core Node ID and cannot be reserved `master`.',
     );
   }
   return value;
@@ -188,15 +192,17 @@ function normalizeRoutingSnapshot(value: unknown): NodeExecutionRoutingSnapshot 
     throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'routingSnapshot must be an object.');
   }
   const candidate = value as Record<string, unknown>;
-  assertOnlyKeys(candidate, ['currentNode', 'cwd', 'deferSessionCwdSync'], 'routingSnapshot');
+  assertOnlyKeys(candidate, ['currentNode', 'callerCurrentNode', 'cwd', 'deferSessionCwdSync'], 'routingSnapshot');
   const currentNode = requireString(candidate.currentNode, 'routingSnapshot.currentNode');
+  const callerCurrentNode = candidate.callerCurrentNode === undefined ? undefined
+    : requireBoundedString(candidate.callerCurrentNode, 'routingSnapshot.callerCurrentNode', MAX_CORE_NODE_ID_LENGTH);
   if (candidate.cwd !== undefined && typeof candidate.cwd !== 'string') {
     throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'routingSnapshot.cwd must be a string when provided.');
   }
   if (candidate.deferSessionCwdSync !== undefined && typeof candidate.deferSessionCwdSync !== 'boolean') {
     throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'routingSnapshot.deferSessionCwdSync must be a boolean when provided.');
   }
-  return { currentNode, ...(typeof candidate.cwd === 'string' ? { cwd: candidate.cwd } : {}), ...(candidate.deferSessionCwdSync === true ? { deferSessionCwdSync: true } : {}) };
+  return { currentNode, ...(callerCurrentNode ? { callerCurrentNode } : {}), ...(typeof candidate.cwd === 'string' ? { cwd: candidate.cwd } : {}), ...(candidate.deferSessionCwdSync === true ? { deferSessionCwdSync: true } : {}) };
 }
 
 export async function requireNodeExecutionAccess(sourceSessionId: string, nodeId: string): Promise<Session> {
@@ -261,7 +267,8 @@ export function createNodeExecutionServiceHandler(options: {
       }
 
       const source = await requireNodeExecutionAccess(sourceSessionId, nodeId);
-      await checkToolPermission({ source: 'node', node: nodeId, tool: toolName }, sourceSessionId, nodeId, args);
+      await checkToolPermissionForSession({ ...source, currentNode: routingSnapshot?.callerCurrentNode ?? source.currentNode },
+        { source: 'node', node: nodeId, tool: toolName }, nodeId, args);
       const providerRouting = routingSnapshot || (!options.expectedSourceSessionId && source.currentNode === nodeId
         ? { currentNode: nodeId, ...(typeof source.cwd === 'string' ? { cwd: source.cwd } : {}) }
         : undefined);
@@ -290,15 +297,16 @@ export function createNodeExecutionServiceHandler(options: {
     async readFile(input, rpcContext) {
       const { sourceSessionId, source } = await requireSource(input,
         ['sourceSessionId', 'nodeId', 'filePath', 'routingSnapshot'], 'Node file read request');
-      const nodeId = requireBoundedString(input.nodeId, 'nodeId', 128);
+      const nodeId = requireBoundedString(input.nodeId, 'nodeId', MAX_CORE_NODE_ID_LENGTH);
       if (nodeId === 'master') throw new RpcError('NODE_EXECUTION_MASTER_FORBIDDEN', 'The colocated master node must read files directly without Node execution RPC.');
-      const filePath = requireString(input.filePath, 'filePath');
+      const filePath = requireBoundedPath(input.filePath, 'filePath');
       const routingSnapshot = normalizeRoutingSnapshot(input.routingSnapshot);
       if (routingSnapshot && routingSnapshot.currentNode !== nodeId) {
         throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'File read cwd must belong to the target Node.');
       }
       await requireNodeExecutionAccess(sourceSessionId, nodeId);
-      await checkToolPermissionForSession(source, { source: 'node', node: nodeId, tool: 'read' }, nodeId, { filePath });
+      await checkToolPermissionForSession({ ...source, currentNode: routingSnapshot?.callerCurrentNode ?? source.currentNode },
+        { source: 'node', node: nodeId, tool: 'read' }, nodeId, { filePath });
       const routing = routingSnapshot || {
         currentNode: nodeId,
         ...(!options.expectedSourceSessionId && source.currentNode === nodeId && typeof source.cwd === 'string' ? { cwd: source.cwd } : {}),
@@ -313,8 +321,8 @@ export function createNodeExecutionServiceHandler(options: {
     },
     async list(input, rpcContext) {
       const { source } = await requireSource(input, ['sourceSessionId', 'nodeId', 'currentNode'], 'Node list request');
-      const filter = input.nodeId === undefined ? undefined : requireBoundedString(input.nodeId, 'nodeId', 128);
-      if (input.currentNode !== undefined) requireBoundedString(input.currentNode, 'currentNode', 128);
+      const filter = input.nodeId === undefined ? undefined : requireBoundedString(input.nodeId, 'nodeId', MAX_CORE_NODE_ID_LENGTH);
+      if (input.currentNode !== undefined) requireBoundedString(input.currentNode, 'currentNode', MAX_CORE_NODE_ID_LENGTH);
       const isolated = sessionManager.isSessionEffectivelyIsolated(source);
       const allowed = isolated ? new Set(['master', sessionManager.getAgentIsolationNode(source.agent || 'main') || source.currentNode || 'master', source.currentNode].filter(Boolean)) : null;
       let registered;
@@ -323,7 +331,7 @@ export function createNodeExecutionServiceHandler(options: {
       const nodes = registered.filter(node => (!filter || node.id === filter) && (!allowed || allowed.has(node.id))).slice(0, 100);
       const output: NodeTopologyListResponse['nodes'] = []; let totalBytes = Buffer.byteLength('{"nodes":[]}', 'utf8');
       for (const node of nodes) {
-        if (typeof node.id !== 'string' || !node.id || node.id.length > 128
+        if (typeof node.id !== 'string' || !node.id || node.id.length > MAX_CORE_NODE_ID_LENGTH
           || typeof node.type !== 'string' || !node.type || node.type.length > 64
           || !['master', 'remote', 'sandbox'].includes(node.kind)
           || typeof node.provider !== 'string' || !node.provider || node.provider.length > 64
@@ -333,7 +341,7 @@ export function createNodeExecutionServiceHandler(options: {
           const descriptors = Object.getOwnPropertyDescriptors(tool);
           const name = descriptors.name && 'value' in descriptors.name ? descriptors.name.value : undefined;
           if (typeof name !== 'string' || !name || name.length > 128) continue;
-          if (!isToolVisibleForSession(source, { source: 'node', node: node.id, tool: name }, node.id)) continue;
+          if (!isToolVisibleForSession({ ...source, currentNode: input.currentNode ?? source.currentNode }, { source: 'node', node: node.id, tool: name }, node.id)) continue;
           const descriptionValue = descriptors.description && 'value' in descriptors.description ? descriptors.description.value : undefined;
           const description = typeof descriptionValue === 'string' ? descriptionValue.slice(0, 2000) : undefined;
           const parametersValue = descriptors.parameters && 'value' in descriptors.parameters ? descriptors.parameters.value : undefined;
@@ -347,6 +355,7 @@ export function createNodeExecutionServiceHandler(options: {
           : undefined;
         const protocolCompatibility = node.protocolCompatibility && plainJsonWithin(node.protocolCompatibility, 4096) as NodeProtocolCompatibility | undefined;
         const candidate = { id: node.id, kind: node.kind, provider: node.provider, type: node.type, availability: node.availability,
+          ...(typeof node.label === 'string' && node.label.length <= 256 ? { label: node.label } : {}),
           ...(typeof node.lastActivity === 'number' && Number.isFinite(node.lastActivity) && node.lastActivity >= 0 ? { lastActivity: node.lastActivity } : {}),
           ...(unavailable ? { unavailable } : {}),
           ...(protocolCompatibility ? { protocolCompatibility } : {}),
@@ -358,9 +367,11 @@ export function createNodeExecutionServiceHandler(options: {
       return { nodes: output };
     },
     async select(input, rpcContext) {
-      const { sourceSessionId, source } = await requireSource(input, ['sourceSessionId', 'nodeId'], 'Node select request');
-      const nodeId = requireBoundedString(input.nodeId, 'nodeId', 128);
+      const { sourceSessionId, source } = await requireSource(input, ['sourceSessionId', 'nodeId', 'callerCurrentNode'], 'Node select request');
+      const nodeId = requireBoundedString(input.nodeId, 'nodeId', MAX_CORE_NODE_ID_LENGTH);
       await requireNodeExecutionAccess(sourceSessionId, nodeId);
+      const callerCurrentNode = input.callerCurrentNode === undefined ? source.currentNode : requireBoundedString(input.callerCurrentNode, 'callerCurrentNode', MAX_CORE_NODE_ID_LENGTH);
+      await checkGenericToolAuthorizationForSession({ ...source, currentNode: callerCurrentNode }, { source: 'builtin', tool: 'node' }, 'master', { action: 'select', nodeId });
       if (nodeId === 'master') return { nodeId, defaultCwd: getAgentDir(source.agent || 'main').slice(0, 4096) };
       try {
         const cwd = (await providers.getDefaultCwd(
@@ -372,36 +383,41 @@ export function createNodeExecutionServiceHandler(options: {
       return { nodeId, defaultCwd: 'node process cwd (run `pwd` to inspect)' };
     },
     async copy(input) {
-      const { sourceSessionId } = await requireSource(input,
-        ['sourceSessionId', 'sourceNode', 'sourcePath', 'targetNode', 'targetPath', 'overwrite'], 'Node copy request');
-      const sourceNode = requireBoundedString(input.sourceNode, 'sourceNode', 128); const sourcePath = requireBoundedPath(input.sourcePath, 'sourcePath');
-      const targetNode = requireBoundedString(input.targetNode, 'targetNode', 128); const targetPath = requireBoundedPath(input.targetPath, 'targetPath');
+      const { sourceSessionId, source } = await requireSource(input,
+        ['sourceSessionId', 'sourceNode', 'sourcePath', 'targetNode', 'targetPath', 'overwrite', 'callerCurrentNode'], 'Node copy request');
+      const sourceNode = requireBoundedString(input.sourceNode, 'sourceNode', MAX_CORE_NODE_ID_LENGTH); const sourcePath = requireBoundedPath(input.sourcePath, 'sourcePath');
+      const targetNode = requireBoundedString(input.targetNode, 'targetNode', MAX_CORE_NODE_ID_LENGTH); const targetPath = requireBoundedPath(input.targetPath, 'targetPath');
       if (input.overwrite !== undefined && typeof input.overwrite !== 'boolean') throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'overwrite must be a boolean.');
-      await checkToolPermission({ source: 'builtin', tool: 'copy_between_nodes' }, sourceSessionId, 'master', { sourceNode, sourcePath, targetNode, targetPath, overwrite: input.overwrite === true });
+      const callerCurrentNode = input.callerCurrentNode === undefined ? source.currentNode : requireBoundedString(input.callerCurrentNode, 'callerCurrentNode', MAX_CORE_NODE_ID_LENGTH);
+      await checkToolPermissionForSession({ ...source, currentNode: callerCurrentNode }, { source: 'builtin', tool: 'copy_between_nodes' }, 'master', { sourceNode, sourcePath, targetNode, targetPath, overwrite: input.overwrite === true });
       if (sourceNode !== 'master') await requireNodeExecutionAccess(sourceSessionId, sourceNode);
       if (targetNode !== 'master') await requireNodeExecutionAccess(sourceSessionId, targetNode);
-      const file = await nodesManager.readFileFromNode(sourceNode, sourcePath, sourceSessionId);
+      const file = await providers.readTransferFile({ nodeId: sourceNode, filePath: sourcePath, sourceSessionId, context: { agent: source.agent || 'main' } });
       try { decodeNodeTransferFile(file); } catch (error) { invalidResponse((error as Error).message); }
-      const written = await nodesManager.writeFileToNode(targetNode, targetPath, file.dataBase64, input.overwrite === true, sourceSessionId);
+      const written = await providers.writeTransferFile({ nodeId: targetNode, filePath: targetPath, dataBase64: file.dataBase64, overwrite: input.overwrite === true, sourceSessionId, context: { agent: source.agent || 'main' } });
       if (typeof written.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(written.sha256)) invalidResponse('Node copy returned an invalid sha256.');
       if (typeof written.overwritten !== 'boolean') invalidResponse('Node copy returned an invalid overwritten flag.');
       if (written.absolutePath !== undefined && (typeof written.absolutePath !== 'string' || written.absolutePath.length > 4096)) invalidResponse('Node copy returned an invalid absolutePath.');
       return { sourceNode, sourcePath, targetNode, targetPath, sizeBytes: file.sizeBytes, sha256: written.sha256,
         overwritten: written.overwritten, ...(written.absolutePath ? { absolutePath: written.absolutePath } : {}) };
     },
-    async lifecycleProviders(input) {
+    async providersList(input, rpcContext) {
       const { source } = await requireSource(input, ['sourceSessionId'], 'Node lifecycle provider list request');
       const isolated = sessionManager.isSessionEffectivelyIsolated(source);
-      return { providers: providers.listLifecycleProviders().slice(0, 100).map(provider => ({
-        id: requireBoundedString(provider.id, 'provider.id', 64),
-        actions: provider.actions.filter(action => ['create', 'ensure', 'inspect', 'destroy'].includes(action)
-          && (!isolated || action === 'inspect')).slice(0, 4),
-      })).filter(provider => provider.actions.length > 0) };
+      try {
+        const descriptions = await providers.listProviders({ signal: rpcContext.signal });
+        return { providers: descriptions.slice(0, 100).map(provider => {
+          const safe = plainJsonWithin(provider, 64 * 1024) as typeof provider | undefined;
+          if (!safe) invalidResponse('Provider description exceeds its plain JSON budget.');
+          const actions = safe.lifecycle.filter(action => ['create', 'ensure', 'inspect', 'destroy'].includes(action) && (!isolated || action === 'inspect'));
+          return { id: requireBoundedString(safe.id, 'provider.id', 64), label: requireBoundedString(safe.label, 'provider.label', 256), lifecycle: actions };
+        }) };
+      } catch (error) { rethrowProviderError(error); }
     },
     async lifecycle(input, rpcContext) {
       const { sourceSessionId, source } = await requireSource(
         input,
-        ['sourceSessionId', 'action', 'providerId', 'nodeId', 'parameters', 'confirmation'],
+        ['sourceSessionId', 'action', 'providerId', 'nodeId', 'parameters', 'confirmation', 'callerCurrentNode'],
         'Node lifecycle request',
       );
       const action = requireBoundedString(input.action, 'action', 16) as NodeLifecycleAction;
@@ -416,6 +432,9 @@ export function createNodeExecutionServiceHandler(options: {
           `Effectively isolated sessions cannot use node lifecycle action \`${action}\` without an ownership policy.`,
         );
       }
+      const callerCurrentNode = input.callerCurrentNode === undefined ? source.currentNode : requireBoundedString(input.callerCurrentNode, 'callerCurrentNode', MAX_CORE_NODE_ID_LENGTH);
+      const { sourceSessionId: _sourceId, callerCurrentNode: _callerNode, ...authorizationArgs } = input;
+      await checkGenericToolAuthorizationForSession({ ...source, currentNode: callerCurrentNode }, { source: 'builtin', tool: 'node' }, 'master', authorizationArgs);
       const context = { agent: source.agent || 'main' };
       try {
         if (action === 'create' || action === 'ensure') {
@@ -431,10 +450,19 @@ export function createNodeExecutionServiceHandler(options: {
           return { result: normalizeLifecycleResult(result) };
         }
 
+        if (action === 'inspect' && input.providerId !== undefined) {
+          if (input.nodeId !== undefined || input.confirmation !== undefined || Object.keys(parameters).length) {
+            throw new RpcError('NODE_LIFECYCLE_INVALID_REQUEST', 'Provider inspection accepts providerId only.');
+          }
+          const provider = await providers.inspectProvider(requireBoundedString(input.providerId, 'providerId', 64), { signal: rpcContext.signal });
+          const safe = normalizeLifecycleResult({ provider });
+          if (isolated && safe.provider) safe.provider.lifecycle = safe.provider.lifecycle.filter(action => action === 'inspect');
+          return { result: safe };
+        }
         if (input.providerId !== undefined) {
           throw new RpcError('NODE_LIFECYCLE_INVALID_REQUEST', `${action} resolves the provider from nodeId and does not accept providerId.`);
         }
-        const nodeId = requireBoundedString(input.nodeId, 'nodeId', 128);
+        const nodeId = requireBoundedString(input.nodeId, 'nodeId', MAX_CORE_NODE_ID_LENGTH);
         await requireNodeExecutionAccess(sourceSessionId, nodeId);
         if (action === 'inspect') {
           if (input.confirmation !== undefined) {

@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import test from 'node:test';
 import { parseFoxwarmWrappedContent } from '../utils/promptWrappers';
 import { getChildHandoffBoundaryForQueueItem } from './childHandoffState';

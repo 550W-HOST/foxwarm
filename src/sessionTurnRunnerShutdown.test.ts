@@ -1,3 +1,4 @@
+import './testEnvironment';
 import * as toolExecutor from './toolExecutor';
 import type { CurrentSessionTurnEffects } from './session/currentSessionEffects';
 import assert from 'node:assert/strict';

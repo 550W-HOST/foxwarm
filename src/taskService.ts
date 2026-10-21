@@ -164,7 +164,7 @@ export class TaskService {
     if (scope !== undefined && scope !== 'all') {
       if (!sessionId?.trim()) throw new TaskError('TASK_SESSION_REQUIRED', 'A current Session is required for this task list scope.');
       canonicalSessionId = this.deps.resolveSessionId(sessionId) || sessionId;
-      if (scope === 'current-session') scopeSessionIds = [canonicalSessionId];
+      if (scope === 'current-session' || scope === 'owned') scopeSessionIds = [canonicalSessionId];
       else if (scope === 'current-agent') {
         const agent = this.deps.resolveSessionAgent?.(canonicalSessionId);
         if (!agent || !this.deps.listSessionIdsForAgent) {

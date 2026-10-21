@@ -21,6 +21,7 @@ import {
   isToolAuthorizationPotentiallyVisibleSync,
   loadToolAuthorizationPolicy,
   toolAuthorizationNeedsSessionTarget,
+  toolAuthorizationNeedsTaskTarget,
   type ToolAuthorizationVisibilityProjection,
 } from './toolAuthorization';
 import { populateToolAuthorizationSessionTargets, supportsToolAuthorizationSessionTarget } from './toolAuthorizationSessionTargets';
@@ -134,6 +135,11 @@ export async function checkGenericToolAuthorizationForSession(
     } else {
       populateToolAuthorizationSessionTargets(request, session);
     }
+  }
+  if (toolAuthorizationNeedsTaskTarget(policy, request)
+    && typeof request.args.taskId === 'string' && request.args.taskId.trim() && request.args.taskId.length <= 128) {
+    const { resolveMainAuthorizationTaskTarget } = await import('./mainManagementTools');
+    request.taskTarget = await resolveMainAuthorizationTaskTarget({ sourceSessionId: session.id, taskId: request.args.taskId });
   }
   const genericDecision = evaluateToolAuthorizationPolicy(policy, request);
   if (genericDecision.action === 'deny') {

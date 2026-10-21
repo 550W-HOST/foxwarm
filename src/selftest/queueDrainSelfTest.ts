@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import * as toolExecutor from '../toolExecutor';
 import assert from 'assert';
 import { MessageRouter } from '../messageRouter';

@@ -1,3 +1,4 @@
+import { appE2eRuntime } from './runtime.mjs'
 import { waitForWebUiReady } from '../../packages/webui/test/webuiReadiness.mjs'
 import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
@@ -5,9 +6,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import puppeteer from 'puppeteer-core'
 
-const baseUrl = process.env.FOXWARM_E2E_URL
-const dataRoot = process.env.FOXWARM_E2E_DATA_DIR
-const tokenFile = process.env.FOXWARM_E2E_TOKEN_FILE
+const { baseUrl, tokenFile, dataRoot } = appE2eRuntime()
 const artifactDir = process.env.FOXWARM_E2E_ARTIFACT_DIR
 assert.ok(baseUrl && dataRoot && tokenFile && artifactDir, 'Run through the disposable application E2E harness.')
 const token = (await fs.readFile(tokenFile, 'utf8')).trim()

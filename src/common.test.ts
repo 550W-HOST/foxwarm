@@ -1,3 +1,4 @@
+import './testEnvironment';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';

@@ -69,7 +69,8 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
     if (mountedRef.current && ownerEpochRef.current === ownerEpoch && generationRef.current === generation) console.error(label, error)
   }, [])
   const focusIds = useMemo(() => dedupe(options.focusIds.filter(Boolean)).slice(0, 8), [options.focusIds.join('\0')])
-  const exactIds = useMemo(() => dedupe([...focusIds, ...(options.exactIds || []), ...watchIds].filter(Boolean)), [focusIds.join('\0'), (options.exactIds || []).join('\0'), watchIds.join('\0')])
+  // Exact lookup/subscription ownership is a set, not focus-first presentation order.
+  const exactIds = useMemo(() => dedupe([...focusIds, ...(options.exactIds || []), ...watchIds].filter(Boolean)).sort(), [focusIds.join('\0'), (options.exactIds || []).join('\0'), watchIds.join('\0')])
   const exactIdsRef = useRef(exactIds); exactIdsRef.current = exactIds
 
   useEffect(() => {
@@ -189,10 +190,10 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
   refreshRef.current = refresh
   const invalidate = useCallback(() => { if (!mountedRef.current) return; const next = { ...stateRef.current, invalidationVersion: stateRef.current.invalidationVersion + 1 }; stateRef.current = next; setState(next); schedulerRef.current?.requestRefresh() }, [])
   useEffect(() => { const scheduler = createSessionListRefreshScheduler(() => refreshRef.current()); schedulerRef.current = scheduler; return () => { scheduler.dispose(); if (schedulerRef.current === scheduler) schedulerRef.current = null } }, [])
-  useEffect(() => { const ownerEpoch = ownerEpochRef.current; const replay = replayOwnedWindows(stateRef.current.rootTarget, new Map(branchTargetsRef.current)); const windowGeneration = windowGenerationRef.current
-    void replay.then(async replayed => { if (!replayed || !isCurrentOwner(ownerEpoch) || windowGenerationRef.current !== windowGeneration) return; const summary = loadSummary(); const summaryGeneration = summaryGenerationRef.current
-      try { await summary } catch (error) { reportErrorIfCurrent('Failed bounded Session bootstrap', error, ownerEpoch, summaryGeneration, summaryGenerationRef) } },
-    error => reportErrorIfCurrent('Failed bounded Session bootstrap', error, ownerEpoch, windowGeneration, windowGenerationRef)) }, [replayOwnedWindows, loadSummary, isCurrentOwner, reportErrorIfCurrent])
+  useEffect(() => { const ownerEpoch = ownerEpochRef.current; const replay = replayOwnedWindows(stateRef.current.rootTarget, new Map(branchTargetsRef.current)); const generation = windowGenerationRef.current
+    void replay.catch(error => reportErrorIfCurrent('Failed bounded Session bootstrap', error, ownerEpoch, generation, windowGenerationRef)) }, [replayOwnedWindows, reportErrorIfCurrent])
+  useEffect(() => { const ownerEpoch = ownerEpochRef.current; const summary = loadSummary(); const generation = summaryGenerationRef.current
+    void summary.catch(error => reportErrorIfCurrent('Failed bounded Session summary', error, ownerEpoch, generation, summaryGenerationRef)) }, [loadSummary, reportErrorIfCurrent])
   useEffect(() => { const ownerEpoch = ownerEpochRef.current; const exact = loadExact(); const generation = exactGenerationRef.current
     void exact.catch(error => reportErrorIfCurrent('Failed bounded Session exact context', error, ownerEpoch, generation, exactGenerationRef)) }, [loadExact, reportErrorIfCurrent])
 

@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
@@ -142,7 +143,7 @@ test('persistent exec expands cwd ~ using local home directory', async () => {
     const status = await waitForExecCompletion(entry.id, 5000);
     assert.ok(status, 'exec should finish during test timeout');
     const result = await buildForegroundExecResult(entry, status);
-    assert.match(result, new RegExp(`^${os.homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n---\nExit code: 0`));
+    assert.match(result, new RegExp(`^${(await fs.realpath(os.homedir())).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n---\nExit code: 0`));
   } finally {
     if (execId) {
       await finalizeForegroundExec(execId).catch(() => {});

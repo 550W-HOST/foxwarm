@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export const TASK_ACTIONS = ['create', 'list', 'get', 'claim', 'assign', 'update', 'complete', 'cancel'] as const;
 export const TASK_STATUSES = ['open', 'active', 'completed', 'cancelled'] as const;
-export const TASK_LIST_SCOPES = ['current-session', 'current-agent', 'all'] as const;
+export const TASK_LIST_SCOPES = ['current-session', 'owned', 'current-agent', 'all'] as const;
 export const TASK_LIST_LIMIT = 50;
 export const TASK_CHILD_LIMIT = 20;
 export const TASK_NOTE_LIMIT = 10;
@@ -311,13 +311,18 @@ export class TaskStore {
       const filters = [args.status === undefined ? "status IN ('open','active')" : 'status=?'];
       const params: any[] = args.status === undefined ? [] : [args.status];
       if (args.scope !== undefined && args.scope !== 'all') {
-        const scopedIds = scopeSessionIds ?? (args.scope === 'current-session' && sessionId ? [sessionId] : []);
+        const scopedIds = scopeSessionIds ?? (['current-session', 'owned'].includes(args.scope) && sessionId ? [sessionId] : []);
         const ids = [...new Set(scopedIds.flatMap(id => this.sessionReferences(id)))];
         if (ids.length === 0) filters.push('0');
         else {
           const placeholders = ids.map(() => '?').join(',');
-          filters.push(`(createdBySessionId IN (${placeholders}) OR ownerSessionId IN (${placeholders}))`);
-          params.push(...ids, ...ids);
+          if (args.scope === 'owned') {
+            filters.push(`ownerSessionId IN (${placeholders})`);
+            params.push(...ids);
+          } else {
+            filters.push(`(createdBySessionId IN (${placeholders}) OR ownerSessionId IN (${placeholders}))`);
+            params.push(...ids, ...ids);
+          }
         }
       }
       const where = filters.join(' AND ');

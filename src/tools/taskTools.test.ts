@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import { executeTools } from '../toolExecutor';
 import { DatabaseSync } from 'node:sqlite';
 import { taskService } from './taskTools';
@@ -388,5 +389,50 @@ test('model task mutation receipts stay minimal across direct, unified, Worker a
     resetMainManagementToolsForTests();
     await sessionManager.deleteSession(creator.id).catch(() => false);
     await sessionManager.deleteSession(owner.id).catch(() => false);
+  }
+});
+
+test('owned Task matcher uses canonical Main ownership for direct, Worker, unified and ToolScript calls', async () => {
+  const prefix = `owned_task_policy_${Date.now()}`;
+  const creator = await sessionManager.getSession(`${prefix}_creator`);
+  let owner = await sessionManager.getSession(`${prefix}_owner`);
+  const outsider = await sessionManager.getSession(`${prefix}_outsider`);
+  try {
+    const ownedId = (await taskService.execute({ action: 'create', title: 'Owned policy target', ownerSessionId: owner.id }, creator.id)).task.id;
+    const unownedId = (await taskService.execute({ action: 'create', title: 'Creator is not current owner' }, owner.id)).task.id;
+    const otherId = (await taskService.execute({ action: 'create', title: 'Other owner', ownerSessionId: outsider.id }, creator.id)).task.id;
+    const oldOwner = owner.id;
+    await sessionManager.moveSessionToTarget({ sourceSessionId: owner.id, newSessionId: `${prefix}_moved` });
+    owner = await sessionManager.getSession(`${prefix}_moved`);
+    assert.equal(sessionManager.getSessionCatalog(oldOwner)?.id, owner.id);
+    setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(JSON.stringify({ version: 1, defaultAction: 'deny', rules: [
+      { tool: { source: 'builtin', name: 'task' }, args: { taskId: { task: { owned: true } } }, action: 'allow' },
+      { tool: { source: 'builtin', name: 'task' }, args: { action: 'list', scope: 'owned' }, action: 'allow' },
+      { tool: { source: 'builtin', name: 'run_script' }, action: 'allow' },
+    ] })));
+    const local = { sessionId: owner.id, session: owner };
+    const worker: any = { ...local, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
+    assert.equal(readResult(await callTool('task', { action: 'get', taskId: ownedId }, local)).task.ownerSessionId, owner.id);
+    assert.equal(readResult(await task({ action: 'get', taskId: ownedId }, worker)).task.id, ownedId);
+    assert.equal(readResult(await call_tool({ toolId: 'builtin:task', args: { action: 'get', taskId: ownedId } }, worker)).task.id, ownedId);
+    const scripted = await callTool('run_script', { code: `return call_tool("builtin:task", {"action":"get","taskId":"${ownedId}"})` }, worker);
+    assert.equal(scripted.status, 'completed');
+    assert.equal(JSON.parse(scripted.result.output).task.id, ownedId);
+    for (const taskId of [unownedId, otherId, 'task_missing']) {
+      await assert.rejects(() => callTool('task', { action: 'get', taskId }, worker), /authorization rule denies/);
+      await assert.rejects(() => callTool('task', { action: 'update', taskId, description: 'must not change' }, worker), /authorization rule denies/);
+    }
+    await assert.rejects(() => callTool('task', { action: 'claim', taskId: unownedId }, worker), /authorization rule denies/);
+    await assert.rejects(() => callTool('task', { action: 'list' }, worker), /authorization rule denies/);
+    const ownedList = readResult(await callTool('task', { action: 'list', scope: 'owned' }, worker));
+    assert.deepEqual(ownedList.tasks.map((entry: any) => entry.id), [ownedId]);
+    await callTool('task', { action: 'update', taskId: ownedId, note: 'Owner progress' }, worker);
+    assert.equal(taskService.get(ownedId).notes.at(-1).text, 'Owner progress');
+    await taskService.execute({ action: 'assign', taskId: ownedId, ownerSessionId: outsider.id }, creator.id);
+    await assert.rejects(() => callTool('task', { action: 'get', taskId: ownedId }, worker), /authorization rule denies/);
+  } finally {
+    setToolAuthorizationPolicyForTests(undefined);
+    await shutdownMainManagementTools().catch(() => {}); resetMainManagementToolsForTests();
+    for (const id of [creator.id, owner.id, outsider.id]) await sessionManager.deleteSession(id).catch(() => false);
   }
 });

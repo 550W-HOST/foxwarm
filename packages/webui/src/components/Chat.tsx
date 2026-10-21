@@ -8,7 +8,6 @@ import { API_BASE_PATH } from '../config'
 import ChatComposer from './ChatComposer'
 import type { ModelOption } from './ChatComposer'
 import ChatTimeline from './ChatTimeline'
-import { buildTimelineRows } from './timelineRows'
 import { findRenderedMatchRange, findSearchSurface, findSessionSearchMatches, projectSessionSearchFields } from './chatSessionSearch'
 import ContextScrollbar from './ContextScrollbar'
 import { CONTEXT_SCROLLBAR_SETTINGS_EVENT, readContextScrollbarSettings } from '../contextScrollbarSettings'
@@ -97,11 +96,13 @@ class HistoryCommit extends Component<{ revision: unknown; beforeCommit: () => v
   render() { return this.props.children }
 }
 
+type ProtectedHistoryRange = { startKey: string; endKey: string }
+
 type PendingViewportRestore =
   | { kind: 'state'; state: ChatViewportState; interactionVersion: number }
   | {
       kind: 'prepend'
-      visibleEndKey?: string
+      protectedRange: ProtectedHistoryRange | null
       anchors: Array<{ messageKey: string; offsetPx: number }>
       scrollTop: number
       scrollHeight: number
@@ -196,7 +197,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   } = useChatConversationSync(sessionId, webUiIdentityMode, historyMode, initialContinuousAnchorSeq)
   const messages = historyMode === 'continuous' ? continuousMessages : activeMessages
   const [continuousWindowKey, setContinuousWindowKey] = useState<string | null>(null)
-  const [continuousWindowEndKey, setContinuousWindowEndKey] = useState<string | null>(null)
+  const [continuousProtectedRange, setContinuousProtectedRange] = useState<ProtectedHistoryRange | null>(null)
   const currentHistoryRef = useRef({ mode: historyMode, messages })
   currentHistoryRef.current = { mode: historyMode, messages }
   const continuousWindowRangeRef = useRef({ start: 0, count: CONTINUOUS_HISTORY_WINDOW_SIZE })
@@ -534,7 +535,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
 
   const handleBottomNavigation = useCallback(() => {
     if (historyMode === 'continuous' && archivePage.hasLater) void loadArchivePage('latest')
-    if (historyMode === 'continuous') setContinuousWindowKey(null)
+    if (historyMode === 'continuous') {
+      setContinuousProtectedRange(null)
+      setContinuousWindowKey(null)
+    }
     markUserViewportInteraction()
     pendingContextScrollbarNavigationRef.current = null
     pendingScrollToTrueTopRef.current = false
@@ -585,6 +589,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       }
       if (historyMode === 'continuous' && messages.length) {
         pendingScrollToTrueTopRef.current = true
+        setContinuousProtectedRange(null)
         setContinuousWindowKey(getMessageStableKey(messages[0], 0))
       }
       container.scrollTop = 0
@@ -611,20 +616,31 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     pendingContextScrollbarNavigationRef.current = { anchorKey, fraction }
     if (historyMode === 'continuous') {
       const index = messages.findIndex(message => getMessageViewportAnchorKey(message) === anchorKey)
-      if (index >= 0) setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, index - 20)], 0))
+      if (index >= 0) {
+        setContinuousProtectedRange(null)
+        setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, index - 20)], 0))
+      }
     } else setShowFullTimeline(true)
   }, [leaveBottomFollow, scrollToContextScrollbarAnchor, historyMode, messages])
 
-  const readVisibleHistoryEnd = useCallback(() => {
+  const readProtectedHistoryRange = useCallback((): ProtectedHistoryRange | null => {
     const container = messagesContainerRef.current
-    const viewport = container?.getBoundingClientRect()
-    if (!container || !viewport) return null
-    const keys = new Set(Array.from(container.querySelectorAll<HTMLElement>(CHAT_MESSAGE_ANCHOR_SELECTOR)).filter(element => {
+    const timeline = committedTimelineRef.current
+    if (!container || !timeline) return null
+    const viewport = container.getBoundingClientRect()
+    const keys = new Set<string>()
+    for (const element of timeline.querySelectorAll<HTMLElement>(`[data-chat-history-start-key], ${CHAT_MESSAGE_ANCHOR_SELECTOR}`)) {
       const rect = element.getBoundingClientRect()
-      return rect.bottom > viewport.top && rect.top < viewport.bottom
-    }).map(element => element.getAttribute('data-chat-history-end-key') || element.getAttribute('data-chat-message-anchor-key')))
-    const end = currentHistoryRef.current.messages.findLast(message => keys.has(getMessageViewportAnchorKey(message)))
-    return end ? getMessageViewportAnchorKey(end) : null
+      if (rect.bottom <= viewport.top - HISTORY_PRELOAD_DISTANCE_PX || rect.top >= viewport.bottom + HISTORY_PRELOAD_DISTANCE_PX) continue
+      const startKey = element.getAttribute('data-chat-history-start-key') || element.getAttribute('data-chat-message-anchor-key')
+      const endKey = element.getAttribute('data-chat-history-end-key')
+      if (startKey) keys.add(startKey)
+      if (endKey) keys.add(endKey)
+    }
+    const protectedKeys = currentHistoryRef.current.messages.map(getMessageViewportAnchorKey).filter((key): key is string => key !== null && keys.has(key))
+    const first = protectedKeys[0]
+    const last = protectedKeys.at(-1)
+    return first && last ? { startKey: first, endKey: last } : null
   }, [])
 
   const captureHistoryCommit = useCallback(() => {
@@ -642,24 +658,24 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       return { messageKey: element.getAttribute('data-chat-message-anchor-key') || '', offsetPx: rect.top - viewport.top,
         distance: Math.max(viewport.top - rect.bottom, rect.top - viewport.bottom, 0), index }
     }).filter(anchor => anchor.messageKey).sort((a, b) => a.distance - b.distance || a.index - b.index)
-    const visibleEndKey = readVisibleHistoryEnd()
+    const protectedRange = readProtectedHistoryRange()
     if (resizeAnchor) anchors.unshift({ messageKey: resizeAnchor.messageKey, offsetPx: resizeAnchor.offsetPx, distance: -1, index: -1 })
     const current = resizeAnchor || readCurrentViewportState(-1)
     if (current?.kind === 'anchor') currentViewportStateRef.current = current
-    pendingViewportRestoreRef.current = { kind: 'prepend', visibleEndKey: visibleEndKey || undefined, anchors: anchors.slice(0, 8).map(({ messageKey, offsetPx }) => ({ messageKey, offsetPx })),
+    pendingViewportRestoreRef.current = { kind: 'prepend', protectedRange, anchors: anchors.slice(0, 8).map(({ messageKey, offsetPx }) => ({ messageKey, offsetPx })),
       scrollTop: container.scrollTop, scrollHeight: container.scrollHeight, interactionVersion: userInteractionVersionRef.current }
-  }, [readCurrentViewportState, readVisibleHistoryEnd, searchNavigation])
+  }, [readCurrentViewportState, readProtectedHistoryRange, searchNavigation])
 
-  const showEarlierWindow = useCallback((key: string) => {
-    const visibleEndKey = readVisibleHistoryEnd()
+  const showContinuousWindow = useCallback((key: string) => {
+    const protectedRange = readProtectedHistoryRange()
     continuousPagingIntentRef.current = null
-    setContinuousWindowEndKey(visibleEndKey)
+    setContinuousProtectedRange(protectedRange)
     setContinuousWindowKey(key)
-  }, [readVisibleHistoryEnd])
+  }, [readProtectedHistoryRange])
 
   const loadEarlierArchivePage = useCallback(() => loadArchivePage('earlier', rows => {
-    if (currentHistoryRef.current.mode === 'continuous' && rows.length && !shouldAutoScrollRef.current) showEarlierWindow(getMessageStableKey(rows[0], 0))
-  }), [loadArchivePage, showEarlierWindow])
+    if (currentHistoryRef.current.mode === 'continuous' && rows.length && !shouldAutoScrollRef.current) showContinuousWindow(getMessageStableKey(rows[0], 0))
+  }), [loadArchivePage, showContinuousWindow])
 
   useEffect(() => {
     const handleScroll = () => {
@@ -685,7 +701,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       const { start: windowStart, count: windowCount } = continuousWindowRangeRef.current
       const earlierContinuous = historyMode === 'continuous' && pagingIntent === 'earlier' && scrollTop < HISTORY_PRELOAD_DISTANCE_PX && !archivePage.loading && !archivePage.error
         && (windowStart > 0 || archivePage.hasEarlier)
-      const laterContinuous = historyMode === 'continuous' && pagingIntent === 'later' && distanceFromBottom < 120
+      const laterContinuous = historyMode === 'continuous' && pagingIntent === 'later' && distanceFromBottom < HISTORY_PRELOAD_DISTANCE_PX
         && windowStart + windowCount < messages.length
       if (earlierContinuous || laterContinuous || (historyMode === 'active' && !showFullTimeline && messages.length > DEFAULT_VISIBLE_TIMELINE_MESSAGES && scrollTop < HISTORY_PRELOAD_DISTANCE_PX)) {
         // This reading navigation supersedes an older host-resize correction.
@@ -693,12 +709,12 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         setBottomFollow(false)
         if (earlierContinuous || laterContinuous) continuousPagingIntentRef.current = null
         if (earlierContinuous) {
-          if (windowStart > 0) showEarlierWindow(getMessageStableKey(messages[Math.max(0, windowStart - 100)], 0))
+          if (windowStart > 0) showContinuousWindow(getMessageStableKey(messages[Math.max(0, windowStart - 100)], 0))
           else {
             void loadEarlierArchivePage()
           }
         } else if (laterContinuous) {
-          setContinuousWindowKey(getMessageStableKey(messages[Math.min(messages.length - 1, windowStart + Math.max(100, windowCount - 100))], 0))
+          showContinuousWindow(getMessageStableKey(messages[Math.min(messages.length - 1, windowStart + Math.max(100, windowCount - 100))], 0))
         } else {
           // Active context is local: retain its existing native-event geometry priority.
           captureHistoryCommit()
@@ -723,8 +739,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
           }
         }
         if (event.deltaY) continuousPagingIntentRef.current = event.deltaY < 0 ? 'earlier' : 'later'
-        // Also handle upward input when the native scroller cannot move further.
-        if (historyMode === 'continuous' && event.deltaY < 0 && container.scrollTop < HISTORY_PRELOAD_DISTANCE_PX) handleScroll()
+        // Recheck both paging edges even when native scrolling is clamped.
+        if (historyMode === 'continuous' && (event.deltaY < 0 && container.scrollTop < HISTORY_PRELOAD_DISTANCE_PX
+          || event.deltaY > 0 && container.scrollHeight - container.scrollTop - container.clientHeight < HISTORY_PRELOAD_DISTANCE_PX)) handleScroll()
       }
       const handleTouchStart = (event: TouchEvent) => {
         markUserViewportInteraction()
@@ -739,7 +756,9 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         if (typeof currentY === 'number') {
           if (typeof startY === 'number' && currentY !== startY) continuousPagingIntentRef.current = currentY > startY ? 'earlier' : 'later'
           touchScrollStartYRef.current = currentY
-          if (historyMode === 'continuous' && typeof startY === 'number' && currentY > startY && container.scrollTop < HISTORY_PRELOAD_DISTANCE_PX) handleScroll()
+          if (historyMode === 'continuous' && typeof startY === 'number'
+            && (currentY > startY && container.scrollTop < HISTORY_PRELOAD_DISTANCE_PX
+              || currentY < startY && container.scrollHeight - container.scrollTop - container.clientHeight < HISTORY_PRELOAD_DISTANCE_PX)) handleScroll()
         }
       }
       const handleTouchEnd = () => {
@@ -789,7 +808,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         window.removeEventListener('keydown', handleWindowKeyDown)
       }
     }
-  }, [captureCurrentViewportState, captureHistoryCommit, leaveBottomFollow, markUserViewportInteraction, messages, historyMode, continuousWindowKey, archivePage, loadEarlierArchivePage, showEarlierWindow, setBottomFollow, showFullTimeline, updateBottomFollowState])
+  }, [captureCurrentViewportState, captureHistoryCommit, leaveBottomFollow, markUserViewportInteraction, messages, historyMode, continuousWindowKey, archivePage, loadEarlierArchivePage, showContinuousWindow, setBottomFollow, showFullTimeline, updateBottomFollowState])
 
   const updateSessionModel = useCallback(async (model: string | null) => {
     setModelBusy(true)
@@ -898,17 +917,21 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
   }, [webUiIdentityMode, historyMode, persistentMemorySnapshot])
 
   const { start: continuousWindowStart, end: continuousWindowEnd } = useMemo(() => {
-    const start = continuousWindowKey === null ? Math.max(0, messages.length - CONTINUOUS_HISTORY_WINDOW_SIZE)
+    let start = continuousWindowKey === null ? Math.max(0, messages.length - CONTINUOUS_HISTORY_WINDOW_SIZE)
       : Math.max(0, messages.findIndex(message => getMessageStableKey(message, 0) === continuousWindowKey))
-    let end = Math.min(messages.length, Math.max(start + CONTINUOUS_HISTORY_WINDOW_SIZE,
-      continuousWindowEndKey ? messages.findIndex(message => getMessageViewportAnchorKey(message) === continuousWindowEndKey) + 1 : 0))
-    if (historyMode === 'continuous' && end - start > CONTINUOUS_HISTORY_WINDOW_SIZE) {
-      const rows = buildTimelineRows({ messages: messages.slice(start, end), isMobile, timelineView, showUsageBadge: false,
-        showTimeDividers: false, nestedDepth: 0, expandedGroupKeys: new Set<string>() }, null).rows
-      if (rows.length > CONTINUOUS_HISTORY_WINDOW_SIZE) end = Math.min(messages.length, start + CONTINUOUS_HISTORY_WINDOW_SIZE)
+    let end = Math.min(messages.length, start + CONTINUOUS_HISTORY_WINDOW_SIZE)
+    if (historyMode === 'continuous' && continuousProtectedRange) {
+      const protectedStart = messages.findIndex(message => getMessageViewportAnchorKey(message) === continuousProtectedRange.startKey)
+      const protectedEnd = messages.findIndex(message => getMessageViewportAnchorKey(message) === continuousProtectedRange.endKey) + 1
+      if (protectedStart >= 0 && protectedEnd > protectedStart) {
+        // Keep the pixel buffer even when a collapsed process spans hundreds of sources.
+        // A delayed page must not mount an unrelated, arbitrarily large prefix to reach it.
+        start = Math.max(protectedStart - CONTINUOUS_HISTORY_WINDOW_SIZE, Math.min(start, protectedStart))
+        end = Math.min(messages.length, protectedEnd + CONTINUOUS_HISTORY_WINDOW_SIZE, Math.max(end, protectedEnd))
+      }
     }
     return { start, end }
-  }, [continuousWindowKey, continuousWindowEndKey, historyMode, messages, timelineView, isMobile])
+  }, [continuousWindowKey, continuousProtectedRange, historyMode, messages])
   continuousWindowRangeRef.current = { start: continuousWindowStart, count: continuousWindowEnd - continuousWindowStart }
   const visibleMessages = useMemo(() => {
     if (historyMode === 'continuous') return messages.slice(continuousWindowStart, continuousWindowEnd)
@@ -960,7 +983,10 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
     leaveBottomFollow()
     const inGroup = match.groupKey && (match.surface === 'call' || match.surface === 'response' || match.surface === 'reasoning' || match.surface === 'system')
     const requiredIndex = inGroup ? Math.min(match.sourceIndex, match.groupStartIndex ?? match.sourceIndex) : match.sourceIndex
-    if (historyMode === 'continuous') setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, requiredIndex - 20)], 0))
+    if (historyMode === 'continuous') {
+      setContinuousProtectedRange(null)
+      setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, requiredIndex - 20)], 0))
+    }
     else if (!showFullTimeline && requiredIndex < messages.length - DEFAULT_VISIBLE_TIMELINE_MESSAGES) setShowFullTimeline(true)
     setSearchMatchId(match.id)
     setSearchNavigation(value => value + 1)
@@ -1140,6 +1166,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
         const messageKey = pending.state.messageKey
         const index = messages.findIndex(message => getMessageViewportAnchorKey(message) === messageKey)
         if (index >= 0 && (index < continuousWindowStart || index >= continuousWindowStart + visibleMessages.length)) {
+          setContinuousProtectedRange(null)
           setContinuousWindowKey(getMessageStableKey(messages[Math.max(0, index - 20)], 0))
           return
         }
@@ -1157,19 +1184,13 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       return
     }
 
-    if (historyMode === 'continuous' && pending.visibleEndKey && !visibleMessages.some(message => getMessageViewportAnchorKey(message) === pending.visibleEndKey)) {
-      if (pending.visibleEndKey !== continuousWindowEndKey) {
-        setContinuousWindowEndKey(pending.visibleEndKey)
+    if (historyMode === 'continuous' && pending.protectedRange) {
+      const { startKey, endKey } = pending.protectedRange
+      const contains = (key: string) => visibleMessages.some(message => getMessageViewportAnchorKey(message) === key)
+      if ((!contains(startKey) || !contains(endKey))
+        && (continuousProtectedRange?.startKey !== startKey || continuousProtectedRange?.endKey !== endKey)) {
+        setContinuousProtectedRange(pending.protectedRange)
         return
-      }
-      const state = currentViewportStateRef.current
-      const index = state.kind === 'anchor' ? messages.findIndex(message => getMessageViewportAnchorKey(message) === state.messageKey) : -1
-      if (index >= 0) {
-        const key = getMessageStableKey(messages[Math.max(0, index - 20)], 0)
-        if (key !== continuousWindowKey) {
-          setContinuousWindowKey(key)
-          return
-        }
       }
     }
 
@@ -1199,7 +1220,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, canoni
       }
       capturedInteractionVersionRef.current = userInteractionVersionRef.current
     }
-  }, [applyViewportAnchorCandidates, applyViewportState, historyLoaded, messages.length, readCurrentViewportState, setBottomFollow, showFullTimeline, timelineMessages, viewportSessionId, historyMode, archivePage.loaded, continuousWindowStart, continuousWindowKey, continuousWindowEndKey, visibleMessages])
+  }, [applyViewportAnchorCandidates, applyViewportState, historyLoaded, messages.length, readCurrentViewportState, setBottomFollow, showFullTimeline, timelineMessages, viewportSessionId, historyMode, archivePage.loaded, continuousWindowStart, continuousWindowKey, continuousProtectedRange, visibleMessages])
 
   useLayoutEffect(() => {
     const pending = pendingContextScrollbarNavigationRef.current

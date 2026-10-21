@@ -1,6 +1,8 @@
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 
+// Both the full harness and per-scenario npm scripts use an owned application.
+// Raw invocation of these scenario files fails before reading an installation token.
 export const appRuntimeE2e = [
   'packages/webui/test/lazyTimelineRestore.e2e.mjs',
   'packages/webui/test/scrollState.e2e.mjs',
@@ -107,6 +109,6 @@ export const deferredGroups = {
   'website-owned': 'Owned by the website test workflow.',
   'manual-smoke': 'Stateful standalone smoke checks; run only with an explicitly assigned disposable environment.',
   'manual-regression': 'Standalone historical regression script; not part of the routine runner.',
-  'manual-skill-trial': 'Interactive skill trial; requires an explicitly assigned Agent and runtime.',
+  'manual-skill-trial': 'Historical interactive trial; isolated state but no maintained synthetic provider fixture.',
   'manual-hardware-smoke': 'Live-device smoke driver; requires explicitly assigned Android hardware and is never routine CI.',
 }

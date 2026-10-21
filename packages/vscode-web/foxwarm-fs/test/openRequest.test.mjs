@@ -49,3 +49,8 @@ test('accepts remote nodes and rejects invalid nodes, relative paths, and invali
   assert.throws(() => normalizeFoxwarmOpenRequest({ kind: 'openFile', nodeId: 'master', path: '/app/a', startLine: 5, endLine: 2 }), /must not be before/);
   assert.throws(() => normalizeFoxwarmOpenRequest({ kind: 'openFile', nodeId: 'master', path: '/app/a', startColumn: 2 }), /requires startLine/);
 });
+test('open requests retain qualified Provider Node IDs', () => {
+  assert.deepEqual(normalizeFoxwarmOpenRequest({ kind: 'openFile', nodeId: 'development/worker:one', path: '/workspace/file.txt' }), {
+    kind: 'openFile', nodeId: 'development/worker:one', path: '/workspace/file.txt',
+  });
+});

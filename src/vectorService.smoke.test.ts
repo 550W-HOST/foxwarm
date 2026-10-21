@@ -1,3 +1,4 @@
+import './testEnvironment';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import http from 'node:http';

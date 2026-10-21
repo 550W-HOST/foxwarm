@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import test from 'node:test';
 import { sessionCatalogStore } from '../session/catalogStore';
 

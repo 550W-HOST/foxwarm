@@ -1,11 +1,19 @@
 'use strict';
+require('../../scripts/test/test-process-env.cjs').initializeTestEnvironment();
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { DEFAULT_OPENAI_MODEL, findGptModelCandidates, WEB_SEARCH_REQUEST_TIMEOUT_MS } = require('./web-search.js');
+// The helper eagerly reads its module-relative .env on import. Load a copied
+// module inside owned data rather than reading an installation's configuration.
+const fixtureRoot = path.join(process.env.FOXWARM_DATA_DIR, 'web-search-fixture');
+const fixtureScript = path.join(fixtureRoot, 'skills/web-search/web-search.js');
+fs.mkdirSync(path.dirname(fixtureScript), { recursive: true });
+fs.copyFileSync(path.join(__dirname, 'web-search.js'), fixtureScript);
+fs.symlinkSync(path.resolve(__dirname, '../../node_modules'), path.join(fixtureRoot, 'node_modules'), 'dir');
+const { DEFAULT_OPENAI_MODEL, findGptModelCandidates, WEB_SEARCH_REQUEST_TIMEOUT_MS } = require(fixtureScript);
 
 test('OpenAI and Gemini web-search requests share a 240-second timeout', () => {
   assert.equal(WEB_SEARCH_REQUEST_TIMEOUT_MS, 240000);

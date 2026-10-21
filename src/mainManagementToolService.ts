@@ -88,6 +88,7 @@ export const mainManagementToolServiceDescriptor = defineRpcService('main-manage
   validateWaitSessions: rpcMethod<ValidateWaitSessionsRequest, ValidateWaitSessionsResponse>(),
   armWaitLiveness: rpcMethod<ArmWaitLivenessRequest, ArmWaitLivenessResponse>(),
   validateWaitExecIds: rpcMethod<ValidateWaitExecIdsRequest, ValidateWaitExecIdsResponse>(),
+  resolveAuthorizationTaskTarget: rpcMethod<{ sourceSessionId: string; taskId: string }, { ownerSessionId?: string }>(),
   resolveAuthorizationSessionTarget: rpcMethod<ResolveAuthorizationSessionTargetRequest, ResolveAuthorizationSessionTargetResponse>(),
 });
 
@@ -398,6 +399,24 @@ export function createMainManagementToolServiceHandler(options: {
       const agentName = source.agent || 'main';
       const sessionIdentityIds = [source.id, ...(source.aliases || [])];
       return { activeExecIds: input.execIds.filter(execId => hasRemoteExecLivenessClaim(sessionIdentityIds, agentName, execId)) };
+    },
+    async resolveAuthorizationTaskTarget(input) {
+      if (!input || typeof input !== 'object' || Array.isArray(input)
+        || Object.keys(input).length !== 2 || typeof input.sourceSessionId !== 'string'
+        || typeof input.taskId !== 'string' || !input.taskId.trim() || input.taskId.length > 128) {
+        throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'resolveAuthorizationTaskTarget requires sourceSessionId and a bounded taskId.');
+      }
+      const sourceSessionId = normalizeSourceSessionId(input.sourceSessionId);
+      assertExpectedSource(sourceSessionId);
+      if (!sessionManager.getSessionCatalog(sourceSessionId)) throw new RpcError('MAIN_MANAGEMENT_SOURCE_NOT_FOUND', 'Source session was not found.');
+      try {
+        const owner = taskService.get(input.taskId).task.ownerSessionId;
+        const canonicalOwner = owner ? sessionManager.getSessionCatalog(owner)?.id : undefined;
+        return canonicalOwner ? { ownerSessionId: canonicalOwner } : {};
+      } catch (error: any) {
+        if (error?.code === 'TASK_NOT_FOUND') return {};
+        throw error;
+      }
     },
     async resolveAuthorizationSessionTarget(input) {
       if (!input || typeof input !== 'object' || Array.isArray(input)

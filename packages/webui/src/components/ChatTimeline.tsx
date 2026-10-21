@@ -1051,6 +1051,7 @@ const MessageRow = memo(function MessageRow({
   return (
     <div
       data-search-row={messageKey}
+      data-chat-history-start-key={nestedDepth === 0 ? getMessageViewportAnchorKey(msg) || undefined : undefined}
       className={`flex w-full min-w-0 max-w-full ${systemLikeMessage ? 'justify-start' : (msg.role === 'user' ? 'justify-end' : 'justify-start')} ${groupFirst ? '' : marginClass}`}
       data-chat-message-anchor-key={suppressAnchor ? undefined : anchorKey}
       data-context-scrollbar-anchor-key={suppressAnchor ? undefined : scrollbarAnchorKey}
@@ -1247,6 +1248,7 @@ const TimelineActivity = memo(function TimelineActivity({ row, identityKey, expa
   return (
     <div ref={ref} data-timeline-activity data-activity-expanded={expanded}
       data-chat-message-anchor-key={row.anchorKey} data-context-scrollbar-anchor-key={row.scrollbarAnchorKey}
+      data-chat-history-start-key={rowProps.nestedDepth === 0 ? getMessageViewportAnchorKey(row.msg) || undefined : undefined}
       data-chat-history-end-key={getMessageViewportAnchorKey(activity.sources?.at(-1) || activity.messages.at(-1) || row.msg)}
       className={`min-w-0 ${row.widthClass} ${row.marginClass}`}>
       <ConversationUsage badge={activity.usage} pendingRequests={activity.pendingRequests || 0} missingRequests={activity.missingRequests || 0} sessionId={rowProps.sessionId}>

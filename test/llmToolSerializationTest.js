@@ -1,3 +1,4 @@
+require('../scripts/test/test-process-env.cjs').initializeTestEnvironment();
 const assert = require('assert');
 const path = require('path');
 const { convertToOpenAIResponsesFormat, convertToOpenAIFormat } = require('../lib/llmProviders/openai.js');

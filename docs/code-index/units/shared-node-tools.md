@@ -1,6 +1,6 @@
 # Unit: shared-node-tools
 
-Files: packages/shared/src/exactReplacement.ts, packages/shared/src/exactReplacement.test.ts, packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/agentPathVariables.ts, packages/shared/src/agentPathVariables.test.ts, packages/shared/src/resolvedPathMetadata.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/toolResponseFormatting.test.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
+Files: packages/shared/src/nodeIdentity.ts, packages/shared/src/exactReplacement.ts, packages/shared/src/exactReplacement.test.ts, packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/agentPathVariables.ts, packages/shared/src/agentPathVariables.test.ts, packages/shared/src/resolvedPathMetadata.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/nodeFileTransfer.test.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/toolResponseFormatting.test.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
 Secondary files: packages/shared/src/outputTruncation.ts, packages/shared/src/outputTruncation.test.ts
 
 Trusted foreground exec signals enter the shared wait and launch fence, not process termination. Interruption uses the existing background-registration and completion path under [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
@@ -10,6 +10,8 @@ Trusted foreground exec signals enter the shared wait and launch fence, not proc
 Provides shared file system tools, shell execution, browser automation, and utility functions used by node-side agents. These tools enable reading/writing/editing files, executing commands with background process support, browsing web pages via Puppeteer, and formatting tool responses.
 
 ## Key Exports
+
+- `isCoreNodeId`, `splitProviderNodeId`, `MAX_CORE_NODE_ID_LENGTH` — pure bounded native/qualified Node identity grammar shared by Core, WebUI and Code URI consumers. Native leading underscores/hyphens retain their existing contract; adapter-local identities keep their protocol-specific alphanumeric start.
 
 - `nodeTools` — aggregated object of all node tool functions (read, write, edit, apply_patch, exec, get_default_cwd, browse_*)
 - `read`, `write`, `edit`, `apply_patch`, `exec`, `get_default_cwd` — file and shell tool functions
@@ -73,6 +75,8 @@ Provides shared file system tools, shell execution, browser automation, and util
 | `browse_get(args)` | ~307 | Tool: gets tab content or screenshot |
 | `browse_close(args)` | ~308 | Tool: closes a browser tab |
 | `browse_interact(args)` | ~309 | Tool: interacts with a browser tab |
+| `buildNodeTransferFilePayload` / `buildNodeTransferWriteResult` | nodeFileTransfer | Shared binary metadata and established SHA256 receipt construction |
+| `readPrimitiveTransferFile` / `writePrimitiveTransferFile` | nodeFileTransfer | Bounded binary reads and create/overwrite plus append transfer composition over target-owned operations |
 | `expandHomePath(filePath)` (nodeFileTransfer) | ~20 | Expands ~ to home directory |
 | `resolveNodeAgentDir(agentName, env, nodeRuntimeRoot)` | helper | Resolves agent storage against the immutable node-process startup root |
 | `getNodeAgentDir(agentName)` | ~25 | Resolves the agent working directory |
@@ -137,9 +141,7 @@ Non-image file reads above 1 MiB must not full-read or decode their source befor
 - `CLI_NODE_CAPABILITIES` keeps the same tool names and schema constraints while using Node-specific caller copy for path defaults and the browser screenshot distinction. Tests cover schema/runtime behavior without pinning editorial wording.
 - Directory reads are paginated (50 items default) with navigation hints
 - File and directory read `startLine`/`endLine` values of `0` are treated as omitted, matching master-side read compatibility for optional numeric placeholders
-- File transfer functions enforce path traversal restrictions by default and
-  write through unique temporary files with atomic rename/cleanup so remote
-  inbound descriptors cannot point at a partially written destination.
+- Native CLI transfer functions enforce path traversal restrictions by default and retain unique temporary publication/cleanup. Primitive transfer composition instead uses bounded binary reads and 1 MiB writes (`w`/`wx` first, `a` later); a later failure leaves the ordinary partial prefix without replay or rollback. Metadata/digest receipt builders are shared with native Main/CLI wrappers. FileOperations supports binary append, and ordinary model file tools retain their existing create/replace semantics.
 - Exec cwd validation produces concise error messages preserving the failure reason, cwd source, raw cwd, and resolved cwd
 - Output exceeding `INLINE_OUTPUT_LIMIT` (10K chars) is truncated with a pointer to the log file
 - Node patch matching and bounded failed-hunk errors follow [D-apply-patch-context-matching](./shared-apply-patch.md#d-apply-patch-context-matching) and [D-apply-patch-context-diagnostics](./shared-apply-patch.md#d-apply-patch-context-diagnostics); filesystem tests verify that a failed hunk neither changes that file nor rolls back earlier successful Unicode edits.

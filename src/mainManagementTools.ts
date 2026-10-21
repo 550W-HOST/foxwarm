@@ -233,3 +233,7 @@ export function resetMainManagementToolsForTests(): void {
 }
 
 export const tool_artifact = (args: ToolArgs, ctx?: ToolContext) => executeMainManagementTool('artifact', args, ctx);
+/** Bounded ownership facts from Main's Task authority; never the caller's proposed owner. */
+export async function resolveMainAuthorizationTaskTarget(request: { sourceSessionId: string; taskId: string }): Promise<{ ownerSessionId?: string }> {
+  return await (await getClient()).call('resolveAuthorizationTaskTarget', request);
+}

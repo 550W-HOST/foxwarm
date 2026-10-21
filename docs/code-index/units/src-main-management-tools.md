@@ -9,12 +9,13 @@ Provides the versioned RPC boundary for a closed first set of tools whose mutabl
 
 ## Key exports
 
-- `mainManagementToolServiceDescriptor` — version 17 descriptor with closed `execute` plus internal wait timeout, target-validation, liveness-diagnostic, remote-exec-validation, bounded tool-authorization Session-target resolution, and exact-source legacy Goal migration/task-context methods.
+- `mainManagementToolServiceDescriptor` — version 18 descriptor with closed `execute` plus internal wait timeout, target-validation, liveness-diagnostic, remote-exec-validation, bounded tool-authorization Session-target/Task-owner resolution, and exact-source legacy Goal migration/task-context methods.
 - `MAIN_MANAGEMENT_TOOL_OPERATIONS` — exact 26-operation allowlist: messaging, agent listing, timer CRUD, child creation, session catalog/display/message reads, archive/recall reads, agent/session creation/deletion, node bootstrap/pairing/auth-token-file creation/approved-credential removal, master-only app/models/tool-policy replacement, and the single shared task operation.
 - `createMainManagementToolServiceHandler()` — validates source identity and operation, optionally fences a reverse handler to one expected worker source before any lookup/mutation, then invokes the existing authoritative raw handler. When bound with an expected generation/incarnation and the worker store, it also rejects stale worker generations retryably before any operation runs.
 - `initializeMainManagementTools()` / `shutdownMainManagementTools()` — placement-injectable local or child-reverse client lifecycle and one-way terminal graceful drain.
 - `resetMainManagementToolsForTests()` — explicit test-only reset after a completed terminal shutdown.
 - `executeMainManagementTool()` — placement-neutral local/reverse caller used by the closed Main-owned tool operations.
+- `resolveMainAuthorizationTaskTarget()` — narrow source-fenced Main Task lookup returning only canonical owner identity; missing and unowned tasks return no owner.
 - `scheduleMainWaitTimeout()` — placement-neutral caller for the exact internal wait-timeout DTO; it does not expand the model-operation allowlist.
 - Placement-neutral wrappers cover every allowlisted model operation; recall/agent/node raw handlers select them only for Worker placement.
 

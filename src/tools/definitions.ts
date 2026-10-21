@@ -1,3 +1,4 @@
+import { MAX_CORE_NODE_ID_LENGTH } from '../../packages/shared/dist/nodeIdentity';
 import { DEFAULT_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS } from '../../packages/shared/dist/persistentExec';
 import { COMPACT_PLAN_TOOL_DEFINITION } from '../session/compactPlan';
 import { MAX_AGENT_TOOL_RULES, MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES } from '../permissions';
@@ -24,7 +25,7 @@ const TOOL_RULES_SCHEMA = {
                 properties: {
                     effect: { type: 'string', enum: ['allow', 'deny'] },
                     source: { type: 'string', enum: ['node'] },
-                    node: { type: 'string', maxLength: MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES },
+                    node: { type: 'string', maxLength: MAX_CORE_NODE_ID_LENGTH },
                     tool: { type: 'string', maxLength: MAX_AGENT_TOOL_RULE_IDENTITY_UTF8_BYTES },
                 },
                 required: ['effect', 'source', 'node', 'tool'],
@@ -83,7 +84,7 @@ const baseDefinitions = [
                     parentTaskId: { type: 'string', maxLength: 128, description: "Existing parent task ID for a simple child task. Set only when creating." },
                     taskId: { type: 'string', maxLength: 128, description: "Existing task ID. Required for get, claim, update, complete, and cancel." },
                     status: { type: 'string', enum: ['open', 'active', 'completed', 'cancelled'], description: "For list, filter by task status. For update, set only open or active." },
-                    scope: { type: 'string', enum: ['current-session', 'current-agent', 'all'], description: "For list, choose tasks created by or assigned to the current Session (default), any Session in the current Agent, or all Sessions and users." },
+                    scope: { type: 'string', enum: ['current-session', 'owned', 'current-agent', 'all'], description: "For list, choose tasks created by or assigned to the current Session (default), tasks owned by the current Session, tasks in the current Agent, or all tasks." },
                     notifySession: { type: 'boolean', description: "When true, create/assign notify the new owner and, on transfer or release, the previous owner after the change is saved. For update with a note, notify the current owner unless it is the caller. Omitted or false saves without these notifications." },
                     ownerSessionId: { type: ['string', 'null'], maxLength: 256, description: "For create, the optional existing Session ID to receive the new task. For assign, the existing Session ID to receive the task, or null to release the current owner." },
                     note: { type: 'string', maxLength: 1000, description: "Short progress note to append when updating a task." },
@@ -243,14 +244,14 @@ Example:
         {
             name: 'copy_between_nodes',
             defaultInject: true,
-            description: "Copy a file between two Nodes, including master. Both paths are checked against the applicable permissions. Relative paths use this agent's directory on each Node, not the session working directory.",
+            description: "Copy a file between Nodes, including master. Both paths are checked against the applicable permissions. Relative paths use the Agent directory on Main and CLI Nodes, or the environment's default directory on other Nodes, not the Session working directory.",
             parameters: {
                 type: 'object',
                 properties: {
                     sourceNode: { type: 'string', description: "Node containing the source file. Use master for the Main host." },
-                    sourcePath: { type: 'string', description: "Source path on sourceNode. Absolute paths, ~/ paths, and paths relative to the agent directory are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected." },
+                    sourcePath: { type: 'string', description: "Source file path on sourceNode. Relative paths use the Agent directory on Main and CLI Nodes, or the environment's default directory on other Nodes. On Main and CLI Nodes, ~/ paths are accepted and leading $fw_agentdir or $fw_tmp expands to this Agent's directory or tmp directory; other leading $ names are rejected." },
                     targetNode: { type: 'string', description: "Node that will receive the file. Use master for the Main host." },
-                    targetPath: { type: 'string', description: "Destination path on targetNode. Absolute paths, ~/ paths, and paths relative to the agent directory are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected." },
+                    targetPath: { type: 'string', description: "Destination file path on targetNode. Relative paths use the Agent directory on Main and CLI Nodes, or the environment's default directory on other Nodes. On Main and CLI Nodes, ~/ paths are accepted and leading $fw_agentdir or $fw_tmp expands to this Agent's directory or tmp directory; other leading $ names are rejected." },
                     overwrite: { type: 'boolean', description: "Allow replacement of an existing destination file. Defaults to false." },
                 },
                 required: ['sourceNode', 'sourcePath', 'targetNode', 'targetPath']
@@ -280,7 +281,7 @@ Example:
                 type: 'object',
                 properties: {
                     id: { type: 'string', description: "Image ID shown in this session." },
-                    filePath: { type: 'string', description: "Destination path. On master, relative paths use the session working directory or, if unset, the agent directory. On other Nodes, they use that Node's agent directory. Absolute paths and ~/ paths are also accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected." },
+                    filePath: { type: 'string', description: "File path on the selected Node. On master, relative paths use the current Session working directory or its Agent directory if unset. On CLI Nodes they use the Agent directory; other Nodes use their environment's default directory. On Main and CLI Nodes, ~/ paths are accepted and leading $fw_agentdir or $fw_tmp expands to this Agent's directory or tmp directory; other leading $ names are rejected." },
                     overwrite: { type: 'boolean', description: "Allow replacement of an existing file. Defaults to false." },
                     node: { type: 'string', description: "Node on which to save the image. Defaults to the current Node." },
                 },
@@ -390,7 +391,7 @@ Example:
                 properties: {
                     channelTargetId: { type: 'string', description: "One destination in the form <channel-instance-id>:<conversation-id>. Do not combine with sessionId." },
                     sessionId: { type: 'string', description: "Session whose attached channels should receive the file. Defaults to the current session; do not combine with channelTargetId." },
-                    filePath: { type: 'string', description: "Path on the selected Node. On master, relative paths use the current session working directory or, if unset, its agent directory. On other Nodes, they use that Node's agent directory. Absolute paths and ~/ paths are accepted. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected." },
+                    filePath: { type: 'string', description: "File path on the selected Node. On master, relative paths use the current Session working directory or its Agent directory if unset. On CLI Nodes they use the Agent directory; other Nodes use their environment's default directory. On Main and CLI Nodes, ~/ paths are accepted and leading $fw_agentdir or $fw_tmp expands to this Agent's directory or tmp directory; other leading $ names are rejected." },
                     node: { type: 'string', description: "Node containing the file. Defaults to the current Node." },
                     caption: { type: 'string', description: "Text to accompany the file, where the destination supports captions." },
                     text: { type: 'string', description: "Alternative name for caption." }
@@ -880,13 +881,13 @@ Example:
         {
             name: 'node',
             defaultInject: true,
-            description: "List available Nodes, select this session's execution Node, or manage a Node through its configured provider. For select, you may put exec or file calls after it in the same response. Those calls use the selected Node; if selection fails, the remaining calls in that batch are skipped. Provider operations may create or remove resources; inspect the provider's behavior before assuming what will be retained or deleted.",
+            description: "List available Nodes, select this session's execution Node, or manage a Node through its configured provider. Inspect a provider to see its supported operations and parameters. For select, you may put exec or file calls after it in the same response. Those calls use the selected Node; if selection fails, the remaining calls in that batch are skipped. Provider operations may create or remove resources; inspect the provider's behavior before assuming what will be retained or deleted.",
             parameters: {
                 type: 'object',
                 properties: {
-                    action: { type: 'string', enum: ['list', 'select', 'create', 'ensure', 'inspect', 'destroy'], description: "list shows Nodes; select changes this session's Node; create or ensure uses a provider; inspect shows a Node's details; destroy requests its removal." },
+                    action: { type: 'string', enum: ['list', 'select', 'create', 'ensure', 'inspect', 'destroy'], description: "list shows Nodes and providers; select changes this session's Node; create or ensure uses a provider; inspect shows Node or provider details; destroy requests a Node's removal." },
                     nodeId: { type: 'string', description: "Node to select, inspect, or destroy. For create or ensure, supply it when requesting a specific Node ID." },
-                    providerId: { type: 'string', description: "Configured provider to use for create or ensure. Existing Nodes identify their own provider for inspect or destroy." },
+                    providerId: { type: 'string', description: "Configured provider to inspect or use for create or ensure. Inspect accepts either providerId or nodeId, not both. Existing Nodes identify their own provider for destroy." },
                     parameters: { type: 'object', description: "Provider-specific options for the lifecycle operation.", additionalProperties: true },
                     parametersJson: { type: 'string', description: "Provider options as a JSON object string when parameters cannot be supplied." },
                     confirmation: { type: 'string', description: "For destroy, exactly: destroy node <nodeId>." }

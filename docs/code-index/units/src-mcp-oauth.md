@@ -1,7 +1,7 @@
 # Unit: outbound MCP OAuth
 
 Files: `src/mcpOAuth.ts`, `src/mcpOAuthHttp.ts`, `src/mcpOAuthRoutes.ts`, `src/mcpOAuth.test.ts`, `src/mcpOAuthTestFixture.ts`, `src/mcpOAuthUiTestMain.ts`
-Secondary files: `src/mcpClient.ts`, `src/mcpCallerConnections.ts`, `src/mcpExternalService.ts`, `src/index.ts`, `src/configFile.ts`, `packages/webui/src/components/AuthorizationsPanel.tsx`, `packages/webui/test/authorizationsHarness.html`, `packages/webui/test/authorizations.e2e.mjs`
+Secondary files: `src/mcpClient.ts`, `src/mcpCallerConnections.ts`, `src/mcpExternalService.ts`, `src/index.ts`, `src/configFile.ts`, `packages/webui/src/components/AuthorizationsPanel.tsx`, `packages/webui/test/authorizationsHarness.html`, `packages/webui/test/authorizations.e2e.mjs`, `packages/webui/test/backendIsolation.e2e.mjs`
 
 ## Purpose
 
@@ -68,7 +68,7 @@ Backend paths remain deployment-relative behind the existing prefix proxy; gener
 
 ## Validation
 
-Real loopback AS/SDK resource fixtures cover pre-registration, CIMD and DCR, state/issuer/configuration rejection, S256/resource validation, persisted grant use by a fresh process, two distinct caller contexts sharing rotating credentials, scope errors, notifications, in-flight grant replacement, disconnect, secret-bearing output rejection, and static/SSE/auto regressions. Missing-grant checks assert the stable `needs-authorization` error code rather than administrator-facing wording. Browser fixtures exercise actual login cookies and the retained authorization component directly in Chromium and Firefox, with a committed cross-site consent document, TLS path prefix, all three registration paths, fixed completion without an opener, missing public URL and scoped-identity denial. They use only owned local services and a fixture-specific Vite cache. The fixture resolves Vite through the WebUI package's exports and closes its child process on startup or browser-launch failure as well as normal completion.
+Real loopback AS/SDK resource fixtures cover pre-registration, CIMD and DCR, state/issuer/configuration rejection, S256/resource validation, persisted grant use by a fresh process, two distinct caller contexts sharing rotating credentials, scope errors, notifications, in-flight grant replacement, disconnect, secret-bearing output rejection, and static/SSE/auto regressions. Missing-grant checks assert the stable `needs-authorization` error code rather than administrator-facing wording. Browser fixtures exercise actual login cookies and the retained authorization component directly in Chromium and Firefox, with a committed cross-site consent document, TLS path prefix, all three registration paths, fixed completion without an opener, missing public URL and scoped-identity denial. They use only owned local services and a fixture-specific Vite cache. The browser entry initializes owned application state before spawning its backend child, so import-time config and logger paths cannot select an installation. The TLS certificate command receives a minimal owned OpenSSL configuration, and Vite uses its runner config loader without writing bundled configuration into dependencies. The fixture resolves Vite through the WebUI package's exports and closes its child process on startup or browser-launch failure as well as normal completion.
 
 ## Design decisions
 

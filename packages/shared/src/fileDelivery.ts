@@ -1,3 +1,4 @@
+import { MAX_CORE_NODE_ID_LENGTH } from './nodeIdentity';
 /** Bounded, persisted receipt for one successful send_file delivery. Bytes never cross this DTO. */
 export interface FileDeliveryArtifact {
   version: 1;
@@ -19,7 +20,7 @@ export function parseFileDeliveryArtifact(value: unknown): FileDeliveryArtifact 
   if (v.version !== 1 || !text('deliveryId', 128) || !['session', 'channel'].includes(String(v.targetKind)) || !text('targetId', 512)
     || !text('fileName', 512) || /[\\/]/.test(v.fileName as string) || !text('mimeType', 128)
     || !text('downloadPath', 4096) || !/^(?:\/|[a-zA-Z]:[\\/]|\\\\)/.test(v.downloadPath as string)
-    || v.downloadNodeId !== 'master' || !text('sourceNodeId', 128)
+    || v.downloadNodeId !== 'master' || !text('sourceNodeId', MAX_CORE_NODE_ID_LENGTH)
     || !Number.isSafeInteger(v.sizeBytes) || (v.sizeBytes as number) < 0) return undefined;
   return {
     version: 1, deliveryId: v.deliveryId as string, targetKind: v.targetKind as FileDeliveryArtifact['targetKind'], targetId: v.targetId as string,

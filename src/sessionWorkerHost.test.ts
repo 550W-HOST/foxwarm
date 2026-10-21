@@ -1,3 +1,7 @@
+import './testEnvironment';
+import * as nodeExecution from './nodeExecution';
+import { ExecutableNodeProvider } from './nodes/executableProvider';
+import { MasterNodeProvider, NodeProviderRegistry } from './nodes/providerRegistry';
 import * as toolExecutor from './toolExecutor';
 import { taskService } from './tools/taskTools';
 import test from 'node:test';
@@ -570,9 +574,9 @@ test('worker keeps tool call/result adjacent while delivering text before append
   } finally { (llm as any).chat = originalChat; (toolExecutor as any).executeTools = originalExecuteTools; }
 });
 
-test('tool terminal paths never resend model text and close an active Worker WeWork stream', async t => {
+test('tool terminal paths deliver one lifecycle outcome without resending Worker model text', async t => {
   const originalChat = llm.chat; const originalExecuteTools = toolExecutor.executeTools;
-  let mode: 'wait' | 'stop' | 'stop-empty' | 'managed' | 'tool-stop' = 'wait';
+  let mode: 'wait' | 'stop' | 'stop-empty' | 'managed' | 'tool-stop' | 'finish' = 'wait';
   (llm as any).chat = async (parts: any, _session: any, _iteration: number, options: any) => {
     if (parts) await options.appendMessage({ role: 'user', parts });
     const toolCall = { id: `terminal-${mode}`, name: 'session', args: { action: 'status' } };
@@ -589,11 +593,13 @@ test('tool terminal paths never resend model text and close an active Worker WeW
     return {
       message: {
         role: 'tool', parts: [{ functionResponse: { tool_use_id: `terminal-${mode}`, name: 'session', response: { output: 'ok' } } }]
-      }, ...(mode === 'wait' ? { postActions: { waitForReply: true } } : {}), ...(mode === 'tool-stop' ? { control: { stopCurrentTurn: true } } : {})
+      }, ...(mode === 'wait' ? { postActions: { waitForReply: true } } : {}),
+      ...(mode === 'tool-stop' || mode === 'finish' ? { control: { stopCurrentTurn: true } } : {}),
+      ...(mode === 'finish' ? { postActions: { finishAfterSend: true } } : {})
     };
   };
   try {
-    for (mode of ['wait', 'stop', 'stop-empty', 'managed', 'tool-stop'] as const) {
+    for (mode of ['wait', 'stop', 'stop-empty', 'managed', 'tool-stop', 'finish'] as const) {
       await t.test(mode, async () => {
         const initial = baseSession(`worker-tool-terminal-${mode}`);
         const intermediates: string[] = []; const finals: Array<{ text: string; outcome: string }> = [];
@@ -605,9 +611,12 @@ test('tool terminal paths never resend model text and close an active Worker WeW
           });
           await host.runPending(8);
           assert.deepEqual(intermediates, mode === 'stop-empty' ? [] : [`${mode} text`]);
+          // Waiting turn endings stay suspendable; Stop and successful
+          // finish-after-send both deliver terminal empty finals.
+          const suspended = mode === 'wait' || mode === 'managed' || mode === 'tool-stop';
           assert.deepEqual(finals, mode === 'stop-empty'
             ? [{ text: '_[Execution stopped by user]_', outcome: 'response' }]
-            : [{ text: '', outcome: 'empty-final' }]);
+            : [{ text: '', outcome: suspended ? 'suspended' : 'empty-final' }]);
           assert.equal(readDurable().history.filter((message: any) => message.role === 'model').length, 1);
           assert.equal(readDurable().busy, false);
         }, true, undefined,
@@ -1885,6 +1894,48 @@ test('real activated child runs durable mailbox through canonical SessionTurnRun
       await exited;
     }
     store.close();
+    await fs.remove(root);
+  }
+});
+
+
+test('maximum qualified Node selection persists and publishes through Worker Host without poisoning later selection', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-worker-node-identity-'));
+  const initial = await sessionManager.getSession(`worker-qualified-node-${Date.now()}`);
+  const providerId = 'p'.repeat(64);
+  const nodeId = `${providerId}/${'n'.repeat(128)}`;
+  assert.equal(nodeId.length, 193);
+  const providers = new NodeProviderRegistry([new MasterNodeProvider(), new ExecutableNodeProvider({
+    id: providerId, type: 'executable', command: process.execPath,
+    args: [path.join(__dirname, 'nodes', 'executableProviderTestFixture.js'), 'normal', path.join(root, 'requests.jsonl')],
+    timeoutMs: 2000,
+  })]);
+  await providers.ensureNode(providerId, { sourceSessionId: initial.id, nodeId, parameters: {}, context: { agent: initial.agent || 'main' } });
+  assert.ok((await providers.listNodes()).some(node => node.id === nodeId));
+  const services = new RpcServiceRegistry();
+  services.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ providerRegistry: providers, expectedSourceSessionId: initial.id }));
+  const transport = new LocalRpcTransport(services);
+  await nodeExecution.initializeNodeExecution({ transport, placement: 'child-reverse' });
+  const publications = new SessionWorkerProjectionRegistry();
+  const identity = { sessionId: initial.id, generation: 1, incarnationId: 'local-host-incarnation' };
+  publications.establish(identity);
+  try {
+    await withLocalHost(initial, async ({ host, readDurable }) => {
+      await nodeExecution.validateNodeSelection(initial.id, nodeId);
+      await host.updateSettings({ currentNode: nodeId, cwd: null });
+      assert.equal(readDurable().currentNode, nodeId);
+      assert.equal(publications.get(initial.id)?.projection?.currentNode, nodeId);
+      assert.equal(publications.get(initial.id)?.stale, false);
+      await nodeExecution.validateNodeSelection(initial.id, 'master');
+      await host.updateSettings({ currentNode: 'master' });
+      assert.equal(readDurable().currentNode, 'master');
+      assert.equal(publications.get(initial.id)?.projection?.currentNode, 'master');
+      assert.equal(publications.get(initial.id)?.stale, false);
+    }, false, value => publications.apply(identity, value));
+  } finally {
+    await nodeExecution.shutdownNodeExecution(); nodeExecution.resetNodeExecutionForTests();
+    await transport.drain(); transport.close();
+    await sessionManager.deleteSession(initial.id);
     await fs.remove(root);
   }
 });

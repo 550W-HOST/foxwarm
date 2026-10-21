@@ -1,3 +1,4 @@
+import { isCoreNodeId } from '../../../shared/src/nodeIdentity';
 export type FoxwarmUriTarget = {
   namespace: 'node';
   nodeId: string;
@@ -47,8 +48,8 @@ export function parseFoxwarmUri(uri: UriLike): FoxwarmUriTarget {
 }
 
 export function buildFoxwarmNodeUriString(nodeId: string, realPath: string): string {
-  if (!nodeId || nodeId.includes('/')) {
-    throw new Error('nodeId must be a non-empty single path segment.');
+  if (!isCoreNodeId(nodeId)) {
+    throw new Error('nodeId must be a valid Core Node ID.');
   }
   if (!realPath.startsWith('/')) {
     throw new Error('realPath must be absolute.');

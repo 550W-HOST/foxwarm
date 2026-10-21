@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import { executeTools } from '../toolExecutor';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -498,7 +499,7 @@ test('agent isolation management schemas expose only exact source-specific tool 
     ]);
     assert.equal(ruleSchema.items.oneOf.every((item: any) => item.additionalProperties === false), true);
     assert.equal(ruleSchema.items.oneOf.every((item: any) => item.properties.tool.maxLength === 128), true);
-    assert.equal(ruleSchema.items.oneOf[1].properties.node.maxLength, 128);
+    assert.equal(ruleSchema.items.oneOf[1].properties.node.maxLength, 193);
     assert.equal(ruleSchema.items.oneOf[2].properties.server.maxLength, 128);
   }
 });
@@ -1359,4 +1360,12 @@ test('programmatic discovery shares ranking and schema caps while exposing avail
     const summary: any = await search_tools({ ...args, includeSchema: false }, { ...ctx, programmatic: true });
     assert.ok(summary.tools.every((tool: any) => tool.inputSchema === undefined && tool.outputSchema === undefined));
   } finally { (mcpClient as any).listServers = originalListServers; (mcpClient as any).listTools = originalListTools; }
+});
+
+test('Node tool names containing slash use explicit descriptors rather than a false Provider namespace', () => {
+  const output = formatSearchToolsOutput([{
+    source: 'node', nodeId: 'native-node', name: 'custom/read', toolId: 'node:native-node/custom/read', inputSchema: { type: 'object' },
+  }], 1, [], true);
+  assert.match(output, /call_tool\(\{ source: "node", nodeId: "native-node", name: "custom\/read"/);
+  assert.doesNotMatch(output, /node:native-node\/custom\/read\(/);
 });

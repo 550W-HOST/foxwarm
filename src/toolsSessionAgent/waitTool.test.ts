@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import * as toolExecutor from '../toolExecutor';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -771,6 +772,7 @@ test('direct idle user messages enter the session queue gate and preserve source
   const router = new MessageRouter();
   const originalChat = llm.chat;
   const observedTurns: Array<{ text: string; parts: MessagePart[] | null }> = [];
+  const triggeredRuns: Promise<void>[] = [];
 
   (llm as any).chat = async (parts: MessagePart[] | null, activeSession: Session) => {
     const text = flattenTurnText(parts, activeSession);
@@ -782,7 +784,7 @@ test('direct idle user messages enter the session queue gate and preserve source
 
   sessionManager.setSessionTriggerCallback((triggeredSessionId) => {
     if (triggeredSessionId === sessionId) {
-      void router.processSessionQueue(triggeredSessionId);
+      triggeredRuns.push(router.processSessionQueue(triggeredSessionId));
     }
   });
 
@@ -810,7 +812,8 @@ test('direct idle user messages enter the session queue gate and preserve source
       username: 'webui-user',
     });
 
-    await waitFor(() => observedTurns.length === 1);
+    // Busy=false precedes the processor's final authority lookup.
+    await Promise.all(triggeredRuns);
     await waitForSessionIdle(sessionId);
     assert.equal(observedTurns.length, 1);
     assert.match(observedTurns[0].text, /<foxwarm-message[^>]+type="channel"/);
@@ -823,9 +826,12 @@ test('direct idle user messages enter the session queue gate and preserve source
     const persisted = await sessionManager.getSession(sessionId);
     assert(persisted.history.some(message => message.parts.some(part => part.inlineDataRef?.mimeType === 'image/png')));
   } finally {
-    (llm as any).chat = originalChat;
     sessionManager.setSessionTriggerCallback(() => {});
-    await cleanupSession(sessionId);
+    try { await Promise.all(triggeredRuns); }
+    finally {
+      (llm as any).chat = originalChat;
+      await cleanupSession(sessionId);
+    }
   }
 });
 

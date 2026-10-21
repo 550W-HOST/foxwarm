@@ -1,3 +1,4 @@
+import './testEnvironment';
 import { executeTools } from './toolExecutor';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';

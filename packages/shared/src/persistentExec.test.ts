@@ -224,8 +224,8 @@ test('recovered exec status without a measured finish keeps event time but repor
   });
   try {
     await fs.writeJson(registryPath, { execs: entries });
-    await fs.writeJson(entries[0].statusPath, { exitCode: 0 });
-    await fs.writeJson(entries[1].statusPath, { exitCode: null, finishedAt: new Date().toISOString(), error: 'Process exited but no status file was written.' });
+    await fs.writeJson(entries[0].statusPath!, { exitCode: 0 });
+    await fs.writeJson(entries[1].statusPath!, { exitCode: null, finishedAt: new Date().toISOString(), error: 'Process exited but no status file was written.' });
     await manager.initialize();
     assert.equal(delivered.length, 3);
     for (const message of delivered) assert.match(message, /\nDuration: unknown\n/);
@@ -328,8 +328,8 @@ test('persistent exec co-locates retained scripts and coordination metadata with
     const datedDir = path.dirname(entry.logPath);
     const commandSuffix = process.platform === 'win32' ? '.command.ps1' : '.command.sh';
     assert.match(path.basename(datedDir), /^\d{4}-\d{2}-\d{2}$/);
-    assert.equal(datedDir, path.dirname(entry.statusPath));
-    assert.equal(datedDir, path.dirname(entry.cwdPath));
+    assert.equal(datedDir, path.dirname(entry.statusPath!));
+    assert.equal(datedDir, path.dirname(entry.cwdPath!));
     assert.equal(await fs.pathExists(path.join(datedDir, `${entry.id}${commandSuffix}`)), true);
     if (process.platform === 'win32') {
       assert.equal(await fs.pathExists(path.join(datedDir, `${entry.id}.user.ps1`)), true);
@@ -515,7 +515,7 @@ test('persistent exec retains a finished background entry across restart until c
   try {
     await fs.ensureDir(path.dirname(logPath));
     await fs.writeFile(logPath, 'done\n');
-    await fs.writeJson(entry.statusPath, { exitCode: 7, finishedAt: new Date().toISOString() });
+    await fs.writeJson(entry.statusPath!, { exitCode: 7, finishedAt: new Date().toISOString() });
     await fs.writeJson(registryPath, { execs: [entry] });
 
     await manager.initialize();
@@ -548,7 +548,7 @@ test('persistent exec expires background tracking records strictly after 24 hour
       notifyOnCompletion: options.notifyOnCompletion,
     });
     await fs.writeFile(logPath, 'done\n');
-    if (options.finished) await fs.writeJson(entry.statusPath, { exitCode: 0, finishedAt: new Date(fixedNow).toISOString() });
+    if (options.finished) await fs.writeJson(entry.statusPath!, { exitCode: 0, finishedAt: new Date(fixedNow).toISOString() });
     await fs.writeJson(registryPath, { execs: [entry] });
     let dispatches = 0;
     let livenessChecks = 0;

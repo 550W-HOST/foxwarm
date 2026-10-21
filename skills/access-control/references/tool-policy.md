@@ -28,9 +28,59 @@ rules:
 This complete example restricts internal calls from the `reviewer` Agent while preserving the internal default for other Agents. It does not create that Agent or change its isolation/Node binding. Merge rules into the real policy only after reviewing existing ordering.
 
 - Top level: `version: 1`, optional `defaultAction: allow | deny` (omission means `allow`), and optional `rules` (omission means an empty list). Prefer writing both optional fields explicitly.
-- Rule: unique non-empty `id`, optional `enabled` (defaults to `true`), optional `match` (omission/`{}` matches all callers), required `action: allow | deny`, and optional `reason`.
+- Rule: optional unique non-empty `id` (omission assigns `rule-<position>`), optional `enabled` (defaults to `true`), optional `match` (omission/`{}` matches all callers), required `action: allow | deny`, and optional `reason`.
 - Limits: at most 256 rules and 256 KiB of policy bytes; IDs up to 128 bytes, reasons up to 1,024 bytes, matcher strings up to 512 bytes, and scalar lists up to 64 items.
 - Unknown fields, unsupported versions/operators/path variables, unsafe dotted argument paths, and duplicate IDs are rejected.
+
+## Concise Session and Node selectors
+
+A rule may put `agent`, `session`, `externalId`, `tool`, `node`, `args`, and `path` directly beside `action`. Do not mix these top-level selectors with `match`, even when `match` is empty. Legacy version-1 `match.session`, `match.targetNode` and argument strings retain their exact scalar semantics.
+
+```yaml
+version: 1
+defaultAction: deny
+rules:
+  - session: developer/main
+    action: allow
+  - agent: [developer, developer-worker]
+    node: 'development/*'
+    action: allow
+  - agent: [developer, developer-worker]
+    tool: { source: builtin, name: task }
+    args:
+      action: [get, update, complete]
+      taskId: { task: { owned: true } }
+    action: allow
+  - agent: [developer, developer-worker]
+    tool: { source: builtin, name: task }
+    args: { action: list, scope: owned }
+    action: allow
+  - agent: [developer, developer-worker]
+    tool: { source: builtin, name: send_to_session }
+    args: { sessionId: { session: { relation: parent } } }
+    action: allow
+  - agent: [developer, developer-worker]
+    tool: { source: builtin, name: [wait, search_tools] }
+    action: allow
+```
+
+This example grants the coordinator all tools, grants other development Sessions every Node belonging to the `development` Provider, and adds explicit Task/parent coordination. It does not bind a Session to one Node, create an Agent or Node, grant Provider creation, or change Agent isolation. Review any additional coordination capability separately. With `defaultAction: deny`, callers not covered by these rules are denied too; when composing a caller-specific block into another policy, retain the intended defaults and existing rules.
+
+- Top-level `session` and string/list `node` accept bounded ASCII identity patterns using `*` for zero or more identity characters, including `/`. Other characters are literal; `?`, character classes and regular expressions are not supported. Lists are alternatives. `session: 'developer/*'` selects caller Sessions, not target Sessions or authoritative Agent membership; use `agent` for the latter.
+- `node: { current: true }` matches only actual effects on the caller's selected Node, using the exact owner's routing fact. It does not grant unrelated Session/Main/MCP operations merely because that Node is selected.
+- `node: { provider: development }` selects the authoritative Core Provider namespace; exact Provider-ID lists are also supported. It is equivalent to the qualified prefix for executable providers, not a match against `args.providerId`. Native Provider IDs are `master` and `authenticated-remote`.
+- A Node selector matches concrete Node capabilities, the file targets of `send_file`/`image_write_to_file`, both endpoints of `copy_between_nodes`, and concrete `node` select/inspect/destroy targets. List and provider-wide create/ensure/inspect have no concrete Node target and require separate rules.
+- A multi-Node **allow** requires every endpoint to satisfy that rule. A Node **deny** matches any affected endpoint. Thus allowing `development/*` never grants a copy's `master` leg. First-match ordering still applies; an earlier matching allow wins.
+- `run_script` is a Session-owned VM operation, not a neutral Node wrapper, even when its source file is on a Node. Grant the starter/continuation explicitly if wanted; file source reads and nested calls still require their own concrete permissions.
+- Omitted rule IDs are only diagnostic position IDs. Use explicit IDs when stable labels matter; generated and explicit IDs must still be unique.
+
+Executable-provider Nodes use Core IDs such as `development/worker-one`. The executable itself still receives its local ID, `worker-one`; native `master` and authenticated CLI IDs remain unchanged. Do not silently rewrite old exact rules or persisted Session selections: review the affected configuration and select the qualified ID deliberately. Historical records remain readable, and old provider execution records reattach through their persisted Provider identity without replaying a command.
+
+### Owned Tasks
+
+`args.taskId: { task: { owned: true } }` is registered only for the exact builtin `task` selector. Main resolves the real task owner and canonical Session identity. Missing, unowned and another Session's tasks do not match; `ownerSessionId` is an assignment target, never proof of caller ownership. This matcher restricts the referenced task, not all tasks globally. Default shared description/note updates and get semantics are unchanged unless a policy restricts them.
+
+For list access, grant `args: { action: list, scope: owned }`. `owned` includes only tasks currently owned by the caller; the existing `current-session` scope still includes tasks created **or** owned by the caller. A creator is not necessarily the current owner.
 
 ## Ordering and fallback
 
@@ -63,10 +113,10 @@ A familiar name in the legacy default list is not evidence that an unconditional
 | `externalId` | Verified inbound identity ID; never matches an internal caller |
 | `tool` | Concrete source/server/name selector, or exact tool-name shorthand |
 | `targetNode` | Actual trusted execution Node; not a caller-supplied authority claim |
-| `args` | Map of dotted argument names to exact scalar or registered Session-target matchers |
+| `args` | Map of dotted argument names to exact scalar or registered Session/owned-Task target matchers |
 | `path` | Containment conditions on supported source-specific file path facts |
 
-Scalar fields accept an exact scalar, an exact list, or an object with `equals`, `oneOf`, and/or `exists`. Conditions in that object are also AND. There are no wildcard, regex, substring, or shell-command operators.
+Scalar fields accept an exact scalar, an exact list, or an object with `equals`, `oneOf`, and/or `exists`. Conditions in that object are also AND. These legacy scalar matchers remain exact: there are no regex, substring, or shell-command operators. Only the new top-level `session` and `node` identity selectors below interpret `*`. Argument strings never become patterns.
 
 Prefer explicit tool selectors:
 

@@ -3,6 +3,7 @@ export type WebUiNodeTarget = {
   type: string
   displayName: string
   online: boolean
+  availability?: 'ready' | 'offline' | 'unavailable' | 'error'
   lastSeenAt?: number
   services: Record<string, number>
   unavailable?: boolean
@@ -12,7 +13,7 @@ export type WebUiNodeTarget = {
 
 export type NodeTargetService = 'vscode-fs' | 'vscode-pty'
 
-const NODE_ID_RE = /^[A-Za-z0-9._-]+$/
+const NODE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 
 export const MASTER_NODE_TARGET: WebUiNodeTarget = {
   id: 'master',
@@ -49,6 +50,7 @@ export function parseWebUiNodeTargets(payload: unknown): WebUiNodeTarget[] {
       type: typeof item.type === 'string' && item.type.trim() ? item.type.trim() : 'remote',
       displayName: typeof item.displayName === 'string' && item.displayName.trim() ? item.displayName.trim() : id,
       online: item.online === true,
+      ...(['ready', 'offline', 'unavailable', 'error'].includes(String(item.availability)) ? { availability: item.availability as WebUiNodeTarget['availability'] } : {}),
       ...(Number.isFinite(item.lastSeenAt) ? { lastSeenAt: Number(item.lastSeenAt) } : {}),
       services,
       ...(

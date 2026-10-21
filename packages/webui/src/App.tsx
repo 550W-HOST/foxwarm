@@ -809,7 +809,10 @@ function App() {
     if (route.tabId && tabsById[route.tabId] && route.tabId !== focusedActiveTabId) {
       activateTab(route.tabId, { expandPane: false })
     }
-  }, [route, tabsById, focusedActiveTabId, activateTab])
+    // Hydrate a route when it changes or its tab arrives. Workbench activation
+    // publishes the hash separately, so reacting to focus would replay the old
+    // route during that transition.
+  }, [route.tabId, !!(route.tabId && tabsById[route.tabId]), activateTab])
 
   useEffect(() => {
     if (route.tabId && tabsById[route.tabId] && pendingRouteTabIdRef.current === route.tabId) {

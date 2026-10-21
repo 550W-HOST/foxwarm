@@ -1,3 +1,4 @@
+import './testEnvironment';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -432,6 +433,14 @@ test('task list scopes match canonical Session creator or owner, use catalog Age
   const current = service.list(undefined, undefined, false, 'current-session', 'old-one');
   assert.deepEqual(new Set(current.tasks.map((task: any) => task.id)), new Set([createdByAlias, historicalAliasTask, assignedToCurrent, userAssigned]));
   assert.equal(current.total, 4, 'old persisted Session IDs resolve into the current Session scope');
+
+  const owned = service.list(undefined, undefined, false, 'owned', 'old-one');
+  assert.deepEqual(new Set(owned.tasks.map((task: any) => task.id)), new Set([assignedToCurrent, userAssigned]));
+  assert.equal(owned.total, 2, 'owned does not include creator-only or unclaimed tasks');
+  assert.equal(service.list(undefined, 1, false, 'owned', 'session-one').omitted, 1);
+  await service.execute({ action: 'assign', taskId: assignedToCurrent, ownerSessionId: 'session-two' }, 'outside');
+  assert.equal(service.list(undefined, undefined, false, 'owned', 'old-one').total, 1, 'transfer changes ownership scope immediately');
+  await service.execute({ action: 'assign', taskId: assignedToCurrent, ownerSessionId: 'old-one' }, 'outside');
 
   const currentAgent = service.list(undefined, undefined, false, 'current-agent', 'old-one');
   assert.deepEqual(new Set(currentAgent.tasks.map((task: any) => task.id)), new Set([createdByAlias, historicalAliasTask, createdInAgent, assignedToCurrent, userAssigned]));

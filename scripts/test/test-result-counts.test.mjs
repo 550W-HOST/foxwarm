@@ -1,3 +1,5 @@
+import testEnvironment from './test-process-env.cjs'
+testEnvironment.initializeTestEnvironment()
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { parseTestResultCounts } from './test-result-counts.mjs'

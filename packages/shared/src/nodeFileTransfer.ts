@@ -2,6 +2,8 @@ import crypto from 'crypto';
 import fs from 'fs-extra';
 import os from 'os';
 import path from 'path';
+import { fileOperationPathExists, readWholeFile, type FileOperations } from './fileOperations';
+import { writeFileToolPath } from './fileToolCore';
 import { expandAgentPathVariable } from './agentPathVariables';
 
 export interface NodeTransferFilePayload {
@@ -81,13 +83,50 @@ export function detectTransferMimeType(filePath: string): { mimeType: string; is
   return { mimeType: GENERIC_MIME[ext] || 'application/octet-stream', isImage: false };
 }
 
+/** Bound each primitive request, not the size of the complete existing transfer. */
+export const NODE_TRANSFER_CHUNK_BYTES = 1024 * 1024;
+
+export function buildNodeTransferFilePayload(filePath: string, bytes: Buffer, name = path.basename(filePath)): NodeTransferFilePayload {
+  const { mimeType, isImage } = detectTransferMimeType(filePath);
+  return { filePath, name, sizeBytes: bytes.length, mimeType, isImage,
+    sha256: crypto.createHash('sha256').update(bytes).digest('hex'), dataBase64: bytes.toString('base64') };
+}
+
+export function buildNodeTransferWriteResult(filePath: string, bytes: Buffer, overwritten: boolean, absolutePath?: string): NodeTransferWriteResult {
+  return { filePath, ...(absolutePath !== undefined ? { absolutePath } : {}), sizeBytes: bytes.length,
+    sha256: crypto.createHash('sha256').update(bytes).digest('hex'), overwritten };
+}
+
+/** Target paths and parent resolution belong to the filesystem, never the Main host. */
+export async function readPrimitiveTransferFile(filePath: string, operations: FileOperations): Promise<NodeTransferFilePayload> {
+  const stat = await operations.stat(filePath);
+  if (stat.kind !== 'file') throw new Error(`Not a file: ${filePath}`);
+  const bytes = await readWholeFile(operations, filePath, NODE_TRANSFER_CHUNK_BYTES);
+  if (bytes.length !== stat.size) throw new Error('Source file changed or the filesystem returned incomplete data.');
+  return buildNodeTransferFilePayload(filePath, bytes, filePath.split(/[\\/]/).pop() || filePath);
+}
+
+/** A later failed chunk leaves its written prefix; no automatic replay or rollback. */
+export async function writePrimitiveTransferFile(filePath: string, bytes: Buffer, overwrite: boolean,
+  operations: FileOperations, parent: (filePath: string) => Promise<string>): Promise<NodeTransferWriteResult> {
+  const existed = await fileOperationPathExists(operations, filePath);
+  const existsMessage = `File already exists: ${filePath}. Use overwrite=true to replace it.`;
+  if (existed && !overwrite) throw new Error(existsMessage);
+  const parentPath = await parent(filePath);
+  await writeFileToolPath(filePath, bytes.subarray(0, NODE_TRANSFER_CHUNK_BYTES),
+    { overwrite, createDirs: true, parentPath, existsMessage }, operations);
+  for (let offset = NODE_TRANSFER_CHUNK_BYTES; offset < bytes.length; offset += NODE_TRANSFER_CHUNK_BYTES) {
+    await operations.write(filePath, bytes.subarray(offset, offset + NODE_TRANSFER_CHUNK_BYTES), 'a');
+  }
+  return buildNodeTransferWriteResult(filePath, bytes, existed);
+}
+
 export async function readNodeTransferFile(filePath: string, agentName: string, restrictToAgentDir = true): Promise<NodeTransferFilePayload> {
   const fullPath = resolveNodeTransferPath(filePath, agentName, restrictToAgentDir);
   const stats = await fs.stat(fullPath);
   if (!stats.isFile()) throw new Error(`Not a file: ${filePath}`);
   const buffer = await fs.readFile(fullPath);
-  const { mimeType, isImage } = detectTransferMimeType(filePath);
-  return { filePath, name: path.basename(filePath), sizeBytes: buffer.length, mimeType, isImage, sha256: crypto.createHash('sha256').update(buffer).digest('hex'), dataBase64: buffer.toString('base64') };
+  return buildNodeTransferFilePayload(filePath, buffer);
 }
 
 export async function writeNodeTransferFile(filePath: string, agentName: string, dataBase64: string, overwrite = false, restrictToAgentDir = true): Promise<NodeTransferWriteResult> {
@@ -111,5 +150,5 @@ export async function writeNodeTransferFile(filePath: string, agentName: string,
   } finally {
     await fs.remove(tempPath).catch(() => {});
   }
-  return { filePath, absolutePath: fullPath, sizeBytes: buffer.length, sha256: crypto.createHash('sha256').update(buffer).digest('hex'), overwritten: exists };
+  return buildNodeTransferWriteResult(filePath, buffer, exists, fullPath);
 }
