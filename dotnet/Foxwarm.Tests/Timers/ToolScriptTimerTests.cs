@@ -600,7 +600,7 @@ public sealed class ToolScriptTimerTests
             "exec",
             string.Join(
                 "",
-                f.Owner.Entry.Snapshot().Queue.Last().Parts.Select(part => part!.ToJsonString())
+                f.Owner.Entry.Snapshot().Queue.Last().Parts!.Select(part => part!.ToJsonString())
             )
         );
         Assert.Equal(1, peer.RequestCount);
