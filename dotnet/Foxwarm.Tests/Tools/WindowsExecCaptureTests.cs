@@ -84,7 +84,9 @@ public sealed class WindowsExecCaptureTests
     {
         var root = Path.Combine(agent, ".temp", "exec");
         var log = Assert.Single(Directory.GetFiles(root, "*.log", SearchOption.AllDirectories));
-        var bytes = await File.ReadAllBytesAsync(log);
+        // Status publication precedes PowerShell's final capture-handle teardown.
+        var size = await ExecOutput.NativeFiles.Size(log);
+        var bytes = await ExecOutput.NativeFiles.Read(log, 0, checked((int)size));
         var text = new UTF8Encoding(false, true).GetString(bytes);
         foreach (
             var expected in new[]
