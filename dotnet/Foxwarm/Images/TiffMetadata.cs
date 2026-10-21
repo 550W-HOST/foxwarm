@@ -18,9 +18,15 @@ internal static class TiffMetadata
             var value = bytes.AsSpan((int)offset, size);
             return size switch
             {
-                2 => little ? BinaryPrimitives.ReadUInt16LittleEndian(value) : BinaryPrimitives.ReadUInt16BigEndian(value),
-                4 => little ? BinaryPrimitives.ReadUInt32LittleEndian(value) : BinaryPrimitives.ReadUInt32BigEndian(value),
-                _ => little ? BinaryPrimitives.ReadUInt64LittleEndian(value) : BinaryPrimitives.ReadUInt64BigEndian(value),
+                2 => little
+                    ? BinaryPrimitives.ReadUInt16LittleEndian(value)
+                    : BinaryPrimitives.ReadUInt16BigEndian(value),
+                4 => little
+                    ? BinaryPrimitives.ReadUInt32LittleEndian(value)
+                    : BinaryPrimitives.ReadUInt32BigEndian(value),
+                _ => little
+                    ? BinaryPrimitives.ReadUInt64LittleEndian(value)
+                    : BinaryPrimitives.ReadUInt64BigEndian(value),
             };
         }
         var magic = Read(2, 2);
@@ -33,7 +39,8 @@ internal static class TiffMetadata
         var entrySize = big ? 20UL : 12UL;
         if (start > (ulong)bytes.Length || count > ((ulong)bytes.Length - start) / entrySize)
             throw Invalid();
-        ulong width = 0, height = 0;
+        ulong width = 0,
+            height = 0;
         var offsets = false;
         var lengths = false;
         for (ulong index = 0; index < count; index++)
@@ -43,14 +50,23 @@ internal static class TiffMetadata
             if (tag is not (256 or 257 or 273 or 279 or 324 or 325))
                 continue;
             var type = Read(entry + 2, 2);
-            var size = type switch { 3 => 2, 4 => 4, 16 when big => 8, _ => 0 };
+            var size = type switch
+            {
+                3 => 2,
+                4 => 4,
+                16 when big => 8,
+                _ => 0,
+            };
             var values = Read(entry + 4, big ? 8 : 4);
             if (size == 0 || values == 0)
                 throw Invalid();
             var valueOffset = entry + (big ? 12UL : 8UL);
             if (values > (big ? 8UL : 4UL) / (ulong)size)
                 valueOffset = Read(valueOffset, big ? 8 : 4);
-            if (valueOffset > (ulong)bytes.Length || values > ((ulong)bytes.Length - valueOffset) / (ulong)size)
+            if (
+                valueOffset > (ulong)bytes.Length
+                || values > ((ulong)bytes.Length - valueOffset) / (ulong)size
+            )
                 throw Invalid();
             if (tag is 256 or 257)
             {
@@ -59,7 +75,10 @@ internal static class TiffMetadata
                 var dimension = Read(valueOffset, size);
                 if (dimension == 0 || dimension > int.MaxValue)
                     throw Invalid();
-                if (tag == 256) width = dimension; else height = dimension;
+                if (tag == 256)
+                    width = dimension;
+                else
+                    height = dimension;
             }
             else if (tag is 273 or 324)
                 offsets = true;
