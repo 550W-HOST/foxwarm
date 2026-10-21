@@ -75,15 +75,25 @@ async function post(f, path, body, status = 200) {
   return result.body
 }
 async function exchange(f, id, marker, code) {
-  await post(f, route(id) + '/message', { text: 'SEMANTIC: ' + marker }, 202)
+  const inputText = 'SEMANTIC: ' + marker
+  const isInput = row => row.role === 'user' && row.parts.some(part => part.system?.includes('\n' + inputText + '\n</foxwarm-message>'))
+  await post(f, route(id) + '/message', { text: inputText }, 202)
   const state = await until(async () => {
     const value = await saved(f, id)
-    return !value.busy && JSON.stringify(value.history).includes(marker) ? value : null
+    return !value.busy && value.history.some(isInput) ? value : null
   }, 'committed exchange ' + marker)
-  assert(JSON.stringify(state.history).includes('Synthetic startup answer.'))
-  const tool = state.history.filter(row => row.role === 'tool').at(-1).parts[0].functionResponse.response
+  const inputIndex = state.history.findIndex(isInput)
+  const toolIndex = state.history.findIndex((row, index) => index > inputIndex && row.role === 'tool' && row.parts.some(part => part.functionResponse?.name === 'recall'))
+  assert(toolIndex > inputIndex, 'Current input must be followed by its recall response: ' + marker)
+  const tool = state.history[toolIndex].parts.find(part => part.functionResponse?.name === 'recall').functionResponse.response
   assert.equal(tool.code, code, JSON.stringify(tool))
   assert.equal(tool.retryable === true, code === 'VECTOR_UNAVAILABLE')
+  const answerIndex = state.history.findIndex((row, index) => index > toolIndex && row.role === 'model' && row.parts.some(part => part.text === 'Synthetic startup answer.'))
+  assert(answerIndex > toolIndex, 'Current recall response must be followed by the final model answer: ' + marker)
+  const inputSeq = state.history[inputIndex].__meta.seq
+  const toolSeq = state.history[toolIndex].__meta.seq
+  const answerSeq = state.history[answerIndex].__meta.seq
+  assert(inputSeq < toolSeq && toolSeq < answerSeq, 'Current exchange must follow canonical sequence order: ' + marker)
   assert(JSON.stringify((await f.api('GET', route(id) + '/history')).body).includes(marker))
   const exact = await f.api('GET', '/api/history/window?sessionId=' + encodeURIComponent(id) + '&target=msg%231-50')
   assert.equal(exact.status, 200, JSON.stringify(exact))
@@ -92,6 +102,7 @@ async function exchange(f, id, marker, code) {
     const archived = f.sql('SELECT message_json FROM archive_messages WHERE session_id=? AND seq=?', [id, row.__meta.seq])
     assert.deepEqual(archived.map(value => JSON.parse(value[0])), [row])
   }
+  console.log(JSON.stringify({ marker, inputSeq, toolSeq, answerSeq, code, currentExchangeCompleted: true }))
 }
 
 try {
