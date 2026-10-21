@@ -7,7 +7,7 @@ Secondary/integration references: `dotnet/Foxwarm.CliNode/Foxwarm.CliNode.csproj
 
 The separate [CLI Node](./dotnet-cli-node.md), shared native primitives and BrowserSupport are the entire application build graph. The recipe uses official .NET SDK 10.0.401 with runtime/ILCompiler 10.0.12 and an ordinary UBI 9 compiler/linker/libc environment. It does not build Main, frontend assets or the TypeScript CLI. SDK files are copied from the Microsoft image; native compilers, headers and libraries come from the builder distro. Runtime behavior and project globalization/serialization settings are unchanged. There are no symbol-version shims, replacement system libraries, warning suppressions or additional runtime packages in the project graph.
 
-The qualified build target is Linux **x64/glibc**. Docker callers can explicitly select `--platform=linux/amd64`; the recipe is not an ARM build or Main Native AOT delivery lane. Image arguments permit caller-controlled image/digest selection. Package repositories can update, so a future rebuild still needs its own actual ABI and execution checks.
+The default recipe qualifies Linux **x64/glibc**; the explicitly selected static-musl build is qualified separately below. Docker callers can explicitly select `--platform=linux/amd64`; the recipe is not an ARM build or Main Native AOT delivery lane. Image arguments permit caller-controlled image/digest selection. Package repositories can update, so a future rebuild still needs its own actual ABI and execution checks.
 
 The measured UBI 9 build uses clang 21.1.8, GCC 11.5 and glibc 2.34. Its executable is ELF64 x86-64 PIE, dynamically linked through `/lib64/ld-linux-x86-64.so.2`. Direct `DT_NEEDED` entries are `libm.so.6`, `libc.so.6` and `ld-linux-x86-64.so.2`. Both executable and `libfoxwarm-pty.so` require at most **GLIBC_2.34**; the shim directly needs libc. This is an ABI floor for these artifacts, not proof that all glibc 2.34 systems supply every runtime dependency or kernel feature. The previous expanded CLI artifact had `fmod@GLIBC_2.38`; this build resolves `fmod@GLIBC_2.2.5` without changing runtime code.
 
@@ -42,7 +42,7 @@ The ordinary UBI 8.10 **build** also failed: the SDK and restore worked, but the
 - PTY requires the adjacent `libfoxwarm-pty.so`, a real shell, temporary IPC and the existing Linux syscalls. `pidfd_open` is mandatory at spawn (upstream Linux 5.3); failure kills/reaps the child rather than falling back. Shell signalling uses `pidfd_send_signal`. Vendor kernel backports can differ, and a loaded shim does not establish that PTY creation will work.
 - Chromium and its matching distro libraries are optional and separately provisioned. CLI executable selection and no-download behavior remain owned by the browser adapter. The representative Debian 13 proof does not qualify all browser actions/distributions.
 
-Every container above shared the same **6.12.101+deb13-amd64** host kernel. No older kernel/VM matrix or minimum CPU execution probe was run. The ELF GNU/Linux 3.2 ABI note is not a whole-program minimum-kernel guarantee. ARM64, musl, Windows, macOS, Main Native AOT and unlisted distro versions remain unqualified by this track.
+Every container above shared the same **6.12.101+deb13-amd64** host kernel. No older kernel/VM matrix or minimum CPU execution probe was run. The ELF GNU/Linux 3.2 ABI note is not a whole-program minimum-kernel guarantee. ARM64, Windows, macOS, Main Native AOT and unlisted distro versions remain unqualified. This dynamic matrix does not qualify musl; the separate static result is below.
 
 ## Probe and ownership boundaries
 
@@ -59,7 +59,7 @@ The smoke Dockerfile contains no .NET runtime. Its explicit `/test-driver/node` 
 
 Public build/probe instructions in `scripts/native-aot/README.md` describe the commands and environment inputs. This is a focused packaging qualification; it neither replaces the existing complete CLI interoperability suites nor changes bootstrap selection.
 
-## Explicit static-musl trial
+## Explicit static-musl qualification
 
 `cli-linux-musl-x64.Dockerfile` is a separate CLI-only publication using official SDK 10.0.401-alpine3.23/runtime 10.0.12 and native Alpine static archives. It sets `StaticExecutable`, `StaticICULinking`, `StaticOpenSslLinking` and `EmbedIcuDataPath`; globalization stays non-invariant. The explicit `FoxwarmStaticMusl` project property requires a static linux-musl-x64 Native AOT CLI publication, statically links the production PTY object and makes libc/PTY imports direct. It does not change default dynamic or managed publication, Main, bootstrap or dependency versions. An ELF static PIE may have a relocation DYNAMIC segment; the relevant loader checks are absence of PT_INTERP and DT_NEEDED, plus actual runtime library-load evidence.
 
@@ -67,4 +67,30 @@ Musl lacks the close-from spawn action used by the unchanged glibc path. Only th
 
 The maintained protocol probe accepts `FOXWARM_TEST_EXPECT_STATIC=1` to require no mapped shared libraries instead of the default positive dynamic ICU/OpenSSL assertions. Both modes establish trusted registration before rejected untrusted/hostname controls, and the real file-read directory comparer must order `a`, `ä`, `z` using its existing en-US culture. The optional `FOXWARM_TEST_EXPECT_GIT=0` is a dependency-absence run only; a separate run with real external Git remains necessary. Alpine smoke images can omit Git with `INSTALL_GIT=0` to avoid bringing its OpenSSL dependency into that absence run. The driver image must match the runtime userspace, for example an official Alpine Node image for Alpine.
 
-The static target remains a trial pending actual full-artifact execution evidence. The glibc table above is not a musl/static qualification. Static linkage also moves ICU/OpenSSL/native-library security updates into rebuild/redistribution responsibility; their licenses/notices and the runtime's third-party notices still apply. Shells, Git, browser libraries, certificate data, writable state and kernel capabilities remain separate external dependencies.
+### Measured full static artifact
+
+On October 21, 2026, the full CLI-plus-PTY graph built on Alpine 3.23.6/musl 1.2.5-r23 with clang 21.1.2/GCC 15.2, static ICU 76.1 and OpenSSL 3.5.9. The stripped executable is **60,061,360 bytes**, ELF64 x86-64 static PIE, with no PT_INTERP, DT_NEEDED or adjacent PTY shared object. SDK/runtime/ILCompiler remain 10.0.401/10.0.12. The existing PuppeteerSharp IL2104, IL3000 and IL3053 diagnostics remain visible and unsuppressed. No feature-deleted executable, TLS relaxation, invariant globalization or dependency fork was used.
+
+The same executable, without rebuilding, passed these focused userspace checks:
+
+| Userspace | Full core/TLS/culture/helpers/recovery/PTY probe | Optional external services |
+| --- | --- | --- |
+| Alpine 3.23.6, with all discovered ICU/OpenSSL shared-library files removed | Passed; no CLR or shared-library mappings | Git and Chromium intentionally absent; missing browser remained isolated |
+| UBI / RHEL 8.10 | Passed, including where the dynamic artifact could not load | Real Git 2.43.7 passed; browser not provisioned |
+| Debian 13.7 | Passed | Real Git 2.47.3 and Chromium 155.0.8059.79 passed representative ARIA query-one/query-all and evaluate checks |
+
+Each row proves trusted registration, untrusted and wrong-host rejection before WebSocket upgrade, real en-US `a`/`ä`/`z` directory collation, Unicode files, foreground inherited environment/cwd/exit 7 and native sidecars, independent background survival after client exit, same-executable status helpers, original-capability recovery/ACK removal without replay, generated trigger entry, PTY dimensions/Unicode and the capability-bound Code helper. Rejected certificates produced a peer secureConnection followed by TLS close without upgrade, not a tlsClientError event. The probe observes that real lifecycle rather than treating an arbitrary client failure as certificate evidence.
+
+The actual-musl native boundary probe also passed all three modes: ordinary close_range, real seccomp-forced ENOSYS/procfs fallback, and synchronous close-all failure with reaping. The last check runs in a fresh owned process because BusyBox timeout itself owns a live watchdog child; before/after ECHILD plus exact fixture-process wait preserve the failed-child cleanup assertion without claiming every wrapper child belongs to PTY.
+
+Process maps at registration, after services/exec and after recovery show only the executable and, in glibc userspaces, optional OS timezone data. A process-following Alpine trace found zero ICU/OpenSSL/PTY shared-library open attempts across all processes, while the driver remained usable without those files. The Debian trace followed fork/clone/exec ancestry: the CLI and every re-entered native helper had zero shared-library open attempts; observed shared-library searches belonged to the separate driver, shells, Git, Chromium or utilities, with no unattributed records. Thus direct ELF inspection is backed by actual TLS/globalization/PTY/helper execution and library-open evidence, not only a startup check.
+
+The containers ran nonroot with read-only roots, network disabled, dropped capabilities, no new privileges, owned writable temporary storage and explicit resource bounds. They all shared host kernel **6.12.101+deb13-amd64**. Neither the userspace table nor static linkage establishes an older-kernel/CPU minimum, arbitrary browser-action qualification, Windows/ARM support, Main Native AOT support or complete CLI parity. The previous dynamic matrix remains valid for that different artifact and was not rerun.
+
+### Remaining dependencies and maintenance
+
+Static means the measured CLI/helpers do not require runtime libc/ICU/OpenSSL/PTY shared libraries or a .NET host. It does not bundle Bash, `/bin/sh`, shell utilities, optional Git/Chromium or their own distro dependencies. TLS still needs appropriate CA trust data; process inspection/cwd uses procfs, and native descriptor closure requires usable close_range or its procfs fallback. Writable owned state/temp and the existing mandatory pidfd kernel operations remain necessary. Timezone data can remain an ordinary OS data dependency.
+
+Static ICU/OpenSSL/native-library security fixes require rebuilding and redistributing the executable; updating a runtime `.so` does not update embedded code/data. Preserve the applicable .NET and native third-party licenses/notices, including musl, ICU/data, OpenSSL and compiler support libraries. This trial has not assembled a redistribution notice bundle or performed a release licensing audit. Image/package selection, notice collection and future updates remain release responsibilities; no new release/bootstrap switch or deployment is implied.
+
+Historical failed attempts were retained: unavailable generic SDK image tag, missing musl close-from spawn action, an invalid wrapper-wide reaping assertion, a nonroot-inaccessible exported directory, and an overly narrow tlsClientError-only test observer. The corrected full artifact passed without a subsequent production-runtime change.

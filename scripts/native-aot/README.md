@@ -3,7 +3,8 @@
 This recipe publishes the standalone .NET CLI Node, including its optional Linux
 PTY shim. It does not build Main, frontend assets or the TypeScript CLI. The
 qualified default target is **Linux x64 with glibc**. The separate static-musl
-trial below is not an ARM64 recipe or a bootstrap change.
+build below has its own bounded qualification; neither recipe changes bootstrap
+selection or qualifies ARM64.
 
 The build uses official .NET SDK 10.0.401 and runtime/ILCompiler 10.0.12 with the
 UBI 9 distro compiler, headers and libraries. It copies SDK files, not the SDK
@@ -146,7 +147,7 @@ Remove the exact owned probe images, certificate directory and intermediate
 outputs when no longer needed. Do not run global Docker prune or remove another
 workspace's state.
 
-## Explicit full static-musl trial
+## Explicit full static-musl build
 
 This separate recipe builds the full CLI graph with the PTY linked into the
 executable, using official SDK `10.0.401-alpine3.23`, runtime/ILCompiler 10.0.12,
@@ -206,9 +207,25 @@ and external-process library loads separately from the CLI and its re-entered
 helpers. No .NET host, Node or Python may implement the CLI features.
 
 The [canonical delivery unit](../../docs/code-index/units/dotnet-cli-linux-aot.md)
-records trial status and evidence. Successful linking or `--help` alone is not
-full static compatibility. Shells, CA trust data, optional Git/browser packages,
+records the measured static result and its bounds. The full 60,061,360-byte
+static PIE passed the same-artifact probe on Alpine 3.23.6 without ICU/OpenSSL
+shared libraries, UBI 8.10 with real Git, and Debian 13.7 with real Git and
+Chromium. The CLI and same-executable helpers made no shared-library open
+attempts in the attributed trace; external programs keep their own libraries.
+Successful linking or `--help` alone would not establish that result. Shells, CA trust data, optional Git/browser packages,
 procfs or usable close_range for descriptor closure, writable state/temp and
 existing pidfd kernel facilities remain separate dependencies. Static ICU and
 OpenSSL must be updated by rebuilding the executable; preserve their license
 notices and the .NET/native dependencies' applicable third-party notices.
+
+The measured static build retained the upstream trim/AOT warnings. Its native
+probe passed ordinary closure, forced procfs fallback and synchronous failure
+with exact cleanup under actual musl. The full protocol run includes positive
+trusted TLS, negative trust/hostname controls, real en-US directory collation,
+PTY/Code and trigger helpers, foreground effects and background survival/recovery
+with the original capability and accepted ACK. Containers shared one modern host
+kernel; no older-kernel or CPU-floor claim follows from the older userspace run.
+
+This qualification is not a release notice/licensing audit. It has not assembled a redistribution notice bundle for static native
+dependencies. Keep applicable .NET, musl, ICU/data, OpenSSL and compiler-support
+notices when preparing a distributable package, and rebuild for their updates.
