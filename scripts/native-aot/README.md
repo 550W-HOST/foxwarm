@@ -182,8 +182,7 @@ requirement. Inspect actual process maps and library-open attempts as well.
 
 For the same maintained smoke probe, set `FOXWARM_TEST_EXPECT_STATIC=1`. Its
 default mode continues to assert that dynamic CLI TLS/globalization actually load
-OpenSSL/ICU. The probe now checks rejected untrusted and hostname certificates
-before trusted registration, and exercises actual culture-sensitive directory
+OpenSSL/ICU. The probe now checks trusted registration followed by rejected untrusted and hostname certificates, and exercises actual culture-sensitive directory
 ordering through the existing file tool. Supply the localhost certificate from
 the earlier example (SAN 127.0.0.1 and localhost, not 127.0.0.2).
 

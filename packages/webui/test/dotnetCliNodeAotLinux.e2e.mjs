@@ -24,12 +24,24 @@ await mkdir(join(project, 'next'), { recursive: true })
 async function until(check, label, timeout = 20000) {
   const end = Date.now() + timeout
   while (Date.now() < end) { const value = await check(); if (value) return value; await new Promise(done => setTimeout(done, 25)) }
-  throw new Error('Timed out: ' + label + '\n' + clients.map(client => client.output).join('\n'))
+  throw new Error('Timed out: ' + label + '\nPeer TLS events: ' + JSON.stringify(evidence.peerTls) + '\n' + clients.map(client => client.output).join('\n'))
 }
 const evidence = {}
 const staticExpected = process.env.FOXWARM_TEST_EXPECT_STATIC === '1'
-const tlsFailures = []
-http.on('tlsClientError', error => tlsFailures.push(error.code))
+function observeTls(server, label) {
+  const events = []
+  evidence.peerTls ??= {}
+  evidence.peerTls[label] = events
+  server.on('secureConnection', socket => {
+    events.push({ event: 'secureConnection', port: socket.remotePort })
+    socket.once('close', hadError => events.push({ event: 'tlsClose', port: socket.remotePort, hadError }))
+  })
+  server.on('tlsClientError', error => events.push({ event: 'tlsClientError', code: error.code }))
+  server.on('upgrade', () => events.push({ event: 'upgrade' }))
+  return events
+}
+const tlsEvents = observeTls(http, 'trusted-and-untrusted')
+const rejectionSettled = events => events.some(row => row.event === 'tlsClientError' || row.event === 'tlsClose')
 const exists = path => readFile(path).then(() => true, () => false)
 peer.on('connection', socket => {
   sockets.add(socket); socket.on('error', () => {}); socket.on('close', () => sockets.delete(socket))
@@ -46,7 +58,7 @@ peer.on('connection', socket => {
   })
 })
 function startClient(target, overrides = {}, trigger = true) {
-  const env = { ...isolatedApplicationEnv(join(cwd, 'data')), FOXWARM_AGENTS_DIR: join(cwd, 'agents'), SHELL: '/bin/bash', FOXWARM_NODE_PTY_SHELL: 'bash', EXECTEST_INHERITED: 'native-inherited', fw_agentdir: 'wrong-parent', fw_tmp: 'wrong-parent' }
+  const env = { ...isolatedApplicationEnv(join(cwd, 'data')), FOXWARM_AGENTS_DIR: join(cwd, 'agents'), SHELL: '/bin/bash', FOXWARM_NODE_PTY_SHELL: 'bash', EXECTEST_INHERITED: 'native-inherited', fw_agentdir: 'wrong-parent', fw_tmp: 'wrong-parent', NO_PROXY: '127.0.0.1,127.0.0.2,localhost', no_proxy: '127.0.0.1,127.0.0.2,localhost' }
   Object.assign(env, overrides)
   delete env.DOTNET_ROOT; delete env.DOTNET_HOST_PATH
   const child = spawn(executable, ['--host', target, '--id', 'native-smoke', '--auth-token', 'synthetic-native', '--credentials-file', join(cwd, 'credentials.json'), ...(trigger ? ['--local-trigger-port', '0'] : ['--no-local-trigger'])], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -86,23 +98,25 @@ async function stop(client) {
 async function rejectedTlsControls() {
   const emptyTrust = join(root, 'empty-trust'), emptyDirectory = join(root, 'empty-certs')
   await writeFile(emptyTrust, ''); await mkdir(emptyDirectory)
-  const beforeFailures = tlsFailures.length, beforeGeneration = generation
+  const beforeEvents = tlsEvents.length, beforeGeneration = generation
   const untrusted = startClient(origin, { SSL_CERT_FILE: emptyTrust, SSL_CERT_DIR: emptyDirectory }, false)
-  await until(() => untrusted.output.includes('connection_error') && tlsFailures.length > beforeFailures, 'untrusted TLS rejection')
+  await until(() => untrusted.output.includes('connection_error'), 'untrusted client failure')
+  await until(() => rejectionSettled(tlsEvents.slice(beforeEvents)), 'untrusted peer TLS close/error')
+  assert(!tlsEvents.slice(beforeEvents).some(row => row.event === 'upgrade'), 'untrusted certificate must fail before WebSocket upgrade')
   assert.equal(generation, beforeGeneration, 'untrusted peer must not register')
   await stop(untrusted)
-  const wrongHostFailures = [], wrongHost = createServer({ cert: await readFile(process.env.FOXWARM_TEST_TLS_CERT), key: await readFile(process.env.FOXWARM_TEST_TLS_KEY) })
-  let upgraded = false
-  wrongHost.on('tlsClientError', error => wrongHostFailures.push(error.code))
-  wrongHost.on('upgrade', (_, socket) => { upgraded = true; socket.destroy() })
+  const wrongHost = createServer({ cert: await readFile(process.env.FOXWARM_TEST_TLS_CERT), key: await readFile(process.env.FOXWARM_TEST_TLS_KEY) })
+  const wrongHostEvents = observeTls(wrongHost, 'mismatched-host')
+  wrongHost.on('upgrade', (_, socket) => socket.destroy())
   wrongHost.listen(0, '127.0.0.2'); await once(wrongHost, 'listening')
   try {
     const mismatch = startClient(`https://127.0.0.2:${wrongHost.address().port}`, {}, false)
-    await until(() => mismatch.output.includes('connection_error') && wrongHostFailures.length > 0, 'TLS hostname rejection')
-    assert(!upgraded, 'hostname mismatch must fail before WebSocket upgrade')
+    await until(() => mismatch.output.includes('connection_error'), 'hostname mismatch client failure')
+    await until(() => rejectionSettled(wrongHostEvents), 'hostname mismatch peer TLS close/error')
+    assert(!wrongHostEvents.some(row => row.event === 'upgrade'), 'hostname mismatch must fail before WebSocket upgrade')
     await stop(mismatch)
   } finally { await new Promise(done => wrongHost.close(done)) }
-  evidence.rejectedTls = { untrusted: tlsFailures.slice(beforeFailures), hostnameMismatch: wrongHostFailures, noAuthenticatedRegistration: generation === beforeGeneration }
+  evidence.rejectedTls = { untrusted: tlsEvents.slice(beforeEvents), hostnameMismatch: wrongHostEvents, trustedRegistrationBeforeControls: beforeGeneration > 0, noAuthenticatedRegistration: generation === beforeGeneration }
 }
 async function tool(client, name, args, extra = {}) {
   const callId = 'smoke-' + ++sequence
@@ -164,8 +178,8 @@ async function optionalServices(client) {
 }
 try {
   const magic = await readFile(executable); assert.equal(magic.subarray(0, 4).toString('hex'), '7f454c46')
-  await rejectedTlsControls()
   let client = await launch()
+  await rejectedTlsControls()
   const firstPid = client.child.pid
   await optionalServices(client)
   const metadata = await until(async () => { try { return JSON.parse(await readFile(join(cwd, 'node_local_trigger.json'), 'utf8')) } catch {} }, 'local trigger metadata')
