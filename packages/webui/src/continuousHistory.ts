@@ -29,13 +29,32 @@ export function mergeContinuousHistory(loaded: Message[], incoming: Message[]): 
 }
 
 export type ContinuousContextRange = { start: number; end: number }
+export type ContinuousContextDemand = { message: Message; sequences: number[] }
+
+/** Only loaded originals lacking an active payload can need non-leaf membership. */
+export function getContinuousContextDemand(active: Message[], loaded: Message[]): ContinuousContextDemand[] {
+  const activeSeqs = new Set(active.filter(isRawHistoryMessage).map(message => message.__meta!.seq!))
+  const candidates = loaded.filter(message => !activeSeqs.has(message.__meta!.seq!)).map(message => message.__meta!.seq!)
+  return active.flatMap(message => {
+    const block = message.__meta?.contextBlock
+    if (block?.sourceKind !== 'block') return []
+    const sequences = candidates.filter(seq => seq >= block.rawStartSeq! && seq <= block.rawEndSeq!)
+    return sequences.length ? [{ message, sequences }] : []
+  })
+}
+
+export function getContinuousContextDemandKey(demand: ContinuousContextDemand[]): string {
+  return demand.map(({ message, sequences }) => `${message.__meta!.contextBlock!.id}:${sequences.join(',')}`).join(';')
+}
 
 /** Only message-backed leaves prove membership; higher-level envelopes can contain gaps. */
-export async function resolveContinuousContextRanges(messages: Message[], expandBlock: (id: number) => Promise<Message[]>): Promise<ContinuousContextRange[]> {
+export async function resolveContinuousContextRanges(messages: Message[], sequences: number[], expandBlock: (id: number) => Promise<Message[]>): Promise<ContinuousContextRange[]> {
   const ranges = await Promise.all(messages.map(async message => {
     const block = message.__meta?.contextBlock
     if (!block) return []
-    if (block.sourceKind === 'block') return resolveContinuousContextRanges(await expandBlock(block.id), expandBlock)
+    const candidates = sequences.filter(seq => seq >= block.rawStartSeq! && seq <= block.rawEndSeq!)
+    if (!candidates.length) return []
+    if (block.sourceKind === 'block') return resolveContinuousContextRanges(await expandBlock(block.id), candidates, expandBlock)
     return Number.isSafeInteger(block.rawStartSeq) && Number.isSafeInteger(block.rawEndSeq)
       && block.rawStartSeq! > 0 && block.rawEndSeq! >= block.rawStartSeq!
       ? [{ start: block.rawStartSeq!, end: block.rawEndSeq! }] : []

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { build } from 'esbuild'
 
 const result = await build({ entryPoints: [new URL('../src/continuousHistory.ts', import.meta.url).pathname], bundle: true, platform: 'node', format: 'esm', write: false })
-const { appendContinuousCommits, mergeContinuousHistory, projectContinuousHistory, resolveContinuousContextRanges } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`)
+const { getContinuousContextDemand, getContinuousContextDemandKey, appendContinuousCommits, mergeContinuousHistory, projectContinuousHistory, resolveContinuousContextRanges } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`)
 const raw = (seq, text = `Original ${seq}`) => ({ role: 'user', parts: [{ text }], __meta: { seq } })
 
 test('original Archive rows survive active rewrites while new canonical rows append once', () => {
@@ -74,7 +74,7 @@ test('higher CTX membership follows explicit children rather than a raw envelope
   const root = higher(20, 1, 12)
   const records = new Map([[20, [block(1, 3), higher(21, 6, 12)]], [21, [block(6, 7), block(10, 12)]]])
   const requested = []
-  const ranges = await resolveContinuousContextRanges([root], async id => { requested.push(id); return records.get(id) })
+  const ranges = await resolveContinuousContextRanges([root], Array.from({ length: 12 }, (_, i) => i + 1), async id => { requested.push(id); return records.get(id) })
   assert.deepEqual(requested, [20, 21], 'message-backed blocks never fetch their raw expansion')
   const originals = Array.from({ length: 12 }, (_, i) => raw(i + 1))
   assert.deepEqual(projectContinuousHistory(originals, [root], new Map([[20, ranges]])).map(message => message.__meta.seq), [1, 2, 3, 6, 7, 10, 11, 12])
@@ -88,4 +88,24 @@ test('removing an independent preserved row leaves only its surviving CTX repres
   assert.equal(projectContinuousHistory(originals, [summary, retained, raw(5)])[2].parts[0].text, 'Active retained version')
   assert.equal(projectContinuousHistory(originals, [summary])[2].parts[0].text, 'Original 3')
   assert.deepEqual(projectContinuousHistory(originals, [raw(5)]), [raw(5)], 'removing the CTX removes its older representation')
+})
+
+
+test('membership demand excludes unloaded originals and rows already owned by active history', () => {
+  const root = { ...block(1, 600), __meta: { contextBlock: { id: 20, sourceKind: 'block', level: 2, rawStartSeq: 1, rawEndSeq: 600 } } }
+  const recent = Array.from({ length: 100 }, (_, index) => raw(index + 501))
+  assert.deepEqual(getContinuousContextDemand([root, ...recent], recent), [])
+  const demand = getContinuousContextDemand([root, ...recent], [raw(301), raw(302), ...recent, raw(601)])
+  assert.deepEqual(demand.map(item => item.sequences), [[301, 302]])
+  assert.equal(getContinuousContextDemandKey(demand), '20:301,302')
+})
+
+test('candidate sequences prune unrelated non-leaf branches without proving membership in gaps', async () => {
+  const higher = (id, start, end) => ({ ...block(start, end), __meta: { contextBlock: { id, sourceKind: 'block', level: 2, rawStartSeq: start, rawEndSeq: end } } })
+  const root = higher(20, 1, 12)
+  const children = new Map([[20, [higher(21, 1, 3), higher(22, 6, 12)]], [22, [block(6, 7), block(10, 12)]]])
+  const requested = []
+  const ranges = await resolveContinuousContextRanges([root], [8], async id => { requested.push(id); return children.get(id) })
+  assert.deepEqual(requested, [20, 22], 'the unrelated non-leaf branch is not traversed')
+  assert.deepEqual(ranges, [], 'the relevant branch envelope is not a membership proof for seq 8')
 })

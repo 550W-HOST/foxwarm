@@ -1,7 +1,7 @@
 import { CHAT_BOOTSTRAP_TAIL_LENGTH, peekPreparedChatHistory, peekPreparedChatArchive, discardPreparedChatHistory } from '../preparedChatHistory'
 import { createLocalSessionNotice } from '../sessionNotices'
 import { getSessionControlAction, parseSessionControlFeedback, type SessionControlAction, type SessionControlFeedback } from '../../../shared/src/sessionControlFeedback'
-import { appendContinuousCommits, mergeContinuousHistory, projectContinuousHistory, resolveContinuousContextRanges, type ContinuousContextRange, type HistoryMode } from '../continuousHistory'
+import { appendContinuousCommits, getContinuousContextDemand, getContinuousContextDemandKey, mergeContinuousHistory, projectContinuousHistory, resolveContinuousContextRanges, type ContinuousContextDemand, type ContinuousContextRange, type HistoryMode } from '../continuousHistory'
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { API_BASE_PATH } from '../config'
 import type { Message, MessagePart, SessionStreamEvent, ToolScriptSubCall } from './chatShared'
@@ -138,19 +138,28 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
   const messages = timelineState.messages
   const queuedMessages = timelineState.queuedMessages
   const blockExpansionCache = useMemo(() => new Map<number, Promise<Message[]>>(), [sessionId])
-  const [resolvedContext, setResolvedContext] = useState({ cache: blockExpansionCache, blocks: new Map<number, ContinuousContextRange[]>() })
+  const [resolvedContext, setResolvedContext] = useState({ cache: blockExpansionCache, blocks: new Map<number, ContinuousContextRange[]>(), key: '' })
   const rememberContextRanges = useCallback((context: typeof resolvedContext) => {
     // Membership is immutable knowledge, not the active block list. Keep older
     // entries when a queue-racing snapshot cannot yet replace active history.
-    setResolvedContext(previous => previous.cache === context.cache
-      ? { cache: context.cache, blocks: new Map([...previous.blocks, ...context.blocks]) } : context)
+    setResolvedContext(previous => {
+      if (previous.cache !== context.cache) return context
+      const blocks = new Map(previous.blocks)
+      for (const [id, ranges] of context.blocks) {
+        blocks.set(id, [...new Map([...(blocks.get(id) || []), ...ranges].map(range => [`${range.start}:${range.end}`, range])).values()])
+      }
+      return { ...context, blocks }
+    })
   }, [])
-  const [contextHistoryError, setContextHistoryError] = useState(false)
+  const [contextHistoryError, setContextHistoryError] = useState<string | null>(null)
   const [contextHistoryRetry, setContextHistoryRetry] = useState(0)
-  const higherBlocks = messages.filter(message => message.__meta?.contextBlock?.sourceKind === 'block')
+  const contextDemand = useMemo(() => getContinuousContextDemand(messages, timelineState.archiveMessages), [messages, timelineState.archiveMessages])
+  const contextDemandKey = `${sessionId}|${getContinuousContextDemandKey(contextDemand)}`
+  const archiveMessagesRef = useRef(timelineState.archiveMessages)
+  archiveMessagesRef.current = timelineState.archiveMessages
   const historyModeRef = useRef(historyMode)
   historyModeRef.current = historyMode
-  const loadContextRanges = useCallback(async (snapshot: Message[]) => {
+  const loadContextRanges = useCallback(async (demand: ContinuousContextDemand[]) => {
     const expandBlock = (id: number): Promise<Message[]> => {
       let request = blockExpansionCache.get(id)
       if (!request) {
@@ -163,21 +172,23 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
       }
       return request
     }
-    const entries = await Promise.all(snapshot.filter(message => message.__meta?.contextBlock?.sourceKind === 'block')
-      .map(async message => [message.__meta!.contextBlock!.id, await resolveContinuousContextRanges([message], expandBlock)] as const))
-    return { cache: blockExpansionCache, blocks: new Map(entries) }
+    const entries = await Promise.all(demand.map(async ({ message, sequences }) => [message.__meta!.contextBlock!.id,
+      await resolveContinuousContextRanges([message], sequences, expandBlock)] as const))
+    return { cache: blockExpansionCache, blocks: new Map(entries), key: `${sessionId}|${getContinuousContextDemandKey(demand)}` }
   }, [blockExpansionCache, sessionId])
   useEffect(() => {
     if (historyMode !== 'continuous') return
+    if (contextHistoryError === contextDemandKey) return
+    if (resolvedContext.cache === blockExpansionCache && resolvedContext.key === contextDemandKey) return
     let cancelled = false
-    setContextHistoryError(false)
-    void loadContextRanges(messages)
+    setContextHistoryError(null)
+    void loadContextRanges(contextDemand)
       .then(context => { if (!cancelled) rememberContextRanges(context) })
-      .catch(() => { if (!cancelled) setContextHistoryError(true) })
+      .catch(() => { if (!cancelled) setContextHistoryError(contextDemandKey) })
     return () => { cancelled = true }
-    // Snapshots resolve membership before publication. This effect covers entering
-    // continuous mode over an already mounted active history, and explicit Retry.
-  }, [contextHistoryRetry, historyMode, loadContextRanges, rememberContextRanges])
+    // Snapshots preserve loaded anchors before publication; paging and mode switches
+    // resolve only the newly needed original rows. Ordinary active-only tails do not expand CTX.
+  }, [blockExpansionCache, contextDemandKey, contextHistoryRetry, historyMode, loadContextRanges, rememberContextRanges, resolvedContext.cache, resolvedContext.key])
   const [archivePage, setArchivePage] = useState({ loaded: !!preparedArchive, loading: false, error: false, hasEarlier: !!preparedArchive?.hasEarlier, hasLater: !!preparedArchive?.hasLater, direction: 'initial' as ArchivePageDirection })
   const archiveRequestRef = useRef<AbortController | null>(null)
   const archiveBoundaryRef = useRef<{ firstSeq?: number; lastSeq?: number }>({firstSeq:preparedArchive?.firstSeq,lastSeq:preparedArchive?.lastSeq})
@@ -468,11 +479,19 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
       }
       const prepareSnapshotContext = async (snapshot: Message[]) => {
         if (historyModeRef.current !== 'continuous') return
+        let demandKey = ''
         try {
-          const context = await loadContextRanges(snapshot)
-          if (isCurrent()) { rememberContextRanges(context); setContextHistoryError(false) }
+          let loaded: Message[]
+          let context: typeof resolvedContext
+          do {
+            loaded = archiveMessagesRef.current
+            const demand = getContinuousContextDemand(snapshot, loaded)
+            demandKey = `${sessionId}|${getContinuousContextDemandKey(demand)}`
+            context = await loadContextRanges(demand)
+          } while (isCurrent() && loaded !== archiveMessagesRef.current)
+          if (isCurrent()) { rememberContextRanges(context); setContextHistoryError(null) }
         } catch {
-          if (isCurrent()) setContextHistoryError(true)
+          if (isCurrent()) setContextHistoryError(demandKey)
         }
       }
       const concurrentMessages = () => historyEventsRef.current
@@ -1204,6 +1223,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
 
   const retryEarlierHistory = useCallback(() => {
     setEarlierHistoryError(false)
+    setContextHistoryError(null)
     setContextHistoryRetry(revision => revision + 1)
     return fetchHistory('full')
   }, [fetchHistory])
@@ -1230,7 +1250,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
   return {
     continuousMessages,
     continuousHistoryReady: isFullHistoryLoaded && resolvedContext.cache === blockExpansionCache
-      && higherBlocks.every(message => resolvedContext.blocks.has(message.__meta!.contextBlock!.id)),
+      && resolvedContext.key === contextDemandKey,
     archivePage,
     loadArchivePage,
     messages,
@@ -1246,7 +1266,7 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
     toolScriptProgress,
     historyLoaded,
     isFullHistoryLoaded,
-    earlierHistoryError: earlierHistoryError || contextHistoryError,
+    earlierHistoryError: earlierHistoryError || contextHistoryError === contextDemandKey,
     connectionState,
     reconnectCountdown,
     loading,
