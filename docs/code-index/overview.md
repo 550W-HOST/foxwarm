@@ -9,6 +9,15 @@ This is the entry point for the project map and repository-specific index conven
 - For translation or replacement, trace the relevant original caller path from entry to observable effects and compare it with the new path. Index summaries and tests written only for the new implementation do not establish parity.
 - Put important constraints and their rationale near the beginning of their owning page, before implementation detail. Each decision has one canonical owner; other pages provide a short summary and link. Unconfirmed proposals belong in `Open Questions`, not among effective decisions.
 
+## Behavior entry points
+
+For developers and Agents changing what a human or runtime Agent observes, start with the relevant behavior page, then follow its technical and test links:
+
+- [Conversation and history](./behaviors/conversation-and-history.md): active context, Conversation, Archive, memory, deletion/clear, historical reading and accounting boundaries.
+- [Execution and waiting](./behaviors/execution-and-waiting.md): process versus foreground-wait lifetime, Stop/Run queued/Continue, completion events, explicit waits and normal ToolScript completion.
+
+These bounded pages own the product semantics they describe; they are not end-user manuals or a second implementation inventory. Threads retain cross-module mechanisms and invariants, modules retain subsystem boundaries, and units retain source/test entry points. For these topics, keep full observable rules at the behavior owner and use short links elsewhere; stable older decision anchors remain navigation points. Source and historical decisions still need checking when a change exposes uncertainty.
+
 ## Overview
 
 Foxwarm is an AI agent system with a .NET Main host, browser WebUI, model adapters, durable Session state, local tools, optional remote Nodes, and compatibility packages that are still being retired or replaced. The .NET solution is the active Main architecture being developed in this branch. The intended end state is a .NET Main with the existing platform packages connected to its public contracts; the repository still contains TypeScript Main source, retained TypeScript CLI/reference build entries, and remote-platform implementations, so this index does not describe those components as deleted, fully integrated, or publicly promoted. Existing package/npm/tmux/Windows source Main entries now select the managed host; see [source startup](./units/source-main-entry.md) and [public Docker delivery](./units/public-main-docker.md) for the candidate boundaries.
@@ -126,7 +135,7 @@ Optional remote and compatibility components:
 
 Keep final text in English and public-safe: no credentials, private deployment details, personal filesystem paths, or agent-private collaboration notes. Compatibility literals from source or persisted data may be quoted when necessary and identified as such.
 
-Use the narrowest owner that covers a contract: a unit for one semantic unit, a module for several units in that subsystem, a thread for a cross-module flow, or this overview for a project-wide principle. Keep the full decision and rationale only there; use stable headings for links. A critical security, data-integrity, persistence, or external-contract invariant may repeat the same short sentence at an execution boundary with its canonical ID and link; rationale stays at the owner.
+For observable rules covered by the behavior pages above, use that behavior owner. For technical contracts, use the narrowest owner that covers a contract: a unit for one semantic unit, a module for several units in that subsystem, a thread for a cross-module flow, or this overview for a project-wide principle. Keep the full decision and rationale only there; use stable headings for links. A critical security, data-integrity, persistence, or external-contract invariant may repeat the same short sentence at an execution boundary with its canonical ID and link; rationale stays at the owner.
 
 Distinguish observed behavior from required invariants. Compatibility notes describe retained persisted-data readers or external contracts, including the old shape read and the new shape written. Replace superseded decisions rather than keeping an implementation chronology.
 
