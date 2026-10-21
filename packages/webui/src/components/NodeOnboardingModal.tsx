@@ -6,6 +6,7 @@ import { API_BASE_PATH } from '../config'
 type PendingRequest = { id: string; requestedName: string; nodeType: string; requestedAt: number; connected: boolean }
 type PendingPage = { items: PendingRequest[]; total: number; nextOffset: number | null }
 type Commands = Record<string, string>
+type CreatedNode = { nodeId: string; baseUrl: string; authToken: string; commands: Commands }
 
 export function useNodePendingApprovals(enabled: boolean) {
   const [page, setPage] = useState<PendingPage>({ items: [], total: 0, nextOffset: null })
@@ -61,9 +62,11 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
   const [nodeId, setNodeId] = useState('my-node')
   const [installDir, setInstallDir] = useState('/opt/foxwarm-node')
   const [commands, setCommands] = useState<Commands>({})
-  const [shellCommand, setShellCommand] = useState('')
-  const [shellNodeId, setShellNodeId] = useState('')
-  const [shellBaseUrl, setShellBaseUrl] = useState('')
+  const [tokenMode, setTokenMode] = useState(false)
+  const [created, setCreated] = useState<CreatedNode | null>(null)
+  const direct = method === 'shell' || tokenMode
+  const address = direct && created ? created.baseUrl : baseUrl
+  const name = direct && created ? created.nodeId : nodeId
   const [install, setInstall] = useState(false)
   const [compose, setCompose] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -112,16 +115,19 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
   const updateCommands = async () => {
     setBusy(true); setError(''); setCopied(false)
     try {
-      const payload = await post('commands', { baseUrl, nodeId, installDir })
-      if (mounted.current) { setBaseUrl(payload.baseUrl); setCommands(payload.commands) }
+      const payload = await post('commands', { baseUrl: address, nodeId: name, installDir, ...(direct && created ? { authToken: created.authToken } : {}) })
+      if (mounted.current) {
+        if (direct && created) setCreated({ ...created, commands: payload.commands })
+        else { setBaseUrl(payload.baseUrl); setCommands(payload.commands) }
+      }
     } catch (failure) { if (mounted.current) setError(failure instanceof Error ? failure.message : 'Could not update commands.') }
     finally { if (mounted.current) setBusy(false) }
   }
-  const createShell = async () => {
-    setBusy(true); setError('')
+  const createNode = async () => {
+    setBusy(true); setError(''); setCopied(false)
     try {
-      const payload = await post('create-shell', { baseUrl, nodeId })
-      if (mounted.current) { setShellCommand(payload.command); setShellNodeId(payload.nodeId); setShellBaseUrl(baseUrl); await onNodesChanged() }
+      const payload = await post('create', { baseUrl, nodeId, installDir })
+      if (mounted.current) { setCreated(payload); await onNodesChanged() }
     } catch (failure) { if (mounted.current) setError(failure instanceof Error ? failure.message : 'Could not create this Node.') }
     finally { if (mounted.current) setBusy(false) }
   }
@@ -135,26 +141,29 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
       if (mounted.current) { setApprovalError(failure instanceof Error ? failure.message : 'Could not approve this request.'); await pending.refresh() }
     } finally { if (mounted.current) setApproving(null) }
   }
-  const command = method === 'shell' ? shellCommand : commands[method === 'bareMetal' && install ? 'bareMetalInstall' : method === 'docker' && compose ? 'manualCompose' : method] || ''
+  const commandKey = method === 'bareMetal' && install ? 'bareMetalInstall' : method === 'docker' && compose ? 'manualCompose' : method
+  const command = (direct ? created?.commands[commandKey] : commands[commandKey]) || ''
   const fieldClass = 'mt-1 w-full rounded-lg border border-fw-border bg-fw-canvas px-3 py-2 text-sm text-fw-text-strong outline-none focus:border-fw-accent-border'
   const close = useCallback(() => closeRef.current(), [])
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3" onClick={event => { if (event.target === event.currentTarget) close() }}>
       <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="node-onboarding-title" className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-fw-border bg-fw-surface p-5 text-fw-text shadow-xl">
         <div className="flex items-center justify-between gap-3"><div><h2 id="node-onboarding-title" className="text-lg font-semibold text-fw-text-strong">New nodes</h2><p className="mt-1 text-sm text-fw-text-muted">Choose a setup method, then run the command on your new Node.</p></div><button type="button" aria-label="Close New nodes" onClick={close} className="rounded-lg p-2 hover:bg-fw-hover"><X className="h-5 w-5" /></button></div>
-        <div className="mt-4 flex flex-wrap gap-2">{methods.map(item => <button key={item.id} type="button" aria-pressed={method === item.id} onClick={() => { setMethod(item.id); setCopied(false) }} className={`rounded-lg border px-3 py-2 text-sm ${method === item.id ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent' : 'border-fw-border hover:bg-fw-hover'}`}>{item.label}</button>)}</div>
+        <div className="mt-4 flex flex-wrap gap-2">{methods.map(item => <button key={item.id} type="button" disabled={busy} aria-pressed={method === item.id} onClick={() => { setMethod(item.id); setCopied(false); setError('') }} className={`rounded-lg border px-3 py-2 text-sm ${method === item.id ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent' : 'border-fw-border hover:bg-fw-hover'}`}>{item.label}</button>)}</div>
         <p className="mt-2 text-xs text-fw-text-muted">{methods.find(item => item.id === method)?.detail}</p>
+        {method !== 'shell' ? <fieldset disabled={busy} className="mt-3 flex flex-wrap gap-4 text-sm"><legend className="mb-1 text-xs font-medium">Authentication</legend>{[{ value: false, label: 'Pairing approval' }, { value: true, label: 'Pre-created token' }].map(mode => <label key={mode.label} className="flex items-center gap-2"><input type="radio" name="node-authentication" checked={tokenMode === mode.value} onChange={() => { setTokenMode(mode.value); setCopied(false); setError('') }} />{mode.label}</label>)}</fieldset> : null}
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <label className="text-xs font-medium">Reachable address<input aria-label="Reachable address" disabled={!!shellNodeId && method === 'shell'} value={method === 'shell' && shellNodeId ? shellBaseUrl : baseUrl} onChange={event => { setBaseUrl(event.target.value); setCommands({}) }} className={fieldClass} /></label>
-          <label className="text-xs font-medium">Node name<input aria-label="Node name" value={method === 'shell' && shellNodeId ? shellNodeId : nodeId} onChange={event => { setNodeId(event.target.value); setCommands({}) }} disabled={!!shellNodeId && method === 'shell'} className={fieldClass} /></label>
-          {method === 'bareMetal' ? <label className="text-xs font-medium">Installation directory<input aria-label="Installation directory" value={installDir} onChange={event => { setInstallDir(event.target.value); setCommands({}) }} className={fieldClass} /></label> : null}
+          <label className="text-xs font-medium">Reachable address<input aria-label="Reachable address" disabled={busy || (direct && !!created)} value={address} onChange={event => { setBaseUrl(event.target.value); setCommands({}); setCopied(false) }} className={fieldClass} /></label>
+          <label className="text-xs font-medium">Node name<input aria-label="Node name" value={name} onChange={event => { setNodeId(event.target.value); setCommands({}); setCopied(false) }} disabled={busy || (direct && !!created)} className={fieldClass} /></label>
+          {method === 'bareMetal' ? <label className="text-xs font-medium">Installation directory<input aria-label="Installation directory" disabled={busy} value={installDir} onChange={event => { setInstallDir(event.target.value); setCommands({}); setCreated(current => current ? { ...current, commands: { ...current.commands, bareMetal: '', bareMetalBackground: '', bareMetalInstall: '' } } : null); setCopied(false) }} className={fieldClass} /></label> : null}
         </div>
-        {method === 'bareMetal' ? <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={install} onChange={event => setInstall(event.target.checked)} />Start automatically with systemd</label> : null}
-        {method === 'docker' ? <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={compose} onChange={event => setCompose(event.target.checked)} />Manual Docker Compose</label> : null}
+        {method === 'bareMetal' ? <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" disabled={busy} checked={install} onChange={event => { setInstall(event.target.checked); setCopied(false) }} />Start automatically with systemd</label> : null}
+        {method === 'docker' ? <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" disabled={busy} checked={compose} onChange={event => { setCompose(event.target.checked); setCopied(false) }} />Manual Docker Compose</label> : null}
         <div className="mt-3 flex items-center gap-2">
-          {method === 'shell' ? !shellNodeId ? <button type="button" disabled={busy || !baseUrl || !nodeId} onClick={() => void createShell()} className="inline-flex items-center gap-2 rounded-lg bg-fw-accent px-3 py-2 text-sm font-medium text-fw-accent-text disabled:opacity-50"><Plus className="h-4 w-4" />Create</button> : <span className="text-sm">{shellNodeId} created. Copy its command before closing.</span> : <button type="button" disabled={busy || !baseUrl || !nodeId} onClick={() => void updateCommands()} className="inline-flex items-center gap-2 rounded-lg border border-fw-border px-3 py-2 text-sm hover:bg-fw-hover disabled:opacity-50"><RefreshCw className="h-4 w-4" />Update command</button>}
+          {direct && !created ? <button type="button" disabled={busy || !address || !name} onClick={() => void createNode()} className="inline-flex items-center gap-2 rounded-lg bg-fw-accent px-3 py-2 text-sm font-medium text-fw-accent-text disabled:opacity-50"><Plus className="h-4 w-4" />Create</button> : method !== 'shell' ? <button type="button" disabled={busy || !address || !name} onClick={() => void updateCommands()} className="inline-flex items-center gap-2 rounded-lg border border-fw-border px-3 py-2 text-sm hover:bg-fw-hover disabled:opacity-50"><RefreshCw className="h-4 w-4" />Update command</button> : null}
           {busy ? <span role="status" className="text-xs text-fw-text-muted">Loading…</span> : null}
         </div>
+        {direct && created ? <p className="mt-2 text-sm">{created.nodeId} created. Copy its command before closing.</p> : null}
         {error ? <p role="alert" className="mt-3 text-sm text-fw-danger">{error}</p> : null}
         {command ? <div className="mt-4 rounded-xl border border-fw-border bg-fw-canvas"><div className="flex items-center justify-between gap-2 border-b border-fw-border px-3 py-2"><span className="text-xs text-fw-text-muted">Run on the new Node</span><button type="button" onClick={() => { void navigator.clipboard.writeText(command).then(() => { if (mounted.current) setCopied(true) }).catch(() => { if (mounted.current) setError('Copy failed. Select the command and copy it manually.') }) }} className="inline-flex items-center gap-1.5 text-xs font-medium text-fw-accent">{copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}{copied ? 'Copied' : 'Copy command'}</button></div><pre data-node-command className="overflow-x-auto whitespace-pre-wrap break-all p-3 text-xs leading-5"><code>{command}</code></pre></div> : null}
         <p className="mt-2 text-xs text-fw-text-muted">Keep setup commands private. They contain credentials.</p>

@@ -28,15 +28,19 @@ test('bootstrap retains external metadata and gives independent literal-address 
 
 test('PowerShell commands inline literal addresses with explicit origin or deployment host', () => {
   for (const url of ['http://YOUR_MASTER:3001', 'https://example.invalid', "https://example.invalid/fox'base/$literal"]) {
-    const result = buildNodeBootstrapInfo({ pairingToken: 'TOKEN123', publicUrl: url });
-    assert.equal(result.endpoints.sourceUrl, `${url}/node/source.tar.gz`);
-    const [fetch, run] = result.examples.windows.split('\n');
-    const target = /^Invoke-WebRequest '((?:[^']|'')*)' -OutFile \.\\run\.ps1$/.exec(fetch)?.[1];
-    assert.equal(target?.replace(/''/g, "'"), `${url}/node/run.ps1`);
-    const host = /-HostUrl '((?:[^']|'')*)' -Pairing/.exec(run)?.[1];
-    assert.equal(host?.replace(/''/g, "'"), url);
-    assert.match(run, /-Pairing 'TOKEN123' -NodeId 'my-node'$/);
-    for (const command of Object.values(result.examples)) assert.doesNotMatch(command, /BASE_URL/);
+    for (const authToken of [undefined, "auth'token/$literal"]) {
+      const commands = buildNodeBootstrapCommands({ pairingToken: 'TOKEN123', baseUrl: url, authToken });
+      const [fetch, run] = commands.windows.split('\n');
+      const target = /^Invoke-WebRequest '((?:[^']|'')*)' -OutFile \.\\run\.ps1$/.exec(fetch)?.[1];
+      assert.equal(target?.replace(/''/g, "'"), `${url}/node/run.ps1`);
+      const host = /-HostUrl '((?:[^']|'')*)' -(?:Pairing|AuthToken)/.exec(run)?.[1];
+      assert.equal(host?.replace(/''/g, "'"), url);
+      if (authToken) {
+        assert.match(run, /-AuthToken 'auth''token\/\$literal' -NodeId 'my-node'$/);
+        assert.doesNotMatch(run, /-Pairing|TOKEN123/);
+      } else assert.match(run, /-Pairing 'TOKEN123' -NodeId 'my-node'$/);
+      for (const command of Object.values(commands)) assert.doesNotMatch(command, /BASE_URL/);
+    }
   }
 });
 
@@ -49,20 +53,24 @@ test('generated manual Compose commands preserve a path with shell/Compose metac
       await fs.writeFile(path.join(bin, command), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     }
     const url = "https://example.invalid/fox'base/$literal";
-    const example = buildNodeBootstrapInfo({ pairingToken: 'TOKEN123', publicUrl: url });
-    await execFileAsync('/bin/bash', ['-c', example.examples.manualCompose], {
-      cwd: root, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, timeout: 3_000,
-    });
-    const envFile = await fs.readFile(path.join(root, '.env'), 'utf8');
-    assert.match(envFile, /NODE_HOST='https:\/\/example.invalid\/fox\\'base\/\$literal'/);
-    assert.match(envFile, /NODE_SOURCE_URL='https:\/\/example.invalid\/fox\\'base\/\$literal\/node\/source.tar.gz'/);
-    assert.equal((await fs.stat(path.join(root, '.env'))).mode & 0o077, 0);
-    await fs.copy(path.resolve(__dirname, '../../templates/node/docker-compose.yaml'), path.join(root, 'docker-compose.yaml'));
-    const { stdout } = await execFileAsync('docker', ['compose', 'config', '--format', 'json'], { cwd: root, timeout: 5000 });
-    const service = JSON.parse(stdout).services['foxwarm-node'];
-    // Compose represents a literal dollar using $$ in serialized service values.
-    assert.equal(service.environment.NODE_URL.replace(/\$\$/g, '$'), url);
-    assert.equal(service.build.args.NODE_SOURCE_URL.replace(/\$\$/g, '$'), `${url}/node/source.tar.gz`);
+    for (const authToken of [undefined, "auth'token/$literal"]) {
+      const commands = buildNodeBootstrapCommands({ pairingToken: 'TOKEN123', baseUrl: url, authToken });
+      await execFileAsync('/bin/bash', ['-c', commands.manualCompose], {
+        cwd: root, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, timeout: 3_000,
+      });
+      const envFile = await fs.readFile(path.join(root, '.env'), 'utf8');
+      assert.match(envFile, /NODE_HOST='https:\/\/example.invalid\/fox\\'base\/\$literal'/);
+      assert.match(envFile, /NODE_SOURCE_URL='https:\/\/example.invalid\/fox\\'base\/\$literal\/node\/source.tar.gz'/);
+      assert.equal((await fs.stat(path.join(root, '.env'))).mode & 0o077, 0);
+      await fs.copy(path.resolve(__dirname, '../../templates/node/docker-compose.yaml'), path.join(root, 'docker-compose.yaml'));
+      const { stdout } = await execFileAsync('docker', ['compose', 'config', '--format', 'json'], { cwd: root, timeout: 5000 });
+      const service = JSON.parse(stdout).services['foxwarm-node'];
+      // Compose represents a literal dollar using $$ in serialized service values.
+      assert.equal(service.environment.NODE_URL.replace(/\$\$/g, '$'), url);
+      assert.equal(service.build.args.NODE_SOURCE_URL.replace(/\$\$/g, '$'), `${url}/node/source.tar.gz`);
+      assert.equal(service.environment.NODE_TOKEN, authToken ? '' : 'TOKEN123');
+      assert.equal(service.environment.NODE_AUTH_TOKEN.replace(/\$\$/g, '$'), authToken || '');
+    }
   } finally {
     await fs.remove(root);
   }
@@ -86,16 +94,21 @@ fi
     const url = "https://example.invalid/deploy'path/$literal";
     const directory = "/opt/node's directory/$literal";
     const token = "fixture'token/$literal";
-    const commands = buildNodeBootstrapCommands({ baseUrl: url, pairingToken: token, installDir: directory, nodeId: 'literal-node', authToken: token });
-    for (const [name, command] of Object.entries(commands).filter(([name]) => !['windows', 'manualCompose'].includes(name))) {
-      await fs.remove(path.join(root, 'args')); await fs.remove(path.join(root, 'urls'));
-      await execFileAsync('/bin/sh', ['-c', command], { cwd: root, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CURL_LOG: path.join(root, 'urls'), LAUNCH_LOG: path.join(root, 'args') }, timeout: 3000 });
-      const args = (await fs.readFile(path.join(root, 'args'), 'utf8')).split('\0').filter(Boolean);
-      assert.ok(args.includes(`--host=${url}`), name);
-      assert.ok(args.includes('--node-id=literal-node'), name);
-      if (name !== 'shell') assert.ok(args.includes(`--pairing=${token}`), name);
-      if (name.startsWith('bareMetal')) assert.ok(args.includes(`--dir=${directory}`), name);
-      assert.ok((await fs.readFile(path.join(root, 'urls'), 'utf8')).startsWith(`${url}/node/`), name);
+    for (const authToken of [undefined, token]) {
+      const commands = buildNodeBootstrapCommands({ baseUrl: url, pairingToken: token, installDir: directory, nodeId: 'literal-node', authToken });
+      for (const [name, command] of Object.entries(commands).filter(([name]) => !['windows', 'manualCompose'].includes(name))) {
+        await fs.remove(path.join(root, 'args')); await fs.remove(path.join(root, 'urls'));
+        await execFileAsync('/bin/sh', ['-c', command], { cwd: root, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CURL_LOG: path.join(root, 'urls'), LAUNCH_LOG: path.join(root, 'args') }, timeout: 3000 });
+        const args = (await fs.readFile(path.join(root, 'args'), 'utf8')).split('\0').filter(Boolean);
+        assert.ok(args.includes(`--host=${url}`), name);
+        assert.ok(args.includes('--node-id=literal-node'), name);
+        if (name !== 'shell') {
+          assert.ok(args.includes(`${authToken ? '--auth-token' : '--pairing'}=${token}`), name);
+          assert.ok(!args.some(arg => arg.startsWith(authToken ? '--pairing=' : '--auth-token=')), name);
+        }
+        if (name.startsWith('bareMetal')) assert.ok(args.includes(`--dir=${directory}`), name);
+        assert.ok((await fs.readFile(path.join(root, 'urls'), 'utf8')).startsWith(`${url}/node/`), name);
+      }
     }
   } finally { await fs.remove(root); }
 });

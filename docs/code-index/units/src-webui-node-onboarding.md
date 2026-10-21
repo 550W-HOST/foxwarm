@@ -9,7 +9,7 @@ Registers focused Main-authenticated WebUI Node setup/approval actions without a
 
 ## Export and function index
 
-- `registerWebUiNodeOnboardingRoutes(server)` — installs the four onboarding routes through ordinary `HttpServer.addRoute` authentication, with no-store responses.
+- `registerWebUiNodeOnboardingRoutes(server)` — installs the onboarding routes through ordinary `HttpServer.addRoute` authentication, with no-store responses.
 - `objectBody(req)` / `stringField(value, fallback, name, max)` — validate small expected request fields without returning request credentials in errors.
 - `commandInput(req)` — chooses an explicit address override, otherwise configured public URL or caller's browser fallback; reuses public URL validation, validates name/directory and never fetches the address.
 
@@ -17,12 +17,13 @@ Registers focused Main-authenticated WebUI Node setup/approval actions without a
 
 | Route | Observable behavior |
 |---|---|
-| `POST /api/nodes/onboarding/commands` | Uses the shared pure command generator, resolving configured/default/explicit addresses and returning modal-owned setup commands. Only this setup request includes the shared pairing credential. |
+| `POST /api/nodes/onboarding/commands` | Uses the shared pure command generator, resolving configured/default/explicit addresses and returning modal-owned setup commands. Defaults to the shared pairing credential; an explicitly supplied `authToken` instead generates direct-auth commands without reading the pairing token, provisioning trust or recovering a credential. |
 | `GET /api/nodes/onboarding/pending` | Filters out approved offline handoffs, reports the real remaining total and at most 50 allowlisted metadata rows, with offset continuation. No tokens, hashes or capability bodies leave this list. |
 | `POST /api/nodes/onboarding/approve` | Explicitly approves an unapproved request through the existing registry. Returns only Node ID and live delivery status. Missing/stale/already-approved/name-conflict state is 409; invalid names are 400. |
-| `POST /api/nodes/onboarding/create-shell` | Explicitly reserves a new approved ID, rejecting online/approved/reserved conflicts, and returns the direct-auth command once after the existing hash persistence. It does not register an online Node or create pending state. |
+| `POST /api/nodes/onboarding/create` | Explicitly reserves a new approved ID, rejecting online/approved/reserved conflicts, and returns its per-node credential, bound address/name and all direct-auth commands once after the existing hash persistence. It does not register an online Node or create pending state. |
+| `POST /api/nodes/onboarding/create-shell` | Retains the existing Shell-only response shape and the same explicit creation semantics for this HTTP API. The modal uses the general create action. |
 
-All routes retain ordinary authenticated Main cookie/Bearer authorization. Credentials do not enter ordinary `/nodes` or pending metadata responses, URLs or route logs. Shared bootstrap credentials are read only for the commands action; per-node credentials appear only in the explicit create response. No creation retry, receipt platform or server fetch of user-provided URLs is introduced.
+All routes retain ordinary authenticated Main cookie/Bearer authorization. Credentials do not enter ordinary `/nodes` or pending metadata responses, URLs or route logs. Shared bootstrap credentials are read only for pairing commands. The initial per-node credential is returned only by explicit creation; command regeneration may echo the credential supplied by the caller but cannot recover it from the registry. No creation retry, receipt platform or server fetch of user-provided URLs is introduced.
 
 The registry checks the same unapproved pending entry immediately before trust mutation after asynchronous allocation. Two concurrent browser approvals therefore cannot turn the same request into two identities; already approved offline credentials remain claimable through the existing Node protocol.
 
@@ -30,4 +31,4 @@ The registry checks the same unapproved pending entry immediately before trust m
 
 `WebUIChannel` registers this helper only with WebUI enabled. The [modal](./webui-node-onboarding.md) owns command responses and explicit actions; ordinary Node summaries remain unchanged. CLI help and external bootstrap information share `buildNodeBootstrapCommands` without adding model-tool parameters.
 
-The route fixture uses a temporary Main data/config directory and real authenticated HTTP, registry persistence, pending approval and credential verification. It checks config precedence/user override, invalid URLs, no implicit create, 50-row bounds with exact totals, offline-approved exclusion, concurrent/stale approval, explicit Shell create/conflicts/hash authentication, no-store and secret-free summaries. Separate browser coverage exercises the same routes from the actual React component.
+The route fixture uses a temporary Main data/config directory and real authenticated HTTP, registry persistence, pending approval and credential verification. It checks config precedence/user override, invalid URLs, no implicit create, 50-row bounds with exact totals, offline-approved exclusion, concurrent/stale approval, explicit create in both response shapes, concurrent/name/reserved conflicts, hash-only persistence/authentication, direct command regeneration without provisioning/rotation, persistence-failure rollback and scoped-identity rejection, no-store and secret-free summaries. Separate browser coverage exercises the same routes from the actual React component.

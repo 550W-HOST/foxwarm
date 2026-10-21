@@ -9,6 +9,7 @@ import type { AddressInfo } from 'node:net';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { NODE_SOURCE_FILES, NODE_SOURCE_TAR_EXCLUDES } from './httpRoutes';
+import { buildNodeBootstrapCommands } from './bootstrapInfo';
 
 const execFileAsync = promisify(execFile);
 const RUN_SH = path.resolve(__dirname, '../../templates/node/run.sh');
@@ -195,6 +196,61 @@ exit 0
   } finally {
     await fs.remove(fixture.root);
   }
+});
+
+test('generated pairing and token commands reach the real Linux, systemd, interactive and Docker consumers', async () => {
+  const fixture = await makeFixture({ userSystemd: true });
+  const templateDir = path.resolve(__dirname, '../../templates/node');
+  const host = "https://example.invalid/deploy'path/$literal";
+  const token = "fixture'token/$literal";
+  try {
+    // Only external effects are stubbed: generated commands download the actual
+    // launchers, which prepare files and call the client/service/container boundary.
+    await writeExecutable(path.join(fixture.bin, 'curl'), `#!/bin/sh
+out=
+url=
+while [ "$#" -gt 0 ]; do
+  case "$1" in -o) out=$2; shift 2 ;; http*) url=$1; shift ;; *) shift ;; esac
+done
+case "$url" in
+  */source.tar.gz) exit 0 ;;
+  *) file="$TEMPLATE_DIR/\${url##*/}" ;;
+esac
+if [ -n "$out" ]; then cp "$file" "$out"; else cat "$file"; fi
+`);
+    await writeExecutable(path.join(fixture.bin, 'node'), '#!/bin/sh\nprintf "%s\\0" "$@" > "$MOCK_CALLS/node"\n');
+    await writeExecutable(path.join(fixture.bin, 'docker'), '#!/bin/sh\nprintf "%s\\n" "$*" >> "$MOCK_CALLS/docker"\n');
+    const env = { ...fixture.env, TEMPLATE_DIR: templateDir };
+    for (const authToken of [undefined, token]) {
+      const mode = authToken ? 'direct' : 'pairing';
+      const installDir = path.join(fixture.root, `${mode} install's $literal`);
+      const commands = buildNodeBootstrapCommands({ baseUrl: host, pairingToken: token, authToken, nodeId: 'generated-node', installDir });
+      const assertClientArgs = async () => {
+        const args = (await fs.readFile(path.join(fixture.calls, 'node'), 'utf8')).split('\0');
+        assert.ok(args.includes(host));
+        assert.ok(args.includes('generated-node'));
+        assert.ok(args.includes(authToken ? '--auth-token' : '--token'));
+        assert.ok(!args.includes(authToken ? '--token' : '--auth-token'));
+        assert.ok(args.includes(token));
+      };
+      for (const method of ['bareMetal', 'bareMetalInstall', 'interactive', 'docker'] as const) {
+        const cwd = path.join(fixture.root, `${mode}-${method}`);
+        await fs.ensureDir(cwd);
+        await execFileAsync('/bin/sh', ['-c', commands[method]], { cwd, env, timeout: 5000 });
+        if (method === 'bareMetalInstall') {
+          const unit = await fs.readFile(path.join(installDir, 'systemd/foxwarm-node-generated-node.service'), 'utf8');
+          assert.ok(unit.includes('run-node-client.sh'));
+          await execFileAsync('/bin/sh', [path.join(installDir, 'run-node-client.sh')], { env, timeout: 5000 });
+          await assertClientArgs();
+        } else if (method === 'docker') {
+          const envFile = await fs.readFile(path.join(cwd, '.env'), 'utf8');
+          assert.ok(envFile.includes(`NODE_AUTH_TOKEN='${authToken ? "fixture\\'token/$literal" : ''}'`));
+          assert.ok(envFile.includes(`NODE_PAIRING_TOKEN='${authToken ? '' : "fixture\\'token/$literal"}'`));
+          assert.equal((await fs.stat(path.join(cwd, '.env'))).mode & 0o077, 0);
+        } else await assertClientArgs();
+      }
+    }
+  } finally { await fs.remove(fixture.root); }
 });
 
 test('Docker Node startup skips global token-file wait with credentials or direct auth', async () => {
