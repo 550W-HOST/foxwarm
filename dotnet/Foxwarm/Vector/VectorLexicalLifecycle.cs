@@ -74,6 +74,8 @@ internal sealed partial class VectorLexicalRuntime
 
     private async Task ShadowCatchupAsync(ArchiveSearchIndex current)
     {
+        // Keep recovery's initial catchup enumeration off the readiness call stack too.
+        await Task.Yield();
         while (!stopping)
         {
             lock (lane)

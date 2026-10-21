@@ -124,7 +124,8 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
         try
         {
             await OpenOrRecoverAsync();
-            if (ready)
+            // Promotion can become ready while the retained shadow startup is still running.
+            if (ready && startup.IsCompleted)
                 startup = StartupBackfillAsync();
         }
         catch
@@ -288,6 +289,8 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
     private async Task StartupBackfillAsync()
     {
         backfilling = true;
+        // Open/recovery gates readiness; enumeration belongs to the retained startup task.
+        await Task.Yield();
         try
         {
             foreach (var entry in Archive("main").LocalVectorMaxima())

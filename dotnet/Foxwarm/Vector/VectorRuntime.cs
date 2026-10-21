@@ -76,6 +76,8 @@ internal sealed partial class VectorRuntime : IAsyncDisposable
 
     private async Task StartupAsync()
     {
+        // Retain startup completion without running enumeration on the readiness call stack.
+        await Task.Yield();
         try
         {
             await maintenance!.StartupAsync();
