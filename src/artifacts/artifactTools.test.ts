@@ -1,3 +1,4 @@
+import '../testEnvironment';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
@@ -57,4 +58,79 @@ test('remote manifests use Node read facade with exact source cwd; explicit othe
     await tool_artifact({ action: 'publish', node: 'remote-b', filePath: 'plot.json' }, ctx);
     assert.deepEqual(calls[1][3], { currentNode: 'remote-b' });
   } finally { (nodeExecution as any).readNodeFile = original; }
+});
+
+test('primitive artifact sources enforce byte bounds before reads, retain qualified routing and read policy', async () => {
+  const { NodeProviderRegistry } = await import('../nodes/providerRegistry');
+  const { nodeProviderRegistry } = await import('../nodes/providers');
+  const { nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler } = await import('../nodeExecutionService');
+  const { RpcServiceRegistry, LocalRpcTransport } = await import('../rpc');
+  const { setToolAuthorizationPolicyForTests } = await import('../toolAuthorization');
+  const providerId = 'p'.repeat(64), nodeId = `${providerId}/${'n'.repeat(128)}`;
+  const id = `artifact_primitive_${Date.now()}`;
+  const session = await sessionManager.getSession(id);
+  session.currentNode = nodeId;
+  session.cwd = 'urn:project';
+  await sessionManager.saveSession(id);
+  const document = await fs.readFile(manifest);
+  let bytes: Buffer = document;
+  let declaredSize = bytes.length;
+  const calls: any[] = [];
+  const descriptor: any = { id: nodeId, provider: providerId, kind: 'sandbox', type: 'memory', availability: 'ready', primitiveBackends: { filesystem: 'read' } };
+  const providers = new NodeProviderRegistry([{
+    id: providerId,
+    listNodes: () => [descriptor],
+    getNode: target => target === nodeId ? descriptor : undefined,
+    async invokeFilesystem(request) {
+      calls.push(request);
+      if (request.operation === 'stat') return { kind: 'file', size: declaredSize, modifiedAtMs: 1 };
+      if (request.operation === 'read') return { dataBase64: bytes.subarray(request.offset, request.offset! + request.count!).toString('base64') };
+      throw new Error('Unexpected primitive');
+    },
+  }]);
+  const registry = new RpcServiceRegistry();
+  registry.register(nodeExecutionServiceDescriptor, createNodeExecutionServiceHandler({ expectedSourceSessionId: id, providerRegistry: providers }));
+  const transport = new LocalRpcTransport(registry);
+  const originalRead = nodeProviderRegistry.readFile;
+  nodeProviderRegistry.readFile = providers.readFile.bind(providers);
+  await nodeExecution.initializeNodeExecution({ transport, placement: 'child-reverse' });
+  const ctx: any = { sessionId: id, session, sessionPlacement: 'session-worker', persistCurrentSession: async () => {} };
+  try {
+    const prepared: any = await call_tool({ toolId: 'builtin:artifact', args: { action: 'prepare', node: nodeId, filePath: 'urn:plot' } }, ctx);
+    assert.equal(prepared.preparedArtifact.type, 'chart');
+    assert.equal(nodeId.length, 193);
+    assert.ok(calls.every(call => call.nodeId === nodeId && call.sourceSessionId === id && call.context.cwd === 'urn:project'));
+    bytes = Buffer.concat([document, Buffer.alloc(2 * 1024 * 1024 - document.length, ' ')]);
+    declaredSize = bytes.length;
+    const exact: any = await call_tool({ toolId: 'builtin:artifact', args: { action: 'prepare', filePath: 'urn:exact-limit' } }, ctx);
+    assert.equal(exact.preparedArtifact.type, 'chart', 'a source exactly at the bound remains accepted');
+    const sharp = (await import('sharp')).default;
+    bytes = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#397eee' } }).png().toBuffer();
+    declaredSize = bytes.length;
+    const image: any = await call_tool({ toolId: 'builtin:artifact', args: { action: 'prepare', type: 'image', filePath: 'urn:figure.png' } }, ctx);
+    assert.deepEqual((await artifactStore.resource(image.preparedArtifact.artifactId, 1, id, 'image')).bytes, bytes);
+    for (const [type, size] of [[undefined, 8 * 1024 * 1024], ['image', 16 * 1024 * 1024]] as const) {
+      bytes = Buffer.alloc(size); declaredSize = bytes.length; calls.length = 0;
+      await assert.rejects(call_tool({ toolId: 'builtin:artifact', args: { action: 'prepare', filePath: 'urn:oversized', ...(type ? { type } : {}) } }, ctx), /exceeds/);
+      assert.deepEqual(calls.map(call => call.operation), ['stat'], 'honest oversized file is rejected without reading any bytes');
+      console.log('oversized-source', JSON.stringify({ type: type || 'manifest', declaredSize, statCalls: calls.length, readCalls: 0, bytesRead: 0 }));
+    }
+    // A source growing after stat still cannot make Core consume its whole size.
+    bytes = Buffer.alloc(8 * 1024 * 1024); declaredSize = document.length; calls.length = 0;
+    await assert.rejects(call_tool({ toolId: 'builtin:artifact', args: { action: 'prepare', filePath: 'urn:growing' } }, ctx), /exceeds/);
+    const consumed = calls.filter(call => call.operation === 'read').reduce((sum, call) => sum + call.count, 0);
+    assert.equal(consumed, 2 * 1024 * 1024 + 1);
+    console.log('growing-source', JSON.stringify({ declaredSize, actualSize: bytes.length, requestedBytes: consumed }));
+    calls.length = 0;
+    setToolAuthorizationPolicyForTests({ version: 1, defaultAction: 'allow', rules: [{ id: 'deny-source', enabled: true, match: { tool: { source: 'node', name: 'read' } }, action: 'deny' }] });
+    await assert.rejects(call_tool({ toolId: 'builtin:artifact', args: { action: 'prepare', filePath: 'urn:denied' } }, ctx), /den(?:ied|ies)/i);
+    assert.equal(calls.length, 0, 'read authorization rejects before provider lookup or reads');
+  } finally {
+    setToolAuthorizationPolicyForTests(undefined);
+    nodeProviderRegistry.readFile = originalRead;
+    await nodeExecution.shutdownNodeExecution(); nodeExecution.resetNodeExecutionForTests();
+    await transport.drain(); transport.close();
+    await shutdownMainManagementTools(); resetMainManagementToolsForTests();
+    await sessionManager.deleteSession(id);
+  }
 });
