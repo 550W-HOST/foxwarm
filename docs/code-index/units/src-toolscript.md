@@ -1,7 +1,7 @@
 # Unit: src-toolscript
 
 Files: src/toolscript.ts, src/toolscript.test.ts, src/toolscriptWait.test.ts, src/toolscriptImageParts.test.ts, src/toolscriptSource.test.ts, src/toolscriptSourceRouting.test.ts
-Secondary files: src/toolscriptSkills.test.ts, src/sessionTurnRunnerDetachedOwner.test.ts, src/sessionWorkerHost.test.ts, skills/toolscript-automation/SKILL.md, package.json, package-lock.json
+Secondary files: src/timerScript.ts, src/timerScript.test.ts, src/toolscriptSkills.test.ts, src/sessionTurnRunnerDetachedOwner.test.ts, src/sessionWorkerHost.test.ts, skills/toolscript-automation/SKILL.md, package.json, package-lock.json
 
 ## Purpose
 
@@ -9,6 +9,7 @@ Implements persisted foreground/background ToolScript runs in the Monty 0.0.19 P
 
 ## Actual exports
 
+- `normalizeToolScriptStartArgs(args)` — starter/source-input validation without file I/O, reused by timer registration.
 - `tool_run_script(args, ctx)` — start an inline run or load complete file source from `node` plus `filePath`; mode may be foreground or background.
 - `tool_start_toolscript_run(args, ctx)` — hidden compatibility-only background starter; current callers use `tool_run_script` with background mode.
 - `tool_continue_script(args, ctx)` — resume an agent-input or timeout-checkpoint wait owned by the current session.
@@ -20,6 +21,10 @@ Implements persisted foreground/background ToolScript runs in the Monty 0.0.19 P
 ToolScript result/run types are internal, not exported TypeScript API types.
 
 Host calls inherit only the current invocation signal and check it before another host effect; persisted background resumption receives a fresh context, not an old turn signal. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
+
+Scheduled invocation uses canonical authorized dispatch with a fresh enclosing execution scope, not the outer model batch executor. It cannot arm a terminal owner wait or consume caller-turn post-actions. Ordinary explicit tool effects, persisted pauses/manual continuation, and explicit model requests are unchanged. Scheduling/ownership/overlap contracts are in [src-timers](./src-timers.md).
+
+Real run/continue host calls carry their actual `toolScriptRunId` through the closed Main-management send path, allowing authorized self-notification without granting direct model calls that exception. The canonical delivery contract is [script self-notification](./src-session-misc.md#d-script-self-notification).
 
 ## Host API
 

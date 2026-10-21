@@ -252,6 +252,18 @@ async function start(): Promise<void> {
         __meta: { llmRequestId: 'worker-prefix-request', llmSegment: { outputStart: 1, outputEndExclusive: 3, complete: true } } });
       return { text: 'Final', allParts: [{ thinking: 'After' }, { text: 'Final', phase: 'final_answer' }] };
     }
+    if (process.env.FOXWARM_TEST_TIMER_SAFEPOINT === '1' && chatCount <= 2) {
+      const phase = chatCount;
+      await fs.writeFile(path.join(STATE_DIR, `timer-provider-${phase}-started`), '1');
+      while (!await fs.pathExists(path.join(STATE_DIR, `timer-provider-${phase}-release`))) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      if (phase === 1) {
+        const call = { id: 'timer-boundary-tool', name: 'session', args: { action: 'status' } };
+        await options.appendMessage({ role: 'model', parts: [{ functionCall: call }] });
+        return { toolCalls: [call] };
+      }
+    }
     // Simulates a slow provider request that honors its abort signal, like the
     // real runner: the controller is registered for the in-flight request and
     // the request rejects AbortError when interrupted.
@@ -381,6 +393,8 @@ async function start(): Promise<void> {
   await initializeSessionWorkerPresentation({ transport: reverseTransport });
   await initializeMcpExternalService({ transport: reverseTransport, placement: 'child-reverse' });
   await vector.init({ transport: reverseTransport, placement: 'child-reverse' });
+  let timerWasBusy = false;
+  let timerBusyClaims = 0;
   const host = new SessionWorkerHost(identity, store, {
     catalogStub,
     publishCommitted: projection => publishCommitted(identity, projection),
@@ -403,6 +417,20 @@ async function start(): Promise<void> {
         }
         if (failWrites.delete(writeCount)) throw new Error(`test write failure ${writeCount}`);
         await writeAuthoritativeSessionState(session);
+        if (process.env.FOXWARM_TEST_TIMER_SAFEPOINT === '1') {
+          if (session.busy && !timerWasBusy) timerBusyClaims += 1;
+          timerWasBusy = !!session.busy;
+          // Reverse self-delivery admits another runPending. Even an empty wake
+          // claims busy before observing its now-consumed queue. Hold its actual
+          // persistence boundary so the original submit response cannot stand in
+          // for completion of every accepted owner operation in the test.
+          if (session.busy && timerBusyClaims === 2) {
+            await fs.writeFile(path.join(STATE_DIR, 'timer-extra-wake-started'), '1');
+            while (!await fs.pathExists(path.join(STATE_DIR, 'timer-extra-wake-release'))) {
+              await new Promise(resolve => setTimeout(resolve, 10));
+            }
+          }
+        }
       },
     },
     initialize: async () => {

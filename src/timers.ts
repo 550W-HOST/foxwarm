@@ -6,6 +6,7 @@ import { logger } from './common';
 import * as sessionManager from './sessionManager';
 import * as sessionRuntime from './sessionRuntime';
 import type { Session } from './types';
+import { normalizeTimerScript, type TimerScript } from './timerScript';
 import { DiskJsonData } from './utils/diskJsonData';
 import { formatLocalTimestamp } from './utils/localTime';
 import { formatFoxwarmMessageClose, formatFoxwarmMessageOpen, formatFoxwarmSystem } from './utils/promptWrappers';
@@ -14,7 +15,9 @@ import { normalizeProspectiveSessionModelEffortSettings } from './session/modelE
 export interface SessionTimer {
   id: string;
   sessionId: string;
+  action?: 'message' | 'toolscript';
   message: string;
+  script?: TimerScript;
   createdAt: number;
   newSession?: boolean;
   sessionPrefix?: string;
@@ -37,6 +40,25 @@ export interface TimerView extends SessionTimer {
 const timers = new Map<string, SessionTimer>();
 const jobs = new Map<string, Job>();
 let initialized = false;
+let shuttingDown = false;
+const scriptInvocations = new Map<string, Promise<void>>();
+
+/** Close script admission before draining accepted work and its host dependencies. */
+export async function shutdownTimers(): Promise<void> {
+  shuttingDown = true;
+  cancelAllJobs();
+  await Promise.allSettled([...scriptInvocations.values()]);
+}
+
+export function getTimerAction(timer: Pick<SessionTimer, 'action'>): 'message' | 'toolscript' {
+  return timer.action || 'message';
+}
+
+export function describeTimerAction(timer: SessionTimer): string {
+  return getTimerAction(timer) === 'toolscript'
+    ? `ToolScript (${timer.script?.code ? 'inline' : `${timer.script?.node || 'current'}: ${timer.script?.filePath}`})`
+    : 'message';
+}
 
 function normalizeTimersPayload(raw: any, filePath: string): { timers: any[] } {
   if (!raw || typeof raw !== 'object') {
@@ -65,12 +87,14 @@ export function setTimersStoreForTests(store: DiskJsonData<{ timers: any[] }> | 
   cancelAllJobs();
   timers.clear();
   initialized = false;
+  shuttingDown = false;
 }
 
 export function resetTimersForTests(): void {
   cancelAllJobs();
   timers.clear();
   initialized = false;
+  shuttingDown = false;
   triggeredSessionNameFactory = buildTriggeredSessionName;
 }
 
@@ -187,6 +211,21 @@ async function fireTimer(timerId: string, modelsConfigOverride?: ModelsConfig): 
   if (!timer) {
     return;
   }
+  if (getTimerAction(timer) === 'toolscript') {
+    if (shuttingDown || scriptInvocations.has(timerId)) return;
+    // Reserve synchronously before the invocation can await owner admission.
+    const invocation = Promise.resolve().then(() => fireScriptTimer(timer));
+    scriptInvocations.set(timerId, invocation);
+    try { await invocation; }
+    finally {
+      scriptInvocations.delete(timerId);
+      // A replacement one-time deadline may have passed while its predecessor ran.
+      const replacement = timers.get(timerId);
+      if (!shuttingDown && replacement && replacement !== timer && !isCronTimer(replacement)
+          && typeof replacement.at === 'number' && replacement.at <= Date.now()) scheduleTimer(replacement);
+    }
+    return;
+  }
   const firedAt = new Date();
 
   if (timer.waitTimeoutId) {
@@ -255,7 +294,7 @@ async function fireTimer(timerId: string, modelsConfigOverride?: ModelsConfig): 
   } catch (err) {
     logger.error({ err, timerId, sessionId: timer.sessionId }, 'Timer delivery failed');
 
-    if (!isCronTimer(timer)) {
+    if (timers.get(timer.id) === timer && !isCronTimer(timer)) {
       cancelTimerJob(timer.id);
       timers.delete(timer.id);
       await saveTimers();
@@ -263,6 +302,8 @@ async function fireTimer(timerId: string, modelsConfigOverride?: ModelsConfig): 
     return;
   }
 
+  // Delivery awaited; an accepted update/delete now owns this ID, not the old firing.
+  if (timers.get(timer.id) !== timer) return;
   timer.lastTriggeredAt = firedAt.getTime();
 
   if (isCronTimer(timer)) {
@@ -273,6 +314,28 @@ async function fireTimer(timerId: string, modelsConfigOverride?: ModelsConfig): 
   cancelTimerJob(timer.id);
   timers.delete(timer.id);
   await saveTimers();
+}
+
+async function fireScriptTimer(timer: SessionTimer): Promise<void> {
+  const firedAt = Date.now();
+  try {
+    const outcome = await sessionRuntime.runTimerScript(timer.sessionId, timer.script!);
+    const details = { timerId: timer.id, sessionId: timer.sessionId, ...outcome };
+    if (outcome.status === 'failed') logger.warn(details, 'Timer ToolScript failed');
+    else logger.info(details, 'Timer ToolScript finished');
+  } catch (err) {
+    logger.error({ err, timerId: timer.id, sessionId: timer.sessionId }, 'Timer ToolScript invocation failed');
+  } finally {
+    // Update/delete while the script awaits must not remove or resurrect a replacement.
+    if (timers.get(timer.id) === timer) {
+      timer.lastTriggeredAt = firedAt;
+      if (!isCronTimer(timer)) {
+        cancelTimerJob(timer.id);
+        timers.delete(timer.id);
+      }
+      await saveTimers();
+    }
+  }
 }
 
 export async function fireTimerForTests(timerId: string, modelsConfigOverride?: ModelsConfig): Promise<void> {
@@ -407,7 +470,26 @@ function normalizeTimerScheduleArgs(args: {
   return { at, cron, scheduleProvided: true };
 }
 
+function normalizeTimerAction(args: { action?: unknown; message?: unknown; script?: unknown; newSession?: unknown;
+  sessionPrefix?: unknown; agentName?: unknown; currentNode?: unknown; model?: unknown }): Pick<SessionTimer, 'action' | 'message' | 'script'> {
+  const action = args.action === undefined ? 'message' : args.action;
+  if (action !== 'message' && action !== 'toolscript') throw new Error('action must be message or toolscript.');
+  if (action === 'message') {
+    if (args.script !== undefined) throw new Error('script requires action=toolscript.');
+    if (typeof args.message !== 'string' || !args.message.trim()) throw new Error('`message` is required.');
+    return { action, message: args.message.trim() };
+  }
+  if (args.message !== undefined && args.message !== '') throw new Error('message requires action=message.');
+  if (args.newSession === true || ['sessionPrefix', 'agentName', 'currentNode', 'model'].some(key =>
+      normalizeOptionalString((args as Record<string, unknown>)[key]) !== undefined)) {
+    throw new Error('ToolScript timers run in their owner Session; new-session settings require action=message.');
+  }
+  return { action, message: '', script: normalizeTimerScript(args.script) };
+}
+
 function normalizeCreateArgs(args: {
+  action?: unknown;
+  script?: unknown;
   at?: unknown;
   afterSeconds?: unknown;
   cron?: unknown;
@@ -418,16 +500,13 @@ function normalizeCreateArgs(args: {
   currentNode?: unknown;
   model?: unknown;
 }) {
-  if (typeof args.message !== 'string' || !args.message.trim()) {
-    throw new Error('`message` is required.');
-  }
-
+  const payload = normalizeTimerAction(args);
   const schedule = normalizeTimerScheduleArgs(args, { required: true });
 
   return {
     at: schedule.at,
     cron: schedule.cron,
-    message: args.message.trim(),
+    ...payload,
     newSession: args.newSession === true,
     sessionPrefix: args.sessionPrefix === undefined ? undefined : normalizeSessionPrefix(String(args.sessionPrefix)),
     agentName: normalizeOptionalString(args.agentName),
@@ -437,6 +516,8 @@ function normalizeCreateArgs(args: {
 }
 
 function normalizeTimerUpdate(existing: SessionTimer, ownerSession: Pick<Session, 'agent' | 'currentNode' | 'model' | 'effort'> | null, args: {
+  action?: unknown;
+  script?: unknown;
   message?: unknown;
   at?: unknown;
   afterSeconds?: unknown;
@@ -455,11 +536,28 @@ function normalizeTimerUpdate(existing: SessionTimer, ownerSession: Pick<Session
   const hasNewSessionFieldUpdate = ['sessionPrefix', 'agentName', 'currentNode', 'model']
     .some(key => normalizeOptionalString((args as Record<string, unknown>)[key]) !== undefined);
 
-  if (!schedule.scheduleProvided && !hasMessageUpdate && !newSessionProvided && !hasNewSessionFieldUpdate) {
+  if (!schedule.scheduleProvided && !hasMessageUpdate && !newSessionProvided && !hasNewSessionFieldUpdate && args.action === undefined && args.script === undefined) {
     throw new Error('At least one timer field must be supplied to update.');
   }
 
   const updated: SessionTimer = { ...existing };
+  const action = args.action === undefined ? getTimerAction(existing) : args.action;
+  const switched = action !== getTimerAction(existing);
+  const payload = normalizeTimerAction({
+    ...args, action,
+    message: args.message === undefined ? (switched ? undefined : existing.message) : args.message,
+    script: args.script === undefined ? (switched ? undefined : existing.script) : args.script,
+  });
+  Object.assign(updated, payload);
+  updated.script = payload.script;
+  if (switched || action === 'toolscript') {
+    updated.newSession = false;
+    updated.sessionPrefix = undefined;
+    updated.agentName = undefined;
+    updated.currentNode = undefined;
+    updated.model = undefined;
+    updated.effort = undefined;
+  }
   if (schedule.scheduleProvided) {
     updated.at = schedule.at;
     updated.cron = schedule.cron;
@@ -469,6 +567,8 @@ function normalizeTimerUpdate(existing: SessionTimer, ownerSession: Pick<Session
     updated.lastTriggeredAt = undefined;
   }
 
+  if (getTimerAction(updated) === 'toolscript') return updated;
+
   if (hasMessageUpdate) {
     if (typeof args.message !== 'string' || !args.message.trim()) {
       throw new Error('`message` must be a non-empty string when supplied.');
@@ -476,7 +576,7 @@ function normalizeTimerUpdate(existing: SessionTimer, ownerSession: Pick<Session
     updated.message = args.message.trim();
   }
 
-  const finalNewSession = newSessionProvided ? args.newSession === true : existing.newSession === true;
+  const finalNewSession = newSessionProvided ? args.newSession === true : !switched && existing.newSession === true;
   updated.newSession = finalNewSession;
 
   const newSessionOnlyFields = ['sessionPrefix', 'agentName', 'currentNode', 'model'];
@@ -523,14 +623,22 @@ function validatePersistedTimer(raw: any): SessionTimer | null {
     return null;
   }
 
-  if (typeof raw.id !== 'string' || typeof raw.sessionId !== 'string' || typeof raw.message !== 'string') {
+  if (typeof raw.id !== 'string' || typeof raw.sessionId !== 'string' || (raw.action !== 'toolscript' && typeof raw.message !== 'string')) {
     return null;
   }
 
+  if (raw.action !== undefined && raw.action !== 'message' && raw.action !== 'toolscript') return null;
+  let script: TimerScript | undefined;
+  if (raw.action === 'toolscript') {
+    if (raw.waitTimeoutId) return null;
+    try { script = normalizeTimerAction(raw).script; } catch { return null; }
+  }
   const timer: SessionTimer = {
+    action: raw.action,
+    script,
     id: raw.id,
     sessionId: raw.sessionId,
-    message: raw.message,
+    message: raw.action === 'toolscript' ? '' : raw.message,
     createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
     newSession: raw.newSession === true,
     sessionPrefix: typeof raw.sessionPrefix === 'string' ? raw.sessionPrefix : undefined,
@@ -601,7 +709,9 @@ export async function initializeTimers(): Promise<void> {
 
 export async function createTimer(args: {
   sessionId: string;
-  message: string;
+  action?: unknown;
+  script?: unknown;
+  message?: string;
   at?: unknown;
   afterSeconds?: unknown;
   cron?: unknown;
@@ -632,7 +742,9 @@ export async function createTimer(args: {
   const timer: SessionTimer = {
     id: generateTimerId(),
     sessionId: args.sessionId,
+    action: normalized.action,
     message: normalized.message,
+    script: normalized.script,
     createdAt: Date.now(),
     newSession: normalized.newSession,
     sessionPrefix: normalized.newSession ? (normalized.sessionPrefix || 'timer') : undefined,
@@ -660,6 +772,8 @@ export async function createTimer(args: {
 export async function updateTimer(args: {
   timerId: string;
   sessionId?: string;
+  action?: unknown;
+  script?: unknown;
   message?: unknown;
   at?: unknown;
   afterSeconds?: unknown;

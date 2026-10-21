@@ -3,7 +3,7 @@
 Files: src/nodeExecutionService.ts, src/nodeExecution.ts, src/nodeExecution.test.ts
 Secondary files: src/llm.ts, src/tools/nodeTools.ts, src/tools/unifiedTools.test.ts, src/toolscript.test.ts, src/nodeExecutionExternalPlacement.test.ts, src/index.ts
 
-The `node-execution@9` execute method retains settled receipts on ordinary caller cancellation. Main pre-effect admission checks the signal; resident providers advertising `supportsExecWaitCancellation` and Core-owned primitive exec waiting receive it during internal exec waiting, avoiding an unsupported adapter's ordinary-Stop abort-to-kill path while forwarding independent hard cancellation for its existing deadline/owner-loss cleanup. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
+The `node-execution@10` execute method retains settled receipts on ordinary caller cancellation. Main pre-effect admission checks the signal; resident providers advertising `supportsExecWaitCancellation` and Core-owned primitive exec waiting receive it during internal exec waiting, avoiding an unsupported adapter's ordinary-Stop abort-to-kill path while forwarding independent hard cancellation for its existing deadline/owner-loss cleanup. See [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
 
 ## Purpose
 

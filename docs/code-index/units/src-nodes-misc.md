@@ -15,8 +15,8 @@ Manages node connectivity to the master server via WebSocket (pairing and authen
 - `NODE_TEMPLATE_BASE_URL_PLACEHOLDER` — the placeholder string used in templates
 - `NODE_SOURCE_FILES` — list of paths included in the source tarball
 - `buildNodeBootstrapInfo(options)` — constructs a `NodeBootstrapInfo` object with complete configured or replaceable example addresses
-- `buildNodeBootstrapCommands(options)` — pure shared generation of independent shell, PowerShell, and Compose commands for CLI help and authenticated WebUI onboarding
-- `buildNodeManualComposeExample(token, baseUrl?, nodeId?)` — generates shell-literal, owner-only Compose `.env` setup instructions
+- `buildNodeBootstrapCommands(options)` — pure shared generation of independent shell, PowerShell, and Compose commands for CLI help and authenticated WebUI onboarding; an `authToken` selects supported direct-auth inputs rather than pairing
+- `buildNodeManualComposeExample(pairingToken, baseUrl?, nodeId?, authToken?)` — generates shell-literal, owner-only Compose `.env` setup instructions
 - `ensureNodePairingToken()` — reads or generates the persistent pairing token
 - `NODE_BOOTSTRAP_BASE_URL_PLACEHOLDER` — placeholder constant (`$BASE_URL`)
 - `NodeBootstrapInfo` (interface) — shape of the bootstrap info response
@@ -40,7 +40,7 @@ Manages node connectivity to the master server via WebSocket (pairing and authen
 | `buildEndpointUrls(baseUrlPlaceholder)` | ~20 | Constructs endpoint path/URL map from a base URL |
 | `buildNodeBootstrapInfo(options)` | ~40 | Assembles full bootstrap info with examples and explanations |
 | `buildNodeBootstrapCommands(options)` | ~35 | Builds independent literal-address commands using contextual quoting |
-| `buildNodeManualComposeExample(token, baseUrl?, nodeId?)` | ~15 | Renders Compose bootstrap commands with quoted public URL values |
+| `buildNodeManualComposeExample(pairingToken, baseUrl?, nodeId?, authToken?)` | ~15 | Renders Compose bootstrap commands with quoted public URL values |
 | `ensureNodePairingToken()` | ~15 | Reads token from file or generates and persists a new one |
 | `makeRequest(headers, protocol)` (test) | ~6 | Test helper to create a mock request object |
 | `makeId(prefix)` (test) | ~5 | Test helper generating unique IDs |
@@ -72,6 +72,7 @@ Manages node connectivity to the master server via WebSocket (pairing and authen
 - Source-distribution regression coverage builds the same allowlisted tar archive with package node_modules excluded and starts the real prebuilt client bundle through `run.sh` in a clean temporary root, preventing externalized bundle modules from accidentally relying on the master checkout's dependencies. The isolated-PATH fixture resolves its required utilities from the invocation PATH before constructing its private bin and still fails for missing utilities. Generated user units receive real `systemd-analyze --user verify` coverage when that binary is available, with fixture-owned configuration and mode-0700 runtime directories; no service is started.
 - Docker node bootstrap uses pinned Node 24 and installs the runtime package strictly. Shell/PowerShell bootstrap installs only that package after extracting the prebuilt JS bundle and continues without PTY capability if npm/native installation is unavailable.
 - `ensureNodePairingToken` lazily generates a 32-byte hex token on first use and persists it to disk.
+- `buildNodeBootstrapCommands` emits `--auth-token` for the Linux, systemd, interactive and Docker launchers, `-AuthToken` for PowerShell, and `NODE_AUTH_TOKEN` with an empty pairing value for manual Compose when a per-node token is supplied. Without it, non-Shell commands retain pairing. Generator/consumer tests execute both modes through the real Linux launchers with external effects stubbed, and resolve manual Compose through the real Compose parser; Windows literal quoting and its unchanged forwarding contract are checked without requiring a Windows host.
 - `buildNodeBootstrapInfo` and CLI help reuse `buildNodeBootstrapCommands`: each example inlines its full URL and explicit host, with contextual shell/PowerShell quoting and a literal Compose heredoc. Without config `url`, commands use `http://YOUR_MASTER:<HTTP_PORT>`; no `BASE_URL` preparation is required. Existing metadata field positions remain available, including the legacy placeholder field; they are not command prerequisites.
 
 ## Integration

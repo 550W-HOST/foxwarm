@@ -37,7 +37,7 @@ export async function handleTimerCommand(ctx: ChannelContext, args: string[], se
         ? `new session (${timer.agentName || 'main'} / ${timer.sessionPrefix || 'timer'})`
         : `this session`
       resp += `- \`${timer.id}\` - ${mode} - next: ${formatTimerDate(timer.nextRunAt)} - ${target}\n`
-      resp += `  ${timer.message}\n`
+      resp += `  ${timers.getTimerAction(timer) === 'toolscript' ? timers.describeTimerAction(timer) : timer.message}\n`
     }
     ctx.reply(resp)
     return
