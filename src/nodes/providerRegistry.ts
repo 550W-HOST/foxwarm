@@ -99,6 +99,9 @@ export type NodeProviderCallOptions = {
   assertExternalOwnerActive?: () => void;
 };
 
+/** Optional source bound applies to primitive filesystem ingestion, not resident CLI transport. */
+export type NodeFileReadOptions = NodeProviderCallOptions & { maxBytes?: number };
+
 export type NodeFilesystemOperation = 'parent' | 'stat' | 'read' | 'readdir' | 'write' | 'mkdir' | 'remove';
 export type NodeFilesystemRequest = {
   sourceSessionId: string;
@@ -173,7 +176,7 @@ export interface NodeProvider {
   invokeTool?(request: NodeToolRequest, options?: NodeProviderCallOptions): Promise<unknown>;
   invokeFilesystem?(request: NodeFilesystemRequest, options?: NodeProviderCallOptions): Promise<unknown>;
   /** Complete internal file bytes, not a formatted or truncated model result. */
-  readFile?(request: Extract<NodeToolRequest, { sourceSessionId: string }> & { toolName: 'read' }, options?: NodeProviderCallOptions): Promise<Buffer>;
+  readFile?(request: Extract<NodeToolRequest, { sourceSessionId: string }> & { toolName: 'read' }, options?: NodeFileReadOptions): Promise<Buffer>;
   readTransferFile?(request: NodeTransferReadRequest): Promise<NodeTransferFilePayload>;
   writeTransferFile?(request: NodeTransferWriteRequest): Promise<NodeTransferWriteResult>;
   describe?(options?: NodeProviderCallOptions): Promise<NodeProviderDescription>;
@@ -352,7 +355,7 @@ export class NodeProviderRegistry {
     return resolved.provider.invokeTool(request, options);
   }
 
-  async readFile(request: Extract<NodeToolRequest, { sourceSessionId: string }> & { toolName: 'read' }, options?: NodeProviderCallOptions): Promise<Buffer> {
+  async readFile(request: Extract<NodeToolRequest, { sourceSessionId: string }> & { toolName: 'read' }, options?: NodeFileReadOptions): Promise<Buffer> {
     const { descriptor, provider } = await this.resolveAvailableTool(request, options);
     if (descriptor.primitiveBackends?.filesystem && provider.invokeFilesystem) {
       const filePath = request.args.filePath;
@@ -361,7 +364,10 @@ export class NodeProviderRegistry {
       const { operations } = this.filesystemBackend(provider, request, options);
       const stat = await operations.stat(filePath);
       if (stat.kind === 'directory') throw new NodeProviderError('NODE_FILE_READ_NOT_FILE', 'Source path is a directory.');
-      const bytes = await readWholeFile(operations, filePath);
+      if (options?.maxBytes !== undefined && stat.size > options.maxBytes) {
+        throw new NodeProviderError('NODE_FILE_READ_TOO_LARGE', `Source file exceeds ${options.maxBytes} bytes.`);
+      }
+      const bytes = await readWholeFile(operations, filePath, 64 * 1024, options?.maxBytes);
       if (bytes.length !== stat.size) throw new NodeProviderError('NODE_FILE_READ_INCOMPLETE', 'Source file changed or the filesystem returned incomplete data.');
       return bytes;
     }
@@ -993,7 +999,7 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
     );
   }
 
-  async readFile(request: Extract<NodeToolRequest, { sourceSessionId: string }> & { toolName: 'read' }, options?: NodeProviderCallOptions): Promise<Buffer> {
+  async readFile(request: Extract<NodeToolRequest, { sourceSessionId: string }> & { toolName: 'read' }, options?: NodeFileReadOptions): Promise<Buffer> {
     const node = nodesManager.getNode(request.nodeId);
     if (!node?.ws || node.type !== 'cli-node') {
       throw new NodeProviderError('NODE_FILE_READ_UNAVAILABLE', `Node \`${request.nodeId}\` does not support complete file reads.`);

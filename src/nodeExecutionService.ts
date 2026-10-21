@@ -38,7 +38,7 @@ export type NodeExecutionRequest = {
 };
 
 export type NodeExecutionResponse = { result: unknown };
-export type NodeFileReadRequest = { sourceSessionId: string; nodeId: string; filePath: string; routingSnapshot?: NodeExecutionRoutingSnapshot };
+export type NodeFileReadRequest = { sourceSessionId: string; nodeId: string; filePath: string; routingSnapshot?: NodeExecutionRoutingSnapshot; maxBytes?: number };
 export type NodeFileReadResponse = { content: string };
 export type NodeTopologyListRequest = { sourceSessionId: string; nodeId?: string; currentNode?: string };
 export type NodeTopologyListResponse = { nodes: Array<{
@@ -70,7 +70,7 @@ export type NodeLifecycleRequest = {
 };
 export type NodeLifecycleResponse = { result: NodeLifecycleResult };
 
-export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 9, {
+export const nodeExecutionServiceDescriptor = defineRpcService('node-execution', 10, {
   readFile: rpcMethod<NodeFileReadRequest, NodeFileReadResponse>(),
   execute: rpcMethod<NodeExecutionRequest, NodeExecutionResponse>({ cancellation: 'settle' }),
   list: rpcMethod<NodeTopologyListRequest, NodeTopologyListResponse>(),
@@ -296,10 +296,13 @@ export function createNodeExecutionServiceHandler(options: {
     },
     async readFile(input, rpcContext) {
       const { sourceSessionId, source } = await requireSource(input,
-        ['sourceSessionId', 'nodeId', 'filePath', 'routingSnapshot'], 'Node file read request');
+        ['sourceSessionId', 'nodeId', 'filePath', 'routingSnapshot', 'maxBytes'], 'Node file read request');
       const nodeId = requireBoundedString(input.nodeId, 'nodeId', MAX_CORE_NODE_ID_LENGTH);
       if (nodeId === 'master') throw new RpcError('NODE_EXECUTION_MASTER_FORBIDDEN', 'The colocated master node must read files directly without Node execution RPC.');
       const filePath = requireBoundedPath(input.filePath, 'filePath');
+      if (input.maxBytes !== undefined && (!Number.isSafeInteger(input.maxBytes) || input.maxBytes < 0)) {
+        throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'maxBytes must be a nonnegative safe integer.');
+      }
       const routingSnapshot = normalizeRoutingSnapshot(input.routingSnapshot);
       if (routingSnapshot && routingSnapshot.currentNode !== nodeId) {
         throw new RpcError('NODE_EXECUTION_INVALID_REQUEST', 'File read cwd must belong to the target Node.');
@@ -315,7 +318,7 @@ export function createNodeExecutionServiceHandler(options: {
         const bytes = await providers.readFile({
           sourceSessionId, nodeId, toolName: 'read', args: { filePath },
           context: { agent: source.agent || 'main', ...(routing ? { currentNode: nodeId, ...(routing.cwd !== undefined ? { cwd: routing.cwd } : {}) } : {}) },
-        }, { signal: rpcContext.signal });
+        }, { signal: rpcContext.signal, ...(input.maxBytes !== undefined ? { maxBytes: input.maxBytes } : {}) });
         return { content: bytes.toString('utf8') };
       } catch (error) { rethrowProviderError(error); }
     },

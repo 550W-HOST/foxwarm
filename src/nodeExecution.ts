@@ -100,11 +100,12 @@ export async function readNodeFile(
   filePath: string,
   routingSnapshot?: NodeExecutionRoutingSnapshot,
   signal?: AbortSignal,
+  maxBytes?: number,
 ): Promise<string> {
   const executionClient = await getClient();
   throwIfToolStopped(signal);
   const response = await executionClient.call('readFile', {
-    sourceSessionId, nodeId, filePath, ...(routingSnapshot ? { routingSnapshot } : {}),
+    sourceSessionId, nodeId, filePath, ...(routingSnapshot ? { routingSnapshot } : {}), ...(maxBytes !== undefined ? { maxBytes } : {}),
   }, { signal });
   if (typeof response.content !== 'string') throw new RpcError('NODE_EXECUTION_INVALID_RESPONSE', 'Node file read did not return complete text.');
   return response.content;

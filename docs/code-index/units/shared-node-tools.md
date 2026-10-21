@@ -49,7 +49,7 @@ Provides shared file system tools, shell execution, browser automation, and util
 | `escapeRegExp(text)` (exactReplacement, private) | helper | Escapes special regex characters in literal search text |
 | `applyExactReplacement(content, searchText, replaceText, label)` (exactReplacement) | pure transformation | Replaces one non-overlapping regex match or throws with the caller label; preserves JavaScript replacement-string substitutions |
 | `nativeFileOperations` (fileOperations) | complete file | Native stat, offset/count read, directory metadata, whole-write, mkdir, and remove implementation |
-| `readWholeFile(operations, filePath)` (fileOperations) | helper | Repeats bounded 64 KiB ranged reads until EOF for edit/patch callers |
+| `readWholeFile(operations, filePath)` (fileOperations) | helper | Repeats bounded 64 KiB ranged reads until EOF; an optional total byte bound reads at most one extra byte to detect source growth |
 | `requireToolFilePath(filePath, toolName)` (fileToolCore) | required-path validation | Rejects missing or blank read/edit paths before wrapper path resolution without trimming valid paths |
 | `normalizeOptionalLineBound(value)` (fileToolCore) | ~35 | Treats omitted/null/non-finite/0 line bounds as absent |
 | `readDirectoryListing(fullPath, displayPath, startLine, endLine)` (fileToolCore) | ~65 | Reads and paginates a directory listing |

@@ -1,4 +1,5 @@
 import http from 'node:http'
+import path from 'node:path'
 import { WebSocketServer } from 'ws'
 import sharp from 'sharp'
 
@@ -114,6 +115,7 @@ export async function startMockProvider({ toolFile, log, readyDelayMs = 0, enfor
     'responses:ATTACHMENT', 'responses:LONGPASTE',
     'ws:COMPACT_SYNC', 'ws:COMPACT_BACKGROUND', 'ws:BTW',
     'responses:IMAGE_ONE', 'responses:IMAGE_EDIT', 'responses:IMAGE_RESTART',
+    'responses:ARTIFACT', 'responses:ARTIFACT', 'responses:ARTIFACT', 'responses:ARTIFACT',
   ]
   const generatedImages = {
     one: await sharp({ create: { width: 9, height: 7, channels: 3, background: { r: 12, g: 120, b: 208 } } }).png().toBuffer(),
@@ -185,7 +187,7 @@ export async function startMockProvider({ toolFile, log, readyDelayMs = 0, enfor
     const protocol = req.url.endsWith('/responses') ? 'responses' : 'chat'
     // Later image markers are listed first: an edit or post-restart request also
     // carries the earlier prompt text in its replayed history.
-    const record = { protocol, marker: ['IMAGE_RESTART', 'IMAGE_EDIT', 'IMAGE_ONE', 'AFTER_STOP', 'INCREMENTAL', 'TOOL', 'STOP', 'EMPTY', 'CHAT', 'ATTACHMENT', 'LONGPASTE'].find(value => wire.includes(`APP_E2E_${value}`)) || null, body }
+    const record = { protocol, marker: ['ARTIFACT', 'IMAGE_RESTART', 'IMAGE_EDIT', 'IMAGE_ONE', 'AFTER_STOP', 'INCREMENTAL', 'TOOL', 'STOP', 'EMPTY', 'CHAT', 'ATTACHMENT', 'LONGPASTE'].find(value => wire.includes(`APP_E2E_${value}`)) || null, body }
     requests.push(record)
     await log(`${protocol} ${record.marker || 'unexpected'} model=${body.model || ''} inputBytes=${wire.length}\n`)
     if (!consumeExpected(protocol, record.marker)) {
@@ -193,7 +195,25 @@ export async function startMockProvider({ toolFile, log, readyDelayMs = 0, enfor
       return
     }
 
-    if (protocol === 'responses' && wire.includes('APP_E2E_INCREMENTAL')) {
+    if (protocol === 'responses' && wire.includes('APP_E2E_ARTIFACT')) {
+      const outputs = Array.isArray(body.input) ? body.input.filter(item => item?.type === 'function_call_output') : []
+      const sources = [
+        { filePath: path.resolve('skills/data-visualization/examples/training-metrics.json') },
+        { filePath: path.resolve('skills/react-artifacts/examples/sorting.json') },
+        { filePath: toolFile + '.artifact.png', type: 'image', title: 'Owned raster figure' },
+      ]
+      if (outputs.length < sources.length) {
+        sse(res, responseTool(`resp-artifact-${outputs.length}`, `call_app_artifact_${outputs.length}`, 'call_tool', { toolId: 'builtin:artifact', args: { action: 'prepare', ...sources[outputs.length] } }))
+      } else {
+        const ids = [...new Set(JSON.stringify(outputs).match(/art_[a-f0-9]{32}/g) || [])]
+        if (ids.length !== 3) {
+          unexpected = 'artifact preparation did not return three persisted references'
+          res.writeHead(500).end(unexpected)
+          return
+        }
+        sse(res, responseText('resp-artifact-final', ['Published examples.\n\n' + ids.map(id => `<foxwarm-artifact id="${id}" revision="1" />`).join('\n\nBetween examples.\n\n') + '\n\nArtifact end.']))
+      }
+    } else if (protocol === 'responses' && wire.includes('APP_E2E_INCREMENTAL')) {
       const events = responseText('resp-incremental', ['streamed ', 'answer'])
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
       for (const event of events.slice(0, 3)) writeSseEvent(res, event)

@@ -11,6 +11,7 @@ import * as agentTools from './toolsSessionAgent/agents';
 import * as timerTools from './toolsSessionAgent/timers';
 import * as sessionCrudTools from './toolsSessionAgent/sessionCrud';
 import * as nodeTools from './tools/nodeTools';
+import { tool_artifact } from './artifacts/tool';
 import { tool_task, taskService } from './tools/taskTools';
 import * as timers from './timers';
 import type { ToolArgs, ToolContext } from './tools/helpers';
@@ -32,6 +33,7 @@ export const MAIN_MANAGEMENT_TOOL_OPERATIONS = [
   'send_to_channel',
   'list_agents',
   'task',
+  'artifact',
   'create_timer',
   'list_timers',
   'update_timer',
@@ -78,7 +80,7 @@ export type MigrateLegacyGoalRequest = { sourceSessionId: string; goal: string; 
 export type TaskContextRequest = { sourceSessionId: string; sequences: number[]; consume: boolean; retainedTaskIds?: string[] };
 export type TaskContextResponse = { tasks: { id: string; title: string; status: string }[]; omitted: number };
 
-export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 18, {
+export const mainManagementToolServiceDescriptor = defineRpcService('main-management-tools', 19, {
   migrateLegacyGoal: rpcMethod<MigrateLegacyGoalRequest, { taskId: string }>(),
   taskContext: rpcMethod<TaskContextRequest, TaskContextResponse>(),
   execute: rpcMethod<MainManagementToolRequest, MainManagementToolResponse>(),
@@ -131,6 +133,7 @@ async function invokeAllowedOperation(
     case 'send_to_session': return interSessionTools.tool_send_to_session(args, ctx);
     case 'send_to_channel': return interSessionTools.tool_send_to_channel(args, ctx);
     case 'task': return tool_task(args, ctx);
+    case 'artifact': return tool_artifact(args, ctx);
     case 'list_agents': return agentTools.tool_list_agents(args, ctx);
     case 'create_timer': return timerTools.tool_create_timer(args, ctx);
     case 'list_timers': return timerTools.tool_list_timers(args, ctx);
@@ -268,7 +271,8 @@ export function createMainManagementToolServiceHandler(options: {
       if (!source) {
         throw new RpcError('MAIN_MANAGEMENT_SOURCE_NOT_FOUND', `Source session \`${sourceSessionId}\` was not found.`);
       }
-      await checkGenericToolAuthorizationForSession(source, { source: 'builtin', tool: operationCapability(operation as MainManagementToolOperation) }, 'master', args);
+      const permissionNode = operation === 'artifact' && ['publish', 'prepare'].includes(args.action) ? (typeof args.node === 'string' && args.node ? args.node : source.currentNode || 'master') : 'master';
+      await checkGenericToolAuthorizationForSession(source, { source: 'builtin', tool: operationCapability(operation as MainManagementToolOperation) }, permissionNode, args);
 
       if (operation === 'create_child_session') {
         return { result: await invokeCreateChildSession(args, sourceSessionId, source) };
@@ -296,7 +300,7 @@ export function createMainManagementToolServiceHandler(options: {
         && args.sourceSessionId !== sourceSessionId && !source.aliases?.includes(args.sourceSessionId)) {
         throw new RpcError('MAIN_MANAGEMENT_INVALID_ARGS', 'create_agent from another source session is unavailable from a Session worker.');
       }
-      if (operation === 'task') {
+      if (operation === 'task' || operation === 'artifact') {
         return { result: await invokeAllowedOperation(operation, args, await exactSourceContext(sourceSessionId, source)) };
       }
       if (operation === 'session_update_display_name') {
