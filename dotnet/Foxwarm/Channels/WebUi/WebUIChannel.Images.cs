@@ -29,14 +29,21 @@ internal sealed partial class WebUIChannel
                     // Source limits each file, not the complete multipart body.
                     limit.MaxRequestBodySize = null;
                 if (context.Request.ContentLength > UploadLimit)
-                    return Results.Json(new { error = "Upload too large", maxBytes = UploadLimit }, statusCode: 413);
+                    return Results.Json(
+                        new { error = "Upload too large", maxBytes = UploadLimit },
+                        statusCode: 413
+                    );
                 var scoped = WebUiAccess.Request(context);
-                var uploadSession = context.Request.Query["sessionId"].Count == 1
-                    ? context.Request.Query["sessionId"].ToString().Trim() : "";
+                var uploadSession =
+                    context.Request.Query["sessionId"].Count == 1
+                        ? context.Request.Query["sessionId"].ToString().Trim()
+                        : "";
                 if (scoped is not null)
                 {
                     if (uploadSession.Length == 0)
-                        return Results.BadRequest(new { error = "WebUI identity upload requires a bound sessionId." });
+                        return Results.BadRequest(
+                            new { error = "WebUI identity upload requires a bound sessionId." }
+                        );
                     scoped.Bind(uploadSession);
                 }
                 if (!context.Request.HasFormContentType)
@@ -56,7 +63,10 @@ internal sealed partial class WebUIChannel
                     var file = form.Files[0];
                     var mimeType = AttachmentMime(file.ContentType, file.FileName);
                     if (file.Length > UploadLimit)
-                        return Results.Json(new { error = "File exceeds the 1 GiB upload limit." }, statusCode: 413);
+                        return Results.Json(
+                            new { error = "File exceeds the 1 GiB upload limit." },
+                            statusCode: 413
+                        );
                     Directory.CreateDirectory(UploadRoot);
                     var original = Path.GetFileName(file.FileName.Replace('\\', '/'));
                     var extension = Path.GetExtension(original);
@@ -101,8 +111,17 @@ internal sealed partial class WebUIChannel
                 catch (Exception error)
                     when (error is InvalidDataException or IOException or BadHttpRequestException)
                 {
-                    if (error is InvalidDataException && error.Message.Contains("Multipart body length limit", StringComparison.Ordinal))
-                        return Results.Json(new { error = "File exceeds the 1 GiB upload limit." }, statusCode: 413);
+                    if (
+                        error is InvalidDataException
+                        && error.Message.Contains(
+                            "Multipart body length limit",
+                            StringComparison.Ordinal
+                        )
+                    )
+                        return Results.Json(
+                            new { error = "File exceeds the 1 GiB upload limit." },
+                            statusCode: 413
+                        );
                     return Results.BadRequest(
                         new
                         {

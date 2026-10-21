@@ -80,8 +80,14 @@ internal static class ProviderImageDedup
                 var part = parts[index];
                 var inline = part["inlineData"]!.AsObject();
                 byte[] bytes;
-                try { bytes = ImageBlobStore.InlineBytes(inline); }
-                catch (ImageInputException) { continue; } // Legacy unvalidated inline data remains serializer-owned.
+                try
+                {
+                    bytes = ImageBlobStore.InlineBytes(inline);
+                }
+                catch (ImageInputException)
+                {
+                    continue;
+                } // Legacy unvalidated inline data remains serializer-owned.
                 if (bytes.Length > 32 * 1024 * 1024)
                     continue;
                 var identity =

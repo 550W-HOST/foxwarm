@@ -162,6 +162,7 @@ public sealed class ImageCodecTests
             HeifDecoder.DecodeImage("not an image"u8.ToArray())
         );
     }
+
     [Fact]
     public async Task HEIF_metadata_preflight_preserves_normal_input_and_falls_back_on_over_limit_primary_without_pixel_conversion()
     {
@@ -175,15 +176,33 @@ public sealed class ImageCodecTests
         {
             if (declared.AsSpan(offset, 4).SequenceEqual("ispe"u8))
             {
-                System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(declared.AsSpan(offset + 8), 8193);
-                System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(declared.AsSpan(offset + 12), 8193);
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(
+                    declared.AsSpan(offset + 8),
+                    8193
+                );
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(
+                    declared.AsSpan(offset + 12),
+                    8193
+                );
             }
             if (declared.AsSpan(offset, 4).SequenceEqual("clap"u8))
             {
-                System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(declared.AsSpan(offset + 4), 8193);
-                System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(declared.AsSpan(offset + 8), 1);
-                System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(declared.AsSpan(offset + 12), 8193);
-                System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(declared.AsSpan(offset + 16), 1);
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(
+                    declared.AsSpan(offset + 4),
+                    8193
+                );
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(
+                    declared.AsSpan(offset + 8),
+                    1
+                );
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(
+                    declared.AsSpan(offset + 12),
+                    8193
+                );
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(
+                    declared.AsSpan(offset + 16),
+                    1
+                );
             }
         }
         Assert.Equal((8193, 8193), HeifDecoder.Inspect(declared));
@@ -191,7 +210,13 @@ public sealed class ImageCodecTests
         using var temp = new TempDirectory();
         var blobs = new ImageBlobStore(temp.Path);
         var reference = await blobs.PutAsync(declared, "image/heic", "metadata-only-heif");
-        var original = new System.Text.Json.Nodes.JsonObject { ["role"] = "user", ["parts"] = new System.Text.Json.Nodes.JsonArray(new System.Text.Json.Nodes.JsonObject { ["inlineDataRef"] = reference }) };
+        var original = new System.Text.Json.Nodes.JsonObject
+        {
+            ["role"] = "user",
+            ["parts"] = new System.Text.Json.Nodes.JsonArray(
+                new System.Text.Json.Nodes.JsonObject { ["inlineDataRef"] = reference }
+            ),
+        };
         var result = (await blobs.HydrateAsync([original], "responses")).Single();
         Assert.DoesNotContain("inlineData", result.ToJsonString());
         Assert.Contains("metadata-only-heif", result.ToJsonString());
@@ -199,5 +224,4 @@ public sealed class ImageCodecTests
         Assert.NotNull(original["parts"]![0]!["inlineDataRef"]);
         Assert.Throws<ImageInputException>(() => HeifDecoder.Inspect("not HEIF"u8.ToArray()));
     }
-
 }

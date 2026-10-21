@@ -144,7 +144,8 @@ internal static class HeifDecoder
 
     internal static void RequirePrerequisite() => _ = Native.Value;
 
-    internal static Pixels DecodeImage(byte[] bytes, long pixelLimit = MaxPixels) => ReadImage(bytes, pixelLimit, true);
+    internal static Pixels DecodeImage(byte[] bytes, long pixelLimit = MaxPixels) =>
+        ReadImage(bytes, pixelLimit, true);
 
     internal static (int Width, int Height) Inspect(byte[] bytes)
     {

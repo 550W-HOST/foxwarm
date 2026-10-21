@@ -49,7 +49,13 @@ public sealed partial class AsrRoutesTests
     {
         await using var f = await Fixture.Create();
         f.Client.Timeout = TimeSpan.FromMinutes(3);
-        foreach (var length in new[] { Foxwarm.Channels.WebUi.WebUiUploadedFiles.Limit, Foxwarm.Channels.WebUi.WebUiUploadedFiles.Limit + 1 })
+        foreach (
+            var length in new[]
+            {
+                Foxwarm.Channels.WebUi.WebUiUploadedFiles.Limit,
+                Foxwarm.Channels.WebUi.WebUiUploadedFiles.Limit + 1,
+            }
+        )
         {
             using var form = new MultipartFormDataContent();
             form.Add(new PatternContent(length), "file", "owned.bin");
@@ -75,20 +81,33 @@ public sealed partial class AsrRoutesTests
                 }
                 Assert.Equal(length, count);
             }
-            finally { File.Delete(path); }
+            finally
+            {
+                File.Delete(path);
+            }
         }
     }
 
     private sealed class PatternContent(long size) : HttpContent
     {
-        protected override bool TryComputeLength(out long length) { length = 0; return false; }
-        protected override async Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context)
+        protected override bool TryComputeLength(out long length)
         {
-            var buffer = new byte[65536]; Array.Fill(buffer, (byte)0x5a);
-            for (long written = 0; written < size;)
+            length = 0;
+            return false;
+        }
+
+        protected override async Task SerializeToStreamAsync(
+            Stream stream,
+            System.Net.TransportContext? context
+        )
+        {
+            var buffer = new byte[65536];
+            Array.Fill(buffer, (byte)0x5a);
+            for (long written = 0; written < size; )
             {
                 var count = (int)Math.Min(buffer.Length, size - written);
-                await stream.WriteAsync(buffer.AsMemory(0, count)); written += count;
+                await stream.WriteAsync(buffer.AsMemory(0, count));
+                written += count;
             }
         }
     }
@@ -108,7 +127,10 @@ public sealed partial class AsrRoutesTests
         f.Client.DefaultRequestHeaders.Authorization = new("Bearer", "synthetic-alice");
         using var form = new MultipartFormDataContent();
         form.Add(new ByteArrayContent([7, 1, 3]), "file", "scoped.bin");
-        var response = await f.Client.PostAsync("/api/upload?sessionId=" + Uri.EscapeDataString(chat.Id), form);
+        var response = await f.Client.PostAsync(
+            "/api/upload?sessionId=" + Uri.EscapeDataString(chat.Id),
+            form
+        );
         Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
         var upload = await Json(response);
         var path = upload["path"]!.ToString();
@@ -141,48 +163,87 @@ public sealed partial class AsrRoutesTests
             File.Delete(path);
         }
     }
+
     [Theory]
     [InlineData("synthetic-alice", "", 1000000, 400)]
     [InlineData("synthetic-alice", "?sessionId=other", 1000000, 403)]
     [InlineData("synthetic-alice", "?sessionId=chat", 1073741825, 413)]
     [InlineData(Fixture.Token, "", 1073741825, 413)]
-    public async Task Upload_rejects_headers_without_consuming_any_multipart_body_or_creating_files(string token, string query, long length, int status)
+    public async Task Upload_rejects_headers_without_consuming_any_multipart_body_or_creating_files(
+        string token,
+        string query,
+        long length,
+        int status
+    )
     {
-        await using var f = await Fixture.Create(_ => "access:\n  identities:\n    alice:\n      token: synthetic-alice\n      surfaces:\n        webui:\n          sessions: [chat]\n");
+        await using var f = await Fixture.Create(_ =>
+            "access:\n  identities:\n    alice:\n      token: synthetic-alice\n      surfaces:\n        webui:\n          sessions: [chat]\n"
+        );
         await f.Manager.CreateNamedAsync("main", "chat", null, null);
         await f.Manager.CreateNamedAsync("main", "other", null, null);
         var root = Foxwarm.Channels.WebUi.WebUiUploadedFiles.StagingRoot;
         var before = Directory.Exists(root) ? Directory.GetFiles(root).Order().ToArray() : [];
         using var socket = new System.Net.Sockets.TcpClient();
         await socket.ConnectAsync(f.Client.BaseAddress!.Host, f.Client.BaseAddress.Port);
-        await socket.GetStream().WriteAsync(System.Text.Encoding.ASCII.GetBytes($"POST /api/upload{query} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nContent-Type: multipart/form-data; boundary=owned\r\nContent-Length: {length}\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n"));
+        await socket
+            .GetStream()
+            .WriteAsync(
+                System.Text.Encoding.ASCII.GetBytes(
+                    $"POST /api/upload{query} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nContent-Type: multipart/form-data; boundary=owned\r\nContent-Length: {length}\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n"
+                )
+            );
         using var reader = new StreamReader(socket.GetStream());
         var first = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5));
         Assert.StartsWith("HTTP/1.1 " + status + " ", first);
-        Assert.Equal(before, Directory.Exists(root) ? Directory.GetFiles(root).Order().ToArray() : []);
+        Assert.Equal(
+            before,
+            Directory.Exists(root) ? Directory.GetFiles(root).Order().ToArray() : []
+        );
         Assert.False(Directory.Exists(Path.Combine(f.Work, ".temp", "channel-files")));
     }
 
     [Fact]
     public async Task Real_inflight_scope_revocation_aborts_incomplete_multipart_without_publishing_staged_files()
     {
-        await using var f = await Fixture.Create(_ => "access:\n  identities:\n    alice:\n      token: synthetic-alice\n      surfaces:\n        webui:\n          sessions: [chat]\n");
+        await using var f = await Fixture.Create(_ =>
+            "access:\n  identities:\n    alice:\n      token: synthetic-alice\n      surfaces:\n        webui:\n          sessions: [chat]\n"
+        );
         await f.Manager.CreateNamedAsync("main", "chat", null, null);
         var root = Foxwarm.Channels.WebUi.WebUiUploadedFiles.StagingRoot;
         var before = Directory.Exists(root) ? Directory.GetFiles(root).Order().ToArray() : [];
         using var socket = new System.Net.Sockets.TcpClient();
         await socket.ConnectAsync(f.Client.BaseAddress!.Host, f.Client.BaseAddress.Port);
         var stream = socket.GetStream();
-        await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes("POST /api/upload?sessionId=chat HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer synthetic-alice\r\nContent-Type: multipart/form-data; boundary=owned\r\nContent-Length: 1000000\r\nExpect: 100-continue\r\n\r\n"));
+        await stream.WriteAsync(
+            System.Text.Encoding.ASCII.GetBytes(
+                "POST /api/upload?sessionId=chat HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer synthetic-alice\r\nContent-Type: multipart/form-data; boundary=owned\r\nContent-Length: 1000000\r\nExpect: 100-continue\r\n\r\n"
+            )
+        );
         using var reader = new StreamReader(stream);
-        Assert.Equal("HTTP/1.1 100 Continue", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(
+            "HTTP/1.1 100 Continue",
+            await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5))
+        );
         Assert.Equal("", await reader.ReadLineAsync());
-        await stream.WriteAsync(System.Text.Encoding.ASCII.GetBytes("--owned\r\nContent-Disposition: form-data; name=\"file\"; filename=\"partial.bin\"\r\nContent-Type: application/octet-stream\r\n\r\npartial"));
-        await f.Manager.Models.ConfigurationOwner!.Access.ApplyAsync(Foxwarm.AccessConfiguration.Normalize(null, false));
-        try { Assert.Null(await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5))); }
-        catch (IOException) { /* TCP reset is the other valid abort projection. */ }
-        Assert.Equal(before, Directory.Exists(root) ? Directory.GetFiles(root).Order().ToArray() : []);
+        await stream.WriteAsync(
+            System.Text.Encoding.ASCII.GetBytes(
+                "--owned\r\nContent-Disposition: form-data; name=\"file\"; filename=\"partial.bin\"\r\nContent-Type: application/octet-stream\r\n\r\npartial"
+            )
+        );
+        await f.Manager.Models.ConfigurationOwner!.Access.ApplyAsync(
+            Foxwarm.AccessConfiguration.Normalize(null, false)
+        );
+        try
+        {
+            Assert.Null(await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+        catch (IOException)
+        { /* TCP reset is the other valid abort projection. */
+        }
+        Assert.Equal(
+            before,
+            Directory.Exists(root) ? Directory.GetFiles(root).Order().ToArray() : []
+        );
         Assert.False(Directory.Exists(Path.Combine(f.Work, ".temp", "channel-files")));
     }
-
 }

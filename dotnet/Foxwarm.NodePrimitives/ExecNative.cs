@@ -161,9 +161,15 @@ internal static class ExecNative
 
     internal static int Start(ProcessStartInfo start)
     {
-        if (OperatingSystem.IsWindows() && start.Environment.TryGetValue("FOXWARM_EXEC_LOG_PATH", out var output) && output is not null)
+        if (
+            OperatingSystem.IsWindows()
+            && start.Environment.TryGetValue("FOXWARM_EXEC_LOG_PATH", out var output)
+            && output is not null
+        )
             return WindowsExecProcess.Start(start, output);
-        using var process = Process.Start(start) ?? throw new IOException("Failed to start background process: missing pid");
+        using var process =
+            Process.Start(start)
+            ?? throw new IOException("Failed to start background process: missing pid");
         return process.Id;
     }
 

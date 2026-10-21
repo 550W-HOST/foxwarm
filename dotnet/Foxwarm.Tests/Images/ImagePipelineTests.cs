@@ -208,7 +208,10 @@ public sealed class ImagePipelineTests
         var prior = invalid.ToJsonString();
         await store.Images.ExternalizeMessageAsync(invalid, false);
         Assert.Equal(prior, invalid.ToJsonString());
-        Assert.Equal(prior, (await store.Images.HydrateAsync([invalid], "responses"))[0].ToJsonString());
+        Assert.Equal(
+            prior,
+            (await store.Images.HydrateAsync([invalid], "responses"))[0].ToJsonString()
+        );
     }
 
     [Fact]

@@ -103,8 +103,13 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                         using var buffer = new MemoryStream();
                         await CopyStagedAsync(source, buffer, token);
                         bytes = buffer.ToArray();
-                        try { isImage = !ImageInputPolicy.IsOversized(bytes, mime); }
-                        catch (ImageInputException) { /* Invalid metadata retains ordinary image ingress failure. */ }
+                        try
+                        {
+                            isImage = !ImageInputPolicy.IsOversized(bytes, mime);
+                        }
+                        catch (ImageInputException)
+                        { /* Invalid metadata retains ordinary image ingress failure. */
+                        }
                         source.Position = 0;
                     }
                 }
@@ -224,7 +229,13 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                 parts.Add(
                     new JsonObject
                     {
-                        ["text"] = ChannelFileNames.Descriptor(filename, destination, mime, node, isImage),
+                        ["text"] = ChannelFileNames.Descriptor(
+                            filename,
+                            destination,
+                            mime,
+                            node,
+                            isImage
+                        ),
                     }
                 );
                 if (isImage)
@@ -291,26 +302,35 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
         );
         try
         {
-        if (!WorkspaceTools.RegularFileHandle(stream, path))
-            throw new ImageInputException("Uploaded file is not a regular file.");
-        if (OperatingSystem.IsLinux())
+            if (!WorkspaceTools.RegularFileHandle(stream, path))
+                throw new ImageInputException("Uploaded file is not a regular file.");
+            if (OperatingSystem.IsLinux())
+            {
+                var opened = new FileInfo(
+                    "/proc/self/fd/" + stream.SafeFileHandle.DangerousGetHandle().ToInt64()
+                )
+                    .ResolveLinkTarget(true)
+                    ?.FullName;
+                if (
+                    opened is null
+                    || !opened.StartsWith(
+                        root + Path.DirectorySeparatorChar,
+                        StringComparison.Ordinal
+                    )
+                )
+                    throw new ImageInputException(
+                        "Uploaded file is outside server upload staging."
+                    );
+            }
+            if (stream.Length > Limit)
+                throw new ImageInputException("File exceeds the 1 GiB upload limit.");
+            return stream;
+        }
+        catch
         {
-            var opened = new FileInfo(
-                "/proc/self/fd/" + stream.SafeFileHandle.DangerousGetHandle().ToInt64()
-            )
-                .ResolveLinkTarget(true)
-                ?.FullName;
-            if (
-                opened is null
-                || !opened.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal)
-            )
-                throw new ImageInputException("Uploaded file is outside server upload staging.");
+            stream.Dispose();
+            throw;
         }
-        if (stream.Length > Limit)
-            throw new ImageInputException("File exceeds the 1 GiB upload limit.");
-        return stream;
-        }
-        catch { stream.Dispose(); throw; }
     }
 
     private static async Task CopyStagedAsync(Stream source, Stream output, CancellationToken token)
@@ -321,7 +341,8 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
         while ((read = await source.ReadAsync(chunk, token)) > 0)
         {
             copied += read;
-            if (copied > Limit) throw new ImageInputException("File exceeds the 1 GiB upload limit.");
+            if (copied > Limit)
+                throw new ImageInputException("File exceeds the 1 GiB upload limit.");
             await output.WriteAsync(chunk.AsMemory(0, read), token);
         }
     }
