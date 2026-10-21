@@ -139,7 +139,7 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
     // Keep actual native browser handoff separate from the presentation checks.
     const client=await browser.target().createCDPSession()
     const network=await page.createCDPSession()
-    const downloads=await mkdtemp(path.join(tmpdir(),'image-native-download-'))
+    const downloads=await mkdtemp(path.join(process.env.fw_tmp || tmpdir(),'image-native-download-'))
     await client.send('Browser.setDownloadBehavior',{behavior:'allow',downloadPath:downloads,eventsEnabled:true})
     await network.send('Fetch.enable',{patterns:[{urlPattern:'*/blobs/*/download',requestStage:'Response'}]})
     network.on('Fetch.requestPaused',async event=>{
@@ -203,6 +203,19 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
       await page.click('[aria-label="Download Image 1"]');await page.waitForFunction(()=>window.downloaded?.url.startsWith('data:'))
       assert.equal(signRequests.length,beforeLocal,'local data images do not request a signature')
       assert.equal(await page.$eval('[data-image-preview] img',img=>{const r=img.getBoundingClientRect(),s=img.parentElement.getBoundingClientRect();return r.left>=s.left&&r.right<=s.right&&r.top>=s.top&&r.bottom<=s.bottom}),true,'large images fit inside the available stage without cropping')
+      const imageSource=await page.$eval('[data-image-preview] img',img=>img.currentSrc)
+      for(const actual of[false,true]){
+        if(actual)await page.click('[aria-label="Actual size"]')
+        const before=await page.$eval('[data-image-preview] img',img=>({width:img.getBoundingClientRect().width,height:img.getBoundingClientRect().height}))
+        await page.evaluate(()=>{window.imageContext=null;document.addEventListener('contextmenu',event=>{window.imageContext={cancelled:event.defaultPrevented,target:event.target.tagName,source:event.target.currentSrc}},{once:true})})
+        await page.click('[data-image-preview] img',{button:'right'})
+        assert.deepEqual(await page.evaluate(()=>window.imageContext),{cancelled:false,target:'IMG',source:imageSource},'native right-click reaches the real image, not an overlay')
+        assert.deepEqual(await page.$eval('[data-image-preview] img',img=>({width:img.getBoundingClientRect().width,height:img.getBoundingClientRect().height})),before,'right-click does not toggle zoom')
+        // Browser context-menu UI is outside the page; this verifies its entry
+        // event is not cancelled, without pretending to automate the OS menu.
+        assert.ok(await page.$('[data-image-preview][open]'))
+        if(actual)await page.click('[aria-label="Fit image"]')
+      }
       if(process.env.FOXWARM_IMAGE_PREVIEW_DIR){await mkdir(process.env.FOXWARM_IMAGE_PREVIEW_DIR,{recursive:true});await page.screenshot({path:process.env.FOXWARM_IMAGE_PREVIEW_DIR+'/preview-'+viewport.width+'.png'})}
       await page.click('[aria-label="Actual size"]')
       assert.equal(await page.$eval('.image-preview-stage',el=>el.scrollWidth>el.clientWidth&&el.scrollHeight>el.clientHeight),true)
@@ -310,9 +323,11 @@ test('ImageParts uses authenticated deployment-relative blob URLs and never rend
       const afterHold=await geometry()
       assert.ok(Math.abs(afterHold.left-held.left-20)<1.5&&Math.abs(afterHold.top-held.top+20)<1.5,'hold-then-drag remains 1:1')
       assert.equal(await page.evaluate(()=>getSelection()?.toString()),'','native touch hold does not create a text selection in Chromium')
+      assert.equal(await page.$eval('[data-image-preview] img',img=>!img.dispatchEvent(new PointerEvent('contextmenu',{bubbles:true,cancelable:true,pointerType:'touch'}))),true,'touch long-press remains suppressed for image gestures')
+      assert.equal(await page.$eval('[data-image-preview] img',img=>img.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true}))),true,'keyboard/legacy mouse context-menu events remain native without an active touch')
       await page.evaluate(()=>document.addEventListener('contextmenu',event=>{window.contextMenuCancelled=event.defaultPrevented},{once:true}))
       await page.mouse.click(180,440,{button:'right'})
-      assert.equal(await page.evaluate(()=>window.contextMenuCancelled),true,'the image stage cancels a native browser context menu')
+      assert.equal(await page.evaluate(()=>window.contextMenuCancelled),false,'mouse right-click retains native image copy/save even after touch gestures')
       if(process.env.FOXWARM_IMAGE_PREVIEW_DIR)await page.screenshot({path:process.env.FOXWARM_IMAGE_PREVIEW_DIR+'/preview-fractional-pan-dpr3.png'})
       await page.mouse.click(180,440)
       assert.equal(await page.$('[data-actual-size]'),null,'a deliberate mouse click also works after a touch gesture')
