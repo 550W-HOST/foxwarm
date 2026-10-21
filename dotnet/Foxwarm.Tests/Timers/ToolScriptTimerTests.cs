@@ -215,7 +215,7 @@ public sealed class ToolScriptTimerTests
 
         void CheckWrapper(JsonNode runId)
         {
-            var wrapper = f.Owner.Entry.Snapshot().Queue.Last().Parts[0]![
+            var wrapper = f.Owner.Entry.Snapshot().Queue.Last().Parts![0]![
                 "system"
             ]!.GetValue<string>();
             Assert.Contains("type=\"toolscript\"", wrapper);
@@ -455,7 +455,7 @@ public sealed class ToolScriptTimerTests
         var done = await Call(tools, "continue_script", Continue(paused));
         Assert.Equal("completed", SessionWait.Text(done["status"]));
         Assert.Equal("not replayed", await File.ReadAllTextAsync(effect));
-        var wrapper = Assert.Single(f.Owner.Entry.Snapshot().Queue).Parts[0]![
+        var wrapper = Assert.Single(f.Owner.Entry.Snapshot().Queue).Parts![0]![
             "system"
         ]!.GetValue<string>();
         Assert.Contains("runId=\"" + SessionWait.Text(paused["runId"]) + "\"", wrapper);
