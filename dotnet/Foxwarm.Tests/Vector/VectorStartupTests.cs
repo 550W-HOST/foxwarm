@@ -8,7 +8,9 @@ public sealed class VectorStartupTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Corrupt_derived_manifest_retains_unavailable_placement_and_disposes(bool child)
+    public async Task Corrupt_derived_manifest_retains_unavailable_placement_and_disposes(
+        bool child
+    )
     {
         await using var f = await VectorFixture.CreateAsync();
         await using (var seed = new VectorService(f.Data, f.Configuration()))
@@ -26,14 +28,16 @@ public sealed class VectorStartupTests
         Assert.Equal(child ? "worker" : "local", service.Mode);
         Assert.True(service.Configuration.Enabled);
         Assert.False(service.Ready);
-        foreach (var operation in new Func<Task>[]
-        {
-            () => service.SearchAsync("synthetic query", 5),
-            () => service.StatusAsync("main/fixture"),
-            () => service.ForceAsync("main/fixture", 1, 0),
-            () => service.ScheduleAsync("main/fixture", 1, 10, 0),
-            () => service.WaitForStartupAsync(),
-        })
+        foreach (
+            var operation in new Func<Task>[]
+            {
+                () => service.SearchAsync("synthetic query", 5),
+                () => service.StatusAsync("main/fixture"),
+                () => service.ForceAsync("main/fixture", 1, 0),
+                () => service.ScheduleAsync("main/fixture", 1, 10, 0),
+                () => service.WaitForStartupAsync(),
+            }
+        )
         {
             var error = await Assert.ThrowsAsync<VectorUnavailableException>(operation);
             Assert.Equal("VECTOR_UNAVAILABLE", error.Code);
@@ -42,5 +46,4 @@ public sealed class VectorStartupTests
         Assert.Empty(f.Peer.Requests);
         Assert.Equal(0, new FileInfo(manifest).Length);
     }
-
 }

@@ -363,8 +363,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         catch (Exception error)
         {
             Console.Error.WriteLine(
-                "Vector initialization failed; Main will continue without semantic search: "
-                    + error
+                "Vector initialization failed; Main will continue without semantic search: " + error
             );
         }
         await timers.LoadAsync();
