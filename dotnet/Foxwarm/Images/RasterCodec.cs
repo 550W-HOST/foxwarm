@@ -14,7 +14,7 @@ internal static class RasterCodec
 
     internal static bool IsHeif(string mime) => mime is "image/heic" or "image/heif";
 
-    internal static Probe Inspect(byte[] bytes, string declaredMime)
+    internal static Probe Inspect(byte[] bytes, string declaredMime, bool enforcePixelLimit = true)
     {
         using var data = SKData.CreateCopy(bytes);
         using var codec =
@@ -29,7 +29,10 @@ internal static class RasterCodec
         };
         if (mime != declaredMime)
             throw new ImageInputException("Image bytes do not match the declared MIME type.");
-        ValidatePixels(codec.Info.Width, codec.Info.Height);
+        if (enforcePixelLimit)
+            ValidatePixels(codec.Info.Width, codec.Info.Height);
+        else if (codec.Info.Width <= 0 || codec.Info.Height <= 0)
+            throw new ImageInputException("Image has invalid dimensions.");
         return new(codec.Info.Width, codec.Info.Height, mime, codec.EncodedOrigin);
     }
 

@@ -377,4 +377,42 @@ public sealed partial class ProviderFileConsumerTests
         Assert.Empty(body["context"]!.AsObject());
         Assert.DoesNotContain("agent", body.ToJsonString());
     }
+    [Fact]
+    public async Task Oversized_WebUI_originals_keep_Main_for_selection_only_and_use_existing_bound_provider_file_transport()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        await using var f = await Fixture.Create();
+        var bytes = new byte[Foxwarm.Images.ImageInputPolicy.MaxBytes + 1];
+        ImageCodecTests.Raster(SkiaSharp.SKEncodedImageFormat.Png).CopyTo(bytes, 0);
+        var uploads = new Foxwarm.Channels.WebUi.WebUiUploadedFiles(f.Manager);
+        var staging = Path.Combine(uploads.Root, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(staging);
+        try
+        {
+            await f.Manager.SelectNodeAsync(f.Owner, f.Node);
+            foreach (var bound in new[] { false, true })
+            {
+                if (bound) await f.Manager.SetAgentNodeAsync("main", f.Node);
+                var input = Path.Combine(staging, "original.png");
+                await File.WriteAllBytesAsync(input, bytes);
+                using var admission = f.Manager.BeginFileIngress(f.Owner);
+                var result = await uploads.PrepareAsync(new JsonObject { ["uploadedFiles"] = new JsonArray(new JsonObject { ["path"] = input, ["filename"] = "original.png", ["mimeType"] = "image/png" }) }, f.Owner, default);
+                Assert.Single(result.Parts);
+                Assert.StartsWith("<foxwarm-file ", result.Parts[0]["text"]!.ToString());
+                Assert.Null(result.Parts[0]["inlineDataRef"]);
+                var saved = Assert.Single(result.SavedFiles);
+                Assert.Equal(bound ? f.Node : "master", saved["node"]!.ToString());
+                var path = saved["path"]!.ToString();
+                var actual = bound ? f.FilePath(path.StartsWith("opaque://root/", StringComparison.Ordinal) ? path["opaque://root/".Length..] : path) : path;
+                Assert.Equal(bytes, await File.ReadAllBytesAsync(actual));
+                Assert.False(File.Exists(input));
+                var calls = (await f.Requests()).Length;
+                await f.Manager.Images.HydrateAsync([new JsonObject { ["role"] = "user", ["parts"] = new JsonArray(result.Parts.Select(part => (JsonNode)part.DeepClone()).ToArray()) }], "responses");
+                Assert.Equal(calls, (await f.Requests()).Length);
+            }
+            Assert.False(Directory.Exists(f.Manager.Images.BlobRoot));
+        }
+        finally { Directory.Delete(staging, true); }
+    }
+
 }

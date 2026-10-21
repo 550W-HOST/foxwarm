@@ -95,7 +95,7 @@ async function sse(token, id) {
 }
 async function upload(token, id, filename = 'owned.txt', bytes = Buffer.from('owned attachment')) {
   const form = new FormData(); if (id) form.append('sessionId', id); form.append('file', new Blob([bytes]), filename)
-  const response = await fetch(host.origin + '/nested/app/api/upload', { method: 'POST', headers: { authorization: 'Bearer ' + token }, body: form })
+  const response = await fetch(host.origin + '/nested/app/api/upload' + (id ? '?sessionId=' + encodeURIComponent(id) : ''), { method: 'POST', headers: { authorization: 'Bearer ' + token }, body: form })
   return { status: response.status, body: await response.json().catch(() => ({})) }
 }
 function heldBody(path, token, type, bodyPrefix) {
@@ -140,7 +140,7 @@ try {
   await until(() => aliceWs.frames.some(frame => frame.type === 'subscriptions-applied') && bobWs.frames.some(frame => frame.type === 'subscriptions-applied'), 'WS snapshots')
   const aliceSse = await sse(aliceToken, 'chat'), bobSse = await sse('synthetic-bob', 'chat')
   const heldInput = heldBody(route('chat') + '/message', aliceToken, 'application/json', '{"text":"NEVER-ADMITTED')
-  const heldUpload = heldBody('/api/upload', aliceToken, 'multipart/form-data; boundary=held', '--held\r\nContent-Disposition: form-data; name="sessionId"\r\n\r\nchat\r\n--held\r\nContent-Disposition: form-data; name="file"; filename="held.txt"\r\nContent-Type: text/plain\r\n\r\npartial')
+  const heldUpload = heldBody('/api/upload?sessionId=chat', aliceToken, 'multipart/form-data; boundary=held', '--held\r\nContent-Disposition: form-data; name="sessionId"\r\n\r\nchat\r\n--held\r\nContent-Disposition: form-data; name="file"; filename="held.txt"\r\nContent-Type: text/plain\r\n\r\npartial')
   // The original parent remains cold: no earlier successful request admitted it.
   const marker = join(faults, segment(seed.parent) + '.admission-hold'); await writeFile(marker, 'hold')
   const heldHistory = alice('GET', route(seed.parent) + '/history').then(value => ({ value }), error => ({ error: error.message }))

@@ -70,10 +70,10 @@ export async function createHostFixture(name, options = {}) {
     if (source) await until(async () => (await api('GET', '/api/nodes')).status === 200, 'Source routes ready')
     else { const health = await api('GET', '/health'); assert.equal(health.status, 200); assert.equal(health.body?.status, 'ready') }
   }
-  async function openApp() {
+  async function openApp(credential = token) {
     browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', ...(options.chromeArgs || [])], userDataDir: join(root, 'browser') })
     page = await browser.newPage(); options.onPage?.(page); await page.goto(options.publicRoot || origin, { waitUntil: 'networkidle0' })
-    await page.waitForSelector('input[type="password"]'); await page.type('input[type="password"]', token); await page.click('button[type="submit"]')
+    await page.waitForSelector('input[type="password"]'); await page.type('input[type="password"]', credential); await page.click('button[type="submit"]')
     await page.waitForSelector('.foxwarm-chat-root'); await waitForWebUiReady(page); return page
   }
   async function save(config) {

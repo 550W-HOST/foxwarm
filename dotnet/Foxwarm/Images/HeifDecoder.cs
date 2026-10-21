@@ -144,7 +144,15 @@ internal static class HeifDecoder
 
     internal static void RequirePrerequisite() => _ = Native.Value;
 
-    internal static Pixels DecodeImage(byte[] bytes, long pixelLimit = MaxPixels)
+    internal static Pixels DecodeImage(byte[] bytes, long pixelLimit = MaxPixels) => ReadImage(bytes, pixelLimit, true);
+
+    internal static (int Width, int Height) Inspect(byte[] bytes)
+    {
+        var metadata = ReadImage(bytes, MaxPixels, false);
+        return (metadata.Width, metadata.Height);
+    }
+
+    private static Pixels ReadImage(byte[] bytes, long pixelLimit, bool decodePixels)
     {
         if (pixelLimit <= 0 || pixelLimit > MaxPixels)
             throw new ArgumentOutOfRangeException(nameof(pixelLimit));
@@ -164,7 +172,7 @@ internal static class HeifDecoder
                 throw new ImageInputException("HEIC native security-limit ABI is incompatible.");
             // v1.23.5 C ABI: uint8 version, padding, uint64 max_image_size_pixels.
             // Preserve every other native default; never request disabled limits.
-            Marshal.WriteInt64(limits, 8, pixelLimit);
+            Marshal.WriteInt64(limits, 8, decodePixels ? pixelLimit : long.MaxValue);
             pinned = GCHandle.Alloc(bytes, GCHandleType.Pinned);
             Check(
                 api.ReadMemory(
@@ -178,10 +186,12 @@ internal static class HeifDecoder
             Check(api.GetPrimary(context, out handle), "HEIC input has no valid primary image.");
             var width = api.Width(handle);
             var height = api.Height(handle);
-            if (width <= 0 || height <= 0 || (long)width * height > pixelLimit)
+            if (width <= 0 || height <= 0 || decodePixels && (long)width * height > pixelLimit)
                 throw new ImageInputException(
                     "Image exceeds the 64-megapixel limit or has invalid dimensions."
                 );
+            if (!decodePixels)
+                return new([], width, height, false);
             // RGB=1, interleaved RGBA=11, default geometric transformations enabled.
             options = api.AllocateOptions();
             if (options == IntPtr.Zero || Marshal.ReadByte(options) < 4)

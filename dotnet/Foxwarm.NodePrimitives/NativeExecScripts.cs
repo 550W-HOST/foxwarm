@@ -48,20 +48,12 @@ internal static class NativeExecScripts
 
     internal const string Windows = """
         $ErrorActionPreference = "Continue"
-        chcp 65001 | Out-Null
-        $basePath = Join-Path $env:FOXWARM_EXEC_LOG_DIR ("{0}_pid{1}" -f $env:FOXWARM_EXEC_TIME_TOKEN, $PID)
-        $index = 0
-        while ($true) {
-          if ($index -eq 0) { $logPath = "$basePath.log" } else { $logPath = "${basePath}_$index.log" }
-          $statusPath = "$logPath.exit.json"
-          $cwdPath = "$logPath.cwd.txt"
-          if (!(Test-Path -LiteralPath $logPath) -and !(Test-Path -LiteralPath $statusPath) -and !(Test-Path -LiteralPath $cwdPath)) { break }
-          $index += 1
-        }
-        $pathsTmp = "$env:FOXWARM_EXEC_PATHS_PATH.tmp.$PID"
-        @{ logPath = $logPath; statusPath = $statusPath; cwdPath = $cwdPath } | ConvertTo-Json -Compress | Set-Content -LiteralPath $pathsTmp
-        Move-Item -LiteralPath $pathsTmp -Destination $env:FOXWARM_EXEC_PATHS_PATH -Force
-        Start-Transcript -LiteralPath $logPath -Append | Out-Null
+        $utf8 = New-Object System.Text.UTF8Encoding $false
+        [Console]::InputEncoding = $utf8
+        [Console]::OutputEncoding = $utf8
+        $OutputEncoding = $utf8
+        $statusPath = $env:FOXWARM_EXEC_STATUS_PATH
+        $cwdPath = $env:FOXWARM_EXEC_CWD_PATH
         $global:LASTEXITCODE = $null
         $foxwarmExecSucceeded = $true
         try {
@@ -77,10 +69,10 @@ internal static class NativeExecScripts
         $finished = [DateTime]::UtcNow.ToString("o")
         $cwdTmp = "$cwdPath.tmp.$PID"
         $statusTmp = "$statusPath.tmp.$PID"
-        (Get-Location).Path | Set-Content -LiteralPath $cwdTmp -Encoding UTF8 -NoNewline
+        [System.IO.File]::WriteAllText($cwdTmp, (Get-Location).Path, $utf8)
         Move-Item -LiteralPath $cwdTmp -Destination $cwdPath -Force
-        Stop-Transcript | Out-Null
-        @{ exitCode = $EXIT_CODE; finishedAt = $finished } | ConvertTo-Json -Compress | Set-Content -LiteralPath $statusTmp -Encoding UTF8
+        $status = @{ exitCode = $EXIT_CODE; finishedAt = $finished } | ConvertTo-Json -Compress
+        [System.IO.File]::WriteAllText($statusTmp, $status, $utf8)
         Move-Item -LiteralPath $statusTmp -Destination $statusPath -Force
         exit $EXIT_CODE
         """;

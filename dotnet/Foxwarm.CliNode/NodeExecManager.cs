@@ -29,14 +29,7 @@ internal sealed partial class NodeExecManager(
     internal Action? TrackingExpired { get; init; }
     internal Action? RegistryIdle { get; init; }
     internal Action? BeforeLaunch { get; init; }
-    internal Func<ProcessStartInfo, int> Launch { get; init; } =
-        start =>
-        {
-            using var process =
-                Process.Start(start)
-                ?? throw new IOException("Failed to start background process: missing pid");
-            return process.Id;
-        };
+    internal Func<ProcessStartInfo, int> Launch { get; init; } = ExecNative.Start;
 
     internal static string? Text(JsonObject entry, string key) => NodeFileTools.Text(entry[key]);
 
@@ -272,7 +265,8 @@ internal sealed partial class NodeExecManager(
                     : NativeExecScripts.Unix(ExecNative.SelfCommand)
                         + "\n"
                         + command
-                        + (command.EndsWith('\n') ? "" : "\n")
+                        + (command.EndsWith('\n') ? "" : "\n"),
+                new System.Text.UTF8Encoding(windows)
             );
             if (!windows)
                 File.SetUnixFileMode(
@@ -292,8 +286,14 @@ internal sealed partial class NodeExecManager(
             launch.Environment["FOXWARM_EXEC_LOG_DIR"] = directory;
             launch.Environment["FOXWARM_EXEC_TIME_TOKEN"] = token;
             launch.Environment["FOXWARM_EXEC_PATHS_PATH"] = pathsFile;
+            var windowsLog = windows ? Path.Combine(directory, token + "_" + id + ".log") : null;
             if (windows)
+            {
                 launch.Environment["FOXWARM_EXEC_COMMAND_PATH"] = userScript;
+                launch.Environment["FOXWARM_EXEC_LOG_PATH"] = windowsLog;
+                launch.Environment["FOXWARM_EXEC_STATUS_PATH"] = windowsLog + ".exit.json";
+                launch.Environment["FOXWARM_EXEC_CWD_PATH"] = windowsLog + ".cwd.txt";
+            }
             BeforeLaunch?.Invoke();
             if (stop.IsCancellationRequested)
                 throw new InvalidDataException(
@@ -302,8 +302,8 @@ internal sealed partial class NodeExecManager(
             var time = Now();
             var pid = Launch(launch);
             started();
-            var log = Path.Combine(directory, token + "_pid" + pid + ".log");
-            var discovered = await ReadPaths(pathsFile);
+            var log = windowsLog ?? Path.Combine(directory, token + "_pid" + pid + ".log");
+            var discovered = windows ? new JsonObject() : await ReadPaths(pathsFile);
             var entry = new JsonObject
             {
                 ["id"] = id,

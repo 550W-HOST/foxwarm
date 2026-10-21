@@ -24,7 +24,7 @@ internal sealed class UploadPreparationException(
 
 internal sealed class WebUiUploadedFiles(SessionManager sessions)
 {
-    internal const long Limit = 50L * 1024 * 1024;
+    internal const long Limit = 1024L * 1024 * 1024;
     internal static string StagingRoot => Path.Combine(Path.GetTempPath(), "foxwarm-uploads");
     internal string Root => StagingRoot;
     internal Func<SessionOwner, string, Task>? BeforeStage { get; set; }
@@ -91,7 +91,23 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                     ? SessionGoal.Trim(suppliedName!)
                     : Path.GetFileName(path);
                 var mime = Mime(SessionWait.Text((entry as JsonObject)?["mimeType"]), filename);
-                var bytes = await ReadStagedAsync(path, token);
+                await using var source = OpenStaged(path);
+                var isImage = mime.StartsWith("image/", StringComparison.Ordinal);
+                byte[]? bytes = null;
+                if (isImage)
+                {
+                    if (source.Length > ImageInputPolicy.MaxBytes)
+                        isImage = false;
+                    else
+                    {
+                        using var buffer = new MemoryStream();
+                        await CopyStagedAsync(source, buffer, token);
+                        bytes = buffer.ToArray();
+                        try { isImage = !ImageInputPolicy.IsOversized(bytes, mime); }
+                        catch (ImageInputException) { /* Invalid metadata retains ordinary image ingress failure. */ }
+                        source.Position = 0;
+                    }
+                }
                 await StageAsync(owner, "before-copy");
                 await sessions.WaitForIdentityMutationAsync(owner.Id, token);
                 sessions.RequireFileIngressOwner(owner);
@@ -109,6 +125,13 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                 string destination;
                 if (node != "master")
                 {
+                    // Existing Node whole-file transport; no implicit transfer during provider preparation.
+                    if (bytes is null)
+                    {
+                        using var buffer = new MemoryStream();
+                        await CopyStagedAsync(source, buffer, token);
+                        bytes = buffer.ToArray();
+                    }
                     // Authenticated administrator ingress selects the real owner; it is not a model tool call.
                     var relative = ".temp/channel-files/webui/" + storage;
                     var written = await sessions.NodeProviders.WriteFileAsync(
@@ -131,7 +154,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                             ["filename"] = filename,
                             ["node"] = node,
                             ["mimeType"] = mime,
-                            ["size"] = bytes.Length,
+                            ["size"] = source.Length,
                         }
                     );
                 }
@@ -170,7 +193,8 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                         )
                         {
                             created = true;
-                            await output.WriteAsync(bytes, token);
+                            source.Position = 0;
+                            await CopyStagedAsync(source, output, token);
                             await output.FlushAsync(token);
                             output.Flush(true);
                         }
@@ -184,7 +208,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                                 ["filename"] = filename,
                                 ["node"] = "master",
                                 ["mimeType"] = mime,
-                                ["size"] = bytes.Length,
+                                ["size"] = source.Length,
                             }
                         );
                         LinuxAtomicJsonFile.LinuxDirectorySync.Sync(directory);
@@ -200,13 +224,13 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                 parts.Add(
                     new JsonObject
                     {
-                        ["text"] = ChannelFileNames.Descriptor(filename, destination, mime, node),
+                        ["text"] = ChannelFileNames.Descriptor(filename, destination, mime, node, isImage),
                     }
                 );
-                if (mime.StartsWith("image/", StringComparison.Ordinal))
+                if (isImage)
                 {
                     var imageId = "image_" + Guid.NewGuid();
-                    var reference = await sessions.Images.PutAsync(bytes, mime, imageId, token);
+                    var reference = await sessions.Images.PutAsync(bytes!, mime, imageId, token);
                     parts.Add(
                         new JsonObject
                         {
@@ -217,7 +241,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                                 ["mimeType"] = mime,
                                 ["width"] = reference["width"]?.DeepClone(),
                                 ["height"] = reference["height"]?.DeepClone(),
-                                ["sizeBytes"] = bytes.Length,
+                                ["sizeBytes"] = source.Length,
                                 ["sha256"] = reference["sha256"]?.DeepClone(),
                             },
                         }
@@ -225,6 +249,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                 }
                 scoped?.ConsumeUpload(path);
                 // Administrator callers may still use other existing staging files.
+                await source.DisposeAsync();
                 File.Delete(path);
             }
             return new(parts, saved);
@@ -245,7 +270,7 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
         }
     }
 
-    private async Task<byte[]> ReadStagedAsync(string path, CancellationToken token)
+    private FileStream OpenStaged(string path)
     {
         var root = AuthorizationPaths.CanonicalPotential(Root);
         var physical = AuthorizationPaths.CanonicalPotential(Path.GetFullPath(path));
@@ -256,14 +281,16 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
             throw new ImageInputException(
                 "Uploaded file is not a regular file in server upload staging."
             );
-        await using var stream = new FileStream(
+        var stream = new FileStream(
             path,
             FileMode.Open,
             FileAccess.Read,
-            FileShare.Read,
+            FileShare.Read | FileShare.Delete,
             65536,
             FileOptions.Asynchronous
         );
+        try
+        {
         if (!WorkspaceTools.RegularFileHandle(stream, path))
             throw new ImageInputException("Uploaded file is not a regular file.");
         if (OperatingSystem.IsLinux())
@@ -280,17 +307,23 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
                 throw new ImageInputException("Uploaded file is outside server upload staging.");
         }
         if (stream.Length > Limit)
-            throw new ImageInputException("File exceeds the 50 MiB upload limit.");
-        using var buffer = new MemoryStream();
-        var chunk = new byte[65536];
-        int read;
-        while ((read = await stream.ReadAsync(chunk, token)) > 0)
-        {
-            if (buffer.Length + read > Limit)
-                throw new ImageInputException("File exceeds the 50 MiB upload limit.");
-            buffer.Write(chunk, 0, read);
+            throw new ImageInputException("File exceeds the 1 GiB upload limit.");
+        return stream;
         }
-        return buffer.ToArray();
+        catch { stream.Dispose(); throw; }
+    }
+
+    private static async Task CopyStagedAsync(Stream source, Stream output, CancellationToken token)
+    {
+        var chunk = new byte[65536];
+        long copied = 0;
+        int read;
+        while ((read = await source.ReadAsync(chunk, token)) > 0)
+        {
+            copied += read;
+            if (copied > Limit) throw new ImageInputException("File exceeds the 1 GiB upload limit.");
+            await output.WriteAsync(chunk.AsMemory(0, read), token);
+        }
     }
 
     private async Task StageAsync(SessionOwner owner, string stage)

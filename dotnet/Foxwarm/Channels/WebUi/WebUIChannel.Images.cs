@@ -9,7 +9,7 @@ namespace Foxwarm.Channels.WebUi;
 
 internal sealed partial class WebUIChannel
 {
-    private const long UploadLimit = 50L * 1024 * 1024;
+    private const long UploadLimit = WebUiUploadedFiles.Limit;
     private static string UploadRoot => WebUiUploadedFiles.StagingRoot;
 
     private static string AttachmentMime(string? declared, string filename) =>
@@ -28,11 +28,21 @@ internal sealed partial class WebUIChannel
                 )
                     // Source limits each file, not the complete multipart body.
                     limit.MaxRequestBodySize = null;
+                if (context.Request.ContentLength > UploadLimit)
+                    return Results.Json(new { error = "Upload too large", maxBytes = UploadLimit }, statusCode: 413);
+                var scoped = WebUiAccess.Request(context);
+                var uploadSession = context.Request.Query["sessionId"].Count == 1
+                    ? context.Request.Query["sessionId"].ToString().Trim() : "";
+                if (scoped is not null)
+                {
+                    if (uploadSession.Length == 0)
+                        return Results.BadRequest(new { error = "WebUI identity upload requires a bound sessionId." });
+                    scoped.Bind(uploadSession);
+                }
                 if (!context.Request.HasFormContentType)
                     return Results.BadRequest(new { error = "A multipart file is required." });
                 try
                 {
-                    var scoped = WebUiAccess.Request(context);
                     var form = await context.Request.ReadFormAsync(
                         new FormOptions
                         {
@@ -41,24 +51,12 @@ internal sealed partial class WebUIChannel
                         },
                         context.RequestAborted
                     );
-                    var uploadSession =
-                        form["sessionId"].Count == 1 ? form["sessionId"].ToString().Trim() : "";
-                    if (scoped is not null)
-                    {
-                        if (uploadSession.Length == 0)
-                            return Results.BadRequest(
-                                new { error = "WebUI identity upload requires a bound sessionId." }
-                            );
-                        scoped.Bind(uploadSession);
-                    }
                     if (form.Files.Count != 1 || form.Files[0].Name != "file")
                         return Results.BadRequest(new { error = "One file is required." });
                     var file = form.Files[0];
                     var mimeType = AttachmentMime(file.ContentType, file.FileName);
                     if (file.Length > UploadLimit)
-                        return Results.BadRequest(
-                            new { error = "File exceeds the 50 MiB upload limit." }
-                        );
+                        return Results.Json(new { error = "File exceeds the 1 GiB upload limit." }, statusCode: 413);
                     Directory.CreateDirectory(UploadRoot);
                     var original = Path.GetFileName(file.FileName.Replace('\\', '/'));
                     var extension = Path.GetExtension(original);
@@ -103,6 +101,8 @@ internal sealed partial class WebUIChannel
                 catch (Exception error)
                     when (error is InvalidDataException or IOException or BadHttpRequestException)
                 {
+                    if (error is InvalidDataException && error.Message.Contains("Multipart body length limit", StringComparison.Ordinal))
+                        return Results.Json(new { error = "File exceeds the 1 GiB upload limit." }, statusCode: 413);
                     return Results.BadRequest(
                         new
                         {

@@ -66,17 +66,20 @@ internal sealed partial class LocalExecManager
         launch.Environment["FOXWARM_EXEC_LOG_DIR"] = directory;
         launch.Environment["FOXWARM_EXEC_TIME_TOKEN"] = token;
         launch.Environment["FOXWARM_EXEC_PATHS_PATH"] = pathsFile;
+        var windowsLog = windows ? Path.Combine(directory, token + "_" + id + ".log") : null;
         if (windows)
+        {
             launch.Environment["FOXWARM_EXEC_COMMAND_PATH"] = userScript;
+            launch.Environment["FOXWARM_EXEC_LOG_PATH"] = windowsLog;
+            launch.Environment["FOXWARM_EXEC_STATUS_PATH"] = windowsLog + ".exit.json";
+            launch.Environment["FOXWARM_EXEC_CWD_PATH"] = windowsLog + ".cwd.txt";
+        }
         beforeLaunch?.Invoke();
         stop.ThrowIfCancellationRequested();
         var started = Now();
-        using var process =
-            Process.Start(launch)
-            ?? throw new IOException("Failed to start background process: missing pid");
-        var pid = process.Id;
-        var discovered = await ReadPathsAsync(pathsFile);
-        var log = Path.Combine(directory, token + "_pid" + pid + ".log");
+        var pid = ExecNative.Start(launch);
+        var discovered = windows ? null : await ReadPathsAsync(pathsFile);
+        var log = windowsLog ?? Path.Combine(directory, token + "_pid" + pid + ".log");
         var raw = !string.IsNullOrWhiteSpace(requestedCwd) ? requestedCwd : paths.SessionCwd;
         raw = raw is null
             ? null

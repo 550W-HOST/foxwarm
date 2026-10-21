@@ -129,7 +129,7 @@ public sealed class WebUiUploadedFilesTests
             var path = file["path"]!.ToString();
             Assert.StartsWith(Path.Combine(f.Work, ".temp", "channel-files", "webui"), path);
             Assert.Equal("master", file["node"]!.ToString());
-            Assert.Equal(new FileInfo(path).Length, file["size"]!.GetValue<int>());
+            Assert.Equal(new FileInfo(path).Length, file["size"]!.GetValue<long>());
         }
         Assert.False(Directory.Exists(cwd));
         Assert.Contains("中文&lt;&amp;&quot;&apos; file.txt", result.Parts[1]["text"]!.ToString());

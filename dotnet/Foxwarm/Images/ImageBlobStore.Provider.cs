@@ -3,6 +3,10 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Models;
+using Foxwarm.Tools;
+using Foxwarm.Channels;
+using System.Text.RegularExpressions;
 
 namespace Foxwarm.Images;
 
@@ -25,6 +29,8 @@ internal sealed partial class ImageBlobStore
         foreach (var source in history)
         {
             var message = (JsonObject)source.DeepClone();
+            var parts = new List<JsonObject>();
+            var toolFiles = new List<(JsonObject Part, string? ToolUseId)>();
             foreach (var part in (message["parts"] as JsonArray ?? []).OfType<JsonObject>())
             {
                 part.Remove("__providerImageIdentity");
@@ -32,54 +38,108 @@ internal sealed partial class ImageBlobStore
                 var reference = part["inlineDataRef"] as JsonObject;
                 var inline = part["inlineData"] as JsonObject;
                 if (reference is null && inline is null)
+                {
+                    parts.Add(part);
                     continue;
-                var generatedSourceModel = SessionWait.Text(
-                    part["providerMeta"]?["openaiResponses"]?["sourceModelId"]
-                );
-                if (
-                    SessionWait.Text(part["imageMeta"]?["origin"]) == "generated"
-                    && generatedSourceModel is not null
-                    && concreteModelId is not null
-                    && generatedSourceModel != concreteModelId
-                )
-                    continue;
-                var mime = Mime(reference ?? inline!);
+                }
                 byte[] bytes;
                 if (reference is not null)
                     bytes = await ReadAsync(reference, token);
                 else
                 {
-                    bytes = InlineBytes(inline!);
+                    try { bytes = InlineBytes(inline!); }
+                    catch (ImageInputException) { parts.Add(part); continue; }
                 }
-                var nonvisual =
-                    SessionWait.Text(message["role"]) == "model"
-                    && (
-                        protocol == "responses"
-                        || SessionWait.Text(part["imageMeta"]?["origin"]) == "generated"
-                    );
-                if (nonvisual)
+                var mime = Mime(reference ?? inline!);
+                var nativeReplay = SessionWait.Text(message["role"]) == "model"
+                    && protocol == "responses"
+                    && concreteModelId is not null
+                    && SessionWait.Text(part["providerMeta"]?["openaiResponses"]?["sourceModelId"]) == concreteModelId
+                    && SessionWait.Text(part["providerMeta"]?["openaiResponses"]?["outputItem"]?["type"]) == "image_generation_call";
+                var nonvisual = SessionWait.Text(message["role"]) == "model" && !nativeReplay
+                    && (protocol == "responses" || SessionWait.Text(part["imageMeta"]?["origin"]) == "generated");
+                if (nonvisual && RasterCodec.IsHeif(mime))
+                    _ = HeifDecoder.DecodeImage(bytes);
+                var variant = new RasterCodec.Variant(bytes, mime);
+                if (!nativeReplay && !nonvisual)
                 {
-                    if (RasterCodec.IsHeif(mime))
-                        _ = HeifDecoder.DecodeImage(bytes);
-                    part["inlineData"] = new JsonObject
+                    try
                     {
-                        ["mimeType"] = mime,
-                        ["data"] = Convert.ToBase64String(bytes),
-                    };
-                    continue;
+                        if (bytes.LongLength > ImageInputPolicy.MaxBytes || (RasterCodec.IsSafeRaster(mime) || RasterCodec.IsHeif(mime)) && ImageInputPolicy.IsOversized(bytes, mime))
+                        {
+                            var fallback = AppendFileFallback(parts, part, mime);
+                            if (SessionWait.Text(message["role"]) == "tool")
+                                toolFiles.Add((fallback, SessionWait.Text(part["toolUseId"])));
+                            continue;
+                        }
+                        variant = await OptimizeAsync(bytes, mime, outputFormat);
+                    }
+                    catch (ImageInputException) when (reference is null && !RasterCodec.IsHeif(mime))
+                    { /* Preserve previously unvalidated legacy inline payloads. */ }
                 }
-                var variant = await OptimizeAsync(bytes, mime, outputFormat);
                 token.ThrowIfCancellationRequested();
-                part["inlineData"] = new JsonObject
-                {
-                    ["mimeType"] = variant.MimeType,
-                    ["data"] = Convert.ToBase64String(variant.Bytes),
-                };
+                part["inlineData"] = new JsonObject { ["mimeType"] = variant.MimeType, ["data"] = Convert.ToBase64String(variant.Bytes) };
+                parts.Add(part);
             }
+            foreach (var file in toolFiles)
+            {
+                var fileIndex = parts.IndexOf(file.Part);
+                var response = parts.Select((part, index) => (Part: part, Index: index))
+                    .Where(item => item.Part["functionResponse"] is JsonObject
+                        && (file.ToolUseId is not null
+                            ? (SessionWait.Text(item.Part["functionResponse"]?["tool_use_id"]) ?? SessionWait.Text(item.Part["toolUseId"])) == file.ToolUseId
+                            : item.Index >= fileIndex))
+                    .OrderBy(item => Math.Abs(item.Index - fileIndex)).FirstOrDefault();
+                if (response.Part is null) continue;
+                var function = response.Part["functionResponse"]!.AsObject();
+                function["response"] = new JsonObject { ["output"] = string.Join("\n", new[] { ToolResponseFormatting.Format(function["response"]), SessionWait.Text(file.Part["text"]) }.Where(text => !string.IsNullOrEmpty(text))) };
+                if (response.Part != file.Part) parts.Remove(file.Part);
+            }
+            message["parts"] = new JsonArray(parts.Select(part => (JsonNode)part.DeepClone()).ToArray());
             result.Add(message);
         }
         ProviderImageDedup.Apply(result, protocol);
         return result;
+    }
+
+    private static string? FileDescriptor(string? text, string mime)
+    {
+        if (text is null) return null;
+        var lines = text.Split('\n');
+        for (var index = lines.Length - 1; index >= 0; index--)
+        {
+            if (!Regex.IsMatch(lines[index], "^\\s*<foxwarm-image\\b([^>]*)/?\\s*>\\s*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) continue;
+            var attributes = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (Match attribute in Regex.Matches(lines[index], "([a-zA-Z_:][a-zA-Z0-9_.:-]*)\\s*=\\s*\"([^\"]*)\""))
+                attributes[attribute.Groups[1].Value] = attribute.Groups[2].Value.Replace("&quot;", "\"").Replace("&apos;", "'").Replace("&lt;", "<").Replace("&gt;", ">").Replace("&amp;", "&");
+            if (!attributes.TryGetValue("name", out var name) || name.Length == 0 || !attributes.TryGetValue("node", out var node) || node.Length == 0 || !attributes.TryGetValue("path", out var path) || path.Length == 0) continue;
+            lines[index] = ChannelFileNames.Descriptor(name, path, mime, node, false);
+            return string.Join('\n', lines);
+        }
+        return null;
+    }
+
+    private static JsonObject AppendFileFallback(List<JsonObject> parts, JsonObject part, string mime)
+    {
+        var own = FileDescriptor(SessionWait.Text(part["text"]), mime);
+        var previous = parts.LastOrDefault();
+        var preceding = own is null && previous?["inlineData"] is null && previous?["inlineDataRef"] is null
+            ? FileDescriptor(SessionWait.Text(previous?["text"]), mime) : null;
+        var imageId = SessionWait.Text(part["imageMeta"]?["imageId"]) ?? SessionWait.Text(part["inlineDataRef"]?["imageId"]);
+        part.Remove("inlineData"); part.Remove("inlineDataRef"); part.Remove("imageMeta");
+        if (preceding is not null)
+        {
+            previous!["text"] = preceding;
+            if (part["text"] is not null || part["functionCall"] is not null || part["functionResponse"] is not null) parts.Add(part);
+            return previous;
+        }
+        part["text"] = own ?? string.Join("\n", new[] {
+            SessionWait.Text(part["text"]),
+            "Image content was not sent because it exceeds the image input limit. " + (imageId is not null
+                ? "The original is retained as image " + JsonStringQuoting.Quote(imageId) + "; use image_write_to_file to save it as a file."
+                : "The original remains in the source message.") }.Where(text => !string.IsNullOrEmpty(text)));
+        parts.Add(part);
+        return part;
     }
 
     private async Task<RasterCodec.Variant> OptimizeAsync(byte[] bytes, string mime, string output)

@@ -90,7 +90,7 @@ internal sealed partial class ImageBlobStore(string dataRoot)
     {
         mime = mime.Trim().ToLowerInvariant();
         RasterCodec.Probe? probe = RasterCodec.IsSafeRaster(mime)
-            ? RasterCodec.Inspect(bytes, mime)
+            ? RasterCodec.Inspect(bytes, mime, enforcePixelLimit: false)
             : null;
         var sha = Convert.ToHexStringLower(SHA256.HashData(bytes));
         var extension = Extension(mime);

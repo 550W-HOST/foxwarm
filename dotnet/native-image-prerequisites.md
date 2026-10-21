@@ -4,7 +4,7 @@ This document covers the .NET host's image-input prerequisites, not image genera
 
 ## Raster input
 
-`Foxwarm.csproj` pins `SkiaSharp` and `SkiaSharp.NativeAssets.Linux.NoDependencies` to **4.153.1**. NuGet restore and publish provide that raster dependency. The qualified runtime is Linux x64 with .NET 10. PNG, JPEG, GIF and WebP header/pixel limits are checked before pixel allocation. GIF contributes its first frame. The Source input limit is `64 * 1024 * 1024` pixels; provider optimization proportionally targets at most `4 * 1024 * 1024` pixels and a 4096-pixel longest side.
+`Foxwarm.csproj` pins `SkiaSharp` and `SkiaSharp.NativeAssets.Linux.NoDependencies` to **4.153.1**. NuGet restore and publish provide that raster dependency. The qualified runtime is Linux x64 with .NET 10. PNG, JPEG, GIF and WebP dimensions are probed without pixel allocation. Visual ingress/provider admission treats originals above 32 MiB or the pixel limit as ordinary files; canonical storage retains original raster bytes without imposing the vision cap. GIF contributes its first frame. The Source input limit is `64 * 1024 * 1024` pixels; provider optimization proportionally targets at most `4 * 1024 * 1024` pixels and a 4096-pixel longest side.
 
 The selected Skia encoder has its own disposable cache policy identity; encoded bytes are not claimed identical to Source's encoder. Original canonical/download bytes are never replaced by provider variants.
 
@@ -12,7 +12,7 @@ The selected Skia encoder has its own disposable cache policy identity; encoded 
 
 HEIC decoding requires **libheif 1.23.5** with the **libde265 1.1.3** HEVC decode chain. This is an explicit native runtime prerequisite, not an implicit system-library fallback or a managed NuGet codec. The narrow C-API adapter checks Linux x64, both exact versions, required symbols, decoder availability and the supported ABI. It selects the `libde265` decoder explicitly.
 
-The adapter changes only the context's `max_image_size_pixels` to the existing Source limit before reading the container or decoding coded pixels. All other native security limits remain enabled. Managed primary dimensions, decoded plane dimensions/stride and allocation bounds are also checked; these are additional checks, not a substitute for the native coded-size limit. Default image transformations and the primary image are retained, including real alpha.
+For pixel decoding, the adapter changes only the context's `max_image_size_pixels` to the existing Source limit before reading the container or decoding coded pixels. Metadata-only preflight instead permits over-limit primary dimensions to be inspected and classified as file-only, returns before decoding, and does not allocate RGBA pixels. All other native security limits remain enabled. Managed primary dimensions, decoded plane dimensions/stride and allocation bounds are also checked; these are additional checks, not a substitute for the native coded-size limit. Default image transformations and the primary image are retained, including real alpha.
 
 To reproduce the qualified decode-only build, use a caller-owned directory and installed C/C++ compiler, CMake, pkg-config, curl, tar and sha256sum:
 
@@ -23,7 +23,7 @@ LD_LIBRARY_PATH="$PWD/.temp/image-decoder/prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBR
 
 The script verifies pinned source-archive SHA-256 values and builds only the declared decode chain without global installation, plugin loading or encoders. It does not configure shared loader paths, package native binaries into the repository or establish a cross-platform deployment system. Keep the declared libraries available to the actual host process, including a published host outside the checkout. Changing `LD_LIBRARY_PATH` after a process has loaded the decoder does not requalify that process; use a fresh process for prerequisite changes.
 
-A missing, incompatible or decoder-less prerequisite produces a visible **local image-preparation error before provider I/O**. It does not trigger retry, failover or provider-health penalties. A cached HEIC variant cannot bypass the prerequisite check. PNG and other raster input do not load HEIF and remain usable without it. HEIC downloads preserve original bytes and are served as attachments rather than a fabricated browser preview.
+Except for byte-over-limit input, which falls back before loading any decoder, a missing, incompatible or decoder-less prerequisite produces a visible **local image-preparation error before provider I/O**. It does not trigger retry, failover or provider-health penalties. A cached HEIC variant cannot bypass the prerequisite check. PNG and other raster input do not load HEIF and remain usable without it. HEIC downloads preserve original bytes and are served as attachments rather than a fabricated browser preview.
 
 The standard [test container](../test/README.md) does not install this optional decode chain. Its raster dependency is supplied by NuGet publish; HEIC/HEIF remains unavailable without the exact separate native prerequisite.
 
