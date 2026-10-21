@@ -31,25 +31,56 @@ internal static class WindowsExecProcess
         using var input = CreateFile("NUL", 0x80000000, 3, ref security, 3, 0x80, IntPtr.Zero);
         if (input.IsInvalid)
             throw new Win32Exception(Marshal.GetLastPInvokeError());
-        var info = new StartupInfo
-        {
-            Size = Marshal.SizeOf<StartupInfo>(),
-            Flags = 0x100,
-            Input = input.DangerousGetHandle(),
-            Output = output.DangerousGetHandle(),
-            Error = output.DangerousGetHandle(),
-        };
-        var environment = Marshal.StringToHGlobalUni(
-            string.Join(
-                '\0',
-                start
-                    .Environment.Where(pair => pair.Value is not null)
-                    .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
-                    .Select(pair => pair.Key + "=" + pair.Value)
-            ) + "\0\0"
-        );
+        IntPtr attributes = IntPtr.Zero;
+        IntPtr handles = IntPtr.Zero;
+        IntPtr environment = IntPtr.Zero;
+        var attributesInitialized = false;
         try
         {
+            nuint size = 0;
+            InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
+            attributes = Marshal.AllocHGlobal(checked((int)size));
+            if (!InitializeProcThreadAttributeList(attributes, 1, 0, ref size))
+                throw new Win32Exception(Marshal.GetLastPInvokeError());
+            attributesInitialized = true;
+            handles = Marshal.AllocHGlobal(IntPtr.Size * 2);
+            Marshal.WriteIntPtr(handles, input.DangerousGetHandle());
+            Marshal.WriteIntPtr(handles, IntPtr.Size, output.DangerousGetHandle());
+            // Restrict this child to its own standard handles even when other execs
+            // have inheritable capture handles open during a concurrent launch.
+            if (
+                !UpdateProcThreadAttribute(
+                    attributes,
+                    0,
+                    (IntPtr)0x00020002,
+                    handles,
+                    (nuint)(IntPtr.Size * 2),
+                    IntPtr.Zero,
+                    IntPtr.Zero
+                )
+            )
+                throw new Win32Exception(Marshal.GetLastPInvokeError());
+            var info = new StartupInfoEx
+            {
+                Startup = new StartupInfo
+                {
+                    Size = Marshal.SizeOf<StartupInfoEx>(),
+                    Flags = 0x100,
+                    Input = input.DangerousGetHandle(),
+                    Output = output.DangerousGetHandle(),
+                    Error = output.DangerousGetHandle(),
+                },
+                Attributes = attributes,
+            };
+            environment = Marshal.StringToHGlobalUni(
+                string.Join(
+                    '\0',
+                    start
+                        .Environment.Where(pair => pair.Value is not null)
+                        .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                        .Select(pair => pair.Key + "=" + pair.Value)
+                ) + "\0\0"
+            );
             var command = new StringBuilder(
                 string.Join(" ", new[] { start.FileName }.Concat(start.ArgumentList).Select(Quote))
             );
@@ -60,7 +91,7 @@ internal static class WindowsExecProcess
                     IntPtr.Zero,
                     IntPtr.Zero,
                     true,
-                    0x08000400,
+                    0x08000400 | 0x00080000,
                     environment,
                     start.WorkingDirectory,
                     ref info,
@@ -74,7 +105,16 @@ internal static class WindowsExecProcess
         }
         finally
         {
-            Marshal.FreeHGlobal(environment);
+            if (environment != IntPtr.Zero)
+                Marshal.FreeHGlobal(environment);
+            if (attributes != IntPtr.Zero)
+            {
+                if (attributesInitialized)
+                    DeleteProcThreadAttributeList(attributes);
+                Marshal.FreeHGlobal(attributes);
+            }
+            if (handles != IntPtr.Zero)
+                Marshal.FreeHGlobal(handles);
         }
     }
 
@@ -128,6 +168,13 @@ internal static class WindowsExecProcess
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct StartupInfoEx
+    {
+        internal StartupInfo Startup;
+        internal IntPtr Attributes;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct ProcessInfo
     {
         internal IntPtr Process,
@@ -168,9 +215,33 @@ internal static class WindowsExecProcess
         uint flags,
         IntPtr environment,
         string cwd,
-        ref StartupInfo startup,
+        ref StartupInfoEx startup,
         out ProcessInfo process
     );
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool InitializeProcThreadAttributeList(
+        IntPtr attributes,
+        int count,
+        uint flags,
+        ref nuint size
+    );
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool UpdateProcThreadAttribute(
+        IntPtr attributes,
+        uint flags,
+        IntPtr attribute,
+        IntPtr value,
+        nuint size,
+        IntPtr previous,
+        IntPtr returned
+    );
+
+    [DllImport("kernel32.dll")]
+    private static extern void DeleteProcThreadAttributeList(IntPtr attributes);
 
     [DllImport("kernel32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
