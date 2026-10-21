@@ -1,7 +1,8 @@
 # Build from the repository root. The SDK is copied, never the SDK image's libc.
 ARG SDK_IMAGE=mcr.microsoft.com/dotnet/sdk:10.0.401
+ARG BUILD_IMAGE=registry.access.redhat.com/ubi9/ubi:latest
 FROM ${SDK_IMAGE} AS sdk
-FROM registry.access.redhat.com/ubi8/ubi:8.10 AS build
+FROM ${BUILD_IMAGE} AS build
 RUN dnf install -y clang gcc binutils zlib-devel libicu openssl-libs krb5-libs \
     && dnf clean all
 COPY --from=sdk /usr/share/dotnet /usr/share/dotnet
