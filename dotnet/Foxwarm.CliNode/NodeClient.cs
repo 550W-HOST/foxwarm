@@ -428,25 +428,32 @@ internal sealed partial class NodeClient
         }
         catch (Exception error)
         {
-            var detail = FileError(error);
             var response =
                 type == "tool_call"
-                    ? new JsonObject
-                    {
-                        ["type"] = "tool_call_error",
-                        ["callId"] = frame["callId"]?.DeepClone(),
-                        ["error"] = detail,
-                    }
+                    ? ToolCallFailure(frame, error, execStarted)
                     : new JsonObject
                     {
                         ["type"] = "file_transfer_error",
                         ["transferId"] = frame["transferId"]?.DeepClone(),
-                        ["error"] = detail["message"]?.DeepClone(),
+                        ["error"] = FileError(error)["message"]?.DeepClone(),
                     };
-            if (type == "tool_call" && Text(frame, "tool") == "exec")
-                response["execStarted"] = execStarted;
             await connection.Send(response);
         }
+    }
+
+    internal static JsonObject ToolCallFailure(JsonObject frame, Exception error, bool execStarted)
+    {
+        var response = new JsonObject
+        {
+            ["type"] = "tool_call_error",
+            ["callId"] = frame["callId"]?.DeepClone(),
+            ["error"] = FileError(error),
+        };
+        // Absence is the existing unknown-outcome representation. Do not claim
+        // no effect when the helper may have launched before losing its receipt.
+        if (Text(frame, "tool") == "exec" && error is not ExecLaunchUncertainException)
+            response["execStarted"] = execStarted;
+        return response;
     }
 
     internal static JsonObject FileError(Exception error)

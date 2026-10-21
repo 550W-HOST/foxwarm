@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json.Nodes;
 using Microsoft.Win32.SafeHandles;
 
 namespace Foxwarm.Tools;
@@ -10,7 +11,77 @@ namespace Foxwarm.Tools;
 // Keep this Windows-only adaptation at the shared native launch boundary, without a managed output pump.
 internal static class WindowsExecProcess
 {
-    internal static int Start(ProcessStartInfo start, string outputPath)
+    internal static int Launch(ProcessStartInfo helper, string outputPath)
+    {
+        // Only the one-shot helper opens inheritable capture handles. Ordinary BCL
+        // children started concurrently in Main or CLI cannot inherit those handles.
+        helper.RedirectStandardOutput = true;
+        helper.StandardOutputEncoding = new UTF8Encoding(false);
+        using var process = Process.Start(helper)
+            ?? throw new IOException("Failed to start exec launch helper.");
+        using var output = process.StandardOutput;
+        string? receipt;
+        try
+        {
+            receipt = output.ReadLineAsync()
+                .WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+        }
+        catch (Exception error) when (error is IOException or TimeoutException)
+        {
+            throw new ExecLaunchUncertainException(outputPath, error);
+        }
+        return Receipt(receipt, outputPath);
+    }
+
+    private static int Receipt(string? receipt, string outputPath)
+    {
+        JsonObject? value;
+        try
+        {
+            value = JsonNode.Parse(receipt ?? "null") as JsonObject;
+        }
+        catch (System.Text.Json.JsonException error)
+        {
+            throw new ExecLaunchUncertainException(outputPath, error);
+        }
+        if (value?["pid"] is JsonValue pid && pid.TryGetValue<int>(out var id) && id > 0)
+            return id;
+        if (value?["errorCode"] is JsonValue code && code.TryGetValue<int>(out var nativeError))
+            throw new Win32Exception(nativeError);
+        throw new ExecLaunchUncertainException(outputPath);
+    }
+
+    internal static int Helper(string script)
+    {
+        var start = new ProcessStartInfo("powershell.exe")
+        {
+            WorkingDirectory = Environment.CurrentDirectory,
+        };
+        foreach (var argument in new[]
+        {
+            "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script,
+        })
+            start.ArgumentList.Add(argument);
+        var output = Environment.GetEnvironmentVariable("FOXWARM_EXEC_LOG_PATH")
+            ?? throw new IOException("Missing exec capture path.");
+        JsonObject receipt;
+        try
+        {
+            receipt = new JsonObject { ["pid"] = Start(start, output) };
+        }
+        catch (Win32Exception error)
+        {
+            // Start throws a Win32Exception only before successful PowerShell creation.
+            receipt = new JsonObject { ["errorCode"] = error.NativeErrorCode };
+        }
+        // Do not include the launch-receipt stream in PowerShell's handle list.
+        // The helper exits immediately; disposing it never terminates the command.
+        using var writer = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false));
+        writer.WriteLine(receipt.ToJsonString());
+        return 0;
+    }
+
+    private static int Start(ProcessStartInfo start, string outputPath)
     {
         var security = new SecurityAttributes
         {
@@ -20,7 +91,7 @@ internal static class WindowsExecProcess
         using var output = CreateFile(
             outputPath,
             0x40000000,
-            3,
+            7,
             ref security,
             1,
             0x80,
@@ -46,8 +117,8 @@ internal static class WindowsExecProcess
             handles = Marshal.AllocHGlobal(IntPtr.Size * 2);
             Marshal.WriteIntPtr(handles, input.DangerousGetHandle());
             Marshal.WriteIntPtr(handles, IntPtr.Size, output.DangerousGetHandle());
-            // Restrict this child to its own standard handles even when other execs
-            // have inheritable capture handles open during a concurrent launch.
+            // Exclude the helper's launch-receipt stream and any inherited caller
+            // handles; PowerShell receives only its own capture and NUL handles.
             if (
                 !UpdateProcThreadAttribute(
                     attributes,
@@ -247,3 +318,12 @@ internal static class WindowsExecProcess
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool CloseHandle(IntPtr handle);
 }
+
+internal sealed class ExecLaunchUncertainException(string outputPath, Exception? inner = null)
+    : IOException(
+        "Command launch outcome is uncertain. Do not retry automatically; inspect the execution artifacts."
+            + "\nLog: " + outputPath
+            + "\nStatus: " + outputPath + ".exit.json"
+            + "\nWorking directory: " + outputPath + ".cwd.txt",
+        inner
+    );

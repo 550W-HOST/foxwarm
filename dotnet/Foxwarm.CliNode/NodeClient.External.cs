@@ -162,6 +162,13 @@ internal sealed partial class NodeClient
                 ["background"] = true,
             };
         }
+        catch (ExecLaunchUncertainException)
+        {
+            if (runtime is not null)
+                lock (externalGate)
+                    runtime.UncertainRunning = true;
+            throw;
+        }
         finally
         {
             if (runtime is not null)

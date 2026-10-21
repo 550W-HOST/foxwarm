@@ -87,6 +87,8 @@ internal static class ExecNative
             );
             return 0;
         }
+        if (OperatingSystem.IsWindows() && args is ["--exec-launch-windows", var script])
+            return WindowsExecProcess.Helper(script);
         if (args[0] != "--exec-launch" || args.Length != 2)
             return null;
         if (Setsid() < 0)
@@ -134,29 +136,12 @@ internal static class ExecNative
     )
     {
         self ??= SelfStart();
-        var start = OperatingSystem.IsWindows() ? new ProcessStartInfo("powershell.exe") : self;
-        start.UseShellExecute = false;
-        start.WorkingDirectory = cwd;
-        start.CreateNoWindow = true;
-        if (OperatingSystem.IsWindows())
-            foreach (
-                var argument in new[]
-                {
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    script,
-                }
-            )
-                start.ArgumentList.Add(argument);
-        else
-        {
-            start.ArgumentList.Add("--exec-launch");
-            start.ArgumentList.Add(script);
-        }
-        return start;
+        self.UseShellExecute = false;
+        self.WorkingDirectory = cwd;
+        self.CreateNoWindow = true;
+        self.ArgumentList.Add(OperatingSystem.IsWindows() ? "--exec-launch-windows" : "--exec-launch");
+        self.ArgumentList.Add(script);
+        return self;
     }
 
     internal static int Start(ProcessStartInfo start)
@@ -166,7 +151,7 @@ internal static class ExecNative
             && start.Environment.TryGetValue("FOXWARM_EXEC_LOG_PATH", out var output)
             && output is not null
         )
-            return WindowsExecProcess.Start(start, output);
+            return WindowsExecProcess.Launch(start, output);
         using var process =
             Process.Start(start)
             ?? throw new IOException("Failed to start background process: missing pid");

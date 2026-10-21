@@ -1,6 +1,8 @@
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json.Nodes;
+using Foxwarm.CliNode;
+using Foxwarm.Tools;
 using Foxwarm.Models;
 using Foxwarm.Nodes;
 using Foxwarm.Sessions;
@@ -429,6 +431,44 @@ public sealed class RemoteExecProtocolTests
         );
         Assert.NotNull(claim);
         Assert.Equal("outcome-unknown", claim.State);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Native_helper_failure_preserves_definite_rejection_versus_unknown_effect(bool uncertain)
+    {
+        await using var fixture = new Fixture();
+        await fixture.Start();
+        var execution = fixture.Exec();
+        var request = await fixture.Read();
+        var log = Path.Combine(fixture.Temp.Path, "owned.log");
+        Exception failure = uncertain
+            ? new ExecLaunchUncertainException(log)
+            : new System.ComponentModel.Win32Exception(80);
+        var response = NodeClient.ToolCallFailure(request, failure, false);
+        await fixture.Send(response);
+        var error = await Assert.ThrowsAnyAsync<InvalidOperationException>(() => execution);
+        var claim = fixture.Manager.Nodes.ExecClaims.Exact(
+            "remote",
+            fixture.Owner.Id,
+            request["backgroundExecId"]!.GetValue<string>(),
+            request["completionCapability"]!.GetValue<string>()
+        );
+        if (uncertain)
+        {
+            Assert.NotNull(claim);
+            Assert.Equal("outcome-unknown", claim.State);
+            Assert.False(response.ContainsKey("execStarted"));
+            Assert.Contains(log, error.Message);
+            Assert.Contains(log + ".exit.json", error.Message);
+            Assert.Contains(log + ".cwd.txt", error.Message);
+        }
+        else
+        {
+            Assert.Null(claim);
+            Assert.False(response["execStarted"]!.GetValue<bool>());
+        }
     }
 
     [Fact]

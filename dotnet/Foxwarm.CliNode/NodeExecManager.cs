@@ -273,7 +273,11 @@ internal sealed partial class NodeExecManager(
                     script,
                     UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
                 );
-            var launch = ExecNative.Launcher(script, cwd);
+            var launch = ExecNative.Launcher(
+                script,
+                cwd,
+                windows ? ExecNative.SelfStart(typeof(NodeExecManager).Assembly) : null
+            );
             foreach (var key in launch.Environment.Keys.ToArray())
                 if ((windows ? key.ToLowerInvariant() : key) is "fw_agentdir" or "fw_tmp")
                     launch.Environment.Remove(key);
