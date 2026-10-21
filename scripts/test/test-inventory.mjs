@@ -30,6 +30,7 @@ export const appHarnessE2e = [
 const testLike = /(?:\.test\.(?:ts|js|mjs|cjs)|\.e2e\.mjs|\/test_[^/]+\.py)$/
 
 const manualGroups = new Map([
+  ['packages/webui/test/dotnetCliNodeAotLinux.e2e.mjs', 'manual-smoke'],
   ['test/managedSessionLiveSmoke.js', 'manual-smoke'],
   ['test/pushOnlyBroadcastSmoke.js', 'manual-smoke'],
   ['test/sessionMetadataSafetySmoke.js', 'manual-smoke'],
