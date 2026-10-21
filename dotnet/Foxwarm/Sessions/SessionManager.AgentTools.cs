@@ -19,7 +19,13 @@ internal sealed partial class SessionManager
         semanticCaller.Value = cancellationToken;
         try
         {
-            return await ExecuteAgentToolCoreAsync(source, name, args, sessionMessageDelivered, toolScriptRunId);
+            return await ExecuteAgentToolCoreAsync(
+                source,
+                name,
+                args,
+                sessionMessageDelivered,
+                toolScriptRunId
+            );
         }
         finally
         {

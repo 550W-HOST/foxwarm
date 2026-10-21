@@ -6,7 +6,8 @@ internal static class TimerToolDefinitions
 {
     internal static JsonArray Definitions() =>
         new(
-            ScriptDefinition("""
+            ScriptDefinition(
+                """
 {
   "name": "create_timer",
   "description": "Schedule a message or a ToolScript run, once or on a recurring schedule. Choose one of at, afterSeconds, or cron. ToolScript timers run for the calling Session without starting a model turn; the script can send a message when needed. Timers survive restarts. Load the timer-automation skill before creating or changing timers.",
@@ -65,7 +66,8 @@ internal static class TimerToolDefinitions
   },
   "type": "function"
 }
-"""),
+"""
+            ),
             Definition(
                 "list_timers",
                 "List timers owned by a session.",
@@ -74,7 +76,8 @@ internal static class TimerToolDefinitions
                     ["sessionId"] = String("Owner Session ID. Defaults to this session."),
                 }
             ),
-            ScriptDefinition("""
+            ScriptDefinition(
+                """
 {
   "name": "update_timer",
   "description": "Change an existing timer. Omitted fields keep their current values. To change its schedule, supply exactly one of at, afterSeconds, or cron. A supplied script replaces the complete script specification. Load the timer-automation skill before changing timers.",
@@ -139,7 +142,8 @@ internal static class TimerToolDefinitions
   },
   "type": "function"
 }
-"""),
+"""
+            ),
             Definition(
                 "delete_timer",
                 "Delete a timer to stop future triggers. A delivery already in progress is not undone.",

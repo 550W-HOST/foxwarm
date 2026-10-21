@@ -200,22 +200,36 @@ internal sealed partial class MainTimers
         var changedTarget =
             TimerArguments.Optional(args["sessionPrefix"]) is not null
             || TimerArguments.Optional(args["agentName"]) is not null;
-        if (!schedule.Provided && !message && !newSession && !changedTarget && !args.ContainsKey("action") && !args.ContainsKey("script"))
+        if (
+            !schedule.Provided
+            && !message
+            && !newSession
+            && !changedTarget
+            && !args.ContainsKey("action")
+            && !args.ContainsKey("script")
+        )
             throw new InvalidDataException("At least one timer field must be supplied to update.");
         var updated = (JsonObject)existing.DeepClone();
-        var action = args.ContainsKey("action") ? args["action"] : existing["action"] ?? JsonValue.Create("message");
-        var switched = MainTimers.Text(action) != (MainTimers.Text(existing["action"]) ?? "message");
+        var action = args.ContainsKey("action")
+            ? args["action"]
+            : existing["action"] ?? JsonValue.Create("message");
+        var switched =
+            MainTimers.Text(action) != (MainTimers.Text(existing["action"]) ?? "message");
         var payload = (JsonObject)args.DeepClone();
         payload["action"] = action?.DeepClone();
         if (!args.ContainsKey("message") && !switched)
-            payload["message"] = existing["message"]?.DeepClone() ?? (TimerArguments.Script(existing) ? JsonValue.Create("") : null);
+            payload["message"] =
+                existing["message"]?.DeepClone()
+                ?? (TimerArguments.Script(existing) ? JsonValue.Create("") : null);
         if (!args.ContainsKey("script") && !switched && existing.ContainsKey("script"))
             payload["script"] = existing["script"]?.DeepClone();
         TimerArguments.PutAction(updated, payload);
         if (switched || TimerArguments.Script(updated))
         {
             updated["newSession"] = false;
-            foreach (var key in new[] { "sessionPrefix", "agentName", "currentNode", "model", "effort" })
+            foreach (
+                var key in new[] { "sessionPrefix", "agentName", "currentNode", "model", "effort" }
+            )
                 updated.Remove(key);
         }
         if (schedule.Provided)
@@ -225,7 +239,9 @@ internal sealed partial class MainTimers
         }
         if (TimerArguments.Script(updated))
             return updated;
-        var fresh = newSession ? Flag(args["newSession"]) : !switched && Flag(existing["newSession"]);
+        var fresh = newSession
+            ? Flag(args["newSession"])
+            : !switched && Flag(existing["newSession"]);
         updated["newSession"] = fresh;
         if (!fresh)
         {

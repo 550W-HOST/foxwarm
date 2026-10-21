@@ -125,7 +125,11 @@ internal sealed partial class SessionManager
         }
     }
 
-    private IDisposable BeginMutation(IEnumerable<string> requested, DeleteOperation? owning = null, bool acceptedTimer = false)
+    private IDisposable BeginMutation(
+        IEnumerable<string> requested,
+        DeleteOperation? owning = null,
+        bool acceptedTimer = false
+    )
     {
         var ids = requested.Distinct(StringComparer.Ordinal).ToArray();
         var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -319,15 +319,17 @@ internal sealed partial class SessionManager
             taskNotification?["recipient"]?.GetValue<string>() == "new"
                 ? "Task assignment from Foxwarm, not direct user input. Complete this task with the task tool when the assigned work is finished; completion automatically notifies the task creator. Do not send a separate routine completion message."
                 : "task notification from Foxwarm; not direct user input";
-        var wrapper = selfSend
-            ? $"<foxwarm-message type=\"toolscript\" sourceSessionId=\"{Escape(source.Id)}\" runId=\"{Escape(toolScriptRunId!)}\" time=\"{Escape(time)}\" hint=\"Message queued by a ToolScript in this Session, not direct user input.\">\n"
-                + message + "\n</foxwarm-message>"
+        var wrapper =
+            selfSend
+                ? $"<foxwarm-message type=\"toolscript\" sourceSessionId=\"{Escape(source.Id)}\" runId=\"{Escape(toolScriptRunId!)}\" time=\"{Escape(time)}\" hint=\"Message queued by a ToolScript in this Session, not direct user input.\">\n"
+                    + message
+                    + "\n</foxwarm-message>"
             : taskNotification is null
-            ? $"<foxwarm-message type=\"inter-agent\" sourceSessionId=\"{Escape(source.Id)}\" "
-                + $"replyTargetSessionId=\"{Escape(source.Id)}\" replyVia=\"send_to_session\" time=\"{Escape(time)}\" "
-                + "hint=\"inter-agent message from another session, not direct end-user input\">\n"
-                + message
-                + "\n</foxwarm-message>"
+                ? $"<foxwarm-message type=\"inter-agent\" sourceSessionId=\"{Escape(source.Id)}\" "
+                    + $"replyTargetSessionId=\"{Escape(source.Id)}\" replyVia=\"send_to_session\" time=\"{Escape(time)}\" "
+                    + "hint=\"inter-agent message from another session, not direct end-user input\">\n"
+                    + message
+                    + "\n</foxwarm-message>"
             : $"<foxwarm-message type=\"task\" taskId=\"{Escape(taskId)}\" event=\"{Escape(taskEvent)}\" sourceSessionId=\"{Escape(source.Id)}\" time=\"{Escape(time)}\" hint=\"{Escape(taskHint)}\">\n"
                 + message
                 + "\n</foxwarm-message>";

@@ -12,9 +12,14 @@ internal sealed partial class MainTimers
         var at = Number(row["at"]);
         var cron = Text(row["cron"]);
         var hasCron = cron is not null && SessionGoal.Trim(cron).Length > 0;
-        if (Text(row["sessionId"]) is null || !TimerArguments.Script(row) && Text(row["message"]) is null)
+        if (
+            Text(row["sessionId"]) is null
+            || !TimerArguments.Script(row) && Text(row["message"]) is null
+        )
             reason = "Unrecognized timer owner or message.";
-        else if (row.ContainsKey("action") && Text(row["action"]) is not ("message" or "toolscript"))
+        else if (
+            row.ContainsKey("action") && Text(row["action"]) is not ("message" or "toolscript")
+        )
             reason = "Unrecognized timer action.";
         else if ((at is not null) == hasCron)
             reason = "Unrecognized timer schedule.";
@@ -36,7 +41,13 @@ internal sealed partial class MainTimers
                 var normalized = new JsonObject();
                 TimerArguments.PutAction(normalized, row);
             }
-            catch (Exception error) when (error is InvalidDataException or ArgumentException or System.Text.Json.JsonException or Foxwarm.ToolScript.ToolScriptDataLimitException)
+            catch (Exception error)
+                when (error
+                        is InvalidDataException
+                            or ArgumentException
+                            or System.Text.Json.JsonException
+                            or Foxwarm.ToolScript.ToolScriptDataLimitException
+                )
             {
                 reason = "Unsupported ToolScript timer: " + error.Message;
             }
@@ -115,7 +126,11 @@ internal sealed partial class MainTimers
             _ = Task.Run(() => RunClockAsync(record, completion, first));
     }
 
-    private async Task RunClockAsync(TimerRecord record, TaskCompletionSource completion, long first)
+    private async Task RunClockAsync(
+        TimerRecord record,
+        TaskCompletionSource completion,
+        long first
+    )
     {
         try
         {
@@ -138,8 +153,10 @@ internal sealed partial class MainTimers
                 }
                 Task? predecessor;
                 lock (gate)
-                    predecessor = TimerArguments.Script(row) && cron is null
-                        ? scriptInvocations.GetValueOrDefault(record.Id) : null;
+                    predecessor =
+                        TimerArguments.Script(row) && cron is null
+                            ? scriptInvocations.GetValueOrDefault(record.Id)
+                            : null;
                 if (predecessor is not null)
                 {
                     // An overdue once replacement waits for release, not a dropped clock.
@@ -151,7 +168,10 @@ internal sealed partial class MainTimers
                 {
                     try
                     {
-                        next = new CronSchedule(Text(row["cron"])!, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()).Next();
+                        next = new CronSchedule(
+                            Text(row["cron"])!,
+                            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                        ).Next();
                     }
                     catch (Exception error)
                         when (error
@@ -174,7 +194,9 @@ internal sealed partial class MainTimers
                         && records.TryGetValue(record.Id, out var current)
                         && ReferenceEquals(current, record)
                         && !record.StopSource.IsCancellationRequested
-                        && (!TimerArguments.Script(row) || !scriptInvocations.ContainsKey(record.Id))
+                        && (
+                            !TimerArguments.Script(row) || !scriptInvocations.ContainsKey(record.Id)
+                        )
                     )
                     {
                         accepted = new(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -148,7 +148,9 @@ internal sealed partial class MainToolScript : IAsyncDisposable
         var sourceNode = Foxwarm.Tools.ToolRegistry.ToolScriptSourceNode(
             args,
             context.SourceNode
-                ?? SessionManager.ResolveExecutionNode(context.Owner.Entry.Snapshot().AuthorityEnvelope)
+                ?? SessionManager.ResolveExecutionNode(
+                    context.Owner.Entry.Snapshot().AuthorityEnvelope
+                )
         );
         string code;
         string path;
@@ -158,7 +160,11 @@ internal sealed partial class MainToolScript : IAsyncDisposable
             path = "<inline>";
         }
         else
-            (path, code) = await context.ReadSource(SessionGoal.Trim(file!), new ToolScriptDataBudget(), token);
+            (path, code) = await context.ReadSource(
+                SessionGoal.Trim(file!),
+                new ToolScriptDataBudget(),
+                token
+            );
         var prep = new ToolScriptDataBudget();
         prep.JsonValue(args);
         var input = args["args"]!.DeepClone();
@@ -219,13 +225,16 @@ internal sealed partial class MainToolScript : IAsyncDisposable
         else if (args.ContainsKey("argsJson"))
         {
             var json = Required(args, "argsJson");
-            input = budget.ParseJson(System.Text.Encoding.UTF8.GetBytes(json))
+            input =
+                budget.ParseJson(System.Text.Encoding.UTF8.GetBytes(json))
                 ?? throw new InvalidDataException("ToolScript argsJson must parse as an object.");
             if (input is not JsonObject)
                 throw new InvalidDataException("ToolScript argsJson must parse as an object.");
         }
         else if (args.ContainsKey("args"))
-            throw new InvalidDataException("ToolScript args must be an object, or provide argsJson.");
+            throw new InvalidDataException(
+                "ToolScript args must be an object, or provide argsJson."
+            );
         else
             input = new JsonObject();
         _ = Foxwarm.Tools.ToolRegistry.ToolScriptSourceNode(args, "master");

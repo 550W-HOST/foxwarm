@@ -306,7 +306,8 @@ internal sealed partial class SessionToolExecutor(
     internal void BroadcastVerboseToolStart(JsonObject call)
     {
         if (
-            Programmatic || unattended
+            Programmatic
+            || unattended
             || !hosted.Entry.WithState(state =>
                 SessionCatalog.Flag(state.AuthorityEnvelope["verbose"])
             )
@@ -423,7 +424,8 @@ internal sealed partial class SessionToolExecutor(
                 hosted.Registry.Runner.AssertCanContinue();
             BroadcastVerboseToolStart(functionCall);
             dispatched = true;
-            var runtimeLease = Programmatic || unattended ? null : hosted.BeginTool(ToolRuntime(resolved));
+            var runtimeLease =
+                Programmatic || unattended ? null : hosted.BeginTool(ToolRuntime(resolved));
             var startedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             var monotonic = System.Diagnostics.Stopwatch.GetTimestamp();
             try
@@ -568,7 +570,7 @@ internal sealed partial class SessionToolExecutor(
             {
                 hosted.Entry.RequireIdentityAuthority();
                 if (!unattended)
-                hosted.Registry.Runner.AssertCanContinue();
+                    hosted.Registry.Runner.AssertCanContinue();
             }
         );
         if (observed is null)
@@ -602,7 +604,7 @@ internal sealed partial class SessionToolExecutor(
             {
                 hosted.Entry.RequireIdentityAuthority();
                 if (!unattended)
-                hosted.Registry.Runner.AssertCanContinue();
+                    hosted.Registry.Runner.AssertCanContinue();
             },
             hardCancellation: hosted.Entry.IdentityLossToken
         );
@@ -714,7 +716,11 @@ internal sealed partial class SessionToolExecutor(
             },
             scriptScope.Value?.RunId
         );
-        if (!unattended && !Programmatic && sessions.ConsumeSuccessfulSendReceipt() is { } receiptTarget)
+        if (
+            !unattended
+            && !Programmatic
+            && sessions.ConsumeSuccessfulSendReceipt() is { } receiptTarget
+        )
             invocation.Value!.Receipt = new TurnToolReceipt(receiptTarget, null, null);
         if (
             response.Remove("__waitTarget", out var target) && SessionWait.Text(target) is string id

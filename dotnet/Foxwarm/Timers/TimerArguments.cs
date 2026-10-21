@@ -207,11 +207,21 @@ internal static class TimerArguments
         }
         if (args.ContainsKey("message") && MainTimers.Text(args["message"]) != "")
             throw new InvalidDataException("message requires action=message.");
-        if (MainTimers.Flag(args["newSession"]) || new[] { "sessionPrefix", "agentName", "currentNode", "model" }.Any(key => Optional(args[key]) is not null))
-            throw new InvalidDataException("ToolScript timers run in their owner Session; new-session settings require action=message.");
+        if (
+            MainTimers.Flag(args["newSession"])
+            || new[] { "sessionPrefix", "agentName", "currentNode", "model" }.Any(key =>
+                Optional(args[key]) is not null
+            )
+        )
+            throw new InvalidDataException(
+                "ToolScript timers run in their owner Session; new-session settings require action=message."
+            );
         if (args["script"] is not JsonObject script)
             throw new InvalidDataException("script must be a ToolScript specification.");
-        Foxwarm.Tools.ToolRegistry.Keys(script, ["code", "filePath", "node", "args", "argsJson", "mode", "timeoutSecs"]);
+        Foxwarm.Tools.ToolRegistry.Keys(
+            script,
+            ["code", "filePath", "node", "args", "argsJson", "mode", "timeoutSecs"]
+        );
         row["script"] = Foxwarm.ToolScript.MainToolScript.NormalizeStartArgs(script);
         row["message"] = "";
     }
