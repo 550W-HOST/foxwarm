@@ -62,7 +62,7 @@ import { registerNodeHttpRoutes } from './nodes/httpRoutes';
 import { initializeNodeRegistry } from './nodes/registry';
 import { scheduleLogRotation } from './logRotation';
 import { startWithRetry } from './startupUtils';
-import { initializeTimers } from './timers';
+import { initializeTimers, shutdownTimers } from './timers';
 import { initializeExecManager } from './execManager';
 import { setFoxwarmProcessTitle } from './processTitle';
 import { isQueueItem } from './types';
@@ -605,6 +605,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
         // Admission closes synchronously, before any service drain yields.
         // An owner that ignores cancellation is not a successful drain: exit
         // without dismantling dependencies underneath its still-running turn.
+        const timersDrained = shutdownTimers();
         const localTurnsDrained = shutdownLocalSessionTurns?.().catch((err: Error) => {
             logger.error({ err, signal }, 'Local Session owners did not settle; exiting without dependency teardown');
             // Native work may also block process.exit() during thread-pool
@@ -617,7 +618,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to stop MCP inbound cleanly'))
             .then(() => mcpExternal.shutdownMcpNotificationReceivers())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to stop MCP notification receivers cleanly'))
-            .then(() => localTurnsDrained)
+            .then(() => Promise.all([localTurnsDrained, timersDrained]))
             .then(() => shutdownToolScriptRuntime())
             .catch((err: Error) => logger.error({ err, signal }, 'Failed to shut down ToolScript runtime cleanly'))
             .then(() => nodeExecution.shutdownNodeExecution())

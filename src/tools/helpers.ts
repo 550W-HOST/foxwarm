@@ -30,6 +30,8 @@ export { findWriteParentIssue, formatWriteContentRefRetryHint, formatWriteParent
 
 // Tool context type
 export interface ToolContext {
+  /** Trusted provenance supplied only by a running ToolScript host call. */
+  toolScriptRunId?: string;
     /** Trusted local ToolScript hook: record a validated wait without registering it. */
     deferSessionWait?: (args: ToolArgs) => void;
     /** Current foreground invocation only; never retained by independent background work. */

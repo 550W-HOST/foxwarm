@@ -1,3 +1,4 @@
+import { normalizeTimerScript, type TimerScript, type TimerScriptOutcome } from './timerScript';
 import { defineRpcService, rpcMethod, RpcError, type RpcServiceHandler } from './rpc';
 import type { SessionWorkerProjection } from './sessionWorkerPersistence';
 import type { SessionWorkerActivationGate } from './sessionWorkerControlService';
@@ -61,11 +62,12 @@ export type SessionWorkerBtwResult = {
   projection: SessionWorkerProjection;
 };
 
-export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 16, {
+export const sessionWorkerRuntimeServiceDescriptor = defineRpcService('session-worker-runtime', 17, {
   loadProjection: rpcMethod<Record<string, never>, SessionWorkerProjection>(),
   runPending: rpcMethod<{ limit: number }, SessionWorkerProjection>(),
   retry: rpcMethod<Record<string, never>, SessionWorkerProjection>(),
   dequeue: rpcMethod<Record<string, never>, SessionWorkerDequeueResult>(),
+  runTimerScript: rpcMethod<{ script: TimerScript }, TimerScriptOutcome>(),
   runBtw: rpcMethod<{ message: string }, SessionWorkerBtwResult>(),
   compactAwaited: rpcMethod<{ request: CompactionRequest }, { compacted: boolean; projection: SessionWorkerProjection }>(),
   cancelCompaction: rpcMethod<Record<string, never>, CompactCancellationResult>(),
@@ -119,6 +121,13 @@ export function createSessionWorkerRuntimeServiceHandler(
         throw new RpcError('SESSION_WORKER_DEQUEUE_INVALID', 'dequeue takes an empty request object.');
       }
       return host.dequeue();
+    },
+    async runTimerScript(input) {
+      gate.assertActive();
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 1) {
+        throw new RpcError('SESSION_WORKER_TIMER_INVALID', 'Timer execution takes one script specification.');
+      }
+      return host.runTimerScript(normalizeTimerScript(input.script));
     },
     async runBtw(input) {
       gate.assertActive();

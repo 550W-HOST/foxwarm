@@ -120,6 +120,7 @@ export async function executeMainManagementTool(
     sourceSessionId: ctx.sessionId,
     operation,
     args,
+    ...(operation === 'send_to_session' && ctx.toolScriptRunId ? { toolScriptRunId: ctx.toolScriptRunId } : {}),
   });
   return response.result;
 }
