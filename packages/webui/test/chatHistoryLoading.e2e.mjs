@@ -54,6 +54,9 @@ async function buildFixtureBundle() {
       { text: 'First body paragraph.\\n\\n'.repeat(80) },
       { text: 'MULTIPART_READER\\n\\n' + 'Second body paragraph.\\n\\n'.repeat(80) },
     ] } : message)
+    window.fixtureBlockExpansions = {}
+    window.fixtureDelayedBlocks = {}
+    window.resolveFixtureBlock = id => { const resolve = window.fixtureDelayedBlocks[id]; delete window.fixtureDelayedBlocks[id]; resolve?.() }
     window.fixtureArchiveRequests = []
     window.fixtureFailArchive = false
     window.fixtureDelayArchive = false
@@ -88,6 +91,10 @@ async function buildFixtureBundle() {
       const entry = historyResponseResolvers.shift()
       if (!entry) throw new Error('No pending history request')
       entry.settled = true
+      for (const message of messages) {
+        const block = message.__meta?.contextBlock
+        if (block?.sourceKind === 'block' && !window.fixtureBlockExpansions[block.id]) window.fixtureBlockExpansions[block.id] = [{ role: 'model', parts: [{ text: 'Child block' }], __meta: { contextBlock: { ...block, id: 10000 + block.id, level: 1, sourceKind: 'message' } } }]
+      }
       const latestSeq = extras.latestSeq ?? messages.reduce((latest, message) => Math.max(latest, message.__meta?.seq || 0), 0)
       entry.resolve(new Response(JSON.stringify({
         session: { id: extras.sessionId || 'fixture/main', busy: extras.busy ?? false, runtimeState: { state: extras.busy ? 'requesting-model' : 'idle', busy: extras.busy ?? false, queueLength }, queueLength, messageCount: extras.messageCount ?? messages.length, historyVersion, modelKey: 'fixture/model' },
@@ -134,6 +141,13 @@ async function buildFixtureBundle() {
       if (url.includes('/state')) {
         window.fixtureStateProbeCount += 1
         return new Promise((resolve, reject) => stateProbeResolvers.push({ resolve, reject }))
+      }
+      if (url.includes('/context-blocks/')) {
+        if (window.fixtureFailBlocks) return new Response('{}', { status: 503 })
+        const id = Number(url.match(/context-blocks\\/(\\d+)/)?.[1])
+        const reply = () => new Response(JSON.stringify({ messages: window.fixtureBlockExpansions[id] || [] }), { status: 200 })
+        if (window.fixtureDelayBlockIds?.includes(id)) return new Promise(resolve => { window.fixtureDelayedBlocks[id] = () => resolve(reply()) })
+        return reply()
       }
       if (url.includes('/history/continuous')) {
         window.fixtureArchiveRequests.push(url)
@@ -2115,7 +2129,7 @@ test('continuous Chat catches up by one bounded page and returns to latest witho
   } finally { await chatPage.close() }
 })
 
-test('continuous Chat backfills original Archive tool results rather than pruned active snapshots', async () => {
+test('continuous Chat displays pruned active contents after bounded Archive catch-up', async () => {
   const chatPage = await openContinuousChat()
   try {
     await chatPage.evaluate(() => {
@@ -2141,9 +2155,9 @@ test('continuous Chat backfills original Archive tool results rather than pruned
     await chatPage.evaluate(() => { window.fixtureDelayArchive = false; window.resolveFixtureArchive() })
     await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-601"]')
     await chatPage.click('[aria-label="Search messages"]', { clickCount: 3 })
-    await chatPage.type('[aria-label="Search messages"]', 'FullOriginalArchiveResult')
+    await chatPage.type('[aria-label="Search messages"]', 'PrunedActiveSnapshotResult')
     await chatPage.waitForFunction(() => document.querySelector('[role="search"] [aria-live]')?.textContent === '1/1')
-    assert.equal(await chatPage.evaluate(() => document.querySelector('[data-chat-timeline="committed"]').textContent.includes('PrunedActiveSnapshotResult')), false)
+    assert.equal(await chatPage.evaluate(() => document.querySelector('[data-chat-timeline="committed"]').textContent.includes('FullOriginalArchiveResult')), false)
   } finally { await chatPage.close() }
 })
 
@@ -2714,5 +2728,199 @@ test('continuous Chat protects later body parts when their sole message anchor i
     const frames = await chatPage.evaluate(() => window.fixtureHistoryFrames)
     assert.ok(frames.every(frame => frame.offset !== null && Math.abs(frame.offset - frames[0].offset) < 3), JSON.stringify(frames))
     await assertProtectedHistorySurfaces(chatPage, before)
+  } finally { await chatPage.close() }
+})
+
+
+test('continuous Chat excludes deleted active rows from an in-flight older page and a fresh remount', async () => {
+  const chatPage = await openContinuousChat()
+  try {
+    await chatPage.evaluate(() => { window.fixtureDelayArchive = true })
+    await loadContinuousEarlier(chatPage)
+    await chatPage.waitForFunction(() => window.fixtureArchiveRequests.length === 2)
+    await chatPage.evaluate(() => window.emitFixtureEvent({ type: 'session-state', session: { id: 'fixture/main', busy: false, queueLength: 0, messageCount: 6, historyVersion: 2 } }))
+    await chatPage.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+    await chatPage.evaluate(() => window.resolveFixtureHistory(0, [{ role: 'model', parts: [{ text: 'Summary' }], __meta: { contextBlock: { id: 1, level: 1, sourceKind: 'message', rawStartSeq: 1, rawEndSeq: 594 } } }, ...window.fixtureArchive.slice(-6, -1)], 2, { latestSeq: 600 }))
+    await chatPage.evaluate(() => { window.fixtureDelayArchive = false; window.resolveFixtureArchive() })
+    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-401"]')
+    await chatPage.click('[aria-label="Scroll to bottom"]')
+    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-599"]')
+    assert.equal(await chatPage.$('[data-chat-message-anchor-key="seq-local-600"]'), null)
+    await chatPage.evaluate(() => window.renderFixtureChats(1, 1))
+    await chatPage.waitForFunction(() => window.fixtureHistoryRequestCount === 3)
+    await chatPage.evaluate(() => window.resolveFixtureHistory(0, [{ role: 'model', parts: [{ text: 'Summary' }], __meta: { contextBlock: { id: 1, level: 1, sourceKind: 'message', rawStartSeq: 1, rawEndSeq: 594 } } }, ...window.fixtureArchive.slice(-6, -1)], 2, { latestSeq: 600 }))
+    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-599"]')
+    assert.equal(await chatPage.$('[data-chat-message-anchor-key="seq-local-600"]'), null)
+  } finally { await chatPage.close() }
+})
+
+test('continuous Chat resolves nested CTX members without resurrecting gaps in their envelopes', async () => {
+  const chatPage = await openContinuousChat()
+  try {
+    await chatPage.evaluate(() => {
+      const block = (id, start, end, level = 1) => ({ role: 'model', parts: [{ text: 'Summary' }], __meta: { contextBlock: { id, level, sourceKind: level === 1 ? 'message' : 'block', rawStartSeq: start, rawEndSeq: end } } })
+      window.fixtureBlockExpansions[20] = [block(21, 1, 590), block(22, 592, 598, 2)]
+      window.fixtureBlockExpansions[22] = [block(23, 592, 594), block(24, 596, 598)]
+      window.fixtureHigherBlock = block(20, 1, 598, 3)
+      window.emitFixtureEvent({ type: 'session-state', session: { id: 'fixture/main', busy: false, queueLength: 0, messageCount: 3, historyVersion: 2 } })
+    })
+    await chatPage.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+    await chatPage.evaluate(() => window.resolveFixtureHistory(0, [window.fixtureHigherBlock, ...window.fixtureArchive.slice(-2)], 2, { latestSeq: 600 }))
+    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-598"]')
+    await chatPage.waitForFunction(() => window.fixtureRequests.some(url => url.includes('/context-blocks/22/expand')))
+    await chatPage.waitForFunction(() => !document.querySelector('[data-chat-message-anchor-key="seq-local-595"]'))
+    assert.equal(await chatPage.$('[data-chat-message-anchor-key="seq-local-591"]'), null)
+    assert.ok(await chatPage.$('[data-chat-message-anchor-key="seq-local-594"]'))
+    assert.ok(await chatPage.$('[data-chat-message-anchor-key="seq-local-596"]'))
+    assert.equal(await chatPage.evaluate(() => window.fixtureRequests.some(url => /context-blocks\/(21|23|24)\//.test(url))), false, 'leaf originals still use bounded Archive pages')
+  } finally { await chatPage.close() }
+})
+
+
+test('continuous Chat waits for complete active authority and retries a failed bootstrap prefix', async () => {
+  const chatPage = await browser.newPage()
+  try {
+    await chatPage.goto(fixtureUrl + '?continuous=1', { waitUntil: 'load' })
+    await chatPage.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+    await chatPage.evaluate(() => window.resolveFixtureHistory(0, window.fixtureArchive.slice(-100), 1, { latestSeq: 600, prefixLength: 1, historyComplete: false, messageCount: 101 }))
+    await chatPage.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+    assert.equal(await chatPage.$('[data-chat-message-anchor-key="seq-local-600"]'), null)
+    await chatPage.evaluate(() => window.rejectFixtureHistory(503))
+    await chatPage.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('Earlier messages could not be loaded.'))
+    await chatPage.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Retry').click())
+    await chatPage.waitForFunction(() => window.fixtureHistoryRequestCount === 3)
+    await chatPage.evaluate(() => window.resolveFixtureHistory(0, [{ role: 'model', parts: [{ text: 'Summary' }], __meta: { contextBlock: { id: 1, level: 1, sourceKind: 'message', rawStartSeq: 1, rawEndSeq: 500 } } }, ...window.fixtureArchive.slice(-100)], 1, { latestSeq: 600 }))
+    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-600"]')
+    assert.equal(await chatPage.evaluate(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('Earlier messages could not be loaded.')), false)
+  } finally { await chatPage.close() }
+})
+
+test('continuous Chat leaves unresolved higher CTX hidden and retries its membership failure explicitly', async () => {
+  const chatPage = await openContinuousChat()
+  try {
+    await chatPage.evaluate(() => {
+      window.fixtureFailBlocks = true
+      window.emitFixtureEvent({ type: 'session-state', session: { id: 'fixture/main', busy: false, queueLength: 0, messageCount: 2, historyVersion: 2 } })
+    })
+    await chatPage.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+    await chatPage.evaluate(() => window.resolveFixtureHistory(0, [{ role: 'model', parts: [{ text: 'Higher summary' }], __meta: { contextBlock: { id: 2, level: 2, sourceKind: 'block', rawStartSeq: 1, rawEndSeq: 599 } } }, window.fixtureArchive.at(-1)], 2, { latestSeq: 600 }))
+    await chatPage.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('Earlier messages could not be loaded.'))
+    assert.equal(await chatPage.$('[data-chat-message-anchor-key="seq-local-599"]'), null, 'unknown membership is not replaced by its envelope')
+    assert.equal(await chatPage.evaluate(() => window.fixtureRequests.filter(url => url.includes('/context-blocks/2/expand')).length), 1, 'failure waits for explicit Retry')
+    await chatPage.evaluate(() => { window.fixtureFailBlocks = false; [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Retry').click() })
+    await chatPage.waitForFunction(() => window.fixtureHistoryRequestCount === 3)
+    await chatPage.evaluate(() => window.resolveFixtureHistory(0, [{ role: 'model', parts: [{ text: 'Higher summary' }], __meta: { contextBlock: { id: 2, level: 2, sourceKind: 'block', rawStartSeq: 1, rawEndSeq: 599 } } }, window.fixtureArchive.at(-1)], 2, { latestSeq: 600 }))
+    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-599"]')
+    assert.equal(await chatPage.evaluate(() => document.querySelector('.foxwarm-chat-root')?.textContent.includes('Earlier messages could not be loaded.')), false)
+  } finally { await chatPage.close() }
+})
+
+
+test('continuous Chat loads an active-only tail without traversing historical CTX and resolves only paged candidates', async t => {
+  const chatPage = await browser.newPage()
+  try {
+    await chatPage.goto(fixtureUrl + '?continuous=1', { waitUntil: 'load' })
+    await chatPage.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+    await chatPage.evaluate(() => {
+      const block = (id, start, end, level, children = []) => ({ role: 'model', parts: [{ text: 'Historical summary' }], __meta: { contextBlock: {
+        id, level, sourceKind: level === 1 ? 'message' : 'block', rawStartSeq: start, rawEndSeq: end,
+        ...(children.length ? { sourceStart: children[0].__meta.contextBlock.id, sourceEnd: children.at(-1).__meta.contextBlock.id, sourceBlockIds: children.map(child => child.__meta.contextBlock.id) } : { sourceStart: start, sourceEnd: end }),
+      } } })
+      const roots = []
+      let seq = 1
+      let childIndex = 0
+      for (let index = 0; index < 58; index++) {
+        const start = seq
+        const children = []
+        for (let child = 0; child < (index < 44 ? 7 : 6); child++) {
+          const leaf = block(3000 + childIndex, seq, seq, 1)
+          const parent = block(2000 + childIndex, seq, seq, 2, [leaf])
+          window.fixtureBlockExpansions[parent.__meta.contextBlock.id] = [leaf]
+          children.push(parent)
+          childIndex += 1
+          seq += 1
+        }
+        const root = block(1000 + index, start, seq - 1, 3, children)
+        window.fixtureBlockExpansions[root.__meta.contextBlock.id] = children
+        roots.push(root)
+      }
+      for (let index = 0; index < 19; index++) roots.push(block(1100 + index, 393 + Math.floor(index * 108 / 19), 392 + Math.floor((index + 1) * 108 / 19), 1))
+      window.fixtureManyRoots = roots
+      window.fixtureFailBlocks = true
+      window.resolveFixtureHistory(0, window.fixtureArchive.slice(-100), 1, { latestSeq: 600, prefixLength: 77, historyComplete: false, messageCount: 177 })
+    })
+    await chatPage.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+    await chatPage.evaluate(() => window.resolveFixtureHistory(0, window.fixtureManyRoots, 1, { latestSeq: 600 }))
+    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-600"]')
+    const normalLoad = await chatPage.evaluate(() => ({
+      roots: window.fixtureManyRoots.length,
+      nonLeafRoots: window.fixtureManyRoots.filter(message => message.__meta.contextBlock.sourceKind === 'block').length,
+      reachableNonLeaf: Object.keys(window.fixtureBlockExpansions).length,
+      blockRequests: window.fixtureRequests.filter(url => url.includes('/context-blocks/')).length,
+      archiveRequests: window.fixtureArchiveRequests.length,
+      error: document.querySelector('.foxwarm-chat-root').textContent.includes('Earlier messages could not be loaded.'),
+    }))
+    assert.deepEqual(normalLoad, { roots: 77, nonLeafRoots: 58, reachableNonLeaf: 450, blockRequests: 0, archiveRequests: 1, error: false })
+    await chatPage.evaluate(() => { window.fixtureFailBlocks = false })
+    await loadContinuousEarlier(chatPage)
+    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-401"]')
+    assert.equal(await chatPage.evaluate(() => window.fixtureRequests.filter(url => url.includes('/context-blocks/')).length), 0, 'message-backed older ranges need no non-leaf reads')
+    await loadContinuousEarlier(chatPage)
+    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-301"]')
+    const paged = await chatPage.evaluate(() => {
+      const expected = []
+      for (const root of window.fixtureManyRoots) {
+        const block = root.__meta.contextBlock
+        if (block.sourceKind !== 'block' || block.rawEndSeq < 301 || block.rawStartSeq > 400) continue
+        expected.push(block.id)
+        for (const child of window.fixtureBlockExpansions[block.id]) {
+          const childBlock = child.__meta.contextBlock
+          if (childBlock.rawEndSeq >= 301 && childBlock.rawStartSeq <= 400) expected.push(childBlock.id)
+        }
+      }
+      return { expected: expected.sort((a, b) => a - b), actual: window.fixtureRequests.filter(url => url.includes('/context-blocks/')).map(url => Number(url.match(/context-blocks\/(\d+)/)[1])).sort((a, b) => a - b) }
+    })
+    t.diagnostic(JSON.stringify({ normalLoad, historicalPageBlockRequests: paged.actual.length }))
+    assert.equal(paged.expected.length, 108)
+    assert.deepEqual(paged.actual, paged.expected, 'only the 16 intersecting roots and 92 candidate child branches are read, once each')
+  } finally { await chatPage.close() }
+})
+
+
+test('continuous Chat includes a racing older page before publishing compacted membership', async () => {
+  const chatPage = await openContinuousChat()
+  try {
+    await chatPage.evaluate(() => {
+      const block = (id, start, end, level = 1) => ({ role: 'model', parts: [{ text: 'Summary' }], __meta: { contextBlock: { id, level, sourceKind: level === 1 ? 'message' : 'block', rawStartSeq: start, rawEndSeq: end } } })
+      window.fixtureDelayArchive = true
+      window.fixtureDelayBlockIds = [21, 22]
+      window.fixtureBlockExpansions[20] = [block(21, 1, 500, 2), block(22, 501, 600, 2)]
+      window.fixtureBlockExpansions[21] = [block(23, 1, 500)]
+      window.fixtureBlockExpansions[22] = [block(24, 501, 600)]
+      window.fixtureCompactedRoot = block(20, 1, 600, 3)
+    })
+    await loadContinuousEarlier(chatPage)
+    await chatPage.waitForFunction(() => window.fixtureArchiveRequests.length === 2)
+    await chatPage.evaluate(() => window.emitFixtureEvent({ type: 'session-state', session: { id: 'fixture/main', busy: false, queueLength: 0, messageCount: 1, historyVersion: 2 } }))
+    await chatPage.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+    await chatPage.evaluate(() => window.resolveFixtureHistory(0, [window.fixtureCompactedRoot], 2, { latestSeq: 600 }))
+    await chatPage.waitForFunction(() => !!window.fixtureDelayedBlocks[22])
+    await chatPage.evaluate(() => { window.fixtureDelayArchive = false; window.resolveFixtureArchive() })
+    await chatPage.waitForSelector('[data-chat-message-anchor-key="seq-local-401"]')
+    await chatPage.evaluate(() => {
+      const container = document.querySelector('.foxwarm-chat-messages')
+      container.scrollTop = 900
+      container.dispatchEvent(new Event('scroll'))
+    })
+    const before = await readingAnchor(chatPage)
+    await chatPage.evaluate(() => window.resolveFixtureBlock(22))
+    await chatPage.waitForFunction(() => !!window.fixtureDelayedBlocks[21])
+    await waitForReadingPosition(chatPage, before)
+    assert.ok(await chatPage.$('[data-chat-message-anchor-key="seq-local-401"]'), 'older page remains represented while its new branch is unresolved')
+    await chatPage.evaluate(() => { window.fixtureDelayBlockIds = []; window.resolveFixtureBlock(21) })
+    await chatPage.waitForFunction(() => !document.querySelector('[data-continuous-history]')?.textContent.includes('Loading'))
+    await waitForReadingPosition(chatPage, before)
+    assert.ok(await chatPage.$('[data-chat-message-anchor-key="seq-local-401"]'))
+    assert.deepEqual(await chatPage.evaluate(() => window.fixtureRequests.filter(url => url.includes('/context-blocks/')).map(url => Number(url.match(/context-blocks\/(\d+)/)[1]))), [20, 22, 21])
   } finally { await chatPage.close() }
 })

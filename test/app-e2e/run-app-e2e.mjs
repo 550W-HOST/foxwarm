@@ -335,6 +335,7 @@ try {
     ? ['test/app-e2e/core.e2e.mjs']
     : [
       'test/app-e2e/core.e2e.mjs',
+      'test/app-e2e/conversationHistory.e2e.mjs',
       ...appRuntimeE2e,
       'test/app-e2e/logs.e2e.mjs',
       'test/app-e2e/imageGeneration.e2e.mjs',
