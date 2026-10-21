@@ -17,6 +17,10 @@
 #include <termios.h>
 #include <unistd.h>
 
+#ifdef FOXWARM_STATIC_MUSL
+#include "foxwarm-pty-spawn-musl.h"
+#endif
+
 typedef struct {
     int master, cancel, pidfd;
     pid_t pid, session;
@@ -30,7 +34,9 @@ static int pidfd_open_owned(pid_t pid) { int fd = (int)syscall(SYS_pidfd_open, p
 fw_pty *fw_spawn(const char *exe, char *const argv[], char *const env[], const char *cwd, unsigned short cols, unsigned short rows, int *error) {
     int master = -1, slave = -1, cancel = -1, pidfd = -1, rc; pid_t pid = -1;
     char slave_path[128]; struct termios term = {0}; struct winsize size = {.ws_row = rows, .ws_col = cols};
+#ifndef FOXWARM_STATIC_MUSL
     posix_spawnattr_t attr; posix_spawn_file_actions_t actions; int attr_ready = 0, actions_ready = 0;
+#endif
     fw_pty *handle = calloc(1, sizeof(*handle)); if (!handle) { *error = ENOMEM; return NULL; }
     term.c_iflag = ICRNL | IXON | IXANY | IMAXBEL | BRKINT | IUTF8;
     term.c_oflag = OPOST | ONLCR; term.c_cflag = CREAD | CS8 | HUPCL;
@@ -45,6 +51,9 @@ fw_pty *fw_spawn(const char *exe, char *const argv[], char *const env[], const c
     if (fcntl(master, F_SETFD, FD_CLOEXEC) < 0 || fcntl(slave, F_SETFD, FD_CLOEXEC) < 0) { rc = errno; goto fail; }
     int flags = fcntl(master, F_GETFL); if (flags < 0 || fcntl(master, F_SETFL, flags | O_NONBLOCK) < 0) { rc = errno; goto fail; }
     cancel = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK); if (cancel < 0) { rc = errno; goto fail; } atomic_fetch_add(&owned_fds, 1);
+#ifdef FOXWARM_STATIC_MUSL
+    rc = fw_musl_spawn(&pid, exe, argv, env, cwd, slave_path); if (rc) goto fail;
+#else
     if ((rc = posix_spawnattr_init(&attr))) goto fail;
     attr_ready = 1;
     if ((rc = posix_spawn_file_actions_init(&actions))) goto fail;
@@ -58,14 +67,20 @@ fw_pty *fw_spawn(const char *exe, char *const argv[], char *const env[], const c
         (rc = posix_spawn_file_actions_adddup2(&actions, 0, 2)) ||
         (rc = posix_spawn_file_actions_addclosefrom_np(&actions, 3))) goto fail;
     rc = posix_spawnp(&pid, exe, &actions, &attr, argv, env); if (rc) goto fail;
+#endif
     pidfd = pidfd_open_owned(pid);
     if (pidfd < 0) { rc = errno; kill(pid, SIGKILL); while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {} goto fail; }
-    posix_spawn_file_actions_destroy(&actions); posix_spawnattr_destroy(&attr); own_close(slave);
+#ifndef FOXWARM_STATIC_MUSL
+    posix_spawn_file_actions_destroy(&actions); posix_spawnattr_destroy(&attr);
+#endif
+    own_close(slave);
     handle->master = master; handle->cancel = cancel; handle->pidfd = pidfd; handle->pid = pid; handle->session = pid;
     *error = 0; return handle;
 fail:
+#ifndef FOXWARM_STATIC_MUSL
     if (actions_ready) posix_spawn_file_actions_destroy(&actions);
     if (attr_ready) posix_spawnattr_destroy(&attr);
+#endif
     own_close(master); own_close(slave); own_close(cancel); own_close(pidfd); free(handle); *error = rc; return NULL;
 }
 int fw_pid(fw_pty *h) { return h->pid; }

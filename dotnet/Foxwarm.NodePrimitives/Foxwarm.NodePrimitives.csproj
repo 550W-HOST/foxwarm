@@ -6,11 +6,12 @@
     <IsAotCompatible>true</IsAotCompatible>
     <!-- Preserve the consuming target RID through the native-resource graph. -->
     <IsRidAgnostic>false</IsRidAgnostic>
+    <DefineConstants Condition="'$(FoxwarmStaticMusl)' == 'true'">$(DefineConstants);FOXWARM_STATIC_MUSL</DefineConstants>
   </PropertyGroup>
   <Target
     Name="PrepareFoxwarmPty"
     BeforeTargets="AssignTargetPaths"
-    Condition="'$(OS)' != 'Windows_NT' and ('$(RuntimeIdentifier)' == '' or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')))"
+    Condition="'$(FoxwarmStaticMusl)' != 'true' and '$(OS)' != 'Windows_NT' and ('$(RuntimeIdentifier)' == '' or $([System.String]::Copy('$(RuntimeIdentifier)').StartsWith('linux-')))"
   >
     <MakeDir Directories="$(IntermediateOutputPath)native" />
     <Exec Command="gcc -std=c11 -O2 -Wall -Wextra -Werror -fPIC -shared -Wl,-z,relro,-z,now -o &quot;$(IntermediateOutputPath)native/libfoxwarm-pty.so&quot; &quot;$(MSBuildProjectDirectory)/Terminal/native/foxwarm-pty.c&quot; -lutil" />

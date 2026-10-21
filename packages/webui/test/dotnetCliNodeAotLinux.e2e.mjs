@@ -27,6 +27,9 @@ async function until(check, label, timeout = 20000) {
   throw new Error('Timed out: ' + label + '\n' + clients.map(client => client.output).join('\n'))
 }
 const evidence = {}
+const staticExpected = process.env.FOXWARM_TEST_EXPECT_STATIC === '1'
+const tlsFailures = []
+http.on('tlsClientError', error => tlsFailures.push(error.code))
 const exists = path => readFile(path).then(() => true, () => false)
 peer.on('connection', socket => {
   sockets.add(socket); socket.on('error', () => {}); socket.on('close', () => sockets.delete(socket))
@@ -42,22 +45,36 @@ peer.on('connection', socket => {
     }
   })
 })
-async function launch() {
-  const before = generation
+function startClient(target, overrides = {}, trigger = true) {
   const env = { ...isolatedApplicationEnv(join(cwd, 'data')), FOXWARM_AGENTS_DIR: join(cwd, 'agents'), SHELL: '/bin/bash', FOXWARM_NODE_PTY_SHELL: 'bash', EXECTEST_INHERITED: 'native-inherited', fw_agentdir: 'wrong-parent', fw_tmp: 'wrong-parent' }
+  Object.assign(env, overrides)
   delete env.DOTNET_ROOT; delete env.DOTNET_HOST_PATH
-  const child = spawn(executable, ['--host', origin, '--id', 'native-smoke', '--auth-token', 'synthetic-native', '--credentials-file', join(cwd, 'credentials.json'), '--local-trigger-port', '0'], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(executable, ['--host', target, '--id', 'native-smoke', '--auth-token', 'synthetic-native', '--credentials-file', join(cwd, 'credentials.json'), ...(trigger ? ['--local-trigger-port', '0'] : ['--no-local-trigger'])], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
   const client = { child, output: '' }; clients.push(client)
   for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { client.output += bytes })
+  return client
+}
+async function launch() {
+  const before = generation
+  const client = startClient(origin)
   await until(() => generation > before, 'native registration')
   client.socket = current
-  assert.equal(await readlink(`/proc/${child.pid}/exe`), executable)
-  const maps = await readFile(`/proc/${child.pid}/maps`, 'utf8')
+  assert.equal(await readlink(`/proc/${client.child.pid}/exe`), executable)
+  await inspectMaps(client, 'registration-' + generation)
+  return client
+}
+async function inspectMaps(client, label) {
+  const maps = await readFile(`/proc/${client.child.pid}/maps`, 'utf8')
   assert(!maps.includes('libcoreclr'), 'must be actual NativeAOT, not CLR')
   evidence.loadedLibraries = [...new Set(maps.split('\n').map(line => line.match(/\/[^ ]+$/)?.[0]).filter(Boolean))]
-  assert(evidence.loadedLibraries.some(path => /libssl\.so/.test(path)), 'actual TLS must load OpenSSL')
-  assert(evidence.loadedLibraries.some(path => /libicu/.test(path)), 'non-invariant globalization must load ICU')
-  return client
+  evidence.librarySnapshots ??= {}
+  evidence.librarySnapshots[label] = evidence.loadedLibraries
+  if (staticExpected) {
+    assert(!evidence.loadedLibraries.some(path => /\.so(?:[.\/-]|$)|ld-musl/.test(path)), 'static CLI must not load shared libraries: ' + JSON.stringify(evidence.loadedLibraries))
+  } else {
+    assert(evidence.loadedLibraries.some(path => /libssl\.so/.test(path)), 'actual TLS must load OpenSSL')
+    assert(evidence.loadedLibraries.some(path => /libicu/.test(path)), 'non-invariant globalization must load ICU')
+  }
 }
 async function stop(client) {
   if (client.child.exitCode !== null || client.child.signalCode !== null) return
@@ -65,6 +82,27 @@ async function stop(client) {
   let timer
   try { await Promise.race([exited, new Promise((_, reject) => { timer = setTimeout(() => { client.child.kill('SIGKILL'); reject(new Error('Native shutdown did not drain')) }, 6000) })]) }
   finally { clearTimeout(timer) }
+}
+async function rejectedTlsControls() {
+  const emptyTrust = join(root, 'empty-trust'), emptyDirectory = join(root, 'empty-certs')
+  await writeFile(emptyTrust, ''); await mkdir(emptyDirectory)
+  const beforeFailures = tlsFailures.length, beforeGeneration = generation
+  const untrusted = startClient(origin, { SSL_CERT_FILE: emptyTrust, SSL_CERT_DIR: emptyDirectory }, false)
+  await until(() => untrusted.output.includes('connection_error') && tlsFailures.length > beforeFailures, 'untrusted TLS rejection')
+  assert.equal(generation, beforeGeneration, 'untrusted peer must not register')
+  await stop(untrusted)
+  const wrongHostFailures = [], wrongHost = createServer({ cert: await readFile(process.env.FOXWARM_TEST_TLS_CERT), key: await readFile(process.env.FOXWARM_TEST_TLS_KEY) })
+  let upgraded = false
+  wrongHost.on('tlsClientError', error => wrongHostFailures.push(error.code))
+  wrongHost.on('upgrade', (_, socket) => { upgraded = true; socket.destroy() })
+  wrongHost.listen(0, '127.0.0.2'); await once(wrongHost, 'listening')
+  try {
+    const mismatch = startClient(`https://127.0.0.2:${wrongHost.address().port}`, {}, false)
+    await until(() => mismatch.output.includes('connection_error') && wrongHostFailures.length > 0, 'TLS hostname rejection')
+    assert(!upgraded, 'hostname mismatch must fail before WebSocket upgrade')
+    await stop(mismatch)
+  } finally { await new Promise(done => wrongHost.close(done)) }
+  evidence.rejectedTls = { untrusted: tlsFailures.slice(beforeFailures), hostnameMismatch: wrongHostFailures, noAuthenticatedRegistration: generation === beforeGeneration }
 }
 async function tool(client, name, args, extra = {}) {
   const callId = 'smoke-' + ++sequence
@@ -83,11 +121,15 @@ async function optionalServices(client) {
   const ptyExpected = process.env.FOXWARM_TEST_EXPECT_PTY !== '0'
   assert.equal(registration.capabilities.services['vscode-pty'], ptyExpected ? 1 : undefined)
   evidence.ptyBackend = ptyExpected ? 'loaded' : 'absent: other services remain usable'
-  execFileSync('git', ['init', project])
-  await writeFile(join(project, 'untracked 雪'), 'native git')
-  const status = await service(client, 'vscode-git', 'status', { workspace: project })
-  assert(status.changes.some(row => row.path === 'untracked 雪'))
-  evidence.git = execFileSync('git', ['--version'], { encoding: 'utf8' }).trim()
+  if (process.env.FOXWARM_TEST_EXPECT_GIT !== '0') {
+    execFileSync('git', ['init', project])
+    await writeFile(join(project, 'untracked 雪'), 'native git')
+    const status = await service(client, 'vscode-git', 'status', { workspace: project })
+    assert(status.changes.some(row => row.path === 'untracked 雪'))
+    evidence.git = execFileSync('git', ['--version'], { encoding: 'utf8' }).trim()
+  } else {
+    evidence.git = 'not provisioned in dependency-absence run; separate real Git proof required'
+  }
   if (ptyExpected) {
     const terminal = (await service(client, 'vscode-pty', 'create', { cwd: project, cols: 91, rows: 37 })).terminal
     await service(client, 'vscode-pty', 'attach', { terminalId: terminal.id })
@@ -122,6 +164,7 @@ async function optionalServices(client) {
 }
 try {
   const magic = await readFile(executable); assert.equal(magic.subarray(0, 4).toString('hex'), '7f454c46')
+  await rejectedTlsControls()
   let client = await launch()
   const firstPid = client.child.pid
   await optionalServices(client)
@@ -133,6 +176,14 @@ try {
   assert.deepEqual(JSON.parse(helperOutput), { success: true })
   assert(frames.some(row => row.value.message === 'native TLS trigger é🙂'))
   evidence.localTriggerAndSameExecutableHelper = true
+  const cultureDirectory = join(agent, 'culture-order')
+  await mkdir(cultureDirectory, { recursive: true })
+  for (const name of ['z', 'ä', 'a']) await writeFile(join(cultureDirectory, name), name)
+  const cultureRead = await tool(client, 'read', { filePath: cultureDirectory })
+  for (const name of ['a', 'ä', 'z']) assert(cultureRead.output.includes('`' + name + '`'))
+  assert(cultureRead.output.indexOf('`a`') < cultureRead.output.indexOf('`ä`'))
+  assert(cultureRead.output.indexOf('`ä`') < cultureRead.output.indexOf('`z`'), 'real en-US directory collation, not ordinal Unicode order')
+  evidence.globalization = { caller: 'file read directory en-US comparer', order: ['a', 'ä', 'z'] }
   const written = await tool(client, 'write', { filePath: 'ordinary.txt', content: 'native file\né🙂', createDirs: true })
   assert(!written.error, JSON.stringify(written))
   const read = await tool(client, 'read', { filePath: 'ordinary.txt' }, { programmatic: true })
@@ -153,6 +204,7 @@ try {
   assert(!script.includes('dotnet ') && !script.includes('node '))
   const logRead = await tool(client, 'read', { filePath: original.logPath })
   assert(logRead.output.startsWith('started native\n'))
+  await inspectMaps(client, 'after-services-and-exec')
   await stop(client)
   assert(await exists(original.logPath), 'native process lifetime retains original artifacts')
   await writeFile(join(project, 'release'), 'finish')
@@ -167,7 +219,7 @@ try {
   assert(event); assert.equal(event.sessionId, original.sessionId); assert.equal(event.completionCapability, original.completionCapability)
   assert.equal(await readFile(original.logPath, 'utf8'), 'started native\nfinished native\n')
   assert.equal(await readFile(join(project, 'background-effect'), 'utf8'), 'x')
-  console.log(JSON.stringify({ ...evidence, actualExecutable: executable, elf: true, trustedTlsRegistration: true, distro: await readFile('/etc/os-release', 'utf8'), kernel: execFileSync('uname', ['-r'], { encoding: 'utf8' }).trim(), glibc: execFileSync('ldd', ['--version'], { encoding: 'utf8' }).split('\n')[0], noCoreClrLoaded: true, firstPid, secondPid: client.child.pid, foreground: { status: foreground.status, exitCode: foreground.exitCode, content: foreground.content }, ordinaryFileRead: read.content, backgroundOriginal: original, backgroundCompletion: event, wrapperNativePathsAndStatusHelpers: true, helperAfterParentExit: true, effectsExactlyOnce: true, ackRemovedRecoveredTracking: true }, null, 2))
+  console.log(JSON.stringify({ ...evidence, actualExecutable: executable, elf: true, trustedTlsRegistration: true, distro: await readFile('/etc/os-release', 'utf8'), kernel: execFileSync('uname', ['-r'], { encoding: 'utf8' }).trim(), linkage: staticExpected ? 'static-musl: ELF and library-open trace checked separately' : execFileSync('ldd', ['--version'], { encoding: 'utf8' }).split('\n')[0], noCoreClrLoaded: true, firstPid, secondPid: client.child.pid, foreground: { status: foreground.status, exitCode: foreground.exitCode, content: foreground.content }, ordinaryFileRead: read.content, backgroundOriginal: original, backgroundCompletion: event, wrapperNativePathsAndStatusHelpers: true, helperAfterParentExit: true, effectsExactlyOnce: true, ackRemovedRecoveredTracking: true }, null, 2))
   await stop(client)
 } finally {
   await writeFile(join(project, 'release'), 'finish')

@@ -2,7 +2,8 @@
 
 This recipe publishes the standalone .NET CLI Node, including its optional Linux
 PTY shim. It does not build Main, frontend assets or the TypeScript CLI. The
-qualified target is **Linux x64 with glibc**; this is not an ARM64 or musl recipe.
+qualified default target is **Linux x64 with glibc**. The separate static-musl
+trial below is not an ARM64 recipe or a bootstrap change.
 
 The build uses official .NET SDK 10.0.401 and runtime/ILCompiler 10.0.12 with the
 UBI 9 distro compiler, headers and libraries. It copies SDK files, not the SDK
@@ -144,3 +145,71 @@ establish a minimum kernel or CPU.
 Remove the exact owned probe images, certificate directory and intermediate
 outputs when no longer needed. Do not run global Docker prune or remove another
 workspace's state.
+
+## Explicit full static-musl trial
+
+This separate recipe builds the full CLI graph with the PTY linked into the
+executable, using official SDK `10.0.401-alpine3.23`, runtime/ILCompiler 10.0.12,
+and ordinary Alpine static ICU/OpenSSL packages. It does not copy glibc libraries
+or enable invariant globalization. The current ICU data argument is the measured
+Alpine full-data path; override `ICU_DATA_PATH` if qualifying different official
+image/package inputs. `SDK_IMAGE` remains overridable. The generic SDK tag
+`10.0.401-alpine` is not available; use the explicit distro tag.
+
+```sh
+docker build --platform=linux/amd64 --progress=plain \
+  -f scripts/native-aot/cli-linux-musl-x64.Dockerfile \
+  --target artifact --output type=local,dest=.temp/cli-aot-musl .
+```
+
+The build runs the focused production-C PTY boundary probe, including real
+seccomp-forced close_range fallback and failure controls. Container policy must
+permit installing that process-local seccomp filter. The ordinary glibc C path
+can also be checked with:
+
+```sh
+gcc -std=c11 -O2 -Wall -Wextra -Werror scripts/native-aot/pty-native-probe.c \
+  -pthread -lutil -o /tmp/foxwarm-pty-probe
+timeout 30s /tmp/foxwarm-pty-probe
+timeout 30s /tmp/foxwarm-pty-probe --fallback
+timeout 30s /tmp/foxwarm-pty-probe --no-close-mechanism
+```
+
+The static CLI needs no adjacent PTY `.so`. Keep the default dynamic recipe for
+the separate optional-shim behavior. Static output must have no PT_INTERP or
+DT_NEEDED; a DYNAMIC segment for static-PIE relocations is not a shared-library
+requirement. Inspect actual process maps and library-open attempts as well.
+
+For the same maintained smoke probe, set `FOXWARM_TEST_EXPECT_STATIC=1`. Its
+default mode continues to assert that dynamic CLI TLS/globalization actually load
+OpenSSL/ICU. The probe now checks rejected untrusted and hostname certificates
+before trusted registration, and exercises actual culture-sensitive directory
+ordering through the existing file tool. Supply the localhost certificate from
+the earlier example (SAN 127.0.0.1 and localhost, not 127.0.0.2).
+
+An Alpine dependency-absence smoke image can use:
+
+```sh
+docker build --platform=linux/amd64 --progress=plain \
+  -f scripts/native-aot/cli-linux-smoke.Dockerfile \
+  --build-arg BASE_IMAGE=alpine:3.23 \
+  --build-arg DRIVER_IMAGE=node:22-alpine3.23 \
+  --build-arg INSTALL_GIT=0 -t fw-cli-static-smoke:alpine .
+```
+
+Use the earlier restricted `docker run` pattern with the static artifact, plus
+`FOXWARM_TEST_EXPECT_STATIC=1` and `FOXWARM_TEST_EXPECT_GIT=0`. The latter is a
+separate absence run: it does not qualify Git. Check the image's actual packages
+and files to demonstrate no ICU/OpenSSL/PTY shared libraries are present. Repeat
+with the **same executable** in a small older-glibc userspace and provision real
+Git/Chromium for representative optional-service proof. Attribute test-driver
+and external-process library loads separately from the CLI and its re-entered
+helpers. No .NET host, Node or Python may implement the CLI features.
+
+The [canonical delivery unit](../../docs/code-index/units/dotnet-cli-linux-aot.md)
+records trial status and evidence. Successful linking or `--help` alone is not
+full static compatibility. Shells, CA trust data, optional Git/browser packages,
+procfs or usable close_range for descriptor closure, writable state/temp and
+existing pidfd kernel facilities remain separate dependencies. Static ICU and
+OpenSSL must be updated by rebuilding the executable; preserve their license
+notices and the .NET/native dependencies' applicable third-party notices.

@@ -6,6 +6,7 @@ namespace Foxwarm.Terminal;
 internal static class TerminalNative
 {
     private const string Library = "foxwarm-pty";
+#if !FOXWARM_STATIC_MUSL
     private static readonly string NativePath = Path.Combine(
         AppContext.BaseDirectory,
         "libfoxwarm-pty.so"
@@ -14,8 +15,12 @@ internal static class TerminalNative
         OperatingSystem.IsLinux() && NativeLibrary.TryLoad(NativePath, out var loaded)
             ? loaded
             : IntPtr.Zero;
+#endif
     internal static bool IsSupported =>
         OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)
+#if FOXWARM_STATIC_MUSL
+        || OperatingSystem.IsLinux();
+#else
         || OperatingSystem.IsLinux() && NativeHandle != IntPtr.Zero;
 
     static TerminalNative()
@@ -25,6 +30,7 @@ internal static class TerminalNative
             (name, _, _) => name == Library ? NativeHandle : IntPtr.Zero
         );
     }
+#endif
 
     [DllImport(Library)]
     private static extern IntPtr fw_spawn(
