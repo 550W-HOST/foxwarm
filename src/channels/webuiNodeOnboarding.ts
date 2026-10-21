@@ -46,8 +46,10 @@ export function registerWebUiNodeOnboardingRoutes(server: HttpServer): void {
 
   route('POST', '/commands', async (req, res) => {
     const input = commandInput(req);
-    const pairingToken = await ensureNodePairingToken();
-    res.json({ baseUrl: input.baseUrl, commands: buildNodeBootstrapCommands({ ...input, pairingToken }) });
+    const body = objectBody(req);
+    const authToken = body.authToken === undefined ? undefined : stringField(body.authToken, '', 'auth token');
+    const pairingToken = authToken ? '' : await ensureNodePairingToken();
+    res.json({ baseUrl: input.baseUrl, commands: buildNodeBootstrapCommands({ ...input, pairingToken, authToken }) });
   });
 
   route('GET', '/pending', async (req, res) => {
@@ -79,18 +81,22 @@ export function registerWebUiNodeOnboardingRoutes(server: HttpServer): void {
     }
   });
 
-  route('POST', '/create-shell', async (req, res) => {
+  const create = (shellOnly: boolean) => async (req: Request, res: Response) => {
     const input = commandInput(req);
     if (nodesManager.getNode(input.nodeId)) { res.status(409).json({ error: 'This Node name is already online. Choose another name.' }); return; }
     try {
       const created = await createApprovedNode(input.nodeId);
-      const command = buildNodeBootstrapCommands({ ...input, pairingToken: '', authToken: created.authToken }).shell;
-      res.json({ nodeId: created.nodeId, command });
+      const commands = buildNodeBootstrapCommands({ ...input, pairingToken: '', authToken: created.authToken });
+      res.json(shellOnly
+        ? { nodeId: created.nodeId, command: commands.shell }
+        : { nodeId: created.nodeId, baseUrl: input.baseUrl, authToken: created.authToken, commands });
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
       if (/already exists/.test(message)) res.status(409).json({ error: 'This Node name is already in use. Choose another name.' });
       else if (/Node id/.test(message)) res.status(400).json({ error: 'Choose a valid, non-reserved Node name.' });
       else throw error;
     }
-  });
+  };
+  route('POST', '/create', create(false));
+  route('POST', '/create-shell', create(true));
 }

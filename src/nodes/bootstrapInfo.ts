@@ -77,7 +77,9 @@ export function buildNodeBootstrapCommands(options: NodeBootstrapCommandOptions)
   const baseUrl = options.baseUrl.replace(/\/$/, '');
   const nodeId = options.nodeId || 'my-node';
   const host = `  --host=${shellQuote(baseUrl)}`;
-  const pairing = `  --pairing=${shellQuote(options.pairingToken)}`;
+  const authentication = options.authToken
+    ? `  --auth-token=${shellQuote(options.authToken)}`
+    : `  --pairing=${shellQuote(options.pairingToken)}`;
   const id = `  --node-id=${shellQuote(nodeId)}`;
   const directory = `  --dir=${shellQuote(options.installDir || '/opt/foxwarm-node')}`;
   const download = (file: string) => `curl -fsSL ${shellQuote(`${baseUrl}/node/${file}`)} | bash -s --`;
@@ -86,21 +88,21 @@ export function buildNodeBootstrapCommands(options: NodeBootstrapCommandOptions)
       `curl -fsSL ${shellQuote(`${baseUrl}/node/run-shell.sh`)} -o run-shell.sh`,
       `NODE_AUTH_TOKEN=${shellQuote(options.authToken || 'YOUR_PER_NODE_AUTH_TOKEN')} sh ./run-shell.sh --host=${shellQuote(baseUrl)} --node-id=${shellQuote(options.nodeId || 'my-shell')}`,
     ].join('\n'),
-    bareMetal: shellCommand([download('run.sh'), directory, host, pairing, id]),
-    bareMetalBackground: shellCommand([download('run.sh'), directory, host, pairing, id, '  -d']),
-    bareMetalInstall: shellCommand([download('run.sh'), directory, host, pairing, id, '  --install']),
-    docker: shellCommand([download('run-docker.sh'), host, pairing, id]),
-    interactive: shellCommand([download('run-interactive.sh'), host, pairing, id]),
-    manualCompose: buildNodeManualComposeExample(options.pairingToken, baseUrl, nodeId),
+    bareMetal: shellCommand([download('run.sh'), directory, host, authentication, id]),
+    bareMetalBackground: shellCommand([download('run.sh'), directory, host, authentication, id, '  -d']),
+    bareMetalInstall: shellCommand([download('run.sh'), directory, host, authentication, id, '  --install']),
+    docker: shellCommand([download('run-docker.sh'), host, authentication, id]),
+    interactive: shellCommand([download('run-interactive.sh'), host, authentication, id]),
+    manualCompose: buildNodeManualComposeExample(options.pairingToken, baseUrl, nodeId, options.authToken),
     windows: [
       `Invoke-WebRequest ${powershellQuote(`${baseUrl}/node/run.ps1`)} -OutFile .\\run.ps1`,
-      `.\\run.ps1 -HostUrl ${powershellQuote(baseUrl)} -Pairing ${powershellQuote(options.pairingToken)} -NodeId ${powershellQuote(nodeId)}`,
+      `.\\run.ps1 -HostUrl ${powershellQuote(baseUrl)} ${options.authToken ? '-AuthToken' : '-Pairing'} ${powershellQuote(options.authToken || options.pairingToken)} -NodeId ${powershellQuote(nodeId)}`,
     ].join('\n'),
   };
 }
 
 /** Quote Compose literals inside a shell-literal heredoc; no variable expansion. */
-export function buildNodeManualComposeExample(pairingToken: string, baseUrl = PUBLIC_BASE_URL || `http://YOUR_MASTER:${HTTP_PORT}`, nodeId = 'my-node'): string {
+export function buildNodeManualComposeExample(pairingToken: string, baseUrl = PUBLIC_BASE_URL || `http://YOUR_MASTER:${HTTP_PORT}`, nodeId = 'my-node', authToken?: string): string {
   const composeQuote = (value: string) => `'${value.replace(/'/g, "\\'")}'`;
   return [
     `curl -fsSL ${shellQuote(`${baseUrl}/node/docker-compose.yaml`)} -o docker-compose.yaml`,
@@ -108,7 +110,8 @@ export function buildNodeManualComposeExample(pairingToken: string, baseUrl = PU
     "cat > .env <<'FOXWARM_NODE_ENV'",
     `NODE_HOST=${composeQuote(baseUrl)}`,
     `NODE_SOURCE_URL=${composeQuote(`${baseUrl}/node/source.tar.gz`)}`,
-    `NODE_PAIRING_TOKEN=${composeQuote(pairingToken)}`,
+    `NODE_PAIRING_TOKEN=${composeQuote(authToken ? '' : pairingToken)}`,
+    `NODE_AUTH_TOKEN=${composeQuote(authToken || '')}`,
     `NODE_ID=${composeQuote(nodeId)}`,
     'NODE_DATA_DIR=./data',
     'FOXWARM_NODE_ENV',

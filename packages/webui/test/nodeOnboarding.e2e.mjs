@@ -15,6 +15,10 @@ const requests = []
 const errors = []
 let commandReads = 0
 let delayCommands = false
+let failNextCreate = false
+let delayCreateResponse = false
+let createCalls = 0
+const createdResponses = []
 const delayed = []
 const component = fileURLToPath(new URL('../src/components/ArchitectureView.tsx', import.meta.url))
 const nodesComponent = fileURLToPath(new URL('../src/components/NodesView.tsx', import.meta.url))
@@ -64,10 +68,18 @@ before(async () => {
   const assets = await fs.readdir(new URL('../dist/assets/', import.meta.url))
   const css = await fs.readFile(new URL(`../dist/assets/${assets.find(name => /^index-.*\.css$/.test(name))}`, import.meta.url), 'utf8')
   server = new HttpServer(0, 'synthetic-browser-auth')
-  server.app.use((req, _res, next) => {
+  server.app.use((req, res, next) => {
     if (req.url.startsWith('/deployment/')) req.url = req.url.slice('/deployment'.length)
     requests.push(req.url)
     if (req.path === '/api/nodes/onboarding/commands') commandReads++
+    if (req.path === '/api/nodes/onboarding/create') {
+      createCalls++
+      if (failNextCreate) { failNextCreate = false; res.status(500).json({ error: 'Could not create this Node.' }); return }
+      if (delayCreateResponse) {
+        const respond = res.json.bind(res)
+        res.json = payload => { createdResponses.push(() => respond(payload)); return res }
+      }
+    }
     if (delayCommands && req.path === '/api/nodes/onboarding/commands') { delayed.push(next); return }
     next()
   })
@@ -200,6 +212,163 @@ test('Nodes is a real independent surface; pending approval, inline copy and exp
   await new Promise(resolve => setTimeout(resolve, 100))
   assert.equal(await page.$('[role=dialog]'), null, 'a late setup response cannot reopen or publish into the closed modal')
   assert.ok(!(await page.evaluate(() => document.body.innerText)).includes('synthetic-pairing-credential'))
+  assert.deepEqual(errors, [])
+})
+
+
+test('every setup method supports explicit pre-creation, safe switching, updates and mounted-only copied credentials', { timeout: 60_000 }, async () => {
+  const choose = async label => {
+    await page.evaluate(text => [...document.querySelectorAll('label')].find(element => element.textContent.trim() === text).querySelector('input').click(), label)
+  }
+  const idle = () => page.waitForFunction(() => ![...document.querySelectorAll('[role=status]')].some(element => element.textContent === 'Loading…'))
+  const command = () => page.$eval('[data-node-command]', element => element.textContent)
+  const copy = async () => {
+    await click('Copy command')
+    await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === 'Copied'))
+    assert.equal(await page.evaluate(() => window.fixtureClipboard), await command())
+  }
+  const baseline = (await registry.listApprovedNodes()).length
+  const callsBefore = createCalls
+  await click('New nodes')
+  await page.waitForSelector('[data-node-command]')
+  await idle()
+  for (const method of ['Linux CLI', 'Interactive CLI', 'Docker', 'Windows']) {
+    await click(method)
+    assert.ok((await command()).includes('synthetic-pairing-credential'), method)
+    await choose('Pre-created token')
+    assert.equal(await page.$('[data-node-command]'), null, method)
+    assert.ok(await page.$('input[aria-label="Node name"]:enabled'))
+    await choose('Pairing approval')
+    assert.ok((await command()).includes('synthetic-pairing-credential'), method)
+  }
+  assert.equal(createCalls, callsBefore, 'method and authentication switches never call create')
+  assert.equal((await registry.listApprovedNodes()).length, baseline)
+  await click('Linux CLI')
+  await choose('Start automatically with systemd')
+  assert.ok((await command()).includes('--install'))
+  await choose('Start automatically with systemd')
+  await click('Docker')
+  await choose('Manual Docker Compose')
+  assert.ok((await command()).includes("NODE_PAIRING_TOKEN='synthetic-pairing-credential'"))
+  await choose('Manual Docker Compose')
+  await click('Linux CLI')
+  await choose('Pre-created token')
+  await replace('Node name', 'offline-example')
+  await click('Create')
+  await page.waitForFunction(() => document.querySelector('[role=alert]')?.textContent.includes('already in use'))
+  await idle()
+  assert.equal(await page.$('[data-node-command]'), null)
+  assert.equal((await registry.listApprovedNodes()).length, baseline)
+  await replace('Node name', 'browser-token')
+  const address = "https://token.example.invalid/deploy'path/$literal"
+  await replace('Reachable address', address)
+  await replace('Installation directory', "/opt/node's directory/$literal")
+  failNextCreate = true
+  const failedCall = createCalls
+  await click('Create')
+  await page.waitForFunction(() => document.querySelector('[role=alert]')?.textContent === 'Could not create this Node.')
+  await idle()
+  assert.equal(createCalls, failedCall + 1, 'failure is not retried automatically')
+  assert.equal((await registry.listApprovedNodes()).length, baseline)
+  assert.equal(await page.$('[data-node-command]'), null)
+  await click('Create')
+  await page.waitForFunction(() => document.querySelector('[data-node-command]')?.textContent.includes('--auth-token='))
+  await idle()
+  const token = /--auth-token='([a-f0-9]{64})'/.exec(await command())[1]
+  assert.equal((await registry.authenticateApprovedNode('browser-token', token))?.nodeId, 'browser-token')
+  assert.equal((await registry.listApprovedNodes()).length, baseline + 1)
+  const callsAfterCreate = createCalls
+  for (const method of ['Linux CLI', 'Interactive CLI', 'Docker', 'Windows', 'Shell']) {
+    await click(method)
+    const text = await command()
+    assert.ok(text.includes(token), method)
+    assert.ok(!text.includes('synthetic-pairing-credential'), method)
+    assert.ok(text.includes('browser-token'), method)
+    assert.ok(text.includes('token.example.invalid'), method)
+    assert.ok(!/--pairing=|-Pairing /.test(text), method)
+    assert.equal(await page.$eval('input[aria-label="Node name"]', element => element.value), 'browser-token')
+    assert.equal(await page.$eval('input[aria-label="Reachable address"]', element => element.value), address)
+    assert.ok(await page.$('input[aria-label="Node name"]:disabled'))
+    await copy()
+    if (method === 'Linux CLI') {
+      await choose('Start automatically with systemd')
+      assert.ok((await command()).includes('--install'))
+      assert.ok((await command()).includes(token))
+      await copy()
+      await choose('Start automatically with systemd')
+    }
+    if (method === 'Docker') {
+      await choose('Manual Docker Compose')
+      assert.ok((await command()).includes(`NODE_AUTH_TOKEN='${token}'`))
+      assert.ok((await command()).includes("NODE_PAIRING_TOKEN=''"))
+      await copy()
+      await choose('Manual Docker Compose')
+    }
+  }
+  assert.equal(createCalls, callsAfterCreate, 'reusing a token across methods never creates another identity')
+  await click('Linux CLI')
+  await choose('Pairing approval')
+  await replace('Node name', 'pairing-draft')
+  await replace('Reachable address', 'https://pairing.example.invalid/other')
+  await replace('Installation directory', '/opt/changed directory')
+  await click('Update command')
+  await page.waitForFunction(() => document.querySelector('[data-node-command]')?.textContent.includes('pairing-draft'))
+  await idle()
+  assert.ok((await command()).includes('synthetic-pairing-credential'))
+  assert.ok(!(await command()).includes(token))
+  await copy()
+  // Even empty pairing drafts must not disable updates for the bound identity.
+  await replace('Reachable address', '')
+  await replace('Node name', '')
+  await choose('Pre-created token')
+  assert.equal(await page.$('[data-node-command]'), null, 'directory edits invalidate the old Linux token command')
+  assert.equal(await page.$eval('input[aria-label="Node name"]', element => element.value), 'browser-token')
+  assert.equal(await page.$eval('input[aria-label="Reachable address"]', element => element.value), address)
+  await click('Update command')
+  await page.waitForFunction(() => document.querySelector('[data-node-command]')?.textContent.includes('/opt/changed directory'))
+  await idle()
+  assert.ok((await command()).includes(token))
+  assert.ok(!(await command()).includes('pairing.example.invalid'))
+  assert.equal(createCalls, callsAfterCreate)
+  assert.equal((await registry.listApprovedNodes()).length, baseline + 1)
+  await screenshot('new-nodes-precreated-token.png')
+  await page.setViewport({ width: 390, height: 844 })
+  await screenshot('new-nodes-precreated-token-narrow.png')
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false)
+  await page.setViewport({ width: 1280, height: 900 })
+  const stores = await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))
+  assert.ok(!stores.includes(token))
+  assert.ok(!stores.includes('synthetic-pairing-credential'))
+  assert.ok(!requests.join('\n').includes(token))
+  assert.ok(!page.url().includes(token))
+  await page.keyboard.press('Escape')
+  await page.waitForSelector('[role=dialog]', { hidden: true })
+  assert.ok(!(await page.evaluate(() => document.body.innerText)).includes(token))
+
+  await click('New nodes')
+  await page.waitForSelector('[data-node-command]')
+  await idle()
+  await choose('Pre-created token')
+  assert.equal(await page.$('[data-node-command]'), null, 'reopen has no stored token')
+  await replace('Node name', 'closed-before-response')
+  delayCreateResponse = true
+  await click('Create')
+  // The actual route persists trust before returning its one-time response.
+  while (!createdResponses.length) await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal((await registry.listApprovedNodes()).length, baseline + 2)
+  assert.ok(await page.$('input[aria-label="Node name"]:disabled'), 'pending actions cannot mix edited names into their result')
+  await page.keyboard.press('Escape')
+  await page.waitForSelector('[role=dialog]', { hidden: true })
+  delayCreateResponse = false
+  createdResponses.splice(0).forEach(respond => respond())
+  await click('New nodes')
+  await page.waitForSelector('[data-node-command]')
+  await idle()
+  await choose('Pre-created token')
+  assert.equal(await page.$('[data-node-command]'), null, 'a late create response cannot publish into the next modal')
+  assert.equal((await registry.listApprovedNodes()).length, baseline + 2)
+  assert.equal(createCalls, callsAfterCreate + 1, 'closing never retries creation')
+  await click('Close New nodes')
   assert.deepEqual(errors, [])
 })
 
