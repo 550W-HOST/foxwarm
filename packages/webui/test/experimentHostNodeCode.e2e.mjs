@@ -69,7 +69,7 @@ model.listen(0, '127.0.0.1'); await once(model, 'listening')
 await writeFile(fixture.modelPath, JSON.stringify({ default: 'local/wire', providers: { local: { providerType: 'openai-responses', apiKey: 'synthetic-model', asyncCompact: false, effort: { allowed: ['none'], default: 'none' }, baseUrl: `http://127.0.0.1:${model.address().port}`, models: ['wire'] } } }))
 async function credential(nodeId) {
   if (!sourceMain) {
-    const reply = await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId }); assert.equal(reply.status, 200); return reply.body
+    const reply = await fixture.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: fixture.origin, nodeId }); assert.equal(reply.status, 200); return reply.body
   }
   const reply = await fixture.api('POST', '/api/nodes/onboarding/create-shell', { nodeId, baseUrl: fixture.origin }); assert.equal(reply.status, 200)
   const token = /NODE_AUTH_TOKEN='([^']+)'/.exec(reply.body.command)?.[1]; assert(token)

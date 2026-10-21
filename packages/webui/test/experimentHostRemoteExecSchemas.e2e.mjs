@@ -56,7 +56,7 @@ async function turn(key, calls = []) {
 }
 try {
   await fixture.start()
-  const credentials = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'official-cli' })).body
+  const credentials = (await fixture.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: fixture.origin, nodeId: 'official-cli' })).body
   client = spawn(process.execPath, [resolve('packages/cli-node/dist/client.js'), '--host', fixture.origin, '--id', credentials.nodeId, '--auth-token', credentials.authToken, '--credentials-file', join(remote, 'credentials.json'), '--no-local-trigger'], {
     cwd: remote, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, FOXWARM_AGENTS_DIR: join(remote, 'agents') },
   })

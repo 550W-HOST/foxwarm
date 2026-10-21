@@ -55,7 +55,7 @@ try {
   await f.start()
   const paths = { runtime: join(f.root, 'node-runtime'), agents: join(f.root, 'node-agents') }
   await mkdir(paths.runtime); await mkdir(join(paths.agents, 'main'), { recursive: true })
-  const credential = await post('/api/nodes/onboarding/create', { nodeId: 'owned-node' })
+  const credential = await post('/api/nodes/onboarding/create', { fallbackUrl: f.origin, nodeId: 'owned-node' })
   client = spawn(process.execPath, [resolve('packages/cli-node/dist/client.js'), '--host', f.origin, '--id', 'owned-node', '--auth-token', credential.authToken, '--credentials-file', join(paths.runtime, 'credentials.json'), '--no-local-trigger'], { cwd: paths.runtime, env: { ...process.env, FOXWARM_AGENTS_DIR: paths.agents }, stdio: 'ignore' })
   await until(async () => (await f.api('GET', '/api/nodes')).body.nodes.some(node => node.id === 'owned-node' && node.online), 'owned official Node')
   const actor = await create('attempt-owner')

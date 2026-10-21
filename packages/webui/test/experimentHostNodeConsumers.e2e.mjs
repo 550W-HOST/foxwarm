@@ -105,7 +105,7 @@ try {
   const shellToken = await privateCredential(actor, 'owned-shell', join(fixture.work, 'shell-token'), true)
   const offlineToken = await privateCredential(actor, 'offline-node', join(fixture.work, 'offline-token'))
   assert(offlineToken)
-  const unsupported = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'upgrade-node' })).body
+  const unsupported = (await fixture.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: fixture.origin, nodeId: 'upgrade-node' })).body
   const socket = new WebSocket(host.replace(/^http/, 'ws') + '/node_ws?id=upgrade-node&auth=' + unsupported.authToken); sockets.push(socket)
   await once(socket, 'open'); const registered = once(socket, 'message')
   socket.send(JSON.stringify({ type: 'node_register', nodeType: 'owned-incompatible', nodeProtocol: { min: 99, max: 100 }, capabilities: { tools: [] } })); await registered

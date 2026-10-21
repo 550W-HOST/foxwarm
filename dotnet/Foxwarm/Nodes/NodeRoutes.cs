@@ -74,13 +74,15 @@ internal static class NodeRoutes
             app,
             "/api/nodes/onboarding/commands",
             (body, _) =>
-                Task.FromResult(
-                    bootstrap.Commands(
-                        NodeBootstrap.OnboardingBaseUrl(body, configuredBaseUrl),
-                        Text(body, "nodeId"),
-                        Text(body, "installDir") ?? "/opt/foxwarm-node"
-                    )
-                )
+            {
+                var input = CommandInput(body, configuredBaseUrl);
+                return Task.FromResult(bootstrap.Commands(
+                    input.Url,
+                    input.Id,
+                    input.Directory,
+                    body.ContainsKey("authToken") ? Field(body, "authToken", "", "auth token") : null
+                ));
+            }
         );
         MapPost(
             app,
@@ -104,36 +106,24 @@ internal static class NodeRoutes
                 return Task.FromResult(new JsonObject { ["success"] = true });
             }
         );
-        MapPost(
-            app,
-            "/api/nodes/onboarding/create",
-            (body, _) => Task.FromResult(hub.Registry.Create(Required(body, "nodeId")))
-        );
-        MapPost(
-            app,
-            "/api/nodes/onboarding/create-shell",
-            (body, _) =>
-            {
-                var id = Required(body, "nodeId");
-                // Validate the URL before issuing a one-time credential.
-                var commands = bootstrap.Commands(
-                    NodeBootstrap.OnboardingBaseUrl(body, configuredBaseUrl),
-                    id
-                );
-                var created = hub.Registry.Create(id);
-                return Task.FromResult(
-                    new JsonObject
-                    {
-                        ["nodeId"] = created["nodeId"]!.DeepClone(),
-                        ["command"] = bootstrap.ShellCommand(
-                            commands["baseUrl"]!.GetValue<string>(),
-                            id,
-                            created["authToken"]!.GetValue<string>()
-                        ),
-                    }
-                );
-            }
-        );
+        JsonObject Create(JsonObject body, bool shellOnly)
+        {
+            // Validate command inputs before reserving an identity, without reading pairing credentials.
+            var input = CommandInput(body, configuredBaseUrl);
+            var created = hub.Registry.Create(input.Id);
+            var commands = bootstrap.Commands(input.Url, input.Id, input.Directory, created["authToken"]!.GetValue<string>());
+            if (shellOnly)
+                return new JsonObject
+                {
+                    ["nodeId"] = created["nodeId"]!.DeepClone(),
+                    ["command"] = commands["commands"]!["shell"]!.DeepClone(),
+                };
+            created["baseUrl"] = commands["baseUrl"]!.DeepClone();
+            created["commands"] = commands["commands"]!.DeepClone();
+            return created;
+        }
+        MapPost(app, "/api/nodes/onboarding/create", (body, _) => Task.FromResult(Create(body, false)));
+        MapPost(app, "/api/nodes/onboarding/create-shell", (body, _) => Task.FromResult(Create(body, true)));
         MapPost(
             app,
             "/api/nodes/{nodeId}/rename",
@@ -201,6 +191,17 @@ internal static class NodeRoutes
                 {
                     return Results.Json(new { error = error.Message }, statusCode: 501);
                 }
+                catch (InvalidDataException error) when (
+                    (path is "/api/nodes/onboarding/create" or "/api/nodes/onboarding/create-shell" or "/api/nodes/onboarding/approve")
+                    && error.Message is "Node id already exists." or "Pending pairing not found." or "Pairing is no longer awaiting approval."
+                )
+                {
+                    return Results.Conflict(new { error = error.Message });
+                }
+                catch (IOException)
+                {
+                    return Results.Json(new { error = "The request could not be completed. Refresh Nodes before trying again." }, statusCode: 500);
+                }
                 catch (Exception error)
                     when (error
                             is InvalidDataException
@@ -212,6 +213,24 @@ internal static class NodeRoutes
                 }
             }
         );
+    }
+
+    private static (string Url, string Id, string Directory) CommandInput(JsonObject body, string? configured)
+    {
+        var url = NodeBootstrap.OnboardingBaseUrl(body, configured);
+        var id = Field(body, "nodeId", "my-node", "Node name", 48);
+        ApprovedNodeRegistry.ValidateId(id);
+        return (url, id, Field(body, "installDir", "/opt/foxwarm-node", "installation directory"));
+    }
+
+    private static string Field(JsonObject body, string key, string fallback, string name, int max = 4096)
+    {
+        if (!body.ContainsKey(key))
+            return fallback;
+        var value = Text(body, key);
+        if (string.IsNullOrWhiteSpace(value) || value.Length > max || value.Any(c => c is '\0' or '\r' or '\n'))
+            throw new InvalidDataException("Enter a valid " + name + ".");
+        return value.Trim();
     }
 
     private static string Required(JsonObject body, string key) =>

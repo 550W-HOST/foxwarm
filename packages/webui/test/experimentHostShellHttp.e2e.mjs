@@ -149,7 +149,7 @@ try {
   assert(!await exists(join(fixture.root, 'invalid-response-effect'))); assert.equal(invalidPolls, 0)
   // The actual 90-second online boundary is not shortened. An idle registration expires
   // while four independent 95-second jobs and two concurrent 35-second calls remain live.
-  const idle = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'idle-shell' })).body
+  const idle = (await fixture.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: fixture.origin, nodeId: 'idle-shell' })).body
   assert.equal((await fetch(fixture.origin + prefix + '/node/shell/register', { method: 'POST', headers: directHeaders(idle), body: startup })).status, 204)
   const longStart = Date.now()
   state = await turn(actor, 'long-backgrounds', Array.from({ length: 4 }, (_, index) => call('long-' + index, 'exec', { command: `printf once >> background-${index}; sleep 95; printf background-${index}`, timeout: 1 })))

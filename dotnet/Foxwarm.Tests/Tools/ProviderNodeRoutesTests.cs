@@ -89,7 +89,7 @@ public sealed class ProviderNodeRoutesTests
         );
         var native = await admin.PostAsJsonAsync(
             "api/nodes/onboarding/create",
-            new { nodeId = "offline-native" }
+            new { nodeId = "offline-native", fallbackUrl = admin.BaseAddress!.ToString() }
         );
         native.EnsureSuccessStatusCode();
         Assert.Equal(

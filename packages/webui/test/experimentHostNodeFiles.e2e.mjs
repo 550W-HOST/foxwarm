@@ -89,7 +89,7 @@ try {
   await fixture.start()
   for (const [node, paths] of Object.entries(homes)) {
     for (const path of [paths.runtime, paths.project, join(paths.agents, 'main'), join(paths.agents, 'bound')]) await mkdir(path, { recursive: true })
-    const credentials = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: node })).body
+    const credentials = (await fixture.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: fixture.origin, nodeId: node })).body
     credentialsByNode.set(node, credentials)
     const clientArgs = node === 'two'
       ? ['-e', `const {NodeClient} = require(${JSON.stringify(resolve('packages/cli-node/dist/client.js'))}); const client = new NodeClient(${JSON.stringify({ host: nodeHost, nodeId: node, authToken: credentials.authToken, credentialsFile: join(paths.runtime, 'credentials.json'), localTrigger: false }).slice(0, -1)}, toolCallInterceptor: async (tool, args) => tool !== 'read' || !args.filePath.endsWith('reject.py')}); client.connect(); process.on('SIGTERM', async () => { await client.disconnect(); process.exit(0) });`]
@@ -326,7 +326,7 @@ rules:
   assert.equal((await fixture.api('GET', '/api/tasks/' + taskId)).body.task.description, 'shared replacement'); await online('two')
   await writeFile(join(fixture.work, 'policy.yaml'), 'version: 1\nrules: []\n')
   state = await turn(actor, 'clear-capability-denial', [[call('clear-capability-denial', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'tool-rules', filePath: join(fixture.work, 'policy.yaml') } })]]); good(state, 'clear-capability-denial')
-  const offline = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'remove-offline' })).body
+  const offline = (await fixture.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: fixture.origin, nodeId: 'remove-offline' })).body
   state = await turn(actor, 'remove-offline', [[call('discover-remove', 'search_tools', { query: 'node_remove', sources: ['builtin'], limit: 1 }), call('remove-offline', 'run_script', { code: 'return call_tool("builtin:node_remove", {"nodeId":"remove-offline"})' })]])
   assert(good(state, 'discover-remove').output.includes('builtin:node_remove')); assert.deepEqual(good(state, 'remove-offline').result, { nodeId: 'remove-offline', disconnected: false })
   assert(requests.every(request => !(request.body.tools || []).some(tool => tool.name === 'node_remove')))

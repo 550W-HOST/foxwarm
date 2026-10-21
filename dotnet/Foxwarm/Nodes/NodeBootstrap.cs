@@ -29,10 +29,15 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
 
     private static string Quote(string value) => "'" + value.Replace("'", "'\"'\"'") + "'";
 
+    private static string PowerShellQuote(string value) => "'" + value.Replace("'", "''") + "'";
+
+    private static string ComposeQuote(string value) => "'" + value.Replace("'", "\\'") + "'";
+
     internal JsonObject Commands(
         string? baseUrl = null,
         string? id = null,
-        string directory = "/opt/foxwarm-node"
+        string directory = "/opt/foxwarm-node",
+        string? authToken = null
     )
     {
         var url = NormalizeBaseUrl(baseUrl ?? address.BaseUrl);
@@ -43,11 +48,12 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
             throw new InvalidDataException("Enter an installation directory.");
         string Download(string name) =>
             "curl -fsSL " + Quote(url + "/node/" + name) + " | bash -s --";
+        var credential = authToken ?? hub.Registry.PairingToken;
         var arguments =
             " --host="
             + Quote(url)
-            + " --pairing="
-            + Quote(hub.Registry.PairingToken)
+            + (authToken is null ? " --pairing=" : " --auth-token=")
+            + Quote(credential)
             + " --node-id="
             + Quote(id);
         return new JsonObject
@@ -55,7 +61,7 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
             ["baseUrl"] = url,
             ["commands"] = new JsonObject
             {
-                ["shell"] = ShellCommand(url, shellId, "YOUR_PER_NODE_AUTH_TOKEN"),
+                ["shell"] = ShellCommand(url, shellId, authToken ?? "YOUR_PER_NODE_AUTH_TOKEN"),
                 ["bareMetal"] = Download("run.sh") + " --dir=" + Quote(directory) + arguments,
                 ["bareMetalBackground"] =
                     Download("run.sh") + " --dir=" + Quote(directory) + arguments + " -d",
@@ -67,27 +73,26 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
                     "curl -fsSL "
                     + Quote(url + "/node/docker-compose.yaml")
                     + " -o docker-compose.yaml\numask 077\ncat > .env <<'FOXWARM_NODE_ENV'\n"
-                    + "NODE_HOST='"
-                    + url.Replace("'", "\\'")
-                    + "'\n"
-                    + "NODE_SOURCE_URL='"
-                    + (url + "/node/source.tar.gz").Replace("'", "\\'")
-                    + "'\n"
-                    + "NODE_PAIRING_TOKEN='"
-                    + hub.Registry.PairingToken
-                    + "'\nNODE_ID='"
-                    + id
-                    + "'\nNODE_DATA_DIR=./data\nFOXWARM_NODE_ENV\nchmod 600 .env\n\ndocker compose up -d --build",
+                    + "NODE_HOST="
+                    + ComposeQuote(url)
+                    + "\nNODE_SOURCE_URL="
+                    + ComposeQuote(url + "/node/source.tar.gz")
+                    + "\nNODE_PAIRING_TOKEN="
+                    + ComposeQuote(authToken is null ? credential : "")
+                    + "\nNODE_AUTH_TOKEN="
+                    + ComposeQuote(authToken ?? "")
+                    + "\nNODE_ID="
+                    + ComposeQuote(id)
+                    + "\nNODE_DATA_DIR=./data\nFOXWARM_NODE_ENV\nchmod 600 .env\n\ndocker compose up -d --build",
                 ["windows"] =
-                    "Invoke-WebRequest '"
-                    + (url + "/node/run.ps1").Replace("'", "''")
-                    + "' -OutFile .\\run.ps1\n.\\run.ps1 -HostUrl '"
-                    + url.Replace("'", "''")
-                    + "' -Pairing '"
-                    + hub.Registry.PairingToken
-                    + "' -NodeId '"
-                    + id
-                    + "'",
+                    "Invoke-WebRequest "
+                    + PowerShellQuote(url + "/node/run.ps1")
+                    + " -OutFile .\\run.ps1\n.\\run.ps1 -HostUrl "
+                    + PowerShellQuote(url)
+                    + (authToken is null ? " -Pairing " : " -AuthToken ")
+                    + PowerShellQuote(credential)
+                    + " -NodeId "
+                    + PowerShellQuote(id),
             },
         };
     }

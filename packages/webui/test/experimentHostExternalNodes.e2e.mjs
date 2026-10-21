@@ -136,7 +136,7 @@ try {
   const fork = await fixture.api('POST', route(actor) + '/fork', { suffix: 'remote-placement' }); assert.equal(fork.status, 200)
   assert.equal((await saved(fork.body.newSessionId)).currentNode, 'official-cli')
   const directRoot = join(fixture.root, 'direct-official'); await mkdir(join(directRoot, 'agents/main'), { recursive: true })
-  const directCredential = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'direct-official' })).body
+  const directCredential = (await fixture.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: fixture.origin, nodeId: 'direct-official' })).body
   const directClient = client(directRoot, ['--id', directCredential.nodeId, '--auth-token', directCredential.authToken, '--credentials-file', join(directRoot, 'credentials.json')]); await online('direct-official')
   // Concrete targetNode authorization is shared by model and native ToolScript dispatch.
   await writeFile(join(fixture.work, 'deny-node.yaml'), 'version: 1\nrules:\n  - id: deny-remote-write\n    action: deny\n    match:\n      tool: {source: node, name: write}\n      targetNode: official-cli\n')
@@ -205,15 +205,15 @@ try {
   cli = client(remote, ['--credentials-file', credentialPath]); await online('official-cli')
   state = await turn(actor, 'restart-read', [call('restart-read', 'read', { filePath: 'remote.txt' })]); assert(JSON.stringify(pair(state, 'restart-read')).includes('remote-three'))
   assert(!fixture.output.includes(credential.authToken)); assert(!fixture.output.includes(pairingToken))
-  const revoked = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'revoked-before-register' })).body
+  const revoked = (await fixture.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: fixture.origin, nodeId: 'revoked-before-register' })).body
   const staleHandshake = await socket(revoked)
   staleHandshake.send(offer({ min: 1.5, max: 3 })); assert.match((await staleHandshake.take('error')).error, /nodeProtocol/)
   assert.equal((await fixture.api('DELETE', '/api/nodes/revoked-before-register')).status, 200)
-  const fresh = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'revoked-before-register' })).body
+  const fresh = (await fixture.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: fixture.origin, nodeId: 'revoked-before-register' })).body
   staleHandshake.send(offer({ min: 1, max: 3 })); assert.match((await staleHandshake.take('error')).error, /credentials were replaced/)
   assert(!(await nodes()).find(node => node.id === fresh.nodeId).online)
   // Protocol 1 legacy and 2 peers retain arbitrary JSON values. A Node without get_default_cwd stays unknown.
-  const probeCredentials = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'probe-peer' })).body
+  const probeCredentials = (await fixture.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: fixture.origin, nodeId: 'probe-peer' })).body
   let probe = await socket(probeCredentials)
   probe.send(offer(undefined, [{ name: 'probe' }, { name: 'write' }])); assert.equal((await probe.take('registered')).nodeProtocol.negotiated, 1)
   const begin = async (key, calls) => {
@@ -253,7 +253,7 @@ try {
   probe = replacement
   await begin('reply-identity', [call('identity', 'call_tool', { toolId: 'node:probe-peer/probe', args: {} })])
   const identity = await probe.take('tool_call')
-  const attackerCreds = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'other-peer' })).body
+  const attackerCreds = (await fixture.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: fixture.origin, nodeId: 'other-peer' })).body
   const attacker = await socket(attackerCreds); attacker.send(offer({ min: 1, max: 3 })); await attacker.take('registered')
   attacker.send({ type: 'tool_call_response', callId: identity.callId, result: 'spoofed' }); await sleep(70)
   probe.send({ type: 'tool_call_response', callId: identity.callId, result: ['actual', 0, false, null] })

@@ -121,7 +121,7 @@ function assertPairs(state) {
 
 try {
   await fixture.start()
-  credentials = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'official-cli' })).body
+  credentials = (await fixture.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: fixture.origin, nodeId: 'official-cli' })).body
   client = startClient(credentials); await online('official-cli')
   const actor = await create('foreground'); await select(actor)
   let state = await turn(actor, 'foreground', [call('foreground', 'exec', { command: 'printf foreground >> foreground-count; pwd' })])
@@ -271,7 +271,7 @@ try {
   await until(async () => (await readFile(join(remote, 'node-removed-count'), 'utf8')) === 'startdone', 'removed Node process completes')
   assert.equal(callsFor(removed).filter(entry => entry.value.tool === 'exec').length, 1)
   await stopClient(client)
-  credentials = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'official-cli' })).body
+  credentials = (await fixture.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: fixture.origin, nodeId: 'official-cli' })).body
   client = startClient(credentials); await online('official-cli')
   state = await turn(actor, 'after-reconnect', [call('after-reconnect', 'call_tool', { toolId: 'node:official-cli/exec', args: { command: 'printf once >> reconnect-count' } })])
   assert(!pair(state, 'after-reconnect').error); assert.equal(await readFile(join(project, 'reconnect-count'), 'utf8'), 'once')

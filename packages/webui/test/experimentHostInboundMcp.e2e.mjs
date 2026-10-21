@@ -144,7 +144,7 @@ try {
 
   // Real existing pairing handshake: no credential is exported by the external wrapper.
   for (const [nodeId, version, feature] of [['v2-external', 2, 1], ['missing-external-feature', 3, undefined]]) {
-    const credential = (await admin('POST', '/api/nodes/onboarding/create', { nodeId })).body
+    const credential = (await admin('POST', '/api/nodes/onboarding/create', { fallbackUrl: host.origin + prefix, nodeId })).body
     const ws = new WebSocket(host.origin.replace('http:', 'ws:') + prefix + '/node_ws?id=' + encodeURIComponent(nodeId) + '&auth=' + encodeURIComponent(credential.authToken))
     sockets.push(ws); const frames = []; ws.on('message', bytes => frames.push(JSON.parse(bytes)))
     await once(ws, 'open')
@@ -194,7 +194,7 @@ try {
   assert.equal(value(await call(alpha, 'foxwarm_exec_result', { execId: running.execId })).state, 'completed')
   assert(value(await call(alpha, 'foxwarm_exec_result')).executions.some(item => item.execId === running.execId))
   const otherRemote = join(host.root, 'other-cli'); await mkdir(otherRemote)
-  const otherCredential = (await admin('POST', '/api/nodes/onboarding/create', { nodeId: 'other-external' })).body
+  const otherCredential = (await admin('POST', '/api/nodes/onboarding/create', { fallbackUrl: host.origin + prefix, nodeId: 'other-external' })).body
   const otherCli = spawn(process.execPath, [resolve('packages/cli-node/dist/client.js'), '--host', host.origin + prefix, '--id', 'other-external', '--auth-token', otherCredential.authToken, '--credentials-file', join(otherRemote, 'credentials.json'), '--no-local-trigger'], { cwd: otherRemote, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, FOXWARM_AGENTS_DIR: join(otherRemote, 'agents') } })
   children.push(otherCli); otherCli.stdout.on('data', () => {}); otherCli.stderr.on('data', () => {})
   await until(async () => value(await call(alpha, 'foxwarm_node', { action: 'list' })).nodes.includes('other-external'), 'second actual CLI owner')

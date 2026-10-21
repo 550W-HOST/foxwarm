@@ -55,7 +55,7 @@ const output = client => client.messages.filter(row => row.type === 'output').ma
 const ptyRequests = operation => wire.filter(row => row.type === 'node_service_request' && row.service === 'vscode-pty' && row.operation === operation)
 try {
   await fixture.start()
-  const credential = await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'list-cli' })
+  const credential = await fixture.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: fixture.origin, nodeId: 'list-cli' })
   assert.equal(credential.status, 200)
   const executable = process.env.FOXWARM_CLI_EXECUTABLE
   cli = spawn(executable || process.execPath, [...(executable ? [] : [resolve('packages/cli-node/dist/client.js')]), '--host', `http://127.0.0.1:${proxyServer.address().port}`, '--id', 'list-cli', '--auth-token', credential.body.authToken, '--credentials-file', join(runtime, 'credentials.json'), '--no-local-trigger'], {

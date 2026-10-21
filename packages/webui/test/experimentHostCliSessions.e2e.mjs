@@ -32,7 +32,7 @@ async function create(name, agent = 'main') {
   assert.equal(result.status, 200, JSON.stringify(result.body)); return result.body.sessionId
 }
 async function connect(id) {
-  const credential = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: id })).body
+  const credential = (await fixture.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: fixture.origin, nodeId: id })).body
   const client = new NodeClient({ host: fixture.origin, nodeId: id, authToken: credential.authToken, credentialsFile: join(fixture.root, id + '.json'), localTrigger: false })
   clients.push(client); await client.connect()
   await until(async () => (await fixture.api('GET', '/api/nodes')).body.nodes.find(node => node.id === id && node.online && node.executable), id + ' registered')

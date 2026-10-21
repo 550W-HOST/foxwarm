@@ -48,7 +48,7 @@ try {
   await mkdir(join(agents, 'main'), { recursive: true }); await mkdir(runtime)
   const bytes = Buffer.from('title: "Unicode 🦊"\nenabled: true\n')
   await writeFile(join(agents, 'main/config.yaml'), bytes)
-  const credentials = (await fixture.api('POST', '/api/nodes/onboarding/create', { nodeId: 'two' })).body
+  const credentials = (await fixture.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: fixture.origin, nodeId: 'two' })).body
   client = spawn(process.execPath, [resolve('packages/cli-node/dist/client.js'), '--host', fixture.origin, '--id', 'two', '--auth-token', credentials.authToken, '--credentials-file', join(runtime, 'credentials.json'), '--no-local-trigger'], { cwd: runtime, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, FOXWARM_AGENTS_DIR: agents } })
   for (const stream of [client.stdout, client.stderr]) stream.on('data', chunk => { clientOutput = (clientOutput + chunk).slice(-20000) })
   await until(async () => (await fixture.api('GET', '/api/nodes')).body.nodes.some(node => node.id === 'two' && node.online && node.executable), 'official CLI online', 30000)
