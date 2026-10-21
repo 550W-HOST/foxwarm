@@ -44,8 +44,7 @@ Safe timeout/snapshot suspension is canonical in [D-toolscript-safe-timeout](../
 
 ### D-toolscript-one-run-model
 
-Foreground and background execution are modes of one persisted ToolScript run model, not separate engines.
-Both modes execute their initial slice in the initiating `run_script` call; background mode is not a detached generic job queue.
+One persisted engine implements both modes. The observable initial-slice, pause and caller-wait distinctions are canonical in [execution and waiting](../behaviors/execution-and-waiting.md#toolscript-completion-is-not-a-return-value-control-protocol).
 
 ### D-toolscript-agent-pause
 
