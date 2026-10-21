@@ -4,7 +4,11 @@ import path from 'path';
 import sharp from 'sharp';
 import { IMAGE_BLOBS_DIR, STATE_DIR } from './config';
 import { optimizeProviderImage, ProviderImageOutputFormat } from './providerImageOptimization';
+import { decodeHeifForProvider } from './imageInputPolicy';
 import { InlineData, InlineDataRef, Message, MessagePart, QueueItem } from './types';
+import { buildFoxwarmAttachmentText } from '../packages/shared/dist/foxwarmMarkup';
+import { parseFoxwarmTagLine } from './utils/promptWrappers';
+import { formatToolResponsePayload } from '../packages/shared/dist/toolResponseFormatting';
 
 const BLOB_ID_RE = /^([a-f0-9]{64})\.(png|jpg|gif|webp|svg|bin)$/;
 const SAFE_RASTER_MIME_BY_EXTENSION: Record<string, string> = {
@@ -14,58 +18,6 @@ const SAFE_RASTER_MIME_BY_EXTENSION: Record<string, string> = {
   webp: 'image/webp',
 };
 const PROVIDER_NORMALIZED_HEIF_MIME_TYPES = new Set(['image/heic', 'image/heif']);
-const MAX_IMAGE_PIXELS = 64 * 1024 * 1024;
-
-interface LibHeifEnumValue {
-  value: number;
-}
-
-interface LibHeifError {
-  code: LibHeifEnumValue;
-  message?: string;
-}
-
-interface LibHeifChannel {
-  id: LibHeifEnumValue;
-  width: number;
-  height: number;
-  stride: number;
-  data: Uint8Array;
-}
-
-interface LibHeifModule {
-  heif_filetype_result: { heif_filetype_yes_supported: LibHeifEnumValue };
-  heif_error_code: { heif_error_Ok: LibHeifEnumValue };
-  heif_colorspace: { heif_colorspace_RGB: LibHeifEnumValue };
-  heif_chroma: { heif_chroma_interleaved_RGBA: LibHeifEnumValue };
-  heif_channel: { heif_channel_interleaved: LibHeifEnumValue };
-  heif_js_check_filetype(data: Buffer): LibHeifEnumValue;
-  heif_context_alloc(): object;
-  heif_context_free(context: object): void;
-  heif_context_read_from_memory(context: object, data: Buffer): LibHeifError;
-  heif_js_context_get_primary_image_handle(context: object): object | LibHeifError;
-  heif_image_handle_release(handle: object): void;
-  heif_image_handle_get_width(handle: object): number;
-  heif_image_handle_get_height(handle: object): number;
-  heif_js_decode_image2(handle: object, colorspace: LibHeifEnumValue, chroma: LibHeifEnumValue): {
-    image?: object;
-    channels?: LibHeifChannel[];
-    code?: LibHeifEnumValue;
-    message?: string;
-  };
-  heif_image_release(image: object): void;
-}
-
-let cachedLibHeif: LibHeifModule | undefined;
-
-function getLibHeif(): LibHeifModule {
-  if (!cachedLibHeif) {
-    // Lazy loading avoids initializing the bundled decoder for requests that
-    // contain only provider-native image formats.
-    cachedLibHeif = require('libheif-js/wasm-bundle') as LibHeifModule;
-  }
-  return cachedLibHeif;
-}
 
 function normalizeMimeType(value: unknown): string {
   return typeof value === 'string' && value.trim()
@@ -110,7 +62,7 @@ function decodeInlineData(inlineData: InlineData): Buffer {
 
 async function probeSafeRaster(buffer: Buffer, mimeType: string): Promise<{ width?: number; height?: number }> {
   if (!Object.values(SAFE_RASTER_MIME_BY_EXTENSION).includes(mimeType)) return {};
-  const metadata = await sharp(buffer, { limitInputPixels: MAX_IMAGE_PIXELS }).metadata();
+  const metadata = await sharp(buffer, { limitInputPixels: false }).metadata();
   const expected = extensionForMimeType(mimeType);
   const actual = metadata.format === 'jpeg' ? 'jpg' : metadata.format;
   if (actual !== expected) {
@@ -120,93 +72,6 @@ async function probeSafeRaster(buffer: Buffer, mimeType: string): Promise<{ widt
     width: typeof metadata.width === 'number' ? metadata.width : undefined,
     height: typeof metadata.height === 'number' ? metadata.height : undefined,
   };
-}
-
-function isLibHeifError(value: object | LibHeifError): value is LibHeifError {
-  return Object.prototype.hasOwnProperty.call(value, 'code');
-}
-
-async function decodeHeifForProvider(buffer: Buffer, imageId: string): Promise<{
-  rgba: Buffer; width: number; height: number; hasTransparency: boolean;
-}> {
-  let context: object | undefined;
-  let handle: object | undefined;
-  let decodedImage: object | undefined;
-  try {
-    const libheif = getLibHeif();
-    const fileType = libheif.heif_js_check_filetype(buffer);
-    if (fileType.value !== libheif.heif_filetype_result.heif_filetype_yes_supported.value) {
-      throw new Error('invalid or unsupported HEIF data');
-    }
-
-    context = libheif.heif_context_alloc();
-    const readResult = libheif.heif_context_read_from_memory(context, buffer);
-    if (readResult.code.value !== libheif.heif_error_code.heif_error_Ok.value) {
-      throw new Error('invalid or unsupported HEIF data');
-    }
-
-    const handleResult = libheif.heif_js_context_get_primary_image_handle(context);
-    if (!handleResult || isLibHeifError(handleResult)) {
-      throw new Error('missing primary HEIF image');
-    }
-    handle = handleResult;
-
-    const width = libheif.heif_image_handle_get_width(handle);
-    const height = libheif.heif_image_handle_get_height(handle);
-    const pixels = width * height;
-    if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
-      throw new Error('invalid image dimensions');
-    }
-    if (!Number.isSafeInteger(pixels) || pixels > MAX_IMAGE_PIXELS) {
-      throw new Error('image exceeds the 64-megapixel limit');
-    }
-
-    const decoded = libheif.heif_js_decode_image2(
-      handle,
-      libheif.heif_colorspace.heif_colorspace_RGB,
-      libheif.heif_chroma.heif_chroma_interleaved_RGBA,
-    );
-    if (!decoded || decoded.code || !decoded.image || !Array.isArray(decoded.channels)) {
-      throw new Error('HEIF pixel decoding failed');
-    }
-    decodedImage = decoded.image;
-
-    const channel = decoded.channels.find(item => (
-      item.id.value === libheif.heif_channel.heif_channel_interleaved.value
-    ));
-    const rowBytes = width * 4;
-    if (!channel
-      || channel.width !== width
-      || channel.height !== height
-      || channel.stride < rowBytes
-      || channel.data.length < channel.stride * height) {
-      throw new Error('HEIF pixel decoding returned invalid data');
-    }
-
-    const rgba = Buffer.allocUnsafe(pixels * 4);
-    for (let row = 0; row < height; row += 1) {
-      rgba.set(channel.data.subarray(row * channel.stride, row * channel.stride + rowBytes), row * rowBytes);
-    }
-    let hasTransparency = false;
-    for (let offset = 3; offset < rgba.length; offset += 4) {
-      if (rgba[offset] !== 255) {
-        hasTransparency = true;
-        break;
-      }
-    }
-
-    return { rgba, width, height, hasTransparency };
-  } catch (error: any) {
-    const detail = typeof error?.message === 'string' && error.message
-      ? error.message
-      : 'invalid or unsupported HEIF data';
-    throw new Error(`Unable to normalize HEIC/HEIF image ${imageId || '(unknown)'} for provider: ${detail}.`);
-  } finally {
-    const libheif = cachedLibHeif;
-    if (decodedImage && libheif) libheif.heif_image_release(decodedImage);
-    if (handle && libheif) libheif.heif_image_handle_release(handle);
-    if (context && libheif) libheif.heif_context_free(context);
-  }
 }
 
 function buildImageId(message: Message, part: MessagePart, partIndex: number): string {
@@ -493,6 +358,51 @@ export async function externalizeQueueItems(items: QueueItem[]): Promise<{ items
   return changed ? { items: converted, changed } : { items, changed };
 }
 
+function imageDescriptorAsFile(text: string | undefined, mimeType: string): string | undefined {
+  if (!text) return undefined;
+  const lines = text.split('\n');
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const tag = parseFoxwarmTagLine(lines[index]);
+    if (!tag || tag.closing || tag.tagName !== 'foxwarm-image' || !tag.attrs.name || !tag.attrs.node || !tag.attrs.path) continue;
+    lines[index] = buildFoxwarmAttachmentText({
+      kind: 'file', name: tag.attrs.name || 'image', node: tag.attrs.node, path: tag.attrs.path, mime: mimeType,
+    });
+    return lines.join('\n');
+  }
+  return undefined;
+}
+
+function appendImageFileFallback(parts: MessagePart[], part: MessagePart, mimeType: string): MessagePart {
+  const { inlineData: _inline, inlineDataRef: _ref, imageMeta: _meta, ...filePart } = stripProviderImageHelperFields(part).part;
+  const ownDescriptor = imageDescriptorAsFile(part.text, mimeType);
+  const previous = parts[parts.length - 1];
+  const previousDescriptor = !ownDescriptor && previous && !previous.inlineData && !previous.inlineDataRef
+    ? imageDescriptorAsFile(previous.text, mimeType) : undefined;
+  if (ownDescriptor) {
+    const result = { ...filePart, text: ownDescriptor };
+    parts.push(result);
+    return result;
+  } else if (previousDescriptor) {
+    const result = { ...previous, text: previousDescriptor };
+    parts[parts.length - 1] = result;
+    if (filePart.text || filePart.functionCall || filePart.functionResponse) parts.push(filePart);
+    return result;
+  } else {
+    // Reference-only images have no ordinary file locator. Keep the real
+    // image ID actionable without exposing a private Main blob path or
+    // materializing a new attachment during provider preparation.
+    const imageId = part.imageMeta?.imageId || part.inlineDataRef?.imageId;
+    const note = 'Image content was not sent because it exceeds the image input limit. '
+      + (imageId
+        ? `The original is retained as image ${JSON.stringify(imageId)}; use image_write_to_file to save it as a file.`
+        : 'The original remains in the source message.');
+    const descriptor = [filePart.text, note].filter(Boolean).join('\n');
+    const result = { ...filePart, text: descriptor };
+    parts.push(result);
+    return result;
+  }
+}
+
 export async function hydrateMessagesForProvider(messages: Message[], options: {
   protocol?: 'openai-responses' | 'openai-chat-completions' | 'anthropic';
   concreteModelId?: string;
@@ -501,7 +411,8 @@ export async function hydrateMessagesForProvider(messages: Message[], options: {
   const hydrated: Message[] = [];
   for (const message of messages) {
     let changed = false;
-    const parts: MessagePart[] = [];
+    let parts: MessagePart[] = [];
+    const toolFiles: Array<{ part: MessagePart; toolUseId?: string }> = [];
     for (const part of message.parts) {
       if (part.inlineDataRef || part.inlineData?.data) {
         // Always check a referenced original, including image history that the
@@ -538,7 +449,7 @@ export async function hydrateMessagesForProvider(messages: Message[], options: {
           // malformed/oversized-input failure without emitting a variant.
           await decodeHeifForProvider(buffer, part.inlineDataRef?.imageId || part.imageMeta?.imageId || '');
         }
-        let providerImage = { buffer, mimeType: declaredMimeType };
+        let providerImage: Awaited<ReturnType<typeof optimizeProviderImage>> = { buffer, mimeType: declaredMimeType };
         if (!nativeReplay && !nonVisualAssistant) {
           try {
             providerImage = await optimizeProviderImage({
@@ -556,6 +467,12 @@ export async function hydrateMessagesForProvider(messages: Message[], options: {
             // serializer. Do not turn their invalid raster into a new error.
           }
         }
+        if (providerImage.asFile) {
+          const filePart = appendImageFileFallback(parts, part, declaredMimeType);
+          if (message.role === 'tool') toolFiles.push({ part: filePart, toolUseId: part.toolUseId });
+          changed = true;
+          continue;
+        }
         const stripped = stripProviderImageHelperFields(part).part;
         parts.push({
           ...stripped,
@@ -565,6 +482,26 @@ export async function hydrateMessagesForProvider(messages: Message[], options: {
       } else {
         parts.push(part);
       }
+    }
+    // OpenAI tool serializers consume function responses, not arbitrary text
+    // siblings. Put each file descriptor into its existing result occurrence
+    // so all protocols retain the file without a serializer/capture change.
+    for (const file of toolFiles) {
+      const fileIndex = parts.indexOf(file.part);
+      let responseIndex = -1;
+      for (let index = 0; index < parts.length; index += 1) {
+        const response = parts[index].functionResponse;
+        if (!response || (file.toolUseId && (response.tool_use_id || parts[index].toolUseId) !== file.toolUseId)) continue;
+        if (!file.toolUseId && index < fileIndex) continue;
+        if (responseIndex < 0 || Math.abs(index - fileIndex) < Math.abs(responseIndex - fileIndex)) responseIndex = index;
+      }
+      if (responseIndex < 0) continue;
+      const responsePart = parts[responseIndex];
+      parts[responseIndex] = { ...responsePart, functionResponse: {
+        ...responsePart.functionResponse,
+        response: { output: [formatToolResponsePayload(responsePart.functionResponse.response || {}), file.part.text].filter(Boolean).join('\n') },
+      } };
+      if (fileIndex !== responseIndex) parts = parts.filter(part => part !== file.part);
     }
     hydrated.push(changed ? { ...message, parts } : message);
   }

@@ -404,7 +404,7 @@ test('real Chat node picker keeps the confirmed value on failure and ignores a l
   }
 })
 
-test('WebUI identity Chat hides node and model controls without fetching their endpoints', async () => {
+test('WebUI identity Chat hides administrator controls and scopes attachment uploads', async () => {
   const identityPage = await browser.newPage()
   try {
     await identityPage.goto(`${fixtureUrl}?identityMode=1`, { waitUntil: 'load' })
@@ -414,6 +414,18 @@ test('WebUI identity Chat hides node and model controls without fetching their e
     assert.equal(await identityPage.$('.foxwarm-node-picker-trigger'), null)
     assert.equal(await identityPage.$('.foxwarm-model-selector-trigger'), null)
     assert.deepEqual(await identityPage.evaluate(() => window.fixtureRequests.filter(url => /\/(nodes|node|models|commands)$/.test(url))), [])
+    await identityPage.$eval('#file-upload', input => {
+      const files = new DataTransfer()
+      files.items.add(new File(['scoped attachment'], 'notes.txt', { type: 'text/plain' }))
+      Object.defineProperty(input, 'files', { configurable: true, value: files.files })
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await identityPage.click('button[aria-label="Send message"]')
+    await identityPage.waitForFunction(() => window.fixtureMessageBodies.length === 1)
+    assert.deepEqual(await identityPage.evaluate(() => window.fixtureRequests.filter(url => url.includes('/upload'))), ['/api/upload?sessionId=fixture%2Fmain'])
+    assert.equal(await identityPage.evaluate(() => window.fixtureMessageBodies[0].uploadedFiles[0].filename), 'attachment1_notes.txt')
+    await identityPage.evaluate(() => window.resolveFixtureMessages())
+    await identityPage.waitForFunction(() => document.querySelectorAll('.foxwarm-composer-attachment-chip').length === 0)
   } finally {
     await identityPage.close()
   }
@@ -809,6 +821,7 @@ test('successful real Chat send clears the live and persisted composer draft', a
     && document.querySelectorAll('.foxwarm-composer-attachment-chip').length === 2, { timeout: 60_000 })
   await page.click('button[aria-label="Send message"]')
   await page.waitForFunction(() => window.fixtureMessageBodies.length === 2)
+  assert.deepEqual(await page.evaluate(() => window.fixtureRequests.filter(url => url.includes('/upload'))), ['/api/upload', '/api/upload'])
   await page.evaluate(() => window.resolveFixtureMessages())
   await page.waitForFunction(selector => document.querySelector(selector)?.textContent === '', {}, editor)
   assert.equal(await page.evaluate(() => localStorage.getItem('composer_draft_v1_fixture/main')), null)

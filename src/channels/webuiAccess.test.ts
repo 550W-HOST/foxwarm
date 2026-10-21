@@ -4,6 +4,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import fs from 'fs-extra';
 import http from 'node:http';
+import sharp from 'sharp';
+import { oversizedVisionImages } from '../testFixtures/visionImages';
+import { parseFoxwarmTagLine } from '../utils/promptWrappers';
+import { nodesManager } from '../nodes/manager';
+import { writeNodeTransferFile } from '../../packages/shared/dist/nodeFileTransfer';
+import { externalizeMessageImages, hydrateMessagesForProvider, putImageBlob, resolveImageBlobPath } from '../imageBlobs';
+import { image_write_to_file } from '../tools';
 import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
@@ -16,21 +23,21 @@ import { initializeSessionRuntime, shutdownSessionRuntime } from '../sessionRunt
 
 async function withWebUiServer(
   accessConfig: ReturnType<typeof normalizeAccessConfig>,
-  run: (baseUrl: string, adminToken: string, webUiToken: string, mcpToken: string, calls: { count: number }, channel: WebUIChannel) => Promise<void>,
+  run: (baseUrl: string, adminToken: string, webUiToken: string, mcpToken: string, calls: { count: number; messages: any[] }, channel: WebUIChannel) => Promise<void>,
 ): Promise<void> {
   const port = 34100 + Math.floor(Math.random() * 1000);
   const adminToken = `admin-${Math.random().toString(36).slice(2)}`;
   const webUiToken = 'synthetic-webui-token';
   const mcpToken = 'synthetic-mcp-token';
   const server = new HttpServer(port, adminToken);
-  const calls = { count: 0 };
+  const calls = { count: 0, messages: [] as any[] };
   setHttpServer(server);
   await server.start();
   const channel = new WebUIChannel({
     token: adminToken,
     accessConfig,
     enableTrigger: false,
-    router: { handleMessage: async () => { calls.count += 1; } } as any,
+    router: { handleMessage: async (_ctx: any, message: any) => { calls.count += 1; calls.messages.push(message); } } as any,
   });
   await channel.start();
   try {
@@ -177,19 +184,61 @@ test('authenticated multipart uploads preserve files and clean rejected or inter
     assert.fail('Upload files did not settle');
   };
   try {
-    await withWebUiServer(accessConfig, async (baseUrl, _adminToken, webUiToken) => {
+    await withWebUiServer(accessConfig, async (baseUrl, adminToken, webUiToken) => {
       const upload = (token: string | undefined, sessionId: string, field = 'file') => {
         const form = new FormData();
-        form.append('sessionId', sessionId);
         form.append(field, new Blob(['attachment contents']), '中文附件.txt');
-        return fetch(`${baseUrl}/api/upload`, {
+        return fetch(`${baseUrl}/api/upload?sessionId=${encodeURIComponent(sessionId)}`, {
           method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form,
         });
       };
       assert.equal((await upload(undefined, bound)).status, 401);
       assert.equal((await upload(webUiToken, 'unbound-session')).status, 403);
       assert.equal((await upload(webUiToken, bound, 'unexpected')).status, 400);
+      const legacyForm = new FormData();
+      legacyForm.append('sessionId', bound);
+      legacyForm.append('file', new Blob(['legacy attachment']), 'legacy.txt');
+      assert.equal((await fetch(`${baseUrl}/api/upload`, {
+        method: 'POST', headers: { Authorization: `Bearer ${webUiToken}` }, body: legacyForm,
+      })).status, 400);
+      const headersOnly = (query: string, contentLength: number) => new Promise<number>((resolve, reject) => {
+        const request = http.request(`${baseUrl}/api/upload${query}`, {
+          method: 'POST', headers: {
+            Authorization: `Bearer ${webUiToken}`,
+            'Content-Type': 'multipart/form-data; boundary=upload-test-boundary',
+            'Content-Length': contentLength,
+          },
+        }, response => {
+          response.resume();
+          response.on('end', () => { resolve(response.statusCode!); request.destroy(); });
+        });
+        request.on('error', reject);
+        request.setTimeout(2000, () => request.destroy(new Error('Upload waited for body before rejecting headers')));
+        request.flushHeaders();
+      });
+      assert.equal(await headersOnly('?sessionId=unbound-session', 1024), 403);
+      assert.equal(await headersOnly('', 1024), 400);
+      assert.equal(await headersOnly('?sessionId=a&sessionId=b', 1024), 400);
+      assert.equal(await headersOnly(`?sessionId=${encodeURIComponent(bound)}`, 1024 ** 3 + 1), 413);
       assert.deepEqual((await fs.readdir(uploadDir)).sort(), originalFiles);
+
+      // Administrators keep the Session-less path used by the current Chat.
+      const adminForm = new FormData();
+      adminForm.append('file', new Blob(['administrator attachment']), 'admin.txt');
+      const adminUpload = await fetch(`${baseUrl}/api/upload`, {
+        method: 'POST', headers: { Authorization: `Bearer ${adminToken}` }, body: adminForm,
+      });
+      assert.equal(adminUpload.status, 200);
+      const adminFile = await adminUpload.json() as { path: string };
+      await fs.remove(adminFile.path);
+
+      // A multipart field cannot override or supply the query's authority.
+      const spoofedForm = new FormData();
+      spoofedForm.append('sessionId', bound);
+      spoofedForm.append('file', new Blob(['attachment']), 'spoofed.txt');
+      assert.equal((await fetch(`${baseUrl}/api/upload?sessionId=unbound-session`, {
+        method: 'POST', headers: { Authorization: `Bearer ${webUiToken}` }, body: spoofedForm,
+      })).status, 403);
 
       const accepted = await upload(webUiToken, bound);
       assert.equal(accepted.status, 200);
@@ -202,7 +251,7 @@ test('authenticated multipart uploads preserve files and clean rejected or inter
         await fs.remove(file.path);
       }
 
-      const request = http.request(`${baseUrl}/api/upload`, {
+      const request = http.request(`${baseUrl}/api/upload?sessionId=${encodeURIComponent(bound)}`, {
         method: 'POST', headers: {
           Authorization: `Bearer ${webUiToken}`,
           'Content-Type': 'multipart/form-data; boundary=upload-test-boundary',
@@ -336,9 +385,8 @@ test('Agent scopes follow real ownership across creation and moves on HTTP, WS, 
       assert.equal((await fetch(swappedGlobal)).status, 401);
 
       const form = new FormData();
-      form.append('sessionId', initial);
       form.append('file', new Blob(['private attachment']), 'attachment.txt');
-      const uploaded = await fetch(`${baseUrl}/api/upload`, { method: 'POST',
+      const uploaded = await fetch(`${baseUrl}/api/upload?sessionId=${encodeURIComponent(initial)}`, { method: 'POST',
         headers: { Authorization: `Bearer ${webUiToken}` }, body: form });
       assert.equal(uploaded.status, 200);
       const uploadedFile = await uploaded.json() as any;
@@ -394,6 +442,163 @@ test('Agent scopes follow real ownership across creation and moves on HTTP, WS, 
     for (const id of ids) await sessionManager.deleteSession(id).catch(() => {});
     await fs.remove(getAgentDir(agent));
     await fs.remove(getAgentDir(otherAgent));
+    await shutdownSessionRuntime().catch(() => {});
+  }
+});
+
+
+test('real image uploads keep oversized inputs as readable files for file-only and text-plus-file messages', async () => {
+  await sessionManager.loadSessions();
+  await initializeSessionRuntime();
+  const bound = `vision_upload_${Math.random().toString(36).slice(2, 9)}`;
+  await sessionManager.createEmptySession(bound);
+  const accessConfig = normalizeAccessConfig({ identities: {
+    webui: { token: 'synthetic-webui-token', surfaces: { webui: { sessions: [bound] } } },
+  } });
+  const { overBytes, overPixels } = await oversizedVisionImages();
+  const normal = await sharp({ create: { width: 40, height: 20, channels: 3, background: 'red' } }).png().toBuffer();
+  const savedPaths: string[] = [];
+  const originalRead = fs.readFile;
+  try {
+    await withWebUiServer(accessConfig, async (baseUrl, _admin, token, _mcp, calls) => {
+      for (const [name, bytes, oversized] of [
+        ['large-source.png', overBytes, true], ['many-pixels.png', overPixels, true], ['ordinary.png', normal, false],
+      ] as const) {
+        for (const withText of [false, true]) {
+          const form = new FormData();
+          form.append('file', new Blob([bytes], { type: 'image/png' }), `attachment1_${name}`);
+          const uploaded = await fetch(`${baseUrl}/api/upload?sessionId=${encodeURIComponent(bound)}`, {
+            method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form,
+          });
+          assert.equal(uploaded.status, 200);
+          const file = await uploaded.json() as any;
+          if (oversized) {
+            // Main path saves must not first turn the original upload into a
+            // giant Buffer/base64 value just to retain an ordinary file.
+            (fs as any).readFile = (target: any, ...args: any[]) => {
+              assert.notEqual(target, file.path, 'Oversized upload should use its existing spool path');
+              return (originalRead as any)(target, ...args);
+            };
+          }
+          let sent: Response;
+          try {
+            sent = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(bound)}/message`, {
+              method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: withText ? 'Please inspect the attachment' : '', uploadedFiles: [file] }),
+            });
+          } finally {
+            (fs as any).readFile = originalRead;
+          }
+          assert.equal(sent.status, 200);
+          const message = calls.messages.at(-1);
+          const descriptor = message.parts.map((part: any) => part.text).filter(Boolean)
+            .map((text: string) => parseFoxwarmTagLine(text)).find((tag: any) => tag?.tagName?.startsWith('foxwarm-'));
+          assert.equal(descriptor.tagName, oversized ? 'foxwarm-file' : 'foxwarm-image');
+          assert.equal(descriptor.attrs.name, `attachment1_${name}`);
+          assert.equal(descriptor.attrs.node, 'master');
+          assert.ok(descriptor.attrs.path.startsWith(getAgentDir('main') + path.sep));
+          savedPaths.push(descriptor.attrs.path);
+          assert.deepEqual(await fs.readFile(descriptor.attrs.path), bytes, 'The retained file is the original image, not a conversion');
+          assert.equal(message.parts.filter((part: any) => part.inlineData).length, oversized ? 0 : 1);
+          const canonical = (await externalizeMessageImages({ role: 'user', parts: message.parts })).message;
+          const prepared = await hydrateMessagesForProvider([canonical]);
+          assert.equal(prepared[0].parts.filter(part => part.inlineData).length, oversized ? 0 : 1);
+          assert.equal(canonical.parts.some(part => part.inlineData), false, 'Canonical ingress remains reference-only');
+          assert.equal(message.parts.some((part: any) => part.text === 'Please inspect the attachment'), withText);
+          assert.equal(await fs.pathExists(file.path), false);
+        }
+      }
+    });
+  } finally {
+    (fs as any).readFile = originalRead;
+    for (const filePath of savedPaths) await fs.remove(filePath);
+    await sessionManager.deleteSession(bound).catch(() => {});
+    await shutdownSessionRuntime().catch(() => {});
+  }
+});
+
+
+test('oversized image fallback preserves an existing isolated CLI destination through ordinary file transfer', async () => {
+  await sessionManager.loadSessions();
+  await initializeSessionRuntime();
+  const agent = `vision_isolated_${Math.random().toString(36).slice(2, 9)}`;
+  const sessionId = `${agent}/main`;
+  const nodeId = 'vision-fixture-node';
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vision-node-files-'));
+  await sessionManager.createAgentWithMainSession({ agentName: agent });
+  await sessionManager.setAgentIsolation(agent, nodeId);
+  nodesManager.registerNode({ readyState: 1, send() {}, close() {} } as any, {} as any, nodeId);
+  const { overBytes, overPixels } = await oversizedVisionImages();
+  const originalWrite = nodesManager.writeFileToNode;
+  let transfers = 0;
+  try {
+    // Transport is an owned fixture boundary. The destination implementation
+    // is the real shared binary file writer used by the resident CLI client.
+    nodesManager.writeFileToNode = async (targetNode, filePath, dataBase64, overwrite, owner) => {
+      assert.equal(targetNode, nodeId);
+      assert.equal(owner, sessionId);
+      if (transfers < 4) assert.match(filePath, /^\.temp[\\/]channel-files[\\/]webui[\\/]/);
+      else assert.equal(filePath, 'artifacts/original.png');
+      transfers += 1;
+      return writeNodeTransferFile(path.join(root, filePath), agent, dataBase64, overwrite, false);
+    };
+    await withWebUiServer(normalizeAccessConfig({ identities: {} }), async (baseUrl, adminToken, _webui, _mcp, calls) => {
+      for (const [name, bytes] of [['large.png', overBytes], ['pixels.png', overPixels]] as const) {
+        for (const withText of [false, true]) {
+          const form = new FormData();
+          form.append('file', new Blob([bytes], { type: 'image/png' }), name);
+          const upload = await fetch(`${baseUrl}/api/upload`, {
+            method: 'POST', headers: { Authorization: `Bearer ${adminToken}` }, body: form,
+          });
+          assert.equal(upload.status, 200);
+          const file = await upload.json() as any;
+          const sent = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/message`, {
+            method: 'POST', headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: withText ? 'Keep this file' : '', uploadedFiles: [file] }),
+          });
+          assert.equal(sent.status, 200);
+          const message = calls.messages.at(-1);
+          const descriptor = message.parts.map((part: any) => parseFoxwarmTagLine(part.text || ''))
+            .find((tag: any) => tag?.tagName === 'foxwarm-file');
+          assert.equal(descriptor.attrs.name, name);
+          assert.equal(descriptor.attrs.node, nodeId);
+          assert.ok(descriptor.attrs.path.startsWith(root + path.sep));
+          assert.deepEqual(await fs.readFile(descriptor.attrs.path), bytes);
+          assert.equal(message.parts.some((part: any) => part.inlineData), false);
+          assert.equal(await fs.pathExists(file.path), false);
+        }
+      }
+      assert.equal(transfers, 4);
+      const session = await sessionManager.getSession(sessionId);
+      const ref = await putImageBlob({ buffer: overPixels, mimeType: 'image/png', imageId: 'retained-large-image' });
+      await sessionManager.appendSessionMessage(session, { role: 'tool', parts: [
+        { functionResponse: { tool_use_id: 'source-image', name: 'read', response: { output: 'Image read' } } },
+        { inlineDataRef: ref, toolUseId: 'source-image' },
+      ] });
+      const canonical = session.history.at(-1)!;
+      const prepared = await hydrateMessagesForProvider([canonical]);
+      const projected = JSON.stringify(prepared);
+      assert.ok(projected.includes(ref.imageId));
+      assert.ok(projected.includes('image_write_to_file'));
+      assert.equal(projected.includes(resolveImageBlobPath(ref.blobId!)), false, 'Private Main blob paths are not file locators for an isolated Session');
+      assert.equal(transfers, 4, 'Provider preparation does not automatically transfer the original');
+      await image_write_to_file({ id: ref.imageId, filePath: 'artifacts/original.png' }, {
+        sessionId, session, runtimeNodeId: nodeId, persistCurrentSession: async () => { await sessionManager.saveSession(sessionId); },
+      });
+      assert.deepEqual(await fs.readFile(path.join(root, 'artifacts/original.png')), overPixels,
+        'The actual existing save-by-ID lookup resolves and saves the retained original on the allowed destination');
+      assert.equal(transfers, 5);
+      assert.equal(canonical.parts[1].inlineDataRef?.blobId, ref.blobId);
+      assert.equal(await fs.pathExists(path.join(getAgentDir(agent), '.temp', 'channel-files')), false,
+        'An isolated destination is never silently replaced with Main storage');
+    });
+  } finally {
+    nodesManager.writeFileToNode = originalWrite;
+    nodesManager.unregisterNode(nodeId);
+    await sessionManager.setAgentIsolation(agent, undefined);
+    await sessionManager.deleteSession(sessionId).catch(() => {});
+    await fs.remove(root);
+    await fs.remove(getAgentDir(agent));
     await shutdownSessionRuntime().catch(() => {});
   }
 });

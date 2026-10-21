@@ -152,10 +152,11 @@ test('JPEG mode converts even small WebP input for endpoints without WebP suppor
 }));
 
 test('cache hits skip decode and encode, policy changes invalidate, corruption rebuilds, and in-flight requests coalesce', async () => withCache(async root => {
-  const rgba = Buffer.alloc(40 * 40 * 4, 255);
+  const { decodeHeifForProvider } = await import('./imageInputPolicy');
+  const buffer = await fs.readFile(path.join(__dirname, '../src/testFixtures/synthetic-3x2.heic'));
   let decodes = 0;
-  const decoder = async () => { decodes += 1; return { rgba, width: 40, height: 40, hasTransparency: false }; };
-  const options = { buffer: Buffer.from('fake-heif-unique'), mimeType: 'image/heif', decodeHeif: decoder, cacheDir: root };
+  const decoder = async () => { decodes += 1; return decodeHeifForProvider(buffer, 'cache-fixture'); };
+  const options = { buffer, mimeType: 'image/heif', decodeHeif: decoder, cacheDir: root };
   const first = await Promise.all(Array.from({ length: 8 }, () => optimizeProviderImage(options)));
   assert.equal(decodes, 1);
   assert.ok(first.every(item => item.buffer.equals(first[0].buffer)));
@@ -269,3 +270,18 @@ test('competing processes share the derived directory and stale cleanup lease re
   assert.equal(await entryCount(root), 1);
   await eventually(async () => (await fs.pathExists(path.join(root, '.cleanup-last'))) && !(await fs.pathExists(lock)));
 }));
+
+test('real HEIF metadata preflight does not invoke its pixel decoder', async () => {
+  const { inspectImageInput } = await import('./imageInputPolicy');
+  const buffer = await fs.readFile(path.join(__dirname, '../src/testFixtures/synthetic-3x2.heic'));
+  const libheif = require('libheif-js/wasm-bundle');
+  const original = libheif.heif_js_decode_image2;
+  let decoded = false;
+  try {
+    libheif.heif_js_decode_image2 = () => { decoded = true; throw new Error('Preflight must not decode HEIF pixels'); };
+    assert.equal((await inspectImageInput(buffer, 'image/heic', buffer.length)).oversized, false);
+    assert.equal(decoded, false);
+  } finally {
+    libheif.heif_js_decode_image2 = original;
+  }
+});

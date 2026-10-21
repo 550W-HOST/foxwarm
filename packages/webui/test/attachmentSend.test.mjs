@@ -25,3 +25,13 @@ test('upload and message HTTP failures reject instead of reporting accepted send
   await assert.rejects(()=>uploadReferencedFiles([{ref:'attachment1',file:new File(['a'],'failed.txt')}],'/upload',async()=>new Response('{}',{status:500})),/Failed to upload failed\.txt/)
   await assert.rejects(()=>postReferencedMessage('/message',{parts:[]},async()=>new Response('{}',{status:400})),/Failed to send message \(400\)/)
 })
+
+test('scoped uploads authorize the query and surface server errors', async()=>{
+  const files=[{ref:'attachment1',file:new File(['a'],'failed.txt')}]
+  await assert.rejects(()=>uploadReferencedFiles(files,'/api/upload',async(url,init)=>{
+    assert.equal(url,'/api/upload?sessionId=agent%2Fsession%20name')
+    assert.equal(init.body.has('sessionId'),false)
+    return new Response(JSON.stringify({error:'Upload too large'}),{status:413})
+  },'agent/session name'),/Failed to upload failed\.txt: Upload too large/)
+  await assert.rejects(()=>uploadReferencedFiles(files,'/api/upload',async()=>new Response('not JSON',{status:502})),/^Error: Failed to upload failed\.txt$/)
+})

@@ -3,10 +3,10 @@ import fs from 'fs-extra';
 import path from 'path';
 import sharp from 'sharp';
 import { STATE_DIR } from './config';
+import { inspectImageInput, MAX_IMAGE_PIXELS, MAX_VISION_IMAGE_BYTES } from './imageInputPolicy';
 
 export type ProviderImageOutputFormat = 'webp' | 'jpeg';
 export const PROVIDER_IMAGE_CACHE_DIR = path.join(STATE_DIR, 'provider-image-cache', 'v1');
-const INPUT_PIXEL_LIMIT = 64 * 1024 * 1024;
 const TARGET_PIXELS = 4 * 1024 * 1024;
 const TARGET_EDGE = 4096;
 const MAX_CACHED_ENTRY = 32 * 1024 * 1024;
@@ -14,7 +14,7 @@ const CACHE_CAPACITY = 512 * 1024 * 1024;
 const CACHE_TRIM_TO = 384 * 1024 * 1024;
 // Increment when conversion semantics change; old derived bytes must never
 // survive an alpha or format-selection fix via a persistent cache hit.
-const POLICY_VERSION = 2;
+const POLICY_VERSION = 3;
 const inFlight = new Map<string, Promise<ProviderImageResult>>();
 const lastCleanupByRoot = new Map<string, number>();
 let cleanupPromise: Promise<void> | undefined;
@@ -22,6 +22,7 @@ const CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
 const CLEANUP_LOCK_STALE_MS = 20 * 60 * 1000;
 
 export interface ProviderImageResult {
+  asFile?: true;
   buffer: Buffer;
   mimeType: string;
 }
@@ -193,6 +194,8 @@ async function convert(options: ProviderImageOptions): Promise<ProviderImageResu
   const { buffer, mimeType } = options;
   const outputFormat = options.outputFormat || 'webp';
   const source = { buffer, mimeType };
+  const inspection = await inspectImageInput(buffer, mimeType, buffer.length, options.imageId);
+  if (inspection.oversized) return { ...source, asFile: true };
   let width: number;
   let height: number;
   let input: sharp.Sharp;
@@ -208,19 +211,16 @@ async function convert(options: ProviderImageOptions): Promise<ProviderImageResu
     width = decoded.width;
     height = decoded.height;
     hasTransparency = decoded.hasTransparency;
-    input = sharp(decoded.rgba, { raw: { width, height, channels: 4 }, limitInputPixels: INPUT_PIXEL_LIMIT });
+    input = sharp(decoded.rgba, { raw: { width, height, channels: 4 }, limitInputPixels: MAX_IMAGE_PIXELS });
   } else {
-    input = sharp(buffer, { page: 0, pages: 1, limitInputPixels: INPUT_PIXEL_LIMIT });
-    const metadata = await input.metadata();
-    if (!metadata.width || !metadata.height) throw new Error(`Image ${options.imageId || '(unknown)'} has invalid dimensions.`);
+    input = sharp(buffer, { page: 0, pages: 1, limitInputPixels: MAX_IMAGE_PIXELS });
+    const metadata = inspection.metadata!;
     const rotated = metadata.orientation && metadata.orientation >= 5 && metadata.orientation <= 8;
     width = rotated ? metadata.height : metadata.width;
     height = rotated ? metadata.width : metadata.height;
-    const format = mimeType === 'image/jpeg' ? 'jpeg' : mimeType.slice('image/'.length);
-    if (metadata.format !== format) throw new Error(`Image bytes do not match declared MIME type ${mimeType}.`);
   }
   const pixels = width * height;
-  if (!Number.isSafeInteger(pixels) || pixels > INPUT_PIXEL_LIMIT) throw new Error('Image exceeds the 64-megapixel limit.');
+  if (!Number.isSafeInteger(pixels) || pixels > MAX_IMAGE_PIXELS) throw new Error('Image exceeds the 64-megapixel limit.');
   const scale = Math.min(1, TARGET_EDGE / Math.max(width, height), Math.sqrt(TARGET_PIXELS / pixels));
   const resize = scale < 1;
   const byteThreshold = Math.min(1_000_000, 96 * 1024 + 0.5 * pixels);
@@ -231,7 +231,7 @@ async function convert(options: ProviderImageOptions): Promise<ProviderImageResu
     // stats().isOpaque checks the actual alpha channel independently of its
     // position (gray+alpha has two channels, RGBA has four).
     hasTransparency = !!metadata.hasAlpha && !(await sharp(buffer, {
-      page: 0, pages: 1, limitInputPixels: INPUT_PIXEL_LIMIT,
+      page: 0, pages: 1, limitInputPixels: MAX_IMAGE_PIXELS,
     }).stats()).isOpaque;
   }
   if (!isHeif) input = input.rotate();
@@ -248,6 +248,7 @@ async function convert(options: ProviderImageOptions): Promise<ProviderImageResu
 
 export async function optimizeProviderImage(options: ProviderImageOptions): Promise<ProviderImageResult> {
   const normalized = options.mimeType.trim().toLowerCase();
+  if (options.buffer.length > MAX_VISION_IMAGE_BYTES) return { buffer: options.buffer, mimeType: normalized, asFile: true };
   if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/heic', 'image/heif'].includes(normalized)) {
     return { buffer: options.buffer, mimeType: normalized };
   }
@@ -260,7 +261,7 @@ export async function optimizeProviderImage(options: ProviderImageOptions): Prom
     const cached = await readCache(root, key, options.buffer, normalized);
     if (cached) return cached;
     const result = await convert({ ...options, mimeType: normalized, outputFormat });
-    await writeCache(root, key, { buffer: options.buffer, mimeType: normalized }, result);
+    if (!result.asFile) await writeCache(root, key, { buffer: options.buffer, mimeType: normalized }, result);
     return result;
   })();
   inFlight.set(`${root}\0${key}`, operation);

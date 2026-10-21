@@ -17,7 +17,8 @@ import http from 'http';
 import os from 'os';
 import path from 'path';
 import fs from 'fs-extra';
-import { buildSavedFileText, saveInboundSessionFile } from '../channelFiles';
+import { buildSavedFileText, saveInboundSessionFile, saveInboundSessionFileFromPath, isInboundSessionMainHosted } from '../channelFiles';
+import { inspectImageInput } from '../imageInputPolicy';
 import { WebSocket } from 'ws';
 import { Channel, ChannelContext, ChannelFile, ChannelMessage, ChannelSendFileOptions } from '../channel';
 import { MessageRouter } from '../messageRouter';
@@ -66,6 +67,7 @@ import { buildQueuedPreviewMessages, MAX_QUEUED_PREVIEW_ITEMS, sanitizeQueuedPre
 import { registerWebUiSetupRoutes } from './webuiSetup';
 
 const WEBUI_UPLOAD_DIR = path.join(os.tmpdir(), 'foxwarm-uploads');
+const WEBUI_UPLOAD_MAX_BYTES = 1024 * 1024 * 1024;
 const WEBUI_IDENTITY_FEATURES = {
   chat: true,
   attachments: true,
@@ -2744,16 +2746,35 @@ export class WebUIChannel implements Channel {
             // Setup multer for file upload
             const upload = multer({
               dest: WEBUI_UPLOAD_DIR,
-              limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
+              limits: { fileSize: WEBUI_UPLOAD_MAX_BYTES }
             });
             
             // Ensure upload directory exists
             await fs.ensureDir(WEBUI_UPLOAD_DIR);
+
+            const declaredLength = Number(req.headers['content-length']);
+            if (Number.isFinite(declaredLength) && declaredLength > WEBUI_UPLOAD_MAX_BYTES) {
+              req.unpipe();
+              setImmediate(() => req.resume());
+              res.status(413).json({ error: 'Upload too large', maxBytes: WEBUI_UPLOAD_MAX_BYTES });
+              return;
+            }
+
+            const declaredSessionId = typeof req.query?.sessionId === 'string' ? req.query.sessionId.trim() : '';
+            const preAuth = await this.getAuthContext(req);
+            if (!preAuth || (preAuth.role === 'webui' && !declaredSessionId)) {
+              res.status(!preAuth ? 401 : 400).json({ error: 'WebUI identity upload requires a bound sessionId.' });
+              return;
+            }
+            if (preAuth.role === 'webui' && !this.webUiCanAccessSession(preAuth, declaredSessionId)) {
+              res.status(403).json({ error: 'Forbidden: WebUI identity is not bound to this session', code: 'WEBUI_SESSION_NOT_ALLOWED' });
+              return;
+            }
             
             // Handle upload
             upload.single('file')(req, res, async (err: any) => {
               if (err) {
-                res.status(400).json({ error: err.message });
+                res.status(err?.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: err.message });
                 return;
               }
               
@@ -2765,7 +2786,7 @@ export class WebUIChannel implements Channel {
               const originalName = normalizeWebUiMultipartFilename(req.file.originalname);
 
               const auth = await this.getAuthContext(req);
-              const uploadSessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
+              const uploadSessionId = declaredSessionId;
               if (!auth || (auth.role === 'webui' && (!uploadSessionId || !this.webUiCanAccessSession(auth, uploadSessionId)))) {
                 await fs.remove(req.file.path).catch(() => {});
                 res.status(!auth ? 401 : uploadSessionId ? 403 : 400).json({ error: 'WebUI identity upload requires a bound sessionId.' });
@@ -3077,7 +3098,6 @@ export class WebUIChannel implements Channel {
                   const stats = await fs.stat(tempPath);
                   if (!stats.isFile()) continue;
 
-                  const fileBuffer = await fs.readFile(tempPath);
                   const originalName = typeof entry?.filename === 'string' && entry.filename.trim()
                     ? entry.filename.trim()
                     : path.basename(tempPath);
@@ -3089,22 +3109,34 @@ export class WebUIChannel implements Channel {
                       : ext === '.webp' ? 'image/webp'
                       : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg'
                       : 'application/octet-stream');
-                  const isImage = mimeType.startsWith('image/');
-                  const saved = await saveInboundSessionFile({
-                    sessionId: auth.role === 'webui' ? existingSession.id : sessionId,
-                    platform: 'webui',
-                    buffer: fileBuffer,
-                    fileName: originalName,
-                    mimeType,
-                    isImage,
-                  });
+                  let isImage = mimeType.startsWith('image/');
+                  if (isImage) {
+                    try {
+                      isImage = !(await inspectImageInput(tempPath, mimeType, stats.size)).oversized;
+                    } catch {
+                      // Invalid or unsupported metadata is not evidence of an
+                      // oversized image; keep the existing image ingress path.
+                    }
+                  }
+                  const storageSessionId = auth.role === 'webui' ? existingSession.id : sessionId;
+                  const mainHosted = await isInboundSessionMainHosted(storageSessionId, 'webui');
+                  // Main can retain the original spool without materializing a
+                  // large Buffer. Existing remote destinations retain their
+                  // ordinary-file transfer path, not a new transport protocol.
+                  const fileBuffer = isImage || !mainHosted ? await fs.readFile(tempPath) : undefined;
+                  const fileOptions = {
+                    sessionId: storageSessionId, platform: 'webui', fileName: originalName, mimeType, isImage,
+                  };
+                  const saved = mainHosted
+                    ? await saveInboundSessionFileFromPath({ ...fileOptions, sourcePath: tempPath, sizeBytes: stats.size })
+                    : await saveInboundSessionFile({ ...fileOptions, buffer: fileBuffer! });
 
                   finalParts.push({ text: buildSavedFileText(saved, isImage ? 'image' : 'file') });
 
                   if (isImage) {
                     finalParts.push({
                       inlineData: {
-                        data: fileBuffer.toString('base64'),
+                        data: fileBuffer!.toString('base64'),
                         mimeType,
                       }
                     });

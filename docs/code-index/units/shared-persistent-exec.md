@@ -1,10 +1,16 @@
 # Unit: shared-persistent-exec
 
-Files: packages/shared/src/execBackend.ts, packages/shared/src/nativeExecBackend.ts, packages/shared/src/processOperations.ts, packages/shared/src/persistentExec.ts, packages/shared/src/persistentExec.test.ts
+Files: packages/shared/src/execBackend.ts, packages/shared/src/nativeExecBackend.ts, packages/shared/src/nativeExecBackend.test.ts, packages/shared/src/processOperations.ts, packages/shared/src/persistentExec.ts, packages/shared/src/persistentExec.test.ts
 
 ## Purpose
 
 Owns one persistent-command manager for native and primitive-provider executions: public identity allocation, registry persistence, bounded foreground waiting, reconciliation, completion delivery and canonical output. Native process/artifact mechanics are extracted, not replaced with another provider manager.
+
+### D-persistent-exec-windows-capture
+
+[2026-10-20] Windows PowerShell exec inherits one preallocated log file as stdout and stderr instead of using `Start-Transcript`. This removes localized transcript banners at the capture source without a Node-side output pump or display filtering. `ProcessOperations.launch` opens the new file exclusively and closes the parent's handle after spawn success or failure; the child owns its inherited handles. Windows log names use start time and exec ID because the PID is not known before spawn; POSIX retains wrapper-selected PID-based paths. Existing persisted paths remain readable.
+
+Generated Windows scripts use UTF-8 with BOM for PowerShell 5.1. The wrapper explicitly selects UTF-8 for console input/output and PowerShell-to-native pipeline text; cwd and status sidecars use UTF-8 without BOM. Native programs can still emit other byte encodings; there is no encoding detection or fallback. Existing wait, completion, recovery and process-launch flags remain unchanged. This does not establish survival after Node process exit, console closure, OS shutdown or external process-tree termination.
 
 ## Key exports and function index
 
@@ -37,7 +43,7 @@ Owns one persistent-command manager for native and primitive-provider executions
 
 ## Native mechanics and compatibility
 
-- Bash/PowerShell wrappers capture merged output, final cwd and actual exit status. Paths are published through the existing temporary paths file. New native starts prepare the real Agent tmp directory, validate target-local cwd and record time immediately before launch. External namespaces omit Agent mapping and strip inherited reserved `fw_agentdir`/`fw_tmp` values. Windows strips case variants; POSIX preserves unrelated uppercase names.
+- Bash/PowerShell wrappers record final cwd and actual exit status. POSIX redirects merged output in the wrapper and publishes paths through a temporary paths file; Windows passes known paths to the wrapper and inherits output handles under [D-persistent-exec-windows-capture](#d-persistent-exec-windows-capture). New native starts prepare the real Agent tmp directory, validate target-local cwd and record time immediately before launch. External namespaces omit Agent mapping and strip inherited reserved `fw_agentdir`/`fw_tmp` values. Windows strips case variants; POSIX preserves unrelated uppercase names.
 - `NativeExecBackend` owns those scripts/artifacts and delegates low-level process facts to `ProcessOperations`. `PersistentExecManager` owns public identity, durable registry mutation, wait/notification lifetime and result formatting. Native status polling preserves its existing cadence and status-before-Stop precedence; native status-read errors are not reclassified as successful exits.
 - Missing native status falls back only after the managed PID is no longer running and the existing grace period has elapsed. The fallback has unknown exit code, a detection timestamp and the existing missing-status error; its duration is unknown. Missing retention-pruned status parents are recreated before atomic fallback publication.
 - Persisted native records without `backend` remain native and are not rewritten into provider records. Native PID/status/cwd fields, historical `exec_...` IDs, CLI completion capabilities, external-owner records and normal authenticated CLI protocol versions are unchanged.
@@ -73,7 +79,7 @@ Measure tracking age from persisted `startedAt`. At ages at or below 24 hours, p
 
 ### D-persistent-exec-date-co-located-artifacts
 
-Every native run's log, status, recorded cwd, wrapper script, Windows user-command script and transient paths file belong to its start-date directory. The paths file is normally removed after consumption. The one-time historical migration remains owned by [D-legacy-undated-exec-artifact-migration](./src-migrations.md#d-legacy-undated-exec-artifact-migration). Provider artifacts belong to the adapter's target namespace and retention policy.
+Every native run's log, status, recorded cwd, wrapper script and Windows user-command script belong to its start-date directory. POSIX also uses a transient paths file there, normally removed after consumption. The one-time historical migration remains owned by [D-legacy-undated-exec-artifact-migration](./src-migrations.md#d-legacy-undated-exec-artifact-migration). Provider artifacts belong to the adapter's target namespace and retention policy.
 
 ### D-persistent-exec-bounded-log-excerpts
 
@@ -91,4 +97,4 @@ Preserve captured output whitespace exactly in foreground and timeout previews. 
 
 Main's `createExecRuntime` supplies persistence and exact-owner completion dispatch. TypeScript CLI tools continue using their existing native managers and external-owner namespace contracts. The [.NET CLI adapter](./dotnet-cli-node.md#persistent-session-exec) preserves Session and external native namespaces and their distinct acknowledged lifecycles without importing Main’s different manager or Provider registry. `src/nodes/providerExecBackend.ts` is the Core-only bridge for optional external process primitives, not an adapter SDK import.
 
-`persistentExec.test.ts` covers native launch, cwd, output, Stop, registry/recovery, expiration, identity allocation, mutation ordering and notifications. Process-separated provider uncertainty, loss, query bounds, restart and raw-output tests belong to [src-node-providers](./src-node-providers.md). Foreground cancellation semantics remain canonical in [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
+`nativeExecBackend.test.ts` covers inherited file capture and launch errors, with Windows-only integration for Unicode scripts/paths, PowerShell and native output, pipeline input, exit/cwd sidecars, and background recovery with acknowledged completion. `persistentExec.test.ts` covers native launch, cwd, output, Stop, registry/recovery, expiration, identity allocation, mutation ordering and notifications. Process-separated provider uncertainty, loss, query bounds, restart and raw-output tests belong to [src-node-providers](./src-node-providers.md). Foreground cancellation semantics remain canonical in [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).

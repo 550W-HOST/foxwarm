@@ -295,7 +295,7 @@ test('read tool returns full content for unified output guard', async () => {
   }
 });
 
-test('persistent exec log files use compact time-and-pid filenames under the date directory', async () => {
+test('persistent exec log files use target-specific identifiers under the date directory', async () => {
   const agentName = `exec_log_name_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const agentDir = getAgentDir(agentName);
   let execId: string | null = null;
@@ -312,9 +312,14 @@ test('persistent exec log files use compact time-and-pid filenames under the dat
     assert.ok(status, 'exec should finish during test timeout');
 
     const logBaseName = path.basename(entry.logPath);
-    assert.match(logBaseName, /^\d{9}_pid\d+(?:_\d+)?\.log$/);
+    if (process.platform === 'win32') {
+      assert.equal(logBaseName.slice(10), `${entry.id}.log`);
+      assert.match(logBaseName, /^\d{9}_/);
+    } else {
+      assert.match(logBaseName, /^\d{9}_pid\d+(?:_\d+)?\.log$/);
+      assert.match(logBaseName, new RegExp(`_pid${entry.pid}(?:_\\d+)?\\.log$`));
+    }
     assert.match(entry.logPath, /[\\/]\.temp[\\/]exec[\\/]\d{4}-\d{2}-\d{2}[\\/]/);
-    assert.match(logBaseName, new RegExp(`_pid${entry.pid}(?:_\\d+)?\\.log$`));
     assert.equal(entry.statusPath, `${entry.logPath}.exit.json`);
     assert.equal(entry.cwdPath, `${entry.logPath}.cwd.txt`);
     assert.equal(await fs.pathExists(entry.logPath), true);

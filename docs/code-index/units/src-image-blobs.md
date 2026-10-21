@@ -1,7 +1,7 @@
 # Unit: src-image-blobs
 
-Files: src/imageBlobs.ts, src/imageBlobs.test.ts, src/imageBlobsSession.test.ts, src/imageBlobsLazySession.test.ts, src/providerImageOptimization.ts, src/providerImageOptimization.test.ts
-Secondary files: src/providerImageRequest.test.ts, src/testFixtures/synthetic-3x2.heic, src/testFixtures/synthetic-alpha-3x2.heic, src/testFixtures/README.md
+Files: src/imageBlobs.ts, src/imageBlobs.test.ts, src/imageBlobsSession.test.ts, src/imageBlobsLazySession.test.ts, src/providerImageOptimization.ts, src/providerImageOptimization.test.ts, src/imageInputPolicy.ts
+Secondary files: src/providerImageRequest.test.ts, src/testFixtures/visionImages.ts, src/testFixtures/synthetic-3x2.heic, src/testFixtures/synthetic-alpha-3x2.heic, src/testFixtures/README.md
 
 ## Purpose
 
@@ -17,6 +17,8 @@ Owns content-addressed image blob storage, inline/legacy-reference materializati
 - `stripReservedProviderImageHelperFields` — removes legacy/forged provider-image helper keys from a request-local or persistence-bound message clone without mutating caller input.
 - `hydrateMessagesForProvider` — reads verified canonical bytes into a provider-only clone and chooses per-concrete-attempt optimization or original-byte native image-generation replay.
 - `optimizeProviderImage` — content/policy-keyed derived cache, image probing and first-frame/orientation handling, single output encoding and bounded write-triggered cleanup.
+- `inspectImageInput`, `MAX_VISION_IMAGE_BYTES`, `MAX_IMAGE_PIXELS` — shared byte-first ordinary-vision preflight for provider preparation and WebUI uploads.
+- `decodeHeifForProvider` — metadata and pixel stages over the same low-level HEIF handle API, with pixel decode gated by the input ceiling.
 
 QQ Bot C2C/group image ingress uses the same transient `inlineData` path after
 its authorization-gated media materializer validates the declared MIME and
@@ -26,12 +28,13 @@ bytes; it must not introduce a QQ-specific durable image format.
 
 - Blob IDs are `<sha256>.<extension>` and live under a hash-prefix shard in `state/image-blobs` (or the configured data directory).
 - Writes use an exclusive temporary file and atomic rename; existing content is reused after size validation.
-- PNG, JPEG, GIF, and WebP bytes are probed with `sharp` and must match their declared MIME type. Other formats are retained as download-only blobs.
+- PNG, JPEG, GIF, and WebP bytes are metadata-probed with `sharp` and must match their declared MIME type. Metadata probing does not reject a large raster before the ordinary-vision file policy can run; canonical bytes remain unchanged. Other formats are retained as download-only blobs.
 - New message image IDs prefer existing metadata, then stable message sequence/part identity, then a UUID for transient queue items.
 - Structured `functionResponse.response.inlineData` and `inlineDataItems` images are removed only after all blob writes succeed and are promoted immediately after their response as sibling reference parts carrying the same `tool_use_id`; business response fields and image order remain stable.
 - Conversion functions do not mutate input messages. Callers update canonical state only after every requested conversion succeeds.
 - Legacy path reads are confined to the configured state directory.
-- Provider hydration lazily loads `libheif-js` only for HEIC/HEIF, validates actual container/decoded pixels, and enforces the existing 64-megapixel limit before pixel decode. It gives raw pixels to the one output encoder (WebP by default, JPEG or PNG for transparent pixels in JPEG mode). PNG/JPEG/WebP below density and dimension triggers pass through; GIF always emits its first frame. The deletable, atomically written cache is separate from canonical blobs, keyed by original SHA-256 plus policy, and checks derived-byte integrity on read. Request-local deduplication hashes final inline bytes/MIME rather than original blob identity.
+- Ordinary vision applies the shared byte-first file policy before pixel work; canonical references, source bytes, and native generated-image replay are unchanged. Existing adjacent attachment descriptors retain their name/Node/path as `foxwarm-file`; reference-only images retain the actual existing image-ID/save-by-ID guidance without exposing an internal Main blob path as an ordinary file locator. Tool-result fallback text is attached only to the request clone's existing result occurrence, because OpenAI serializers do not consume arbitrary tool text siblings. No new attachment store or history rewrite exists. Canonical policy: [D-image-oversized-vision-as-file](../threads/image-blob-lifecycle.md#d-image-oversized-vision-as-file).
+- HEIC/HEIF lazily loads `libheif-js`, validates the container and primary-image handle, and reads dimensions before `heif_js_decode_image2`. Over-limit ordinary images stop at metadata. Normal HEIF decode still enforces the existing pixel ceiling and gives raw pixels to the selected WebP/JPEG/PNG encoder. PNG/JPEG/WebP below normal optimization triggers pass through; GIF always emits its first frame. The deletable derived cache is separate from canonical blobs, keyed by original content and conversion policy, and checks derived-byte integrity on read. Request-local deduplication hashes final inline bytes/MIME rather than original blob identity.
 - Externalization strips legacy/reserved provider-image helper keys from every converted part, including already-reference-only parts, so those keys cannot enter canonical Session, queue, archive, or WebUI source shapes. Low-level LLM requests apply the same pure scrub to their structured-cloned canonical request before journaling.
 - Provider-generated output images use the same store: the hosted Responses image path validates the provider bytes, writes one content-addressed blob per accepted image, and records a reference-only part with `imageMeta.origin = "generated"`. Identical bytes from two separate generations share one blob while each native call record is preserved, and replay reads the blob back rather than trusting provider payload bytes.
 
@@ -44,7 +47,7 @@ bytes; it must not introduce a QQ-specific durable image format.
 
 ## Tests
 
-- Atomic deduplication, traversal rejection, MIME/byte validation, nested single/multiple promotion, idempotence, lazy legacy import, provider/tool association, HEIC/HEIF alias normalization and malformed-input rejection, below-threshold still-image pass-through, GIF first frame, real grayscale+alpha PNG transparency versus opaque gray in JPEG mode, cache hit/corruption/cleanup, provider-only optimization, native replay preservation, failure preservation, live/archive/queue persistence, and fork reference preservation.
+- Atomic deduplication, traversal rejection, MIME/byte validation, nested single/multiple promotion, idempotence, lazy legacy import, provider/tool association, HEIC/HEIF alias normalization and malformed-input rejection, below-threshold still-image pass-through, GIF first frame, real grayscale+alpha PNG transparency versus opaque gray in JPEG mode, cache hit/corruption/cleanup, provider-only optimization, native replay preservation, failure preservation, live/archive/queue persistence, and fork reference preservation. Genuine over-byte and over-pixel PNGs exercise the physical provider-request path without pixel conversion; HEIF preflight verifies that metadata inspection does not call the pixel decoder.
 
 ## Design decisions
 
