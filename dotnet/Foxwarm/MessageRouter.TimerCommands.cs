@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Foxwarm.Channels;
 using Foxwarm.Sessions;
+using Foxwarm.Timers;
 
 namespace Foxwarm;
 
@@ -21,6 +22,18 @@ internal sealed partial class MessageRouter
                         System.Globalization.CultureInfo.InvariantCulture
                     )
                 : "n/a";
+        static string Action(JsonObject timer) =>
+            TimerArguments.Script(timer)
+                ? "ToolScript ("
+                    + (
+                        SessionWait.Text(timer["script"]?["code"]) is { Length: > 0 }
+                            ? "inline"
+                            : (SessionWait.Text(timer["script"]?["node"]) ?? "current")
+                                + ": "
+                                + SessionWait.Text(timer["script"]?["filePath"])
+                    )
+                    + ")"
+                : SessionWait.Text(timer["message"]) ?? "";
         var sub = args.FirstOrDefault();
         var manager = runtime.Manager;
         if (sub is null)
@@ -63,7 +76,7 @@ internal sealed partial class MessageRouter
                                             ? $"new session ({SessionWait.Text(timer["agentName"]) ?? "main"} / {SessionWait.Text(timer["sessionPrefix"]) ?? "timer"})"
                                             : "this session"
                                     )
-                                    + $"\n  {timer["message"]}\n"
+                                    + $"\n  {Action(timer)}\n"
                                 )
                         )
             );

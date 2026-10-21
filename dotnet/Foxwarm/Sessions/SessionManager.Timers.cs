@@ -261,11 +261,15 @@ internal sealed partial class SessionManager
             var owner =
                 await GetExistingAsync(SessionWait.Text(timer["sessionId"])!, acceptedTimer: true)
                 ?? throw new InvalidDataException("Timer owner Session not found.");
-            using var admitted = BeginOwnerMutation(owner, acceptedTimer: true);
-            await WaitForIdentityMutationAsync(owner.Id);
-            owner.Entry.RequireIdentityAuthority();
-            if (!IsCurrentOwner(owner))
-                throw new InvalidOperationException("Timer owner lifetime is unavailable.");
+            using (BeginOwnerMutation(owner, acceptedTimer: true))
+            {
+                await WaitForIdentityMutationAsync(owner.Id);
+                owner.Entry.RequireIdentityAuthority();
+                if (!IsCurrentOwner(owner))
+                    throw new InvalidOperationException("Timer owner lifetime is unavailable.");
+            }
+            // Admission fences the exact owner, not the script's nested mutations. The scheduler
+            // drains the accepted slice; retaining this lease would block surviving-child deletion.
             // A separate dispatcher has no foreground batch, wait control or abort slot.
             var dispatcher = new SessionToolExecutor(
                 new WorkspaceTools(

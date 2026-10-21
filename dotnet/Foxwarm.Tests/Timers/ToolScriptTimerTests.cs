@@ -86,6 +86,112 @@ public sealed class ToolScriptTimerTests
             ["input"] = "yes",
         };
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Native_parent_deletion_detaches_the_surviving_child_and_shutdown_settles(bool scheduled)
+    {
+        await using var f = await ScriptFixture.Create();
+        var parent = f.Owner;
+        var (child, _) = await f.Manager.CreateChildAsync(parent, "survivor", null, null, null, null);
+        child.Registry.TriggerOverride = _ => Task.CompletedTask;
+        f.Owner = child;
+        var before = child.History().Select(row => row.ToJsonString()).ToArray();
+        var script = new JsonObject
+        {
+            ["code"] = "return call_tool('delete_session', {'sessionId':args['parent']})",
+            ["args"] = new JsonObject { ["parent"] = parent.Id },
+        };
+        JsonObject run;
+        if (scheduled)
+        {
+            await Finished(f, await Register(f, script));
+            run = Assert.Single(await f.Manager.ToolScript.Store.ListAsync(child.Id, 20, null, default));
+            Assert.Equal("completed", SessionWait.Text(run["status"]));
+            Assert.Null(run["lastResult"]?["error"]);
+        }
+        else
+        {
+            run = await Call(Dispatcher(f), "run_script", script);
+            Assert.Equal("completed", SessionWait.Text(run["status"]));
+            Assert.Null(run["result"]?["error"]);
+        }
+        Assert.Null(f.Manager.Catalog.Get(parent.Id));
+        Assert.Same(child, f.Manager.Find(child.Id));
+        Assert.Null(child.Metadata().ParentSessionId);
+        Assert.Equal(before, child.History().Select(row => row.ToJsonString()));
+        Assert.Empty(child.Entry.Snapshot().Queue);
+        await f.Manager.ShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task Accepted_timer_cannot_recreate_a_deleted_owner_or_start_its_script_during_shutdown_drain()
+    {
+        await using var f = await ScriptFixture.Create();
+        var ownerId = f.Owner.Id;
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        f.Manager.Timers.BeforeDelivery = async _ =>
+        {
+            reached.TrySetResult();
+            await release.Task;
+        };
+        var output = Path.Combine(f.Work, "deleted-owner.txt");
+        await Register(f, new JsonObject
+        {
+            ["code"] = "return call_tool('write', args)",
+            ["args"] = new JsonObject { ["filePath"] = output, ["content"] = "must not run" },
+        });
+        try
+        {
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await f.Manager.DeleteAsync(ownerId);
+            Assert.Null(f.Manager.Catalog.Get(ownerId));
+            var stop = f.Manager.ShutdownAsync();
+            Assert.False(stop.IsCompleted);
+            release.TrySetResult();
+            await stop.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Null(f.Manager.Catalog.Get(ownerId));
+            Assert.Null(f.Manager.Find(ownerId));
+            Assert.False(File.Exists(output));
+            Assert.Empty(await f.Manager.ToolScript.Store.ListAsync(ownerId, 20, null, default));
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public async Task Scheduled_roots_are_quiet_but_correlated_foreground_nested_runs_keep_progress()
+    {
+        await using var f = await ScriptFixture.Create();
+        var progress = new System.Collections.Concurrent.ConcurrentQueue<JsonObject>();
+        f.Owner.Changed += e =>
+        {
+            if (e.Kind == SessionEventKind.ModelStream && e.Data?["type"]?.ToString() == "toolscript-progress")
+                progress.Enqueue((JsonObject)e.Data.DeepClone());
+        };
+        var nested = "return call_tool('run_script', {'code':'return 7'})";
+        foreach (var code in new[] { "return 7", nested })
+            await Finished(f, await Register(f, Inline(code)));
+        Assert.Empty(progress);
+        var runs = await f.Manager.ToolScript.Store.ListAsync(f.Owner.Id, 20, null, default);
+        Assert.All(runs, row => Assert.Equal("completed", SessionWait.Text(row["status"])));
+        Assert.Contains(runs, row => row["lastResult"] is JsonValue value && value.TryGetValue<long>(out var number) && number == 7);
+        Assert.Empty(f.Owner.History());
+        Assert.Empty(f.Owner.Entry.Snapshot().Queue);
+        var foreground = await Dispatcher(f).ExecuteAttributedAsync(
+            new JsonObject { ["id"] = "foreground-tool", ["name"] = "run_script", ["args"] = Inline(nested) },
+            default
+        );
+        Assert.Equal("completed", SessionWait.Text(foreground.Response?["status"]));
+        Assert.NotEmpty(progress);
+        Assert.All(progress, row => Assert.Equal("foreground-tool", SessionWait.Text(row["toolUseId"])));
+        Assert.Contains(progress, row => row["subCalls"]!.AsArray().Any(call => SessionWait.Text(call?["name"]) == "run_script" && SessionWait.Text(call?["status"]) == "running"));
+        Assert.Contains(progress, row => row["subCalls"]!.AsArray().Any(call => SessionWait.Text(call?["name"]) == "run_script" && SessionWait.Text(call?["status"]) == "completed"));
+    }
+
     [Fact]
     public async Task Actual_Monty_timer_rereads_current_source_while_model_is_busy_and_Stop_keeps_its_own_abort_slot()
     {
@@ -465,41 +571,43 @@ public sealed class ToolScriptTimerTests
     [Fact]
     public async Task Scheduled_timeout_checkpoint_keeps_real_pending_wait_for_manual_continuation_only()
     {
-        await using var f = await ScriptFixture.Create();
+        // A supported nested run returns its final wait intent after an explicit slow one-shot.
+        // Its own slice stays within budget; the outer scheduled slice checkpoints that settled call.
+        await using var peer = new LoopbackResponsesServer(
+            async (stream, _) =>
+            {
+                await Task.Delay(200);
+                await LoopbackResponsesServer.WriteResponseAsync(
+                    stream,
+                    200,
+                    "text/event-stream",
+                    Encoding.UTF8.GetBytes(
+                        "data: {\"type\":\"response.completed\",\"response\":{\"output\":[]}}\n\n"
+                    )
+                );
+            }
+        );
+        var options = new ResponsesClientOptions(peer.BaseUri, "wire", "a", "", "", 713);
+        await using var f = await ScriptFixture.Create(suppliedOptions: options);
         await f.Manager.DeclareWaitAsync(f.Owner, new JsonObject { ["waitForInput"] = true });
         var wait = f.Owner.WaitSnapshot()!.ToJsonString();
-        var delayed = false;
-        void Observe(SessionRuntimeEvent e)
+        var script = new JsonObject
         {
-            if (
-                !delayed
-                && e.Data?["type"]?.ToString() == "toolscript-progress"
-                && e.Data["subCalls"] is JsonArray calls
-                && calls.LastOrDefault()?["status"]?.ToString() == "completed"
-            )
+            ["code"] = "call_tool('run_script', {'code':args['inner']})\nreturn 7",
+            ["args"] = new JsonObject
             {
-                delayed = true;
-                Thread.Sleep(180); // Hold the actual final wait host boundary past the slice budget.
-            }
-        }
-        f.Owner.Changed += Observe;
-        try
-        {
-            var script = Inline("call_tool('wait', {'waitForInput':True})\nreturn 7");
-            script["timeoutSecs"] = .1;
-            await Finished(f, await Register(f, script));
-        }
-        finally
-        {
-            f.Owner.Changed -= Observe;
-        }
-        Assert.True(delayed);
+                ["inner"] = "request_model_without_context('explicit checkpoint delay')\ncall_tool('wait', {'waitForInput':True})\nreturn 0",
+            },
+            ["timeoutSecs"] = .1,
+        };
+        await Finished(f, await Register(f, script));
+        Assert.Equal(1, peer.RequestCount);
         Assert.Equal(wait, f.Owner.WaitSnapshot()!.ToJsonString());
         Assert.Empty(f.Owner.History());
         Assert.Empty(f.Owner.Entry.Snapshot().Queue);
-        var saved = Assert.Single(
-            await f.Manager.ToolScript.Store.ListAsync(f.Owner.Id, 20, null, default)
-        )!;
+        var saved = (await f.Manager.ToolScript.Store.ListAsync(f.Owner.Id, 20, null, default))
+            .Single(row => SessionWait.Text(row["status"]) == "waiting");
+        Assert.Equal("timeout", SessionWait.Text(saved["waiting"]!["reason"]));
         Assert.NotNull(saved["waiting"]!["timeout"]!["pendingSessionWait"]);
         var paused = new JsonObject
         {
@@ -510,6 +618,9 @@ public sealed class ToolScriptTimerTests
         Assert.Equal("completed", SessionWait.Text(done["status"]));
         Assert.Equal(7, done["result"]!.GetValue<long>());
         Assert.NotEqual(wait, f.Owner.WaitSnapshot()!.ToJsonString());
+        Assert.Equal(1, peer.RequestCount);
+        Assert.Empty(f.Owner.History());
+        Assert.Empty(f.Owner.Entry.Snapshot().Queue);
     }
 
     [Fact]

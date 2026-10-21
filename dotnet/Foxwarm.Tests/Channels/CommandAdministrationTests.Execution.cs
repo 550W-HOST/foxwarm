@@ -1,11 +1,57 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Channels;
 
 namespace Foxwarm.Tests;
 
 public sealed partial class CommandAdministrationTests
 {
+    [Fact]
+    public async Task Timer_list_real_WebUI_ingress_distinguishes_script_sources_and_retains_message_details_and_scope()
+    {
+        await using var f = await ExternalChannelFixture.CreateAsync(
+            new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
+        );
+        var replies = new List<string>();
+        f.Owner.Changed += e =>
+        {
+            if (e.Kind == SessionEventKind.CommandReply)
+                replies.Add(e.Data!["parts"]![0]!["text"]!.GetValue<string>());
+        };
+        foreach (var script in new[]
+        {
+            new JsonObject { ["code"] = "return 7" },
+            new JsonObject { ["filePath"] = "monitor.py", ["node"] = "master" },
+            new JsonObject { ["filePath"] = "relative.py" },
+        })
+            await f.Manager.ExecuteTimerToolAsync(f.Owner, "create_timer", new JsonObject
+            {
+                ["action"] = "toolscript", ["afterSeconds"] = 600, ["script"] = script,
+            }, default);
+        var other = await f.Manager.CreateNamedAsync("main", "other-timers", null, null);
+        await f.Manager.ExecuteTimerToolAsync(other, "create_timer", new JsonObject
+        {
+            ["afterSeconds"] = 600, ["message"] = "foreign timer detail",
+        }, default);
+        var context = new ChannelContext(f.Owner.Id, "webui");
+        await f.Router.HandleMessageAsync(context, new ChannelMessage("/timer after 600 --new-session --prefix watch -- message detail", null));
+        replies.Clear();
+        var response = await f.Router.HandleMessageAsync(context, new ChannelMessage("/timer list", null));
+        Assert.Equal(200, response.Status);
+        var listing = Assert.Single(replies);
+        Assert.Contains("ToolScript (inline)", listing);
+        Assert.Contains("master: monitor.py", listing);
+        Assert.Contains("current: relative.py", listing);
+        Assert.Contains("message detail", listing);
+        Assert.Contains("watch", listing);
+        Assert.DoesNotContain("foreign timer detail", listing);
+        foreach (var timer in f.Manager.Timers.List(f.Owner.Id))
+            Assert.Contains(SessionWait.Text(timer?["id"])!, listing);
+        Assert.Empty(f.Owner.History());
+        Assert.Empty(f.Owner.Entry.Snapshot().Queue);
+    }
+
     [Fact]
     public async Task Timer_text_ingress_keeps_Source_single_token_presets_and_multi_field_limit_and_fires_real_owned_after_and_at_timers()
     {

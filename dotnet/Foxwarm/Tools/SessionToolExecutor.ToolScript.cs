@@ -201,7 +201,7 @@ internal sealed partial class SessionToolExecutor
                 await stream.ReadExactlyAsync(bytes, currentToken);
                 return (actual, new System.Text.UTF8Encoding(false, true).GetString(bytes));
             },
-            nested
+            nested || unattended
                 ? null
                 : calls =>
                 {
