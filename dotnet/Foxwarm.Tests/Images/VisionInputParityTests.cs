@@ -53,6 +53,41 @@ public sealed class VisionInputParityTests
             );
             Assert.Equal(bytes, await blobs.ReadAsync(reference));
         }
+        foreach (var row in oracle["tiffCases"]!.AsArray())
+        {
+            var bytes = await File.ReadAllBytesAsync(Path.Combine(temp.Path, row!["name"]!.ToString() + ".tif"));
+            if (row["invalid"]?.GetValue<bool>() == true)
+                Assert.Throws<ImageInputException>(() => ImageInputPolicy.IsOversized(bytes, "image/tiff"));
+            else
+                Assert.Equal(row["oversized"]!.GetValue<bool>(), ImageInputPolicy.IsOversized(bytes, "image/tiff"));
+        }
+        var tiffOptions = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
+        await using (var manager = new SessionManager(Path.Combine(temp.Path, "tiff-data"), Path.Combine(temp.Path, "tiff-work"), tiffOptions, HostModels.ForTest(tiffOptions)))
+        {
+            await manager.LoadAsync();
+            var owner = await manager.CreateNamedAsync("main", "tiff", null, null);
+            var uploads = new Foxwarm.Channels.WebUi.WebUiUploadedFiles(manager);
+            var staging = Path.Combine(uploads.Root, Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(staging);
+            try
+            {
+                foreach (var row in oracle["tiffCases"]!.AsArray())
+                {
+                    var name = row!["name"]!.ToString();
+                    var bytes = await File.ReadAllBytesAsync(Path.Combine(temp.Path, name + ".tif"));
+                    var path = Path.Combine(staging, name + ".tif");
+                    await File.WriteAllBytesAsync(path, bytes);
+                    using var ingress = manager.BeginFileIngress(owner);
+                    var prepared = await uploads.PrepareAsync(new JsonObject { ["uploadedFiles"] = new JsonArray(new JsonObject { ["path"] = path, ["filename"] = name + ".tif", ["mimeType"] = "image/tiff" }) }, owner, default);
+                    var oversized = row["oversized"]?.GetValue<bool>() == true;
+                    Assert.StartsWith(oversized ? "<foxwarm-file " : "<foxwarm-image ", prepared.Parts[0]["text"]!.ToString());
+                    Assert.Equal(oversized ? 0 : 1, prepared.Parts.Count(part => part["inlineDataRef"] is not null));
+                    Assert.Equal(bytes, await File.ReadAllBytesAsync(prepared.SavedFiles.Single()["path"]!.ToString()));
+                    Assert.False(File.Exists(path));
+                }
+            }
+            finally { Directory.Delete(staging, true); }
+        }
         var messages = oracle["messages"]!.AsArray().OfType<JsonObject>().ToArray();
         var canonical = string.Join('\n', messages.Select(message => message.ToJsonString()));
         foreach (var protocol in new[] { "responses", "completions", "anthropic" })

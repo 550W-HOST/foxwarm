@@ -23,6 +23,18 @@ for (const [name, buffer] of Object.entries(images)) {
   const inspection = await inspectImageInput(buffer, 'image/png', buffer.length)
   cases.push({ name, oversized: inspection.oversized })
 }
+const tiffCases = []
+const normalTiff = await sharp(images.small).tiff({ compression: 'deflate' }).toBuffer()
+const overTiff = await sharp(images.overPixels, { limitInputPixels: false }).tiff({ compression: 'deflate' }).toBuffer()
+const bigTiff = await sharp(images.overPixels, { limitInputPixels: false }).tiff({ compression: 'deflate', bigtiff: true }).toBuffer()
+// A first directory with dimensions but no image layout must not be accepted as metadata.
+const headerOnly = Buffer.alloc(38); headerOnly.write('II'); headerOnly.writeUInt16LE(42, 2); headerOnly.writeUInt32LE(8, 4); headerOnly.writeUInt16LE(2, 8)
+for (const [offset, tag] of [[10, 256], [22, 257]]) { headerOnly.writeUInt16LE(tag, offset); headerOnly.writeUInt16LE(4, offset + 2); headerOnly.writeUInt32LE(1, offset + 4); headerOnly.writeUInt32LE(8193, offset + 8) }
+for (const [name, buffer] of Object.entries({ normal: normalTiff, over: overTiff, big: bigTiff, truncated: overTiff.subarray(0, 12), headerOnly })) {
+  await fs.writeFile(path.join(root, name + '.tif'), buffer)
+  try { tiffCases.push({ name, oversized: (await inspectImageInput(buffer, 'image/tiff', buffer.length)).oversized }) }
+  catch { tiffCases.push({ name, invalid: true }) }
+}
 const image = (name, extra = {}) => ({ inlineDataRef: refs[name], ...extra })
 const descriptor = '<foxwarm-image name="source &amp; original.png" node="other" path="original.png" />'
 const messages = [
@@ -37,4 +49,4 @@ const messages = [
   ] },
 ]
 const prepared = await hydrateMessagesForProvider(messages, { protocol: 'openai-responses' })
-await fs.writeFile(output, JSON.stringify({ cases, refs, messages, prepared }))
+await fs.writeFile(output, JSON.stringify({ cases, refs, messages, prepared, tiffCases }))

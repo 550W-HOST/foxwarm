@@ -14,6 +14,11 @@ internal static class ImageInputPolicy
             var dimensions = HeifDecoder.Inspect(bytes);
             return (long)dimensions.Width * dimensions.Height > HeifDecoder.MaxPixels;
         }
+        if (mime == "image/tiff")
+        {
+            var dimensions = TiffMetadata.Inspect(bytes);
+            return (long)dimensions.Width * dimensions.Height > HeifDecoder.MaxPixels;
+        }
         var probe = RasterCodec.Inspect(bytes, mime, enforcePixelLimit: false);
         return (long)probe.Width * probe.Height > HeifDecoder.MaxPixels;
     }

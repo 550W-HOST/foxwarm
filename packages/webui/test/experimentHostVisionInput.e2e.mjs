@@ -14,6 +14,8 @@ const sources = {
   overBytes: await sharp({ create: { width: 4096, height: 3072, channels: 3, background: 'red' } }).png({ compressionLevel: 0 }).toBuffer(),
   overPixels: await sharp({ create: { width: 8193, height: 8193, channels: 3, background: 'blue' }, limitInputPixels: false }).png().toBuffer(),
 }
+sources.overTiff = await sharp(sources.overPixels, { limitInputPixels: false }).tiff({ compression: 'deflate' }).toBuffer()
+const extension = name => name === 'overTiff' ? '.tif' : '.png'
 assert(sources.overBytes.length > 32 * 1024 * 1024)
 await mkdir(join(fixture.work, 'memory'), { recursive: true }); await writeFile(join(fixture.work, 'memory', 'ONBOOT.md'), ' \n')
 const peer = createServer(async (request, response) => {
@@ -26,19 +28,19 @@ peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
 await writeModelFixture(fixture.data, { default: 'local', providers: { local: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${peer.address().port}/v1`, apiKey: 'synthetic-vision-input', models: ['wire'] } } })
 await writeFile(join(fixture.data, 'state/config.yaml'), (await readFile(join(fixture.data, 'state/config.yaml'), 'utf8')) + 'access:\n  identities:\n    alice:\n      token: synthetic-vision-alice\n      surfaces:\n        webui:\n          sessions: [main]\n')
 const files = []
-for (const [name, bytes] of Object.entries(sources)) { const path = join(fixture.root, name + '.png'); await writeFile(path, bytes); files.push(path) }
+for (const [name, bytes] of Object.entries(sources)) { const path = join(fixture.root, name + extension(name)); await writeFile(path, bytes); files.push(path) }
 try {
   await fixture.start(); assert.equal((await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'main' })).status, 200); const page = await fixture.openApp('synthetic-vision-alice')
   page.on('response', async response => { if (new URL(response.url()).pathname === '/api/upload') uploads.push({ status: response.status(), url: response.url(), body: await response.json() }) })
   await page.type('[role="textbox"][aria-label="Message"]', 'VISION-INPUT ')
   await (await page.$('#file-upload')).uploadFile(...files)
-  await until(() => page.$$eval('.foxwarm-composer-attachment-chip', nodes => nodes.length === 3), 'three original attachments')
+  await until(() => page.$$eval('.foxwarm-composer-attachment-chip', nodes => nodes.length === 4), 'four original attachments')
   await page.click('button[aria-label="Send message"]')
   await until(async () => {
     const state = JSON.parse(await readFile(join(fixture.data, 'state/sessions/main.json'), 'utf8'))
     return !state.busy && state.history.some(row => row.parts?.some(part => part.text === 'VISION-INPUT-DONE')) && state
   }, 'real vision-input turn')
-  assert.equal(uploads.length, 3)
+  assert.equal(uploads.length, 4)
   for (const upload of uploads) { assert.equal(upload.status, 200); assert.equal(new URL(upload.url).searchParams.get('sessionId'), 'main') }
   const state = JSON.parse(await readFile(join(fixture.data, 'state/sessions/main.json'), 'utf8'))
   const parts = state.history.filter(row => row.role === 'user').flatMap(row => row.parts)
@@ -47,10 +49,10 @@ try {
   assert.equal(refs[0].inlineDataRef.width, 3)
   assert.equal(refs[0].inlineDataRef.height, 2)
   const fileTags = parts.filter(part => part.text?.startsWith('<foxwarm-file '))
-  assert.equal(fileTags.length, 2)
+  assert.equal(fileTags.length, 3)
   for (const part of parts.filter(part => /^<foxwarm-(?:file|image) /.test(part.text || ''))) {
     const name = /name="([^"]+)"/.exec(part.text)[1]
-    const source = Object.keys(sources).find(key => name.endsWith(key + '.png'))
+    const source = Object.keys(sources).find(key => name.endsWith(key + extension(key)))
     const saved = /path="([^"]+)"/.exec(part.text)[1]
     assert(saved.startsWith(join(fixture.work, '.temp/channel-files/webui/')))
     assert.deepEqual(await readFile(saved), sources[source])
