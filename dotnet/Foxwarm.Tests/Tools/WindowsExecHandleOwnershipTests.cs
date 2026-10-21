@@ -24,21 +24,26 @@ public sealed class WindowsExecHandleOwnershipTests
         var previous = Environment.GetEnvironmentVariable("FOXWARM_AGENT_DIR");
         Environment.SetEnvironmentVariable("FOXWARM_AGENT_DIR", agent);
         var records = new List<JsonObject>();
-        var releases = Enumerable.Range(0, 5)
+        var releases = Enumerable
+            .Range(0, 5)
             .Select(index => Path.Combine(agent, "release-" + index))
             .ToArray();
         try
         {
-            await using (var main = new LocalExecManager(
-                Path.Combine(temp.Path, "data"),
-                _ => agent,
-                (_, _, _) => Task.CompletedTask
-            ))
-            await using (var node = new NodeExecManager(
-                new NodePaths(agent),
-                Path.Combine(agent, ".temp", "exec", "running-exec.json"),
-                (_, _, _) => Task.CompletedTask
-            ))
+            await using (
+                var main = new LocalExecManager(
+                    Path.Combine(temp.Path, "data"),
+                    _ => agent,
+                    (_, _, _) => Task.CompletedTask
+                )
+            )
+            await using (
+                var node = new NodeExecManager(
+                    new NodePaths(agent),
+                    Path.Combine(agent, ".temp", "exec", "running-exec.json"),
+                    (_, _, _) => Task.CompletedTask
+                )
+            )
             {
                 async Task<JsonObject> Start(int index)
                 {
@@ -80,7 +85,8 @@ public sealed class WindowsExecHandleOwnershipTests
                 // It is an API exclusion probe, not a deterministic reproduction of that race.
                 using (var probe = OpenInheritableCapture(owner["logPath"]!.ToString()))
                 {
-                    var launches = Enumerable.Range(1, releases.Length - 1)
+                    var launches = Enumerable
+                        .Range(1, releases.Length - 1)
                         .Select(index => Task.Run(() => Start(index)))
                         .ToArray();
                     // Retain successful starts even if another launch fails, for owned cleanup.
@@ -91,7 +97,9 @@ public sealed class WindowsExecHandleOwnershipTests
                     finally
                     {
                         records.AddRange(
-                            launches.Where(task => task.IsCompletedSuccessfully).Select(task => task.Result)
+                            launches
+                                .Where(task => task.IsCompletedSuccessfully)
+                                .Select(task => task.Result)
                         );
                     }
                 }
@@ -99,9 +107,11 @@ public sealed class WindowsExecHandleOwnershipTests
             // Managers stop observing; commands remain independent. No observer's transient
             // log read can be mistaken for a sibling's retained writable capture handle.
             var children = records
-                .Select(record => Process.GetProcessById(
-                    int.Parse(record["pid"]!.ToString(), CultureInfo.InvariantCulture)
-                ))
+                .Select(record =>
+                    Process.GetProcessById(
+                        int.Parse(record["pid"]!.ToString(), CultureInfo.InvariantCulture)
+                    )
+                )
                 .ToArray();
             try
             {
