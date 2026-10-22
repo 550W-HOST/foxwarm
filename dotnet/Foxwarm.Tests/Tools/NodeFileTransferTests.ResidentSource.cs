@@ -16,27 +16,40 @@ public sealed partial class NodeFileTransferTests
         var socket = new ClientWebSocket();
         f.Sockets.Add(socket);
         await socket.ConnectAsync(
-            new Uri(f.App.Urls.Single().Replace("http", "ws") + "/node_ws?id=resident&auth="
-                + credential["authToken"]!.GetValue<string>()), default);
-        await Fixture.Send(socket, new JsonObject
-        {
-            ["type"] = "node_register",
-            ["nodeType"] = "cli-node",
-            ["nodeProtocol"] = new JsonObject { ["min"] = 1, ["max"] = 3 },
-            ["capabilities"] = new JsonObject
+            new Uri(
+                f.App.Urls.Single().Replace("http", "ws")
+                    + "/node_ws?id=resident&auth="
+                    + credential["authToken"]!.GetValue<string>()
+            ),
+            default
+        );
+        await Fixture.Send(
+            socket,
+            new JsonObject
             {
-                ["tools"] = new JsonArray(new JsonObject { ["name"] = "read" }),
-                ["features"] = new JsonObject { ["programmaticToolData"] = true },
-            },
-        });
+                ["type"] = "node_register",
+                ["nodeType"] = "cli-node",
+                ["nodeProtocol"] = new JsonObject { ["min"] = 1, ["max"] = 3 },
+                ["capabilities"] = new JsonObject
+                {
+                    ["tools"] = new JsonArray(new JsonObject { ["name"] = "read" }),
+                    ["features"] = new JsonObject { ["programmaticToolData"] = true },
+                },
+            }
+        );
         Assert.Equal("registered", SessionWait.Text((await Fixture.Read(socket))["type"]));
         await f.Manager.SelectNodeAsync(f.Owner, "resident");
         return socket;
     }
 
-    private static async Task<JsonNode> SourceReadReply(Fixture f, string file, bool programmatic = true)
+    private static async Task<JsonNode> SourceReadReply(
+        Fixture f,
+        string file,
+        bool programmatic = true
+    )
     {
-        var root = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
+        var root =
+            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
             ?? throw new InvalidOperationException("FOXWARM_TS_ROOT is required for Source reads");
         var info = new ProcessStartInfo("node")
         {
@@ -48,10 +61,9 @@ public sealed partial class NodeFileTransferTests
         info.Environment["FOXWARM_DATA_DIR"] = f.Data;
         info.Environment["FOXWARM_AGENTS_DIR"] = Path.Combine(f.Data, "agents");
         using var child = Process.Start(info)!;
-        await child.StandardInput.WriteAsync(new JsonObject
-        {
-            ["filePath"] = file, ["programmatic"] = programmatic,
-        }.ToJsonString());
+        await child.StandardInput.WriteAsync(
+            new JsonObject { ["filePath"] = file, ["programmatic"] = programmatic }.ToJsonString()
+        );
         child.StandardInput.Close();
         var output = child.StandardOutput.ReadToEndAsync();
         var errors = child.StandardError.ReadToEndAsync();
@@ -65,7 +77,12 @@ public sealed partial class NodeFileTransferTests
         var definitions = ToolScriptToolDefinitions.Definitions();
         definitions.Add(ArtifactToolDefinition.Definition());
         var registry = SessionToolExecutor.CreateRegistry(
-            definitions, mcp, _ => f.Work, f.Manager.Nodes, f.Manager.NodeProviders);
+            definitions,
+            mcp,
+            _ => f.Work,
+            f.Manager.Nodes,
+            f.Manager.NodeProviders
+        );
         return new(new WorkspaceTools(f.Work), f.Owner, f.Manager, registry);
     }
 
@@ -75,17 +92,24 @@ public sealed partial class NodeFileTransferTests
         Assert.Equal("tool_call", SessionWait.Text(call["type"]));
         Assert.Equal("read", SessionWait.Text(call["tool"]));
         Assert.True(call["programmatic"]!.GetValue<bool>());
-        await Fixture.Send(socket, new JsonObject
-        {
-            ["type"] = "tool_call_response", ["callId"] = call["callId"]!.DeepClone(),
-            ["result"] = reply,
-        });
+        await Fixture.Send(
+            socket,
+            new JsonObject
+            {
+                ["type"] = "tool_call_response",
+                ["callId"] = call["callId"]!.DeepClone(),
+                ["result"] = reply,
+            }
+        );
     }
 
     // An actual later file read is served if requested, so changed/missing-source regressions
     // expose their real consequence instead of merely timing out the test.
     private static async Task<(JsonObject Result, List<JsonObject> Transfers)> FinishSource(
-        ClientWebSocket socket, Task<JsonNode?> running, string file)
+        ClientWebSocket socket,
+        Task<JsonNode?> running,
+        string file
+    )
     {
         var transfers = new List<JsonObject>();
         async Task Serve()
@@ -98,13 +122,20 @@ public sealed partial class NodeFileTransferTests
                 Assert.Equal("file_read_request", SessionWait.Text(request["type"]));
                 transfers.Add(request);
                 if (File.Exists(file))
-                    await Fixture.Send(socket, Fixture.Reply(request, await File.ReadAllBytesAsync(file)));
+                    await Fixture.Send(
+                        socket,
+                        Fixture.Reply(request, await File.ReadAllBytesAsync(file))
+                    );
                 else
-                    await Fixture.Send(socket, new JsonObject
-                    {
-                        ["type"] = "file_transfer_error", ["transferId"] = request["transferId"]!.DeepClone(),
-                        ["error"] = "ENOENT: source was removed after the approved read",
-                    });
+                    await Fixture.Send(
+                        socket,
+                        new JsonObject
+                        {
+                            ["type"] = "file_transfer_error",
+                            ["transferId"] = request["transferId"]!.DeepClone(),
+                            ["error"] = "ENOENT: source was removed after the approved read",
+                        }
+                    );
             }
         }
         var serving = Serve();
@@ -117,7 +148,9 @@ public sealed partial class NodeFileTransferTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Complete_Source_resident_reply_runs_original_contents_without_a_second_transfer(bool replace)
+    public async Task Complete_Source_resident_reply_runs_original_contents_without_a_second_transfer(
+        bool replace
+    )
     {
         await using var f = new Fixture();
         await f.Start();
@@ -136,26 +169,37 @@ public sealed partial class NodeFileTransferTests
             File.Delete(file);
         await using var mcp = new Foxwarm.McpClient(f.Data);
         var tools = SourceTools(f, mcp);
-        var running = tools.ExecuteAsync(new JsonObject
-        {
-            ["name"] = "run_script", ["args"] = new JsonObject { ["filePath"] = "source.py" },
-        }, default);
+        var running = tools.ExecuteAsync(
+            new JsonObject
+            {
+                ["name"] = "run_script",
+                ["args"] = new JsonObject { ["filePath"] = "source.py" },
+            },
+            default
+        );
         var read = await Fixture.Read(socket);
         Assert.Equal("read", SessionWait.Text(read["tool"]));
         Assert.True(read["programmatic"]!.GetValue<bool>());
         Assert.Equal(f.Work, SessionWait.Text(read["sessionCwd"]));
         await f.Manager.SelectNodeAsync(f.Owner, "master");
-        await Fixture.Send(socket, new JsonObject
-        {
-            ["type"] = "tool_call_response", ["callId"] = read["callId"]!.DeepClone(),
-            ["result"] = reply,
-        });
+        await Fixture.Send(
+            socket,
+            new JsonObject
+            {
+                ["type"] = "tool_call_response",
+                ["callId"] = read["callId"]!.DeepClone(),
+                ["result"] = reply,
+            }
+        );
         var (result, transfers) = await FinishSource(socket, running, file);
         Assert.Null(result["error"]);
         Assert.Equal("completed", SessionWait.Text(result["status"]));
         Assert.Equal(73, result["result"]!.GetValue<int>());
         Assert.Empty(transfers);
-        var saved = await f.Manager.ToolScript.Store.ReadAsync(SessionWait.Text(result["runId"])!, default);
+        var saved = await f.Manager.ToolScript.Store.ReadAsync(
+            SessionWait.Text(result["runId"])!,
+            default
+        );
         Assert.Equal(file, SessionWait.Text(saved!["scriptPath"]));
         Assert.Equal("resident", SessionWait.Text(saved["sourceNode"]));
     }
@@ -171,24 +215,33 @@ public sealed partial class NodeFileTransferTests
         var reply = await SourceReadReply(f, file);
         await using var mcp = new Foxwarm.McpClient(f.Data);
         var tools = SourceTools(f, mcp);
-        var running = tools.ExecuteAsync(new JsonObject
-        {
-            ["name"] = "run_script", ["args"] = new JsonObject { ["filePath"] = "source.py" },
-        }, default);
+        var running = tools.ExecuteAsync(
+            new JsonObject
+            {
+                ["name"] = "run_script",
+                ["args"] = new JsonObject { ["filePath"] = "source.py" },
+            },
+            default
+        );
         await ReplyToSourceRead(socket, reply);
         var (waiting, transfers) = await FinishSource(socket, running, file);
         Assert.Equal("waiting", SessionWait.Text(waiting["status"]));
         Assert.Empty(transfers);
         File.Delete(file);
         await f.Manager.SelectNodeAsync(f.Owner, "master");
-        var continued = tools.ExecuteAsync(new JsonObject
-        {
-            ["name"] = "continue_script", ["args"] = new JsonObject
+        var continued = tools.ExecuteAsync(
+            new JsonObject
             {
-                ["runId"] = waiting["runId"]!.DeepClone(),
-                ["continuationId"] = waiting["continuationId"]!.DeepClone(), ["input"] = "yes",
+                ["name"] = "continue_script",
+                ["args"] = new JsonObject
+                {
+                    ["runId"] = waiting["runId"]!.DeepClone(),
+                    ["continuationId"] = waiting["continuationId"]!.DeepClone(),
+                    ["input"] = "yes",
+                },
             },
-        }, default);
+            default
+        );
         var (done, laterTransfers) = await FinishSource(socket, continued, file);
         Assert.Null(done["error"]);
         Assert.Equal(73, done["result"]!.GetValue<int>());
@@ -198,7 +251,9 @@ public sealed partial class NodeFileTransferTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task Actual_Source_incomplete_or_display_read_uses_correlated_transfer(bool programmatic)
+    public async Task Actual_Source_incomplete_or_display_read_uses_correlated_transfer(
+        bool programmatic
+    )
     {
         await using var f = new Fixture();
         await f.Start();
@@ -219,10 +274,14 @@ public sealed partial class NodeFileTransferTests
         await f.Owner.UpdateCwdAsync(f.Work);
         await using var mcp = new Foxwarm.McpClient(f.Data);
         var tools = SourceTools(f, mcp);
-        var running = tools.ExecuteAsync(new JsonObject
-        {
-            ["name"] = "run_script", ["args"] = new JsonObject { ["filePath"] = "source.py" },
-        }, default);
+        var running = tools.ExecuteAsync(
+            new JsonObject
+            {
+                ["name"] = "run_script",
+                ["args"] = new JsonObject { ["filePath"] = "source.py" },
+            },
+            default
+        );
         await ReplyToSourceRead(socket, reply);
         var (result, transfers) = await FinishSource(socket, running, file);
         Assert.Null(result["error"]);
@@ -237,15 +296,22 @@ public sealed partial class NodeFileTransferTests
         await f.Start();
         var socket = await ConnectProgrammaticResident(f);
         var file = Path.Combine(f.Work, "chart.json");
-        await File.WriteAllTextAsync(file, ArtifactStoreTests.Chart("Complete read").ToJsonString());
+        await File.WriteAllTextAsync(
+            file,
+            ArtifactStoreTests.Chart("Complete read").ToJsonString()
+        );
         var reply = await SourceReadReply(f, file);
         File.Delete(file);
         await using var mcp = new Foxwarm.McpClient(f.Data);
         var tools = SourceTools(f, mcp);
-        var running = tools.ExecuteAsync(new JsonObject
-        {
-            ["name"] = "artifact", ["args"] = new JsonObject { ["action"] = "prepare", ["filePath"] = "chart.json" },
-        }, default);
+        var running = tools.ExecuteAsync(
+            new JsonObject
+            {
+                ["name"] = "artifact",
+                ["args"] = new JsonObject { ["action"] = "prepare", ["filePath"] = "chart.json" },
+            },
+            default
+        );
         await ReplyToSourceRead(socket, reply);
         var (result, transfers) = await FinishSource(socket, running, file);
         Assert.Null(result["error"]);
@@ -267,13 +333,19 @@ public sealed partial class NodeFileTransferTests
         Assert.Null(reply["content"]);
         await using var mcp = new Foxwarm.McpClient(f.Data);
         var tools = SourceTools(f, mcp);
-        var running = tools.ExecuteAsync(new JsonObject
-        {
-            ["name"] = "artifact", ["args"] = new JsonObject
+        var running = tools.ExecuteAsync(
+            new JsonObject
             {
-                ["action"] = "prepare", ["filePath"] = "image.png", ["type"] = "image",
+                ["name"] = "artifact",
+                ["args"] = new JsonObject
+                {
+                    ["action"] = "prepare",
+                    ["filePath"] = "image.png",
+                    ["type"] = "image",
+                },
             },
-        }, default);
+            default
+        );
         await ReplyToSourceRead(socket, reply);
         var (result, transfers) = await FinishSource(socket, running, file);
         Assert.Null(result["error"]);
@@ -300,13 +372,31 @@ public sealed partial class NodeFileTransferTests
         var tools = SourceTools(f, mcp);
         var budget = new Foxwarm.ToolScript.ToolScriptDataBudget(1);
         long charged = 0;
-        var reader = typeof(SessionToolExecutor).GetMethod("ReadResidentSourceAsync",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
-        var running = (Task<Foxwarm.Nodes.NodeConnectionHub.TransferFile>)reader.Invoke(tools,
-            ["resident", "invalid-utf8.txt", null, new WorkspaceTools(f.Work), CancellationToken.None,
-                new Action<long>(size => { charged = size; budget.Charge(size); })])!;
+        var reader = typeof(SessionToolExecutor).GetMethod(
+            "ReadResidentSourceAsync",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance
+        )!;
+        var running =
+            (Task<Foxwarm.Nodes.NodeConnectionHub.TransferFile>)
+                reader.Invoke(
+                    tools,
+                    [
+                        "resident",
+                        "invalid-utf8.txt",
+                        null,
+                        new WorkspaceTools(f.Work),
+                        CancellationToken.None,
+                        new Action<long>(size =>
+                        {
+                            charged = size;
+                            budget.Charge(size);
+                        }),
+                    ]
+                )!;
         await ReplyToSourceRead(socket, reply);
-        await Assert.ThrowsAsync<Foxwarm.ToolScript.ToolScriptDataLimitException>(async () => await running);
+        await Assert.ThrowsAsync<Foxwarm.ToolScript.ToolScriptDataLimitException>(async () =>
+            await running
+        );
         Assert.Equal(3, charged);
         await Fixture.Send(socket, new JsonObject { ["type"] = "ping" });
         Assert.Equal("pong", SessionWait.Text((await Fixture.Read(socket))["type"]));
@@ -315,39 +405,50 @@ public sealed partial class NodeFileTransferTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task Resident_source_policy_or_interactive_read_denial_never_starts_transfer(bool policy)
+    public async Task Resident_source_policy_or_interactive_read_denial_never_starts_transfer(
+        bool policy
+    )
     {
         await using var f = new Fixture();
         await f.Start();
         var socket = await ConnectProgrammaticResident(f);
         if (policy)
         {
-            await File.WriteAllTextAsync(Path.Combine(f.Data, "state", "tool-authorization.yaml"),
-                "version: 1\ndefaultAction: allow\nrules:\n- id: source-read\n  action: deny\n  match:\n    tool: {source: node, name: read}\n    targetNode: resident\n");
+            await File.WriteAllTextAsync(
+                Path.Combine(f.Data, "state", "tool-authorization.yaml"),
+                "version: 1\ndefaultAction: allow\nrules:\n- id: source-read\n  action: deny\n  match:\n    tool: {source: node, name: read}\n    targetNode: resident\n"
+            );
             f.Manager.Authorization.Invalidate();
         }
         await using var mcp = new Foxwarm.McpClient(f.Data);
         var tools = SourceTools(f, mcp);
-        var running = tools.ExecuteAsync(new JsonObject
-        {
-            ["name"] = "run_script", ["args"] = new JsonObject { ["filePath"] = "source.py" },
-        }, default);
+        var running = tools.ExecuteAsync(
+            new JsonObject
+            {
+                ["name"] = "run_script",
+                ["args"] = new JsonObject { ["filePath"] = "source.py" },
+            },
+            default
+        );
         if (!policy)
         {
             var read = await Fixture.Read(socket);
             Assert.Equal("tool_call", SessionWait.Text(read["type"]));
-            await Fixture.Send(socket, new JsonObject
-            {
-                ["type"] = "tool_call_error", ["callId"] = read["callId"]!.DeepClone(),
-                ["error"] = "Interactive read rejected",
-            });
+            await Fixture.Send(
+                socket,
+                new JsonObject
+                {
+                    ["type"] = "tool_call_error",
+                    ["callId"] = read["callId"]!.DeepClone(),
+                    ["error"] = "Interactive read rejected",
+                }
+            );
         }
         var result = (await running.WaitAsync(TimeSpan.FromSeconds(10)))!.AsObject();
         Assert.NotNull(result["error"]);
         await Fixture.Send(socket, new JsonObject { ["type"] = "ping" });
         Assert.Equal("pong", SessionWait.Text((await Fixture.Read(socket))["type"]));
     }
-
 
     [Fact]
     public async Task Resident_artifact_real_preview_transfer_retains_the_manifest_byte_limit()
@@ -356,22 +457,25 @@ public sealed partial class NodeFileTransferTests
         await f.Start();
         var socket = await ConnectProgrammaticResident(f);
         var file = Path.Combine(f.Work, "large.json");
-        await File.WriteAllTextAsync(file, "{" + new string(' ', ArtifactStore.ManifestLimit) + "}");
+        await File.WriteAllTextAsync(
+            file,
+            "{" + new string(' ', ArtifactStore.ManifestLimit) + "}"
+        );
         var reply = await SourceReadReply(f, file);
         Assert.True(reply["truncated"]!.GetValue<bool>());
         await using var mcp = new Foxwarm.McpClient(f.Data);
         var tools = SourceTools(f, mcp);
-        var running = tools.ExecuteAsync(new JsonObject
-        {
-            ["name"] = "artifact", ["args"] = new JsonObject
+        var running = tools.ExecuteAsync(
+            new JsonObject
             {
-                ["action"] = "prepare", ["filePath"] = "large.json",
+                ["name"] = "artifact",
+                ["args"] = new JsonObject { ["action"] = "prepare", ["filePath"] = "large.json" },
             },
-        }, default);
+            default
+        );
         await ReplyToSourceRead(socket, reply);
         var (result, transfers) = await FinishSource(socket, running, file);
         Assert.Single(transfers);
         Assert.Contains("Artifact exceeds 2 MiB", result["error"]!.ToJsonString());
     }
-
 }
