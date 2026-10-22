@@ -11,6 +11,54 @@ namespace Foxwarm.Tests;
 
 public sealed class WebUiRealtimeRevisionTests
 {
+    [Fact]
+    public async Task Queue_consumption_and_Stop_publish_canonical_batches_with_the_matching_queue_snapshot()
+    {
+        using var temp = new TempDirectory();
+        var release = Signal();
+        await using var provider = new LoopbackResponsesServer(async (stream, _) =>
+        {
+            await release.Task;
+            await LoopbackResponsesServer.WriteResponseAsync(stream, 200, "text/event-stream",
+                Encoding.UTF8.GetBytes("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n"));
+        });
+        var options = new ResponsesClientOptions(provider.BaseUri, "wire", "local/wire", "synthetic", "", 713);
+        await using var manager = new SessionManager(Path.Combine(temp.Path, "data"), Path.Combine(temp.Path, "work"), options, HostModels.ForTest(options));
+        await manager.LoadAsync();
+        var owner = await manager.CreateAsync();
+        var runtime = new SessionRuntime(manager);
+        var events = new ConcurrentQueue<SessionRuntimeEvent>();
+        runtime.Changed += events.Enqueue;
+        try
+        {
+            await runtime.SubmitAndRunAsync(owner.Id, QueueItem.UserText("initial input", clientMessageId: "initial"));
+            await provider.Request.WaitAsync(TimeSpan.FromSeconds(10));
+            await runtime.SubmitAndRunAsync(owner.Id, QueueItem.UserText("queued A", clientMessageId: "queue-a"));
+            await runtime.SubmitAndRunAsync(owner.Id, QueueItem.UserText("queued B", clientMessageId: "queue-b"));
+            Assert.Equal(2, owner.Entry.Snapshot().Queue.Count);
+            await runtime.StopAsync(owner.Id);
+            var batches = events.Where(value => value.Kind == SessionEventKind.QueueHistoryAppended).ToArray();
+            Assert.Equal(2, batches.Length);
+            Assert.Single(batches[0].Data!.AsArray());
+            var batch = WebUiContract.Event(batches[1], runtime);
+            Assert.Equal("history-append", batch["type"]!.GetValue<string>());
+            Assert.Equal(new[] { "queue-a", "queue-b" }, batch["messages"]!.AsArray().Select(message => message!["__meta"]!["clientMessageId"]!.GetValue<string>()));
+            Assert.Equal(new long[] { 2, 3 }, batch["messages"]!.AsArray().Select(message => message!["__meta"]!["seq"]!.GetValue<long>()));
+            Assert.Equal(3, batch["messageCount"]!.GetValue<int>());
+            Assert.Equal(3, batch["latestSeq"]!.GetValue<long>());
+            Assert.Equal(0, batch["queueLength"]!.GetValue<int>());
+            Assert.Empty(batch["queuedMessages"]!.AsArray());
+            Assert.DoesNotContain(events, value => value.Kind == SessionEventKind.MessageCommitted && value.Data?["role"]?.ToString() == "user");
+            Assert.Equal(3, owner.History().Count);
+            Assert.Equal(0, owner.Entry.PostCommitNotificationFailureCount);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await manager.ShutdownAsync();
+        }
+    }
+
     [Theory]
     [InlineData("retained")]
     [InlineData("removed")]

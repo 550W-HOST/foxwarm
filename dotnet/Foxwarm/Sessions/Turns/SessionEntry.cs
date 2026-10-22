@@ -107,6 +107,7 @@ public sealed class SessionEntry
     public Exception? LastBackgroundProcessorFailure =>
         Volatile.Read(ref lastBackgroundProcessorFailure);
     public Action<SessionSnapshot>? Committed { get; set; }
+    internal Action<SessionSnapshot, IReadOnlyList<JsonObject>>? QueueHistoryAppended { get; set; }
     internal Func<Action>? CaptureForegroundRelease { get; set; }
 
     public SessionEntry(
@@ -347,11 +348,14 @@ public sealed class SessionEntry
 
     internal void InvokeCommitted(SessionSnapshot snapshot) => Committed?.Invoke(snapshot);
 
-    internal void InvokeQueuedCommitted(SessionSnapshot snapshot)
+    internal void InvokeQueuedCommitted(SessionSnapshot snapshot, IReadOnlyList<JsonObject>? appendedMessages = null)
     {
         try
         {
-            Committed?.Invoke(snapshot);
+            if (appendedMessages is not null && QueueHistoryAppended is { } batch)
+                batch(snapshot, appendedMessages);
+            else
+                Committed?.Invoke(snapshot);
         }
         catch (Exception error)
         {

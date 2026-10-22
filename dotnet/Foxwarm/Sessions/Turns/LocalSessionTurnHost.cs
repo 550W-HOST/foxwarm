@@ -93,12 +93,12 @@ public sealed partial class LocalSessionTurnHost
             return;
         foreach (var item in items)
             SessionIngress.EnsureSupportedForRunner(item);
-        await entry
-            .SaveLane.CommitCanonicalAppendAsync(state =>
+        var appended = await entry
+            .SaveLane.CommitCanonicalAppendWithResultAsync(state =>
                 PrepareQueuedAppend(state, items, finalizing: false, clock)
             )
             .ConfigureAwait(false);
-        entry.InvokeQueuedCommitted(entry.Snapshot());
+        entry.InvokeQueuedCommitted(entry.Snapshot(), appended);
     }
 
     public async Task<ChatResult> ChatAsync(string turnId)
@@ -526,8 +526,8 @@ public sealed partial class LocalSessionTurnHost
         });
         foreach (var item in items.Where(item => item.Type != QueueItemType.CompactCommit))
             SessionIngress.EnsureSupportedForRunner(item);
-        await entry
-            .SaveLane.CommitCanonicalAppendAsync(state =>
+        var appended = await entry
+            .SaveLane.CommitCanonicalAppendWithResultAsync(state =>
                 PrepareQueuedAppend(state, items, finalizing: true, clock)
             )
             .ConfigureAwait(false);
@@ -535,7 +535,7 @@ public sealed partial class LocalSessionTurnHost
         releaseForeground?.Invoke();
         if (entry.TurnStopped is { } stopped)
             await stopped();
-        entry.InvokeQueuedCommitted(entry.Snapshot());
+        entry.InvokeQueuedCommitted(entry.Snapshot(), appended);
     }
 
     private static CanonicalAppendPreparation PrepareQueuedAppend(

@@ -101,6 +101,19 @@ internal sealed partial class SessionOwner
     {
         Entry.CaptureForegroundRelease = CaptureForegroundRelease;
         lastNotifiedSeq = Entry.WithState(state => state.History.LastOrDefault()?.Sequence ?? 0);
+        Entry.QueueHistoryAppended = (snapshot, messages) =>
+        {
+            foreach (var message in messages)
+                lastNotifiedSeq = Math.Max(lastNotifiedSeq, message["__meta"]?["seq"]?.GetValue<long>() ?? 0);
+            Emit(SessionEventKind.StateChanged);
+            if (messages.Count > 0)
+            {
+                Emit(SessionEventKind.QueueHistoryAppended,
+                    new JsonArray(messages.Select(message => (JsonNode?)message.DeepClone()).ToArray()), snapshot);
+                foreach (var message in messages)
+                    ClearCommittedDraft(message);
+            }
+        };
         Entry.Committed = snapshot =>
         {
             foreach (var record in snapshot.History)
@@ -211,11 +224,11 @@ internal sealed partial class SessionOwner
             Unsubscribe(id);
     }
 
-    public void Emit(SessionEventKind kind, JsonNode? data = null)
+    public void Emit(SessionEventKind kind, JsonNode? data = null, SessionSnapshot? snapshot = null)
     {
         if (Entry.Retired)
             return;
-        var value = new SessionRuntimeEvent(Id, kind, data?.DeepClone());
+        var value = new SessionRuntimeEvent(Id, kind, data?.DeepClone(), snapshot);
         Changed?.Invoke(value);
         foreach (var channel in listeners.Values)
             channel.Writer.TryWrite(value);

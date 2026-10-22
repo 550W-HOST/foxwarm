@@ -98,6 +98,41 @@ internal static class WebUiContract
             selected = selected
                 .Where(message => message.Sequence is long actual && actual > seq)
                 .ToArray();
+        var preview = QueuedPreview(snapshot);
+        var result = new JsonObject
+        {
+            ["session"] = Session(
+                snapshot,
+                models,
+                toolActive,
+                compacting,
+                executionNode,
+                runtimeState
+            ),
+            ["messages"] = new JsonArray(
+                selected.Select(message => (JsonNode?)message.ToJson()).ToArray()
+            ),
+            ["persistentMemorySnapshot"] =
+                snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.DeepClone()
+                ?? JsonValue.Create(""),
+            ["queuedMessages"] = preview,
+            ["queueLength"] = snapshot.Queue.Count(SessionCompactor.Ordinary),
+            ["latestSeq"] = snapshot.NextMessageSeq - 1,
+            ["nextMessageSeq"] = snapshot.NextMessageSeq,
+            ["historyVersion"] = snapshot.HistoryVersion,
+            ["prefixLength"] = prefix,
+            ["historyComplete"] = complete,
+            ["queuedPreviewLimit"] = 20,
+            ["queuedPreviewOmittedCount"] = Math.Max(
+                0,
+                snapshot.Queue.Count(SessionCompactor.Ordinary) - preview.Count
+            ),
+        };
+        return result;
+    }
+
+    internal static JsonArray QueuedPreview(SessionSnapshot snapshot)
+    {
         var preview = new JsonArray();
         for (var i = 0; i < snapshot.Queue.Count && preview.Count < 20; i++)
         {
@@ -146,41 +181,32 @@ internal static class WebUiContract
                 }
             );
         }
-        var result = new JsonObject
+        return preview;
+    }
+
+    private static JsonObject QueueHistoryAppend(SessionRuntimeEvent entry)
+    {
+        var snapshot = entry.Snapshot ?? throw new InvalidOperationException("Queue append snapshot is missing.");
+        var preview = QueuedPreview(snapshot);
+        var queueLength = snapshot.Queue.Count(SessionCompactor.Ordinary);
+        return new JsonObject
         {
-            ["session"] = Session(
-                snapshot,
-                models,
-                toolActive,
-                compacting,
-                executionNode,
-                runtimeState
-            ),
-            ["messages"] = new JsonArray(
-                selected.Select(message => (JsonNode?)message.ToJson()).ToArray()
-            ),
-            ["persistentMemorySnapshot"] =
-                snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.DeepClone()
-                ?? JsonValue.Create(""),
+            ["type"] = "history-append",
+            ["sessionId"] = entry.SessionId,
+            ["messages"] = entry.Data?.DeepClone(),
             ["queuedMessages"] = preview,
-            ["queueLength"] = snapshot.Queue.Count(SessionCompactor.Ordinary),
-            ["latestSeq"] = snapshot.NextMessageSeq - 1,
-            ["nextMessageSeq"] = snapshot.NextMessageSeq,
+            ["queueLength"] = queueLength,
+            ["queuedPreviewOmittedCount"] = Math.Max(0, queueLength - preview.Count),
+            ["messageCount"] = snapshot.History.Count,
             ["historyVersion"] = snapshot.HistoryVersion,
-            ["prefixLength"] = prefix,
-            ["historyComplete"] = complete,
-            ["queuedPreviewLimit"] = 20,
-            ["queuedPreviewOmittedCount"] = Math.Max(
-                0,
-                snapshot.Queue.Count(SessionCompactor.Ordinary) - preview.Count
-            ),
+            ["latestSeq"] = snapshot.NextMessageSeq - 1,
         };
-        return result;
     }
 
     public static JsonObject Event(SessionRuntimeEvent entry, SessionRuntime runtime) =>
         entry.Kind switch
         {
+            SessionEventKind.QueueHistoryAppended => QueueHistoryAppend(entry),
             SessionEventKind.MessageCommitted or SessionEventKind.CommandReply => new JsonObject
             {
                 ["type"] = "message",

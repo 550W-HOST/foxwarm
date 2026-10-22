@@ -985,28 +985,16 @@ export function useChatConversationSync(sessionId: string, webUiIdentityMode: bo
 
         if (data.type === 'message') {
           const incomingMessage = data.message as Message
-          const msgTimestamp = incomingMessage.__meta?.timestamp
-          const isCommandResponse = incomingMessage.__meta?.isCommandResponse
-          const isUpdateExisting = incomingMessage.__meta?.updateExisting
           const pendingQueueAppend = pendingQueueAppendRef.current
-          const seq = incomingMessage.__meta?.seq
-          // Single-message producers also need one queue/history correction before
-          // a queued user row can enter the committed timeline.
-          const queuedUserCommit = incomingMessage.role === 'user' && queuedMessagesRef.current.length > 0
-            && !isCommandResponse && !isUpdateExisting && Number.isSafeInteger(seq)
-            && (seq as number) > latestCommittedSeqRef.current
-          if (Number.isSafeInteger(seq) && (queuedUserCommit
-            || pendingQueueAppend && (seq as number) >= pendingQueueAppend.startSeq)) {
-            pendingQueueAppendRef.current = {
-              historyVersion: pendingQueueAppend?.historyVersion ?? sessionHistoryVersionRef.current,
-              startSeq: pendingQueueAppend?.startSeq ?? seq as number,
-              endSeq: Math.max(pendingQueueAppend?.endSeq ?? 0, seq as number),
-            }
+          if (pendingQueueAppend && Number.isSafeInteger(incomingMessage.__meta?.seq)
+            && (incomingMessage.__meta?.seq as number) >= pendingQueueAppend.startSeq) {
             historyGapDetectedRef.current = true
-            queueRefreshNeededRef.current = true
             scheduleAtomicRecovery()
             return
           }
+          const msgTimestamp = data.message.__meta?.timestamp
+          const isCommandResponse = data.message.__meta?.isCommandResponse
+          const isUpdateExisting = data.message.__meta?.updateExisting
 
           if (data.message.role === 'model') {
             const next = reconcileCommittedModelDraft(streamingAssistantDraftRef.current, incomingMessage)
