@@ -152,7 +152,7 @@ internal sealed class ResponsesWsResource(
             callerAbort = default;
         }
         owner.Remove(this);
-        owner.Log(this, "discard", cause);
+        owner.Log(this, "discard", cause, failure: cause is "request-failure" or "receive-failure" or "replay-failure" or "upstream-close");
         active?.Completion.TrySetException(
             new IOException("OpenAI Responses WebSocket request was interrupted.")
         );
@@ -220,7 +220,8 @@ internal sealed class ResponsesWsResource(
                         "close",
                         "upstream-close",
                         "upstream",
-                        (int?)socket.CloseStatus
+                        (int?)socket.CloseStatus,
+                        failure: before != WsPhase.Idle || socket.CloseStatus is not WebSocketCloseStatus.NormalClosure
                     );
                     if (before == WsPhase.Idle)
                     {

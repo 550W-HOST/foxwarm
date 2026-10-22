@@ -35,6 +35,8 @@ if (args.Contains("--tui", StringComparer.Ordinal))
     Environment.ExitCode = 2;
     return;
 }
+try
+{
 var background = args.Contains("--windows-background", StringComparer.Ordinal);
 if (background && !OperatingSystem.IsWindows())
     throw new PlatformNotSupportedException("The Windows background entry requires Windows.");
@@ -83,3 +85,12 @@ await host.WaitForShutdownAsync();
 
 // Keep status/stop available until the exact Main owners have drained.
 await host.DisposeAsync();
+
+}
+catch (Exception error)
+{
+    // MainHost records composition/start failures before disposing capture. This also covers
+    // configuration and logging failures before a MainLog exists, without an unsafe CLR dump.
+    MainLog.Fatal("entry", error);
+    Environment.ExitCode = 1;
+}

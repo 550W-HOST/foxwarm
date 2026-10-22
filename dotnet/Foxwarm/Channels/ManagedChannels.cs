@@ -38,6 +38,8 @@ internal sealed class ManagedChannels(
     private readonly object gate = new();
     private volatile bool closed;
     private Task? ingressStop;
+    private Task? initialStartup;
+    private readonly CancellationTokenSource initialStop = new();
 
     internal static string Type(string id, JsonObject config) =>
         SessionWait.Text(config["type"])?.Trim() is { Length: > 0 } type ? type : id;
@@ -98,6 +100,86 @@ internal sealed class ManagedChannels(
         return result;
     }
 
+    // Normal startup is independent per adapter; configuration reload deliberately stays sequential.
+    internal Task StartInitialAsync()
+    {
+        lock (gate)
+            return initialStartup ??= StartInitialCoreAsync();
+    }
+
+    private async Task StartInitialCoreAsync()
+    {
+        try
+        {
+            var entries = configuration.CurrentChannels().ToArray();
+            var eligible = new List<(string Id, string Type)>();
+            foreach (var (id, raw) in entries)
+            {
+                var config = raw as JsonObject ?? new JsonObject();
+                if (Eligible(id, config))
+                    eligible.Add((id, Type(id, config)));
+                else
+                {
+                    var reason = id is "webui" or "tui" ? "reserved transport"
+                        : !Implemented(Type(id, config)) ? "adapter unavailable"
+                        : config["enabled"]?.GetValue<bool>() == false ? "disabled"
+                        : "missing required credentials";
+                    Console.WriteLine($"Channel {id} startup skipped: {reason}.");
+                }
+            }
+            var outcomes = await Task.WhenAll(eligible.Select(entry => StartWithRetryAsync(entry.Id, entry.Type)));
+            Console.WriteLine($"Channel startup settled: registered={outcomes.Count(value => value)}, unavailable={outcomes.Count(value => !value)}, skipped={entries.Length - eligible.Count}, stopping={closed}.");
+        }
+        catch (Exception error)
+        {
+            // This is retained background startup, not a detached unobserved exception.
+            Console.Error.WriteLine("Channel initial startup failed: " + MainLog.SafeFailure(error));
+        }
+    }
+
+    private static bool Eligible(string id, JsonObject config) =>
+        id is not ("webui" or "tui")
+        && Implemented(Type(id, config))
+        && config["enabled"]?.GetValue<bool>() != false
+        && ModelConfiguration.IsConfigured(Type(id, config), config);
+
+    private async Task<bool> StartWithRetryAsync(string id, string type)
+    {
+        var attempts = type == "telegram" ? 4 : 2;
+        var pause = TimeSpan.FromSeconds(type == "telegram" ? 5 : 3);
+        for (var attempt = 1; attempt <= attempts && !closed; attempt++)
+        {
+            Console.WriteLine($"Channel {id} ({type}) startup attempt {attempt}/{attempts}.");
+            try
+            {
+                return await StartCoreAsync(id);
+            }
+            catch (OperationCanceledException) when (closed)
+            {
+                return false;
+            }
+            catch (Exception error)
+            {
+                if (closed)
+                    return false;
+                RecordError(id, error);
+                if (attempt == attempts)
+                    break;
+                try
+                {
+                    await (dependencies?.Delay ?? Task.Delay)(pause, initialStop.Token);
+                }
+                catch (OperationCanceledException) when (closed)
+                {
+                    return false;
+                }
+            }
+        }
+        if (!closed)
+            Console.Error.WriteLine($"Channel {id} ({type}) initial startup attempts exhausted.");
+        return false;
+    }
+
     internal async Task<JsonObject> ReloadAsync()
     {
         if (closed)
@@ -125,12 +207,7 @@ internal sealed class ManagedChannels(
         )
         {
             var config = raw as JsonObject ?? new JsonObject();
-            if (
-                id is "webui" or "tui"
-                || !Implemented(Type(id, config))
-                || config["enabled"]?.GetValue<bool>() == false
-                || !ModelConfiguration.IsConfigured(Type(id, config), config)
-            )
+            if (!Eligible(id, config))
                 continue;
             try
             {
@@ -240,6 +317,7 @@ internal sealed class ManagedChannels(
             {
                 if (closed || running.ContainsKey(id) || starting.ContainsKey(id))
                     return false;
+                errors.Remove(id);
                 starting.Add(id, (channel, settled));
                 initializing = true;
                 // Stop cannot precede an adapter's synchronous start admission.
@@ -252,7 +330,6 @@ internal sealed class ManagedChannels(
                     return false;
                 sessions.ChannelRegistry.Register(id, channel.Transport);
                 running.Add(id, channel);
-                errors.Remove(id);
                 if (
                     SessionWait.Text(
                         config[Type(id, config) == "matrix" ? "botUserId" : "mainAttachUser"]
@@ -263,6 +340,7 @@ internal sealed class ManagedChannels(
                     sessions.AttachConfiguredChannel(id + ":" + conversation, "main");
                 published = true;
             }
+            Console.WriteLine($"Channel {id} ({Type(id, config)}) transport registered.");
             return true;
         }
         finally
@@ -298,9 +376,7 @@ internal sealed class ManagedChannels(
 
     private void RecordError(string id, Exception error)
     {
-        var safe = error is TelegramApiException telegram
-            ? $"Telegram API request failed ({telegram.Code})."
-            : configuration.SafeAppError(error);
+        var safe = ChannelFailure.Describe(error);
         lock (gate)
             errors[id] = safe;
         Console.Error.WriteLine("Channel " + id + ": " + safe);
@@ -319,11 +395,13 @@ internal sealed class ManagedChannels(
         lock (gate)
         {
             closed = true;
+            initialStop.Cancel();
             current = running
                 .Values.Concat(starting.Values.Select(value => value.Channel))
                 .Distinct()
                 .ToArray();
-            initializers = starting.Values.Select(value => value.Settled.Task).ToArray();
+            initializers = starting.Values.Select(value => value.Settled.Task)
+                .Concat(initialStartup is null ? [] : new[] { initialStartup }).ToArray();
         }
         await Task.WhenAll(current.Select(channel => channel.StopAsync()));
         await Task.WhenAll(initializers);

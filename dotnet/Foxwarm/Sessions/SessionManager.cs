@@ -359,15 +359,18 @@ internal sealed partial class SessionManager : IAsyncDisposable
         try
         {
             await Vector.StartAsync();
+            if (startMainServices)
+                Console.WriteLine($"Vector startup: mode={Vector.Mode}, ready={Vector.Ready}.");
         }
         catch (Exception error)
         {
             Console.Error.WriteLine(
-                "Vector initialization failed; Main will continue without semantic search: " + error
+                "Vector initialization failed; Main will continue without semantic search: " + MainLog.SafeFailure(error)
             );
         }
         await timers.LoadAsync();
-        foreach (var row in Catalog.List())
+        var catalogRows = Catalog.List();
+        foreach (var row in catalogRows)
         {
             var id = SessionCatalog.Text(row["id"])!;
             var agent = SessionCatalog.Text(row["agent"])!;
@@ -382,8 +385,15 @@ internal sealed partial class SessionManager : IAsyncDisposable
             .Concat(executor.OwnerIds)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+        if (startMainServices)
+        {
+            Console.WriteLine($"Exec startup: supported={LocalExecManager.IsSupported}, tracked={executor.TrackedCount}.");
+            Console.WriteLine($"Session catalog loaded: entries={catalogRows.Length}, requiredOwners={ids.Length}.");
+        }
         var mandatory = ids.Select(id => RequiredAsync(id)).ToList();
         await Task.WhenAll(mandatory);
+        if (startMainServices)
+            Console.WriteLine($"Session startup: loadedOwners={sessions.Count}.");
         servicesReady = true;
         foreach (var owner in sessions.Values)
             WaitTransition(owner.Id);

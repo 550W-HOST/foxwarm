@@ -62,7 +62,8 @@ internal sealed class ResponsesWsTransport(
         string boundary,
         string cause,
         string? origin = null,
-        int? code = null
+        int? code = null,
+        bool failure = false
     )
     {
         try
@@ -84,7 +85,7 @@ internal sealed class ResponsesWsTransport(
             if (diagnostics is not null)
                 diagnostics(data);
             else
-                Console.Error.WriteLine(data.ToJsonString());
+                MainLog.Diagnostic(data.ToJsonString(), failure);
         }
         catch { }
     }

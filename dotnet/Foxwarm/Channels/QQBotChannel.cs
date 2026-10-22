@@ -7,9 +7,10 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Channels;
 
-internal sealed class QQBotApiException(string message, long? code) : IOException(message)
+internal sealed class QQBotApiException(string message, long? code, int? status = null) : IOException(message)
 {
     internal long? Code { get; } = code;
+    internal int? Status { get; } = status;
 }
 
 internal sealed partial class QQBotChannel : IManagedChannel
@@ -149,12 +150,10 @@ internal sealed partial class QQBotChannel : IManagedChannel
                     }
                 ),
             };
-            using var response = await http.SendAsync(request);
-            var text = await response.Content.ReadAsStringAsync();
+            using var response = await http.SendAsync(request, lifetime.Token);
+            var text = await response.Content.ReadAsStringAsync(lifetime.Token);
             if (!response.IsSuccessStatusCode)
-                throw new IOException(
-                    $"QQ Bot access token request failed ({(int)response.StatusCode}): {text[..Math.Min(300, text.Length)]}"
-                );
+                throw new HttpRequestException("QQ Bot token request failed.", null, response.StatusCode);
             var payload =
                 JsonNode.Parse(text)?.AsObject()
                 ?? throw new IOException("QQ Bot access token response was not JSON.");
@@ -166,6 +165,10 @@ internal sealed partial class QQBotChannel : IManagedChannel
                 tokenExpires = now().AddSeconds(expires is > 0 and < 1e10 ? expires.Value : 7200);
             }
             return token;
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            throw new ChannelFailure("token acquisition", error);
         }
         finally
         {
@@ -242,8 +245,9 @@ internal sealed partial class QQBotChannel : IManagedChannel
                 }
                 catch (System.Text.Json.JsonException) { }
                 throw new QQBotApiException(
-                    $"QQ Bot API {request.Method} {path} failed ({(int)response.StatusCode}): {text[..Math.Min(300, text.Length)]}",
-                    code
+                    $"QQ Bot API request failed ({(int)response.StatusCode}).",
+                    code,
+                    (int)response.StatusCode
                 );
             }
             if (string.IsNullOrWhiteSpace(text))

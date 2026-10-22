@@ -86,6 +86,7 @@ internal sealed partial class QQBotChannel
         {
             Connection? connection = null;
             var receiving = false;
+            var stage = "gateway discovery";
             try
             {
                 if (!first)
@@ -95,6 +96,7 @@ internal sealed partial class QQBotChannel
                         log(new IOException("QQ Bot gateway reconnect limit reached."));
                         return;
                     }
+                    Console.WriteLine($"Channel {id} (qqbot) gateway reconnect attempt {reconnectAttempt + 1}.");
                     await delay(
                         TimeSpan.FromMilliseconds(
                             nextDelay ?? ReconnectDelays[Math.Min(reconnectAttempt, 4)]
@@ -109,12 +111,15 @@ internal sealed partial class QQBotChannel
                 connection.Socket.Options.KeepAliveInterval = Timeout.InfiniteTimeSpan;
                 lock (stateGate)
                     socket = connection;
+                stage = "gateway connect";
                 await connection.Socket.ConnectAsync(
                     new Uri(Required(gateway["url"], "gateway URL")),
                     token
                 );
                 RequireCurrent(current);
                 reconnectAttempt = 0;
+                if (!first)
+                    Console.WriteLine($"Channel {id} (qqbot) gateway reconnected (socket open).");
                 opened.TrySetResult();
                 first = false;
                 // Independent receive lifetime mirrors ws.close(): a retired connection may finish its
@@ -136,10 +141,10 @@ internal sealed partial class QQBotChannel
             {
                 if (first)
                 {
-                    opened.TrySetException(error);
+                    opened.TrySetException(new ChannelFailure(stage, error));
                     return;
                 }
-                log(error);
+                log(new ChannelFailure(stage, error));
                 nextDelay = null;
             }
             finally
@@ -192,6 +197,7 @@ internal sealed partial class QQBotChannel
                                 else if (code == 4004)
                                     lock (tokenGate)
                                         accessToken = null;
+                                log(new QQBotGatewayException(code is 1000 or 4914 or 4915 ? "terminal close" : "reconnecting after close", code));
                                 connection.Retired.TrySetResult(
                                     new(
                                         code is not (1000 or 4914 or 4915),
@@ -333,11 +339,15 @@ internal sealed partial class QQBotChannel
         }
         if (op == 7)
         {
+            if (Current(connection))
+                log(new QQBotGatewayException("reconnect requested"));
             ReconnectSocket(connection);
             return;
         }
         if (op == 9)
         {
+            if (Current(connection))
+                log(new QQBotGatewayException("invalid session; reconnecting"));
             ReconnectSocket(connection, 3000, frame["d"]?.ToJsonString() != "true");
             return;
         }
@@ -375,6 +385,7 @@ internal sealed partial class QQBotChannel
             {
                 if (connection.AwaitingAck)
                 {
+                    log(new QQBotGatewayException("heartbeat acknowledgement missed; reconnecting"));
                     ReconnectSocket(connection);
                     return;
                 }

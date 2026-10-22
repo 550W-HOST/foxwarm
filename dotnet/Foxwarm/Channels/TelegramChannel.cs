@@ -71,19 +71,27 @@ internal sealed class TelegramChannel : IManagedChannel
 
     public async Task StartAsync()
     {
-        await ApiAsync(
-            "setMyCommands",
-            new JsonObject { ["commands"] = ExternalCommands.TelegramCommands() },
-            stopping.Token
-        );
-        username =
-            SessionWait.Text(
+        var stage = "command registration";
+        try
+        {
+            await ApiAsync(
+                "setMyCommands",
+                new JsonObject { ["commands"] = ExternalCommands.TelegramCommands() },
+                stopping.Token
+            );
+            stage = "identity lookup";
+            username = SessionWait.Text(
                 (await ApiAsync("getMe", new JsonObject(), stopping.Token))?["username"]
             ) ?? "";
-        // Telegraf 4.16.3 initializes identity, removes the webhook without dropping pending updates,
-        // then polls at offset zero. Its launch callback alone is not polling readiness.
-        await ApiAsync("deleteWebhook", new JsonObject(), stopping.Token);
-        polling = PollAsync();
+            // Launch completion is transport initialization, not a completed first poll.
+            stage = "webhook removal";
+            await ApiAsync("deleteWebhook", new JsonObject(), stopping.Token);
+            polling = PollAsync();
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            throw new ChannelFailure(stage, error);
+        }
     }
 
     public Task StopAsync()
