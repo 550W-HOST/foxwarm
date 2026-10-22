@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Main-owned generic Node discovery/provider resolution plus authenticated remote-node lifecycle: pairing and approved credentials, the `/node_ws` protocol, connected-node registration/dispatch, node-scoped session-event authorization, backend service transport, and public bootstrap artifacts.
+Main-owned generic Node discovery/provider resolution plus authenticated remote-node lifecycle: pairing and approved credentials, the `/node_ws` protocol, connected-node registration/dispatch, node-scoped session-event authorization, backend service transport, and public bootstrap artifacts. [Nodes, workspaces, and permissions](../behaviors/nodes-workspaces-and-permissions.md) owns observable selection, cwd/path, authority and lifecycle distinctions.
 
 ## Units
 

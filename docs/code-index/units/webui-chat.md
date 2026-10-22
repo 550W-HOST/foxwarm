@@ -131,7 +131,7 @@ Busy-time sends avoid a duplicate optimistic committed row; queue preview is rel
 
 ### D-chat-user-follow-intent
 
-Token/layout growth cannot override explicit upward user intent. Downward wheel navigation while already away from the actual bottom also detaches follow, including navigation that interrupts pending reflow. Downward wheel at the actual bottom retains follow. Rejoin occurs only at the actual bottom or by explicit action.
+[Chat follow behavior](../behaviors/workbench-and-chat.md#chat-follows-user-intent-not-incoming-token-volume) owns actual-bottom rejoin, explicit navigation priority and growth/resize consequences. The existing user-intent latch also fences pending reflow corrections; geometry alone cannot reattach it.
 
 Lazy full-timeline expansion is part of that same user-intent contract: a regrouped or otherwise missing transient prepend anchor preserves geometry rather than falling back to bottom. Normal stored session/remount restoration retains its compact bottom-or-anchor state.
 

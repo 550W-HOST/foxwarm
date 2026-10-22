@@ -2,7 +2,7 @@
 
 ## Overview
 
-The interactive turn flow from channel input through authorization, queueing, provider/tool iterations, retries, final delivery, and automatic compaction.
+The interactive turn flow from channel input through authorization, queueing, provider/tool iterations, retries, final delivery, and automatic compaction. Observable input/turn semantics are owned by [messages and turns](../behaviors/messages-and-turns.md); this thread retains scheduling, persistence, and dispatch mechanisms.
 
 ## Flow
 
@@ -100,17 +100,15 @@ Persist the canonical provider-qualified model key on model messages so mixed-mo
 
 ### D-pipeline-source-blind-turn-routing
 
-[2026-09-21] Session queue consumption and automatic model output are source-blind. The runner consumes all ordinary input currently visible at each safe point in canonical order, retaining one canonical Message per logical input, and does not split by platform, configured Channel instance, conversation, card, message ID, or reply preference. Real compact, Stop, wait, managed-control, tool-call/result, mailbox/authority, and lifecycle boundaries remain unchanged. `${TURN_ID}` correlates one provider/tool lifecycle and presentation progress only; it is not a reply target.
-
-Intermediate, final, error, and empty lifecycle output goes to every eligible attached Channel through the same local or Worker attachment path. WebUI retains its independent history/stream presentation exclusions. Empty finals invoke only adapters with a lifecycle handler, so platforms that do not need completion receive no empty message. QQ Bot and WeWork choose passive/proactive delivery from their own bounded latest per-conversation context; current QueueSource, Worker RPC, and tool context carry no card/message receipt or reply-control metadata. Request-level slash, authorization, and managed acknowledgements remain immediate `ctx.reply` operations and are not model output.
+[2026-09-21] [Source-blind input and output behavior](../behaviors/messages-and-turns.md#what-happens-when-input-arrives-while-the-session-is-busy) owns consumption without Channel/source batching; [Channels and replies](../behaviors/channels-and-replies.md#where-should-the-agents-ordinary-reply-go) owns automatic attachment delivery. `${TURN_ID}` remains ephemeral lifecycle/progress correlation, never a reply target. Local and Worker paths use the same attachment selection; request-level slash/auth/managed replies remain immediate `ctx.reply` operations. Empty lifecycle finals call only capable adapters, with WebUI using its independent history/stream path.
 
 ### D-pipeline-canonical-queue-item-boundaries
 
-Each logical queued input or event is appended as its own canonical `Message` in queue order, including `parts` items and structured `message` items. The ordinary prefix may be consumed before one provider request so tool-loop follow-ups affect that request, but the runner never concatenates queue-item parts. Ready compact commits and the established lifecycle/control boundaries remain queue boundaries; Channel source changes do not. Provider-specific serializers, not persisted history, normalize adjacent same-role messages when a protocol requires it.
+[Canonical input boundaries](../behaviors/messages-and-turns.md#what-happens-when-input-arrives-while-the-session-is-busy) retain one history Message per logical queue item. The owner commits a selected batch through one bulk append/save/publication boundary, including structured `message` and `parts` inputs; provider serializers alone normalize adjacent roles. Ready compact commits and established lifecycle/control boundaries remain queue boundaries; Channel source changes do not. Tool-call/result adjacency remains authoritative.
 
 ### D-pipeline-busy-queue-silence
 
-Busy-time input queues silently; UI/channel queue state is presented by current surfaces rather than an automatic acknowledgement message.
+[Busy ingress](../behaviors/messages-and-turns.md#what-happens-when-input-arrives-while-the-session-is-busy) queues without an automatic acknowledgement; queue state is presentation, not an extra model-visible message.
 
 ### D-pipeline-display-only-retries
 

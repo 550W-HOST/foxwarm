@@ -133,11 +133,12 @@ upload flow.
   byte-probed JPEG/PNG/GIF/WebP/BMP within the image cap; other images downgrade
   to generic files within the file cap. Outbound local files are hard-capped at
   100 MiB; this is lower than the 200 MiB inbound configuration hard cap.
-- `SessionTurnRunner` carries only the current turn's QQ source metadata through
-  the in-process tool context to `send_file`. An explicit target receives that
-  fallback metadata only when its exact instance/conversation matches; a
-  mismatched target is therefore proactive, while session broadcast still
-  relies on the adapter's exact-match check.
+- Current automatic reply context stays adapter-local; the runner's current
+  source snapshot and ToolContext do not carry old QQ receipt fields.
+  Narrow legacy source/options readers remain for persisted data, and
+  `sendFile` can still validate an explicitly supplied exact-match legacy
+  fallback. They do not restore source-targeted Session routing. Observable
+  behavior is owned by [latest passive context](../behaviors/channels-and-replies.md#why-can-a-newer-inbound-message-change-where-a-passive-reply-appears).
 
 ## Runtime and configuration
 

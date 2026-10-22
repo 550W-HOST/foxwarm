@@ -2,7 +2,7 @@
 
 ## Scope
 
-Display spans [composer](../units/webui-chat-composer.md) and [timeline](../units/webui-chat-timeline.md). Atomic serialization and draft/File ownership remain in [D-composer-inline-attachments](../units/webui-chat-composer.md#d-composer-inline-attachments); image URL/MIME authority remains in [image blob lifecycle](./image-blob-lifecycle.md).
+Observable draft/upload/history/provider/delivery distinctions are owned by [files, images, and attachments](../behaviors/files-images-and-attachments.md). This thread retains grid/reference projection, modal interaction and receipt-qualification mechanisms across [composer](../units/webui-chat-composer.md) and [timeline](../units/webui-chat-timeline.md). Atomic serialization and draft/File ownership remain in [D-composer-inline-attachments](../units/webui-chat-composer.md#d-composer-inline-attachments); image URL/MIME authority remains in [image blob lifecycle](./image-blob-lifecycle.md).
 
 ## D-attachment-grid-and-inline-references
 

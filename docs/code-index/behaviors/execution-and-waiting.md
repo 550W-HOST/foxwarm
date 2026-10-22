@@ -1,6 +1,6 @@
 # Behavior: execution and waiting
 
-For developers and Agents changing shell execution, turn controls, explicit waits, or ToolScript completion. This page owns their observable meanings. A Session turn, a shell process, a persisted script run, and a wait are different lifetimes; ending one does not imply that the others ended.
+For developers and Agents changing shell execution, turn controls, explicit waits, or ToolScript completion. This page owns their observable meanings. A Session turn, a shell process, a persisted script run, and a wait are different lifetimes; ending one does not imply that the others ended. [Messages and turns](./messages-and-turns.md) owns input/request boundaries, while [Nodes, workspaces, and permissions](./nodes-workspaces-and-permissions.md) owns placement and path authority.
 
 ## Exec waits for a process; it does not lease its lifetime
 

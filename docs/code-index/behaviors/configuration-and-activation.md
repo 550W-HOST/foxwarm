@@ -4,7 +4,7 @@ For developers and Agents changing Setup, configuration tools, or reload behavio
 
 ## Supported saves install a complete validated candidate
 
-WebUI Setup and `set_config` share one serialized Main-owned installer for `config`, `models`, and `tool-rules`. Setup supplies edited text or builds a candidate from a section form; the tool reads a complete regular-file candidate on Main. A tool candidate's location is not the active configuration location, and selecting a remote execution Node does not make that file a remote candidate.
+WebUI Setup and `set_config` share one serialized Main-owned installer for `config`, `models`, and `tool-rules`. Setup supplies edited text or builds a candidate from a section form; the tool reads a complete regular-file candidate on Main. A tool candidate's location is not the active configuration location, and selecting a remote execution Node does not make that file a remote candidate; [operation placement](nodes-workspaces-and-permissions.md#selection-routes-operations-not-the-whole-session) remains independent.
 
 The tool must be allowed by the current authorization policy both to install that target and to read the candidate through Main's file capability. Those checks run before reading and again at installation admission. A candidate cannot grant permission to install itself. Supported saves validate before replacement, retain the submitted bytes rather than redumping YAML, and replace the target through a synced same-directory temporary file. Schema-valid configuration is not proof that a provider credential works or an external service is reachable.
 
@@ -42,7 +42,7 @@ Revoking an identity, rotating its token, or withdrawing a surface affects its e
 
 The affected set is surface-specific: changing only WebUI scope does not rebuild that identity's unrelated MCP context, selected Node, or cwd. Unchanged identities are not disconnected. These rules prevent a revoked connection from continuing to authorize new work without treating configuration as process cancellation.
 
-Already-started commands are not killed, and durably accepted Session input is not withdrawn. A connection closing after input admission therefore does not prove the message was rejected or undo what the Agent has done. Inspect the relevant committed state before repeating an uncertain operation. [Access identities](../units/src-access-config.md) owns authentication/fencing; [execution and waiting](execution-and-waiting.md) owns cancellation and command lifetime.
+Already-started commands are not killed, and durably accepted Session input is not withdrawn. A connection closing after [input admission](messages-and-turns.md#which-boundary-am-i-observing) therefore does not prove the message was rejected or undo what the Agent has done. Inspect the relevant committed state before repeating an uncertain operation. [Access identities](../units/src-access-config.md) owns authentication/fencing; [execution and waiting](execution-and-waiting.md) owns cancellation and command lifetime.
 
 ## Direct file edits do not invoke the installer
 

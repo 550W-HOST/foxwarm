@@ -16,7 +16,7 @@ For developers and Agents changing durable state, restart behavior, or failure h
 | Persistent exec registry/artifacts | Tracked execution identity, owner, backend observation, and available capture/status. | The OS process necessarily survived, or missing status means exit zero. |
 | Active tool/model phase, stream draft, socket/cache reuse, failover health | Process-local working/presentation state. | These are a durable checkpoint or can be restored merely from an old UI view. |
 
-[Conversation and history](conversation-and-history.md) owns the active/Archive/memory distinction. [Execution and waiting](execution-and-waiting.md) owns exec, wait, Continue, Stop, and ToolScript continuation semantics. Use those rules rather than redefining their complete lifecycles here.
+[Messages and turns](messages-and-turns.md) owns input admission and consumption; [conversation and history](conversation-and-history.md) owns the active/Archive/memory distinction. [Execution and waiting](execution-and-waiting.md) owns exec, wait, Continue, Stop, and ToolScript continuation semantics. Use those rules rather than redefining their complete lifecycles here.
 
 ## Restart resumes recorded work, not the last machine instruction
 
@@ -42,11 +42,11 @@ Session workers retain their separate generation/incarnation fencing and drain/h
 | --- | --- | --- |
 | Explicit Session wait | Recognized persisted wait still derives a waiting state; its declared sources remain conditions for later activity. Timeout timers are reloaded by the timer subsystem. | A fallback wake asks the Agent to reassess, not declare the dependency successful. Stale timeout tokens cannot wake a replacement wait. |
 | Persisted overdue one-shot timer | Scheduling makes it due for delivery; recurring timers resume scheduling. | There is no general exactly-once effect or full missed-cron-backlog replay promise. Delivery and timer bookkeeping have their own failure windows. |
-| Task completed before notification failure | Task stays completed and the delivery warning/status is independent. | No background completion-notification retry runs, and repeating `complete` does not resend; terminal Tasks reject mutation. A lost response calls for inspection, not a second completion claim. |
+| Task completed before notification failure | Task stays completed and the delivery warning/status is independent. | No background completion-notification retry runs, and repeating `complete` does not resend; terminal Tasks reject model-facing mutations; authenticated user comments remain a separate append-only exception. A lost response calls for inspection, not a second completion claim. |
 | ToolScript paused for Agent input or safe timeout | A compatible saved snapshot can resume with the matching continuation under its owner Session. | Continuation resumes the snapshot, not current file source. Incompatible snapshots fail clearly while retaining historical evidence; an in-progress host effect is not a saved safe pause. |
 | Persistent exec tracked at restart | Registry reconciliation observes the recorded backend and routes completion to its exact owner when supported. | Process survival, log availability, notification retention, and transport capabilities remain separate. Lost status produces an unknown outcome, not synthetic success. |
 
-Timer semantics and persistence entry points are in [timers](../units/src-timers.md). Task commit/notification rules are in [Tasks](../units/src-tasks.md#actions). Compatible/incompatible VM snapshots and owner checks remain in [ToolScript](../units/src-toolscript.md#behavior). Exec's retention and uncertain-start boundaries remain in [persistent exec](../units/shared-persistent-exec.md#shared-tracking-and-provider-observations).
+Timer semantics and persistence entry points are in [timers](../units/src-timers.md). Task commit/notification outcomes are owned by [collaboration and Tasks](collaboration-and-tasks.md#when-does-a-task-change-notify-or-start-a-session); notification bookkeeping remains in [Tasks](../units/src-tasks.md#actions). Compatible/incompatible VM snapshots and owner checks remain in [ToolScript](../units/src-toolscript.md#behavior). Exec's retention and uncertain-start boundaries remain in [persistent exec](../units/shared-persistent-exec.md#shared-tracking-and-provider-observations).
 
 ## Unknown outcomes require evidence, not automatic repetition
 

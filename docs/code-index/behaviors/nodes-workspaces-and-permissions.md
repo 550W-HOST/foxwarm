@@ -4,7 +4,7 @@ For developers and Agents changing execution placement, filesystem access, or No
 
 ## Selection routes operations, not the whole Session
 
-Session conversation and runtime ownership do not move to a remote Node when `currentNode` changes. Placement follows the resolved operation:
+Session conversation and [turn ownership](messages-and-turns.md#which-boundary-am-i-observing) do not move to a remote Node when `currentNode` changes. Placement follows the resolved operation:
 
 | Operation | Observable placement |
 | --- | --- |
@@ -38,7 +38,7 @@ A useful file locator is **Node plus path**, with the relevant base directory wh
 | `copy_between_nodes` relative endpoints | Main/CLI legs are Agent-directory-relative; primitive Provider legs use that environment's default directory, not Session cwd. Each endpoint resolves separately. |
 | `send_file` relative source | Main uses Session cwd then Agent directory. Remote transfer readers retain their own transfer defaults rather than inheriting an unrelated Main cwd. |
 
-The differing transfer bases are implemented behavior, not a universal relative-path convention. Prefer explicit locators at cross-Node boundaries. Successful native file-tool results retain their actual resolved Node/path for Code actions; older relative-path records must not be reinterpreted using today's cwd. Detailed rules remain in [native paths](../threads/tool-dispatch-node-execution.md#d-dispatch-native-agent-paths-and-code-targets), [transfer semantics](../threads/tool-dispatch-node-execution.md#d-dispatch-generic-node-transfer), and [file delivery](../units/src-file-delivery.md).
+The differing transfer bases are implemented behavior, not a universal relative-path convention. Prefer explicit locators at cross-Node boundaries. [Attachment storage and file delivery](files-images-and-attachments.md#storage-does-not-follow-every-node-selection) have their own placement rather than following every selection. Successful native file-tool results retain their actual resolved Node/path for Code actions; older relative-path records must not be reinterpreted using today's cwd. Detailed rules remain in [native paths](../threads/tool-dispatch-node-execution.md#d-dispatch-native-agent-paths-and-code-targets), [transfer semantics](../threads/tool-dispatch-node-execution.md#d-dispatch-generic-node-transfer), and [file delivery](../units/src-file-delivery.md).
 
 File operations retain ordinary filesystem consequences: `write` protects existing files unless overwrite is explicit and creates missing parents only with `createDirs`; exact `edit` requires one match. Multi-file patches apply sequentially and may leave earlier operations applied when a later one fails. Cross-Node copy may leave a partial destination after failure. Shared semantics do not add transactions, rollback, or permission to overwrite. See [shared file semantics](../threads/tool-dispatch-node-execution.md#d-dispatch-shared-file-semantics).
 
@@ -78,4 +78,4 @@ Revoking an authenticated Node with `node_remove` is different again: it removes
 | Shell HTTP Node | Exec-only, with bounded output samples and no persistent full-log/restart-reconciliation guarantee. |
 | Code integration | Uses absolute POSIX URI paths; native Windows workspace mapping is not implemented. |
 
-Execution interruption, background retention, and transport-specific completion limits belong to [execution and waiting](./execution-and-waiting.md), not to Node selection. Browser workbench/resource lifetime belongs to [Code integration](../threads/code-integration.md) and [Workbench](../units/webui-workbench.md).
+Execution interruption, background retention, and transport-specific completion limits belong to [execution and waiting](./execution-and-waiting.md), not to Node selection. Browser surface/resource lifetime belongs to [Workbench and Chat](workbench-and-chat.md), with service mechanics in [Code integration](../threads/code-integration.md).

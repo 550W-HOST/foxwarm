@@ -1,6 +1,6 @@
 # Behavior: models and requests
 
-For developers and Agents changing model selection, provider requests, or request attribution. This page describes the current TypeScript request path; sharing a model name or protocol with another runtime does not establish behavioral parity. [Conversation and history](conversation-and-history.md) owns what context contains, and [execution and waiting](execution-and-waiting.md) owns turn controls.
+For developers and Agents changing model selection, provider requests, or request attribution. This page describes the current TypeScript request path; sharing a model name or protocol with another runtime does not establish behavioral parity. [Messages and turns](messages-and-turns.md) owns input/turn/request boundaries, [conversation and history](conversation-and-history.md) owns what context contains, and [execution and waiting](execution-and-waiting.md) owns turn controls.
 
 ## Selection is not execution identity
 
@@ -60,7 +60,7 @@ Effort is a requested provider-neutral value, not a promise that every leaf supp
 
 Changing models does not clear conversation, rewrite old attribution, or remove ordinary text and tool exchanges. Request preparation uses an attempt-local clone. When a historical assistant message has a known concrete source different from the attempted destination, the clone drops model-specific reasoning/signatures, opaque provider fields, and incompatible hosted-output replay metadata while preserving ordinary content and tool order. A message containing only the removed artifacts can disappear from that payload. Canonical history remains intact.
 
-The comparison is exact concrete identity, not provider type, virtual route, or an upstream model alias. Legacy messages with unknown identity are not assigned a guessed source. Same-leaf Chat Completions replay uses the destination's current configured reasoning field. Conditional memory can also vary with the concrete destination, so a failover may change the effective system prompt as well as request serialization. See [history compatibility](../threads/model-routing.md#d-model-routing-history-reasoning-compatibility) and [conditional memory snapshots](../threads/conditional-memory-snapshots.md).
+The comparison is exact concrete identity, not provider type, virtual route, or an upstream model alias. Legacy messages with unknown identity are not assigned a guessed source. Same-leaf Chat Completions replay uses the destination's current configured reasoning field. Image preparation/replay follows the separate [attachment representations](files-images-and-attachments.md#original-image-provider-input-and-browser-preview-are-not-the-same-object). Conditional memory can also vary with the concrete destination, so a failover may change the effective system prompt as well as request serialization. See [history compatibility](../threads/model-routing.md#d-model-routing-history-reasoning-compatibility) and [conditional memory snapshots](../threads/conditional-memory-snapshots.md).
 
 ## Usage and request records describe evidence, not estimates
 

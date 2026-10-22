@@ -2,7 +2,7 @@
 
 ## Overview
 
-This thread owns the cross-module contract for concrete and virtual model selection, prompt-cache-lineage routing, per-attempt failover, provider request rebuilding, response usability, model attribution, and setup/CLI exposure.
+This thread owns routing graph validation, hash/health algorithms, concrete request rebuilding, attribution metadata and exact-owner adoption mechanics. [Models and requests](../behaviors/models-and-requests.md) owns the selected/attempted distinction, retry/adoption consequences and provider-sensitive history observations.
 
 ## Configuration and resolved graph
 
@@ -84,7 +84,7 @@ HTTP 400, 413, and 422 are terminal and do not affect route health unless the bo
 
 Abort, stop, and cancellation terminate immediately and do not count as target health failures.
 
-Across OpenAI Chat Completions, OpenAI Responses, Anthropic, and compatible concrete providers, a completed response without non-whitespace assistant content and without a tool call is accepted by default as a normal turn end. Thinking/reasoning alone is not content. A tool-call-only response is valid. A concrete provider that sets `disallowEmptyResponse: true` instead treats an empty, whitespace-only, or reasoning-only response as a retryable `response-error`. Accepted empty completions never create fake model-visible `Error:` history.
+The [response-usability behavior](../behaviors/models-and-requests.md#routing-and-retry-change-the-attempted-request-not-the-saved-selection) distinguishes accepted empty completion from provider failure. `disallowEmptyResponse` is a concrete-provider-only fingerprinted field; when enabled, the common response classifier returns retryable `response-error` for empty/whitespace/reasoning-only output. Tool calls and successful hosted images remain usable content.
 
 ## Surfaces and attribution
 
@@ -134,7 +134,7 @@ Derivation occurs after virtual/concrete selection inside the complete request-p
 
 ### D-model-routing-outer-attempts
 
-There is one outer LLM attempt loop, with six total attempts by default. Each virtual attempt selects a leaf and rebuilds the complete concrete request; virtual providers do not contain another retry loop. Compatibility surfaces retain the historical `maxRetries` field name even though it means total attempts.
+[Retry behavior](../behaviors/models-and-requests.md#routing-and-retry-change-the-attempted-request-not-the-saved-selection) has one bounded physical-attempt budget. The LLM outer loop selects/rebuilds each concrete plan; virtual providers contain no retry loop. Compatibility surfaces retain `maxRetries` for the total-attempt count, currently six by default.
 
 ### D-model-routing-effort
 
@@ -148,7 +148,7 @@ The requested effort is captured once per selected-model snapshot; explicit owne
 
 ### D-model-routing-live-session-selection
 
-[2026-10-16] Model/Node selection notices are generated only when a normal authoritative LLM attempt adopts its effective configuration, after concrete routing and the existing owner safe point. Compare Foxwarm's canonical concrete `modelId`, not raw aliases or vendor-returned names. Same-leaf aliases do not notify; setter-only changes coalesce to the last adopted configuration versus the configuration actually used next. A→B→A without an intervening step produces no change notice. Setters and Node selection tools save settings but do not enqueue a notice or start idle/waiting/managed work. Future-child defaults and effort-only changes do not trigger notices or speculative child routing.
+[2026-10-16] [Selection adoption behavior](../behaviors/models-and-requests.md#switching-takes-effect-at-an-adoption-boundary) owns effective-change notices, coalescing, missing-key fallback and in-flight limits. This anchor retains exact-owner persistence and retry/Worker ordering; setters themselves do not enqueue notices or start work.
 
 The exact owner appends one timestamped `foxwarm-system` notice with `kind="session-settings-changed"` through its existing canonical append boundary, then rebuilds committed provider context before compatibility filtering/hydration/send. Automatic failover to a different concrete leaf therefore informs that next physical attempt. Missing requested Session keys use the existing global-default resolver and report the requested key, actual model, and fallback reason; the same missing key and actual model do not warn on every retry/turn. Notices do not retain pending setter actors, so deferred changes and automatic routing/fallback never impersonate an earlier user action. Historical notices are left unchanged.
 
