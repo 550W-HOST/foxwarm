@@ -32,29 +32,42 @@ public sealed partial class WebUiStartupTests
         var config = new ModelConfiguration(
             HostPaths.ForDataRoot(data, temp.Path, environment: _ => null)
         );
-        var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
+        var options = new ResponsesClientOptions(
+            new Uri("http://127.0.0.1:1"),
+            "wire",
+            "a",
+            "",
+            "",
+            713
+        );
         await using var manager = new SessionManager(data, work, options, config.Models);
         await manager.LoadAsync();
         var owner = await manager.CreateNamedAsync("main", "chart-owner", null, null);
         await using var mcp = new McpClient(data);
         var registry = SessionToolExecutor.CreateRegistry(
-            new JsonArray(ArtifactToolDefinition.Definition()), mcp, _ => work
+            new JsonArray(ArtifactToolDefinition.Definition()),
+            mcp,
+            _ => work
         );
         var tools = new SessionToolExecutor(new WorkspaceTools(work), owner, manager, registry);
         tools.BeginTurn();
-        var document = JsonNode.Parse("""
-            {
-              "type": "chart", "schemaVersion": 1, "title": "Log message categories",
-              "data": [
-                {"x": 1, "messageJson": "request completed", "type": "image", "mimeType": "image/png", "data": "category"},
-                {"x": 2, "messageJson": "{ \"status\": \"request completed\" }", "type": "other", "mimeType": null, "data": false}
-              ],
-              "spec": {"mark": "line", "encoding": {
-                "x": {"field": "x", "type": "quantitative"},
-                "y": {"field": "messageJson", "type": "nominal"}
-              }}
-            }
-            """)!.AsObject();
+        var document = JsonNode
+            .Parse(
+                """
+                {
+                  "type": "chart", "schemaVersion": 1, "title": "Log message categories",
+                  "data": [
+                    {"x": 1, "messageJson": "request completed", "type": "image", "mimeType": "image/png", "data": "category"},
+                    {"x": 2, "messageJson": "{ \"status\": \"request completed\" }", "type": "other", "mimeType": null, "data": false}
+                  ],
+                  "spec": {"mark": "line", "encoding": {
+                    "x": {"field": "x", "type": "quantitative"},
+                    "y": {"field": "messageJson", "type": "nominal"}
+                  }}
+                }
+                """
+            )!
+            .AsObject();
         var file = Path.Combine(work, "chart.json");
         await File.WriteAllTextAsync(file, document.ToJsonString());
         var published = await tools.ExecuteAsync(
@@ -72,11 +85,29 @@ public sealed partial class WebUiStartupTests
 
         await using var terminals = new Foxwarm.Terminal.TerminalRegistry(data, default);
         var address = new PublicWebAddress(
-            "http://127.0.0.1:0", new PathString("/nested/app"), "/nested/app/", false
+            "http://127.0.0.1:0",
+            new PathString("/nested/app"),
+            "/nested/app/",
+            false
         );
-        var server = new HttpServer([], 0, "synthetic-artifact-admin", null, manager, terminals, address, true);
+        var server = new HttpServer(
+            [],
+            0,
+            "synthetic-artifact-admin",
+            null,
+            manager,
+            terminals,
+            address,
+            true
+        );
         var runtime = new SessionRuntime(manager);
-        new WebUIChannel(manager, runtime, new MessageRouter(runtime), terminals, server.Downloads).Register(server.App);
+        new WebUIChannel(
+            manager,
+            runtime,
+            new MessageRouter(runtime),
+            terminals,
+            server.Downloads
+        ).Register(server.App);
         await server.App.StartAsync();
         using var client = new HttpClient(new HttpClientHandler { UseCookies = false })
         {
@@ -96,7 +127,9 @@ public sealed partial class WebUiStartupTests
                 JsonNode.DeepEquals(stored, delivered),
                 $"Stored: {stored.ToJsonString()}; HTTP: {delivered?.ToJsonString()}"
             );
-            Assert.True(JsonNode.DeepEquals(stored, await manager.Artifacts.ReadAsync(id, 1, owner.Id)));
+            Assert.True(
+                JsonNode.DeepEquals(stored, await manager.Artifacts.ReadAsync(id, 1, owner.Id))
+            );
         }
         finally
         {
