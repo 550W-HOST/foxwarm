@@ -24,6 +24,8 @@ The captured `${workspace}` base is the configured Agents directory for canonica
 
 The [Main browser boundary](./dotnet-main-browser.md#exact-isolated-agent-compatibility) preserves Source's exact isolated master capability opt-in for the five `browse_*` tools only. Generic denial still wins. This includes the raw slash-prefixed screenshot write without ordinary file-path facts; it is not constrained by the normal own-Agent file resolver. Unrelated bound-Node, exec, selection and structural guards remain unchanged.
 
+The hidden Archive message and block tools retain an independent same-Agent read guard for isolated callers, in addition to generic policy. The shared handler resolves live catalog identity and aliases first; absent live membership uses Source's requested-ID Agent fallback. It checks before reading retained Archive data, without hydrating a target owner or requiring its Node to be online. Clear/deletion retain Archive records and do not relax this boundary; an exact capability allow cannot bypass it. Nonisolated callers retain selected-target reads, and missing permitted targets remain pure empty reads.
+
 ## Policy selectors and authoritative facts
 
 Version-1 rules accept either legacy `match` or top-level selectors, never both. Omitted IDs become position-based `rule-N` diagnostics. Top-level Session/Node identity selectors use bounded literal `*` patterns; legacy `match.session`, scalar/argument matchers, ordered first-match evaluation and external-default-deny remain unchanged. Node selectors also accept caller-current or exact Provider IDs: native Main is `master`, authenticated native remotes are `authenticated-remote`. The matcher syntax does not create a Provider backend or widen native Node registration.

@@ -205,6 +205,18 @@ internal static class ArchiveControlTools
         );
         var sessionId = SessionGoal.Trim(SessionWait.Text(args["sessionId"]) ?? source.Id);
         await manager.AuthorizeToolAsync(source, new(name, "builtin", name, args), null, token);
+        if (manager.AgentIsolated(source.Agent))
+        {
+            // Source resolves live catalog aliases first and falls back to the requested
+            // identity's Agent segment when no live membership remains. Do not hydrate
+            // an owner or inspect retained Archive contents to admit this read.
+            var targetAgent =
+                manager.AuthorizationTarget(sessionId)?.Agent ?? sessionId.Split('/')[0];
+            if (targetAgent != source.Agent)
+                throw new ToolAuthorizationDeniedException(
+                    $"Isolated session can only use {name} for sessions under its own agent ({source.Agent})."
+                );
+        }
         return (sessionId, manager.ArchiveReader(sessionId));
     }
 
