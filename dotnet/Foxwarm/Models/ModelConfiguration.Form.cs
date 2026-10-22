@@ -36,9 +36,10 @@ internal sealed partial class ModelConfiguration
                 drafts[index] as JsonObject
                 ?? throw new InvalidDataException("Provider draft must be an object.");
             var key = JsString(
-                FirstTruthyFormValue(draft["id"], draft["providerKey"], draft["provider"])
-                    ?? JsonValue.Create("provider" + (index + 1))
-            ).Trim();
+                    FirstTruthyFormValue(draft["id"], draft["providerKey"], draft["provider"])
+                        ?? JsonValue.Create("provider" + (index + 1))
+                )
+                .Trim();
             if (key.Length == 0)
                 continue;
             if (next.ContainsKey(key))
