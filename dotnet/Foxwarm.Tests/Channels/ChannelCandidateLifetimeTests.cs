@@ -29,11 +29,16 @@ public sealed class ChannelCandidateLifetimeTests
                 f.Manager.ResolveChannelAsync("alpha:manual-cleanup")
             );
             Assert.Equal(2, failure.InnerExceptions.Count);
-            Assert.All(failure.InnerExceptions, error => Assert.IsType<UnauthorizedAccessException>(error));
+            Assert.All(
+                failure.InnerExceptions,
+                error => Assert.IsType<UnauthorizedAccessException>(error)
+            );
             Assert.Null(f.Manager.ChannelBinding("alpha:manual-cleanup"));
             Assert.NotNull(f.Manager.Catalog.Get(candidate!));
             Assert.True(File.Exists(Path.Combine(sessions, candidate + ".json")));
-            await Assert.ThrowsAsync<SessionDeletionException>(() => f.Manager.RequiredAsync(candidate!));
+            await Assert.ThrowsAsync<SessionDeletionException>(() =>
+                f.Manager.RequiredAsync(candidate!)
+            );
         }
         finally
         {
@@ -77,14 +82,22 @@ public sealed class ChannelCandidateLifetimeTests
                     {
                         candidate = await f.Manager.CreateAsync();
                         var accepted = await f.Manager.CreateChildAsync(
-                            candidate, "accepted", null, null, "accepted child task", null
+                            candidate,
+                            "accepted",
+                            null,
+                            null,
+                            "accepted child task",
+                            null
                         );
                         child = accepted.Child;
                         Assert.True(accepted.Delivered);
                         Assert.Single(child.Entry.Snapshot().Queue);
                         Assert.Empty(candidate.Entry.Snapshot().Queue);
                         Assert.Empty(candidate.History());
-                        File.SetUnixFileMode(state, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+                        File.SetUnixFileMode(
+                            state,
+                            UnixFileMode.UserRead | UnixFileMode.UserExecute
+                        );
                         return candidate;
                     }
                 )
@@ -95,9 +108,22 @@ public sealed class ChannelCandidateLifetimeTests
             Assert.False(candidate.Entry.Retired);
             Assert.NotNull(candidate.Archive.ReadBranch());
             Assert.Null(f.Manager.ChannelBinding("alpha:accepted-child"));
-            Assert.Equal(candidate.Id, SessionWait.Text(f.Manager.Catalog.Get(child!.Id)!["parentSessionId"]));
-            Assert.Equal(candidate.Id, SessionWait.Text(child.Entry.Snapshot().AuthorityEnvelope["parentSessionId"]));
-            Assert.Equal(candidate.Id, SessionWait.Text(JsonNode.Parse(await File.ReadAllTextAsync(child.AuthorityStore.AuthorityPath))!["parentSessionId"]));
+            Assert.Equal(
+                candidate.Id,
+                SessionWait.Text(f.Manager.Catalog.Get(child!.Id)!["parentSessionId"])
+            );
+            Assert.Equal(
+                candidate.Id,
+                SessionWait.Text(child.Entry.Snapshot().AuthorityEnvelope["parentSessionId"])
+            );
+            Assert.Equal(
+                candidate.Id,
+                SessionWait.Text(
+                    JsonNode.Parse(
+                        await File.ReadAllTextAsync(child.AuthorityStore.AuthorityPath)
+                    )!["parentSessionId"]
+                )
+            );
         }
         finally
         {
@@ -113,7 +139,10 @@ public sealed class ChannelCandidateLifetimeTests
         await ChannelCreationCompensationTests.ReopenAsync(f);
         var coldParent = await f.Manager.RequiredAsync(candidate.Id);
         var coldChild = await f.Manager.RequiredAsync(child.Id);
-        Assert.Equal(candidate.Id, SessionWait.Text(coldChild.Entry.Snapshot().AuthorityEnvelope["parentSessionId"]));
+        Assert.Equal(
+            candidate.Id,
+            SessionWait.Text(coldChild.Entry.Snapshot().AuthorityEnvelope["parentSessionId"])
+        );
         Assert.Single(coldChild.Entry.Snapshot().Queue);
         Assert.Single(coldParent.Entry.Snapshot().Queue);
     }
