@@ -27,7 +27,7 @@ public sealed class OutboundMcpDiscoveryTests
         );
         Assert.Contains("discovery timed out", error.Message);
         Assert.InRange(watch.Elapsed.TotalSeconds, 59, 70);
-        Assert.Single((await peer.EventsAsync()).Where(item => item["kind"]?.ToString() == "list"));
+        Assert.Single(await peer.EventsAsync(), item => item["kind"]?.ToString() == "list");
         var tools = await fixture.Mcp.ListToolsAsync(
             "peer",
             stop.Token,
