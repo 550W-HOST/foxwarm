@@ -601,17 +601,25 @@ internal sealed partial class SessionManager : IAsyncDisposable
             current = sessions.Values.ToArray();
         // Start bounded foreground settlement immediately; accepted effects retain
         // their dependencies throughout grace and cancellation.
-        await Task.WhenAll(current.Select(session => session.Registry.Runner.ShutdownAsync(
-            cancelForeground: ToolScript.CancelForegroundForShutdown
-        )));
+        await Task.WhenAll(
+            current.Select(session =>
+                session.Registry.Runner.ShutdownAsync(
+                    cancelForeground: ToolScript.CancelForegroundForShutdown
+                )
+            )
+        );
         await timers.DisposeAsync();
         await DrainPublicationsAsync();
         lock (lifecycle)
             current = sessions.Values.ToArray();
         // An accepted creation can publish during closure, but its runner is fenced.
-        await Task.WhenAll(current.Select(session => session.Registry.Runner.ShutdownAsync(
-            cancelForeground: ToolScript.CancelForegroundForShutdown
-        )));
+        await Task.WhenAll(
+            current.Select(session =>
+                session.Registry.Runner.ShutdownAsync(
+                    cancelForeground: ToolScript.CancelForegroundForShutdown
+                )
+            )
+        );
         await Task.WhenAll(current.Select(session => session.DrainForegroundAsync()));
         await waitTimeouts.DrainAsync();
         await waitLiveness.DrainAsync();

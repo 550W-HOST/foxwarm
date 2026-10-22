@@ -384,7 +384,10 @@ internal sealed partial class MainToolScript : IAsyncDisposable
     {
         // Stop may already have taken the foreground handle. Timer slices do not carry its cancelled token.
         foreach (var run in active.Values)
-            if (ReferenceEquals(run.Context.Owner.Entry, entry) && run.Caller.IsCancellationRequested)
+            if (
+                ReferenceEquals(run.Context.Owner.Entry, entry)
+                && run.Caller.IsCancellationRequested
+            )
                 run.RequestCancel();
     }
 
