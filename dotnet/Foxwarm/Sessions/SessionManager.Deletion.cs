@@ -480,7 +480,14 @@ internal sealed partial class SessionManager
         {
             if (sessions.TryGetValue(id, out var current) && ReferenceEquals(current, owner))
                 sessions.TryRemove(id, out _);
-            identities.Remove(id);
+            if (identities.TryGetValue(id, out var slot))
+                foreach (
+                    var key in identities
+                        .Where(pair => ReferenceEquals(pair.Value, slot))
+                        .Select(pair => pair.Key)
+                        .ToArray()
+                )
+                    identities.Remove(key);
         }
         lock (presentationGate)
             if (localVisible.Remove(id))
