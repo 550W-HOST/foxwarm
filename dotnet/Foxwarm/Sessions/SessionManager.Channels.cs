@@ -83,9 +83,20 @@ internal sealed partial class SessionManager
                 AttachChannel(target, owner, updates: updates);
                 return owner;
             }
-            catch
+            catch (Exception error)
             {
-                await RollbackChannelCreationAsync(owner);
+                try
+                {
+                    await RollbackChannelCreationAsync(owner);
+                }
+                catch (Exception cleanup)
+                {
+                    throw new AggregateException(
+                        $"Channel binding failed and candidate '{owner.Id}' cleanup also failed.",
+                        error,
+                        cleanup
+                    );
+                }
                 throw;
             }
         }
@@ -97,9 +108,84 @@ internal sealed partial class SessionManager
 
     private async Task RollbackChannelCreationAsync(SessionOwner owner)
     {
-        var branch = owner.Archive.ReadBranch();
-        await DeleteAsync(owner.Id);
-        await CompensateCreatedBranchAsync(owner.AuthorityStore, branch);
+        using var creation = TrackCreation();
+        var id = owner.Id;
+        var operation = new DeleteOperation(
+            Catalog.SelectDeletion(id, false),
+            false,
+            id,
+            null,
+            false
+        );
+        try
+        {
+            lock (lifecycle)
+                RequireIdentityAction([id]);
+            await ClaimDeleteAsync(operation);
+            if (!ReferenceEquals(await GetExistingAsync(id, forDeletion: true), owner))
+                throw new InvalidOperationException(
+                    "The channel candidate lifetime is no longer current."
+                );
+            RequireSameSelection(operation);
+            if (deletionChannels.Blockers(deletionChannels.Read(id), [id]).Count > 0)
+                throw new InvalidOperationException(
+                    "The channel candidate acquired another attachment."
+                );
+            var snapshot = owner.Entry.Snapshot();
+            if (
+                operation.Selection.Direct.Length > 0
+                || snapshot.Queue.Count > 0
+                || snapshot.History.Count > 0
+                || snapshot.Busy
+                || snapshot.Stopping
+                || owner.Processing
+            )
+                throw new InvalidOperationException(
+                    "The channel candidate has accepted work and cannot be compensated."
+                );
+            operation.Owners[id] = owner;
+            var branch = owner.Archive.ReadBranch();
+            // Creation compensation owns only this unused candidate, not general exec cleanup.
+            await RetireDeletionOwnerAsync(operation, id, owner);
+            await DeleteStageAsync(operation, "json-unlink", id);
+            UnlinkActive(owner.AuthorityStore.AuthorityPath, () => operation.JsonRemoved.Add(id));
+            operation.JsonDurable.Add(id);
+            await DeleteStageAsync(operation, "frontier-unlink", id);
+            UnlinkActive(
+                Path.Combine(root, "state", "sessions", id + ".frontier.json"),
+                () => operation.FrontierRemoved.Add(id)
+            );
+            operation.FrontierDurable.Add(id);
+            await DeleteStageAsync(operation, "channels", id);
+            deletionChannels.Detach(id);
+            operation.ChannelsCleaned.Add(id);
+            await DeleteStageAsync(operation, "archive", id);
+            await CompensateCreatedBranchAsync(owner.AuthorityStore, branch);
+            await DeleteStageAsync(operation, "catalog", id);
+            try
+            {
+                Catalog.RemoveForDeletion(id);
+            }
+            catch
+            {
+                if (Catalog.Get(id) is null)
+                    CompleteDeletedOwner(operation, id, owner);
+                throw;
+            }
+            CompleteDeletedOwner(operation, id, owner);
+        }
+        catch
+        {
+            // An explicit null-source delete can continue this exact retired lifetime.
+            // It retains Archive under the ordinary manual-deletion policy.
+            if (operation.RetirementStarted.Count > 0)
+                RetainPartialDelete(operation);
+            throw;
+        }
+        finally
+        {
+            ReleaseDelete(operation);
+        }
     }
 
     internal async Task<SessionOwner?> ProvisionChannelGuestAsync(ExternalChannelContext source)

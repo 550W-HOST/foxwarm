@@ -280,23 +280,7 @@ internal sealed partial class SessionManager
             {
                 AssertDeleteSource(operation);
                 var owner = operation.Owners[id];
-                if (!operation.Retired.Contains(id))
-                {
-                    await DeleteStageAsync(operation, "retire", id);
-                    lock (lifecycle)
-                        identities[id].Retiring = true;
-                    operation.RetirementStarted.Add(id);
-                    mcp.InvalidateOwner(owner);
-                    Nodes.RetireSession(owner);
-                    await owner.Compactor.StopAsync();
-                    await owner.DrainForegroundAsync();
-                    await waitTimeouts.RetireAsync(id);
-                    await waitLiveness.RetireAsync(id);
-                    await owner.Entry.SaveLane.RetireAsync(owner.AuthorityStore.Retire);
-                    lock (lifecycle)
-                        identities[id].Retired = true;
-                    operation.Retired.Add(id);
-                }
+                await RetireDeletionOwnerAsync(operation, id, owner);
                 if (!operation.TrackingCleaned.Contains(id))
                 {
                     await DeleteStageAsync(operation, "tracking", id);
@@ -374,23 +358,7 @@ internal sealed partial class SessionManager
                 && operation.Deleted.Count == 0
             )
                 throw;
-            var remaining = RemainingDeleteClaims(operation).Length > 0;
-            lock (lifecycle)
-            {
-                if (remaining)
-                {
-                    partialDeletes[operation.Requested] = operation;
-                    partialDeletes[operation.Selection.Root] = operation;
-                }
-                else
-                    foreach (
-                        var key in partialDeletes
-                            .Where(pair => pair.Value == operation)
-                            .Select(pair => pair.Key)
-                            .ToArray()
-                    )
-                        partialDeletes.Remove(key);
-            }
+            var remaining = RetainPartialDelete(operation);
             var details = DeleteProgress(operation);
             details["failedStage"] = operation.Stage;
             details["failedSessionId"] = operation.FailedId;
@@ -409,6 +377,53 @@ internal sealed partial class SessionManager
         finally
         {
             ReleaseDelete(operation);
+        }
+    }
+
+    private bool RetainPartialDelete(DeleteOperation operation)
+    {
+        var remaining = RemainingDeleteClaims(operation).Length > 0;
+        lock (lifecycle)
+        {
+            if (remaining)
+            {
+                partialDeletes[operation.Requested] = operation;
+                partialDeletes[operation.Selection.Root] = operation;
+            }
+            else
+                foreach (
+                    var key in partialDeletes
+                        .Where(pair => pair.Value == operation)
+                        .Select(pair => pair.Key)
+                        .ToArray()
+                )
+                    partialDeletes.Remove(key);
+        }
+        return remaining;
+    }
+
+    private async Task RetireDeletionOwnerAsync(
+        DeleteOperation operation,
+        string id,
+        SessionOwner owner
+    )
+    {
+        if (!operation.Retired.Contains(id))
+        {
+            await DeleteStageAsync(operation, "retire", id);
+            lock (lifecycle)
+                identities[id].Retiring = true;
+            operation.RetirementStarted.Add(id);
+            mcp.InvalidateOwner(owner);
+            Nodes.RetireSession(owner);
+            await owner.Compactor.StopAsync();
+            await owner.DrainForegroundAsync();
+            await waitTimeouts.RetireAsync(id);
+            await waitLiveness.RetireAsync(id);
+            await owner.Entry.SaveLane.RetireAsync(owner.AuthorityStore.Retire);
+            lock (lifecycle)
+                identities[id].Retired = true;
+            operation.Retired.Add(id);
         }
     }
 
