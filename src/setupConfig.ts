@@ -189,10 +189,6 @@ export function buildAppConfigWithChannelsYaml(channels: AppConfig['channels'], 
   return nextRawYaml;
 }
 
-export function writeAppConfigWithChannels(channels: AppConfig['channels'], filePath: string = APP_CONFIG_PATH): AppConfig {
-  return writeRawAppConfig(buildAppConfigWithChannelsYaml(channels, filePath), filePath);
-}
-
 function splitModelIds(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value.map(item => String(item || '').trim()).filter(Boolean);

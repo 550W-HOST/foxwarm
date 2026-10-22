@@ -178,12 +178,12 @@ try {
   state = await turn(actor, 'failed-install', [call('invalid-model', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'models', filePath: 'invalid-model' } }), call('removed-setter', 'call_tool', { toolId: 'builtin:set_tool_rules', args: { filePath: 'model-candidate' } })])
   assert(pair(state, 'invalid-model').response.error); assert(pair(state, 'removed-setter').response.error); assert.equal(await readFile(fixture.modelPath, 'utf8'), rawModels)
   const nextApp = '# latest unrelated field\nllm:\n  maxOutput: 715\n  compactKeepPercent: 0.3\nchannels:\n  webui: {}\n'
-  const saves = await Promise.all([fixture.api('POST', '/api/setup/config', { yaml: nextApp }), fixture.api('POST', '/api/setup/channels', { channels: { webui: { type: 'webui', token: 'synthetic-channel-token' } } })])
+  const alternateApp = nextApp.replace('webui: {}', 'webui: {type: webui, token: synthetic-channel-token}')
+  const saves = await Promise.all([fixture.api('POST', '/api/setup/config', { yaml: nextApp }), fixture.api('POST', '/api/setup/config', { yaml: alternateApp })])
   assert(saves.every(result => result.status === 200), JSON.stringify(saves))
   const config = await readFile(join(fixture.data, 'state/config.yaml'), 'utf8')
-  assert(config.includes('# latest unrelated field')); assert(config.includes('maxOutput: 715'))
-  // Either admitted whole-document order is legal. If it won last, it intentionally replaces channels.
-  if (!config.includes('synthetic-channel-token')) assert.equal(config, nextApp)
+  // Each full-document save is a complete replacement; either admitted order is legal.
+  assert([nextApp, alternateApp].includes(config))
 
   // Bounded patch diagnostics remain useful through the native tool's paired provider error.
   await writeFile(join(own, 'patch-source'), Array.from({ length: 200 }, (_, i) => 'line-' + i).join('\n'))

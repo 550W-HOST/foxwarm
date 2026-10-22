@@ -89,7 +89,9 @@ public sealed class QQBotChannelTests
         );
         // A separate denied conversation without guest provisioning creates/saves nothing.
         var next = peer.Config();
-        await f.Configuration.SaveChannelsAsync(new() { ["qq"] = next });
+        await f.Configuration.SaveAppAsync(
+            new JsonObject { ["channels"] = new JsonObject { ["qq"] = next } }.ToJsonString()
+        );
         peer.Push(
             "C2C_MESSAGE_CREATE",
             QQBotPeer.Message(
@@ -286,8 +288,8 @@ public sealed class QQBotChannelTests
         );
         Assert.Single(peer.Sent.Skip(count));
         Assert.Equal("7", peer.Sent.Last().Body["msg_type"]!.ToString());
-        await f.Configuration.SaveChannelsAsync(
-            new() { ["qq"] = config.DeepClone(), ["second"] = config.DeepClone() }
+        await f.Configuration.SaveAppAsync(
+            new JsonObject { ["channels"] = new JsonObject { ["qq"] = config.DeepClone(), ["second"] = config.DeepClone() } }.ToJsonString()
         );
         await f.Manager.ManagedChannels!.ReloadAsync();
         await f

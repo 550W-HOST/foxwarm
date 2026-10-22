@@ -80,44 +80,7 @@ try {
   const statusAfter = await api('/api/setup/status')
   assert.equal(statusAfter.body.config.rawYaml, savedRaw)
 
-  const channelSave = await api('/api/setup/channels', 'POST', {
-    channels: {
-      webui: { type: 'webui', enabled: true },
-      weixin: { type: 'weixin', enabled: true, token: 'saved-token', unknown: 'retained' },
-    },
-  })
-  assert.equal(channelSave.status, 200, JSON.stringify(channelSave))
-  assert.equal(channelSave.body.saved, true)
-  assert.equal(channelSave.body.target, 'config')
-  assert.deepEqual(channelSave.body.applied, ['access.identities'])
-  assert.deepEqual(channelSave.body.notApplied, ['channels'])
-  assert(Array.isArray(channelSave.body.restartRequired))
-  const channelRaw = await readFile(`${fixture.data}/state/config.yaml`, 'utf8')
-  assert.equal((channelRaw.match(/^channels:/gm) || []).length, 1)
-  assert.match(channelRaw, /newUnknownField: preserved/)
-  assert.match(channelRaw, /unknown: retained/)
-
-  const quotedRaw = channelRaw.replace(/^channels:/m, '"channels":')
-  const quotedSave = await api('/api/setup/config', 'POST', { yaml: quotedRaw })
-  assert.equal(quotedSave.status, 200, JSON.stringify(quotedSave))
-  const quotedChannels = await api('/api/setup/channels', 'POST', {
-    channels: { webui: { type: 'webui', enabled: true } },
-  })
-  assert.equal(quotedChannels.status, 400, JSON.stringify(quotedChannels))
-  assert.equal(await readFile(`${fixture.data}/state/config.yaml`, 'utf8'), quotedRaw)
-  const quotedRestore = await api('/api/setup/config', 'POST', { yaml: channelRaw })
-  assert.equal(quotedRestore.status, 200, JSON.stringify(quotedRestore))
-
-  const spacedRaw = channelRaw.replace(/^channels:/m, 'channels :')
-  const spacedSave = await api('/api/setup/config', 'POST', { yaml: spacedRaw })
-  assert.equal(spacedSave.status, 200, JSON.stringify(spacedSave))
-  const spacedChannels = await api('/api/setup/channels', 'POST', {
-    channels: { webui: { type: 'webui', enabled: true } },
-  })
-  assert.equal(spacedChannels.status, 200, JSON.stringify(spacedChannels))
-  assert.equal((await readFile(`${fixture.data}/state/config.yaml`, 'utf8')).match(/^channels:/gm)?.length, 1)
-  const spacedRestore = await api('/api/setup/config', 'POST', { yaml: channelRaw })
-  assert.equal(spacedRestore.status, 200, JSON.stringify(spacedRestore))
+  const channelRaw = savedRaw
 
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'], userDataDir: `${fixture.root}/browser` })
   page = await browser.newPage()
@@ -134,7 +97,7 @@ try {
   await page.waitForSelector(editor, { visible: true })
   assert.match(await page.evaluate(() => document.body.innerText), /External chat channels are unavailable on this server\./)
   assert.equal(await page.$eval('body', body => body.innerText.includes('Start Weixin login')), false)
-  const uiRaw = channelRaw.replace('unknown: retained', 'unknown: ui-edited')
+  const uiRaw = channelRaw.replace('customChannelField: keep-me', 'customChannelField: ui-edited')
   await page.focus(editor)
   await page.keyboard.down('Control'); await page.keyboard.press('A'); await page.keyboard.up('Control')
   await page.keyboard.sendCharacter(uiRaw.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n'))
@@ -182,9 +145,9 @@ try {
     notApplied: response.notApplied, restartRequired: response.restartRequired,
   })
   console.log(JSON.stringify({
-    result: 'ok', rawPreserved: true, invalidUnchanged: true, channelSectionPreserved: true,
+    result: 'ok', rawPreserved: true, invalidUnchanged: true,
     unavailableChannels: true, uiSave: true, originalSetupFeedback,
-    configOutcome: outcome(saved.body), channelOutcome: outcome(channelSave.body), restartPrefix: true,
+    configOutcome: outcome(saved.body), restartPrefix: true,
   }))
 } finally {
   if (browser) await browser.close().catch(() => {})

@@ -88,61 +88,6 @@ internal sealed partial class WebUIChannel
                 }
             }
         );
-        app.MapPost(
-            "/api/setup/channels",
-            async (HttpRequest request) =>
-            {
-                try
-                {
-                    var input =
-                        await JsonNode.ParseAsync(request.Body) as JsonObject
-                        ?? throw new InvalidDataException(
-                            "Setup channels input must be an object."
-                        );
-                    JsonObject channels;
-                    if (input["channels"] is JsonObject objectValue)
-                        channels = objectValue;
-                    else if (
-                        input["yaml"] is JsonValue yaml
-                        && yaml.TryGetValue<string>(out var raw)
-                    )
-                    {
-                        var parsed = ConfigurationYaml.Parse(raw, "channels config");
-                        channels = parsed["channels"] as JsonObject ?? parsed;
-                    }
-                    else
-                        throw new InvalidDataException(
-                            "Setup channels must contain a channels object or YAML."
-                        );
-                    var installation = await configuration.SaveChannelsAsync(channels);
-                    installation["success"] = true;
-                    installation["configPath"] = configuration.AppPath;
-                    installation["channelsYaml"] = ModelConfiguration.ChannelsYamlForObject(
-                        channels
-                    );
-                    installation["channelCount"] = channels.Count;
-                    installation["reload"] ??= new JsonObject
-                    {
-                        ["started"] = new JsonArray(),
-                        ["stopped"] = new JsonArray(),
-                        ["statuses"] = configuration.ChannelDiagnostics(webUiRunning: true),
-                        ["available"] = false,
-                        ["message"] = "External chat channels are unavailable on this server.",
-                    };
-                    return Results.Ok(installation);
-                }
-                catch (Exception error)
-                    when (error
-                            is JsonException
-                                or InvalidDataException
-                                or InvalidOperationException
-                                or IOException
-                    )
-                {
-                    return Results.BadRequest(new { error = configuration.SafeAppError(error) });
-                }
-            }
-        );
         RegisterWeixinSetupRoutes(app, configuration);
         app.MapPost(
             "/api/setup/models",

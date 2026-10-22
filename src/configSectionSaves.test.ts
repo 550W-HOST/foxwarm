@@ -133,26 +133,6 @@ channels:
   };
 }
 
-test('queued Channels save preserves a preceding full Config token, URL, and raw surrounding text', { timeout: 30_000 }, async () => {
-  const fixture = await heldReloadFixture();
-  try {
-    const { pending: first } = await fixture.beginHeldSave();
-    const secondAdmitted = fixture.expectAdmission(2);
-    const second = fixture.save('config', { yaml: `# Preserve the latest document\n${fixture.newer}` });
-    await secondAdmitted;
-    const thirdAdmitted = fixture.expectAdmission(3);
-    const third = fixture.save('channels', { channels: {} });
-    await thirdAdmitted;
-    await fixture.finish(first, second, third);
-    const raw = await fs.readFile(APP_CONFIG_PATH, 'utf8');
-    const config = validateAppConfigYaml(raw);
-    assert.equal(config.url, 'https://new.example.invalid');
-    assert.equal(fixture.access.snapshot.identities.reader.token, 'rotated-token');
-    assert.match(raw, /^# Preserve the latest document/);
-    assert.deepEqual(config.channels, {});
-  } finally { await fixture.close(); }
-});
-
 test('queued structured Models save reads latest overrides while replacing the submitted provider set', { timeout: 30_000 }, async () => {
   const fixture = await heldReloadFixture();
   try {
@@ -192,7 +172,7 @@ test('queued Weixin login merges only its channel against the latest app configu
     const login = await fixture.save('weixin/login/start', { channelId: 'login-weixin', baseUrl: fixture.upstreamUrl });
     const { pending: first } = await fixture.beginHeldSave();
     const secondAdmitted = fixture.expectAdmission(2);
-    const latest = fixture.newer.replace('channels: {}', `channels:\n  other-weixin: { type: weixin, enabled: false, customField: retained }\n  login-weixin: { type: weixin, enabled: false, allowedUsers: [latest-user], customField: latest }`);
+    const latest = '# Preserve the latest document\n' + fixture.newer.replace('channels: {}', `channels:\n  other-weixin: { type: weixin, enabled: false, customField: retained }\n  login-weixin: { type: weixin, enabled: false, allowedUsers: [latest-user], customField: latest }`);
     const second = fixture.save('config', { yaml: latest });
     await secondAdmitted;
     const thirdAdmitted = fixture.expectAdmission(3);
@@ -200,7 +180,9 @@ test('queued Weixin login merges only its channel against the latest app configu
     await thirdAdmitted;
     const results = await fixture.finish(first, second, third);
     assert.equal(results[2].connected, true);
-    const config = validateAppConfigYaml(await fs.readFile(APP_CONFIG_PATH, 'utf8'));
+    const raw = await fs.readFile(APP_CONFIG_PATH, 'utf8');
+    assert.match(raw, /^# Preserve the latest document/);
+    const config = validateAppConfigYaml(raw);
     assert.equal(config.url, 'https://new.example.invalid');
     assert.equal(fixture.access.snapshot.identities.reader.token, 'rotated-token');
     const channels = config.channels as any;

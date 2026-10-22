@@ -103,22 +103,6 @@ function buildProviderConfigFromSetup(body: any): { default: string; providers: 
   };
 }
 
-function parseChannelsYaml(rawYaml: unknown): AppConfig['channels'] {
-  const text = typeof rawYaml === 'string' ? rawYaml.trim() : '';
-  if (!text) {
-    return {};
-  }
-  const parsed = yaml.load(text) as any;
-  if (!parsed) {
-    return {};
-  }
-  const channels = parsed.channels && typeof parsed.channels === 'object' ? parsed.channels : parsed;
-  if (!channels || typeof channels !== 'object' || Array.isArray(channels)) {
-    throw new Error('channels config must be a YAML object or an object under `channels:`.');
-  }
-  return channels;
-}
-
 function sanitizeChannelConfigForSetup(config: AppConfig): Record<string, any> {
   return config.channels || {};
 }
@@ -339,30 +323,6 @@ export function registerWebUiSetupRoutes(server: HttpServer, installer: ConfigIn
         });
       } catch (e: any) {
         logger.error({ err: e }, 'Failed to save setup config');
-        res.status(400).json({ error: e.message });
-      }
-    },
-  });
-
-  server.addRoute({
-    path: '/api/setup/channels',
-    method: 'POST',
-    handler: async (req: express.Request, res: express.Response) => {
-      try {
-        const nextChannels = req.body?.channels && typeof req.body.channels === 'object'
-          ? req.body.channels
-          : parseChannelsYaml(req.body?.yaml);
-        const installation = await installer.install('config', () => buildAppConfigWithChannelsYaml(nextChannels || {}, APP_CONFIG_PATH));
-        const reload = installation.reload;
-        res.json({
-          success: true,
-          configPath: APP_CONFIG_PATH,
-          channelsYaml: dumpSetupYaml(nextChannels || {}),
-          ...installation,
-          reload,
-        });
-      } catch (e: any) {
-        logger.error({ err: e }, 'Failed to save channels setup');
         res.status(400).json({ error: e.message });
       }
     },

@@ -104,8 +104,8 @@ public sealed class ExternalChannelNodeTests
             Assert.Equal(bytes, await File.ReadAllBytesAsync(path));
             // The configured WeWork callback actually materializes through that same isolated Node owner.
             var callbackPort = WeWorkPeer.Port();
-            await f.Configuration.SaveChannelsAsync(
-                new JsonObject { ["work"] = peer.Config(callbackPort) }
+            await f.Configuration.SaveAppAsync(
+                new JsonObject { ["channels"] = new JsonObject { ["work"] = peer.Config(callbackPort) } }.ToJsonString()
             );
             f.Manager.AttachChannel("wework:node-media", f.Owner);
             f.Manager.AttachChannel("work:node-media", f.Owner);
@@ -142,7 +142,9 @@ public sealed class ExternalChannelNodeTests
             );
             // QQ resolves the actual authorized Session before its bounded Node materializer runs.
             qq.Assets["/small"] = "QQ Node bytes"u8.ToArray();
-            await f.Configuration.SaveChannelsAsync(new JsonObject { ["qq"] = qq.Config() });
+            await f.Configuration.SaveAppAsync(
+                new JsonObject { ["channels"] = new JsonObject { ["qq"] = qq.Config() } }.ToJsonString()
+            );
             f.Manager.AttachChannel("qq:group:room", f.Owner);
             qq.Push(
                 "GROUP_AT_MESSAGE_CREATE",

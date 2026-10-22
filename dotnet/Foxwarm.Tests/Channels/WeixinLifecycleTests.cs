@@ -48,7 +48,9 @@ public sealed class WeixinLifecycleTests
         await f.Manager.ManagedChannels!.ReloadAsync();
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
         config["weixin"]!["longPollTimeoutMs"] = 80;
-        var reload = f.Configuration.SaveChannelsAsync(config);
+        var reload = f.Configuration.SaveAppAsync(
+            new JsonObject { ["channels"] = config.DeepClone() }.ToJsonString()
+        );
         await TelegramChannelTests.Until(() => f.Manager.ChannelRegistry.Get("alpha") is null);
         release.TrySetResult();
         // On failure the bounded test process, rather than a joining teardown, owns cleanup of the cycle.
@@ -103,7 +105,9 @@ public sealed class WeixinLifecycleTests
         await f.Manager.ManagedChannels.ReloadAsync();
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
         config["z-source"]!["longPollTimeoutMs"] = 80;
-        var reload = f.Configuration.SaveChannelsAsync(config);
+        var reload = f.Configuration.SaveAppAsync(
+            new JsonObject { ["channels"] = config.DeepClone() }.ToJsonString()
+        );
         await TelegramChannelTests.Until(() => f.Manager.ChannelRegistry.Get("a-default") is null);
         release.TrySetResult();
         Assert.Same(reload, await Task.WhenAny(reload, Task.Delay(2000)));
