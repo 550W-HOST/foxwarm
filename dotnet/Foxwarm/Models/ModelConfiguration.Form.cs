@@ -17,9 +17,7 @@ internal sealed partial class ModelConfiguration
             : "providers";
         var old = existing[rootKey] as JsonObject ?? new JsonObject();
         var next = new JsonObject();
-        var drafts =
-            input["providers"] as JsonArray
-            ?? throw new InvalidDataException("Models setup requires providers array.");
+        var drafts = NormalizeProviderDrafts(input);
         string[] Split(JsonNode? node) =>
             node is JsonArray array
                 ? array
@@ -32,12 +30,15 @@ internal sealed partial class ModelConfiguration
                     .Select(value => value.Trim())
                     .Where(value => value.Length > 0)
                     .ToArray();
-        foreach (var draftNode in drafts)
+        for (var index = 0; index < drafts.Count; index++)
         {
             var draft =
-                draftNode as JsonObject
+                drafts[index] as JsonObject
                 ?? throw new InvalidDataException("Provider draft must be an object.");
-            var key = JsString(draft["id"]).Trim();
+            var key = JsString(
+                FirstTruthyFormValue(draft["id"], draft["providerKey"], draft["provider"])
+                    ?? JsonValue.Create("provider" + (index + 1))
+            ).Trim();
             if (key.Length == 0)
                 continue;
             if (next.ContainsKey(key))
@@ -165,4 +166,42 @@ internal sealed partial class ModelConfiguration
                 new System.Text.Json.JsonSerializerOptions { WriteIndented = true }
             ) + "\n";
     }
+
+    private static JsonArray NormalizeProviderDrafts(JsonObject input)
+    {
+        if (input["providers"] is JsonArray providers)
+            return providers;
+        var draft = new JsonObject
+        {
+            ["id"] = (
+                FirstTruthyFormValue(input["providerKey"], input["provider"])
+                ?? JsonValue.Create("openai")
+            ).DeepClone(),
+            ["models"] = FirstTruthyFormValue(input["models"], input["model"])?.DeepClone(),
+        };
+        foreach (
+            var field in new[]
+            {
+                "providerType",
+                "baseUrl",
+                "apiKey",
+                "targets",
+                "failureThreshold",
+                "cooldownMs",
+            }
+        )
+            draft[field] = input[field]?.DeepClone();
+        return new JsonArray(draft);
+    }
+
+    private static JsonNode? FirstTruthyFormValue(params JsonNode?[] values) =>
+        values.FirstOrDefault(value =>
+            value is JsonObject or JsonArray
+            || value is JsonValue scalar
+                && (
+                    scalar.TryGetValue<string>(out var text) ? text.Length > 0
+                    : scalar.TryGetValue<bool>(out var flag) ? flag
+                    : SessionWait.Number(value) is double number && number != 0
+                )
+        );
 }
