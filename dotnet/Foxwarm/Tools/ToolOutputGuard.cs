@@ -147,12 +147,12 @@ internal static class ToolOutputGuard
         )
             if (
                 response is JsonObject obj
-                && obj[key] is JsonNode value
-                && value.ToJsonString().Length <= 2000
+                && obj.TryGetPropertyValue(key, out var value)
+                && (value is null || value.ToJsonString().Length <= 2000)
             )
-                result[key] = value.DeepClone();
+                result[key] = value?.DeepClone();
         var excerpt = head + $"\n[Tool output truncated; complete output: {file}]\n" + tail;
-        if (response is JsonObject error && error.ContainsKey("error"))
+        if (response is JsonObject error && error["error"] is not null)
             result["error"] = "TOOL ERROR OUTPUT TOO LONG\n" + excerpt;
         else
             result["output"] = excerpt;
