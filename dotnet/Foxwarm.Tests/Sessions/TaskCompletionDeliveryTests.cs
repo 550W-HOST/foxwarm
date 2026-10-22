@@ -10,7 +10,14 @@ public sealed class TaskCompletionDeliveryTests
     public async Task Completion_delivers_full_stored_result_and_reopen_does_not_resend_terminal_task()
     {
         using var temp = new TempDirectory();
-        var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
+        var options = new ResponsesClientOptions(
+            new Uri("http://127.0.0.1:1"),
+            "wire",
+            "a",
+            "",
+            "",
+            713
+        );
         SessionManager Manager()
         {
             var manager = new SessionManager(
@@ -47,16 +54,18 @@ public sealed class TaskCompletionDeliveryTests
             var worker = await manager.CreateNamedAsync("main", "worker", null, null);
             creatorId = creator.Id;
             workerId = worker.Id;
-            var created = (await manager.Tasks.ExecuteAsync(
-                new JsonObject
-                {
-                    ["action"] = "create",
-                    ["title"] = "complete report",
-                    ["ownerSessionId"] = worker.Id,
-                    ["notifySession"] = true,
-                },
-                creator.Id
-            )).Payload;
+            var created = (
+                await manager.Tasks.ExecuteAsync(
+                    new JsonObject
+                    {
+                        ["action"] = "create",
+                        ["title"] = "complete report",
+                        ["ownerSessionId"] = worker.Id,
+                        ["notifySession"] = true,
+                    },
+                    creator.Id
+                )
+            ).Payload;
             taskId = created["task"]!["id"]!.GetValue<string>();
             Assert.Equal(1, created["sentNotifications"]!.GetValue<int>());
             var completed = await manager.Tasks.ExecuteForToolWithReceiptAsync(
@@ -71,7 +80,10 @@ public sealed class TaskCompletionDeliveryTests
             Assert.Equal(creator.Id, completed.CompletionTarget);
             Assert.Equal("completed", SessionWait.Text(completed.Payload["task"]?["status"]));
             Assert.Equal(result, SessionWait.Text(completed.Payload["task"]?["result"]));
-            Assert.Equal("sent", SessionWait.Text(completed.Payload["task"]?["completionNotificationStatus"]));
+            Assert.Equal(
+                "sent",
+                SessionWait.Text(completed.Payload["task"]?["completionNotificationStatus"])
+            );
             Assert.Equal(1, completed.Payload["sentNotifications"]!.GetValue<int>());
             Assert.Null(completed.Payload["warning"]);
             CheckNotification(creator);
@@ -83,17 +95,26 @@ public sealed class TaskCompletionDeliveryTests
             await manager.LoadAsync();
             var creator = await manager.RequiredAsync(creatorId);
             var worker = await manager.RequiredAsync(workerId);
-            var stored = (await manager.Tasks.ExecuteAsync(
-                new JsonObject { ["action"] = "get", ["taskId"] = taskId },
-                null
-            )).Payload["task"]!;
+            var stored = (
+                await manager.Tasks.ExecuteAsync(
+                    new JsonObject { ["action"] = "get", ["taskId"] = taskId },
+                    null
+                )
+            ).Payload["task"]!;
             Assert.Equal(result, SessionWait.Text(stored["result"]));
             Assert.Equal("sent", SessionWait.Text(stored["completionNotificationStatus"]));
             CheckNotification(creator);
-            var error = await Assert.ThrowsAsync<TaskError>(() => manager.Tasks.ExecuteAsync(
-                new JsonObject { ["action"] = "complete", ["taskId"] = taskId, ["result"] = "do not resend" },
-                worker.Id
-            ));
+            var error = await Assert.ThrowsAsync<TaskError>(() =>
+                manager.Tasks.ExecuteAsync(
+                    new JsonObject
+                    {
+                        ["action"] = "complete",
+                        ["taskId"] = taskId,
+                        ["result"] = "do not resend",
+                    },
+                    worker.Id
+                )
+            );
             Assert.Equal("TASK_TERMINAL", error.Code);
             CheckNotification(creator);
             Assert.Single(worker.Entry.Snapshot().Queue);
