@@ -345,28 +345,36 @@ public sealed class WebUiAccessTests
 
             var ordinary = new[]
             {
-                "Discuss /session delete without running it",
-                "\uFEFFordinary text",
+                (Text: "Discuss /session delete without running it", Parts: false),
+                (Text: "\uFEFFordinary text", Parts: true),
                 // U+0085 is .NET whitespace, but is not Source command whitespace.
-                "\u0085@helper /session archive outside-archive",
+                (Text: "\u0085@helper /session archive outside-archive", Parts: false),
+                (Text: "\u0085/session clear", Parts: false),
+                (Text: "\u0085/session clear", Parts: true),
             };
             for (var index = 0; index < ordinary.Length; index++)
             {
                 var body =
-                    index == 1
+                    ordinary[index].Parts
                         ? new JsonObject
                         {
                             ["parts"] = new JsonArray(
-                                new JsonObject { ["text"] = ordinary[index] }
+                                new JsonObject { ["text"] = ordinary[index].Text }
                             ),
                         }
-                        : new JsonObject { ["text"] = ordinary[index] };
+                        : new JsonObject { ["text"] = ordinary[index].Text };
                 using var response = await http.PostAsJsonAsync("/api/sessions/chat/message", body);
                 Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
-                Assert.Contains(
-                    ordinary[index],
-                    SessionWait.Text(chat.Entry.Snapshot().Queue[index].Parts![0]["system"])
-                );
+                var queue = chat.Entry.Snapshot().Queue;
+                Assert.Equal(index + 1, queue.Count);
+                for (var queued = 0; queued <= index; queued++)
+                    Assert.Contains(
+                        ordinary[queued].Text,
+                        SessionWait.Text(queue[queued].Parts![0]["system"])
+                    );
+                Assert.NotNull(runtime.Catalog.Get("outside-normal"));
+                Assert.NotNull(runtime.Catalog.Get("outside-delete"));
+                Assert.False(SessionCatalog.Flag(runtime.Catalog.Get("outside-archive")!["archived"]));
             }
             Assert.Equal(ordinary.Length, chat.Entry.Snapshot().Queue.Count);
             Assert.False(SessionCatalog.Flag(runtime.Catalog.Get("outside-archive")!["archived"]));
