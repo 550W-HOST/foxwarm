@@ -475,64 +475,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             : null;
     }
 
-    public async Task<SessionOwner> CreateAsync()
-    {
-        using var operation = TrackCreation();
-        if (!accepting)
-            throw new InvalidOperationException("Host is shutting down.");
-        var id = $"s_{Guid.NewGuid():N}";
-        if (await IdReservedAsync(id))
-            throw new InvalidOperationException("Session ID collision.");
-        return await WithCreationIdentityAsync(
-            id,
-            async () =>
-            {
-                var store = MakeStore(id, "main");
-                if (await store.LoadAsync(id) is not null)
-                    throw new InvalidOperationException("Session ID collision.");
-                var hosted = MakeSession(id, "main", store);
-                var entry = hosted.Registry.Add(id);
-                BindMutations(hosted);
-                entry.WithState(state =>
-                {
-                    state.AuthorityEnvelope["agent"] = "main";
-                    state.Meta["lastMessageTime"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                });
-                var branch = store.Archive.EnsureBranch();
-                try
-                {
-                    await entry.SaveLane.SaveStrictAsync();
-                } // First authority JSON exists before publication/acknowledgement.
-                catch (AuthorityCommittedException error)
-                {
-                    await PublishCreatedAsync(hosted);
-                    throw new CommittedSessionCreationException(
-                        id,
-                        $"Session '{id}' was committed but a later durability step failed.",
-                        error
-                    );
-                }
-                catch (Exception error)
-                {
-                    try
-                    {
-                        await CompensateCreatedBranchAsync(store, branch);
-                    }
-                    catch (Exception cleanup)
-                    {
-                        throw new AggregateException(
-                            "Creation failed and owned branch compensation also failed.",
-                            error,
-                            cleanup
-                        );
-                    }
-                    throw;
-                }
-                await PublishCreatedAsync(hosted);
-                return hosted;
-            }
-        );
-    }
+    public Task<SessionOwner> CreateAsync() => CreateNamedAsync("main", null, null, null);
 
     private SessionOwner MakeSession(string id, string agent, PersistentSessionAuthorityStore store)
     {

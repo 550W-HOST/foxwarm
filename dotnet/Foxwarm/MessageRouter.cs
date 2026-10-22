@@ -138,7 +138,7 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
                 );
                 var suffix = parsed.Success
                     ? parsed.Groups[1].Value
-                    : "fork_" + Guid.NewGuid().ToString("N");
+                    : runtime.Manager.GenerateSessionId();
                 var initial =
                     parsed.Groups[2].Success && parsed.Groups[2].Value.Length > 0
                         ? parsed.Groups[2].Value

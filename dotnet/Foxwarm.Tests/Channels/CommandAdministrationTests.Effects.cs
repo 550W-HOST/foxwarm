@@ -187,8 +187,9 @@ public sealed partial class CommandAdministrationTests
         var child = await f.Manager.RequiredAsync("peer/target");
         Assert.Equal("virtual", child.Metadata().Model);
         Assert.Equal("none", child.Metadata().Effort);
-        Assert.Contains(
-            "Selected memory marker.",
+        // Source records the selection but defers a virtual route's snapshot until an actual leaf is selected.
+        Assert.Equal(
+            "",
             SessionWait.Text(child.Entry.Snapshot().AuthorityEnvelope["persistentMemorySnapshot"])
         );
         Assert.Equal(

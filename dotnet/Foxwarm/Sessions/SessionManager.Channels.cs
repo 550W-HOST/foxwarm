@@ -129,12 +129,7 @@ internal sealed partial class SessionManager
                     throw new InvalidDataException(
                         "Guest single-mode Agent isolation/Node does not match its configuration."
                     );
-                return await CreateNamedAsync(
-                    agent,
-                    "s_" + Guid.NewGuid().ToString("N"),
-                    null,
-                    null
-                );
+                return await CreateNamedAsync(agent, null, null, null);
             }
             for (var attempt = 0; attempt < 32; attempt++)
             {

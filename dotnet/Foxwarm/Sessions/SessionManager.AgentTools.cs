@@ -167,16 +167,40 @@ internal sealed partial class SessionManager
                 {
                     Keys(
                         args,
-                        ["agentName", "sessionName", "displayName", "forceModel"],
+                        [
+                            "agentName",
+                            "sessionName",
+                            "displayName",
+                            "parentSessionId",
+                            "node",
+                            "forceModel",
+                            "systemPromptFiles",
+                        ],
                         ["agentName", "sessionName"]
                     );
                     var forceModel = OptionalForceModel(args);
+                    if (
+                        args.ContainsKey("systemPromptFiles")
+                        && args["systemPromptFiles"] is not JsonArray
+                    )
+                        throw new InvalidDataException(
+                            "systemPromptFiles must be an array of strings."
+                        );
+                    var settings = source.Entry.Snapshot().AuthorityEnvelope;
                     var created = await CreateNamedAsync(
                         RequiredString(args, "agentName"),
                         RequiredString(args, "sessionName"),
                         OptionalString(args, "displayName"),
                         forceModel,
-                        initialNode: CurrentNode(source)
+                        initialNode: CreationNode(args) ?? CurrentNode(source),
+                        inherited: (
+                            SessionWait.Text(settings["childModelDefault"])
+                                ?? SessionWait.Text(settings["model"]),
+                            SessionWait.Text(settings["childEffortDefault"])
+                                ?? SessionWait.Text(settings["effort"])
+                        ),
+                        selectedFiles: AgentMemory.NormalizeSelection(args["systemPromptFiles"]),
+                        parentSessionId: OptionalString(args, "parentSessionId")
                     );
                     return (
                         Output($"Created Session {created.Id} under Agent {created.Agent}."),
@@ -195,6 +219,7 @@ internal sealed partial class SessionManager
                             "message",
                             "afterSend",
                             "forceModel",
+                            "node",
                             "fork",
                             "taskId",
                             "handoffConfirmation",
@@ -213,6 +238,7 @@ internal sealed partial class SessionManager
                             "create_child_session with afterSend=wait requires a nonempty initial message."
                         );
                     var initialMessage = OptionalString(args, "message");
+                    var initialNode = CreationNode(args);
                     SessionOwner child;
                     var delivered = false;
                     var sentNotifications = 0;
@@ -227,7 +253,8 @@ internal sealed partial class SessionManager
                             initialMessage,
                             forceModel,
                             OptionalBool(args, "fork") ?? false,
-                            taskId
+                            taskId,
+                            initialNode
                         );
                         child = created.Child;
                         delivered = created.Delivered;
@@ -248,7 +275,8 @@ internal sealed partial class SessionManager
                                         null,
                                         forceModel,
                                         OptionalBool(args, "fork") ?? false,
-                                        taskId
+                                        taskId,
+                                        initialNode
                                     )
                                 ).Child,
                             initialMessage
@@ -401,6 +429,22 @@ internal sealed partial class SessionManager
         !args.ContainsKey(key) ? null
         : args[key] is JsonValue value && value.TryGetValue<bool>(out var result) ? result
         : throw new InvalidDataException($"{key} must be a boolean.");
+
+    private static string? CreationNode(JsonObject args)
+    {
+        var node = OptionalString(args, "node");
+        if (
+            node is not null
+            && (
+                string.IsNullOrWhiteSpace(node)
+                || System.Text.Encoding.UTF8.GetByteCount(node) > 4096
+            )
+        )
+            throw new InvalidDataException(
+                "node must be a bounded non-empty string when provided."
+            );
+        return node;
+    }
 
     private static string AfterSend(JsonObject args)
     {
