@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json.Nodes;
+using Foxwarm.Tools;
 
 namespace Foxwarm.Sessions;
 
@@ -50,6 +51,10 @@ internal sealed partial class AgentMemory
         CancellationToken token
     )
     {
+        var agentDirectory = agents.AgentDirectory(agentName);
+        var restrictToAgentDirectory = IsolatedToolCompatibility
+            .Metadata(agents.MetadataSnapshot()[agentName])
+            .Isolated;
         foreach (var reference in selection)
         {
             token.ThrowIfCancellationRequested();
@@ -62,7 +67,11 @@ internal sealed partial class AgentMemory
                         reference[2..]
                     )
                 : reference;
-            var path = Path.GetFullPath(expanded, agents.AgentDirectory(agentName));
+            var path = Path.GetFullPath(expanded, agentDirectory);
+            if (restrictToAgentDirectory && !ToolAuthorizationEvaluation.Within(path, agentDirectory))
+                throw new InvalidDataException(
+                    $"Isolated agent session can only access agents/{agentName}/ on master."
+                );
             if (!RegularSelectedFile(path))
                 throw new InvalidDataException(
                     $"systemPromptFiles entry '{reference}' must resolve to an existing ordinary file."
