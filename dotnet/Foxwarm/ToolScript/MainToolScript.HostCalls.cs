@@ -13,7 +13,7 @@ internal sealed partial class MainToolScript
         ToolScriptDataBudget budget
     )
     {
-        run.Token.ThrowIfCancellationRequested();
+        run.RequireHostAdmission();
         var record = run.Record;
         var context = run.Context;
         record["hostCallCount"] = (int)Number(record["hostCallCount"], 0) + 1;

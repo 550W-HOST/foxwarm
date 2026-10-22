@@ -180,10 +180,7 @@ internal static class ArchiveControlTools
                 ["output"] = $"Session `{target.Id}` is idle; no stop was needed.",
             };
 
-        var result = await target.Registry.Control.StopFromToolAsync(
-            target.Id,
-            source.Id == target.Id
-        );
+        var result = await target.Registry.Control.StopAsync(target.Id);
         var output = result.AbortedInFlight
             ? $"Stop signal sent to session `{target.Id}`; its in-flight request was canceled."
             : $"Stop signal sent to session `{target.Id}`. It will stop after the current tool call completes.";

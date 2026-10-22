@@ -314,15 +314,6 @@ public sealed class SessionEntry
             handle.Dispose();
     }
 
-    internal void MarkStoppingAfterCurrentTool()
-    {
-        lock (stateGate)
-        {
-            State.Stopping = true;
-            State.Meta.Remove("runQueuedAfterStop");
-        }
-    }
-
     internal CancellationHandle? BeginStop(bool runQueued = false)
     {
         lock (stateGate)

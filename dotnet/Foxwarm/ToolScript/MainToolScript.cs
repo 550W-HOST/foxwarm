@@ -15,11 +15,13 @@ internal sealed partial class MainToolScript : IAsyncDisposable
     private readonly object gate = new();
     internal ToolScriptRunStore Store => store;
 
-    private sealed class ActiveRun
+    private sealed class ActiveRun : IDisposable
     {
         internal readonly JsonObject Record;
         internal readonly ToolScriptContext Context;
         internal readonly CancellationTokenSource Cancel;
+        private readonly CancellationTokenSource hostCancellation;
+        private readonly CancellationToken caller;
         internal readonly CancellationToken Token;
         internal readonly string RecordOwner;
         internal volatile string? CommittedStatus;
@@ -29,9 +31,27 @@ internal sealed partial class MainToolScript : IAsyncDisposable
             Record = record;
             Context = context;
             RecordOwner = Required(record, "ownerSessionId");
-            Cancel = CancellationTokenSource.CreateLinkedTokenSource(token);
-            Token = Cancel.Token;
+            // Foreground cancellation fences host effects; explicit run cancellation owns the VM lifetime.
+            caller = token;
+            Cancel = new CancellationTokenSource();
+            hostCancellation = CancellationTokenSource.CreateLinkedTokenSource(token, Cancel.Token);
+            Token = hostCancellation.Token;
             CommittedStatus = record["snapshotBase64"] is not null ? "waiting" : null;
+        }
+
+        internal void RequireHostAdmission()
+        {
+            Cancel.Token.ThrowIfCancellationRequested();
+            if (caller.IsCancellationRequested)
+                throw new InvalidOperationException(
+                    $"Tool call was not started because {Context.Owner.Entry.ToolCancellationSource} cancelled it; it was not executed."
+                );
+        }
+
+        public void Dispose()
+        {
+            hostCancellation.Dispose();
+            Cancel.Dispose();
         }
 
         internal void RequestCancel()

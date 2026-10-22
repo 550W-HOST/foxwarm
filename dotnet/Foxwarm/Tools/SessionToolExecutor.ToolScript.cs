@@ -99,8 +99,7 @@ internal sealed partial class SessionToolExecutor
                     return await sessions.NormalizeToolScriptResultAsync(
                         execution.Response,
                         resolved.Name,
-                        budget,
-                        currentToken
+                        budget
                     );
                 }
                 catch (SessionIdentityUnavailableException error)
