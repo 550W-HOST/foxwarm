@@ -42,6 +42,35 @@ internal sealed partial class ImageBlobStore
                     parts.Add(part);
                     continue;
                 }
+                var generatedOutput =
+                    part["providerMeta"]?["openaiResponses"]?["outputItem"] as JsonObject;
+                var generatedSource = SessionWait.Text(
+                    part["providerMeta"]?["openaiResponses"]?["sourceModelId"]
+                );
+                var nativeGenerated =
+                    generatedOutput is not null
+                    && HostedResponsesTools.IsGeneratedImage(generatedOutput);
+                var nativeReplay =
+                    SessionWait.Text(message["role"]) == "model"
+                    && protocol == "responses"
+                    && concreteModelId is not null
+                    && generatedSource == concreteModelId
+                    && nativeGenerated;
+                if (
+                    reference is not null
+                    && SessionWait.Text(message["role"]) == "model"
+                    && SessionWait.Text(part["imageMeta"]?["origin"]) == "generated"
+                    && nativeGenerated
+                    && generatedSource is not null
+                    && concreteModelId is not null
+                    && !nativeReplay
+                )
+                {
+                    // Incompatible destinations receive the existing text-only placeholder.
+                    part.Remove("inlineData");
+                    parts.Add(part);
+                    continue;
+                }
                 byte[] bytes;
                 if (reference is not null)
                     bytes = await ReadAsync(reference, token);
@@ -58,15 +87,6 @@ internal sealed partial class ImageBlobStore
                     }
                 }
                 var mime = Mime(reference ?? inline!);
-                var nativeReplay =
-                    SessionWait.Text(message["role"]) == "model"
-                    && protocol == "responses"
-                    && concreteModelId is not null
-                    && SessionWait.Text(part["providerMeta"]?["openaiResponses"]?["sourceModelId"])
-                        == concreteModelId
-                    && SessionWait.Text(
-                        part["providerMeta"]?["openaiResponses"]?["outputItem"]?["type"]
-                    ) == "image_generation_call";
                 var nonvisual =
                     SessionWait.Text(message["role"]) == "model"
                     && !nativeReplay
