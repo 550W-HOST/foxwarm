@@ -2,6 +2,17 @@
 
 For developers and Agents changing input admission, queued steering, or model-request scheduling. This page explains when an input becomes conversation history, when it can affect a request, and why a visible message is not necessarily a completed turn. History retrieval and mutation remain in [conversation and history](./conversation-and-history.md); process lifetime, Stop, Continue, and waits remain in [execution and waiting](./execution-and-waiting.md).
 
+## From Send to an observable result
+
+Ordinary admitted input follows the Session's owned queue into conversation processing:
+
+1. The entry surface submits input. Browser upload/optimistic display or an acceptance receipt is not yet proof of committed history or model consumption.
+2. The runner selects queued input and appends canonical messages. While busy, Chat can show separate queued previews; committed rows replace them rather than becoming duplicates.
+3. A request uses the committed working context. The provider/tool loop can make several requests, expose intermediate text, and run tools before deciding whether the turn ends or suspends.
+4. Committed provider output is delivered through its eligible surfaces. Chat history, external Channel delivery, idle/wait status, and a launched process's later completion remain different evidence.
+
+[Attachments](files-images-and-attachments.md#from-draft-to-retained-input) owns upload/draft lifetimes; [Channels and replies](channels-and-replies.md#where-should-the-agents-ordinary-reply-go) owns where output goes. Input from several sources can influence one request without selecting a unique reply target. Creating/opening a Session is separate from submitting this work; see [Sessions and Agents](sessions-and-agents.md).
+
 ## Which boundary am I observing?
 
 | Boundary | Observable meaning | Not implied |
@@ -13,7 +24,7 @@ For developers and Agents changing input admission, queued steering, or model-re
 | Logical model request | A particular provider-neutral input and request identity; it can have retry/failover attempts. | One physical provider send or an entire Session turn. |
 | Physical attempt | One selected concrete-provider attempt within the bounded request/retry path. | Successful generation, tool execution, or final delivery. |
 
-One owned queue processor serializes a Session's work. Its busy window may cover later turn invocations; busy is not a durable business-task status. The current requesting-model/running-tool/waiting/idle presentation and exact ownership live in [runtime state](../units/src-session-runtime-state.md) and [the turn runner](../units/src-session-turn-runner.md).
+One owned queue processor serializes a Session's ordinary turn work. Its busy window may cover later turn invocations; busy is not a durable business-task status. Supported [BTW asides](#ask-an-aside-without-steering-the-main-turn) and [quiet script timers](automation-and-scheduled-work.md#schedule-a-message-or-execute-a-quiet-script) have separate execution paths, not another consumer draining the ordinary queue. The current requesting-model/running-tool/waiting/idle presentation and exact ownership live in [runtime state](../units/src-session-runtime-state.md) and [the turn runner](../units/src-session-turn-runner.md).
 
 A provider result can contain several ordered content items, and supported Responses commentary can commit before the response completes. Consequently, neither an assistant row nor a visible paragraph establishes a request or turn boundary. The canonical [streaming flow](../threads/streaming-pipeline.md#d-streaming-early-commentary-commit) owns the early-commit and retry details.
 
@@ -29,6 +40,8 @@ Ordinary input queues without an automatic busy acknowledgement. The current req
 Every currently selected ordinary input remains a separate canonical message in queue order. They may all influence one subsequent request; the runner does not concatenate them into one history message. Provider serializers may normalize adjacent roles for their own protocol without changing these stored boundaries. The [model adoption rules](models-and-requests.md#switching-takes-effect-at-an-adoption-boundary) determine which settings the next attempt uses. A selected batch has a finite boundary: arrivals after selection belong to a later safe point rather than extending an unbounded drain.
 
 The queue is **source-blind**. A different Channel type, configured instance, conversation, passive message ID, or card does not create a new consumption batch or choose an output destination. Source metadata describes provenance only. Real tool-call/result, compaction, Stop, wait, managed-control, authority/mailbox, and lifecycle boundaries still apply. The implementation contract is [source-blind routing](../threads/message-processing-pipeline.md#d-pipeline-source-blind-turn-routing), with [canonical input boundaries](../threads/message-processing-pipeline.md#d-pipeline-canonical-queue-item-boundaries).
+
+While ordinary input waits, Chat shows a bounded body preview, including supported source-wrapped Channel input. The preview is a separate observable result, not another queue item or a committed row. On canonical append, Chat replaces it with the corresponding committed input rather than leaving both visible. [Queue-preview extraction](../units/src-channels-webui.md#d-webui-channel-queue-preview) owns wrapping/sanitization; [history reconciliation](../threads/streaming-pipeline.md#d-streaming-optimistic-message-identity) owns replacing previews with canonical rows.
 
 ### Example: a correction arrives during work
 
@@ -46,13 +59,22 @@ This is processing guidance, not a claim that the sender is human, that the inpu
 
 A canonical `user` role alone does not identify a human sender: inter-session messages, task notifications, timer events, execution completions, and lifecycle inputs can use that role. Inspect trusted source metadata and the actual producer, not role or quoted body text alone.
 
+## Ask an aside without steering the main turn
+
+`/btw <message>` starts a supported side/background request using a captured copy of the Session's conversation/settings. Its immediate command reply acknowledges the start, not completion. Unlike ordinary busy-time input, the aside question does not append to the main conversation or wait to be consumed as steering by its turn loop.
+
+BTW does not execute model-returned tool calls. A request requiring tool effects must use the ordinary conversation; a returned tool attempt produces an explanatory aside result rather than dispatch. Completion appends an attributed display-only result and sends its eligible reply presentation. That visible result is not main-turn provider context, a continuation instruction, or proof that the ongoing main task finished.
+
+The copied request can refresh only its detached prompt state, not the live owner's snapshot or normal adopted-selection baseline. Captured context does not follow later edits while the request runs. Source and tests are `src/commands.ts`'s `/btw` handler, `src/btw.ts`, and `src/btw.test.ts`; exact detached prompt ownership remains at [conditional snapshots](../threads/conditional-memory-snapshots.md#ownership-and-detached-work). This is a particular no-tool side-request contract, not a generic detached-job guarantee.
+
 ## Which events wake the model, and which stay quiet?
 
 Delivery, visibility, and triggering are separate properties:
 
 | Operation or event | Expected consequence |
 | --- | --- |
-| Ordinary admitted user input, inter-session delivery, task assignment/completion, timer or background-exec completion | Uses the ordinary queue path. Idle work can start processing; busy work joins at supported safe points. Active waits follow their existing source/barrier rules. |
+| Ordinary admitted user input, inter-session delivery, task assignment/completion, message-timer firing, or background-exec completion | Uses the ordinary queue path. Idle work can start processing; busy work joins at supported safe points. Active waits follow their existing source/barrier rules. |
+| Quiet ToolScript-timer invocation | Runs the authorized owner-bound program without automatic model input/history. Explicit notification and other requested effects keep their ordinary behavior; see [scheduled work](automation-and-scheduled-work.md#schedule-a-message-or-execute-a-quiet-script). |
 | Trusted passive previous-owner task transfer/release notice | Persists in the same queue/inbox without starting a turn or waking its managed owner/controller. It is wait-neutral: it neither clears a wait nor satisfies a listed all-Session source. |
 | Internal ready-compaction wake | Lets the owner apply completed context maintenance; it is not an ordinary user instruction and does not clear an active wait. |
 | Retry notice, temporary stream, runtime-status update | Presentation, not new model input. A display-only row is not replayed to the provider, summarized, or embedded merely because it is visible. |

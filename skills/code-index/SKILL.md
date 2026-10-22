@@ -45,6 +45,31 @@ After changing source:
 3. Choose one canonical owner for each decision. Replace superseded text and remove redundant detail instead of appending another account of the change.
 4. Run available index checks and review the documentation diff. Structural checks do not prove behavioral correctness or parity.
 
+## Writing Behavior Documentation from Supported Use
+
+Start with the supported actions that explain a topic, not a directory inventory or a list of known defects. Follow each relevant action from its real entry through input interpretation, defaults, authorization and effects to the consumers that determine its observable result. Those consumers may include a UI, a script receiving a value, a notification recipient, or the next model request. A successful producer return or stored record does not establish what those consumers receive.
+
+Select evidence according to the question being answered:
+
+| Question | Useful evidence |
+| --- | --- |
+| What can a user or runtime Agent initiate? | Actual UI actions, commands, tool definitions, API callers and shipped workflows. |
+| How are inputs, omitted values and targets interpreted? | Normalization, default resolution, caller/target selection and authorization paths. |
+| What effects occur, and what does each participant receive? | Execution and delivery paths, renderers, programmatic consumers and subsequent requests. |
+| What survives or changes over time? | Save/read paths and relevant cancellation, reconnect, restart, fork, move or deletion lifecycles. |
+| Which distinctions are intentional, and why? | Confirmed product decisions and original design discussions; use available history/recall when intent is unclear. |
+| What has actually been verified? | Tests and reproductions, including their real entry points, asserted consequences and limits. |
+
+Compare entry points where they differ in defaults, permissions, effects or results; combine routes that genuinely share the same behavior. Read enough of each relevant path to explain its consequence, not every file in the subsystem. Tests show what was exercised, not independent authority for a requirement. Code shows current behavior, not necessarily intended behavior; record a conflict or unresolved rationale rather than inventing an explanation.
+
+Explain distinctions that matter to participants. Accepted input, committed history and model consumption may be different events; a returned call, a finished process and a visible result may have different lifetimes. Likewise, stored data, display previews and control signals can have different consumers and authority. Use the system's actual distinctions, not a new terminology layer.
+
+Describe the normal process and the supported changes that materially affect it. For an action still in progress, consider which real operations can intersect it: new input, cancellation, a settings change, navigation, reconnect or restart, for example. Establish what stays true, what may change, when the result is determined, which effects remain, and how completion, failure or uncertainty is observed. Follow only relevant combinations supported by the actual callers; this is not an exhaustive fault matrix or a reason to invent stronger guarantees.
+
+Organize the resulting prose around reader questions, actions and consequences. Behaviors explain observable rules and meaningful variations; threads explain cross-module ordering and handoffs; modules and units locate responsibilities, exact interfaces, protocol details and source/test evidence. Keep one canonical owner for each rule and link the other layers. Choose the document structure that fits the subject rather than applying a mandatory template.
+
+Review the draft by asking whether a developer unfamiliar with the implementation could predict the ordinary outcome and important supported variations, distinguish observations from guarantees, and find the original caller and consumer paths. Use discovered defects to test this writing method and expose missing distinctions, not as a standing outline for more paragraphs. Clarify a reusable contract when evidence supports it; leave implementation-specific cases in technical docs/tests and unresolved choices explicitly open. This method applies when writing or substantially revising behavior documentation, not as an extra reading ritual for every code change.
+
 ## Document Roles and Ownership
 
 ### `overview.md`

@@ -1,6 +1,6 @@
 # Behavior: execution and waiting
 
-For developers and Agents changing shell execution, turn controls, explicit waits, or ToolScript completion. This page owns their observable meanings. A Session turn, a shell process, a persisted script run, and a wait are different lifetimes; ending one does not imply that the others ended. [Messages and turns](./messages-and-turns.md) owns input/request boundaries, while [Nodes, workspaces, and permissions](./nodes-workspaces-and-permissions.md) owns placement and path authority.
+For developers and Agents changing shell execution, turn controls, or explicit waits. This page owns their observable meanings; [ToolScript and scheduled work](automation-and-scheduled-work.md) owns program results, continuations and scheduled invocation. A Session turn, a shell process, a persisted script run, and a wait are different lifetimes; ending one does not imply that the others ended. [Messages and turns](./messages-and-turns.md) owns input/request boundaries, while [Nodes, workspaces, and permissions](./nodes-workspaces-and-permissions.md) owns placement and path authority.
 
 ## Exec waits for a process; it does not lease its lifetime
 
@@ -47,9 +47,17 @@ Continue is available only for an idle, interrupted current turn, never an activ
 
 A stopped batch still needs ordered call/result pairing. Calls prevented from starting receive an unstarted cancellation receipt. Dispatched calls without a settled result identify Stop or Run queued when known and explain possible remote side effects or continued execution; they must not claim rollback. Completed siblings keep their actual results, including errors, partial output and images. An ordinary SDK timeout/disconnect is not relabeled user cancellation.
 
-ToolScript checks foreground interruption before its next host effect; Stop is not arbitrary VM or file-operation preemption. A host call that already returned keeps its real completion and payload: the script can consume, print or return that value before another host call is fenced. A failed outer run does not automatically publish every nested return value; an unprinted exec handoff may be absent from the outer result and next model request even though tracking and normal completion notification remain. Explicit run cancellation and shutdown retain their separate VM lifetime controls. MCP request cancellation cannot undo remote effects or imply that a pooled server was killed. No control scans returned `execId`/`runId` values to cancel background work. A fresh turn receives a fresh signal.
+ToolScript checks foreground interruption before its next host effect; Stop is not arbitrary VM or file-operation preemption. A host call that already returned keeps its real completion and payload: the script can consume, print or return that value before another host call is fenced. Retained printed output remains part of the outer result even if a later invocation fails. An outer failure does not automatically publish unprinted nested values; tracking and later exec completion remain independent. Explicit run cancellation and shutdown retain their separate VM lifetime controls. MCP request cancellation cannot undo remote effects or imply that a pooled server was killed. No control scans returned `execId`/`runId` values to cancel background work. A fresh turn receives a fresh signal.
 
 WebUI control acknowledgement confirms receipt, not settled runtime state. Stop remains pending until canonical stopping/idle feedback arrives; a timeout is not displayed as a successful stop. Controls keep their existing permissions, and HTTP acceptance is not stronger authority than the exact Session owner. Correlated UI feedback, status poses and diagnostic details remain in [runtime presentation](../threads/session-runtime-presentation.md#d-session-control-feedback).
+
+## Tool values, presentation, and turn controls have different consumers
+
+Native tool data, a bounded model/browser receipt, and a turn-control signal have different consumers. [Programmatic execution](automation-and-scheduled-work.md#what-does-the-program-consume-and-what-does-the-model-receive) owns what a script receives, exposes through print/return, or retains only for inspection. Complete-data/source predicates and producer budgets remain at [programmatic tool data](../threads/tool-dispatch-node-execution.md#d-dispatch-programmatic-tool-data), not at the readable preview boundary.
+
+Limiting presentation must preserve the operation's success/error classification. Large successful output must not become a sibling error just because it was shortened: an actual sibling error can suppress the [explicit wait](#explicit-wait-ends-an-otherwise-finished-turn). A preview or saved-output locator does not itself change execution status. The [output guard](../modules/tools-and-permissions.md#d-tools-structured-output-guard) owns the bounded envelope and full-output storage.
+
+Wait and handoff authority comes from the executed control operation, not control-looking fields in returned application data. Script return values and stdout do not establish a wait; [normal ToolScript completion](automation-and-scheduled-work.md#end-the-callers-turn-deliberately) applies its separate trusted last-host-call rule. The current external-result control limitation is recorded under [Open Questions](#open-questions).
 
 ## Explicit wait ends an otherwise-finished turn
 
@@ -79,34 +87,15 @@ A terminal handoff can also end a turn, with or without a Session activity wait.
 
 ## ToolScript completion is not a return-value control protocol
 
-A ToolScript run has its own persisted status and owner. Foreground and background modes both execute their first slice inside `run_script`; background mode is not a generic detached job queue. A slice timeout pauses at a safe host-call checkpoint, not by cutting off an in-progress tool/model call. `ask_agent` and timeout checkpoints require `continue_script`; only the separate background managed-event path auto-resumes. Those script pauses are not caller-Session `wait`.
+A completed program, a paused run, and a caller-Session wait have separate effects. [ToolScript and scheduled work](automation-and-scheduled-work.md#end-the-callers-turn-deliberately) owns the normal outer-completion/last-host-call rule for nested `wait`, with native inputs, print/return results, saved continuations, and quiet timer invocations. Returning data that resembles a control receipt is not a substitute for executing the authorized control operation.
 
-The terminal-wait contract established on 2026-10-19 keeps ordinary `call_tool("wait", ...)`: it affects the caller Session only when it remains the last host invocation and the outer explicit `run_script`/`continue_script` completes normally:
+## Open Questions
 
-```python
-result = call_tool("exec", {"command": args["command"], "timeout": 1})
-if result.get("status") == "running":
-    call_tool("wait", {"waitExecIds": [result["execId"]]})
-return result
-```
-
-The exec's script-facing result supplies real structured status/identity; this example does not parse a human-readable receipt. The wait is deferred until normal outer completion, leaving the script's business return value independent. No special `finish` object or dictionary with control-looking keys is recognized.
-
-| What follows a nested wait | Does the caller enter that wait? |
-| --- | --- |
-| Pure computation, `print`, ordinary return | Yes, on normal outer completion after current validation/authorization. |
-| Another host invocation, including a failed tool, nested script, model call, or `ask_agent` | No; the later invocation invalidates the earlier intent. A later actual wait may establish a new one. |
-| Script error or pause | No wait is armed on that outcome. |
-| Safe timeout checkpoint followed by continuation | The dedicated saved intent can survive, but only normal completion with no later host invocation commits it. |
-| A returned/stored object that merely resembles a wait receipt | No; script data is never scanned for control. |
-
-The last-host-call rule exists so the caller cannot enter wait while the script still has later host work to perform. Nested scripts share this boundary: an inner completion cannot arm a caller wait while its parent can still call tools. A wake resumes the Session's ordinary turn; it does not resume execution after the script's completed return. Actual script checkpoints resume saved VM state through `continue_script` instead.
-
-Runs/snapshots are owner-Session scoped, and newly executed nested calls retain normal tool authorization, Node placement, path checks and isolation. Completing a script does not grant a cross-Session resume right. Restart-compatible snapshots may continue; incompatible snapshots fail clearly rather than pretending to replay the source. Details remain in [ToolScript runtime](../units/src-toolscript.md) and [scripting](../modules/scripting.md).
+- **Known limitation:** the current model-batch executor still reads internal control fields from object-shaped results without restricting that read to trusted control producers. Outbound MCP structured results can reach that boundary. The intended data/control separation above is not a claim that this path is already fenced; resolving it requires a runtime change, not a new return-value control protocol.
 
 ## Change and test entry points
 
 - [Turn/dispatch ordering](../threads/message-processing-pipeline.md#d-pipeline-control-commands), [exec wrapper](../units/src-exec-manager.md), and [shared persistent exec](../units/shared-persistent-exec.md) locate cancellation, capture, registry and completion owners.
 - `packages/shared/src/persistentExec.test.ts`, `src/tools/execToolMessages.test.ts`, `src/stopActiveTools.test.ts`, and `src/commands/stopCommand.test.ts` cover foreground handoff, settled receipts, cancellation and queue consequences. Provider uncertainty/capability tests are linked from [Node providers](../units/src-node-providers.md).
 - `src/toolsSessionAgent/waitTool.test.ts`, `src/toolsSessionAgent/handoffWait.test.ts`, and `src/waitLiveness.test.ts` cover declaration, wake/barrier behavior, delivery races and quiescence. [Wait unit](../units/src-wait-tool.md) links detached-owner and timeout-persistence coverage.
-- `src/toolscriptWait.test.ts` covers normal outer completion, invalidation, nested scopes, checkpoints and batch-error cleanup. `packages/shared/src/sessionContinuation.test.ts` covers exact Continue derivation. These are regression entry points, not a new blanket test gate.
+- [ToolScript and scheduled work](automation-and-scheduled-work.md#change-and-test-entry-points) locates program-value, continuation, nested-wait and timer regressions. `packages/shared/src/sessionContinuation.test.ts` covers exact Continue derivation. These are regression entry points, not a new blanket test gate.

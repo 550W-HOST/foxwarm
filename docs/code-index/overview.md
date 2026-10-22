@@ -1,6 +1,6 @@
 # Foxwarm Code Index
 
-This is the entry point for the project map and repository-specific index conventions. The `code-index` skill (`skills/code-index/SKILL.md`) describes the general reading and maintenance method.
+This is the entry point for the project map and repository-specific index conventions. The `code-index` skill (`skills/code-index/SKILL.md`) describes the general reading, evidence-led writing, and maintenance method.
 
 ## Reading and changing the code
 
@@ -13,30 +13,35 @@ This is the entry point for the project map and repository-specific index conven
 
 For developers and Agents changing what a human or runtime Agent observes, choose the relevant question below. Read that page and its necessary technical links; these are independent entry points, not a sequence that every change must traverse.
 
-### Conversation and ongoing work
+### Establish, read, and return to work
 
-- [Conversation and history](./behaviors/conversation-and-history.md): which history is current, displayed, archived, or durable memory; what clear, deletion, Search, and recall change.
-- [Messages and turns](./behaviors/messages-and-turns.md): when input is queued or committed, how busy-time steering joins requests, and which events wake the model.
-- [Execution and waiting](./behaviors/execution-and-waiting.md): process versus foreground-wait lifetime, Stop/Run queued/Continue, completion events, explicit waits, and normal ToolScript completion.
+- [Sessions and Agents](./behaviors/sessions-and-agents.md): existing versus fresh/forked work, creation defaults, label/identity/topology, and putting aside or retiring a lifetime.
+- [Conversation and history](./behaviors/conversation-and-history.md): working instructions and their adoption, current/displayed/archived history, clear/deletion, Search, and recall.
+- [Workbench and Chat](./behaviors/workbench-and-chat.md): navigation, reading intent, pane/component/Session lifetimes, Code, and Terminal.
 
-### Delegation and delivery
+### Send, steer, or ask an aside
 
-- [Collaboration and Tasks](./behaviors/collaboration-and-tasks.md): child versus Task versus message, parent and Agent relations, actor/owner rights, assignment, completion, and handoffs.
-- [Channels and replies](./behaviors/channels-and-replies.md): conversation bindings, triggers and buffered context, automatic replies versus explicit sends, progress, and platform limits.
-
-### Requests, configuration, and recovery
-
+- [Messages and turns](./behaviors/messages-and-turns.md): normal send-to-result flow, queued steering, BTW side requests, and which events wake the model.
 - [Models and requests](./behaviors/models-and-requests.md): selected versus attempted model, retry/failover, adoption, provider-sensitive history, and attribution.
-- [Configuration and activation](./behaviors/configuration-and-activation.md): validated saves, live application, connection fencing, direct file edits, and restart requirements.
+
+### Execute tools and arrange later work
+
+- [Execution and waiting](./behaviors/execution-and-waiting.md): process versus foreground-wait lifetime, Stop/Run queued/Continue, completion events, and Session waits.
+- [ToolScript and scheduled work](./behaviors/automation-and-scheduled-work.md): native program inputs versus outer output, run continuations, nested waits, and message versus quiet-script timers.
+- [Nodes, workspaces, and permissions](./behaviors/nodes-workspaces-and-permissions.md): operation placement, paths/cwd, discovery and authorization, lifecycle, and environment limits.
+
+### Collaborate and deliver
+
+- [Collaboration and Tasks](./behaviors/collaboration-and-tasks.md): child versus Task versus message, parent and actor/owner rights, assignment/completion, and handoffs.
+- [Channels and replies](./behaviors/channels-and-replies.md): conversation bindings, triggers and buffered context, automatic replies versus explicit sends, progress, and platform limits.
+- [Files, images, and attachments](./behaviors/files-images-and-attachments.md): draft/upload/history/model/delivery boundaries, image replay, published artifact data, previews, and download authority.
+
+### Install settings and recover
+
+- [Configuration and activation](./behaviors/configuration-and-activation.md): validated installation saves, live application, connection fencing, direct file edits, and restart requirements.
 - [Persistence and recovery](./behaviors/persistence-and-recovery.md): authoritative records, restart selection, independently committed effects, unknown outcomes, and rollback limits.
 
-### Environments and browser surfaces
-
-- [Nodes, workspaces, and permissions](./behaviors/nodes-workspaces-and-permissions.md): placement, paths/cwd, authorization, lifecycle, and environment limits.
-- [Files, images, and attachments](./behaviors/files-images-and-attachments.md): draft/upload/history/model/delivery boundaries, image preparation and replay, previews, and download authority.
-- [Workbench and Chat](./behaviors/workbench-and-chat.md): navigation, pane/component/Session/PTY lifetimes, reader intent, Code, and Terminal.
-
-Behavior pages own the observable contracts within their stated scope, not end-user tutorials or a second implementation inventory. Threads retain cross-module mechanisms and precise protocol/storage invariants, modules retain subsystem boundaries, and units retain source/test entry points. Keep the full observable rule at one behavior owner and short linked summaries at technical anchors; keep numerical/current-platform limits and unresolved intent explicitly distinguished from confirmed product decisions. Source and historical decisions still need checking when a change exposes uncertainty.
+Behavior pages own the observable contracts within their stated scope, not end-user tutorials or a second implementation inventory. Write them from supported usage paths through their actual consumers, comparing meaningful entry-point and lifecycle differences rather than listing modules or past bugs. The skill's “Writing Behavior Documentation from Supported Use” section owns the evidence and writing method. Threads retain cross-module mechanisms and precise protocol/storage invariants, modules retain subsystem boundaries, and units retain source/test entry points. Keep the full observable rule at one behavior owner and short linked summaries at technical anchors; keep numerical/current-platform limits and unresolved intent explicitly distinguished from confirmed product decisions.
 
 ## Overview
 

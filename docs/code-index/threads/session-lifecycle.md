@@ -2,7 +2,7 @@
 
 ## Overview
 
-Cross-module lifecycle from public creation through lazy hydration, queued execution, compaction/archive lineage, parent-child/fork behavior, restart recovery, archival, and coordinated deletion.
+Cross-module mechanisms from public creation through lazy hydration, queued execution, compaction/archive lineage, parent-child/fork behavior, restart recovery, archival, and coordinated deletion. [Sessions and Agents](../behaviors/sessions-and-agents.md) owns the observable choices, initial defaults, identity/topology distinctions, and retirement consequences; this thread locates their implementation and recovery invariants.
 
 ## Creation surfaces
 
@@ -123,7 +123,7 @@ Persisted prompt-cache keys follow the model-facing prefix, not session identity
 
 ### D-lifecycle-model-effort-inheritance
 
-[2026-08-13] New Session lifetimes carry model and provider-neutral effort as one prospective pair. Child/fork resolution is explicit effort, parent `childEffortDefault`, parent raw `effort`, then unset; model resolution keeps the existing explicit model, parent child-model default, parent raw model, then global-default path. Inherited unset remains unset so a differently configured child model or virtual leaf chooses its own default. A spawned fork/non-fork child receives only that resolved current pair: its own `childModelDefault` and `childEffortDefault` remain unset, so grandchildren naturally follow the child's current model/raw effort and virtual unset remains per-leaf rather than freezing the parent's future-child overrides. An explicit one-time creation override changes only that child's current pair; a later child-model/effort setting on the child may independently override its own future children. Existing persisted future-child settings remain effective until explicitly changed and are not inferred from equality with current settings. Source-based agent/session creation continues to carry raw effort with model inheritance, and new-session timers snapshot model plus raw effort together. At timer fire, that persisted pair is inherited state and is re-normalized against one current models-config snapshot, preserving compatible concrete/virtual-union effort while clearing config-drift incompatibility to unset rather than rejecting delivery. Newly explicit effort remains strict against the selected concrete capability or virtual union, while stale inherited effort is cleared rather than blocking creation.
+The observable prospective-pair/default contract and rationale are owned by [Sessions and Agents](../behaviors/sessions-and-agents.md#prospective-model-and-effort-are-a-pair). `resolveSpawnedSessionModelEffort` and prospective-setting normalization preserve raw unset versus explicit values. Timer firing passes one current models-config snapshot through normalization and creation validation, so those steps cannot observe different configurations; the snapshot is not persisted. Model-setting edits preserve compatible effort or clear incompatible effort without introducing a timer effort argument.
 
 ### D-lifecycle-manual-fork-event
 

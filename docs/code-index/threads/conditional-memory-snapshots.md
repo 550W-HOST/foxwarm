@@ -4,6 +4,8 @@
 
 Foxwarm materializes each memory-backed Session system-prompt snapshot for one canonical concrete model identity. Individual memory source bodies may contain bounded full-line `foxwarm-if` blocks; the resulting snapshot begins with a deterministic current-model marker used to decide whether the persisted bytes can be reused for a selected provider attempt.
 
+The observable source/adoption choices and refresh rationale are owned by [working instructions](../behaviors/conversation-and-history.md#which-instructions-are-in-the-working-context). This thread owns concrete identity matching, owner persistence, detached clones, and request-journal linkage.
+
 ## Source assembly
 
 - [src-conditional-memory](../units/src-conditional-memory.md) owns the pure conditional grammar and current-model header format.
@@ -30,6 +32,7 @@ Foxwarm materializes each memory-backed Session system-prompt snapshot for one c
 - A never-run virtual Session has no truthful concrete generation identity and leaves its snapshot unmaterialized until an actual attempt selects a leaf.
 - Forks retain the copied snapshot and cache lineage; first actual use rebuilds when the selected concrete identity differs.
 - Explicit, stale-idle, agent-metadata, and compaction-commit refreshes rebuild using the snapshot's recorded concrete generation identity. A concrete Session without a marker can derive its identity directly. A markerless virtual Session defers rather than selecting a synthetic leaf.
+- Exact-target refresh resolves an existing lifetime before assembly and uses that target Agent in `appendConfiguredMemoryFiles`, including its isolation-based path restriction. Default targeting and refresh admission are governed by [instruction adoption](../behaviors/conversation-and-history.md#when-do-changed-instructions-reach-the-model); refreshing does not choose an arbitrary virtual leaf.
 - Compaction commit keeps its existing memory reread behavior when a truthful live snapshot identity exists. Detached compact prompts are never copied back over live authority.
 
 ## Journal linkage

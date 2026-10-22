@@ -93,7 +93,13 @@ Metadata facts, normalized storage, isolation reads and inheritance traversal li
 - Rule validation rejects wildcard/extra fields and duplicate or conflicting exact identities before agent creation or metadata mutation effects. Rules remain attached only to the exact agent and are not inherited through `agent.inherit`.
 - Isolation enforcement prevents cross-agent session moves when either source or target agent is isolated.
 - Inheritance chain resolution detects cycles and logs a warning rather than throwing.
-- Setting inheritance is metadata-only by default; new and later normally refreshed snapshots use the new chain. `refreshSnapshots=true` uses the canonical inactivity predicate and catalog metadata to rebuild snapshots for the Agent and transitive inheritors that have been inactive for at most one hour. Older Sessions are skipped before hydration and retain the ordinary next-turn automatic refresh. Exact single-Session refresh remains immediate regardless of inactivity. Isolation changes retain their existing affected-Session update behavior.
+- The [instruction-adoption contract](../behaviors/conversation-and-history.md#when-do-changed-instructions-reach-the-model) owns inheritance-refresh defaults and activity boundaries. `setAgentInherit` filters Agent/transitive-inheritor catalog metadata with the shared inactivity predicate before hydration; exact refresh and isolation mutation use their separate owner paths.
+
+### Creation source and memory options
+
+[Sessions and Agents](../behaviors/sessions-and-agents.md#omitted-creation-settings-do-not-have-one-universal-source) owns caller/source defaults, prospective model/effort, Node precedence, and fresh versus conversion effects. `tool_create_agent` normalizes an omitted source to the caller; the lower `createAgentWithMainSession` consumes that explicit source or a passed owner override. Without a source, directory initialization's memory-copy fallback uses the `main` Agent.
+
+`inheritMemory` and `inherit` enter separate copy and metadata operations. Their observable independence and source restrictions are owned by [working instructions](../behaviors/conversation-and-history.md#which-instructions-are-in-the-working-context). Exact-target snapshot construction remains at [conditional snapshots](../threads/conditional-memory-snapshots.md#lifecycle-refresh).
 
 ### Named-session Node defaults
 
