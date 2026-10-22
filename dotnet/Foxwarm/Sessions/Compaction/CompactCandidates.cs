@@ -469,11 +469,19 @@ internal static class CompactCandidateBuilder
                 && CompletionSystemText(OpenAIRequestText.Trim(system))
             )
             && !parts.Any(part =>
-                (SessionWait.Text(part["text"]) is string text
+                (
+                    SessionWait.Text(part["text"]) is string text
                     && OpenAIRequestText.Trim(text).Length > 0
-                    && !(part["systemPayload"] is JsonValue flag && flag.TryGetValue<bool>(out var payload) && payload))
-                || (SessionWait.Text(part["thinking"]) is string thinking
-                    && OpenAIRequestText.Trim(thinking).Length > 0)
+                    && !(
+                        part["systemPayload"] is JsonValue flag
+                        && flag.TryGetValue<bool>(out var payload)
+                        && payload
+                    )
+                )
+                || (
+                    SessionWait.Text(part["thinking"]) is string thinking
+                    && OpenAIRequestText.Trim(thinking).Length > 0
+                )
                 || part["functionCall"] is not null
                 || part["functionResponse"] is not null
                 || part["inlineData"] is not null
@@ -484,15 +492,26 @@ internal static class CompactCandidateBuilder
     private static bool CompletionSystemText(string text)
     {
         // Only the opening system wrapper identifies a completion; quoted body text does not.
-        var opening = Regex.Match(text, "^<foxwarm-([a-zA-Z0-9_-]+)\\b([^>]*)>",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.ECMAScript);
-        if (opening.Success && opening.Groups[1].Value.Equals("system", StringComparison.OrdinalIgnoreCase))
+        var opening = Regex.Match(
+            text,
+            "^<foxwarm-([a-zA-Z0-9_-]+)\\b([^>]*)>",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.ECMAScript
+        );
+        if (
+            opening.Success
+            && opening.Groups[1].Value.Equals("system", StringComparison.OrdinalIgnoreCase)
+        )
         {
             var attributes = new Dictionary<string, string>();
-            foreach (Match attribute in Regex.Matches(opening.Groups[2].Value,
-                "([a-zA-Z_:][a-zA-Z0-9_.:-]*)\\s*=\\s*\"([^\"]*)\""))
-                attributes[attribute.Groups[1].Value] = attribute.Groups[2].Value
-                    .Replace("&quot;", "\"", StringComparison.Ordinal)
+            foreach (
+                Match attribute in Regex.Matches(
+                    opening.Groups[2].Value,
+                    "([a-zA-Z_:][a-zA-Z0-9_.:-]*)\\s*=\\s*\"([^\"]*)\""
+                )
+            )
+                attributes[attribute.Groups[1].Value] = attribute
+                    .Groups[2]
+                    .Value.Replace("&quot;", "\"", StringComparison.Ordinal)
                     .Replace("&apos;", "'", StringComparison.Ordinal)
                     .Replace("&lt;", "<", StringComparison.Ordinal)
                     .Replace("&gt;", ">", StringComparison.Ordinal)

@@ -101,9 +101,12 @@ internal sealed partial class SessionCompactor
             ["parts"] = new JsonArray(
                 new JsonObject
                 {
-                    ["system"] = CompletionMarker(live.Id,
+                    ["system"] = CompletionMarker(
+                        live.Id,
                         SessionWait.Text(live.AuthorityEnvelope["parentSessionId"]),
-                        CompactedSkillNames(original.History.Take(candidates.Split)), now),
+                        CompactedSkillNames(original.History.Take(candidates.Split)),
+                        now
+                    ),
                 }
             ),
             ["__meta"] = new JsonObject { ["seq"] = live.NextMessageSeq, ["timestamp"] = now },
@@ -199,24 +202,43 @@ internal sealed partial class SessionCompactor
             if (part["functionCall"] is not JsonObject call)
                 continue;
             var name = SessionWait.Text(call["name"]);
-            if (name != "load_skill"
-                && !(name == "skill" && SessionWait.Text((call["args"] as JsonObject)?["action"]) == "load"))
+            if (
+                name != "load_skill"
+                && !(
+                    name == "skill"
+                    && SessionWait.Text((call["args"] as JsonObject)?["action"]) == "load"
+                )
+            )
                 continue;
             var skill = SessionWait.Text((call["args"] as JsonObject)?["skillName"]);
-            if (skill is not null && OpenAIRequestText.Trim(skill) is { Length: > 0 } trimmed
-                && !names.Contains(trimmed))
+            if (
+                skill is not null
+                && OpenAIRequestText.Trim(skill) is { Length: > 0 } trimmed
+                && !names.Contains(trimmed)
+            )
                 names.Add(trimmed);
         }
         return names;
     }
 
-    private static string CompletionMarker(string id, string? parent, IReadOnlyList<string> skills, long now)
+    private static string CompletionMarker(
+        string id,
+        string? parent,
+        IReadOnlyList<string> skills,
+        long now
+    )
     {
         static string Attribute(string value) => LocalSessionTurnHost.EscapeFoxwarmAttribute(value);
-        var hint = skills.Count == 0 ? "" : " hint=\"" + Attribute(
-            "Note: The following skill(s) were loaded with skill(action=\"load\") but their content was compacted away: "
-            + string.Join(", ", skills.Select(skill => "`" + skill + "`"))
-            + ". If you still need them, call skill with action=\"load\" again.") + "\"";
+        var hint =
+            skills.Count == 0
+                ? ""
+                : " hint=\""
+                    + Attribute(
+                        "Note: The following skill(s) were loaded with skill(action=\"load\") but their content was compacted away: "
+                            + string.Join(", ", skills.Select(skill => "`" + skill + "`"))
+                            + ". If you still need them, call skill with action=\"load\" again."
+                    )
+                    + "\"";
         return $"<foxwarm-system kind=\"session-boundary\" event=\"compact-completed\" parentSessionId=\"{Attribute(string.IsNullOrEmpty(parent) ? "(none)" : parent)}\" currentSessionId=\"{Attribute(id)}\" time=\"{ArchiveBlockRecord.LocalTimestamp(now)}\"{hint} />";
     }
 }
