@@ -89,7 +89,7 @@ internal static class ConfiguredModelRequests
             Token = model.Token,
             Effort = effort,
             Instructions = instructions,
-            ProviderPromptCacheKey = model.ProviderType == "openai-ws" ? cacheKey : null,
+            ProviderPromptCacheKey = responses ? cacheKey : null,
             ExtraHeaders = Expand(model.Configuration["extraHeaders"]) as JsonObject,
             ExtraFields = Expand(model.Configuration["extraFields"]) as JsonObject,
             RequestCompression = compression,
