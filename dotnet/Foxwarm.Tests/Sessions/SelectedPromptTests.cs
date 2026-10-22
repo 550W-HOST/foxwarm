@@ -19,13 +19,25 @@ public sealed class SelectedPromptTests
         var outside = Path.Combine(temp.Path, "outside.md");
         await File.WriteAllTextAsync(outside, "synthetic symlink marker");
         File.CreateSymbolicLink(Path.Combine(directory, "inside-link.md"), outside);
-        var allowed = await memory.BuildAsync("restricted", "restricted/child", "a/wire", selection: ["inside-link.md"]);
+        var allowed = await memory.BuildAsync(
+            "restricted",
+            "restricted/child",
+            "a/wire",
+            selection: ["inside-link.md"]
+        );
         Assert.Contains("synthetic symlink marker", allowed);
         var outsideLink = Path.Combine(temp.Path, "outside-link.md");
         File.CreateSymbolicLink(outsideLink, Path.Combine(directory, "inside-link.md"));
-        var error = await Assert.ThrowsAsync<InvalidDataException>(() => memory.BuildAsync("restricted", "restricted/child", "a/wire", selection: [outsideLink]));
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            memory.BuildAsync("restricted", "restricted/child", "a/wire", selection: [outsideLink])
+        );
         Assert.Contains("can only access agents/restricted/", error.Message);
-        var empty = await memory.BuildAsync("restricted", "restricted/child", "a/wire", selection: []);
+        var empty = await memory.BuildAsync(
+            "restricted",
+            "restricted/child",
+            "a/wire",
+            selection: []
+        );
         Assert.DoesNotContain("synthetic symlink marker", empty);
     }
 

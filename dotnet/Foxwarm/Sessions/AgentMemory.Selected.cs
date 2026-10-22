@@ -68,7 +68,10 @@ internal sealed partial class AgentMemory
                     )
                 : reference;
             var path = Path.GetFullPath(expanded, agentDirectory);
-            if (restrictToAgentDirectory && !ToolAuthorizationEvaluation.Within(path, agentDirectory))
+            if (
+                restrictToAgentDirectory
+                && !ToolAuthorizationEvaluation.Within(path, agentDirectory)
+            )
                 throw new InvalidDataException(
                     $"Isolated agent session can only access agents/{agentName}/ on master."
                 );
