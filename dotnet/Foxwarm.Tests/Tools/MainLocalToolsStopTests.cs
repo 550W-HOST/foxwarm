@@ -10,7 +10,9 @@ public sealed partial class MainLocalToolsTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Self_stop_retains_its_receipt_and_fences_later_batch_or_nested_work(bool nested)
+    public async Task Self_stop_retains_its_receipt_and_fences_later_batch_or_nested_work(
+        bool nested
+    )
     {
         await using var f = await Fixture.Create();
         var work = f.Manager.IdentityWorkspace(f.Owner)!.ToolDirectory;
@@ -59,9 +61,15 @@ public sealed partial class MainLocalToolsTests
         );
         Assert.False(File.Exists(skipped));
         var row = Assert.Single(f.Owner.History(), row => row["role"]?.ToString() == "tool");
-        var responses = row["parts"]!.AsArray().Select(part => part!["functionResponse"]!).ToArray();
+        var responses = row["parts"]!
+            .AsArray()
+            .Select(part => part!["functionResponse"]!)
+            .ToArray();
         Assert.Equal(2, responses.Length);
-        Assert.Equal("tool_call_cancelled", responses[1]["response"]!["error"]!["type"]!.GetValue<string>());
+        Assert.Equal(
+            "tool_call_cancelled",
+            responses[1]["response"]!["error"]!["type"]!.GetValue<string>()
+        );
         Assert.True(responses[1]["response"]!["canceled"]!.GetValue<bool>());
         if (nested)
         {
@@ -94,7 +102,10 @@ public sealed partial class MainLocalToolsTests
             await release.Task;
         };
         f.Manager.Timers.Start();
-        var path = Path.Combine(f.Manager.IdentityWorkspace(f.Owner)!.ToolDirectory, "timer-after-stop");
+        var path = Path.Combine(
+            f.Manager.IdentityWorkspace(f.Owner)!.ToolDirectory,
+            "timer-after-stop"
+        );
         var timer = await f.Manager.ExecuteTimerToolAsync(
             f.Owner,
             "create_timer",
@@ -114,16 +125,14 @@ public sealed partial class MainLocalToolsTests
         var host = new LocalSessionTurnHost(
             f.Owner.Entry,
             f.Owner.Registry.Store,
-            new StopCallsChat(
-                [
-                    new JsonObject
-                    {
-                        ["id"] = "stop",
-                        ["name"] = "stop_session",
-                        ["args"] = new JsonObject { ["sessionId"] = f.Owner.Id },
-                    },
-                ]
-            ),
+            new StopCallsChat([
+                new JsonObject
+                {
+                    ["id"] = "stop",
+                    ["name"] = "stop_session",
+                    ["args"] = new JsonObject { ["sessionId"] = f.Owner.Id },
+                },
+            ]),
             f.Tools
         );
         try
@@ -155,13 +164,21 @@ public sealed partial class MainLocalToolsTests
             string id,
             IReadOnlyList<JsonObject> history,
             CancellationToken token
-        ) => Task.FromResult(new ChatResult(new JsonObject
-        {
-            ["role"] = "model",
-            ["parts"] = new JsonArray(calls.Select(call => (JsonNode)new JsonObject
-            {
-                ["functionCall"] = call.DeepClone(),
-            }).ToArray()),
-        }));
+        ) =>
+            Task.FromResult(
+                new ChatResult(
+                    new JsonObject
+                    {
+                        ["role"] = "model",
+                        ["parts"] = new JsonArray(
+                            calls
+                                .Select(call =>
+                                    (JsonNode)new JsonObject { ["functionCall"] = call.DeepClone() }
+                                )
+                                .ToArray()
+                        ),
+                    }
+                )
+            );
     }
 }
