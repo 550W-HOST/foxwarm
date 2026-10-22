@@ -104,12 +104,20 @@ internal sealed partial class SessionOwner
         Entry.QueueHistoryAppended = (snapshot, messages) =>
         {
             foreach (var message in messages)
-                lastNotifiedSeq = Math.Max(lastNotifiedSeq, message["__meta"]?["seq"]?.GetValue<long>() ?? 0);
+                lastNotifiedSeq = Math.Max(
+                    lastNotifiedSeq,
+                    message["__meta"]?["seq"]?.GetValue<long>() ?? 0
+                );
             Emit(SessionEventKind.StateChanged);
             if (messages.Count > 0)
             {
-                Emit(SessionEventKind.QueueHistoryAppended,
-                    new JsonArray(messages.Select(message => (JsonNode?)message.DeepClone()).ToArray()), snapshot);
+                Emit(
+                    SessionEventKind.QueueHistoryAppended,
+                    new JsonArray(
+                        messages.Select(message => (JsonNode?)message.DeepClone()).ToArray()
+                    ),
+                    snapshot
+                );
                 foreach (var message in messages)
                     ClearCommittedDraft(message);
             }

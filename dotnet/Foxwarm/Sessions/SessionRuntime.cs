@@ -16,7 +16,12 @@ internal enum SessionEventKind
     Deleted,
 }
 
-internal sealed record SessionRuntimeEvent(string SessionId, SessionEventKind Kind, JsonNode? Data, SessionSnapshot? Snapshot = null);
+internal sealed record SessionRuntimeEvent(
+    string SessionId,
+    SessionEventKind Kind,
+    JsonNode? Data,
+    SessionSnapshot? Snapshot = null
+);
 
 internal sealed record SessionMetadata(
     string Id,

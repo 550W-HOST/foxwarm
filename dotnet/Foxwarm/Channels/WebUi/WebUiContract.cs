@@ -186,7 +186,9 @@ internal static class WebUiContract
 
     private static JsonObject QueueHistoryAppend(SessionRuntimeEvent entry)
     {
-        var snapshot = entry.Snapshot ?? throw new InvalidOperationException("Queue append snapshot is missing.");
+        var snapshot =
+            entry.Snapshot
+            ?? throw new InvalidOperationException("Queue append snapshot is missing.");
         var preview = QueuedPreview(snapshot);
         var queueLength = snapshot.Queue.Count(SessionCompactor.Ordinary);
         return new JsonObject

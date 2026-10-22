@@ -348,7 +348,10 @@ public sealed class SessionEntry
 
     internal void InvokeCommitted(SessionSnapshot snapshot) => Committed?.Invoke(snapshot);
 
-    internal void InvokeQueuedCommitted(SessionSnapshot snapshot, IReadOnlyList<JsonObject>? appendedMessages = null)
+    internal void InvokeQueuedCommitted(
+        SessionSnapshot snapshot,
+        IReadOnlyList<JsonObject>? appendedMessages = null
+    )
     {
         try
         {
