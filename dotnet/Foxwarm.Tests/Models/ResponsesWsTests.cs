@@ -663,6 +663,8 @@ internal sealed class WsPeer : IAsyncDisposable
     private int connections;
     internal Func<JsonObject, Task>? BeforeResponse;
     internal bool ReplyToClose = true;
+    internal WebSocketCloseStatus CloseReplyStatus = WebSocketCloseStatus.NormalClosure;
+    internal WebSocketCloseStatus? CloseAfterRequest;
     internal Uri Uri { get; private set; } = null!;
     internal int Connections => Volatile.Read(ref connections);
     internal List<JsonObject> Requests { get; } = [];
@@ -723,7 +725,7 @@ internal sealed class WsPeer : IAsyncDisposable
                         CloseCodes.Add((int?)socket.CloseStatus);
                     if (ReplyToClose)
                         await socket.CloseOutputAsync(
-                            WebSocketCloseStatus.NormalClosure,
+                            CloseReplyStatus,
                             "OK",
                             stop.Token
                         );
@@ -747,6 +749,11 @@ internal sealed class WsPeer : IAsyncDisposable
                 }
                 if (BeforeResponse is not null)
                     await BeforeResponse(wire);
+                if (CloseAfterRequest is { } closeStatus)
+                {
+                    await socket.CloseOutputAsync(closeStatus, "fixture-close", stop.Token);
+                    continue;
+                }
                 var completed = new JsonObject
                 {
                     ["type"] = "response.completed",

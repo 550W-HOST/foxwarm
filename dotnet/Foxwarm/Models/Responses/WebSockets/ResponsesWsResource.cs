@@ -24,6 +24,7 @@ internal sealed class ResponsesWsResource(
     private CancellationTokenRegistration callerAbort;
     private WsLease? lease;
     private WsPhase phase = WsPhase.Active;
+    private bool localIdleClose;
     private Task pump = Task.CompletedTask;
     private int disposed;
     private long frames,
@@ -183,6 +184,7 @@ internal sealed class ResponsesWsResource(
         {
             if (phase != WsPhase.Idle)
                 return;
+            localIdleClose = true;
             phase = WsPhase.Closed;
         }
         owner.Remove(this);
@@ -224,14 +226,20 @@ internal sealed class ResponsesWsResource(
                     .ConfigureAwait(false);
                 if (result.MessageType == WebSocketMessageType.Close)
                 {
-                    var before = Phase;
+                    WsPhase before;
+                    bool expectedLocalClose;
+                    lock (gate)
+                    {
+                        before = phase;
+                        expectedLocalClose = localIdleClose;
+                    }
                     owner.Log(
                         this,
                         "close",
                         "upstream-close",
                         "upstream",
                         (int?)socket.CloseStatus,
-                        failure: before != WsPhase.Idle
+                        failure: (before != WsPhase.Idle && !expectedLocalClose)
                             || socket.CloseStatus is not WebSocketCloseStatus.NormalClosure
                     );
                     if (before == WsPhase.Idle)
