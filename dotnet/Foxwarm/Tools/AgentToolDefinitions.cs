@@ -273,13 +273,20 @@ internal static class AgentToolDefinitions
                             "Session name without the agent prefix. Use only ASCII letters, digits, underscores, and hyphens."
                         ),
                         ["displayName"] = String("Display name for the new session."),
-                        ["parentSessionId"] = String("Existing session to record as the new session's parent."),
-                        ["node"] = String("Node for the new session. Omit to inherit this session's current Node. An isolated target agent uses its bound Node."),
+                        ["parentSessionId"] = String(
+                            "Existing session to record as the new session's parent."
+                        ),
+                        ["node"] = String(
+                            "Node for the new session. Omit to inherit this session's current Node. An isolated target agent uses its bound Node."
+                        ),
                         ["systemPromptFiles"] = new JsonObject
                         {
                             ["type"] = "array",
-                            ["description"] = "Memory source files for the new prompt snapshot. When supplied, these replace the default memory-file selection; other system instructions remain.",
-                            ["items"] = String("File path. Relative paths use the agent directory; absolute paths and ~/ paths are accepted."),
+                            ["description"] =
+                                "Memory source files for the new prompt snapshot. When supplied, these replace the default memory-file selection; other system instructions remain.",
+                            ["items"] = String(
+                                "File path. Relative paths use the agent directory; absolute paths and ~/ paths are accepted."
+                            ),
                         },
                         ["forceModel"] = ForceModel(),
                     },
@@ -324,7 +331,9 @@ internal static class AgentToolDefinitions
                             "finish",
                             "wait"
                         ),
-                        ["node"] = String("Node for the new child session. Omit to inherit the parent's current Node. An isolated target agent uses its bound Node."),
+                        ["node"] = String(
+                            "Node for the new child session. Omit to inherit the parent's current Node. An isolated target agent uses its bound Node."
+                        ),
                         ["forceModel"] = ForceModel(),
                         ["handoffConfirmation"] = String(
                             "Put handoffConfirmation last. Use the exact required opening and closing sentences with your own specific review."

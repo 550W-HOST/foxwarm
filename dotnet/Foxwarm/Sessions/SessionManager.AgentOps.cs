@@ -50,7 +50,9 @@ internal sealed partial class SessionManager
         await gate.WaitAsync();
         try
         {
-            if (createMainSession && await IdReservedAsync(SessionIdentity.Build(agentName, "main")))
+            if (
+                createMainSession && await IdReservedAsync(SessionIdentity.Build(agentName, "main"))
+            )
                 throw new InvalidDataException("Agent main Session ID is already reserved.");
             try
             {
@@ -444,7 +446,8 @@ internal sealed partial class SessionManager
                 if (timerCreation)
                     model = inherited?.Model;
                 var selectedModel = models.All.Count == 0 ? null : models.Resolve(model);
-                var snapshotModel = selectedModel is null || selectedModel.IsVirtual ? null : selectedModel.Key;
+                var snapshotModel =
+                    selectedModel is null || selectedModel.IsVirtual ? null : selectedModel.Key;
                 var snapshotText = snapshotModel is null
                     ? ""
                     : await memory.BuildAsync(
@@ -557,7 +560,8 @@ internal sealed partial class SessionManager
             : inherited?.Model;
         if (model is not null && !models.Contains(model))
             model = null;
-        var allowedEfforts = models.All.Count == 0 ? HostModels.Efforts : models.Resolve(model).AllowedEfforts;
+        var allowedEfforts =
+            models.All.Count == 0 ? HostModels.Efforts : models.Resolve(model).AllowedEfforts;
         var effort = forceModel?["effort"] is JsonNode effortValue
             ? effortValue is JsonValue e
             && e.TryGetValue<string>(out var raw)

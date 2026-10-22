@@ -108,7 +108,9 @@ public sealed partial class WebUiStartupTests
         using (var response = await Post(JsonContent.Create(new { agentId = "framing" })))
         {
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-            var generated = (await response.Content.ReadFromJsonAsync<JsonObject>())!["sessionId"]!.GetValue<string>();
+            var generated = (await response.Content.ReadFromJsonAsync<JsonObject>())![
+                "sessionId"
+            ]!.GetValue<string>();
             Assert.Matches(@"^framing/\d{4}_[a-z0-9]{5}$", generated);
             Assert.Equal(new[] { generated }.Concat(previous), await Roots());
         }
@@ -149,7 +151,9 @@ public sealed partial class WebUiStartupTests
             Assert.Equal(previous, await Roots());
         }
         previous = await Roots();
-        using (var response = await h.Client.PostAsJsonAsync("/api/agents", new { agentId = "newest" }))
+        using (
+            var response = await h.Client.PostAsJsonAsync("/api/agents", new { agentId = "newest" })
+        )
         {
             Assert.Equal(HttpStatusCode.Created, response.StatusCode);
             Assert.Equal(new[] { "newest/main" }.Concat(previous), await Roots());
@@ -157,15 +161,34 @@ public sealed partial class WebUiStartupTests
         previous = await Roots();
         using (var duplicate = await Post(JsonContent.Create(identity)))
             Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
-        using (var invalid = await Post(JsonContent.Create(new { agentId = "framing", sessionId = " requested " })))
+        using (
+            var invalid = await Post(
+                JsonContent.Create(new { agentId = "framing", sessionId = " requested " })
+            )
+        )
             Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
         Assert.Equal(previous, await Roots());
-        using (var invalid = await h.Client.PostAsJsonAsync("/api/sessions/framing%2Frequested/fork", new { suffix = "" }))
+        using (
+            var invalid = await h.Client.PostAsJsonAsync(
+                "/api/sessions/framing%2Frequested/fork",
+                new { suffix = "" }
+            )
+        )
             Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
-        using (var forked = await h.Client.PostAsJsonAsync("/api/sessions/framing%2Frequested/fork", new { }))
+        using (
+            var forked = await h.Client.PostAsJsonAsync(
+                "/api/sessions/framing%2Frequested/fork",
+                new { }
+            )
+        )
         {
             Assert.Equal(HttpStatusCode.OK, forked.StatusCode);
-            Assert.Equal("framing/requested_fork", (await forked.Content.ReadFromJsonAsync<JsonObject>())!["newSessionId"]!.GetValue<string>());
+            Assert.Equal(
+                "framing/requested_fork",
+                (await forked.Content.ReadFromJsonAsync<JsonObject>())![
+                    "newSessionId"
+                ]!.GetValue<string>()
+            );
         }
         await h.Stop();
     }

@@ -167,12 +167,25 @@ internal sealed partial class SessionManager
                 {
                     Keys(
                         args,
-                        ["agentName", "sessionName", "displayName", "parentSessionId", "node", "forceModel", "systemPromptFiles"],
+                        [
+                            "agentName",
+                            "sessionName",
+                            "displayName",
+                            "parentSessionId",
+                            "node",
+                            "forceModel",
+                            "systemPromptFiles",
+                        ],
                         ["agentName", "sessionName"]
                     );
                     var forceModel = OptionalForceModel(args);
-                    if (args.ContainsKey("systemPromptFiles") && args["systemPromptFiles"] is not JsonArray)
-                        throw new InvalidDataException("systemPromptFiles must be an array of strings.");
+                    if (
+                        args.ContainsKey("systemPromptFiles")
+                        && args["systemPromptFiles"] is not JsonArray
+                    )
+                        throw new InvalidDataException(
+                            "systemPromptFiles must be an array of strings."
+                        );
                     var settings = source.Entry.Snapshot().AuthorityEnvelope;
                     var created = await CreateNamedAsync(
                         RequiredString(args, "agentName"),
@@ -181,8 +194,10 @@ internal sealed partial class SessionManager
                         forceModel,
                         initialNode: CreationNode(args) ?? CurrentNode(source),
                         inherited: (
-                            SessionWait.Text(settings["childModelDefault"]) ?? SessionWait.Text(settings["model"]),
-                            SessionWait.Text(settings["childEffortDefault"]) ?? SessionWait.Text(settings["effort"])
+                            SessionWait.Text(settings["childModelDefault"])
+                                ?? SessionWait.Text(settings["model"]),
+                            SessionWait.Text(settings["childEffortDefault"])
+                                ?? SessionWait.Text(settings["effort"])
                         ),
                         selectedFiles: AgentMemory.NormalizeSelection(args["systemPromptFiles"]),
                         parentSessionId: OptionalString(args, "parentSessionId")
@@ -418,8 +433,16 @@ internal sealed partial class SessionManager
     private static string? CreationNode(JsonObject args)
     {
         var node = OptionalString(args, "node");
-        if (node is not null && (string.IsNullOrWhiteSpace(node) || System.Text.Encoding.UTF8.GetByteCount(node) > 4096))
-            throw new InvalidDataException("node must be a bounded non-empty string when provided.");
+        if (
+            node is not null
+            && (
+                string.IsNullOrWhiteSpace(node)
+                || System.Text.Encoding.UTF8.GetByteCount(node) > 4096
+            )
+        )
+            throw new InvalidDataException(
+                "node must be a bounded non-empty string when provided."
+            );
         return node;
     }
 

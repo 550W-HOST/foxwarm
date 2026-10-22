@@ -82,15 +82,25 @@ internal sealed partial class WebUIChannel
                         ? null
                         : body["inheritAgent"]!.GetValue<string>()?.Trim();
                     if (!string.IsNullOrEmpty(inherit) && sessions.AgentIsolated(inherit))
-                        return Results.BadRequest(new { error = "An isolated Agent cannot be used as an inherit source." });
+                        return Results.BadRequest(
+                            new { error = "An isolated Agent cannot be used as an inherit source." }
+                        );
                     var created = await sessions.CreateAgentAsync(
                         name.Trim(),
                         inherit: string.IsNullOrEmpty(inherit) ? null : inherit,
                         isolatedNode: body["isolatedNode"]?.GetValue<string>()
                     );
                     if (created.MainSessionId is not null)
-                        runtime.ChangePresentation(catalog => catalog.Move(created.MainSessionId,
-                            new JsonObject { ["parentSessionId"] = null, ["position"] = "first" }));
+                        runtime.ChangePresentation(catalog =>
+                            catalog.Move(
+                                created.MainSessionId,
+                                new JsonObject
+                                {
+                                    ["parentSessionId"] = null,
+                                    ["position"] = "first",
+                                }
+                            )
+                        );
                     return Results.Json(
                         new
                         {
@@ -363,7 +373,8 @@ internal sealed partial class WebUIChannel
                         statusCode: 409
                     );
                 }
-                catch (InvalidDataException error) when (error.Message.Contains("already reserved", StringComparison.Ordinal))
+                catch (InvalidDataException error)
+                    when (error.Message.Contains("already reserved", StringComparison.Ordinal))
                 {
                     return Results.Conflict(new { error = error.Message });
                 }
