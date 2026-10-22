@@ -724,11 +724,7 @@ internal sealed class WsPeer : IAsyncDisposable
                     lock (gate)
                         CloseCodes.Add((int?)socket.CloseStatus);
                     if (ReplyToClose)
-                        await socket.CloseOutputAsync(
-                            CloseReplyStatus,
-                            "OK",
-                            stop.Token
-                        );
+                        await socket.CloseOutputAsync(CloseReplyStatus, "OK", stop.Token);
                     else
                         await Task.Delay(Timeout.InfiniteTimeSpan, stop.Token);
                     break;

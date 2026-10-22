@@ -172,7 +172,10 @@ public sealed class StartupDiagnosticsTests
     {
         using var temp = new TempDirectory();
         Directory.CreateDirectory(Path.Combine(temp.Path, "state"));
-        await File.WriteAllTextAsync(Path.Combine(temp.Path, "state", "config.yaml"), "vector: false\n");
+        await File.WriteAllTextAsync(
+            Path.Combine(temp.Path, "state", "config.yaml"),
+            "vector: false\n"
+        );
         var configuration = new ModelConfiguration(temp.Path);
         await using var peer = await WsPeer.StartAsync();
         peer.CloseReplyStatus = (WebSocketCloseStatus)code;
@@ -180,7 +183,11 @@ public sealed class StartupDiagnosticsTests
             peer.CloseAfterRequest = (WebSocketCloseStatus)code;
         await using var transport = new ResponsesWsTransport();
         var service = new ResponsesWsChatService(
-            ResponsesWsTests.Options(peer.Uri), transport, ModelRequestScope.Canonical, false, "diagnostics"
+            ResponsesWsTests.Options(peer.Uri),
+            transport,
+            ModelRequestScope.Canonical,
+            false,
+            "diagnostics"
         );
         var sync = Environment.GetEnvironmentVariable("FOXWARM_SYNC_FILE_LOG");
         try
@@ -188,9 +195,15 @@ public sealed class StartupDiagnosticsTests
             Environment.SetEnvironmentVariable("FOXWARM_SYNC_FILE_LOG", "1");
             using (var log = new MainLog(configuration))
             {
-                var request = service.ChatAsync("fixture", [ResponsesWsTests.Message("user", "fixture")], default);
+                var request = service.ChatAsync(
+                    "fixture",
+                    [ResponsesWsTests.Message("user", "fixture")],
+                    default
+                );
                 if (active)
-                    await Assert.ThrowsAsync<IOException>(() => request.WaitAsync(TimeSpan.FromSeconds(5)));
+                    await Assert.ThrowsAsync<IOException>(() =>
+                        request.WaitAsync(TimeSpan.FromSeconds(5))
+                    );
                 else
                 {
                     var result = await request.WaitAsync(TimeSpan.FromSeconds(5));
@@ -200,12 +213,19 @@ public sealed class StartupDiagnosticsTests
                 await transport.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
             }
             var records = File.ReadLines(MainLog.Destination(configuration))
-                .Select(line => JsonNode.Parse(line)!.AsObject()).ToArray();
-            var close = Assert.Single(records, row =>
-                JsonNode.Parse(row["msg"]!.ToString())!["cause"]!.ToString() == "upstream-close"
-                && JsonNode.Parse(row["msg"]!.ToString())!["boundary"]!.ToString() == "close");
+                .Select(line => JsonNode.Parse(line)!.AsObject())
+                .ToArray();
+            var close = Assert.Single(
+                records,
+                row =>
+                    JsonNode.Parse(row["msg"]!.ToString())!["cause"]!.ToString() == "upstream-close"
+                    && JsonNode.Parse(row["msg"]!.ToString())!["boundary"]!.ToString() == "close"
+            );
             Assert.Equal(expectedLevel, close["level"]!.GetValue<int>());
-            Assert.Equal(code, JsonNode.Parse(close["msg"]!.ToString())!["closeCode"]!.GetValue<int>());
+            Assert.Equal(
+                code,
+                JsonNode.Parse(close["msg"]!.ToString())!["closeCode"]!.GetValue<int>()
+            );
             if (!active)
                 Assert.Equal(1000, Assert.Single(peer.CloseCodes));
             if (expectedLevel == 30)

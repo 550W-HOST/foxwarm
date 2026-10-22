@@ -248,16 +248,25 @@ public sealed class InitialChannelStartupTests
                     next["telegram"]!["enabled"] = false;
                 var saved = await config.SaveChannelsAsync(next);
                 Assert.True(saved["saved"]!.GetValue<bool>());
-                Assert.Contains("channels", saved["applied"]!.AsArray().Select(value => value!.ToString()));
+                Assert.Contains(
+                    "channels",
+                    saved["applied"]!.AsArray().Select(value => value!.ToString())
+                );
                 if (action == "failed-reload")
-                    Assert.Contains("channels.telegram", saved["notApplied"]!.AsArray().Select(value => value!.ToString()));
+                    Assert.Contains(
+                        "channels.telegram",
+                        saved["notApplied"]!.AsArray().Select(value => value!.ToString())
+                    );
                 else
                     Assert.Empty(saved["notApplied"]!.AsArray());
             }
             release.TrySetResult();
             await config.ManagedChannels!.StartInitialAsync().WaitAsync(TimeSpan.FromSeconds(10));
             Assert.Equal(action is "enabled-save" or "failed-reload" ? 2 : 1, commands);
-            Assert.Equal(action == "enabled-save", Status(config, "telegram")["running"]!.GetValue<bool>());
+            Assert.Equal(
+                action == "enabled-save",
+                Status(config, "telegram")["running"]!.GetValue<bool>()
+            );
             if (action != "enabled-save")
                 Assert.DoesNotContain(peer.Calls, call => call.Method == "getUpdates");
             if (action == "explicit-stop")

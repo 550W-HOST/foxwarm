@@ -34,6 +34,7 @@ internal sealed class ManagedChannels(
         string,
         (IManagedChannel Channel, TaskCompletionSource Settled)
     > starting = new(StringComparer.Ordinal);
+
     // Only initial-start intent: reload and successful explicit stop take over this policy.
     private readonly HashSet<string> initialStarts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> errors = new(StringComparer.Ordinal);
@@ -190,7 +191,9 @@ internal sealed class ManagedChannels(
                 }
             }
             if (!closed)
-                Console.Error.WriteLine($"Channel {id} ({type}) initial startup attempts exhausted.");
+                Console.Error.WriteLine(
+                    $"Channel {id} ({type}) initial startup attempts exhausted."
+                );
             return false;
         }
         finally
