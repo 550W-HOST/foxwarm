@@ -5,6 +5,12 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionManager
 {
+    private enum IdentityMovePurpose
+    {
+        MoveSession,
+        AgentConversion,
+    }
+
     private sealed class IdentityMoveOperation(
         SessionOwner owner,
         SessionIdentityMoveRecord record,
@@ -155,9 +161,16 @@ internal sealed partial class SessionManager
         }
     }
 
-    internal async Task<JsonObject> MoveIdentityAsync(
+    internal Task<JsonObject> MoveIdentityAsync(
         SessionOwner caller,
         JsonObject args,
+        CancellationToken token = default
+    ) => RenameIdentityAsync(caller, args, IdentityMovePurpose.MoveSession, token);
+
+    private async Task<JsonObject> RenameIdentityAsync(
+        SessionOwner caller,
+        JsonObject args,
+        IdentityMovePurpose purpose,
         CancellationToken token = default
     )
     {
@@ -220,7 +233,8 @@ internal sealed partial class SessionManager
                 "Destination Agent already exists or its directory is reserved."
             );
         if (
-            owner.Agent != targetAgent
+            purpose == IdentityMovePurpose.MoveSession
+            && owner.Agent != targetAgent
             && (Isolation(owner.Agent).Isolated || !create && Isolation(targetAgent).Isolated)
         )
             throw new InvalidDataException(

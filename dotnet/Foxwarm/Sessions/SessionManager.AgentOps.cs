@@ -33,7 +33,12 @@ internal sealed partial class SessionManager
         string? initialMemory = null,
         string? inherit = null,
         string? isolatedNode = null,
-        string? initialSoul = null
+        string? initialSoul = null,
+        SessionOwner? sourceSession = null,
+        string? initialModel = null,
+        string? initialNode = null,
+        bool inheritMemory = false,
+        string? sourceSessionId = null
     )
     {
         await EnsureIdentityStartupAsync();
@@ -46,7 +51,16 @@ internal sealed partial class SessionManager
             await RequireAgentNodeAsync(isolatedNode);
         inherit = string.IsNullOrWhiteSpace(inherit) ? null : inherit.Trim();
         using var operation = TrackCreation();
-        var gate = CreationKey(SessionIdentity.Build(agentName, "main"));
+        var mainId = SessionIdentity.Build(agentName, "main");
+        if (sourceSession is null && sourceSessionId is not null)
+        {
+            // Source resolves (and may create) its source only after the target-main preflight.
+            // Do not hold the target creation key while entering another lifetime's creation owner.
+            if (createMainSession && await IdReservedAsync(mainId))
+                throw new InvalidDataException("Agent main Session ID is already reserved.");
+            sourceSession = await ResolveAgentCreationSourceAsync(sourceSessionId);
+        }
+        var gate = CreationKey(mainId);
         await gate.WaitAsync();
         try
         {
@@ -68,17 +82,30 @@ internal sealed partial class SessionManager
             }
             try
             {
+                if (inheritMemory)
+                    agents.CopyIdentityMemory(sourceSession?.Agent ?? "main", agentName);
                 if (isolatedNode is not null)
                     await agents.SetNodeAsync(agentName, isolatedNode);
                 if (!createMainSession)
                     return (agentName, null);
+                var source = sourceSession?.Entry.Snapshot().AuthorityEnvelope;
                 var session = await CreateNamedLockedAsync(
                     agentName,
                     "main",
                     null,
                     null,
+                    (
+                        initialModel ?? SessionWait.Text(source?["model"]),
+                        SessionWait.Text(source?["effort"])
+                    ),
                     null,
-                    null
+                    initialNode: initialNode
+                        ?? (sourceSession is null ? null : CurrentNode(sourceSession)),
+                    childDefaults: (
+                        SessionWait.Text(source?["childModelDefault"]),
+                        SessionWait.Text(source?["childEffortDefault"])
+                    ),
+                    agentMainCreation: true
                 );
                 return (agentName, session.Id);
             }
@@ -90,6 +117,35 @@ internal sealed partial class SessionManager
                     error
                 );
             }
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<SessionOwner> ResolveAgentCreationSourceAsync(string id)
+    {
+        var existing = await GetExistingAsync(id);
+        if (existing is not null)
+            return existing;
+        using var operation = TrackCreation();
+        var gate = CreationKey(id);
+        await gate.WaitAsync();
+        try
+        {
+            existing = await GetExistingAsync(id);
+            return existing
+                ?? await CreateNamedLockedAsync(
+                    SessionIdentity.Agent(id),
+                    id[(id.LastIndexOf('/') + 1)..],
+                    null,
+                    null,
+                    null,
+                    null,
+                    exactId: id,
+                    initialNode: "master"
+                );
         }
         finally
         {
@@ -386,14 +442,23 @@ internal sealed partial class SessionManager
         return target.Id;
     }
 
-    public async Task<string> RefreshSnapshotAsync(SessionOwner session)
+    public async Task<string?> RefreshSnapshotAsync(SessionOwner session)
     {
         using var admission = BeginOwnerMutation(session);
         var snapshot = session.Entry.Snapshot();
-        var modelId =
-            ConditionalMemory.ReadCurrentModelSnapshotId(
-                snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.GetValue<string>() ?? ""
-            ) ?? models.Select(snapshot).Model.Key;
+        var modelId = ConditionalMemory.ReadCurrentModelSnapshotId(
+            snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.GetValue<string>() ?? ""
+        );
+        if (modelId is null)
+        {
+            var model =
+                models.All.Count == 0
+                    ? null
+                    : models.Resolve(SessionWait.Text(snapshot.AuthorityEnvelope["model"]));
+            if (model is null || model.IsVirtual)
+                return null;
+            modelId = model.Key;
+        }
         var value = await memory.BuildAsync(
             session.Agent,
             session.Id,
@@ -415,7 +480,9 @@ internal sealed partial class SessionManager
         IReadOnlyList<string>? selectedFiles = null,
         bool timerCreation = false,
         string? timerNode = null,
-        string? initialNode = null
+        string? initialNode = null,
+        (string? Model, string? Effort)? childDefaults = null,
+        bool agentMainCreation = false
     )
     {
         using var membership = BeginAgentAdmission(agentName);
@@ -442,7 +509,11 @@ internal sealed partial class SessionManager
             id,
             async () =>
             {
-                var (model, effort) = ValidateModelSettings(inherited, forceModel);
+                var (model, effort) = ValidateModelSettings(
+                    inherited,
+                    forceModel,
+                    preserveInheritedModel: agentMainCreation
+                );
                 if (timerCreation)
                     model = inherited?.Model;
                 var selectedModel = models.All.Count == 0 ? null : models.Resolve(model);
@@ -473,6 +544,10 @@ internal sealed partial class SessionManager
                         state.AuthorityEnvelope["model"] = model;
                     if (effort is not null)
                         state.AuthorityEnvelope["effort"] = effort;
+                    if (childDefaults?.Model is string childModel)
+                        state.AuthorityEnvelope["childModelDefault"] = childModel;
+                    if (childDefaults?.Effort is string childEffort)
+                        state.AuthorityEnvelope["childEffortDefault"] = childEffort;
                     state.AuthorityEnvelope["persistentMemorySnapshot"] = snapshotText;
                     if (selectedFiles is not null)
                         state.AuthorityEnvelope["systemPromptFiles"] = new JsonArray(
@@ -535,7 +610,8 @@ internal sealed partial class SessionManager
 
     private (string? Model, string? Effort) ValidateModelSettings(
         (string? Model, string? Effort)? inherited,
-        JsonObject? forceModel
+        JsonObject? forceModel,
+        bool preserveInheritedModel = false
     )
     {
         if (
@@ -558,7 +634,11 @@ internal sealed partial class SessionManager
                 ? id
                 : throw new InvalidDataException("Unknown configured model key.")
             : inherited?.Model;
-        if (model is not null && !models.Contains(model))
+        // Agent mains copy stored raw selection across configuration removal. Resolution below
+        // still uses the current default for effort and snapshot selection when that key is absent.
+        if (preserveInheritedModel && model is not null)
+            model = SessionGoal.Trim(model) is { Length: > 0 } rawModel ? rawModel : null;
+        if (!preserveInheritedModel && model is not null && !models.Contains(model))
             model = null;
         var allowedEfforts =
             models.All.Count == 0 ? HostModels.Efforts : models.Resolve(model).AllowedEfforts;

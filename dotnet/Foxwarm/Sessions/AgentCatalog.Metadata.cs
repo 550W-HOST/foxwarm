@@ -53,6 +53,10 @@ internal sealed partial class AgentCatalog
         ValidateName(inherit);
         if (name == inherit)
             throw new InvalidDataException("Agent cannot inherit from itself.");
+        if (IsolatedToolCompatibility.Metadata(MetadataSnapshot()[inherit]).Isolated)
+            throw new InvalidDataException(
+                $"Agent '{inherit}' is isolated and cannot be used as an inherit source."
+            );
         if (!Exists(inherit) || !Directory.Exists(SourceDirectory(inherit)))
             throw new InvalidDataException($"Inherited Agent '{inherit}' does not exist.");
         if (InheritanceChain(inherit).Contains(name, StringComparer.Ordinal))

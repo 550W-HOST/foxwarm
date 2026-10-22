@@ -131,17 +131,46 @@ internal sealed partial class SessionManager
                     );
                 return await CreateNamedAsync(agent, null, null, null);
             }
+            string AllocateName()
+            {
+                for (var attempt = 0; attempt < 32; attempt++)
+                {
+                    var name = agent + "_" + RandomBase36Fraction(6);
+                    var directory = agents.SourceDirectory(name);
+                    if (
+                        !agents.Exists(name)
+                        && !Directory.Exists(directory)
+                        && !File.Exists(directory)
+                    )
+                        return name;
+                }
+                throw new InvalidOperationException("Unable to allocate a guest Agent.");
+            }
             for (var attempt = 0; attempt < 32; attempt++)
             {
-                var name = agent + "_" + Guid.NewGuid().ToString("N")[..6];
-                if (agents.Exists(name))
-                    continue;
-                var created = await CreateAgentAsync(
-                    name,
-                    inherit: agent,
-                    isolatedNode: isolated ? node : null
-                );
-                return await RequiredAsync(created.MainSessionId!);
+                var name = AllocateName();
+                try
+                {
+                    var created = await CreateAgentAsync(
+                        name,
+                        inherit: agent,
+                        isolatedNode: isolated ? node : null
+                    );
+                    return await RequiredAsync(created.MainSessionId!);
+                }
+                catch (InvalidDataException error)
+                    when (error.Message.Contains(
+                            "already reserved",
+                            StringComparison.OrdinalIgnoreCase
+                        )
+                        || error.Message.Contains(
+                            "already exists",
+                            StringComparison.OrdinalIgnoreCase
+                        )
+                    )
+                {
+                    // Source retries allocation collisions, not failures after Agent creation.
+                }
             }
             throw new InvalidOperationException("Unable to allocate a guest Agent.");
         }
