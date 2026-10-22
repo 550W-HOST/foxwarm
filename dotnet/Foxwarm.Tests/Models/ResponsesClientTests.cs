@@ -319,7 +319,7 @@ public sealed class ResponsesClientTests
     }
 
     [Fact]
-    public async Task NonSuccessReadsBoundedBodyAndCreatesNoAssistant()
+    public async Task NonSuccessKeepsBoundedDiagnosticBodyAndCreatesNoAssistant()
     {
         var body = Encoding.UTF8.GetBytes(new string('x', 70_000));
         await using var server = new LoopbackResponsesServer(

@@ -206,13 +206,7 @@ internal sealed class AnthropicMessagesService(
             if (count == 0)
                 break;
             activity.CancelAfter(RequestTimeout);
-            var keep = success
-                ? count
-                : Math.Min(count, Math.Max(0, 64 * 1024 - (int)buffer.Length));
-            if (keep > 0)
-                buffer.Write(bytes, 0, keep);
-            if (!success && buffer.Length >= 64 * 1024)
-                break;
+            buffer.Write(bytes, 0, count);
         }
         cancellationToken.ThrowIfCancellationRequested();
         activity.Token.ThrowIfCancellationRequested();
@@ -230,8 +224,11 @@ internal sealed class AnthropicMessagesService(
             text = text[1..];
         if (!success)
         {
-            // This collector stops at the bound without requiring another read.
-            options.Diagnostics?.ResponseBody(JsonValue.Create(text), buffer.Length >= 64 * 1024);
+            var diagnostic = ModelAttemptFailure.DiagnosticBody(text);
+            options.Diagnostics?.ResponseBody(
+                JsonValue.Create(diagnostic.Body),
+                diagnostic.Truncated
+            );
             throw ModelAttemptFailure.Http(statusCode, text);
         }
         try

@@ -240,10 +240,24 @@ internal sealed partial class McpClient : IAsyncDisposable
                             string? cursor = null;
                             do
                             {
-                                var page = await client.ListToolsAsync(
-                                    new ListToolsRequestParams { Cursor = cursor },
+                                using var budget = CancellationTokenSource.CreateLinkedTokenSource(
                                     requestToken
                                 );
+                                // Source's SDK applies this default to each request;
+                                // timeoutSeconds overrides tool calls, not discovery.
+                                budget.CancelAfter(TimeSpan.FromSeconds(60));
+                                ListToolsResult page;
+                                try
+                                {
+                                    page = await client.ListToolsAsync(
+                                        new ListToolsRequestParams { Cursor = cursor },
+                                        budget.Token
+                                    );
+                                }
+                                catch (OperationCanceledException) when (!requestToken.IsCancellationRequested)
+                                {
+                                    throw new TimeoutException("MCP tool discovery timed out.");
+                                }
                                 tools.AddRange(
                                     page.Tools.Select(tool =>
                                         JsonSerializer

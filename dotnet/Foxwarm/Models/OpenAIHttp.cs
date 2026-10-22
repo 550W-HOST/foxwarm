@@ -60,15 +60,16 @@ internal static class OpenAIHttp
             .ConfigureAwait(false);
         if (response.StatusCode != System.Net.HttpStatusCode.OK)
         {
-            var (error, truncated) = await ReadBoundedAsync(response.Content, token)
+            var error = await ReadErrorAsync(response.Content, token)
                 .ConfigureAwait(false);
+            var diagnostic = ModelAttemptFailure.DiagnosticBody(error);
             options.Diagnostics?.Response(
                 $"{(int)response.StatusCode} {response.ReasonPhrase}",
                 ProviderHttpRequest.ResponseHeaders(response),
-                JsonValue.Create(error),
-                truncated
+                JsonValue.Create(diagnostic.Body),
+                diagnostic.Truncated
             );
-            throw new ResponsesHttpException(response.StatusCode, error, truncated);
+            throw new ResponsesHttpException(response.StatusCode, error, false);
         }
         await using var stream = await response
             .Content.ReadAsStreamAsync(token)
@@ -92,27 +93,17 @@ internal static class OpenAIHttp
         );
     }
 
-    private static async Task<(string Body, bool Truncated)> ReadBoundedAsync(
+    private static async Task<string> ReadErrorAsync(
         HttpContent content,
         CancellationToken cancellationToken
     )
     {
-        const int limit = 64 * 1024;
         await using var stream = await content
             .ReadAsStreamAsync(cancellationToken)
             .ConfigureAwait(false);
-        var bytes = new byte[limit + 1];
-        var used = 0;
-        while (used < bytes.Length)
-        {
-            var read = await stream
-                .ReadAsync(bytes.AsMemory(used), cancellationToken)
-                .ConfigureAwait(false);
-            if (read == 0)
-                break;
-            used += read;
-        }
-        return (Encoding.UTF8.GetString(bytes, 0, Math.Min(used, limit)), used > limit);
+        using var buffer = new MemoryStream();
+        await stream.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
+        return Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
     }
 
     internal static bool HasMeaningfulAssistant(JsonObject? assistant) =>

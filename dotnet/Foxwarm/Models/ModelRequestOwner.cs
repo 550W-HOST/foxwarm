@@ -478,7 +478,7 @@ internal sealed class ModelRequestOwner(
                         ModelAttemptFailure known => known,
                         ResponsesHttpException response => ModelAttemptFailure.Http(
                             (int)response.StatusCode!,
-                            response.ResponseBody
+                            response.ClassificationBody
                         ),
                         OperationCanceledException or TimeoutException => new ModelAttemptFailure(
                             "Configured provider request timed out.",

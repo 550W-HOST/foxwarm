@@ -30,15 +30,27 @@ internal sealed class ModelAttemptFailure(
     internal static ModelAttemptFailure Http(int status, string body)
     {
         var (retryable, countable) = ClassifyHttp(status, body);
+        var diagnostic = DiagnosticBody(body).Body;
         return new ModelAttemptFailure(
             body.Length == 0
                 ? "HTTP " + status
-                : Foxwarm.Images.ImageTransport.DiagnosticBody(body),
+                : Foxwarm.Images.ImageTransport.DiagnosticBody(diagnostic),
             "http-error",
             retryable,
             countable,
             status.ToString(CultureInfo.InvariantCulture)
         );
+    }
+
+    // The diagnostic carrier stays bounded; classification consumes the complete
+    // provider error, whose structured code may follow a long message.
+    internal static (string Body, bool Truncated) DiagnosticBody(string body)
+    {
+        const int limit = 64 * 1024;
+        if (System.Text.Encoding.UTF8.GetByteCount(body) <= limit)
+            return (body, false);
+        var bytes = System.Text.Encoding.UTF8.GetBytes(body);
+        return (System.Text.Encoding.UTF8.GetString(bytes, 0, limit), true);
     }
 
     internal static (bool Retryable, bool Countable) ClassifyHttp(int status, string body)
