@@ -47,6 +47,36 @@ public sealed class ModelConfigurationFormTests
         Assert.Equal("wire", configuration.Capture().Resolve(key).ModelId);
     }
 
+    [Theory]
+    [InlineData("{}", "a/wire-a")]
+    [InlineData("{\"defaultModel\":\"\",\"default\":\" b/wire-b \"}", "b/wire-b")]
+    [InlineData("{\"defaultModel\":\" \",\"default\":\"b/wire-b\"}", "a/wire-a")]
+    [InlineData("{\"defaultModel\":\"\",\"default\":\"\"}", "a/wire-a")]
+    public async Task Structured_defaults_select_before_trimming_then_use_the_first_model_fallback(
+        string raw,
+        string expected
+    )
+    {
+        using var temp = new TempDirectory();
+        var configuration = new ModelConfiguration(
+            HostPaths.ForDataRoot(temp.Path, environment: _ => null)
+        );
+        var form = JsonNode.Parse(raw)!.AsObject();
+        form["providers"] = JsonNode.Parse(
+            """
+            [{"id":"a","models":"wire-a"},{"id":"b","models":"wire-b"}]
+            """
+        );
+        await configuration.SaveAsync(form);
+        var saved = ConfigurationYaml.Parse(
+            await File.ReadAllTextAsync(configuration.ActivePath),
+            "models config"
+        );
+        Assert.Equal(expected, saved["default"]!.GetValue<string>());
+        Assert.Equal(expected, configuration.Capture().DefaultKey);
+        Assert.Equal(expected.Split('/')[1], configuration.Capture().Resolve(null).ModelId);
+    }
+
     [Fact]
     public async Task Single_provider_normalization_clears_omitted_connection_fields_like_TypeScript()
     {
@@ -136,7 +166,7 @@ public sealed class ModelConfigurationFormTests
         client.DefaultRequestHeaders.Authorization = new("Bearer", settings.Token);
         var form = JsonNode.Parse(
             """
-            {"providers":[{"id":"a","models":"wire-a"},{"providerKey":"b","models":"wire-b"}],"defaultModel":"b/wire-b"}
+            {"providers":[{"id":"a","models":"wire-a"},{"providerKey":"b","models":"wire-b"}],"defaultModel":" b/wire-b ","default":"a/wire-a"}
             """
         )!;
         var response = await client.PostAsJsonAsync("/api/setup/models", form);
@@ -154,6 +184,7 @@ public sealed class ModelConfigurationFormTests
         Assert.False(configuration.Capture().Contains("omitted"));
         var installed = await File.ReadAllBytesAsync(configuration.ActivePath);
         var saved = ConfigurationYaml.Parse(Encoding.UTF8.GetString(installed), "models config");
+        Assert.Equal("b/wire-b", saved["default"]!.GetValue<string>());
         Assert.Equal(
             "synthetic-retained-key",
             saved["providers"]!["b"]!["apiKey"]!.GetValue<string>()
