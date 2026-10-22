@@ -135,7 +135,7 @@ for (const runtime of ['source', 'dotnet']) for (const clientRuntime of ['source
     const foreground = await create('lost-foreground'); await select(foreground)
     await begin(foreground, 'lost-foreground', [[call('lost-foreground', 'exec', { command: 'printf start >> lost-foreground-count; while [ ! -e lost-foreground-go ]; do sleep .03; done; printf done >> lost-foreground-count', timeout: 30 })]])
     const third = await until(() => execCalls(foreground)[0], 'original foreground dispatch')
-    await until(async () => exists(join(cwd, 'lost-foreground-count')) && (await tracked()).execs.some(entry => entry.id === third.backgroundExecId && !entry.notifyOnCompletion), 'real persisted foreground record')
+    await until(async () => (await exists(join(cwd, 'lost-foreground-count'))) && (await tracked()).execs.some(entry => entry.id === third.backgroundExecId && !entry.notifyOnCompletion), 'real persisted foreground record')
     cli = await restartCli(cli)
     await finish(foreground, 'lost-foreground')
     assert(pair(await saved(foreground), 'lost-foreground').error, 'lost reply must not become a successful foreground result')

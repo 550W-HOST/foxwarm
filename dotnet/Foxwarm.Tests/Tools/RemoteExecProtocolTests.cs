@@ -508,9 +508,7 @@ public sealed class RemoteExecProtocolTests
         );
         await fixture.Send(fixture.Completion(request, "late"));
         Assert.Equal("error", (await fixture.Read())["type"]!.GetValue<string>());
-        Assert.ThrowsAny<InvalidOperationException>(() =>
-            fixture.Manager.GetExistingAsync(old).GetAwaiter().GetResult()
-        );
+        Assert.Null(await fixture.Manager.GetExistingAsync(old));
         Assert.Null(SessionWait.Text(fixture.Manager.Catalog.Resolve(old)["sessionId"]));
     }
 
