@@ -159,10 +159,9 @@ internal sealed partial class ModelConfiguration
         var firstModel = (first.Value?["models"] as JsonArray)?.FirstOrDefault();
         var firstId = SessionWait.Text(firstModel) ?? SessionWait.Text(firstModel?["id"]);
         var fallback = firstId is null ? first.Key : first.Key + "/" + firstId;
-        var selectedDefault = JsString(
-                FirstTruthyFormValue(input["defaultModel"], input["default"])
-            )
-            .Trim();
+        var selectedDefault = SessionGoal.Trim(
+            JsString(FirstTruthyFormValue(input["defaultModel"], input["default"]))
+        );
         existing["default"] = selectedDefault.Length > 0 ? selectedDefault : fallback;
         existing[rootKey] = next;
         // JSON is YAML 1.2; raw mode is never regenerated through this form writer.

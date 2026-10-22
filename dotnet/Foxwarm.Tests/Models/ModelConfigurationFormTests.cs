@@ -166,7 +166,7 @@ public sealed class ModelConfigurationFormTests
         client.DefaultRequestHeaders.Authorization = new("Bearer", settings.Token);
         var form = JsonNode.Parse(
             """
-            {"providers":[{"id":"a","models":"wire-a"},{"providerKey":"b","models":"wire-b"}],"defaultModel":" b/wire-b ","default":"a/wire-a"}
+            {"providers":[{"id":"a","models":"wire-a"},{"providerKey":"b","models":"wire-b"}],"defaultModel":" \ufeffb/wire-b\ufeff ","default":"a/wire-a"}
             """
         )!;
         var response = await client.PostAsJsonAsync("/api/setup/models", form);
