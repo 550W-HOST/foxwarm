@@ -37,7 +37,7 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
             attachmentOwner
             ?? await runtime.GetOwnerAsync(context.SessionId)
             ?? throw new InvalidDataException("Session not found.");
-        var command = message.Text.Trim();
+        var command = SessionCatalog.Trim(message.Text);
         if (IsDeleteCommand(message.Text))
             return await HandleDeleteCommandAsync(context, message.Text, owner);
         if (IsIdentityMoveCommand(message.Text))
@@ -82,7 +82,7 @@ internal sealed partial class MessageRouter(SessionRuntime runtime)
         }
         if (command == "/node" || command.StartsWith("/node ", StringComparison.Ordinal))
             return await HandleNodeCommandAsync(command, owner);
-        if (message.Text.TrimStart().StartsWith("/", StringComparison.Ordinal))
+        if (command.StartsWith("/", StringComparison.Ordinal))
         {
             if (command == "/session index")
             {

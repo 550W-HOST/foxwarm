@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Channels.WebUi;
@@ -230,6 +232,171 @@ public sealed class WebUiAccessTests
         await accepted;
         Assert.Single(entry.Snapshot().Queue);
         Assert.Single((await store.LoadAsync("chat"))!.Queue);
+    }
+
+    [Fact]
+    public async Task Scoped_http_command_guard_matches_Source_whitespace_without_management_effects()
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        Directory.CreateDirectory(Path.Combine(data, "state"));
+        var app = App(Alice);
+        app["vector"] = false;
+        app["dbWorkers"] = false;
+        await File.WriteAllTextAsync(
+            Path.Combine(data, "state", "config.yaml"),
+            app.ToJsonString()
+        );
+        await File.WriteAllTextAsync(
+            Path.Combine(data, "state", "models.yaml"),
+            """
+            {"default":"local","providers":{"local":{"providerType":"openai-responses","baseUrl":"http://127.0.0.1:1","models":["wire"]}}}
+            """
+        );
+        var config = new ModelConfiguration(data);
+        var options = new ResponsesClientOptions(
+            new Uri("http://127.0.0.1:1"),
+            "wire",
+            "a",
+            "",
+            "",
+            713
+        );
+        await using var manager = new SessionManager(
+            data,
+            Path.Combine(temp.Path, "work"),
+            options,
+            config.Models
+        );
+        await manager.LoadMainHostAsync();
+        foreach (var id in new[] { "chat", "outside-delete", "outside-archive", "outside-normal" })
+        {
+            var owner = await manager.CreateNamedAsync("main", id, null, null);
+            owner.Registry.TriggerOverride = _ => Task.CompletedTask;
+        }
+        await using var terminals = new Foxwarm.Terminal.TerminalRegistry(data, default);
+        var server = new HttpServer(
+            [],
+            0,
+            "synthetic-admin",
+            null,
+            manager,
+            terminals,
+            webUiEnabled: true
+        );
+        var runtime = new SessionRuntime(manager);
+        new WebUIChannel(
+            manager,
+            runtime,
+            new MessageRouter(runtime),
+            terminals,
+            server.Downloads
+        ).Register(server.App);
+        await server.App.StartAsync();
+        using var http = new HttpClient { BaseAddress = new Uri(server.App.Urls.Single()) };
+        http.DefaultRequestHeaders.Authorization = new("Bearer", "synthetic-alice");
+        try
+        {
+            using var history = await http.GetAsync("/api/sessions/outside-delete/history");
+            Assert.Equal(HttpStatusCode.Forbidden, history.StatusCode);
+            var chat = (await runtime.GetOwnerAsync("chat"))!;
+            var denied = new JsonObject[]
+            {
+                new() { ["text"] = "/session delete outside-normal" },
+                new() { ["text"] = "\uFEFF/session delete outside-delete" },
+                new()
+                {
+                    ["parts"] = new JsonArray(
+                        new JsonObject { ["text"] = "\uFEFF/session archive outside-archive" }
+                    ),
+                },
+                new()
+                {
+                    ["text"] = "ordinary text cannot hide a command in parts",
+                    ["parts"] = new JsonArray(
+                        new JsonObject { ["text"] = "\uFEFF" },
+                        new JsonObject { ["text"] = "/session archive outside-archive" }
+                    ),
+                },
+                new() { ["text"] = "\u2007@helper-name.\uFEFF/session delete outside-delete" },
+                new()
+                {
+                    ["parts"] = new JsonArray(
+                        new JsonObject
+                        {
+                            ["text"] = "\t@helper_name \uFEFF/session archive outside-archive",
+                        }
+                    ),
+                },
+            };
+            foreach (var body in denied)
+            {
+                using var response = await http.PostAsJsonAsync("/api/sessions/chat/message", body);
+                Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+                var error = await response.Content.ReadFromJsonAsync<JsonObject>();
+                Assert.Equal("WEBUI_COMMANDS_DISABLED", SessionWait.Text(error?["code"]));
+                Assert.NotNull(runtime.Catalog.Get("outside-normal"));
+                Assert.NotNull(runtime.Catalog.Get("outside-delete"));
+                var archived = runtime.Catalog.Get("outside-archive");
+                Assert.NotNull(archived);
+                Assert.False(SessionCatalog.Flag(archived["archived"]));
+                Assert.Empty(chat.Entry.Snapshot().Queue);
+            }
+
+            var ordinary = new[]
+            {
+                (Text: "Discuss /session delete without running it", Parts: false),
+                (Text: "\uFEFFordinary text", Parts: true),
+                // U+0085 is .NET whitespace, but is not Source command whitespace.
+                (Text: "\u0085@helper /session archive outside-archive", Parts: false),
+                (Text: "\u0085/session clear", Parts: false),
+                (Text: "\u0085/session clear", Parts: true),
+            };
+            for (var index = 0; index < ordinary.Length; index++)
+            {
+                var body = ordinary[index].Parts
+                    ? new JsonObject
+                    {
+                        ["parts"] = new JsonArray(
+                            new JsonObject { ["text"] = ordinary[index].Text }
+                        ),
+                    }
+                    : new JsonObject { ["text"] = ordinary[index].Text };
+                using var response = await http.PostAsJsonAsync("/api/sessions/chat/message", body);
+                Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+                var queue = chat.Entry.Snapshot().Queue;
+                Assert.Equal(index + 1, queue.Count);
+                for (var queued = 0; queued <= index; queued++)
+                    Assert.Contains(
+                        ordinary[queued].Text,
+                        SessionWait.Text(queue[queued].Parts![0]["system"])
+                    );
+                Assert.NotNull(runtime.Catalog.Get("outside-normal"));
+                Assert.NotNull(runtime.Catalog.Get("outside-delete"));
+                Assert.False(
+                    SessionCatalog.Flag(runtime.Catalog.Get("outside-archive")!["archived"])
+                );
+            }
+            Assert.Equal(ordinary.Length, chat.Entry.Snapshot().Queue.Count);
+            Assert.False(SessionCatalog.Flag(runtime.Catalog.Get("outside-archive")!["archived"]));
+
+            http.DefaultRequestHeaders.Authorization = new("Bearer", "synthetic-admin");
+            foreach (var body in denied.Take(3))
+            {
+                using var response = await http.PostAsJsonAsync("/api/sessions/chat/message", body);
+                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            }
+            Assert.Null(runtime.Catalog.Get("outside-normal"));
+            Assert.Null(runtime.Catalog.Get("outside-delete"));
+            Assert.True(SessionCatalog.Flag(runtime.Catalog.Get("outside-archive")!["archived"]));
+            Assert.Equal(ordinary.Length, chat.Entry.Snapshot().Queue.Count);
+        }
+        finally
+        {
+            await server.App.StopAsync();
+            await server.App.DisposeAsync();
+            await manager.ShutdownAsync();
+        }
     }
 
     [Fact]
