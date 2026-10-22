@@ -108,10 +108,7 @@ public sealed partial class WebUiStartupTests
                 await Task.WhenAny(listening.Task, exited).WaitAsync(TimeSpan.FromSeconds(20));
                 if (Process.HasExited || !listening.Task.IsCompletedSuccessfully)
                     throw new InvalidOperationException(await Output());
-                Assert.Equal(
-                    "http://0.0.0.0:" + Port,
-                    await listening.Task
-                );
+                Assert.Equal("http://0.0.0.0:" + Port, await listening.Task);
             }
             else
             {
@@ -853,7 +850,10 @@ public sealed partial class WebUiStartupTests
             }
         )
         {
-            await File.WriteAllTextAsync(h.ConfigPath, $"bot: {{httpPort: {h.Port}}}\nurl: '{address}'\n");
+            await File.WriteAllTextAsync(
+                h.ConfigPath,
+                $"bot: {{httpPort: {h.Port}}}\nurl: '{address}'\n"
+            );
             h.Start();
             await h.Failed();
             Assert.Equal(h.Token, await File.ReadAllTextAsync(h.TokenPath));

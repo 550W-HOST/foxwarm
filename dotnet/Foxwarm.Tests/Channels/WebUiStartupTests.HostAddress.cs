@@ -12,12 +12,14 @@ public sealed partial class WebUiStartupTests
         await using var h = new Host();
         await File.WriteAllTextAsync(h.TokenPath, h.Token);
         var assets = Path.Combine(h.Temp.Path, "code-assets");
-        foreach (var file in new[]
-        {
-            "out/nls.messages.js",
-            "out/vs/workbench/workbench.web.main.internal.css",
-            "out/vs/workbench/workbench.web.main.internal.js",
-        })
+        foreach (
+            var file in new[]
+            {
+                "out/nls.messages.js",
+                "out/vs/workbench/workbench.web.main.internal.css",
+                "out/vs/workbench/workbench.web.main.internal.js",
+            }
+        )
         {
             var path = Path.Combine(assets, file);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -39,26 +41,67 @@ public sealed partial class WebUiStartupTests
         async Task Check(string prefix, string publicUrl)
         {
             using var anonymous = new HttpClient { BaseAddress = h.Client.BaseAddress };
-            Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync(prefix + "/health")).StatusCode);
-            var login = await anonymous.PostAsJsonAsync(prefix + "/api/auth", new { token = h.Token });
+            Assert.Equal(
+                HttpStatusCode.Unauthorized,
+                (await anonymous.GetAsync(prefix + "/health")).StatusCode
+            );
+            var login = await anonymous.PostAsJsonAsync(
+                prefix + "/api/auth",
+                new { token = h.Token }
+            );
             Assert.Equal(HttpStatusCode.OK, login.StatusCode);
             Assert.False(login.Headers.Contains("Set-Cookie"));
-            var commands = await h.Client.PostAsJsonAsync(prefix + "/api/nodes/onboarding/commands", new { fallbackUrl = "https://browser.example/browser" });
+            var commands = await h.Client.PostAsJsonAsync(
+                prefix + "/api/nodes/onboarding/commands",
+                new { fallbackUrl = "https://browser.example/browser" }
+            );
             Assert.Equal(HttpStatusCode.OK, commands.StatusCode);
-            Assert.Equal(publicUrl, (await commands.Content.ReadFromJsonAsync<JsonObject>())!["baseUrl"]!.GetValue<string>());
-            var authorizations = await h.Client.GetFromJsonAsync<JsonObject>(prefix + "/api/setup/authorizations");
-            Assert.Equal(publicUrl + "/api/mcp/oauth/callback", authorizations!["callbackUrl"]!.GetValue<string>());
+            Assert.Equal(
+                publicUrl,
+                (await commands.Content.ReadFromJsonAsync<JsonObject>())![
+                    "baseUrl"
+                ]!.GetValue<string>()
+            );
+            var authorizations = await h.Client.GetFromJsonAsync<JsonObject>(
+                prefix + "/api/setup/authorizations"
+            );
+            Assert.Equal(
+                publicUrl + "/api/mcp/oauth/callback",
+                authorizations!["callbackUrl"]!.GetValue<string>()
+            );
             var html = await h.Client.GetStringAsync(prefix + "/vscode-web/");
-            var match = System.Text.RegularExpressions.Regex.Match(html, "data-settings=\"([^\"]+)\"");
+            var match = System.Text.RegularExpressions.Regex.Match(
+                html,
+                "data-settings=\"([^\"]+)\""
+            );
             var bootstrap = JsonNode.Parse(WebUtility.HtmlDecode(match.Groups[1].Value))!;
-            Assert.Equal(publicUrl + "/vscode-web/static", bootstrap["productConfiguration"]!["webEndpointUrlTemplate"]!.GetValue<string>());
-            Assert.StartsWith(publicUrl + "/vscode-web/webview/", bootstrap["productConfiguration"]!["webviewContentExternalBaseUrlTemplate"]!.GetValue<string>());
+            Assert.Equal(
+                publicUrl + "/vscode-web/static",
+                bootstrap["productConfiguration"]!["webEndpointUrlTemplate"]!.GetValue<string>()
+            );
+            Assert.StartsWith(
+                publicUrl + "/vscode-web/webview/",
+                bootstrap["productConfiguration"]![
+                    "webviewContentExternalBaseUrlTemplate"
+                ]!.GetValue<string>()
+            );
         }
         await Check("/first", "https://yaml.example/first");
-        var saved = await h.Client.PostAsJsonAsync("/first/api/setup/config", new { yaml = Config("https://saved.example/second") });
+        var saved = await h.Client.PostAsJsonAsync(
+            "/first/api/setup/config",
+            new { yaml = Config("https://saved.example/second") }
+        );
         Assert.Equal(HttpStatusCode.OK, saved.StatusCode);
-        Assert.Contains("url", (await saved.Content.ReadFromJsonAsync<JsonObject>())!["restartRequired"]!.ToJsonString());
-        Assert.Contains("url: https://saved.example/second", await File.ReadAllTextAsync(h.ConfigPath));
+        Assert.Contains(
+            "url",
+            (await saved.Content.ReadFromJsonAsync<JsonObject>())![
+                "restartRequired"
+            ]!.ToJsonString()
+        );
+        Assert.Contains(
+            "url: https://saved.example/second",
+            await File.ReadAllTextAsync(h.ConfigPath)
+        );
         await Check("/first", "https://yaml.example/first");
         await h.Stop();
         h.Start(environment);
