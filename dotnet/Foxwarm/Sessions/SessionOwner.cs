@@ -15,7 +15,6 @@ internal sealed partial class SessionOwner
     internal event Action<SessionRuntimeEvent>? Changed;
     private long nextListener;
     private long nextRun;
-    private long lastNotifiedSeq;
     private int lastReportedFailureCount;
     private readonly HostModels models;
     internal Func<string, SessionMetadata?>? ResolveAncestry { get; set; }
@@ -100,21 +99,31 @@ internal sealed partial class SessionOwner
     public void EnableCommittedNotifications()
     {
         Entry.CaptureForegroundRelease = CaptureForegroundRelease;
-        lastNotifiedSeq = Entry.WithState(state => state.History.LastOrDefault()?.Sequence ?? 0);
-        Entry.Committed = snapshot =>
+        Entry.HistoryAppended = messages =>
         {
-            foreach (var record in snapshot.History)
+            foreach (var message in messages)
             {
-                var seq = record.Sequence ?? 0;
-                if (seq <= lastNotifiedSeq)
-                    continue;
-                lastNotifiedSeq = seq;
-                var message = record.ToJson();
                 Emit(SessionEventKind.MessageCommitted, message);
                 ClearCommittedDraft(message);
             }
-            Emit(SessionEventKind.StateChanged);
         };
+        Entry.QueueHistoryAppended = (snapshot, messages) =>
+        {
+            Emit(SessionEventKind.StateChanged);
+            if (messages.Count > 0)
+            {
+                Emit(
+                    SessionEventKind.QueueHistoryAppended,
+                    new JsonArray(
+                        messages.Select(message => (JsonNode?)message.DeepClone()).ToArray()
+                    ),
+                    snapshot
+                );
+                foreach (var message in messages)
+                    ClearCommittedDraft(message);
+            }
+        };
+        Entry.Committed = _ => Emit(SessionEventKind.StateChanged);
     }
 
     private static JsonNode JsonSerializerNode(object value) =>
@@ -211,11 +220,11 @@ internal sealed partial class SessionOwner
             Unsubscribe(id);
     }
 
-    public void Emit(SessionEventKind kind, JsonNode? data = null)
+    public void Emit(SessionEventKind kind, JsonNode? data = null, SessionSnapshot? snapshot = null)
     {
         if (Entry.Retired)
             return;
-        var value = new SessionRuntimeEvent(Id, kind, data?.DeepClone());
+        var value = new SessionRuntimeEvent(Id, kind, data?.DeepClone(), snapshot);
         Changed?.Invoke(value);
         foreach (var channel in listeners.Values)
             channel.Writer.TryWrite(value);

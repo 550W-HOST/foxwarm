@@ -98,67 +98,7 @@ internal static class WebUiContract
             selected = selected
                 .Where(message => message.Sequence is long actual && actual > seq)
                 .ToArray();
-        var preview = new JsonArray();
-        for (var i = 0; i < snapshot.Queue.Count && preview.Count < 20; i++)
-        {
-            var item = snapshot.Queue[i];
-            if (item.Type != QueueItemType.User)
-                continue;
-            var parts = new JsonArray();
-            if (item.Message?["parts"] is JsonArray existing)
-                foreach (var part in existing.OfType<JsonObject>())
-                    if (part["text"] is JsonValue text && text.TryGetValue<string>(out var raw))
-                        parts.Add(
-                            new JsonObject
-                            {
-                                ["text"] =
-                                    raw.Length > 4000
-                                        ? raw[..4000] + "\n… [preview truncated]"
-                                        : raw,
-                            }
-                        );
-                    else if (
-                        part["inlineDataRef"] is not null
-                        || part["inlineData"] is not null
-                        || part["inlineDataUnavailable"] is not null
-                    )
-                        parts.Add(Foxwarm.Images.ImageTransport.Project(part));
-            if (item.Parts is not null)
-                foreach (var part in item.Parts)
-                    if (part["text"] is JsonValue text && text.TryGetValue<string>(out var raw))
-                        parts.Add(
-                            new JsonObject
-                            {
-                                ["text"] =
-                                    raw.Length > 4000
-                                        ? raw[..4000] + "\n… [preview truncated]"
-                                        : raw,
-                            }
-                        );
-                    else if (
-                        part["inlineDataRef"] is not null
-                        || part["inlineData"] is not null
-                        || part["inlineDataUnavailable"] is not null
-                    )
-                        parts.Add(Foxwarm.Images.ImageTransport.Project(part));
-            if (parts.Count == 0)
-                continue;
-            preview.Add(
-                new JsonObject
-                {
-                    ["role"] = "user",
-                    ["parts"] = parts,
-                    ["__meta"] = new JsonObject
-                    {
-                        ["synthetic"] = $"queued-{i}-user",
-                        ["temporary"] = true,
-                        ["queuedPreview"] = true,
-                        ["queueIndex"] = i,
-                        ["queueType"] = "user",
-                    },
-                }
-            );
-        }
+        var preview = QueuedPreview(snapshot);
         var result = new JsonObject
         {
             ["session"] = Session(
@@ -191,9 +131,84 @@ internal static class WebUiContract
         return result;
     }
 
+    internal static JsonArray QueuedPreview(SessionSnapshot snapshot)
+    {
+        var preview = new JsonArray();
+        for (var i = 0; i < snapshot.Queue.Count && preview.Count < 20; i++)
+        {
+            var item = snapshot.Queue[i];
+            if (item.Type != QueueItemType.User)
+                continue;
+            var parts = new JsonArray();
+            void AddPreviewParts(IEnumerable<JsonObject> source)
+            {
+                foreach (var part in source)
+                {
+                    var projected = new JsonObject();
+                    foreach (var field in new[] { "text", "system", "thinking" })
+                        if (part[field] is JsonValue text && text.TryGetValue<string>(out var raw))
+                            projected[field] =
+                                raw.Length > 4000 ? raw[..4000] + "\n… [preview truncated]" : raw;
+                    if (projected.Count > 0)
+                        parts.Add(projected);
+                    else if (
+                        part["inlineDataRef"] is not null
+                        || part["inlineData"] is not null
+                        || part["inlineDataUnavailable"] is not null
+                    )
+                        parts.Add(Foxwarm.Images.ImageTransport.Project(part));
+                }
+            }
+            if (item.Message?["parts"] is JsonArray existing)
+                AddPreviewParts(existing.OfType<JsonObject>());
+            if (item.Parts is not null)
+                AddPreviewParts(item.Parts);
+            if (parts.Count == 0)
+                continue;
+            preview.Add(
+                new JsonObject
+                {
+                    ["role"] = "user",
+                    ["parts"] = parts,
+                    ["__meta"] = new JsonObject
+                    {
+                        ["synthetic"] = $"queued-{i}-user",
+                        ["temporary"] = true,
+                        ["queuedPreview"] = true,
+                        ["queueIndex"] = i,
+                        ["queueType"] = "user",
+                    },
+                }
+            );
+        }
+        return preview;
+    }
+
+    private static JsonObject QueueHistoryAppend(SessionRuntimeEvent entry)
+    {
+        var snapshot =
+            entry.Snapshot
+            ?? throw new InvalidOperationException("Queue append snapshot is missing.");
+        var preview = QueuedPreview(snapshot);
+        var queueLength = snapshot.Queue.Count(SessionCompactor.Ordinary);
+        return new JsonObject
+        {
+            ["type"] = "history-append",
+            ["sessionId"] = entry.SessionId,
+            ["messages"] = entry.Data?.DeepClone(),
+            ["queuedMessages"] = preview,
+            ["queueLength"] = queueLength,
+            ["queuedPreviewOmittedCount"] = Math.Max(0, queueLength - preview.Count),
+            ["messageCount"] = snapshot.History.Count,
+            ["historyVersion"] = snapshot.HistoryVersion,
+            ["latestSeq"] = snapshot.NextMessageSeq - 1,
+        };
+    }
+
     public static JsonObject Event(SessionRuntimeEvent entry, SessionRuntime runtime) =>
         entry.Kind switch
         {
+            SessionEventKind.QueueHistoryAppended => QueueHistoryAppend(entry),
             SessionEventKind.MessageCommitted or SessionEventKind.CommandReply => new JsonObject
             {
                 ["type"] = "message",

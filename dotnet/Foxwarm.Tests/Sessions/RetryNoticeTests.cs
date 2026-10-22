@@ -150,6 +150,61 @@ public sealed class RetryNoticeTests
         Assert.Equal(2, entry.Snapshot().NextMessageSeq);
     }
 
+    [Fact]
+    public async Task Retry_notifications_publish_one_initial_row_and_one_owned_update_without_replaying_history()
+    {
+        var store = new InMemorySessionAuthorityStore();
+        var models = HostModels.ForTest(
+            new ResponsesClientOptions(new Uri("http://localhost"), "m", "a/m", "", "", 50)
+        );
+        var owner = new SessionOwner("s", "main", models)
+        {
+            Registry = new SessionRegistry(store, new NoChat()),
+        };
+        owner.Registry.Add("s");
+        owner.EnableCommittedNotifications();
+        var notifications = new List<SessionRuntimeEvent>();
+        owner.Changed += notifications.Add;
+        var notice = new ModelRetryNotice(owner);
+        Assert.False(
+            await notice.NotifyAsync(
+                new ModelRetryEvent(
+                    1,
+                    6,
+                    "http-error",
+                    "unavailable",
+                    "a/m",
+                    null,
+                    "503",
+                    DelayMs: 1000
+                )
+            )
+        );
+        Assert.True(
+            await notice.NotifyAsync(
+                new ModelRetryEvent(
+                    2,
+                    6,
+                    "http-error",
+                    "unavailable",
+                    "a/m",
+                    null,
+                    "503",
+                    Final: true
+                )
+            )
+        );
+        var rows = notifications
+            .Where(value => value.Kind == SessionEventKind.MessageCommitted)
+            .Select(value => value.Data!)
+            .ToArray();
+        Assert.Equal(2, rows.Length);
+        Assert.Equal(rows[0]["__meta"]!["seq"]!.ToString(), rows[1]["__meta"]!["seq"]!.ToString());
+        Assert.Null(rows[0]["__meta"]!["updateExisting"]);
+        Assert.True(rows[1]["__meta"]!["updateExisting"]!.GetValue<bool>());
+        Assert.True(JsonNode.DeepEquals(Assert.Single(owner.History()), rows[1]));
+    }
+
     private sealed class NoChat : IChatService
     {
         public Task<ChatResult> ChatAsync(

@@ -107,6 +107,8 @@ public sealed partial class SessionCommandEffectsTests
             var saved = await f.Owner.AuthorityStore.LoadAsync(f.Owner.Id);
             Assert.True(saved!.AuthorityEnvelope["verbose"]!.GetValue<bool>());
             var before = f.Owner.History().Count;
+            var notifications = new List<SessionRuntimeEvent>();
+            f.Owner.Changed += notifications.Add;
             await f.Owner.Registry.Ingress.EnqueueAsync(
                 f.Owner.Id,
                 QueueItem.UserText("run tools")
@@ -136,6 +138,19 @@ public sealed partial class SessionCommandEffectsTests
                 File.Exists(Path.Combine(f.Manager.AgentDirectory("main"), "cancelled.txt"))
             );
             Assert.Equal(before + 4, f.Owner.History().Count);
+            Assert.Equal(
+                f.Owner.History()
+                    .Skip(before)
+                    .Where(row => row["role"]?.ToString() != "user")
+                    .Select(row => row.ToJsonString()),
+                notifications
+                    .Where(value => value.Kind == SessionEventKind.MessageCommitted)
+                    .Select(value => value.Data!.ToJsonString())
+            );
+            Assert.Single(
+                notifications,
+                value => value.Kind == SessionEventKind.QueueHistoryAppended
+            );
             Assert.DoesNotContain(
                 "🛠",
                 string.Join('\n', f.Owner.History().Select(row => row.ToJsonString()))

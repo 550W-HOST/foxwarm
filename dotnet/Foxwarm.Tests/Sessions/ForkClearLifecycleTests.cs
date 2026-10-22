@@ -28,6 +28,8 @@ public sealed class ForkClearLifecycleTests
         };
         await AppendAsync(parent, hidden, call);
         var before = parent.Entry.Snapshot();
+        var notifications = new List<SessionRuntimeEvent>();
+        fixture.Manager.Changed += notifications.Add;
         var (child, delivered) = await fixture.Manager.CreateChildAsync(
             parent,
             "copy",
@@ -73,6 +75,11 @@ public sealed class ForkClearLifecycleTests
         );
         Assert.Equal(2, child.Archive.ReadBranch()!.MessageCap);
         Assert.Equal(3, child.Archive.ReadMessages().Count);
+        // Creation appends the suffix before publishing the owner; initial history is snapshot-only.
+        Assert.DoesNotContain(
+            notifications,
+            value => value.Kind == SessionEventKind.MessageCommitted
+        );
         var manual = await fixture.Manager.ForkAsync(parent, "copy");
         Assert.All(
             manual.Entry.Snapshot().History[before.History.Count].ToJson()["parts"]!.AsArray(),
@@ -107,6 +114,8 @@ public sealed class ForkClearLifecycleTests
         );
         var before = parent.Entry.Snapshot();
         var runtime = new SessionRuntime(fixture.Manager);
+        var notifications = new List<SessionRuntimeEvent>();
+        parent.Changed += notifications.Add;
         var initial = "Ordinary user instructions.\nSecond line.\n";
         var manual = await runtime.ForkCommandAsync(parent.Id, "manual", initial);
         var snapshot = manual.Entry.Snapshot();
@@ -132,6 +141,11 @@ public sealed class ForkClearLifecycleTests
             "manual-fork-created",
             parent.Entry.Snapshot().History.Last().ToJsonString()
         );
+        var parentNotice = Assert.Single(
+            notifications,
+            value => value.Kind == SessionEventKind.MessageCommitted
+        );
+        Assert.True(JsonNode.DeepEquals(parent.History().Last(), parentNotice.Data));
         var (delegated, delivered) = await fixture.Manager.CreateChildAsync(
             parent,
             "delegated",

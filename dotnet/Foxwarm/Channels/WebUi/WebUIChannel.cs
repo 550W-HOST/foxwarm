@@ -512,10 +512,26 @@ internal sealed partial class WebUIChannel(
                         {
                             if (item.Kind == SessionEventKind.RequestProgress)
                                 continue;
-                            var payload = WebUiContract.Event(item, runtime);
-                            if (scoped is not null && payload["session"] is JsonObject session)
-                                payload["session"] = scoped.Session(session);
-                            await SendSse(context, payload);
+                            var payloads =
+                                item.Kind == SessionEventKind.QueueHistoryAppended
+                                && item.Data is JsonArray messages
+                                    ? messages.Select(message =>
+                                        WebUiContract.Event(
+                                            new(
+                                                item.SessionId,
+                                                SessionEventKind.MessageCommitted,
+                                                message
+                                            ),
+                                            runtime
+                                        )
+                                    )
+                                    : [WebUiContract.Event(item, runtime)];
+                            foreach (var payload in payloads)
+                            {
+                                if (scoped is not null && payload["session"] is JsonObject session)
+                                    payload["session"] = scoped.Session(session);
+                                await SendSse(context, payload);
+                            }
                             if (item.Kind == SessionEventKind.Deleted)
                             {
                                 deleted = true;

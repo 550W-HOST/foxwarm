@@ -98,6 +98,7 @@ internal sealed partial class SessionOwner
             operationId is null ? null : "compact:" + operationId
         );
         var appended = false;
+        IReadOnlyList<JsonObject> rows = [];
         // Never send a second semantic append down the authority path whose failure is being presented.
         if (
             durable
@@ -108,23 +109,31 @@ internal sealed partial class SessionOwner
         {
             try
             {
-                await Entry.SaveLane.CommitCanonicalAppendAsync(state =>
-                    LocalSessionTurnHost.PrepareCanonicalAppend(
-                        state,
-                        [message],
-                        [],
-                        false,
-                        false,
-                        () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                    )
+                await Entry.SaveLane.CommitCanonicalAppendWithResultAsync(
+                    state =>
+                    {
+                        var operation = LocalSessionTurnHost.PrepareCanonicalAppend(
+                            state,
+                            [message],
+                            [],
+                            false,
+                            false,
+                            () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                        );
+                        rows = operation.AppendedMessages;
+                        return operation;
+                    },
+                    notifyMessages: false
                 );
                 appended = true;
+                Entry.InvokeHistoryAppended(rows);
                 Entry.InvokeCommitted(Entry.Snapshot());
             }
             catch (AuthorityCommittedException noticeError)
             {
                 appended = true;
                 Entry.RecordBestEffortFailure(noticeError);
+                Entry.InvokeHistoryAppended(rows);
                 Entry.InvokeCommitted(Entry.Snapshot());
             }
             catch (Exception noticeError)

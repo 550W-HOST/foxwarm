@@ -6,6 +6,7 @@ namespace Foxwarm.Sessions;
 internal enum SessionEventKind
 {
     MessageCommitted,
+    QueueHistoryAppended,
     StateChanged,
     ModelStream,
     RequestProgress,
@@ -15,7 +16,12 @@ internal enum SessionEventKind
     Deleted,
 }
 
-internal sealed record SessionRuntimeEvent(string SessionId, SessionEventKind Kind, JsonNode? Data);
+internal sealed record SessionRuntimeEvent(
+    string SessionId,
+    SessionEventKind Kind,
+    JsonNode? Data,
+    SessionSnapshot? Snapshot = null
+);
 
 internal sealed record SessionMetadata(
     string Id,

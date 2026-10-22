@@ -280,7 +280,7 @@ public sealed partial class SessionSaveLane
             root[key] = value;
     }
 
-    internal Task CommitCanonicalAppendAsync(
+    private Task CommitCanonicalAppendCoreAsync(
         Func<SessionState, CanonicalAppendPreparation> prepare,
         CancellationToken cancellationToken = default
     ) =>
@@ -317,20 +317,34 @@ public sealed partial class SessionSaveLane
             entry.WithState(operation.Publish);
         });
 
+    internal Task CommitCanonicalAppendAsync(
+        Func<SessionState, CanonicalAppendPreparation> prepare,
+        CancellationToken cancellationToken = default
+    ) => CommitCanonicalAppendWithResultAsync(prepare, cancellationToken: cancellationToken);
+
     internal async Task<IReadOnlyList<JsonObject>> CommitCanonicalAppendWithResultAsync(
-        Func<SessionState, CanonicalAppendPreparation> prepare
+        Func<SessionState, CanonicalAppendPreparation> prepare,
+        bool notifyMessages = true,
+        CancellationToken cancellationToken = default
     )
     {
         IReadOnlyList<JsonObject> rows = [];
-        await CommitCanonicalAppendAsync(state =>
-            {
-                var operation = prepare(state);
-                rows = operation
-                    .AppendedMessages.Select(row => (JsonObject)row.DeepClone())
-                    .ToArray();
-                return operation;
-            })
+        await CommitCanonicalAppendCoreAsync(
+                state =>
+                {
+                    var operation = prepare(state);
+                    rows = operation
+                        .AppendedMessages.Select(row => (JsonObject)row.DeepClone())
+                        .ToArray();
+                    return operation;
+                },
+                cancellationToken
+            )
             .ConfigureAwait(false);
+        if (entry.BeforeCanonicalNotification is { } before)
+            await before();
+        if (notifyMessages)
+            entry.InvokeHistoryAppended(rows);
         return rows;
     }
 

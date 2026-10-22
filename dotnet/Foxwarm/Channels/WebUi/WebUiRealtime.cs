@@ -11,6 +11,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
 {
     // Optional scheduling seam for the focused transport test; normal hosts leave it unset.
     internal Func<JsonObject, CancellationToken, Task>? BeforeQueuedSend { get; init; }
+    private const int MaxPendingEvents = 1000; // webuiRealtime.ts initialization limit.
     private const int MaxSubscriptions = 5000; // webuiRealtime.ts union limit.
     private const int MaxMessageBytes = 32 * 1024 * 1024; // Two bounded UTF-8 ID arrays, including JSON escaping.
 
@@ -29,7 +30,7 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
         var listIds = new HashSet<string>(StringComparer.Ordinal);
         var listActive = false;
         var initializing = false;
-        var pending = new List<JsonObject>();
+        var pending = new List<(JsonObject Data, SessionOwner? Owner)>();
         long queuedBytes = 0;
         string? logsId = null;
         Action? stopLogs = null;
@@ -47,12 +48,37 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
             if (!output.Writer.TryWrite((expected, data, bytes, topic)))
                 Interlocked.Add(ref queuedBytes, -bytes);
         }
+        bool Subscribed(JsonObject data)
+        {
+            if (SessionCatalog.Text(data["sessionId"]) is { } id)
+                return sessionIds.Contains(id);
+            if (!listActive)
+                return false;
+            if (SessionCatalog.Text(data["type"]) != "session-list-delta")
+                return true;
+            return (data["sessions"] as JsonArray)?.Any(row =>
+                    SessionCatalog.Text(row?["id"]) is { } rowId && listIds.Contains(rowId)
+                ) == true
+                || (data["deletedIds"] as JsonArray)?.Any(row =>
+                    SessionCatalog.Text(row) is { } deleted && listIds.Contains(deleted)
+                ) == true;
+        }
         void Deliver(JsonObject data)
         {
             lock (gate)
             {
+                if (!Subscribed(data))
+                    return;
                 if (initializing)
-                    pending.Add(data);
+                {
+                    if (pending.Count >= MaxPendingEvents)
+                    {
+                        lifetime.Cancel();
+                        return;
+                    }
+                    var id = SessionCatalog.Text(data["sessionId"]);
+                    pending.Add((data, id is null ? null : runtime.Owner(id)));
+                }
                 else
                     Queue(revision, data);
             }
@@ -278,8 +304,9 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                     }
                     requestedLogs = logRequest;
                     revision = requested;
+                    if (!initializing)
+                        pending.Clear();
                     initializing = true;
-                    pending.Clear();
                     sessionIds = requestedSessions
                         .Select(id =>
                             SessionCatalog.Text(
@@ -289,6 +316,8 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                         .ToHashSet(StringComparer.Ordinal);
                     listIds = listCanonical.ToHashSet(StringComparer.Ordinal);
                     listActive = active;
+                    // A superseding initialization carries only still-subscribed events.
+                    pending.RemoveAll(item => !Subscribed(item.Data));
                 }
                 CancellationTokenSource? previous;
                 lock (gate)
@@ -536,8 +565,24 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                 {
                     if (revision != requested || attempt.IsCancellationRequested)
                         return;
-                    foreach (var data in pending)
-                        Queue(requested, data);
+                    foreach (var item in pending)
+                        if (
+                            Subscribed(item.Data)
+                            && (
+                                SessionCatalog.Text(item.Data["sessionId"]) is not { } id
+                                || (
+                                    runtime.Owner(id) is { } current
+                                    && ReferenceEquals(
+                                        current,
+                                        item.Owner
+                                            ?? admittedOwners.Values.FirstOrDefault(owner =>
+                                                owner?.Id == id
+                                            )
+                                    )
+                                )
+                            )
+                        )
+                            Queue(requested, item.Data);
                     pending.Clear();
                     Queue(
                         requested,
