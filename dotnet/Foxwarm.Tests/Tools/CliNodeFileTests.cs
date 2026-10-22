@@ -79,7 +79,7 @@ public sealed class CliNodeFileTests
     }
 
     [Fact]
-    public async Task Cli_content_writes_follow_links_while_Main_keeps_its_own_authorized_atomic_owner()
+    public async Task Cli_content_writes_follow_links_while_separate_atomic_publication_keeps_its_own_owner()
     {
         using var temp = new TempDirectory();
         var target = Path.Combine(temp.Path, "target.txt");

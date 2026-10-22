@@ -39,7 +39,7 @@ public sealed partial class WorkspaceTools
                         "edit_failed",
                         $"Found {occurrences} occurrences of oldText in file. Make oldText more specific."
                     );
-                await WritePatchFileAsync(path, updated!, true, ct);
+                await WritePatchFileAsync(path, updated!, ct);
                 ReportPaths((file, path));
                 return new JsonObject { ["output"] = "File edited successfully" };
             }
@@ -85,12 +85,7 @@ public sealed partial class WorkspaceTools
                         await MakeDirectoryAsync(await ParentAsync(path, ct), ct);
                         // Parent components created in this operation must still be ordinary directories.
                         path = ResolvePatchPath(operation.Path, true);
-                        await WritePatchFileAsync(
-                            path,
-                            string.Join('\n', operation.Lines),
-                            false,
-                            ct
-                        );
+                        await WritePatchFileAsync(path, string.Join('\n', operation.Lines), ct);
                     }
                     else if (operation.Action == "delete")
                     {
@@ -110,7 +105,7 @@ public sealed partial class WorkspaceTools
                             operation.Lines,
                             operation.Path
                         );
-                        await WritePatchFileAsync(path, updated, true, ct);
+                        await WritePatchFileAsync(path, updated, ct);
                     }
                     applied.Add(WorkspacePatch.Summary(operation));
                 }
@@ -215,30 +210,13 @@ public sealed partial class WorkspaceTools
         return StrictUtf8.GetString(buffer.ToArray());
     }
 
-    private async Task WritePatchFileAsync(
-        string path,
-        string content,
-        bool overwrite,
-        CancellationToken ct
-    )
+    private async Task WritePatchFileAsync(string path, string content, CancellationToken ct)
     {
         if (targetFiles is not null)
         {
             await targetFiles.WriteAsync(path, StrictUtf8.GetBytes(content), "w", ct);
             return;
         }
-        path = AuthorizationPaths.CanonicalPotential(path);
-        var bytes = StrictUtf8.GetBytes(content);
-        var temp = Path.Combine(Path.GetDirectoryName(path)!, $".foxwarm-edit-{Guid.NewGuid():N}");
-        try
-        {
-            await File.WriteAllBytesAsync(temp, bytes, ct);
-            File.Move(temp, path, overwrite);
-        }
-        finally
-        {
-            if (File.Exists(temp))
-                File.Delete(temp);
-        }
+        await FileToolCore.WriteBytes(path, StrictUtf8.GetBytes(content), true, ct);
     }
 }

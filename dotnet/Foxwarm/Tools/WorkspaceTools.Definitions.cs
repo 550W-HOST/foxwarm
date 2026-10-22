@@ -10,7 +10,7 @@ public sealed partial class WorkspaceTools
             ["type"] = "function",
             ["name"] = "edit",
             ["description"] =
-                "Replace one exact occurrence of text in a UTF-8 file. Use apply_patch for line-based changes. Files and resulting content are limited to 1 MiB.",
+                "Replace one exact occurrence of text in a UTF-8 file. Use apply_patch for line-based changes.",
             ["parameters"] = new JsonObject
             {
                 ["type"] = "object",
@@ -46,7 +46,7 @@ public sealed partial class WorkspaceTools
             ["type"] = "function",
             ["name"] = "apply_patch",
             ["description"] =
-                "Add, modify, or delete UTF-8 files with a line-based patch. Paths in patch headers use the session working directory, or the agent directory when unset. Absolute paths, ~/ paths, and leading $fw_agentdir or $fw_tmp are accepted subject to permissions. Other leading $ names are rejected. Files and resulting content are limited to 1 MiB. Missing parent directories are created for added files. Operations are applied in order; if one fails, earlier changes may remain. Supply the patch as input.\n\n"
+                "Add, modify, or delete UTF-8 files with a line-based patch. Paths in patch headers use the session working directory, or the agent directory when unset. Absolute paths, ~/ paths, and leading $fw_agentdir or $fw_tmp are accepted subject to permissions. Other leading $ names are rejected. Missing parent directories are created for added files. Operations are applied in order; if one fails, earlier changes may remain. Supply the patch as input.\n\n"
                 + """"
 The patch must be enclosed in `*** Begin Patch` / `*** End Patch`. Each file operation starts with a header line:
 - `*** Update File: <path>` — modify an existing file

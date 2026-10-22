@@ -126,7 +126,12 @@ internal sealed class NodeFileTools(NodePaths paths)
                         throw new InvalidDataException(
                             $"Found {occurrences} occurrences of oldText in file. Edit tool only replaces once. Please make oldText more specific to match exactly one location."
                         );
-                    await File.WriteAllBytesAsync(path, Encoding.UTF8.GetBytes(updated!));
+                    await FileToolCore.WriteBytes(
+                        path,
+                        Encoding.UTF8.GetBytes(updated!),
+                        true,
+                        default
+                    );
                     result = new JsonObject { ["output"] = "File edited successfully" };
                     break;
                 }
@@ -163,9 +168,11 @@ internal sealed class NodeFileTools(NodePaths paths)
                                     operation.Lines,
                                     operation.Path
                                 );
-                                await File.WriteAllBytesAsync(
+                                await FileToolCore.WriteBytes(
                                     path,
-                                    Encoding.UTF8.GetBytes(updated)
+                                    Encoding.UTF8.GetBytes(updated),
+                                    true,
+                                    default
                                 );
                             }
                             else if (operation.Action == "add")
@@ -176,9 +183,11 @@ internal sealed class NodeFileTools(NodePaths paths)
                                     );
                                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                                 var content = string.Join('\n', operation.Lines);
-                                await File.WriteAllBytesAsync(
+                                await FileToolCore.WriteBytes(
                                     path,
-                                    Encoding.UTF8.GetBytes(content)
+                                    Encoding.UTF8.GetBytes(content),
+                                    true,
+                                    default
                                 );
                             }
                             else
@@ -310,20 +319,17 @@ internal sealed class NodeFileTools(NodePaths paths)
         }
         try
         {
-            await using var stream = new FileStream(
-                path,
-                overwrite ? FileMode.Create : FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.Read
-            );
-            await stream.WriteAsync(Encoding.UTF8.GetBytes(content));
-        }
-        catch (IOException)
-            when (!overwrite && (Exists(path) || new FileInfo(path).LinkTarget is not null))
-        {
-            throw new InvalidDataException(
-                $"File already exists: {display}. Use overwrite=true to overwrite, or use edit tool to modify existing file."
-            );
+            if (
+                !await FileToolCore.WriteBytes(
+                    path,
+                    Encoding.UTF8.GetBytes(content),
+                    overwrite,
+                    default
+                )
+            )
+                throw new InvalidDataException(
+                    $"File already exists: {display}. Use overwrite=true to overwrite, or use edit tool to modify existing file."
+                );
         }
         catch (IOException) when (!createDirs)
         {

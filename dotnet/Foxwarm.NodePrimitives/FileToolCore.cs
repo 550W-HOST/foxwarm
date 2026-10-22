@@ -5,6 +5,43 @@ namespace Foxwarm.Tools;
 
 internal static partial class FileToolCore
 {
+    internal static async Task<bool> WriteBytes(
+        string path,
+        ReadOnlyMemory<byte> bytes,
+        bool overwrite,
+        CancellationToken cancellationToken
+    )
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        FileStream stream;
+        try
+        {
+            // Source uses w/wx: overwrite follows links and updates the existing inode.
+            stream = new FileStream(
+                path,
+                overwrite ? FileMode.Create : FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.ReadWrite | FileShare.Delete,
+                8192,
+                FileOptions.Asynchronous
+            );
+        }
+        catch (IOException)
+            when (!overwrite
+                && (
+                    File.Exists(path)
+                    || Directory.Exists(path)
+                    || new FileInfo(path).LinkTarget is not null
+                )
+            )
+        {
+            return false;
+        }
+        await using (stream)
+            await stream.WriteAsync(bytes, cancellationToken);
+        return true;
+    }
+
     internal static long NativeSize(string path)
     {
         var file = new FileInfo(path);
