@@ -161,6 +161,7 @@ internal sealed class ResponsesWsResource(
                     or "receive-failure"
                     or "replay-failure"
                     or "upstream-close"
+                    or "attempt-timeout"
         );
         active?.Completion.TrySetException(
             new IOException("OpenAI Responses WebSocket request was interrupted.")
