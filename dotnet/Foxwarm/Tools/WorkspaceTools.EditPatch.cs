@@ -39,7 +39,7 @@ public sealed partial class WorkspaceTools
                         "edit_failed",
                         $"Found {occurrences} occurrences of oldText in file. Make oldText more specific."
                     );
-                await WritePatchFileAsync(path, updated!, true, ct);
+                await WritePatchFileAsync(path, updated!, ct);
                 ReportPaths((file, path));
                 return new JsonObject { ["output"] = "File edited successfully" };
             }
@@ -88,7 +88,6 @@ public sealed partial class WorkspaceTools
                         await WritePatchFileAsync(
                             path,
                             string.Join('\n', operation.Lines),
-                            false,
                             ct
                         );
                     }
@@ -110,7 +109,7 @@ public sealed partial class WorkspaceTools
                             operation.Lines,
                             operation.Path
                         );
-                        await WritePatchFileAsync(path, updated, true, ct);
+                        await WritePatchFileAsync(path, updated, ct);
                     }
                     applied.Add(WorkspacePatch.Summary(operation));
                 }
@@ -218,7 +217,6 @@ public sealed partial class WorkspaceTools
     private async Task WritePatchFileAsync(
         string path,
         string content,
-        bool overwrite,
         CancellationToken ct
     )
     {
@@ -227,18 +225,6 @@ public sealed partial class WorkspaceTools
             await targetFiles.WriteAsync(path, StrictUtf8.GetBytes(content), "w", ct);
             return;
         }
-        path = AuthorizationPaths.CanonicalPotential(path);
-        var bytes = StrictUtf8.GetBytes(content);
-        var temp = Path.Combine(Path.GetDirectoryName(path)!, $".foxwarm-edit-{Guid.NewGuid():N}");
-        try
-        {
-            await File.WriteAllBytesAsync(temp, bytes, ct);
-            File.Move(temp, path, overwrite);
-        }
-        finally
-        {
-            if (File.Exists(temp))
-                File.Delete(temp);
-        }
+        await FileToolCore.WriteBytes(path, StrictUtf8.GetBytes(content), true, ct);
     }
 }

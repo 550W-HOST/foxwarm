@@ -361,11 +361,10 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
                     );
                 if (File.Exists(destination) && !RegularFile(destination))
                     return Error("not_file", "Write target must be a regular file.");
-                var written = await FileToolWrite.WriteAtomic(
+                var written = await FileToolCore.WriteBytes(
                     destination,
-                    content,
+                    Encoding.UTF8.GetBytes(content),
                     overwrite,
-                    () => _ = ResolveReadWrite(pathText, read: false),
                     cancellationToken
                 );
                 if (!written)
