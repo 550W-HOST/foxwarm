@@ -1,19 +1,25 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 
 // Normal Source owners use only the explicitly supplied disposable data root.
-const [mode, root] = process.argv.slice(2)
-if (!root || !['seed', 'reopen', 'race'].includes(mode)) throw new Error('usage: lifecycle-transition-fixture-ts.mjs seed|reopen|race ROOT')
-process.env.FOXWARM_DATA_DIR = root
-process.env.FOXWARM_AGENTS_DIR = path.join(root, 'agents')
-process.env.FOXWARM_VECTOR_ENABLED = 'false'
+const [mode, requestedRoot] = process.argv.slice(2)
+if (!requestedRoot || !['seed', 'reopen', 'race'].includes(mode)) throw new Error('usage: lifecycle-transition-fixture-ts.mjs seed|reopen|race ROOT')
+const root = path.resolve(requestedRoot)
+const { isolatedApplicationEnv } = createRequire(import.meta.url)('../scripts/test/test-process-env.cjs')
+Object.assign(process.env, isolatedApplicationEnv(root))
+process.env.FOXWARM_CONFIG_PATH = path.join(root, 'state/config.yaml')
 const repository = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '..')
 if (mode !== 'reopen') {
   await fs.mkdir(path.join(root, 'state'), { recursive: true })
   await fs.writeFile(path.join(root, 'state/models.yaml'), 'default: a\nproviders:\n  a:\n    providerType: openai-responses\n    baseUrl: http://127.0.0.1:1\n    apiKey: fixture-not-a-key\n    models: [wire]\n')
-  await fs.writeFile(path.join(root, 'state/app.yaml'), 'dbWorkers: false\nvector:\n  enabled: false\n')
+  await fs.writeFile(process.env.FOXWARM_CONFIG_PATH, JSON.stringify({
+    paths: { agentsDir: path.join(root, 'agents'), skillsDir: path.join(root, 'skills') },
+    sessionWorkers: false, dbWorkers: false, vector: { enabled: false },
+    bot: { enableWebUI: false, enableTrigger: false },
+  }))
 }
 const load = relative => import(pathToFileURL(path.join(repository, 'lib', relative)).href)
 const sm = await load('sessionManager.js')

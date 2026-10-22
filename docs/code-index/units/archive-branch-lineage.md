@@ -28,4 +28,6 @@ Block reads, exact replay and compensation accept legacy block-backed ascending 
 
 ## Tests
 
+The Source lifecycle fixture binds its owned `state/config.yaml` before application imports through the shared process-harness environment contract. Its Agent, skill, model and state paths stay under the supplied fixture root, and optional workers, Vector and listeners are disabled. `scripts/test/test-isolation.test.mjs` checks direct race, seed and independent-process reopen entries against synthetic caller configuration, including the legacy override.
+
 `dotnet/Foxwarm.Tests/Storage/ArchiveLineageTests.cs`; `ArchiveFrictionTests.cs`; `PersistencePrimitiveTests.cs`; `dotnet/Foxwarm.Tests/Sessions/LifecycleTransitionTests.cs` and `dotnet/lifecycle-transition-fixture-ts.mjs` (real fork failure concurrent with parent move, exact compensation and Source identity-lock control); `dotnet/Foxwarm.Tests/Sessions/ForkClearLifecycleTests.cs`; `LegacyBlockAuthorityTests.cs` and `dotnet/legacy-block-fixture-ts.mjs` (actual Source seed/reopen, mandatory owner startup, preserved legacy provenance, inherited expansion, unchanged candidate exclusion, normal compact commit and reopen).
