@@ -172,7 +172,7 @@ internal sealed partial class SessionToolExecutor
         return result;
     }
 
-    // Reuse the resident approved read and correlated complete-file transfer, not display text.
+    // Use explicitly complete programmatic content; previews still need correlated byte transfer.
     private async Task<Foxwarm.Nodes.NodeConnectionHub.TransferFile> ReadResidentSourceAsync(
         string node,
         string file,
@@ -183,7 +183,7 @@ internal sealed partial class SessionToolExecutor
     )
     {
         string? resolvedPath = null;
-        await sessions.Nodes.ExecuteAsync(
+        var result = await sessions.Nodes.ExecuteAsync(
             node,
             "read",
             new JsonObject { ["filePath"] = file },
@@ -196,6 +196,8 @@ internal sealed partial class SessionToolExecutor
             hosted,
             value =>
             {
+                if (value is not JsonObject)
+                    return;
                 resolvedPath = SessionWait.Text(value?["filePath"]);
                 if (
                     resolvedPath is null
@@ -206,6 +208,28 @@ internal sealed partial class SessionToolExecutor
                     resolvedPath = SessionWait.Text(paths[0]?["resolved"]);
             }
         );
+        if (
+            result is JsonObject value
+            && SessionWait.Text(value["content"]) is string content
+            && value["truncated"] is JsonValue truncated
+            && truncated.TryGetValue<bool>(out var isTruncated)
+            && !isTruncated
+            && SessionWait.Number(value["sizeBytes"]) is double size
+            && size >= 0
+            && size <= 9007199254740991
+            && Math.Truncate(size) == size
+            && SessionWait.Number(value["selectedBytes"]) == size
+        )
+        {
+            // Charge actual UTF-8 bytes before allocation, not the peer's size metadata.
+            beforeMaterialize?.Invoke(System.Text.Encoding.UTF8.GetByteCount(content));
+            var path = resolvedPath ?? RemoteSourcePath(file, cwd);
+            return new(
+                System.Text.Encoding.UTF8.GetBytes(content),
+                path,
+                Foxwarm.Nodes.NodeConnectionHub.RemoteFileName(path)
+            );
+        }
         return await sessions.ReadNodeFileAsync(
             hosted,
             node,
