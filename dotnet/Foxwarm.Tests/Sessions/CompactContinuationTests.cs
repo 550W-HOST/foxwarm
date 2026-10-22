@@ -24,7 +24,9 @@ public sealed partial class CompactLifecycleTests
         await fixture.Peer.PlanReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(8, fixture.Peer.NormalRequests);
 
-        var requiredWait = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requiredWait = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         fixture.Owner.Changed += _ =>
         {
             if (fixture.Owner.Compacting)
@@ -53,10 +55,13 @@ public sealed partial class CompactLifecycleTests
             "s",
             new QueueItem(
                 QueueItemType.User,
-                [new JsonObject
-                {
-                    ["system"] = "<foxwarm-message type=\"user\" hint=\"original\">input during required planning</foxwarm-message>",
-                }],
+                [
+                    new JsonObject
+                    {
+                        ["system"] =
+                            "<foxwarm-message type=\"user\" hint=\"original\">input during required planning</foxwarm-message>",
+                    },
+                ],
                 ClientMessageId: "during-planning"
             )
         );
@@ -77,8 +82,10 @@ public sealed partial class CompactLifecycleTests
         else
         {
             var input = JsonNode.Parse(resumed)!["input"]!.AsArray();
-            var call = input.Single(row => row?["type"]?.GetValue<string>() == "function_call"
-                && row?["call_id"]?.GetValue<string>() == "actual-tool");
+            var call = input.Single(row =>
+                row?["type"]?.GetValue<string>() == "function_call"
+                && row?["call_id"]?.GetValue<string>() == "actual-tool"
+            );
             var response = input[input.IndexOf(call) + 1]!;
             Assert.Equal("function_call_output", response["type"]!.GetValue<string>());
             Assert.Equal("actual-tool", response["call_id"]!.GetValue<string>());
@@ -88,8 +95,10 @@ public sealed partial class CompactLifecycleTests
         Assert.Equal(1, saved.HistoryVersion);
         Assert.False(saved.Busy);
         Assert.Empty(saved.Queue);
-        var admitted = Assert.Single(saved.History.Materialize(), row =>
-            SessionWait.Text(row["__meta"]?["clientMessageId"]) == "during-planning");
+        var admitted = Assert.Single(
+            saved.History.Materialize(),
+            row => SessionWait.Text(row["__meta"]?["clientMessageId"]) == "during-planning"
+        );
         Assert.Contains("queueInputHint", admitted.ToJsonString());
         Assert.Contains("hint=\"original\"", admitted["parts"]![0]!["system"]!.GetValue<string>());
         Assert.Null(fixture.Owner.Entry.LastBackgroundProcessorFailure);
