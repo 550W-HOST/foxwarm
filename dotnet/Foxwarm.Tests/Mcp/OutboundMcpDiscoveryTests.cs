@@ -19,14 +19,20 @@ public sealed class OutboundMcpDiscoveryTests
         var watch = Stopwatch.StartNew();
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             fixture.Mcp.ListToolsAsync(
-                "peer", stop.Token, fixture.First, fixture.First.McpGeneration
+                "peer",
+                stop.Token,
+                fixture.First,
+                fixture.First.McpGeneration
             )
         );
         Assert.Contains("discovery timed out", error.Message);
         Assert.InRange(watch.Elapsed.TotalSeconds, 59, 70);
         Assert.Single((await peer.EventsAsync()).Where(item => item["kind"]?.ToString() == "list"));
         var tools = await fixture.Mcp.ListToolsAsync(
-            "peer", stop.Token, fixture.First, fixture.First.McpGeneration
+            "peer",
+            stop.Token,
+            fixture.First,
+            fixture.First.McpGeneration
         );
         Assert.Contains(tools, tool => tool["name"]!.ToString() == "probe");
         var events = await peer.EventsAsync();

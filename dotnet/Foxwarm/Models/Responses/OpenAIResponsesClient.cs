@@ -46,8 +46,16 @@ public sealed class UnsupportedResponsesFeatureException(string feature)
 
 public sealed class ResponsesHttpException : HttpRequestException
 {
-    public ResponsesHttpException(HttpStatusCode statusCode, string responseBody, bool bodyTruncated)
-        : base($"OpenAI Responses HTTP request failed with status {(int)statusCode}.", null, statusCode)
+    public ResponsesHttpException(
+        HttpStatusCode statusCode,
+        string responseBody,
+        bool bodyTruncated
+    )
+        : base(
+            $"OpenAI Responses HTTP request failed with status {(int)statusCode}.",
+            null,
+            statusCode
+        )
     {
         ClassificationBody = responseBody;
         var diagnostic = ModelAttemptFailure.DiagnosticBody(responseBody);

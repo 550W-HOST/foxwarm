@@ -254,7 +254,8 @@ internal sealed partial class McpClient : IAsyncDisposable
                                         budget.Token
                                     );
                                 }
-                                catch (OperationCanceledException) when (!requestToken.IsCancellationRequested)
+                                catch (OperationCanceledException)
+                                    when (!requestToken.IsCancellationRequested)
                                 {
                                     throw new TimeoutException("MCP tool discovery timed out.");
                                 }

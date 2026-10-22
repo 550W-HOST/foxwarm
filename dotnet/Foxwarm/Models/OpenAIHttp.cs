@@ -60,8 +60,7 @@ internal static class OpenAIHttp
             .ConfigureAwait(false);
         if (response.StatusCode != System.Net.HttpStatusCode.OK)
         {
-            var error = await ReadErrorAsync(response.Content, token)
-                .ConfigureAwait(false);
+            var error = await ReadErrorAsync(response.Content, token).ConfigureAwait(false);
             var diagnostic = ModelAttemptFailure.DiagnosticBody(error);
             options.Diagnostics?.Response(
                 $"{(int)response.StatusCode} {response.ReasonPhrase}",
