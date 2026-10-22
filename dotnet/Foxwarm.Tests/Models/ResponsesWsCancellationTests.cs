@@ -50,7 +50,9 @@ public sealed class ResponsesWsCancellationTests
                 clock.Advance(TimeSpan.FromSeconds(181));
             else
                 release.TrySetResult();
-            var error = await Record.ExceptionAsync(() => request.WaitAsync(TimeSpan.FromSeconds(5)));
+            var error = await Record.ExceptionAsync(() =>
+                request.WaitAsync(TimeSpan.FromSeconds(5))
+            );
             Assert.False(attempt.IsCancellationRequested);
             if (ending == "caller")
             {
@@ -143,8 +145,12 @@ public sealed class ResponsesWsCancellationTests
         await seen.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await owner.Registry.Control.StopAsync(owner.Id);
         await running.WaitAsync(TimeSpan.FromSeconds(10));
-        var request = Assert.Single(await manager.Journal.ListAsync(owner.Id, null, null, null, 10));
-        var journal = await manager.Journal.ReconstructAsync(request!["requestId"]!.GetValue<string>());
+        var request = Assert.Single(
+            await manager.Journal.ListAsync(owner.Id, null, null, null, 10)
+        );
+        var journal = await manager.Journal.ReconstructAsync(
+            request!["requestId"]!.GetValue<string>()
+        );
         var attempt = Assert.Single(journal["attempts"]!.AsArray());
         Assert.Equal("abort", attempt!["result"]!["outcome"]!.GetValue<string>());
         Assert.Equal("abort", attempt["result"]!["error"]!["kind"]!.GetValue<string>());
