@@ -21,7 +21,7 @@ internal sealed partial class MainToolScript : IAsyncDisposable
         internal readonly ToolScriptContext Context;
         internal readonly CancellationTokenSource Cancel;
         private readonly CancellationTokenSource hostCancellation;
-        private readonly CancellationToken caller;
+        internal readonly CancellationToken Caller;
         internal readonly CancellationToken Token;
         internal readonly string RecordOwner;
         internal volatile string? CommittedStatus;
@@ -31,8 +31,8 @@ internal sealed partial class MainToolScript : IAsyncDisposable
             Record = record;
             Context = context;
             RecordOwner = Required(record, "ownerSessionId");
-            // Foreground cancellation fences host effects; explicit run cancellation owns the VM lifetime.
-            caller = token;
+            // Foreground cancellation fences host effects; explicit run/shutdown cancellation owns the VM lifetime.
+            Caller = token;
             Cancel = new CancellationTokenSource();
             hostCancellation = CancellationTokenSource.CreateLinkedTokenSource(token, Cancel.Token);
             Token = hostCancellation.Token;
@@ -42,7 +42,7 @@ internal sealed partial class MainToolScript : IAsyncDisposable
         internal void RequireHostAdmission()
         {
             Cancel.Token.ThrowIfCancellationRequested();
-            if (caller.IsCancellationRequested)
+            if (Caller.IsCancellationRequested)
                 throw new InvalidOperationException(
                     $"Tool call was not started because {Context.Owner.Entry.ToolCancellationSource} cancelled it; it was not executed."
                 );
@@ -378,6 +378,14 @@ internal sealed partial class MainToolScript : IAsyncDisposable
         record["cancelledAt"] = Now();
         await store.WriteAsync(record, token);
         return Project(record, false);
+    }
+
+    internal void CancelForegroundForShutdown(SessionEntry entry)
+    {
+        // Stop may already have taken the foreground handle. Timer slices do not carry its cancelled token.
+        foreach (var run in active.Values)
+            if (ReferenceEquals(run.Context.Owner.Entry, entry) && run.Caller.IsCancellationRequested)
+                run.RequestCancel();
     }
 
     internal void BeginShutdown()

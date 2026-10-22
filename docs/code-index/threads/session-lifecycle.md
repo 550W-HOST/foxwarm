@@ -47,6 +47,8 @@ Dependency teardown waits for local owner drain. If accepted work does not settl
 
 The .NET console and optional Desktop share this composition through `MainHost`: ApplicationStopping/admin shutdown close admission, then disposal drains Sessions before ASP.NET/terminal and effect dependencies. The console and Desktop observer wait for the stopping notification without ASP.NET's implicit stop/dispose helper. .NET uses `Environment.FailFast` for an unsettled foreground drain, not a POSIX-only signal or a process-tree kill. Its independent journal/Archive writer leases remain pinned until successful owner settlement and final saves. Forced exit retains the existing crash-like Archive/JSON boundary; it is not a cross-database atomicity guarantee or a new remote-process recovery contract.
 
+The .NET runner's cancellation phase also reaches the exact owner's active foreground ToolScript VM, including pure native computation and work previously stopped with Stop or Run queued. This is shutdown-owned cancellation after the existing grace period, not ordinary Stop preemption. Started host effects still settle before their dependencies close; independent accepted script timers retain their own uncancelled caller scope and drain before ToolScript-wide shutdown.
+
 ## Context, archive, and recall
 
 - Final usage may trigger `checkAndCompactIfNeeded`.
