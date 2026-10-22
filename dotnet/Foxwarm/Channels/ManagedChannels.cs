@@ -120,20 +120,27 @@ internal sealed class ManagedChannels(
                     eligible.Add((id, Type(id, config)));
                 else
                 {
-                    var reason = id is "webui" or "tui" ? "reserved transport"
+                    var reason =
+                        id is "webui" or "tui" ? "reserved transport"
                         : !Implemented(Type(id, config)) ? "adapter unavailable"
                         : config["enabled"]?.GetValue<bool>() == false ? "disabled"
                         : "missing required credentials";
                     Console.WriteLine($"Channel {id} startup skipped: {reason}.");
                 }
             }
-            var outcomes = await Task.WhenAll(eligible.Select(entry => StartWithRetryAsync(entry.Id, entry.Type)));
-            Console.WriteLine($"Channel startup settled: registered={outcomes.Count(value => value)}, unavailable={outcomes.Count(value => !value)}, skipped={entries.Length - eligible.Count}, stopping={closed}.");
+            var outcomes = await Task.WhenAll(
+                eligible.Select(entry => StartWithRetryAsync(entry.Id, entry.Type))
+            );
+            Console.WriteLine(
+                $"Channel startup settled: registered={outcomes.Count(value => value)}, unavailable={outcomes.Count(value => !value)}, skipped={entries.Length - eligible.Count}, stopping={closed}."
+            );
         }
         catch (Exception error)
         {
             // This is retained background startup, not a detached unobserved exception.
-            Console.Error.WriteLine("Channel initial startup failed: " + MainLog.SafeFailure(error));
+            Console.Error.WriteLine(
+                "Channel initial startup failed: " + MainLog.SafeFailure(error)
+            );
         }
     }
 
@@ -400,8 +407,10 @@ internal sealed class ManagedChannels(
                 .Values.Concat(starting.Values.Select(value => value.Channel))
                 .Distinct()
                 .ToArray();
-            initializers = starting.Values.Select(value => value.Settled.Task)
-                .Concat(initialStartup is null ? [] : new[] { initialStartup }).ToArray();
+            initializers = starting
+                .Values.Select(value => value.Settled.Task)
+                .Concat(initialStartup is null ? [] : new[] { initialStartup })
+                .ToArray();
         }
         await Task.WhenAll(current.Select(channel => channel.StopAsync()));
         await Task.WhenAll(initializers);

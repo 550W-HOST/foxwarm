@@ -365,7 +365,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         catch (Exception error)
         {
             Console.Error.WriteLine(
-                "Vector initialization failed; Main will continue without semantic search: " + MainLog.SafeFailure(error)
+                "Vector initialization failed; Main will continue without semantic search: "
+                    + MainLog.SafeFailure(error)
             );
         }
         await timers.LoadAsync();
@@ -387,8 +388,12 @@ internal sealed partial class SessionManager : IAsyncDisposable
             .ToArray();
         if (startMainServices)
         {
-            Console.WriteLine($"Exec startup: supported={LocalExecManager.IsSupported}, tracked={executor.TrackedCount}.");
-            Console.WriteLine($"Session catalog loaded: entries={catalogRows.Length}, requiredOwners={ids.Length}.");
+            Console.WriteLine(
+                $"Exec startup: supported={LocalExecManager.IsSupported}, tracked={executor.TrackedCount}."
+            );
+            Console.WriteLine(
+                $"Session catalog loaded: entries={catalogRows.Length}, requiredOwners={ids.Length}."
+            );
         }
         var mandatory = ids.Select(id => RequiredAsync(id)).ToList();
         await Task.WhenAll(mandatory);

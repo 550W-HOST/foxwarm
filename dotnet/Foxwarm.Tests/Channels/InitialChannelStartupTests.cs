@@ -9,26 +9,42 @@ namespace Foxwarm.Tests;
 
 public sealed class InitialChannelStartupTests
 {
-    private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private static TaskCompletionSource Signal() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private static async Task<(MainHost Host, ModelConfiguration Config)> MainAsync(
-        TempDirectory temp, JsonObject channels, ChannelTransportDependencies dependencies)
+        TempDirectory temp,
+        JsonObject channels,
+        ChannelTransportDependencies dependencies
+    )
     {
         var data = Path.Combine(temp.Path, "data");
         var work = Path.Combine(temp.Path, "work");
         Directory.CreateDirectory(Path.Combine(data, "state"));
         Directory.CreateDirectory(work);
-        await File.WriteAllTextAsync(Path.Combine(data, "state", "config.yaml"),
-            new JsonObject { ["vector"] = false, ["channels"] = channels }.ToJsonString());
+        await File.WriteAllTextAsync(
+            Path.Combine(data, "state", "config.yaml"),
+            new JsonObject { ["vector"] = false, ["channels"] = channels }.ToJsonString()
+        );
         var config = new ModelConfiguration(data);
         var settings = await HttpServerSettings.CaptureDesktopAsync(data);
-        var host = await MainHost.CreateAsync([], data, work, config, settings, null,
-            channelDependencies: dependencies);
+        var host = await MainHost.CreateAsync(
+            [],
+            data,
+            work,
+            config,
+            settings,
+            null,
+            channelDependencies: dependencies
+        );
         return (host, config);
     }
 
     private static JsonObject Status(ModelConfiguration config, string id) =>
-        config.ManagedChannels!.Statuses().OfType<JsonObject>().Single(row => row["channelId"]!.ToString() == id);
+        config
+            .ManagedChannels!.Statuses()
+            .OfType<JsonObject>()
+            .Single(row => row["channelId"]!.ToString() == id);
 
     [Fact]
     public async Task Normal_Main_starts_Telegram_while_QQ_is_pending_and_stop_owns_the_pending_initializer()
@@ -55,26 +71,36 @@ public sealed class InitialChannelStartupTests
                 telegramReached.TrySetResult();
             return Task.FromResult<IResult?>(null);
         };
-        var (host, config) = await MainAsync(temp,
+        var (host, config) = await MainAsync(
+            temp,
             new() { ["qq"] = qq.Config(), ["telegram"] = ExternalChannelFixture.Channel() },
-            telegram.Dependencies with { CreateQQBotHttp = qq.Dependencies.CreateQQBotHttp });
+            telegram.Dependencies with
+            {
+                CreateQQBotHttp = qq.Dependencies.CreateQQBotHttp,
+            }
+        );
         await using var ownedHost = host;
         var lifetime = host.Lifetime;
         var start = host.StartAsync();
         try
         {
-            await Task.WhenAll(qqReached.Task, telegramReached.Task).WaitAsync(TimeSpan.FromSeconds(10));
+            await Task.WhenAll(qqReached.Task, telegramReached.Task)
+                .WaitAsync(TimeSpan.FromSeconds(10));
             await start.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.False(release.Task.IsCompleted);
-            await TelegramChannelTests.Until(() => Status(config, "telegram")["running"]!.GetValue<bool>());
+            await TelegramChannelTests.Until(() =>
+                Status(config, "telegram")["running"]!.GetValue<bool>()
+            );
             Assert.False(Status(config, "qq")["running"]!.GetValue<bool>());
             lifetime.StopApplication();
             await start.WaitAsync(TimeSpan.FromSeconds(5));
             await host.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
             release.TrySetResult();
             await lateReply.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.All(config.ManagedChannels!.Statuses().OfType<JsonObject>(),
-                row => Assert.False(row["running"]!.GetValue<bool>()));
+            Assert.All(
+                config.ManagedChannels!.Statuses().OfType<JsonObject>(),
+                row => Assert.False(row["running"]!.GetValue<bool>())
+            );
             Assert.Equal(0, qq.Connections);
             Assert.DoesNotContain(qq.Calls, call => call.Path == "/gateway");
         }
@@ -96,13 +122,21 @@ public sealed class InitialChannelStartupTests
         await using var telegram = await TelegramPeer.StartAsync();
         var qqAttempts = 0;
         var telegramAttempts = 0;
-        qq.Respond = call => Task.FromResult<IResult?>(
-            call.Path == "/app/getAppAccessToken" && (Interlocked.Increment(ref qqAttempts) == 1 || !recover)
-                ? Results.Text("secret-vendor-body", statusCode: 401) : null);
-        telegram.Fail = call => call.Method == "setMyCommands" && (Interlocked.Increment(ref telegramAttempts) == 1 || !recover)
-            ? (401, "secret-vendor-description") : null;
+        qq.Respond = call =>
+            Task.FromResult<IResult?>(
+                call.Path == "/app/getAppAccessToken"
+                && (Interlocked.Increment(ref qqAttempts) == 1 || !recover)
+                    ? Results.Text("secret-vendor-body", statusCode: 401)
+                    : null
+            );
+        telegram.Fail = call =>
+            call.Method == "setMyCommands"
+            && (Interlocked.Increment(ref telegramAttempts) == 1 || !recover)
+                ? (401, "secret-vendor-description")
+                : null;
         var delays = new ConcurrentQueue<TimeSpan>();
-        var (host, config) = await MainAsync(temp,
+        var (host, config) = await MainAsync(
+            temp,
             new() { ["qq"] = qq.Config(), ["telegram"] = ExternalChannelFixture.Channel() },
             telegram.Dependencies with
             {
@@ -113,7 +147,8 @@ public sealed class InitialChannelStartupTests
                     delays.Enqueue(duration);
                     return Task.CompletedTask;
                 },
-            });
+            }
+        );
         await using var ownedHost = host;
         await host.StartAsync().WaitAsync(TimeSpan.FromSeconds(10));
         await config.ManagedChannels!.StartInitialAsync().WaitAsync(TimeSpan.FromSeconds(10));
@@ -145,7 +180,8 @@ public sealed class InitialChannelStartupTests
         await using var peer = await TelegramPeer.StartAsync();
         peer.Fail = call => call.Method == "setMyCommands" ? (401, "synthetic") : null;
         var retry = Signal();
-        var (host, config) = await MainAsync(temp,
+        var (host, config) = await MainAsync(
+            temp,
             new() { ["telegram"] = ExternalChannelFixture.Channel() },
             peer.Dependencies with
             {
@@ -155,7 +191,8 @@ public sealed class InitialChannelStartupTests
                     retry.TrySetResult();
                     return Task.Delay(Timeout.InfiniteTimeSpan, token);
                 },
-            });
+            }
+        );
         await using var ownedHost = host;
         var start = host.StartAsync();
         await retry.Task.WaitAsync(TimeSpan.FromSeconds(10));
@@ -169,17 +206,29 @@ public sealed class InitialChannelStartupTests
     [Theory]
     [InlineData(4914)]
     [InlineData(4915)]
-    public async Task QQ_terminal_rejection_is_visible_without_redefining_registry_running_as_account_health(int closeCode)
+    public async Task QQ_terminal_rejection_is_visible_without_redefining_registry_running_as_account_health(
+        int closeCode
+    )
     {
         using var temp = new TempDirectory();
         await using var peer = await QQBotPeer.StartAsync();
-        var (host, config) = await MainAsync(temp, new() { ["qq"] = peer.Config() }, peer.Dependencies);
+        var (host, config) = await MainAsync(
+            temp,
+            new() { ["qq"] = peer.Config() },
+            peer.Dependencies
+        );
         await using var ownedHost = host;
         await host.StartAsync().WaitAsync(TimeSpan.FromSeconds(10));
         await config.ManagedChannels!.StartInitialAsync().WaitAsync(TimeSpan.FromSeconds(10));
-        await TelegramChannelTests.Until(() => peer.Frames.Any(frame => frame["op"]!.ToString() == "2"));
+        await TelegramChannelTests.Until(() =>
+            peer.Frames.Any(frame => frame["op"]!.ToString() == "2")
+        );
         var socket = peer.Sockets.Single().Value;
-        await socket.CloseOutputAsync((WebSocketCloseStatus)closeCode, "secret-vendor-close-reason", default);
+        await socket.CloseOutputAsync(
+            (WebSocketCloseStatus)closeCode,
+            "secret-vendor-close-reason",
+            default
+        );
         await TelegramChannelTests.Until(() => Status(config, "qq")["lastError"] is not null);
         var status = Status(config, "qq");
         Assert.True(status["running"]!.GetValue<bool>());
@@ -188,6 +237,7 @@ public sealed class InitialChannelStartupTests
         Assert.Single(peer.Calls, call => call.Path == "/gateway");
         Assert.Equal(1, peer.Connections);
     }
+
     [Fact]
     public async Task Dynamic_reload_retains_sequential_start_and_does_not_apply_initial_retries()
     {
@@ -214,7 +264,8 @@ public sealed class InitialChannelStartupTests
                     telegramConstructed = true;
                     return telegram.Dependencies.TelegramApi!(token);
                 },
-            });
+            }
+        );
         var reload = fixture.Manager.ManagedChannels!.ReloadAsync();
         try
         {
@@ -231,5 +282,4 @@ public sealed class InitialChannelStartupTests
             await reload;
         }
     }
-
 }

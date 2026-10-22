@@ -96,7 +96,9 @@ internal sealed partial class QQBotChannel
                         log(new IOException("QQ Bot gateway reconnect limit reached."));
                         return;
                     }
-                    Console.WriteLine($"Channel {id} (qqbot) gateway reconnect attempt {reconnectAttempt + 1}.");
+                    Console.WriteLine(
+                        $"Channel {id} (qqbot) gateway reconnect attempt {reconnectAttempt + 1}."
+                    );
                     await delay(
                         TimeSpan.FromMilliseconds(
                             nextDelay ?? ReconnectDelays[Math.Min(reconnectAttempt, 4)]
@@ -197,7 +199,14 @@ internal sealed partial class QQBotChannel
                                 else if (code == 4004)
                                     lock (tokenGate)
                                         accessToken = null;
-                                log(new QQBotGatewayException(code is 1000 or 4914 or 4915 ? "terminal close" : "reconnecting after close", code));
+                                log(
+                                    new QQBotGatewayException(
+                                        code is 1000 or 4914 or 4915
+                                            ? "terminal close"
+                                            : "reconnecting after close",
+                                        code
+                                    )
+                                );
                                 connection.Retired.TrySetResult(
                                     new(
                                         code is not (1000 or 4914 or 4915),
@@ -385,7 +394,9 @@ internal sealed partial class QQBotChannel
             {
                 if (connection.AwaitingAck)
                 {
-                    log(new QQBotGatewayException("heartbeat acknowledgement missed; reconnecting"));
+                    log(
+                        new QQBotGatewayException("heartbeat acknowledgement missed; reconnecting")
+                    );
                     ReconnectSocket(connection);
                     return;
                 }

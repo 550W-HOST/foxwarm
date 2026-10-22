@@ -7,7 +7,8 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Channels;
 
-internal sealed class QQBotApiException(string message, long? code, int? status = null) : IOException(message)
+internal sealed class QQBotApiException(string message, long? code, int? status = null)
+    : IOException(message)
 {
     internal long? Code { get; } = code;
     internal int? Status { get; } = status;
@@ -153,7 +154,11 @@ internal sealed partial class QQBotChannel : IManagedChannel
             using var response = await http.SendAsync(request, lifetime.Token);
             var text = await response.Content.ReadAsStringAsync(lifetime.Token);
             if (!response.IsSuccessStatusCode)
-                throw new HttpRequestException("QQ Bot token request failed.", null, response.StatusCode);
+                throw new HttpRequestException(
+                    "QQ Bot token request failed.",
+                    null,
+                    response.StatusCode
+                );
             var payload =
                 JsonNode.Parse(text)?.AsObject()
                 ?? throw new IOException("QQ Bot access token response was not JSON.");

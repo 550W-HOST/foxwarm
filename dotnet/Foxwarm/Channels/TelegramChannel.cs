@@ -80,9 +80,10 @@ internal sealed class TelegramChannel : IManagedChannel
                 stopping.Token
             );
             stage = "identity lookup";
-            username = SessionWait.Text(
-                (await ApiAsync("getMe", new JsonObject(), stopping.Token))?["username"]
-            ) ?? "";
+            username =
+                SessionWait.Text(
+                    (await ApiAsync("getMe", new JsonObject(), stopping.Token))?["username"]
+                ) ?? "";
             // Launch completion is transport initialization, not a completed first poll.
             stage = "webhook removal";
             await ApiAsync("deleteWebhook", new JsonObject(), stopping.Token);

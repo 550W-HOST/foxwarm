@@ -99,7 +99,9 @@ internal sealed partial class MainTimers
         foreach (var record in items)
             if (!record.Internal && record.Reason is null)
                 Start(record);
-        Console.WriteLine($"Timer startup: loaded={items.Length}, scheduled={items.Count(record => !record.Internal && record.Reason is null)}, inactive={items.Count(record => record.Internal || record.Reason is not null)}.");
+        Console.WriteLine(
+            $"Timer startup: loaded={items.Length}, scheduled={items.Count(record => !record.Internal && record.Reason is null)}, inactive={items.Count(record => record.Internal || record.Reason is not null)}."
+        );
     }
 
     private void Start(TimerRecord record)

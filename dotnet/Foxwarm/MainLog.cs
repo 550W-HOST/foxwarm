@@ -38,7 +38,8 @@ internal sealed class MainLog : IDisposable
     {
         var detail = error switch
         {
-            System.Net.Http.HttpRequestException { StatusCode: { } status } => $"HTTP {(int)status}",
+            System.Net.Http.HttpRequestException { StatusCode: { } status } =>
+                $"HTTP {(int)status}",
             System.Net.Sockets.SocketException socket => socket.SocketErrorCode.ToString(),
             _ => error.GetType().Name,
         };
