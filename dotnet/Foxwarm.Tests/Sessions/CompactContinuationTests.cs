@@ -9,6 +9,95 @@ public sealed partial class CompactLifecycleTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task Input_admitted_during_required_planning_is_in_the_first_resumed_request(
+        bool queued
+    )
+    {
+        await using var fixture = await CompactFixture.CreateAsync();
+        await fixture.SeedAsync();
+        fixture.Peer.NextUsage = 18000;
+        await fixture.Owner.Registry.Ingress.EnqueueAsync(
+            "s",
+            QueueItem.UserText("start automatic background planning")
+        );
+        await fixture.Owner.DrainForegroundAsync();
+        await fixture.Peer.PlanReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(8, fixture.Peer.NormalRequests);
+
+        var requiredWait = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Owner.Changed += _ =>
+        {
+            if (fixture.Owner.Compacting)
+                requiredWait.TrySetResult();
+        };
+        fixture.Peer.NextUsage = 21000;
+        fixture.Peer.NextTool = !queued;
+        await fixture.Owner.Registry.Ingress.EnqueueAsync(
+            "s",
+            QueueItem.UserText(queued ? "hold foreground" : "tool continuation")
+        );
+        if (queued)
+        {
+            await fixture.Peer.ForegroundReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await fixture.Owner.Registry.Ingress.EnqueueAsync(
+                "s",
+                QueueItem.UserText("provider-time input")
+            );
+            fixture.Peer.ReleaseForeground();
+        }
+        await fixture.ContinuationReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await requiredWait.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(fixture.Continuation!.IsCompleted);
+        Assert.Equal(9, fixture.Peer.NormalRequests);
+        await fixture.Owner.Registry.Ingress.EnqueueAsync(
+            "s",
+            new QueueItem(
+                QueueItemType.User,
+                [new JsonObject
+                {
+                    ["system"] = "<foxwarm-message type=\"user\" hint=\"original\">input during required planning</foxwarm-message>",
+                }],
+                ClientMessageId: "during-planning"
+            )
+        );
+        var waiting = (await fixture.Store.LoadAsync("s"))!;
+        Assert.True(waiting.Busy);
+        Assert.Equal("during-planning", Assert.Single(waiting.Queue).ClientMessageId);
+        Assert.Equal(0, waiting.HistoryVersion);
+
+        fixture.Peer.ReleasePlan();
+        await fixture.Owner.DrainForegroundAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(10, fixture.Peer.NormalRequests);
+        Assert.Equal(1, fixture.Peer.PlannerRequests);
+        var resumed = fixture.Peer.NormalBodies[9];
+        Assert.Contains("input during required planning", resumed);
+        Assert.Contains("Prior context.", resumed);
+        if (queued)
+            Assert.Contains("provider-time input", resumed);
+        else
+        {
+            var input = JsonNode.Parse(resumed)!["input"]!.AsArray();
+            var call = input.Single(row => row?["type"]?.GetValue<string>() == "function_call"
+                && row?["call_id"]?.GetValue<string>() == "actual-tool");
+            var response = input[input.IndexOf(call) + 1]!;
+            Assert.Equal("function_call_output", response["type"]!.GetValue<string>());
+            Assert.Equal("actual-tool", response["call_id"]!.GetValue<string>());
+            Assert.Contains("completed tool", response["output"]!.ToString());
+        }
+        var saved = (await fixture.Store.LoadAsync("s"))!;
+        Assert.Equal(1, saved.HistoryVersion);
+        Assert.False(saved.Busy);
+        Assert.Empty(saved.Queue);
+        var admitted = Assert.Single(saved.History.Materialize(), row =>
+            SessionWait.Text(row["__meta"]?["clientMessageId"]) == "during-planning");
+        Assert.Contains("queueInputHint", admitted.ToJsonString());
+        Assert.Contains("hint=\"original\"", admitted["parts"]![0]!["system"]!.GetValue<string>());
+        Assert.Null(fixture.Owner.Entry.LastBackgroundProcessorFailure);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task Shutdown_interrupts_required_planning_wait_without_finalizing_later_input_or_cancelling_its_independent_planner(
         bool beforeWait
     )

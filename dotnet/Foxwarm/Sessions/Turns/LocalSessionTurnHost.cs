@@ -120,7 +120,8 @@ public sealed partial class LocalSessionTurnHost
             {
                 AssertCanContinue();
                 registered.Token.ThrowIfCancellationRequested();
-                await SafePointAsync().ConfigureAwait(false);
+                await AppendQueuedInputsAtSafePointAsync(queuedInput: iteration > 0)
+                    .ConfigureAwait(false);
                 AssertCanContinue();
                 registered.Token.ThrowIfCancellationRequested();
                 entry.StructuredProgress?.Invoke(new("llm-start"));
@@ -446,16 +447,19 @@ public sealed partial class LocalSessionTurnHost
         {
             await beforeContinuation(
                     result,
-                    safe => AppendQueuedFollowUpsAfterToolAsync(safe),
+                    safe => AppendQueuedInputsAtSafePointAsync(safe),
                     token
                 )
                 .ConfigureAwait(false);
             return;
         }
-        await AppendQueuedFollowUpsAfterToolAsync().ConfigureAwait(false);
+        await AppendQueuedInputsAtSafePointAsync().ConfigureAwait(false);
     }
 
-    private async Task AppendQueuedFollowUpsAfterToolAsync(Func<Task>? continuationSafePoint = null)
+    private async Task AppendQueuedInputsAtSafePointAsync(
+        Func<Task>? continuationSafePoint = null,
+        bool queuedInput = true
+    )
     {
         AssertCanContinue();
         await (continuationSafePoint?.Invoke() ?? SafePointAsync()).ConfigureAwait(false);
@@ -465,7 +469,8 @@ public sealed partial class LocalSessionTurnHost
         await entry.SaveLane.SaveBestEffortAsync().ConfigureAwait(false);
         await (continuationSafePoint?.Invoke() ?? SafePointAsync()).ConfigureAwait(false);
         AssertCanContinue();
-        entry.WithState(state => DeferredQueueInput.Mark(state.Queue));
+        if (queuedInput)
+            entry.WithState(state => DeferredQueueInput.Mark(state.Queue));
         var batch = SessionTurnRunner.DrainLeading(entry);
         if (batch.Count > 0)
         {
