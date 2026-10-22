@@ -11,18 +11,45 @@ public sealed class WebUiQueuePreviewTests
     public void Channel_system_parts_are_bounded_previews_without_mutating_the_queued_input()
     {
         var state = new SessionState("preview");
-        var wrapped = SessionBoundary.ChannelInput([new JsonObject { ["text"] = "queued body " + new string('x', 5000) }], "webui");
+        var wrapped = SessionBoundary.ChannelInput(
+            [new JsonObject { ["text"] = "queued body " + new string('x', 5000) }],
+            "webui"
+        );
         var original = wrapped[0].ToJsonString();
-        state.Queue.Add(new QueueItem(QueueItemType.User, wrapped, ClientMessageId: "browser-input"));
-        state.Queue.Add(QueueItem.Prebuilt(new JsonObject
-        {
-            ["role"] = "user",
-            ["parts"] = new JsonArray(new JsonObject { ["system"] = "prebuilt system", ["text"] = "visible text", ["thinking"] = new string('y', 5000) }),
-        }));
+        state.Queue.Add(
+            new QueueItem(QueueItemType.User, wrapped, ClientMessageId: "browser-input")
+        );
+        state.Queue.Add(
+            QueueItem.Prebuilt(
+                new JsonObject
+                {
+                    ["role"] = "user",
+                    ["parts"] = new JsonArray(
+                        new JsonObject
+                        {
+                            ["system"] = "prebuilt system",
+                            ["text"] = "visible text",
+                            ["thinking"] = new string('y', 5000),
+                        }
+                    ),
+                }
+            )
+        );
         for (var index = 2; index < 21; index++)
             state.Queue.Add(QueueItem.UserText("queued " + index));
-        var models = HostModels.Parse(new JsonObject { ["providers"] = new JsonObject() }, new JsonObject());
-        var history = WebUiContract.History(state.Snapshot(), models, false, false, null, null, null);
+        var models = HostModels.Parse(
+            new JsonObject { ["providers"] = new JsonObject() },
+            new JsonObject()
+        );
+        var history = WebUiContract.History(
+            state.Snapshot(),
+            models,
+            false,
+            false,
+            null,
+            null,
+            null
+        );
         var previews = history["queuedMessages"]!.AsArray();
         Assert.Equal(20, previews.Count);
         Assert.Equal(21, history["queueLength"]!.GetValue<int>());

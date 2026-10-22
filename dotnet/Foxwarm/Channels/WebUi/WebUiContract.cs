@@ -112,9 +112,8 @@ internal static class WebUiContract
                     var projected = new JsonObject();
                     foreach (var field in new[] { "text", "system", "thinking" })
                         if (part[field] is JsonValue text && text.TryGetValue<string>(out var raw))
-                            projected[field] = raw.Length > 4000
-                                ? raw[..4000] + "\n… [preview truncated]"
-                                : raw;
+                            projected[field] =
+                                raw.Length > 4000 ? raw[..4000] + "\n… [preview truncated]" : raw;
                     if (projected.Count > 0)
                         parts.Add(projected);
                     else if (

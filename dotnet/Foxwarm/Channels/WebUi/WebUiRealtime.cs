@@ -57,9 +57,11 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
             if (SessionCatalog.Text(data["type"]) != "session-list-delta")
                 return true;
             return (data["sessions"] as JsonArray)?.Any(row =>
-                    SessionCatalog.Text(row?["id"]) is { } rowId && listIds.Contains(rowId)) == true
+                    SessionCatalog.Text(row?["id"]) is { } rowId && listIds.Contains(rowId)
+                ) == true
                 || (data["deletedIds"] as JsonArray)?.Any(row =>
-                    SessionCatalog.Text(row) is { } deleted && listIds.Contains(deleted)) == true;
+                    SessionCatalog.Text(row) is { } deleted && listIds.Contains(deleted)
+                ) == true;
         }
         void Deliver(JsonObject data)
         {
@@ -564,9 +566,13 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                     if (revision != requested || attempt.IsCancellationRequested)
                         return;
                     foreach (var item in pending)
-                        if (Subscribed(item.Data)
-                            && (SessionCatalog.Text(item.Data["sessionId"]) is not { } id
-                                || ReferenceEquals(runtime.Owner(id), item.Owner)))
+                        if (
+                            Subscribed(item.Data)
+                            && (
+                                SessionCatalog.Text(item.Data["sessionId"]) is not { } id
+                                || ReferenceEquals(runtime.Owner(id), item.Owner)
+                            )
+                        )
                             Queue(requested, item.Data);
                     pending.Clear();
                     Queue(
