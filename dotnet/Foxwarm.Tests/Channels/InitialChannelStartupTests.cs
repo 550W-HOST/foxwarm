@@ -204,6 +204,77 @@ public sealed class InitialChannelStartupTests
     }
 
     [Theory]
+    [InlineData("disable-save")]
+    [InlineData("explicit-stop")]
+    [InlineData("enabled-save")]
+    [InlineData("failed-reload")]
+    public async Task Normal_save_or_stop_supersedes_pending_initial_retry(string action)
+    {
+        using var temp = new TempDirectory();
+        await using var peer = await TelegramPeer.StartAsync();
+        var commands = 0;
+        peer.Fail = call =>
+            call.Method == "setMyCommands"
+            && (Interlocked.Increment(ref commands) == 1 || action == "failed-reload")
+                ? (401, "synthetic")
+                : null;
+        var retry = Signal();
+        var release = Signal();
+        var (host, config) = await MainAsync(
+            temp,
+            new() { ["telegram"] = ExternalChannelFixture.Channel() },
+            peer.Dependencies with
+            {
+                Delay = (duration, token) =>
+                {
+                    Assert.Equal(TimeSpan.FromSeconds(5), duration);
+                    retry.TrySetResult();
+                    return release.Task.WaitAsync(token);
+                },
+            }
+        );
+        await using var ownedHost = host;
+        try
+        {
+            await host.StartAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            await retry.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.False(Status(config, "telegram")["running"]!.GetValue<bool>());
+            if (action == "explicit-stop")
+                await config.ManagedChannels!.ChangeAsync("stop", "telegram");
+            else
+            {
+                var next = config.CurrentChannels();
+                if (action == "disable-save")
+                    next["telegram"]!["enabled"] = false;
+                var saved = await config.SaveChannelsAsync(next);
+                Assert.True(saved["saved"]!.GetValue<bool>());
+                Assert.Contains("channels", saved["applied"]!.AsArray().Select(value => value!.ToString()));
+                if (action == "failed-reload")
+                    Assert.Contains("channels.telegram", saved["notApplied"]!.AsArray().Select(value => value!.ToString()));
+                else
+                    Assert.Empty(saved["notApplied"]!.AsArray());
+            }
+            release.TrySetResult();
+            await config.ManagedChannels!.StartInitialAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(action is "enabled-save" or "failed-reload" ? 2 : 1, commands);
+            Assert.Equal(action == "enabled-save", Status(config, "telegram")["running"]!.GetValue<bool>());
+            if (action != "enabled-save")
+                Assert.DoesNotContain(peer.Calls, call => call.Method == "getUpdates");
+            if (action == "explicit-stop")
+            {
+                // Stopping initial intent must not disable a later explicit start.
+                await config.ManagedChannels.ChangeAsync("start", "telegram");
+                Assert.Equal(2, commands);
+                Assert.True(Status(config, "telegram")["running"]!.GetValue<bool>());
+            }
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+    }
+
+    [Theory]
     [InlineData(4914)]
     [InlineData(4915)]
     public async Task QQ_terminal_rejection_is_visible_without_redefining_registry_running_as_account_health(

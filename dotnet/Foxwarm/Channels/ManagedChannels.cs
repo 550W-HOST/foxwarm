@@ -34,6 +34,8 @@ internal sealed class ManagedChannels(
         string,
         (IManagedChannel Channel, TaskCompletionSource Settled)
     > starting = new(StringComparer.Ordinal);
+    // Only initial-start intent: reload and successful explicit stop take over this policy.
+    private readonly HashSet<string> initialStarts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> errors = new(StringComparer.Ordinal);
     private readonly object gate = new();
     private volatile bool closed;
@@ -128,6 +130,9 @@ internal sealed class ManagedChannels(
                     Console.WriteLine($"Channel {id} startup skipped: {reason}.");
                 }
             }
+            lock (gate)
+                foreach (var entry in eligible)
+                    initialStarts.Add(entry.Id);
             var outcomes = await Task.WhenAll(
                 eligible.Select(entry => StartWithRetryAsync(entry.Id, entry.Type))
             );
@@ -152,39 +157,47 @@ internal sealed class ManagedChannels(
 
     private async Task<bool> StartWithRetryAsync(string id, string type)
     {
-        var attempts = type == "telegram" ? 4 : 2;
-        var pause = TimeSpan.FromSeconds(type == "telegram" ? 5 : 3);
-        for (var attempt = 1; attempt <= attempts && !closed; attempt++)
+        try
         {
-            Console.WriteLine($"Channel {id} ({type}) startup attempt {attempt}/{attempts}.");
-            try
+            var attempts = type == "telegram" ? 4 : 2;
+            var pause = TimeSpan.FromSeconds(type == "telegram" ? 5 : 3);
+            for (var attempt = 1; attempt <= attempts && !closed; attempt++)
             {
-                return await StartCoreAsync(id);
-            }
-            catch (OperationCanceledException) when (closed)
-            {
-                return false;
-            }
-            catch (Exception error)
-            {
-                if (closed)
-                    return false;
-                RecordError(id, error);
-                if (attempt == attempts)
-                    break;
+                Console.WriteLine($"Channel {id} ({type}) startup attempt {attempt}/{attempts}.");
                 try
                 {
-                    await (dependencies?.Delay ?? Task.Delay)(pause, initialStop.Token);
+                    return await StartCoreAsync(id, initial: true);
                 }
                 catch (OperationCanceledException) when (closed)
                 {
                     return false;
                 }
+                catch (Exception error)
+                {
+                    if (closed)
+                        return false;
+                    RecordError(id, error);
+                    if (attempt == attempts)
+                        break;
+                    try
+                    {
+                        await (dependencies?.Delay ?? Task.Delay)(pause, initialStop.Token);
+                    }
+                    catch (OperationCanceledException) when (closed)
+                    {
+                        return false;
+                    }
+                }
             }
+            if (!closed)
+                Console.Error.WriteLine($"Channel {id} ({type}) initial startup attempts exhausted.");
+            return false;
         }
-        if (!closed)
-            Console.Error.WriteLine($"Channel {id} ({type}) initial startup attempts exhausted.");
-        return false;
+        finally
+        {
+            lock (gate)
+                initialStarts.Remove(id);
+        }
     }
 
     internal async Task<JsonObject> ReloadAsync()
@@ -194,7 +207,10 @@ internal sealed class ManagedChannels(
         sessions.ChannelProgress.Reset();
         string[] previous;
         lock (gate)
+        {
+            initialStarts.Clear();
             previous = running.Keys.Order(StringComparer.Ordinal).ToArray();
+        }
         var stopped = new JsonArray();
         foreach (var id in previous)
             try
@@ -250,7 +266,11 @@ internal sealed class ManagedChannels(
                     "Adapter is not implemented on this server: " + id
                 );
             if (action is "stop" or "restart")
+            {
                 await StopCoreAsync(id);
+                lock (gate)
+                    initialStarts.Remove(id);
+            }
             if (action is "start" or "restart")
                 await StartCoreAsync(id);
         }
@@ -261,14 +281,22 @@ internal sealed class ManagedChannels(
         }
     }
 
-    private async Task<bool> StartCoreAsync(string id)
+    private async Task<bool> StartCoreAsync(string id, bool initial = false)
     {
         lock (gate)
-            if (closed || running.ContainsKey(id) || starting.ContainsKey(id))
+            if (
+                closed
+                || running.ContainsKey(id)
+                || starting.ContainsKey(id)
+                || initial && !initialStarts.Contains(id)
+            )
                 return false;
         if (sessions.ChannelRegistry.Get(id) is not null)
             throw new InvalidOperationException("Channel ID is already registered: " + id);
-        var config = Config(id);
+        var config = configuration.CurrentChannels()[id] as JsonObject;
+        if (initial && (config is null || !Eligible(id, config)))
+            return false;
+        config ??= Config(id);
         IManagedChannel channel = Type(id, config) switch
         {
             "telegram" => new TelegramChannel(
@@ -322,7 +350,12 @@ internal sealed class ManagedChannels(
             Task startup;
             lock (gate)
             {
-                if (closed || running.ContainsKey(id) || starting.ContainsKey(id))
+                if (
+                    closed
+                    || running.ContainsKey(id)
+                    || starting.ContainsKey(id)
+                    || initial && !initialStarts.Contains(id)
+                )
                     return false;
                 errors.Remove(id);
                 starting.Add(id, (channel, settled));
