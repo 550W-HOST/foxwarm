@@ -151,6 +151,8 @@ internal sealed partial class LocalExecManager : IAsyncDisposable
             return registration ??= LoadAsync(hasSession);
     }
 
+    internal int TrackedCount => pending.Count;
+
     private async Task LoadAsync(Func<string, bool> hasSession)
     {
         if (!IsSupported)

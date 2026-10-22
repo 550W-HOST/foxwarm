@@ -86,14 +86,22 @@ internal sealed partial class MainTimers
         TimerRecord[] items;
         lock (gate)
         {
-            if (closed || running || unavailable is not null)
+            if (closed || running)
                 return;
+            if (unavailable is not null)
+            {
+                Console.Error.WriteLine("Timer startup: store unavailable; scheduling disabled.");
+                return;
+            }
             running = true;
             items = records.Values.ToArray();
         }
         foreach (var record in items)
             if (!record.Internal && record.Reason is null)
                 Start(record);
+        Console.WriteLine(
+            $"Timer startup: loaded={items.Length}, scheduled={items.Count(record => !record.Internal && record.Reason is null)}, inactive={items.Count(record => record.Internal || record.Reason is not null)}."
+        );
     }
 
     private void Start(TimerRecord record)

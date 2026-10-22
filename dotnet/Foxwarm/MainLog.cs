@@ -18,6 +18,33 @@ internal sealed class MainLog : IDisposable
     private readonly Capture error;
     private readonly bool json = Environment.GetEnvironmentVariable("FOXWARM_SYNC_FILE_LOG") == "1";
     private bool failed;
+    private static MainLog? active;
+
+    // Typed lifecycle diagnostics are INFO only inside Main's capture. Outside Main, stderr
+    // remains the diagnostic stream so CLI and private helper stdout framing stays intact.
+    internal static void Diagnostic(string line, bool failure = false)
+    {
+        if (!failure && Volatile.Read(ref active) is not null)
+            Console.WriteLine(line);
+        else
+            Console.Error.WriteLine(line);
+    }
+
+    internal static void Fatal(string stage, Exception error) =>
+        Console.Error.WriteLine($"Main fatal startup failure at {stage}: {SafeFailure(error)}");
+
+    // Do not echo configuration values, credential-bearing URLs or vendor response bodies.
+    internal static string SafeFailure(Exception error)
+    {
+        var detail = error switch
+        {
+            System.Net.Http.HttpRequestException { StatusCode: { } status } =>
+                $"HTTP {(int)status}",
+            System.Net.Sockets.SocketException socket => socket.SocketErrorCode.ToString(),
+            _ => error.GetType().Name,
+        };
+        return error.InnerException is { } inner ? detail + " / " + SafeFailure(inner) : detail;
+    }
 
     internal static string Destination(ModelConfiguration? configuration, string? dataRoot = null)
     {
@@ -50,6 +77,7 @@ internal sealed class MainLog : IDisposable
         error = new Capture(this, suppress ? null : stderr, true);
         Console.SetOut(output);
         Console.SetError(error);
+        Volatile.Write(ref active, this);
     }
 
     private void Record(string line, bool isError)
@@ -97,6 +125,7 @@ internal sealed class MainLog : IDisposable
             // Channel ingress can finish a diagnostic concurrently with shutdown.
             // A writer reference already obtained by that callback must stay harmless.
             failed = true;
+            Interlocked.CompareExchange(ref active, null, this);
             Console.SetOut(stdout);
             Console.SetError(stderr);
             try

@@ -40,6 +40,8 @@ The scheduler reserves one script invocation per timer ID before owner admission
 
 `StopFuture` closes admission and cancels future clocks; disposal drains accepted slices before ToolScript/services close. Only an already accepted scheduler delivery can request the narrow closing-time owner admission path; it does not borrow a foreground settlement scope or reopen runner admission. A cold accepted owner can finish admission and publish a fenced runner during this drain. The exact-owner mutation admission covers only initial identity/deletion validation, not native execution: a surviving child may use ordinary nested deletion to remove its parent without waiting on its own slice. Accepted-slice shutdown drain belongs to the scheduler, while nested effects retain their ordinary owner admissions. Existing best-effort restart semantics remain: overdue once fires, cron waits for its next tick, and there is no journal, missed-tick replay or exactly-once guarantee. Paused snapshots use ordinary owner-scoped manual continuation.
 
+At normal scheduler start, the existing loaded timer snapshot supplies aggregate loaded/scheduled/inactive counts. An unavailable store reports scheduling disabled. No timer content or new persistence/statistics scan is needed for this diagnostic.
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/Tools/TaskNativeResultTests.cs` covers all mutation receipts and native get/list through direct/unified/real Monty calls, generic YAML formatting, and dependent task-create-to-child assignment through ordinary nested ToolScript. `ToolScriptTerminalWaitTests` checks native linked completion values independently of trusted receipt forwarding and real creator notification.

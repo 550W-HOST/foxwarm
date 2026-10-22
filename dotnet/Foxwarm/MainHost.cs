@@ -23,26 +23,32 @@ internal sealed class MainHost : IAsyncDisposable
 
     internal async Task StartAsync()
     {
+        try
+        {
+            await StartCoreAsync();
+        }
+        catch (Exception error)
+        {
+            MainLog.Fatal("host start", error);
+            throw;
+        }
+    }
+
+    private async Task StartCoreAsync()
+    {
         await host.StartAsync();
         if (sessions.ManagedChannels is { } channels)
         {
-            var stopping = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously
-            );
-            using var registration = Lifetime.ApplicationStopping.Register(() =>
-                stopping.TrySetResult()
-            );
             if (Lifetime.ApplicationStopping.IsCancellationRequested)
-                return;
-            var startup = channels.ReloadAsync();
-            if (await Task.WhenAny(startup, stopping.Task) == stopping.Task)
                 await channels.StopIngressAsync();
-            // Startup retains ownership until cancellation and cleanup have settled.
-            await startup;
+            else
+                // ManagedChannels retains these initializers and retries through stop/drain.
+                _ = channels.StartInitialAsync();
         }
         rotation.Start();
     }
 
+    private readonly CancellationTokenRegistration channelStopping;
     private readonly object lifecycle = new();
     private Task? disposal;
 
@@ -60,6 +66,12 @@ internal sealed class MainHost : IAsyncDisposable
         this.inboundMcp = inboundMcp;
         this.host = host;
         this.log = log;
+        if (sessions.ManagedChannels is { } channels)
+            channelStopping = Lifetime.ApplicationStopping.Register(() =>
+            {
+                // Close publication synchronously; the managed owner retains and joins cleanup.
+                _ = channels.StopIngressAsync();
+            });
         rotation = new LogRotation(Path.Combine(dataRoot, "state", "logs"), sessions.ExecLogRoots);
         if (log is not null)
             Lifetime.ApplicationStarted.Register(() =>
@@ -125,8 +137,9 @@ internal sealed class MainHost : IAsyncDisposable
                 paths
             );
         }
-        catch
+        catch (Exception error)
         {
+            MainLog.Fatal("Session construction", error);
             log?.Dispose();
             throw;
         }
@@ -180,13 +193,17 @@ internal sealed class MainHost : IAsyncDisposable
                 http.TriggerEnabled
             );
             if (server.WebUiEnabled)
+            {
                 new WebUIChannel(sessions, runtime, router, terminals, server.Downloads).Register(
                     server.App
                 );
+                Console.WriteLine("WebUI transport registered.");
+            }
             return new MainHost(sessions, terminals, server.App, server.InboundMcp, log, dataRoot);
         }
-        catch
+        catch (Exception error)
         {
+            MainLog.Fatal("host composition", error);
             sessions.BeginShutdown();
             if (sessions.ManagedChannels is { } channels)
                 await channels.DisposeAsync();
@@ -248,6 +265,7 @@ internal sealed class MainHost : IAsyncDisposable
         else
             host.Dispose();
         await rotation.DisposeAsync().ConfigureAwait(false);
+        channelStopping.Dispose();
         await sessions.DisposeAsync().ConfigureAwait(false);
         if (log is not null)
             Console.WriteLine("Main stopped.");

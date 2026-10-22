@@ -62,7 +62,8 @@ internal sealed class ResponsesWsTransport(
         string boundary,
         string cause,
         string? origin = null,
-        int? code = null
+        int? code = null,
+        bool failure = false
     )
     {
         try
@@ -84,7 +85,7 @@ internal sealed class ResponsesWsTransport(
             if (diagnostics is not null)
                 diagnostics(data);
             else
-                Console.Error.WriteLine(data.ToJsonString());
+                MainLog.Diagnostic(data.ToJsonString(), failure);
         }
         catch { }
     }
@@ -333,7 +334,11 @@ internal sealed class ResponsesWsTransport(
             }
             var lease = resource.Begin(watched, lifetimeCaller ?? caller, watchdog.Finish);
             using var abortDeadline = deadline.Token.Register(() =>
-                resource.Abort("attempt-timeout-or-abort")
+                resource.Abort(
+                    (lifetimeCaller ?? caller).IsCancellationRequested
+                        ? "caller-abort"
+                        : "attempt-timeout"
+                )
             );
             var wire = (JsonObject)body.DeepClone();
             wire.Remove("stream");
@@ -431,7 +436,12 @@ internal sealed class ResponsesWsTransport(
         }
         catch (Exception error)
         {
-            resource?.Abort("request-failure");
+            resource?.Abort(
+                (lifetimeCaller ?? caller).IsCancellationRequested ? "caller-abort"
+                : caller.IsCancellationRequested || deadline.IsCancellationRequested
+                    ? "attempt-timeout"
+                : "request-failure"
+            );
             if (caller.IsCancellationRequested)
                 throw new OperationCanceledException(caller);
             if (deadline.IsCancellationRequested)
