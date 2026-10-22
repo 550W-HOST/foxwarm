@@ -33,4 +33,6 @@ SSE and WebSocket image activity share the attempt-local latched inactivity floo
 
 ## Tests
 
+`dotnet/Foxwarm.Tests/Models/DefaultToolWireTests.cs` drives ordinary SessionManager turns with the full selected default catalog through HTTP and WebSocket peers that reject missing function discriminators and malformed function envelopes. Both paths keep native search/image declarations separate, execute an explicit channel send against an owned fake, and continue with the paired tool result. Companion declaration and serializer tests cover discovery-only local functions and the Completions/Anthropic schema projections without starting channel consumers.
+
 `dotnet/Foxwarm.Tests/Models/ResponsesClientTests.cs`; `ResponsesStreamingTests.cs`; `ResponsesWsTests.cs`; `HostedResponsesToolsTests.cs`; hosted WebSocket image tests; `ResponsesPrefixCommitTests.cs` (durable prefix/failure/Stop/retry, guarded reasoning, barriers, local failure, empty suffix and image replay); `HostedImageWatchdogParityTests.cs` (controlled-clock actual SSE/WS activity and hard deadline).

@@ -18,6 +18,8 @@ internal static class MainBrowserDefinitions
                 """
 [
   {
+    "type": "function",
+    "strict": false,
     "name": "browse_open",
     "description": "Open a browser tab at a URL and return its tab ID for later browser calls.",
     "parameters": {
@@ -34,6 +36,8 @@ internal static class MainBrowserDefinitions
     }
   },
   {
+    "type": "function",
+    "strict": false,
     "name": "browse_list",
     "description": "List open browser tabs with their IDs, titles, and URLs.",
     "parameters": {
@@ -42,6 +46,8 @@ internal static class MainBrowserDefinitions
     }
   },
   {
+    "type": "function",
+    "strict": false,
     "name": "browse_get",
     "description": "Read a browser tab's text or capture its screenshot.",
     "parameters": {
@@ -66,6 +72,8 @@ internal static class MainBrowserDefinitions
     }
   },
   {
+    "type": "function",
+    "strict": false,
     "name": "browse_close",
     "description": "Close a browser tab.",
     "parameters": {
@@ -82,6 +90,8 @@ internal static class MainBrowserDefinitions
     }
   },
   {
+    "type": "function",
+    "strict": false,
     "name": "browse_interact",
     "description": "Interact with a browser tab: click, type, fill, press a key, scroll, wait, evaluate JavaScript, or navigate.",
     "parameters": {

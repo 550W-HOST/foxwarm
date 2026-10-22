@@ -104,6 +104,8 @@ internal static class UnifiedToolDefinitions
     "strict": false
   },
   {
+    "type": "function",
+    "strict": false,
     "name": "mcp_notifications",
     "description": "Start, stop, or inspect message notifications from a configured MCP server for the current Session. Requires Streamable HTTP and Foxwarm notification support. Calls to the server share this Session's connection. Incoming messages enter this Session's normal queue only while reception is enabled; disconnected messages are not replayed. See the mcp-management skill for setup and explicit replies between instances.",
     "parameters": {
@@ -116,6 +118,8 @@ internal static class UnifiedToolDefinitions
     }
   },
   {
+    "type": "function",
+    "strict": false,
     "name": "send_to_channel",
     "defaultInject": true,
     "description": "Send a message to a specific channel destination. The destination does not need a Session attachment. For a normal-mode channel attached to this session, reply directly instead: your assistant text is delivered automatically. Use this tool for send-only channels or when the task requires delivery to a different destination.",
