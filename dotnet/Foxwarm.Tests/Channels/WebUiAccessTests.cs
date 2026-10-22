@@ -243,7 +243,10 @@ public sealed class WebUiAccessTests
         var app = App(Alice);
         app["vector"] = false;
         app["dbWorkers"] = false;
-        await File.WriteAllTextAsync(Path.Combine(data, "state", "config.yaml"), app.ToJsonString());
+        await File.WriteAllTextAsync(
+            Path.Combine(data, "state", "config.yaml"),
+            app.ToJsonString()
+        );
         await File.WriteAllTextAsync(
             Path.Combine(data, "state", "models.yaml"),
             """
@@ -273,11 +276,21 @@ public sealed class WebUiAccessTests
         }
         await using var terminals = new Foxwarm.Terminal.TerminalRegistry(data, default);
         var server = new HttpServer(
-            [], 0, "synthetic-admin", null, manager, terminals, webUiEnabled: true
+            [],
+            0,
+            "synthetic-admin",
+            null,
+            manager,
+            terminals,
+            webUiEnabled: true
         );
         var runtime = new SessionRuntime(manager);
         new WebUIChannel(
-            manager, runtime, new MessageRouter(runtime), terminals, server.Downloads
+            manager,
+            runtime,
+            new MessageRouter(runtime),
+            terminals,
+            server.Downloads
         ).Register(server.App);
         await server.App.StartAsync();
         using var http = new HttpClient { BaseAddress = new Uri(server.App.Urls.Single()) };
@@ -309,7 +322,10 @@ public sealed class WebUiAccessTests
                 new()
                 {
                     ["parts"] = new JsonArray(
-                        new JsonObject { ["text"] = "\t@helper_name \uFEFF/session archive outside-archive" }
+                        new JsonObject
+                        {
+                            ["text"] = "\t@helper_name \uFEFF/session archive outside-archive",
+                        }
                     ),
                 },
             };
@@ -336,12 +352,15 @@ public sealed class WebUiAccessTests
             };
             for (var index = 0; index < ordinary.Length; index++)
             {
-                var body = index == 1
-                    ? new JsonObject
-                    {
-                        ["parts"] = new JsonArray(new JsonObject { ["text"] = ordinary[index] }),
-                    }
-                    : new JsonObject { ["text"] = ordinary[index] };
+                var body =
+                    index == 1
+                        ? new JsonObject
+                        {
+                            ["parts"] = new JsonArray(
+                                new JsonObject { ["text"] = ordinary[index] }
+                            ),
+                        }
+                        : new JsonObject { ["text"] = ordinary[index] };
                 using var response = await http.PostAsJsonAsync("/api/sessions/chat/message", body);
                 Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
                 Assert.Contains(
