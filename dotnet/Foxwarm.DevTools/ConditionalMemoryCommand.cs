@@ -65,35 +65,28 @@ internal static class ConditionalMemoryCommand
 
         static Result ParseArgumentsResult(ParityCase item)
         {
-            try
-            {
-                var raw =
-                    item.RawInput.ValueKind is JsonValueKind.Undefined
-                        ? null
-                        : JsonNode.Parse(item.RawInput.GetRawText());
-                return new Result(
-                    "value",
-                    JsonNode.Parse(
-                        JsonSerializer.Serialize(
-                            FunctionCallArguments.Parse(raw),
-                            new JsonSerializerOptions
-                            {
-                                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                                DefaultIgnoreCondition = System
-                                    .Text
-                                    .Json
-                                    .Serialization
-                                    .JsonIgnoreCondition
-                                    .WhenWritingNull,
-                            }
-                        )
+            var raw =
+                item.RawInput.ValueKind is JsonValueKind.Undefined
+                    ? null
+                    : JsonNode.Parse(item.RawInput.GetRawText());
+            return new Result(
+                "value",
+                JsonNode.Parse(
+                    JsonSerializer.Serialize(
+                        FunctionCallArguments.Parse(raw),
+                        new JsonSerializerOptions
+                        {
+                            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                            DefaultIgnoreCondition = System
+                                .Text
+                                .Json
+                                .Serialization
+                                .JsonIgnoreCondition
+                                .WhenWritingNull,
+                        }
                     )
-                );
-            }
-            catch (UnsupportedArgumentInputException error)
-            {
-                return new Result("unsupported", error.Message);
-            }
+                )
+            );
         }
     }
 

@@ -12,6 +12,8 @@ Use the test namespace/directory matching the owning module, then follow the pro
 
 `RuntimePresentationTests` covers exact foreground/compact cleanup, physical retry clearing, bounded tool previews, exact-owner notice deduplication, durable/reopened notice visibility and failed-authority temporary presentation without another append. Actual ingress/provider regressions cover a completed run followed by held next-input preparation, and terminal retry-save failure followed by temporary model fallback and the independent strict busy-release attempt. `experimentHostRuntimeDelta.e2e.mjs` drives the built original App, an owned normal host and a controlled Responses provider through correlated controls, common runtime projections, real direct/unified/ToolScript delivery metadata, typed notices, real cookie/prefix login and prepared navigation. These are focused producer/consumer checks, not complete feature-parity evidence.
 
+`FunctionArgumentErrorTests` exercises the shared [argument-error boundary](./session-domain.md#tool-argument-parsing) through normal Session owners and loopback Responses HTTP/WS and Messages peers, including one real sibling channel effect, ordered canonical/Archive pairs and safe error replay in the next physical request. Direct Chat Completions converter/serializer and legitimate object/null/empty-input controls retain the existing transport scope.
+
 ## Contract boundary
 
 Tests establish source behavior for the checked revision, not release acceptance or root launcher migration. Documentation-only validation intentionally does not run this project or restart the runtime.

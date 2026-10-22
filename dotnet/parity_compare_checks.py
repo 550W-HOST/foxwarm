@@ -21,11 +21,5 @@ class ComparatorTests(unittest.TestCase):
         right = {'kind': 'value', 'value': {'args': {}, 'rawArgsText': '[]', 'argsParseError': 'Invalid tool arguments JSON: native'}}
         with self.assertRaises(AssertionError): compare_case(case, left, right)
 
-    def test_rejects_missing_supported_null_as_unsupported(self):
-        for raw in (None,):
-            case = {'name': 'null', 'op': 'argsParse', 'rawInput': raw}
-            with self.assertRaises(AssertionError): compare_case(case, {'kind': 'value', 'value': {'args': {}}}, {'kind': 'unsupported', 'value': 'x'})
-
-
 if __name__ == '__main__':
     unittest.main()

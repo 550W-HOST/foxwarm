@@ -32,8 +32,10 @@ public static class FunctionCallArguments
         if (raw is JsonObject obj)
             return new ParsedArguments((JsonObject)obj.DeepClone());
         if (raw is not JsonValue value || !value.TryGetValue<string>(out var text))
-            throw new UnsupportedArgumentInputException(
-                "Non-string non-object argument input is outside the experimental C# boundary."
+            return new ParsedArguments(
+                new JsonObject(),
+                RawInputText(raw),
+                $"Invalid tool arguments JSON: expected an object string, received {InputType(raw)}"
             );
         if (text.Length == 0)
             return new ParsedArguments(new JsonObject());
@@ -58,6 +60,24 @@ public static class FunctionCallArguments
         }
     }
 
+    // Source uses String(raw) for diagnostics, not JSON serialization. Array
+    // joining is only a raw-error projection; it never produces executable args.
+    private static string RawInputText(JsonNode? raw) =>
+        raw switch
+        {
+            null => "",
+            JsonObject => "[object Object]",
+            JsonArray array => string.Join(",", array.Select(RawInputText)),
+            JsonValue value when value.TryGetValue<string>(out var text) => text,
+            _ when SessionWait.Number(raw) is double number => double.IsFinite(number)
+                ? EcmaNumber.Format(number)
+                : number.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            _ => raw.ToJsonString(),
+        };
+
+    private static string InputType(JsonNode raw) =>
+        raw is JsonArray ? "object" : ParsedJsonType(raw);
+
     private static string ParsedJsonType(JsonNode? value) =>
         value switch
         {
@@ -76,5 +96,3 @@ public sealed record ParsedArguments(
     string? RawArgsText = null,
     string? ArgsParseError = null
 );
-
-public sealed class UnsupportedArgumentInputException(string message) : Exception(message);

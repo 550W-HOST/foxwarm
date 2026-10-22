@@ -13,7 +13,7 @@ Serializes canonical Session messages, tools, images and system content for Anth
 - `AnthropicCanonicalConverter.ConvertAssistant`, `StopReason` and `Usage` share canonical conversion between JSON and SSE, including structured argument errors and thinking-token component accounting.
 - Completions serializers/converter and `CompletionsChatService.ChatAsync` retain their own wire forms. `CompletionsEventAccumulator` and `CompletionsSseCollector` merge deltas, usage, stop reasons and tool fragments without adopting the Messages terminal law.
 
-Callers: `SessionChatService`, `ConfiguredModelRequests`, `ModelRequestOwner`, retry/journal preparation and the `LocalSessionTurnHost` tool loop. Tool input is not executed by either collector.
+Callers: `SessionChatService`, `ConfiguredModelRequests`, `ModelRequestOwner`, retry/journal preparation and the `LocalSessionTurnHost` tool loop. Tool input is not executed by either collector. Canonical conversion uses the shared [per-call argument-error boundary](./session-domain.md#tool-argument-parsing); Messages passes native JSON inputs directly rather than reserializing malformed nonobjects before parsing.
 
 ## Contract and side effects
 

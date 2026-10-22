@@ -17,10 +17,6 @@ def compare_case(case, left, right):
     if not isinstance(left, dict) or not isinstance(right, dict):
         raise AssertionError(f'runner result must be an object: left={left!r} right={right!r}')
     op = case['op']
-    if right.get('kind') == 'unsupported':
-        if op == 'argsParse' and 'rawInput' in case and isinstance(case['rawInput'], (list, int, float, bool)) and not isinstance(case['rawInput'], str):
-            return 'explicit-unsupported'
-        raise AssertionError(f'unexpected unsupported: {case["name"]}: {right}')
     if left.get('kind') != right.get('kind'):
         raise AssertionError(f'kind mismatch: {case["name"]}: TS={left!r} C#={right!r}')
     if op == 'argsStringify':

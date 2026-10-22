@@ -20,6 +20,12 @@ Defines stable Session/Agent identity and message shapes used by owner/runtime, 
 
 These are value/domain boundaries, not persistence writers. JSON authority owns active history/queue/wait semantic instances; catalog owns Main identity/topology/presentation summaries. Agent memory selection can affect a prompt but does not mutate Session history until a turn save commits its canonical result.
 
+## Tool argument parsing
+
+`FunctionCallArguments.Parse` is the shared canonical boundary for Responses HTTP/WS, Chat Completions conversion, and Anthropic Messages. Null, direct objects, empty strings and JSON object strings retain their established meanings. Malformed strings, JSON strings containing nonobjects, and raw numeric/boolean/array values produce empty `args` plus `rawArgsText` and `argsParseError`; they do not reject valid siblings or enter whole-response provider retry. Direct malformed values use Source's diagnostic string projection, including array joining, without making those values executable arguments. Ordinary strings retain their exact text.
+
+The normal turn host returns a paired `invalid_tool_arguments` response without invoking the malformed call; valid same-batch calls proceed normally. Serializers replay parse errors as safe JSON objects containing the error and nonempty raw text, rather than forwarding invalid provider arguments. Canonical Session and Archive rows retain the original per-call error fields. `FunctionArgumentErrorTests` covers real normal-owner HTTP/WS/Messages batches, one valid sibling effect, canonical/Archive pairing and the next physical request; converter controls cover Chat Completions without adding another transport mode. The existing argument parity corpus compares the actual Source helper, retaining native JSON diagnostic wording as a compatibility category rather than an editorial contract.
+
 ## Wait-liveness observation identity
 
 `WaitLiveness.Diagnose` traverses the current owner/catalog dependency graph and keeps the existing progress/candidate rules, grace window and four-wake admission bound. Its persisted identity matches Source `waitLiveness.ts`: compact `JSON.stringify` field order and spelling, absent `timeoutSeconds` omitted, `state` omitted for a missing Session, current runtime state for an existing owner, ordinal sorting of dependencies and serialized observations, newline join, and the first 24 lowercase hexadecimal SHA-256 digits. The existing `EcmaJson` projection is used only at this observation boundary; ordinary JSON serialization is unchanged.
