@@ -30,8 +30,7 @@ internal sealed partial class SessionManager
     internal async Task<JsonNode?> NormalizeToolScriptResultAsync(
         JsonNode? value,
         string name,
-        ToolScriptDataBudget budget,
-        CancellationToken token
+        ToolScriptDataBudget budget
     )
     {
         budget.JsonValue(value);
@@ -46,7 +45,7 @@ internal sealed partial class SessionManager
             ["role"] = "tool",
             ["parts"] = new JsonArray(new JsonObject { ["functionResponse"] = response }),
         };
-        token.ThrowIfCancellationRequested();
+        // The host call already settled. Deliver its real result before the next admission fence.
         await Images.ExternalizeMessageAsync(message);
         var envelope = message["parts"]![0]!["functionResponse"]!.AsObject();
         var result = envelope["response"];

@@ -36,7 +36,11 @@ public sealed class SessionTurnRunner
             throw new SessionTurnShutdownException();
     }
 
-    internal Task ShutdownAsync(TimeSpan? grace = null, TimeSpan? cancellation = null)
+    internal Task ShutdownAsync(
+        TimeSpan? grace = null,
+        TimeSpan? cancellation = null,
+        Action<SessionEntry>? cancelForeground = null
+    )
     {
         lock (lifecycle)
         {
@@ -44,12 +48,18 @@ public sealed class SessionTurnRunner
             return shutdown ??= DrainAsync(
                 processors.Values.Select(value => value.Task).ToArray(),
                 grace ?? TimeSpan.FromSeconds(5),
-                cancellation ?? TimeSpan.FromSeconds(5)
+                cancellation ?? TimeSpan.FromSeconds(5),
+                cancelForeground
             );
         }
     }
 
-    private async Task DrainAsync(Task[] accepted, TimeSpan grace, TimeSpan cancellation)
+    private async Task DrainAsync(
+        Task[] accepted,
+        TimeSpan grace,
+        TimeSpan cancellation,
+        Action<SessionEntry>? cancelForeground
+    )
     {
         var settled = Task.WhenAll(accepted);
         try
@@ -62,7 +72,10 @@ public sealed class SessionTurnRunner
         lock (lifecycle)
             current = processors.Keys.ToArray();
         foreach (var entry in current)
+        {
             entry.CancelForShutdown();
+            cancelForeground?.Invoke(entry);
+        }
         try
         {
             await settled.WaitAsync(cancellation).ConfigureAwait(false);

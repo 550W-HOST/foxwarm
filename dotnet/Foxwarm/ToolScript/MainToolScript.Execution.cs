@@ -25,12 +25,12 @@ internal sealed partial class MainToolScript
         {
             if (closing)
             {
-                run.Cancel.Dispose();
+                run.Dispose();
                 throw new InvalidOperationException("ToolScript host is closing.");
             }
             if (!active.TryAdd(id, run))
             {
-                run.Cancel.Dispose();
+                run.Dispose();
                 throw new InvalidOperationException("ToolScript run is already executing.");
             }
         }
@@ -95,7 +95,7 @@ internal sealed partial class MainToolScript
                     Required(record, "scriptName"),
                     Number(record["timeoutSecs"], 30),
                     Budget(),
-                    run.Token
+                    run.Cancel.Token
                 );
                 if (configured.KindCase != ChildEvent.KindOneofCase.Ok)
                     throw new InvalidDataException(
@@ -112,7 +112,7 @@ internal sealed partial class MainToolScript
                     new() { Feed = feed },
                     progressBudget,
                     stdout.Append,
-                    run.Token
+                    run.Cancel.Token
                 );
                 code = null;
                 input = null;
@@ -127,7 +127,7 @@ internal sealed partial class MainToolScript
                     new() { Load = new Load { State = ByteString.CopyFrom(snapshot) } },
                     progressBudget,
                     stdout.Append,
-                    run.Token
+                    run.Cancel.Token
                 );
                 if (progress.KindCase != ChildEvent.KindOneofCase.FunctionCall)
                     throw new InvalidDataException(
@@ -148,13 +148,13 @@ internal sealed partial class MainToolScript
                     resume,
                     progressBudget,
                     stdout,
-                    run.Token
+                    run.Cancel.Token
                 );
                 resume = null;
             }
             while (true)
             {
-                run.Token.ThrowIfCancellationRequested();
+                run.Cancel.Token.ThrowIfCancellationRequested();
                 context.Owner.Entry.RequireIdentityAuthority();
                 if (progress.KindCase == ChildEvent.KindOneofCase.Complete)
                 {
@@ -187,7 +187,7 @@ internal sealed partial class MainToolScript
                         },
                         progressBudget,
                         stdout.Append,
-                        run.Token
+                        run.Cancel.Token
                     );
                     continue;
                 }
@@ -206,7 +206,7 @@ internal sealed partial class MainToolScript
                         },
                         progressBudget,
                         stdout.Append,
-                        run.Token
+                        run.Cancel.Token
                     );
                     continue;
                 }
@@ -230,6 +230,7 @@ internal sealed partial class MainToolScript
                     ] = MontyValues.ToJson(pair.Value, hostBudget);
                 if (call.FunctionName == "ask_agent")
                 {
+                    run.RequireHostAdmission();
                     var question = positional.Count > 0 ? positional[0] : kwargs["question"];
                     hostBudget.JsonValue(question);
                     var text =
@@ -272,7 +273,7 @@ internal sealed partial class MainToolScript
                 {
                     outcome = Failure("RuntimeError", error.Message);
                 }
-                run.Token.ThrowIfCancellationRequested();
+                run.Cancel.Token.ThrowIfCancellationRequested();
                 context.Owner.Entry.RequireIdentityAuthority();
                 if (slice.Elapsed.TotalSeconds >= Number(record["timeoutSecs"], 30))
                 {
@@ -286,7 +287,7 @@ internal sealed partial class MainToolScript
                     outcome,
                     progressBudget,
                     stdout,
-                    run.Token
+                    run.Cancel.Token
                 );
             }
             async Task WaitAsync(string reason, JsonObject? fields, JsonObject? pending)
@@ -296,7 +297,7 @@ internal sealed partial class MainToolScript
                     new() { Dump = new Dump() },
                     budget,
                     stdout.Append,
-                    run.Token
+                    run.Cancel.Token
                 );
                 if (dump.KindCase != ChildEvent.KindOneofCase.DumpResult)
                     throw new InvalidDataException("Monty snapshot dump failed.");
@@ -352,7 +353,7 @@ internal sealed partial class MainToolScript
             if (worker is not null)
                 await worker.DisposeAsync();
             active.TryRemove(id, out _);
-            run.Cancel.Dispose();
+            run.Dispose();
         }
     }
 

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
@@ -11,6 +12,234 @@ public sealed class SessionShutdownTests
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(5);
+
+    [Theory]
+    [InlineData("none")]
+    [InlineData("stop")]
+    [InlineData("runQueued")]
+    public async Task Normal_manager_shutdown_cancels_foreground_pure_VM_work_after_grace(
+        string priorControl
+    )
+    {
+        if (!Foxwarm.ToolScript.MontyWorker.IsSupported)
+            return;
+        using var temp = new TempDirectory();
+        var marker = Path.Combine(temp.Path, "vm-entered");
+        var script =
+            "call_tool('write', {'filePath': "
+            + JsonSerializer.Serialize(marker)
+            + ", 'content': 'ready'})\nwhile True:\n    pass\n";
+        await using var peer = await StreamingModelPeer.StartAsync(
+            false,
+            async (context, _) =>
+            {
+                var call = new JsonObject
+                {
+                    ["type"] = "function_call",
+                    ["id"] = "fc_loop",
+                    ["call_id"] = "loop",
+                    ["name"] = "run_script",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["code"] = script,
+                        ["timeoutSecs"] = 30,
+                    }.ToJsonString(),
+                };
+                await context.Send(ResponsesPrefixCommitTests.Done(0, call));
+                await context.Send(ResponsesPrefixCommitTests.Completed(call));
+            }
+        );
+        var options = new ResponsesClientOptions(
+            peer.Uri,
+            "offline",
+            "fixture/offline",
+            "",
+            "",
+            713
+        );
+        var manager = new SessionManager(
+            Path.Combine(temp.Path, "data"),
+            Path.Combine(temp.Path, "work"),
+            options,
+            HostModels.ForTest(options)
+        );
+        Task? processing = null;
+        try
+        {
+            await manager.LoadMainHostAsync();
+            var owner = await manager.CreateNamedAsync("main", "pure-vm-shutdown", null, null);
+            owner.Registry.TriggerOverride = _ => Task.CompletedTask;
+            await owner.Registry.Ingress.EnqueueAsync(
+                owner.Id,
+                QueueItem.UserText("Run pure VM work.")
+            );
+            processing = owner.Registry.Runner.ProcessQueueAsync(owner.Id);
+            using (var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
+                while (!File.Exists(marker))
+                    await Task.Delay(10, deadline.Token);
+            // Allow the completed marker write to resume into native computation.
+            await Task.Delay(100);
+            if (priorControl == "runQueued")
+            {
+                await owner.Registry.Ingress.EnqueueAsync(
+                    owner.Id,
+                    QueueItem.UserText("Keep queued for restart.")
+                );
+                await owner.Registry.Control.DequeueAsync(owner.Id);
+            }
+            else if (priorControl == "stop")
+                await owner.Registry.Control.StopAsync(owner.Id);
+            if (priorControl != "none")
+            {
+                // Ordinary foreground control is not pure-VM preemption.
+                await Task.Delay(100);
+                Assert.False(processing.IsCompleted);
+            }
+            await manager.ShutdownAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            await processing;
+            Assert.Equal(priorControl == "none", owner.Entry.ShutdownCancellationRequested);
+            Assert.Equal(0, owner.Entry.BackgroundProcessorFailureCount);
+            Assert.Single(peer.Requests);
+            var run = Assert.Single(
+                await manager.ToolScript.Store.ListAsync(owner.Id, 10, null, default)
+            );
+            Assert.Equal("cancelled", run["status"]!.GetValue<string>());
+            Assert.Equal("ready", await File.ReadAllTextAsync(marker));
+            Assert.Equal(priorControl == "runQueued" ? 1 : 0, owner.Entry.Snapshot().Queue.Count);
+        }
+        finally
+        {
+            // Retire the owned worker even if a regression leaves the foreground drain failed.
+            manager.ToolScript.BeginShutdown();
+            if (processing is not null)
+                await processing.WaitAsync(Deadline);
+            try
+            {
+                await manager.DisposeAsync();
+            }
+            catch (SessionTurnDrainException) { }
+        }
+    }
+
+    [Fact]
+    public async Task Normal_manager_shutdown_keeps_an_accepted_script_timer_independent_of_foreground_cancellation()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        using var temp = new TempDirectory();
+        var marker = Path.Combine(temp.Path, "vm-entered");
+        var timerReady = Path.Combine(temp.Path, "timer-entered");
+        var timerRelease = Path.Combine(temp.Path, "timer-release");
+        var timerEffect = Path.Combine(temp.Path, "timer-effect");
+        var script =
+            "call_tool('write', {'filePath': "
+            + JsonSerializer.Serialize(marker)
+            + ", 'content':'ready'})\nwhile True:\n    pass\n";
+        await using var peer = await StreamingModelPeer.StartAsync(
+            false,
+            async (context, _) =>
+            {
+                var call = new JsonObject
+                {
+                    ["type"] = "function_call",
+                    ["id"] = "fc_loop",
+                    ["call_id"] = "loop",
+                    ["name"] = "run_script",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["code"] = script,
+                        ["timeoutSecs"] = 30,
+                    }.ToJsonString(),
+                };
+                await context.Send(ResponsesPrefixCommitTests.Done(0, call));
+                await context.Send(ResponsesPrefixCommitTests.Completed(call));
+            }
+        );
+        var options = new ResponsesClientOptions(
+            peer.Uri,
+            "offline",
+            "fixture/offline",
+            "",
+            "",
+            713
+        );
+        var manager = new SessionManager(
+            Path.Combine(temp.Path, "data"),
+            Path.Combine(temp.Path, "work"),
+            options,
+            HostModels.ForTest(options)
+        );
+        Task? running = null;
+        try
+        {
+            await manager.LoadMainHostAsync();
+            var owner = await manager.CreateNamedAsync("main", "timer-shutdown", null, null);
+            owner.Registry.TriggerOverride = _ => Task.CompletedTask;
+            await owner.Registry.Ingress.EnqueueAsync(
+                owner.Id,
+                QueueItem.UserText("Run pure VM work.")
+            );
+            running = owner.Registry.Runner.ProcessQueueAsync(owner.Id);
+            await Until(() => File.Exists(marker));
+            var command =
+                $"printf ready > '{timerReady}'; for n in $(seq 1 500); do test -f '{timerRelease}' && break; sleep 0.02; done";
+            var timer = await manager.ExecuteTimerToolAsync(
+                owner,
+                "create_timer",
+                new JsonObject
+                {
+                    ["action"] = "toolscript",
+                    ["afterSeconds"] = .03,
+                    ["script"] = new JsonObject
+                    {
+                        ["code"] =
+                            "call_tool('exec', {'command': "
+                            + JsonSerializer.Serialize(command)
+                            + ", 'timeout': 10})\ncall_tool('write', {'filePath': "
+                            + JsonSerializer.Serialize(timerEffect)
+                            + ", 'content': 'independent'})\nreturn 'independent timer'\n",
+                    },
+                },
+                default
+            );
+            Assert.Null(timer["error"]);
+            manager.Timers.Start();
+            await Until(() => File.Exists(timerReady));
+            var shutdown = manager.ShutdownAsync();
+            await running.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.True(owner.Entry.ShutdownCancellationRequested);
+            Assert.False(shutdown.IsCompleted);
+            Assert.False(File.Exists(timerEffect));
+            await File.WriteAllTextAsync(timerRelease, "release");
+            await shutdown.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal("independent", await File.ReadAllTextAsync(timerEffect));
+            var runs = await manager.ToolScript.Store.ListAsync(owner.Id, 10, null, default);
+            Assert.Equal(2, runs.Count);
+            Assert.Single(runs, row => row["status"]?.ToString() == "cancelled");
+            var completed = Assert.Single(runs, row => row["status"]?.ToString() == "completed");
+            Assert.Equal("independent timer", completed["lastResult"]!.GetValue<string>());
+            Assert.Single(peer.Requests);
+        }
+        finally
+        {
+            await File.WriteAllTextAsync(timerRelease, "release");
+            manager.ToolScript.BeginShutdown();
+            if (running is not null)
+                await running.WaitAsync(TimeSpan.FromSeconds(5));
+            try
+            {
+                await manager.DisposeAsync();
+            }
+            catch (SessionTurnDrainException) { }
+        }
+    }
+
+    private static async Task Until(Func<bool> condition)
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (!condition())
+            await Task.Delay(10, deadline.Token);
+    }
 
     [Fact]
     public async Task Interrupted_provider_preserves_busy_and_unconsumed_input_without_a_terminal_error()

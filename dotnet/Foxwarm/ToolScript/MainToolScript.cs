@@ -15,11 +15,13 @@ internal sealed partial class MainToolScript : IAsyncDisposable
     private readonly object gate = new();
     internal ToolScriptRunStore Store => store;
 
-    private sealed class ActiveRun
+    private sealed class ActiveRun : IDisposable
     {
         internal readonly JsonObject Record;
         internal readonly ToolScriptContext Context;
         internal readonly CancellationTokenSource Cancel;
+        private readonly CancellationTokenSource hostCancellation;
+        internal readonly CancellationToken Caller;
         internal readonly CancellationToken Token;
         internal readonly string RecordOwner;
         internal volatile string? CommittedStatus;
@@ -29,9 +31,27 @@ internal sealed partial class MainToolScript : IAsyncDisposable
             Record = record;
             Context = context;
             RecordOwner = Required(record, "ownerSessionId");
-            Cancel = CancellationTokenSource.CreateLinkedTokenSource(token);
-            Token = Cancel.Token;
+            // Foreground cancellation fences host effects; explicit run/shutdown cancellation owns the VM lifetime.
+            Caller = token;
+            Cancel = new CancellationTokenSource();
+            hostCancellation = CancellationTokenSource.CreateLinkedTokenSource(token, Cancel.Token);
+            Token = hostCancellation.Token;
             CommittedStatus = record["snapshotBase64"] is not null ? "waiting" : null;
+        }
+
+        internal void RequireHostAdmission()
+        {
+            Cancel.Token.ThrowIfCancellationRequested();
+            if (Caller.IsCancellationRequested)
+                throw new InvalidOperationException(
+                    $"Tool call was not started because {Context.Owner.Entry.ToolCancellationSource} cancelled it; it was not executed."
+                );
+        }
+
+        public void Dispose()
+        {
+            hostCancellation.Dispose();
+            Cancel.Dispose();
         }
 
         internal void RequestCancel()
@@ -358,6 +378,17 @@ internal sealed partial class MainToolScript : IAsyncDisposable
         record["cancelledAt"] = Now();
         await store.WriteAsync(record, token);
         return Project(record, false);
+    }
+
+    internal void CancelForegroundForShutdown(SessionEntry entry)
+    {
+        // Stop may already have taken the foreground handle. Timer slices do not carry its cancelled token.
+        foreach (var run in active.Values)
+            if (
+                ReferenceEquals(run.Context.Owner.Entry, entry)
+                && run.Caller.IsCancellationRequested
+            )
+                run.RequestCancel();
     }
 
     internal void BeginShutdown()

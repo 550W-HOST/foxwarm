@@ -442,6 +442,9 @@ internal sealed class ResponsesWsTransport(
                     ? "attempt-timeout"
                 : "request-failure"
             );
+            // The resource observes the original caller before linked attempt callbacks may run.
+            if (lifetimeCaller is { IsCancellationRequested: true } original)
+                throw new OperationCanceledException(original);
             if (caller.IsCancellationRequested)
                 throw new OperationCanceledException(caller);
             if (deadline.IsCancellationRequested)
