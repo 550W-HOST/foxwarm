@@ -247,7 +247,11 @@ public sealed class InitialChannelStartupTests
                 if (action == "disable-save")
                     next["telegram"]!["enabled"] = false;
                 var saved = await config.SaveAppAsync(
-                    new JsonObject { ["vector"] = false, ["channels"] = next.DeepClone() }.ToJsonString()
+                    new JsonObject
+                    {
+                        ["vector"] = false,
+                        ["channels"] = next.DeepClone(),
+                    }.ToJsonString()
                 );
                 Assert.True(saved["saved"]!.GetValue<bool>());
                 Assert.Contains(

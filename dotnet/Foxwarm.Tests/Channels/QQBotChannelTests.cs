@@ -289,7 +289,14 @@ public sealed class QQBotChannelTests
         Assert.Single(peer.Sent.Skip(count));
         Assert.Equal("7", peer.Sent.Last().Body["msg_type"]!.ToString());
         await f.Configuration.SaveAppAsync(
-            new JsonObject { ["channels"] = new JsonObject { ["qq"] = config.DeepClone(), ["second"] = config.DeepClone() } }.ToJsonString()
+            new JsonObject
+            {
+                ["channels"] = new JsonObject
+                {
+                    ["qq"] = config.DeepClone(),
+                    ["second"] = config.DeepClone(),
+                },
+            }.ToJsonString()
         );
         await f.Manager.ManagedChannels!.ReloadAsync();
         await f

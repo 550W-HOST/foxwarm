@@ -56,13 +56,13 @@ public sealed class WeixinCommitOrderingTests
         var raw =
             "# retained YAML comment\nother:\n  preserve: true\nchannels:\n"
             + string.Join(
-                "\n",
-                ModelConfiguration
-                    .ChannelsYamlForObject(channels)
-                    .TrimEnd()
-                    .Split('\n')
-                    .Select(line => "  " + line)
-            )
+                    "\n",
+                    ModelConfiguration
+                        .ChannelsYamlForObject(channels)
+                        .TrimEnd()
+                        .Split('\n')
+                        .Select(line => "  " + line)
+                )
                 .Replace("\n  weixin:", "\n# between Weixin entries\n  weixin:")
             + "\n\n# retained following section\nlast: {preserve: true}\n";
         await File.WriteAllTextAsync(Path.Combine(data, "state", "config.yaml"), raw);

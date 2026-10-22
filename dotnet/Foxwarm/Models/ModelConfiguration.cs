@@ -259,7 +259,10 @@ internal sealed partial class ModelConfiguration
         // Keep trailing comments and spacing with the surrounding document, not old entries.
         while (
             end > start + 1
-            && (string.IsNullOrWhiteSpace(lines[end - 1]) || lines[end - 1].TrimStart().StartsWith('#'))
+            && (
+                string.IsNullOrWhiteSpace(lines[end - 1])
+                || lines[end - 1].TrimStart().StartsWith('#')
+            )
         )
             end--;
         var next = lines.Take(start).Concat(replacement.Split('\n')).Concat(lines.Skip(end));

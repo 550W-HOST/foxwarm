@@ -31,9 +31,15 @@ public sealed class ModelConfigurationInstallationTests
             setup: true
         );
         var block = ConfigurationYaml.Parse(configuration.ReadCurrentAppRaw(), "config");
-        Assert.Equal("synthetic-login-token", block["channels"]!["weixin"]!["token"]!.GetValue<string>());
+        Assert.Equal(
+            "synthetic-login-token",
+            block["channels"]!["weixin"]!["token"]!.GetValue<string>()
+        );
         Assert.Equal(2, block["channels"]!.AsObject().Count);
-        Assert.Contains("# retained following section\nother: {preserve: true}", configuration.ReadCurrentAppRaw());
+        Assert.Contains(
+            "# retained following section\nother: {preserve: true}",
+            configuration.ReadCurrentAppRaw()
+        );
         Assert.Equal("11", block["channels"]!["alpha"]!["allowedUsers"]![0]!.GetValue<string>());
         Assert.Equal("42", block["channels"]!["alpha"]!["mainAttachUser"]!.GetValue<string>());
         Assert.Equal(
