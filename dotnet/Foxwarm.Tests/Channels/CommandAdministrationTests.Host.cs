@@ -139,7 +139,13 @@ public sealed partial class CommandAdministrationTests
                         await response.Content.ReadAsStringAsync()
                     );
                 }
-                foreach (var text in new[] { "/session compact-threshold 0.9", "/session compact-threshold" })
+                foreach (
+                    var text in new[]
+                    {
+                        "/session compact-threshold 0.9",
+                        "/session compact-threshold",
+                    }
+                )
                 {
                     var response = await admin.PostAsJsonAsync(
                         route,
@@ -206,7 +212,10 @@ public sealed partial class CommandAdministrationTests
                 var events = await eventBody.WaitAsync(TimeSpan.FromSeconds(5));
                 Assert.Contains("directory-only", events);
                 Assert.Contains("9500", events);
-                Assert.Contains("compactThresholdTokens must be a positive number or null.", events);
+                Assert.Contains(
+                    "compactThresholdTokens must be a positive number or null.",
+                    events
+                );
                 Assert.Contains(selectedId!, events);
                 Assert.Contains("session-control-feedback", events);
                 eventStream!.Dispose();

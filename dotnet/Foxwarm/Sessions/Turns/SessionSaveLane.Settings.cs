@@ -25,7 +25,9 @@ public sealed partial class SessionSaveLane
                     var threshold = SessionWait.Number(supplied);
                     if (
                         supplied is not null
-                        && (threshold is null || !double.IsFinite(threshold.Value) || threshold <= 0)
+                        && (
+                            threshold is null || !double.IsFinite(threshold.Value) || threshold <= 0
+                        )
                     )
                         throw new InvalidDataException(
                             "compactThresholdTokens must be a positive number or null."
