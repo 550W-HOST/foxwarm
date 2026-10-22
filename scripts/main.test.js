@@ -140,6 +140,54 @@ test('explicit app/data/config environment wins without moving state to binary o
   await until(() => !running(pid), 'Managed Main survived SIGINT.');
 });
 
+function longTemporaryDirectory(f) {
+  const directory = path.join(f.root, 't'.repeat(Math.max(1, 106 - Buffer.byteLength(f.root) - 1)));
+  fs.mkdirSync(directory);
+  assert(Buffer.byteLength(directory) >= 106);
+  return { TMPDIR: directory, TMP: directory, TEMP: directory };
+}
+
+test('package Main starts and stops with a valid long TMPDIR without replacing it', linux, async t => {
+  const f = fixture(t);
+  const temporary = longTemporaryDirectory(f);
+  const instance = await f.launch([f.app], temporary);
+  const pid = await f.ready(instance);
+  const environment = fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0');
+  for (const [key, value] of Object.entries(temporary)) assert(environment.includes(`${key}=${value}`));
+  assert.equal(fs.readlinkSync(`/proc/${pid}/cwd`), f.cwd);
+  for (const fd of [0, 1, 2]) {
+    assert.equal(fs.readlinkSync(`/proc/${pid}/fd/${fd}`), fs.readlinkSync(`/proc/${instance.child.pid}/fd/${fd}`));
+  }
+  instance.child.kill('SIGTERM');
+  assert.deepEqual(await instance.exited, { code: 0, signal: null }, instance.text);
+  await until(() => !running(pid), 'Managed Main survived long-TMPDIR shutdown.');
+});
+
+test('a stop requested before managed entry starts remains queued on the lifetime pipe', linux, async t => {
+  let release;
+  t.after(() => release?.());
+  const f = fixture(t);
+  const bin = path.join(f.root, 'delayed-runtime');
+  const reached = path.join(f.root, 'runtime-reached');
+  const gate = path.join(f.root, 'release-runtime');
+  fs.mkdirSync(bin);
+  const dotnet = execFileSync('/bin/sh', ['-c', 'command -v dotnet'], { encoding: 'utf8' }).trim();
+  // Hold only executable entry; the real launcher, inherited pipe and managed
+  // lifetime owner remain unchanged. The timeout also bounds failure cleanup.
+  fs.writeFileSync(path.join(bin, 'dotnet'), `#!/bin/bash\nprintf reached > '${reached}'\nfor ((i=0; i<200; i++)); do [ -f '${gate}' ] && break; sleep 0.05; done\nexec '${dotnet}' "$@"\n`, { mode: 0o700 });
+  release = () => fs.writeFileSync(gate, 'release');
+  const instance = await f.launch([f.app], { ...longTemporaryDirectory(f), PATH: bin + path.delimiter + process.env.PATH });
+  await until(() => fs.existsSync(reached), 'Launcher did not reach the owned runtime gate.');
+  instance.child.kill('SIGTERM');
+  // Let the launcher record the request while managed entry is still held.
+  await sleep(100);
+  assert.equal(instance.child.exitCode, null);
+  release();
+  assert.deepEqual(await instance.exited, { code: 0, signal: null }, instance.text);
+  assert(!instance.text.includes('Main started'));
+  assert(!fs.existsSync(path.join(f.data, 'agents')));
+});
+
 test('a hard foreground-parent termination requests Main drain rather than leaving Main running', linux, async t => {
   const f = fixture(t);
   const instance = await f.launch();
@@ -151,7 +199,14 @@ test('a hard foreground-parent termination requests Main drain rather than leavi
 
 for (const signal of ['SIGTERM', 'SIGKILL']) {
   test(`launcher ${signal} waits for a real accepted canonical owner before Main exits`, linux, async t => {
+    let releaseExec;
+    t.after(() => releaseExec?.());
     const f = fixture(t);
+    const effect = path.join(f.root, 'independent-effect');
+    const execGate = path.join(f.root, 'release-exec');
+    const temporarySeen = path.join(f.root, 'exec-tmpdir');
+    const temporaryFile = path.join(f.root, 'exec-tempfile');
+    releaseExec = () => fs.writeFileSync(execGate, 'release');
     const listener = net.createServer();
     listener.listen(0, '127.0.0.1'); await once(listener, 'listening');
     const port = listener.address().port;
@@ -159,8 +214,16 @@ for (const signal of ['SIGTERM', 'SIGKILL']) {
     let release, reached;
     const held = new Promise(resolve => { release = resolve; });
     const request = new Promise(resolve => { reached = resolve; });
+    let launchedExec = false;
     const peer = http.createServer(async (req, res) => {
       for await (const _ of req) { /* consume the real request */ }
+      if (signal === 'SIGKILL' && !launchedExec) {
+        launchedExec = true;
+        const command = `printf '%s' "$TMPDIR" > '${temporarySeen}'; mktemp > '${temporaryFile}'; printf started > '${effect}'; for ((i=0; i<200; i++)); do [ -f '${execGate}' ] && break; sleep 0.05; done; printf done >> '${effect}'`;
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.end('data: ' + JSON.stringify({ type: 'response.completed', response: { output: [{ type: 'function_call', call_id: 'independent-exec', name: 'exec', arguments: JSON.stringify({ command, timeout: 1 }) }] } }) + '\n\n');
+        return;
+      }
       reached(); await held;
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       res.end('data: ' + JSON.stringify({ type: 'response.completed', response: { output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'entry-drained' }] }] } }) + '\n\n');
@@ -170,7 +233,10 @@ for (const signal of ['SIGTERM', 'SIGKILL']) {
     fs.writeFileSync(path.join(f.app, 'app.yaml'), `vector: false\nbot: {httpPort: ${port}}\n`);
     fs.writeFileSync(path.join(f.data, 'state/token'), 'synthetic-entry-token');
     fs.writeFileSync(path.join(f.data, 'state/models.yaml'), JSON.stringify({ default: 'a', providers: { a: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${peer.address().port}`, models: ['wire'] } } }));
-    const instance = await f.launch();
+    // Also exercise the long-directory IPC correction through an accepted owner
+    // held across hard launcher loss, not only an idle startup/shutdown.
+    const temporary = signal === 'SIGKILL' ? longTemporaryDirectory(f) : {};
+    const instance = await f.launch([f.app], temporary);
     const pid = await f.ready(instance, `Main HTTP listening: http://127.0.0.1:${port}`);
     async function post(route, body) {
       const result = await fetch(`http://127.0.0.1:${port}${route}`, { method: 'POST', headers: { authorization: 'Bearer synthetic-entry-token', 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -181,6 +247,13 @@ for (const signal of ['SIGTERM', 'SIGKILL']) {
     const { sessionId } = await post('/api/sessions', { agentId: 'main', sessionId: 'drain-entry' });
     await post('/api/sessions/' + encodeURIComponent(sessionId) + '/message', { text: 'qualification' });
     await request;
+    if (signal === 'SIGKILL') {
+      assert.equal(fs.readFileSync(effect, 'utf8'), 'started');
+      assert.equal(fs.readFileSync(temporarySeen, 'utf8'), temporary.TMPDIR);
+      const created = fs.readFileSync(temporaryFile, 'utf8').trim();
+      assert.equal(path.dirname(created), temporary.TMPDIR);
+      assert(fs.existsSync(created));
+    }
     const faults = path.join(f.data, 'state/experiment-faults');
     fs.mkdirSync(faults, { recursive: true });
     const hold = path.join(faults, 'id_' + Buffer.from(sessionId).toString('base64url') + '.canonical-hold-before-rename');
@@ -196,6 +269,11 @@ for (const signal of ['SIGTERM', 'SIGKILL']) {
     const saved = JSON.parse(fs.readFileSync(path.join(f.data, 'state/sessions', sessionId + '.json'), 'utf8'));
     assert.equal(saved.busy, false);
     assert(JSON.stringify(saved.history).includes('entry-drained'));
+    if (signal === 'SIGKILL') {
+      assert.equal(fs.readFileSync(effect, 'utf8'), 'started', 'Independent exec ended before Main stopped.');
+      releaseExec();
+      await until(() => fs.readFileSync(effect, 'utf8') === 'starteddone', 'Main exit killed its independent exec helper.');
+    }
   });
 }
 

@@ -2,8 +2,6 @@
 'use strict';
 
 const net = require('node:net');
-const os = require('node:os');
-const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { coreExecutable, coreEnvironment } = require('./core-executable');
@@ -13,20 +11,23 @@ const { coreExecutable, coreEnvironment } = require('./core-executable');
 // drain when this foreground launcher is terminated, including a hard parent kill.
 async function main() {
   const executable = coreExecutable();
-  const name = `foxwarm-main-${randomUUID()}`;
-  const pipe = process.platform === 'win32' ? `\\\\.\\pipe\\${name}` : path.join(os.tmpdir(), name);
+  const windows = process.platform === 'win32';
+  const name = windows ? `foxwarm-main-${randomUUID()}` : '3';
   let connection;
+  let server;
   let stopping = false;
-  const server = net.createServer(socket => {
-    connection = socket;
-    socket.on('error', () => {});
-    if (stopping) socket.write('stop\n');
-    server.close();
-  });
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(pipe, resolve);
-  });
+  if (windows) {
+    server = net.createServer(socket => {
+      connection = socket;
+      socket.on('error', () => {});
+      if (stopping) socket.write('stop\n');
+      server.close();
+    });
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(`\\\\.\\pipe\\${name}`, resolve);
+    });
+  }
   const stop = () => {
     stopping = true;
     connection?.write('stop\n');
@@ -34,12 +35,19 @@ async function main() {
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, stop);
   try {
     const child = spawn(executable.command, [...executable.args, ...process.argv.slice(2)], {
-      env: { ...coreEnvironment(), FOXWARM_MAIN_LIFETIME_PIPE: process.platform === 'win32' ? name : pipe },
-      stdio: 'inherit',
+      env: { ...coreEnvironment(), FOXWARM_MAIN_LIFETIME_PIPE: name },
+      // Unix inherits a separate connected pipe at fd 3: no filesystem address or
+      // TMPDIR restriction, and no change to the caller's stdin/stdout/stderr.
+      stdio: windows ? 'inherit' : ['inherit', 'inherit', 'inherit', 'pipe'],
       // libuv otherwise places Windows children in its kill-on-parent-exit job.
       // Keep the child referenced and awaited; the lifetime pipe owns normal drain.
-      detached: process.platform === 'win32',
+      detached: windows,
     });
+    if (!windows) {
+      connection = child.stdio[3];
+      connection.on('error', () => {});
+      if (stopping) connection.write('stop\n');
+    }
     await new Promise((resolve, reject) => {
       child.once('error', error => reject(new Error(`Cannot launch Foxwarm Main: ${error.message}. Make the .NET 10 ASP.NET Core runtime available on PATH.`)));
       child.once('exit', (code, signal) => {
@@ -55,7 +63,7 @@ async function main() {
   } finally {
     for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.removeListener(signal, stop);
     connection?.destroy();
-    if (server.listening) server.close();
+    if (server?.listening) server.close();
   }
 }
 

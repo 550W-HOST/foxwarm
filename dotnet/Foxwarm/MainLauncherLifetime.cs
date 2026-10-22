@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using Microsoft.Win32.SafeHandles;
 
 namespace Foxwarm;
 
@@ -23,6 +24,15 @@ internal sealed class MainLauncherLifetime : IAsyncDisposable
         var name = Environment.GetEnvironmentVariable("FOXWARM_MAIN_LIFETIME_PIPE");
         if (string.IsNullOrEmpty(name))
             return null;
+        // Node supplies a connected extra stdio pipe on Unix. It has no socket
+        // pathname limit and remains separate from the caller's prompt stream.
+        if (!OperatingSystem.IsWindows())
+            return new(new NamedPipeClientStream(
+                PipeDirection.In,
+                isAsync: true,
+                isConnected: true,
+                new SafePipeHandle((IntPtr)int.Parse(name), ownsHandle: true)
+            ));
         var pipe = new NamedPipeClientStream(
             ".",
             name,
