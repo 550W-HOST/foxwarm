@@ -51,7 +51,7 @@ Compact completion is a single self-closing `<foxwarm-system kind="session-bound
 
 Only the newest pure compact-completion notice remains in active model-visible history after a later successful compact. Older current/legacy completion notices are transparent to planning, never become summary text, and are removed from the complete compatible active history at commit time (including force-kept tail items); durable archive records are never rewritten. Other session-boundary events and messages containing real user/tool/content remain protected. Failed or non-committing compaction leaves active history unchanged.
 
-Canonical implementation: `formatCompactionCompletionMarker()` in [src-session-history](../units/src-session-history.md).
+Continuation identity and skill-reload consequences are owned by [conversation and history](../behaviors/conversation-and-history.md#actions-and-consequences). `extractCompactedSkillNames` scans only the consumed snapshot prefix for direct `skill(action:"load")` and persisted legacy `load_skill` calls; arbitrary wrapper output is not skill-load evidence. Canonical implementation: `formatCompactionCompletionMarker()` in [src-session-history](../units/src-session-history.md).
 
 ### D-context-compact-planner-debug
 

@@ -1,6 +1,6 @@
 # Behavior: files, images, and attachments
 
-For developers and Agents changing attachment ingress, model image input, previews, or file delivery. Selecting a browser File, uploading bytes, saving a file, storing an image in history, showing a thumbnail, sending visual input to a model, and delivering a downloadable file are separate effects. Success at one boundary does not prove the others occurred.
+For developers and Agents changing attachment ingress, model image input, file delivery, or file-backed published content and previews. Selecting a browser File, uploading bytes, saving a file, storing an image in history, showing a thumbnail, sending visual input to a model, and delivering a downloadable file are separate effects. Success at one boundary does not prove the others occurred.
 
 ## From draft to retained input
 
@@ -54,7 +54,7 @@ The model can explicitly save a reference-only original by ID to an authorized f
 A completed provider-hosted generated image enters the same canonical blob lifecycle. History, request journals, response diagnostics, and WebUI transport retain only references and safe native metadata, not another base64 copy.
 
 - The exact concrete Responses model that produced it may replay the verified original bytes as its native generated-image call for later editing. That replay bypasses ordinary-vision optimization.
-- Another concrete model/protocol receives an honest bounded no-image-content note and local-ID save/crop guidance, not a fabricated native call or silently substituted visual input.
+- Another concrete model/protocol receives an honest bounded no-image-content note and local-ID save/crop guidance, not a fabricated native call or silently substituted visual input. That placeholder path does not require the original image bytes; eligibility must be decided before loading bytes needed only for native replay. The current hydration conflict is recorded under [Open Questions](#open-questions).
 - Missing or corrupt required original bytes fail locally rather than silently regenerating an image or treating an edit request as if the image were present.
 - Using the image later as an ordinary tool image is ordinary vision input, with that path's optimization and oversize policy; native provenance is not copied into the tool image.
 
@@ -78,6 +78,16 @@ Successful deliveries addressed to the current Session or its exact WebUI target
 | Native browser download from a signed URL | A short-lived resource grant for GET/HEAD, not a new login, general API token, or right to mint further grants. |
 
 A valid credential **or** valid resource signature authorizes the resource; a bad signature does not veto otherwise valid credentials. Signatures bind resource kind, path/blob, optional Session route, filename/preview options, and expiry. Path, global-blob, and Session-blob grants are not interchangeable. Explicit download actions request fresh 15-minute grants; normal authenticated preview URLs remain unchanged. The instance token is never placed in these URLs. Token replacement invalidates old grants; ordinary restart does not. Expiry is checked at request start, not by interrupting an accepted stream. All URLs retain deployment prefixes. Detailed authority and safe MIME/disposition/HEAD behavior remain in [download capabilities](../modules/webui.md#d-webui-download-capabilities).
+
+## Published content is application data
+
+Preparing or publishing a browser artifact snapshots authorized file-backed content; editing a file alone does not publish it. The authorized read of a stored artifact retains its authored JSON: dataset fields resembling message or image metadata are data, not instructions to project them as conversation Messages. This distinction does not disable the separate image/privacy projection on actual history routes.
+
+Publication receipts, immutable revisions, access checks, original downloads, and user-started preview execution retain their [artifact contract](../threads/webui-artifacts.md). [Artifact storage and routes](../units/src-artifacts.md#ownership-and-persistence) locate the producer and authorized consumer; publication does not grant general browser execution permission.
+
+## Open Questions
+
+- **Known limitation:** `hydrateMessagesForProvider` currently reads referenced originals before deciding that an incompatible generated assistant image will become a text-only placeholder. Missing bytes can therefore fail that request even though no image bytes could be sent. This conflicts with the eligibility distinction above; it does not weaken the required-original failure for native replay.
 
 ## Retention and limits
 

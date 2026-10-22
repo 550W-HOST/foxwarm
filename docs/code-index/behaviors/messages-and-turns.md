@@ -30,6 +30,8 @@ Every currently selected ordinary input remains a separate canonical message in 
 
 The queue is **source-blind**. A different Channel type, configured instance, conversation, passive message ID, or card does not create a new consumption batch or choose an output destination. Source metadata describes provenance only. Real tool-call/result, compaction, Stop, wait, managed-control, authority/mailbox, and lifecycle boundaries still apply. The implementation contract is [source-blind routing](../threads/message-processing-pipeline.md#d-pipeline-source-blind-turn-routing), with [canonical input boundaries](../threads/message-processing-pipeline.md#d-pipeline-canonical-queue-item-boundaries).
 
+While ordinary input waits, Chat shows a bounded body preview, including supported source-wrapped Channel input. The preview is a separate observable result, not another queue item or a committed row. On canonical append, Chat replaces it with the corresponding committed input rather than leaving both visible. [Queue-preview extraction](../units/src-channels-webui.md#d-webui-channel-queue-preview) owns wrapping/sanitization; [history reconciliation](../threads/streaming-pipeline.md#d-streaming-optimistic-message-identity) owns replacing previews with canonical rows.
+
 ### Example: a correction arrives during work
 
 Suppose the model has called a tool, and a human sends a correction while that tool runs. The canonical order is the model's tool call, the complete tool-result row, then the correction. The next request can use the correction. It does not appear between the call and its response, and its eventual position does not prove that the human wrote it after seeing the tool result.

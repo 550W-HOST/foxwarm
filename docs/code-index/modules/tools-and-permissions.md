@@ -90,7 +90,7 @@ Normal writes attempt the real filesystem operation first. Missing/non-directory
 
 ### D-tools-structured-output-guard
 
-Output guarding preserves the structured function-response envelope. It replaces only oversized payload content and records where the full result is stored.
+Output guarding preserves the structured function-response envelope. It replaces only oversized payload content and records where the full result is stored. Its [observable result/control boundary](../behaviors/execution-and-waiting.md#tool-values-presentation-and-turn-controls-have-different-consumers) requires success/error classification to survive that projection; null or absent errors must not become manufactured errors.
 
 ### D-tools-exec-timeout
 

@@ -30,6 +30,7 @@ Foxwarm materializes each memory-backed Session system-prompt snapshot for one c
 - A never-run virtual Session has no truthful concrete generation identity and leaves its snapshot unmaterialized until an actual attempt selects a leaf.
 - Forks retain the copied snapshot and cache lineage; first actual use rebuilds when the selected concrete identity differs.
 - Explicit, stale-idle, agent-metadata, and compaction-commit refreshes rebuild using the snapshot's recorded concrete generation identity. A concrete Session without a marker can derive its identity directly. A markerless virtual Session defers rather than selecting a synthetic leaf.
+- `refresh_session_snapshot` defaults to the caller but accepts an explicit existing target; `refreshSessionSnapshot` resolves it without allocating a missing lifetime. Exact refresh has no inactivity gate and is not an all-Agent refresh. Selected custom files are assembled for the target Agent, including its isolation-based path restriction in `appendConfiguredMemoryFiles`; refreshing does not choose an arbitrary virtual leaf.
 - Compaction commit keeps its existing memory reread behavior when a truthful live snapshot identity exists. Detached compact prompts are never copied back over live authority.
 
 ## Journal linkage

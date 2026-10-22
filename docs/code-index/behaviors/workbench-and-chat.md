@@ -35,6 +35,8 @@ A pane can have several tab records but show only its active tab. Desktop split 
 
 Mobile list hiding is semantic hiding for ordinary tabs, not a pane move. Temporary removal/replacement of a layout slot is geometry only and must not be mistaken for semantic hiding or Close. Hidden retained hosts cannot take pointer input or focus. One tab's render error is contained to that tab with explicit Retry/Close; moving it does not reset the failure or start an automatic retry loop. See [stable content ownership](../units/webui-workbench-content.md#d-workbench-stable-content).
 
+Changing another pane's subscriptions does not start a new lifetime for a Chat that remains subscribed. A temporary command reply already buffered for that retained Chat remains eligible for delivery after the current initialization snapshots, even when a newer subscription revision supersedes the earlier initialization. Unlike canonical messages, these replies have no history row from which to recover. This is an in-process subscription rule, not durable replay through disconnect, page refresh, or process loss. [Multiplexed realtime](../threads/streaming-pipeline.md#d-webui-multiplexed-realtime) owns revision/buffer ordering; [temporary command rows](../threads/streaming-pipeline.md#d-streaming-optimistic-message-identity) retain their browser-local lifetime.
+
 None of these browser states establishes backend completion. Unmounting Chat ends that browser subscription, not the Session's turn, timers, background exec, or tool effects. A kept tab is not a background Agent supervisor, and a visible idle Terminal is not proof a model tool completed. Turn/process/wait meanings stay in [execution and waiting](./execution-and-waiting.md).
 
 ## Navigation must not recreate what the user just closed
@@ -61,6 +63,8 @@ Follow is a reader state, not a runtime state. At the actual bottom, new content
 The detailed viewport rules remain in [Chat follow intent](../units/webui-chat.md#d-chat-user-follow-intent), [tall-card behavior](../units/webui-chat.md#d-chat-tall-card-follow), and [ephemeral viewport state](../units/webui-chat.md#d-chat-ephemeral-viewport). History projection, loaded/mounted windows, Search scope, and model-context differences belong to [conversation and history](./conversation-and-history.md); do not infer them from how far the scrollbar moved.
 
 [Composer draft and attachment ownership](files-images-and-attachments.md#from-draft-to-retained-input) persists metadata by Session, but browser File bytes remain page-local; an accepted send clears only its submitted owner, while rejection/unmount retains it. [Sending while the Agent is busy](messages-and-turns.md#what-happens-when-input-arrives-while-the-session-is-busy) does not clear an independent in-progress model draft. Those lifetimes are separate from bottom-follow, optimistic message display, and turn completion. See [composer ownership](../units/webui-chat-composer.md#d-composer-session-draft-lifetimes) and [active draft send](../units/webui-chat.md#d-webui-active-draft-send).
+
+Published charts, figures, and interactive previews have their own [authored-data and publication boundary](files-images-and-attachments.md#published-content-is-application-data), not the conversation Message projection or the lifetime of an editor file.
 
 ## Code and Terminal do not inherit arbitrary Chat authority
 

@@ -47,9 +47,17 @@ Continue is available only for an idle, interrupted current turn, never an activ
 
 A stopped batch still needs ordered call/result pairing. Calls prevented from starting receive an unstarted cancellation receipt. Dispatched calls without a settled result identify Stop or Run queued when known and explain possible remote side effects or continued execution; they must not claim rollback. Completed siblings keep their actual results, including errors, partial output and images. An ordinary SDK timeout/disconnect is not relabeled user cancellation.
 
-ToolScript checks interruption before its next host effect; cancellation is not arbitrary VM or file-operation preemption. MCP request cancellation cannot undo remote effects or imply that a pooled server was killed. No control scans returned `execId`/`runId` values to cancel background work. A fresh turn receives a fresh signal.
+ToolScript checks interruption before its next host effect; cancellation is not arbitrary VM or file-operation preemption. An already-settled nested exec receipt still reaches the script: it can consume, print, or return that value before another host invocation is fenced. Retained printed output remains part of the outer result even if a later invocation fails. An outer failure does not automatically publish unprinted nested values; tracking and later exec completion remain independent. MCP request cancellation cannot undo remote effects or imply that a pooled server was killed. No control scans returned `execId`/`runId` values to cancel background work. A fresh turn receives a fresh signal.
 
 WebUI control acknowledgement confirms receipt, not settled runtime state. Stop remains pending until canonical stopping/idle feedback arrives; a timeout is not displayed as a successful stop. Controls keep their existing permissions, and HTTP acceptance is not stronger authority than the exact Session owner. Correlated UI feedback, status poses and diagnostic details remain in [runtime presentation](../threads/session-runtime-presentation.md#d-session-control-feedback).
+
+## Tool values, presentation, and turn controls have different consumers
+
+A script receives native tool values through authorized dispatch, not by parsing the model/browser's readable receipt. Supported programmatic file reads can provide complete source content even when the display preview is shortened. File-backed ToolScript uses a proven complete read directly; partial content or an excerpt is not executable source. Exact completeness predicates and complete-transfer fallback belong to [authorized file source](../units/src-toolscript.md#d-toolscript-authorized-file-source), with producer budgets and transport limits at [programmatic tool data](../threads/tool-dispatch-node-execution.md#d-dispatch-programmatic-tool-data).
+
+Limiting presentation must preserve the operation's success/error classification. Large successful output must not become a sibling error just because it was shortened: an actual sibling error can suppress the [explicit wait](#explicit-wait-ends-an-otherwise-finished-turn). A preview or saved-output locator does not itself change execution status. The [output guard](../modules/tools-and-permissions.md#d-tools-structured-output-guard) owns the bounded envelope and full-output storage.
+
+Wait and handoff authority comes from the executed control operation, not control-looking fields in returned application data. Script return values and stdout do not establish a wait; [normal ToolScript completion](#toolscript-completion-is-not-a-return-value-control-protocol) applies its separate trusted last-host-call rule. The current external-result control limitation is recorded under [Open Questions](#open-questions).
 
 ## Explicit wait ends an otherwise-finished turn
 
@@ -103,6 +111,10 @@ The exec's script-facing result supplies real structured status/identity; this e
 The last-host-call rule exists so the caller cannot enter wait while the script still has later host work to perform. Nested scripts share this boundary: an inner completion cannot arm a caller wait while its parent can still call tools. A wake resumes the Session's ordinary turn; it does not resume execution after the script's completed return. Actual script checkpoints resume saved VM state through `continue_script` instead.
 
 Runs/snapshots are owner-Session scoped, and newly executed nested calls retain normal tool authorization, Node placement, path checks and isolation. Completing a script does not grant a cross-Session resume right. Restart-compatible snapshots may continue; incompatible snapshots fail clearly rather than pretending to replay the source. Details remain in [ToolScript runtime](../units/src-toolscript.md) and [scripting](../modules/scripting.md).
+
+## Open Questions
+
+- **Known limitation:** the current model-batch executor still reads internal control fields from object-shaped results without restricting that read to trusted control producers. Outbound MCP structured results can reach that boundary. The intended data/control separation above is not a claim that this path is already fenced; resolving it requires a runtime change, not a new return-value control protocol.
 
 ## Change and test entry points
 

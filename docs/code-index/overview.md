@@ -33,7 +33,7 @@ For developers and Agents changing what a human or runtime Agent observes, choos
 ### Environments and browser surfaces
 
 - [Nodes, workspaces, and permissions](./behaviors/nodes-workspaces-and-permissions.md): placement, paths/cwd, authorization, lifecycle, and environment limits.
-- [Files, images, and attachments](./behaviors/files-images-and-attachments.md): draft/upload/history/model/delivery boundaries, image preparation and replay, previews, and download authority.
+- [Files, images, and attachments](./behaviors/files-images-and-attachments.md): draft/upload/history/model/delivery boundaries, image preparation and replay, published artifact data, previews, and download authority.
 - [Workbench and Chat](./behaviors/workbench-and-chat.md): navigation, pane/component/Session/PTY lifetimes, reader intent, Code, and Terminal.
 
 Behavior pages own the observable contracts within their stated scope, not end-user tutorials or a second implementation inventory. Write them from supported usage paths through their actual consumers, comparing meaningful entry-point and lifecycle differences rather than listing modules or past bugs. The skill's “Writing Behavior Documentation from Supported Use” section owns the evidence and writing method. Threads retain cross-module mechanisms and precise protocol/storage invariants, modules retain subsystem boundaries, and units retain source/test entry points. Keep the full observable rule at one behavior owner and short linked summaries at technical anchors; keep numerical/current-platform limits and unresolved intent explicitly distinguished from confirmed product decisions.

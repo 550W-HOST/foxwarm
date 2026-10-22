@@ -95,6 +95,12 @@ Metadata facts, normalized storage, isolation reads and inheritance traversal li
 - Inheritance chain resolution detects cycles and logs a warning rather than throwing.
 - Setting inheritance is metadata-only by default; new and later normally refreshed snapshots use the new chain. `refreshSnapshots=true` uses the canonical inactivity predicate and catalog metadata to rebuild snapshots for the Agent and transitive inheritors that have been inactive for at most one hour. Older Sessions are skipped before hydration and retain the ordinary next-turn automatic refresh. Exact single-Session refresh remains immediate regardless of inactivity. Isolation changes retain their existing affected-Session update behavior.
 
+### Creation source and memory options
+
+[Creation and inheritance behavior](../behaviors/collaboration-and-tasks.md#parent-agent-and-task-relations-are-independent) distinguishes Agent-main creation from spawned children. `tool_create_agent` resolves an omitted source to the caller; `createAgentWithMainSession` consumes that explicit source (or passed current owner). Without a source, memory copying uses the `main` Agent. Fresh main creation resolves explicit model/effort over source raw values, normalizes that pair without freezing concrete defaults, and retains the source's future-child settings. Node precedence is target isolation binding, explicit Node, source Node, then `master`. Optional conversion moves an existing lifetime rather than creating a fresh history.
+
+`inheritMemory` copies initial memory files once; `inherit` establishes an ongoing metadata chain. `setAgentInherit` rejects self/cyclic relationships and isolated source Agents. That source prohibition belongs to ongoing inheritance, not a new prohibition on the separate copy option. Prompt activation and explicit target refresh remain in [conditional snapshots](../threads/conditional-memory-snapshots.md#lifecycle-refresh).
+
 ### Named-session Node defaults
 
 - `createSessionInAgent` chooses the target Agent's isolation binding first, then a supplied `currentNode`, then the non-`master` Node returned by looking up `<agentName>/main`, then `master`. An explicit `master` overrides the main-session default but not isolation. The main-session lookup runs only without the first two choices and excludes the `main` Agent.
