@@ -10,13 +10,12 @@ import { join, resolve } from 'node:path'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
 
-const env = { FOXWARM_BIND_ADDRESS: '127.0.0.1', FOXWARM_SYNC_FILE_LOG: '0' }
+const env = { FOXWARM_SYNC_FILE_LOG: '0' }
 const options = { normalStartup: true, env }
 const fixture = await createHostFixture('node-onboarding', options)
 const prefix = '/onboarding-proof', host = fixture.origin + prefix
-env.FOXWARM_PUBLIC_BASE_URL = host
 env.FOXWARM_AGENTS_DIR = join(fixture.data, 'agents')
-await writeFile(join(fixture.data, 'state/config.yaml'), `bot: {httpPort: ${fixture.port}, enableTrigger: false}\nvector: {enabled: false}\n`)
+await writeFile(join(fixture.data, 'state/config.yaml'), `url: ${host}\nbot: {httpPort: ${fixture.port}, enableTrigger: false}\nvector: {enabled: false}\n`)
 await writeFile(fixture.modelPath, 'default: local/wire\nproviders:\n  local:\n    providerType: openai-responses\n    baseUrl: http://127.0.0.1:1\n    models: [wire]\n')
 const requests = [], created = [], clients = [], errors = []
 let page, browser

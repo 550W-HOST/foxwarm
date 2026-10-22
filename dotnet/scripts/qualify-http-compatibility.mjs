@@ -45,7 +45,7 @@ async function stream(f, path, token = f.token) {
   })()
   return { status: response.status, events, comments, done, async close() { controller.abort(); await done } }
 }
-const f = await createHostFixture('http-compatibility', { runtime: source ? 'source' : undefined, normalStartup: !source, env: { FOXWARM_BIND_ADDRESS: '127.0.0.1' } })
+const f = await createHostFixture('http-compatibility', { runtime: source ? 'source' : undefined, normalStartup: !source, env: {} })
 const hidden = ['set_session_child_model', 'set_session_compact_threshold', 'refresh_session_snapshot', 'compact_session', 'create_agent', 'create_session', 'set_agent_inherit']
 const calls = [], errors = [], rounds = new Map()
 let releaseQueue
@@ -180,7 +180,7 @@ try {
   await f.cleanup(); peer.closeAllConnections(); await new Promise(done => peer.close(done))
 }
 // A configured public URL wins command suggestions but never downloaded defaults.
-const configured = await createHostFixture('http-compatibility-configured', { runtime: source ? 'source' : undefined, normalStartup: !source, env: { FOXWARM_BIND_ADDRESS: '127.0.0.1' } })
+const configured = await createHostFixture('http-compatibility-configured', { runtime: source ? 'source' : undefined, normalStartup: !source, env: {} })
 try {
   await writeFile(join(configured.data, 'state/config.yaml'), `bot:\n  httpPort: ${configured.port}\nurl: https://configured.example/mount\n`)
   await configured.start()

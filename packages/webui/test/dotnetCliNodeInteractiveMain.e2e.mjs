@@ -16,7 +16,7 @@ const functionCall = (id, name, args) => ({ type: 'function_call', call_id: id, 
 const exists = path => access(path).then(() => true, () => false)
 for (const runtime of ['source', 'dotnet']) {
   const env = {}, fixture = await createHostFixture('cli-console-' + runtime, { runtime, normalStartup: true, env })
-  Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '', FOXWARM_BIND_ADDRESS: '127.0.0.1' })
+  Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
   const cwd = join(fixture.root, 'cli'); await mkdir(join(cwd, 'agents/main'), { recursive: true })
   const plans = new Map(), rounds = new Map(), failures = [], wire = [], sockets = new Set()
   const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)

@@ -207,4 +207,4 @@ sudo docker compose up -d
 cat test/state/token
 ```
 
-浏览器访问 `http://127.0.0.1:3003/`，在登录页粘贴该 token。修改 token 时替换该文件内容，然后重启服务使其生效。`FOXWARM_PUBLIC_BASE_URL` 仅在需要改变对外访问地址时设置，默认值为 `http://127.0.0.1:3003`；它不参与登录校验。
+浏览器访问 `http://127.0.0.1:3003/`，在登录页粘贴该 token。修改 token 时替换该文件内容，然后重启服务使其生效。在挂载的 `state/config.yaml` 中设置 `url: http://127.0.0.1:3003`（或实际对外地址）及 `bot.httpPort: 3001`；对外 URL 不参与登录校验。

@@ -11,10 +11,9 @@ const options = { normalStartup: true, env: {} }
 const fixture = await createHostFixture('legacy-node-projection', options)
 options.cwd = fixture.root
 options.publicRoot = fixture.origin + '/preview/#session/legacy-absent'
-options.env.FOXWARM_PUBLIC_BASE_URL = fixture.origin + '/preview'
 await writeFile(fixture.modelPath, JSON.stringify({ default: 'local', providers: { local: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:1', models: ['wire'] } } }))
 options.env.FOXWARM_CONFIG_PATH = join(fixture.data, 'state/config.yaml')
-await writeFile(options.env.FOXWARM_CONFIG_PATH, `bot:\n  httpPort: ${fixture.port}\nllm:\n  maxOutput: 713\n`)
+await writeFile(options.env.FOXWARM_CONFIG_PATH, `url: ${fixture.origin}/preview\nbot:\n  httpPort: ${fixture.port}\nllm:\n  maxOutput: 713\n`)
 const sessions = join(fixture.data, 'state/sessions')
 await mkdir(sessions, { recursive: true })
 const variants = [['legacy-absent', {}], ['legacy-null', { currentNode: null }], ['explicit-remote', { currentNode: 'retained-remote' }]]

@@ -6,6 +6,7 @@ import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
+import testEnvironment from '../../../scripts/test/test-process-env.cjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 export const sleep = milliseconds => new Promise(done => setTimeout(done, milliseconds))
@@ -31,9 +32,9 @@ export async function saveModelsInOriginalApp(page, raw, modelPath) {
 export async function createHostFixture(name, options = {}) {
   const root = await mkdtemp(join(tmpdir(), 'foxwarm-' + name + '-')), data = join(root, 'data'), work = join(root, 'work')
   await mkdir(join(data, 'state'), { recursive: true }); await mkdir(work)
-  await writeFile(join(data, 'state/config.yaml'), 'llm:\n  maxOutput: 713\n  compactKeepPercent: 0.3\n')
   const socket = createServer(); socket.listen(0, '127.0.0.1'); await once(socket, 'listening')
   const port = socket.address().port; await new Promise(done => socket.close(done))
+  await writeFile(join(data, 'state/config.yaml'), `bot:\n  httpPort: ${port}\nllm:\n  maxOutput: 713\n  compactKeepPercent: 0.3\n`)
   const token = 'synthetic-' + name + '-api', origin = `http://127.0.0.1:${port}`, modelPath = join(data, 'state/models.yaml')
   await writeFile(join(data, 'state/token'), token)
   let host, browser, page, ownedListener = false; const hostPids = []
@@ -43,9 +44,9 @@ export async function createHostFixture(name, options = {}) {
     return { status: response.status, body: await response.json().catch(() => ({})) }
   }
   async function start() {
-    const startup = { ...process.env, ...(options.env || {}), FOXWARM_DATA_DIR: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work, FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist') }
-    if (options.normalStartup) { delete startup.FOXWARM_EXPERIMENT_PORT; delete startup.FOXWARM_EXPERIMENT_API_TOKEN }
-    else { startup.FOXWARM_EXPERIMENT_PORT = String(port); startup.FOXWARM_EXPERIMENT_API_TOKEN = token }
+    const startup = { ...testEnvironment.isolatedApplicationEnv(data), ...(options.env || {}), FOXWARM_DATA_DIR: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work, FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist') }
+    if (options.normalStartup) delete startup.FOXWARM_EXPERIMENT_API_TOKEN
+    else startup.FOXWARM_EXPERIMENT_API_TOKEN = token
     ownedListener = false
     const source = options.runtime === 'source'
     const child = spawn(source ? process.execPath : join(process.env.DOTNET_ROOT, 'dotnet'), [resolve(source ? 'lib/index.js' : 'dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
@@ -62,7 +63,7 @@ export async function createHostFixture(name, options = {}) {
         output = (output + bytes).slice(-20000)
         const bound = source && output.includes('HTTP server started') ? origin : /^Main HTTP listening: ([^\r\n]+)\r?\n/m.exec(output)?.[1]
         if (bound) {
-          if (bound !== origin || child.exitCode !== null || child.signalCode !== null) finish(new Error('Owned listener address does not match fixture: ' + bound))
+          if (bound !== (source ? origin : `http://0.0.0.0:${port}`) || child.exitCode !== null || child.signalCode !== null) finish(new Error('Owned listener address does not match fixture: ' + bound))
           else { ownedListener = true; finish() }
         }
       }); child.stderr.on('data', bytes => { output = (output + bytes).slice(-20000) })

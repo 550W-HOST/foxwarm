@@ -18,7 +18,7 @@ const exists = file => access(file).then(() => true, () => false)
 const value = result => { assert(!result.isError, JSON.stringify(result)); return result.structuredContent ?? JSON.parse(result.content[0].text) }
 for (const runtime of ['source', 'dotnet']) {
   const env = {}, host = await createHostFixture('cli-external-' + runtime, { runtime, normalStartup: true, env })
-  Object.assign(env, isolatedApplicationEnv(host.data), { FOXWARM_BIND_ADDRESS: '127.0.0.1', FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
+  Object.assign(env, isolatedApplicationEnv(host.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
   const prefix = runtime === 'source' ? '' : '/external/main'
   const tokens = { alpha: 'synthetic-alpha', beta: 'synthetic-beta' }
   const identities = Object.fromEntries(Object.entries(tokens).map(([id, token]) => [id, { token, surfaces: { mcp: {} } }]))

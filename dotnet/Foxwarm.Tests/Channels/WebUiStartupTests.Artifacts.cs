@@ -146,7 +146,8 @@ public sealed partial class WebUiStartupTests
         var config =
             $"bot:\n  httpPort: {h.Port}\nvector: false\naccess:\n  identities:\n    viewer:\n      token: synthetic-artifact-viewer\n      surfaces:\n        webui: {{sessions: [artifact-owner]}}\n";
         await File.WriteAllTextAsync(h.ConfigPath, config);
-        h.Start(new() { ["FOXWARM_PUBLIC_BASE_URL"] = h.Client.BaseAddress + "nested/main/" });
+        await File.AppendAllTextAsync(h.ConfigPath, "url: " + h.Client.BaseAddress + "nested/main/\n");
+        h.Start();
         await h.Ready();
         foreach (var id in new[] { "artifact-owner", "artifact-other" })
         {

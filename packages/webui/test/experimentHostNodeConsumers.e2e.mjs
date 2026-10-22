@@ -16,7 +16,7 @@ options.cwd = fixture.root
 env.FOXWARM_CONFIG_PATH = join(fixture.data, 'state/config.yaml')
 await writeFile(env.FOXWARM_CONFIG_PATH, `bot:\n  httpPort: ${fixture.port}\nllm:\n  maxOutput: 713\n`)
 const prefix = '/consumer-proof'
-env.FOXWARM_PUBLIC_BASE_URL = fixture.origin + prefix
+await writeFile(join(fixture.data, 'state/config.yaml'), (await readFile(join(fixture.data, 'state/config.yaml'), 'utf8')) + 'url: ' + fixture.origin + prefix + '\n')
 options.publicRoot = fixture.origin + prefix + '/'
 const host = fixture.origin + prefix, plans = new Map(), requests = [], failures = [], clients = [], sockets = [], secrets = []
 let releaseHeld

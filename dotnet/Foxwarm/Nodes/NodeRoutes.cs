@@ -28,9 +28,9 @@ internal static class NodeRoutes
         );
         var bootstrap = sessions.Bootstrap = new NodeBootstrap(hub, address);
         bootstrap.Register(app);
-        var configuredBaseUrl =
-            Environment.GetEnvironmentVariable("FOXWARM_PUBLIC_BASE_URL")
-            ?? SessionWait.Text(sessions.Models.ConfigurationOwner?.AppConfiguration["url"]);
+        var configuredBaseUrl = SessionWait.Text(
+            sessions.Models.ConfigurationOwner?.AppConfiguration["url"]
+        );
         app.Map("/node_ws", hub.HandleAsync);
         hub.RegisterShellRoutes(app);
         app.MapGet(

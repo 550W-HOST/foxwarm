@@ -68,18 +68,7 @@ public sealed partial class WebUiStartupTests
                 RedirectStandardError = true,
             };
             info.ArgumentList.Add(typeof(HttpServer).Assembly.Location);
-            foreach (
-                var key in new[]
-                {
-                    "FOXWARM_HTTP_PORT",
-                    "FOXWARM_EXPERIMENT_PORT",
-                    "FOXWARM_EXPERIMENT_BIND_ADDRESS",
-                    "FOXWARM_PUBLIC_BASE_URL",
-                    "FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN",
-                }
-            )
-                info.Environment.Remove(key);
-            info.Environment["FOXWARM_BIND_ADDRESS"] = "127.0.0.1";
+            info.Environment.Remove("FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN");
             info.Environment["FOXWARM_DATA_DIR"] = Data;
             info.Environment["FOXWARM_CONFIG_PATH"] = ConfigPath;
             info.Environment["FOXWARM_EXPERIMENT_TOOL_ROOT"] = Work;
@@ -120,7 +109,7 @@ public sealed partial class WebUiStartupTests
                 if (Process.HasExited || !listening.Task.IsCompletedSuccessfully)
                     throw new InvalidOperationException(await Output());
                 Assert.Equal(
-                    Client.BaseAddress!.GetLeftPart(UriPartial.Authority),
+                    "http://0.0.0.0:" + Port,
                     await listening.Task
                 );
             }
@@ -592,7 +581,8 @@ public sealed partial class WebUiStartupTests
         await using var h = new Host();
         await File.WriteAllTextAsync(h.TokenPath, h.Token);
         var origin = "http://127.0.0.1:" + h.Port;
-        h.Start(new() { ["FOXWARM_PUBLIC_BASE_URL"] = origin + "/public/main/" });
+        await File.AppendAllTextAsync(h.ConfigPath, "url: " + origin + "/public/main/\n");
+        h.Start();
         await h.Ready();
         h.Client.DefaultRequestHeaders.Authorization = null;
         Assert.Contains("id=\"token\"", await h.Client.GetStringAsync("/public/main/"));
@@ -655,7 +645,7 @@ public sealed partial class WebUiStartupTests
             Assert.True((await h.Client.GetAsync("/public/main/api/sessions")).IsSuccessStatusCode);
         }
         await h.Stop();
-        h.Start(new() { ["FOXWARM_PUBLIC_BASE_URL"] = origin + "/public/main/" });
+        h.Start();
         await h.Ready();
         h.Client.DefaultRequestHeaders.Authorization = null;
         h.Client.DefaultRequestHeaders.Remove("Cookie");
@@ -789,7 +779,8 @@ public sealed partial class WebUiStartupTests
     {
         await using var h = new Host();
         await File.WriteAllTextAsync(h.TokenPath, h.Token);
-        h.Start(new() { ["FOXWARM_PUBLIC_BASE_URL"] = "https://declared.example/main/" });
+        await File.AppendAllTextAsync(h.ConfigPath, "url: https://declared.example/main/\n");
+        h.Start();
         await h.Ready();
         h.Client.DefaultRequestHeaders.Authorization = null;
         h.Client.DefaultRequestHeaders.Add("Origin", "http://127.0.0.1:" + h.Port);
@@ -843,7 +834,7 @@ public sealed partial class WebUiStartupTests
     }
 
     [Fact]
-    public async Task Actual_invalid_startup_inputs_fail_without_touching_existing_secret_and_port_override_wins()
+    public async Task Actual_invalid_YAML_startup_inputs_fail_without_touching_existing_secret()
     {
         await using var h = new Host();
         await File.WriteAllTextAsync(h.TokenPath, h.Token);
@@ -862,14 +853,18 @@ public sealed partial class WebUiStartupTests
             }
         )
         {
-            h.Start(new() { ["FOXWARM_PUBLIC_BASE_URL"] = address });
+            await File.WriteAllTextAsync(h.ConfigPath, $"bot: {{httpPort: {h.Port}}}\nurl: '{address}'\n");
+            h.Start();
             await h.Failed();
             Assert.Equal(h.Token, await File.ReadAllTextAsync(h.TokenPath));
         }
-        await File.WriteAllTextAsync(h.ConfigPath, "bot:\n  httpPort: 1\n");
-        h.Start(new() { ["FOXWARM_EXPERIMENT_PORT"] = h.Port.ToString() });
-        await h.Ready();
-        await h.Stop();
+        foreach (var invalidPort in new[] { "0", "-1", "65536", "1.5", "invalid" })
+        {
+            await File.WriteAllTextAsync(h.ConfigPath, $"bot: {{httpPort: {invalidPort}}}\n");
+            h.Start();
+            await h.Failed();
+            Assert.Equal(h.Token, await File.ReadAllTextAsync(h.TokenPath));
+        }
         await File.WriteAllTextAsync(h.ConfigPath, "bot:\n  enableWebUI: invalid\n");
         h.Start();
         await h.Failed();

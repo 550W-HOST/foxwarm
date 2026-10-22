@@ -35,39 +35,16 @@ internal sealed record HttpServerSettings(
         string dataRoot
     )
     {
-        var portOverride =
-            Environment.GetEnvironmentVariable("FOXWARM_HTTP_PORT")
-            ?? Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_PORT");
-        int port;
-        if (portOverride is not null)
-        {
-            if (!int.TryParse(portOverride, out port))
-                throw new InvalidDataException("HTTP port override must be a port number.");
-        }
-        else
-        {
-            var value = configuration.AppConfiguration["bot"]?["httpPort"];
-            port =
-                value is null ? 3001
-                : SessionWait.Number(value) is { } configured
-                && configured >= 1
-                && configured <= 65535
-                && configured == Math.Truncate(configured)
-                    ? (int)configured
-                : throw new InvalidDataException("bot.httpPort must be a port number.");
-        }
-        if (port is <= 0 or > 65535)
-            throw new InvalidDataException("HTTP port must be between 1 and 65535.");
-        var bindAddress =
-            Environment.GetEnvironmentVariable("FOXWARM_BIND_ADDRESS")
-            ?? Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_BIND_ADDRESS");
-        if (string.IsNullOrWhiteSpace(bindAddress))
-            bindAddress = "0.0.0.0";
-        if (
-            !System.Net.IPAddress.TryParse(bindAddress, out var parsedBindAddress)
-            || parsedBindAddress.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork
-        )
-            throw new InvalidDataException("HTTP bind address must be an IPv4 address.");
+        var value = configuration.AppConfiguration["bot"]?["httpPort"];
+        var port =
+            value is null ? 3001
+            : SessionWait.Number(value) is { } configured
+            && configured >= 1
+            && configured <= 65535
+            && configured == Math.Truncate(configured)
+                ? (int)configured
+            : throw new InvalidDataException("bot.httpPort must be a port number.");
+        const string bindAddress = "0.0.0.0";
         var configuredUrl = SessionWait.Text(configuration.AppConfiguration["url"]);
         var address = PublicWebAddress.Capture(port, configuredUrl);
         var enabled = Enabled(configuration);
@@ -161,7 +138,7 @@ internal sealed record PublicWebAddress(
 
     internal static PublicWebAddress Capture(int port, string? configured = null)
     {
-        var input = Environment.GetEnvironmentVariable("FOXWARM_PUBLIC_BASE_URL") ?? configured;
+        var input = configured;
         if (string.IsNullOrEmpty(input))
             return new($"http://127.0.0.1:{port}", PathString.Empty, "/", false);
         if (
@@ -181,7 +158,7 @@ internal sealed record PublicWebAddress(
             || input.Contains('\\')
         )
             throw new InvalidDataException(
-                "FOXWARM_PUBLIC_BASE_URL must be an HTTP(S) origin with an optional mount path and no credentials, query or fragment."
+                "app config `url` must be an HTTP(S) origin with an optional mount path and no credentials, query or fragment."
             );
         var escaped = uri.AbsolutePath.TrimEnd('/');
         if (
@@ -189,12 +166,12 @@ internal sealed record PublicWebAddress(
             || escaped.Contains("%5c", StringComparison.OrdinalIgnoreCase)
         )
             throw new InvalidDataException(
-                "FOXWARM_PUBLIC_BASE_URL mount path must not contain an encoded path separator."
+                "app config `url` mount path must not contain an encoded path separator."
             );
         var path = Uri.UnescapeDataString(escaped);
         if (path.Contains('\0'))
             throw new InvalidDataException(
-                "FOXWARM_PUBLIC_BASE_URL mount path contains an invalid character."
+                "app config `url` mount path contains an invalid character."
             );
         var host =
             uri.HostNameType == UriHostNameType.IPv6

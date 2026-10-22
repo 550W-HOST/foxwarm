@@ -12,7 +12,7 @@ import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
 const env = { FOXWARM_EXPERIMENT_MONTY_BINARY: process.env.FOXWARM_EXPERIMENT_MONTY_BINARY }
 const fixture = await createHostFixture('shell-http', { env })
 const prefix = '/shell-proof'
-env.FOXWARM_PUBLIC_BASE_URL = fixture.origin + prefix
+await writeFile(join(fixture.data, 'state/config.yaml'), (await readFile(join(fixture.data, 'state/config.yaml'), 'utf8')) + 'url: ' + fixture.origin + prefix + '\n')
 const plans = new Map(), rounds = new Map(), errors = [], requests = [], clients = [], sockets = []
 const tasks = [], reports = []
 let droppedTask, invalidPolls = 3, lostResponse = false

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import testEnvironment from '../../../scripts/test/test-process-env.cjs'
 import { migrateModelFixture } from './experimentModelFixture.mjs'
 // Concentrated localhost browser+HTTP+SQLite acceptance for the bounded .NET Chat host.
 import assert from 'node:assert/strict'
@@ -49,8 +50,8 @@ async function json(hostPort, method, path, body) {
 async function hostStart(hostPort, dataRoot, toolRoot, modelsFile) {
   await migrateModelFixture(dataRoot, modelsFile, { FOXWARM_ALPHA_PROVIDER_KEY: alphaToken, FOXWARM_BETA_PROVIDER_KEY: betaToken })
   const child = spawn(dotnet, [dll], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: {
-    ...process.env, FOXWARM_EXPERIMENT_DATA_ROOT: dataRoot, FOXWARM_EXPERIMENT_TOOL_ROOT: toolRoot,
-    FOXWARM_EXPERIMENT_PORT: String(hostPort), FOXWARM_EXPERIMENT_API_TOKEN: token,
+    ...testEnvironment.isolatedApplicationEnv(dataRoot), FOXWARM_EXPERIMENT_DATA_ROOT: dataRoot, FOXWARM_EXPERIMENT_TOOL_ROOT: toolRoot,
+    FOXWARM_EXPERIMENT_API_TOKEN: token,
     FOXWARM_EXPERIMENT_MODELS_FILE: modelsFile, FOXWARM_ALPHA_PROVIDER_KEY: alphaToken,
     FOXWARM_BETA_PROVIDER_KEY: betaToken, FOXWARM_EXPERIMENT_WEBUI_DIST: dist,
     FOXWARM_EXPERIMENT_MAX_OUTPUT_TOKENS: '8192',
@@ -114,6 +115,9 @@ try {
       contextLimit: 18000, effort: { allowed: ['none', 'low', 'high'], default: 'none' }, models: [{ id: 'beta-wire' }] },
   } }))
   const hostPort = await port()
+  await mkdir(join(dataRoot, 'state'), { recursive: true })
+  await writeFile(join(dataRoot, 'state/config.yaml'), `bot: {httpPort: ${hostPort}}\n`)
+  await writeFile(join(dataRoot, 'state/token'), token, { mode: 0o600 })
   host = await hostStart(hostPort, dataRoot, toolRoot, modelsFile)
   assert.equal((await json(hostPort, 'GET', '/api/models')).body.defaultKey, 'alpha')
   const firstPid = host.child.pid

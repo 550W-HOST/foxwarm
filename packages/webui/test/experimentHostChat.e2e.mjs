@@ -1,10 +1,11 @@
 #!/usr/bin/env node
+import testEnvironment from '../../../scripts/test/test-process-env.cjs'
 import { writeModelFixture } from './experimentModelFixture.mjs'
 // One local, bounded, real-browser experiment using the shared Chat component.
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { once } from 'node:events'
@@ -64,10 +65,9 @@ async function json(port, method, path, body) {
 async function startHost(port, providerPort, dataRoot, toolRoot) {
   await writeModelFixture(dataRoot, { default: 'local-browser-model', providers: { 'local-browser-model': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${providerPort}`, apiKey: providerToken, models: ['local-browser-model'] } } })
   const env = {
-    ...process.env,
+    ...testEnvironment.isolatedApplicationEnv(dataRoot),
     FOXWARM_EXPERIMENT_DATA_ROOT: dataRoot,
     FOXWARM_EXPERIMENT_TOOL_ROOT: toolRoot,
-    FOXWARM_EXPERIMENT_PORT: `${port}`,
     FOXWARM_EXPERIMENT_API_TOKEN: token,
     FOXWARM_EXPERIMENT_PROVIDER_TOKEN: providerToken,
     FOXWARM_EXPERIMENT_RESPONSES_BASE_URI: `http://127.0.0.1:${providerPort}`,
@@ -162,6 +162,9 @@ try {
   await once(provider, 'listening')
   const providerPort = provider.address().port
   const port = await openPort()
+  await mkdir(join(dataRoot, 'state'), { recursive: true })
+  await writeFile(join(dataRoot, 'state/config.yaml'), `bot: {httpPort: ${port}}\n`)
+  await writeFile(join(dataRoot, 'state/token'), token, { mode: 0o600 })
   host = await startHost(port, providerPort, dataRoot, toolRoot)
   const firstPid = host.child.pid
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium',

@@ -19,9 +19,8 @@ const options = { normalStartup: true, env: {}, onPage: async page => {
 const fixture = await createHostFixture('prompt-snapshot', options)
 options.cwd = fixture.work
 options.publicRoot = fixture.origin + '/preview/#session/saved-prompt'
-options.env.FOXWARM_PUBLIC_BASE_URL = fixture.origin + '/preview'
 options.env.FOXWARM_CONFIG_PATH = join(fixture.data, 'state/config.yaml')
-await writeFile(options.env.FOXWARM_CONFIG_PATH, `bot:\n  httpPort: ${fixture.port}\nllm:\n  maxOutput: 713\n`)
+await writeFile(options.env.FOXWARM_CONFIG_PATH, `url: ${fixture.origin}/preview\nbot:\n  httpPort: ${fixture.port}\nllm:\n  maxOutput: 713\n`)
 await writeFile(fixture.modelPath, JSON.stringify({ default: 'local', providers: { local: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:1', models: ['wire'] } } }))
 const stored = '  SAVED_PROMPT_FIRST_LINE\r\nExact <literal> & "quotes" \\ café 🦊\nLast saved line.\n\n'
 const diskMarker = 'CHANGED_MEMORY_NOT_YET_REFRESHED'

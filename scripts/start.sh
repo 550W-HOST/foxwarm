@@ -27,7 +27,7 @@ UNSET_ENV=""
 SET_ENV=""
 START_CMD="cd $(printf '%q' "$FOXWARM_DIR") && env "
 # A long-lived tmux server may have a different environment from this invocation.
-for name in FOXWARM_APP_ROOT FOXWARM_DATA_DIR FOXWARM_CONFIG_PATH CONFIG_PATH MCP_CONFIG_PATH FOXWARM_HTTP_PORT FOXWARM_BIND_ADDRESS DOTNET_ROOT; do
+for name in FOXWARM_APP_ROOT FOXWARM_DATA_DIR FOXWARM_CONFIG_PATH CONFIG_PATH MCP_CONFIG_PATH DOTNET_ROOT; do
     if [ -n "${!name:-}" ]; then
         SET_ENV+="$(printf '%q' "$name=${!name}") "
     else

@@ -58,7 +58,6 @@ public sealed class CanonicalEntryTests
         )
             start.Environment.Remove(key);
         start.Environment["FOXWARM_APP_ROOT"] = app; // Known install base, not cwd discovery.
-        start.Environment["FOXWARM_BIND_ADDRESS"] = "127.0.0.1";
         using var process = Process.Start(start)!;
         var error = process.StandardError.ReadToEndAsync();
         var ready = new TaskCompletionSource<string>(

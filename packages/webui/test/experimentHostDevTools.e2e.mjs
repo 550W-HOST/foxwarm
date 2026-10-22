@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import testEnvironment from '../../../scripts/test/test-process-env.cjs'
 import { writeModelFixture } from './experimentModelFixture.mjs'
 // One owned localhost scripted-provider development workflow, including clean restart.
 import assert from 'node:assert/strict'
@@ -101,11 +102,14 @@ try {
   })
   provider.listen(0, '127.0.0.1'); await once(provider, 'listening')
   const providerPort = provider.address().port; const hostPort = await port()
+  await mkdir(join(dataRoot, 'state'), { recursive: true })
+  await writeFile(join(dataRoot, 'state/config.yaml'), `bot: {httpPort: ${hostPort}}\n`)
+  await writeFile(join(dataRoot, 'state/token'), apiToken, { mode: 0o600 })
   async function startHost() {
   await writeModelFixture(dataRoot, { default: 'scripted-wire', providers: { 'scripted-wire': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${providerPort}`, apiKey: providerToken, models: ['scripted-wire'] } } })
     const child = spawn(dotnet, [dll], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: {
-      ...process.env, FOXWARM_EXPERIMENT_DATA_ROOT: dataRoot, FOXWARM_EXPERIMENT_TOOL_ROOT: workRoot,
-      FOXWARM_EXPERIMENT_PORT: String(hostPort), FOXWARM_EXPERIMENT_API_TOKEN: apiToken,
+      ...testEnvironment.isolatedApplicationEnv(dataRoot), FOXWARM_EXPERIMENT_DATA_ROOT: dataRoot, FOXWARM_EXPERIMENT_TOOL_ROOT: workRoot,
+      FOXWARM_EXPERIMENT_API_TOKEN: apiToken,
       FOXWARM_EXPERIMENT_PROVIDER_TOKEN: providerToken, FOXWARM_EXPERIMENT_RESPONSES_BASE_URI: `http://127.0.0.1:${providerPort}`,
       FOXWARM_EXPERIMENT_REQUEST_MODEL: 'scripted-wire', FOXWARM_EXPERIMENT_CONCRETE_MODEL: 'scripted-wire',
       FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist'),

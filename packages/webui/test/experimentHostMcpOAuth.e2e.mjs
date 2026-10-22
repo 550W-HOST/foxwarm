@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import testEnvironment from '../../../scripts/test/test-process-env.cjs'
 // Original merged App, normal .NET host/login, real cross-site AS consent and official SDK resource.
 import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
@@ -20,7 +21,7 @@ const data = join(root, 'data'), work = join(root, 'work')
 const token = 'synthetic-oauth-administrator', providerToken = 'synthetic-oauth-model'
 const scripts = new Map(), failures = [], records = []
 const selected = process.env.FOXWARM_E2E_BROWSER || 'all'
-let host, proxy, provider, peer, browser, port, url, serial = 0
+let host, proxy, provider, peer, browser, port, url, serial = 0, apiPrefix = '/preview'
 const sleep = ms => new Promise(done => setTimeout(done, ms))
 async function until(check, label, timeout = 20000) {
   const deadline = Date.now() + timeout
@@ -28,16 +29,16 @@ async function until(check, label, timeout = 20000) {
   throw new Error(`Timeout: ${label}; host=${host?.output}; failures=${JSON.stringify(failures)}`)
 }
 async function api(method, path, body, extra = {}) {
-  const response = await fetch(`http://127.0.0.1:${port}/preview${path}`, { method,
+  const response = await fetch(`http://127.0.0.1:${port}${apiPrefix}${path}`, { method,
     headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...extra },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(15000) })
   return { status: response.status, body: await response.json().catch(() => ({})) }
 }
 async function start() {
   const child = spawn(join(process.env.DOTNET_ROOT, 'dotnet'), [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
-    stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, FOXWARM_DATA_DIR: data, FOXWARM_CONFIG_PATH: join(data, 'state/config.yaml'),
-      FOXWARM_EXPERIMENT_DATA_ROOT: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work, FOXWARM_EXPERIMENT_PORT: String(port),
-      FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist'), FOXWARM_PUBLIC_BASE_URL: url.replace(/\/$/, ''),
+    stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(data), FOXWARM_DATA_DIR: data, FOXWARM_CONFIG_PATH: join(data, 'state/config.yaml'),
+      FOXWARM_EXPERIMENT_DATA_ROOT: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work,
+      FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist'),
       FOXWARM_EXPERIMENT_MONTY_BINARY: resolve('node_modules/@pydantic/monty-linux-x64-gnu/monty') } })
   let output = ''
   for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-12000) })
@@ -139,11 +140,11 @@ try {
   })
   provider.listen(0, '127.0.0.1'); await once(provider, 'listening')
   await writeModelFixture(data, { default: 'local', providers: { local: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.address().port}`, apiKey: providerToken, models: ['wire'] } } })
-  await writeFile(join(data, 'state/config.yaml'), JSON.stringify({ url: url.replace(/\/$/, ''), bot: { enableWebUI: true }, llm: { ollamaBaseUrl: 'http://127.0.0.1:1' } }))
+  await writeFile(join(data, 'state/config.yaml'), JSON.stringify({ url: url.replace(/\/$/, ''), bot: { enableWebUI: true, httpPort: port }, llm: { ollamaBaseUrl: 'http://127.0.0.1:1' } }))
   await writeFile(join(data, 'state/mcp.json'), JSON.stringify({ servers: { 'Fixture MCP': { url: peer.resource, transport: 'streamable-http' } } }), { mode: 0o600 })
   await start()
   // Public exceptions are exact GET documents, not a broad path or an exchange exemption.
-  const anonymous = async (path, method = 'GET', body) => fetch(`http://127.0.0.1:${port}/preview${path}`, { method,
+  const anonymous = async (path, method = 'GET', body) => fetch(`http://127.0.0.1:${port}${apiPrefix}${path}`, { method,
     ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) })
   assert.equal((await anonymous('/api/setup/authorizations')).status, 401)
   assert.equal((await anonymous('/api/mcp/oauth/complete', 'POST', {})).status, 401)
@@ -213,7 +214,8 @@ try {
   assert.equal(saved.version, 1); assert(saved.servers['Fixture MCP'].tokens.access_token)
   await stop()
   // Missing config.url is harmless to ordinary hosting and actionable only to Authorizations.
-  await writeFile(join(data, 'state/config.yaml'), '{"bot":{"enableWebUI":true}}')
+  await writeFile(join(data, 'state/config.yaml'), JSON.stringify({ bot: { enableWebUI: true, httpPort: port } }))
+  apiPrefix = ''
   await start()
   const missing = await api('GET', '/api/setup/authorizations')
   assert.equal(missing.status, 200); assert.match(missing.body.publicUrlError, /Set url in Config/)

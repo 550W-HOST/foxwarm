@@ -51,10 +51,10 @@ public sealed class StartupDiagnosticsTests
         start.Environment["FOXWARM_APP_ROOT"] = temp.Path;
         start.Environment["FOXWARM_DATA_DIR"] = temp.Path;
         start.Environment["FOXWARM_AGENTS_DIR"] = Path.Combine(temp.Path, "agents");
-        start.Environment["FOXWARM_HTTP_PORT"] = (
-            (IPEndPoint)occupied.LocalEndpoint
-        ).Port.ToString();
-        start.Environment["FOXWARM_BIND_ADDRESS"] = "127.0.0.1";
+        await File.AppendAllTextAsync(
+            Path.Combine(state, "config.yaml"),
+            $"bot: {{httpPort: {((IPEndPoint)occupied.LocalEndpoint).Port}}}\n"
+        );
         start.Environment["FOXWARM_SYNC_FILE_LOG"] = "1";
         using var process = Process.Start(start)!;
         var stdout = process.StandardOutput.ReadToEndAsync();

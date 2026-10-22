@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import testEnvironment from '../../../scripts/test/test-process-env.cjs'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { createServer as tcpServer } from 'node:net'
@@ -20,6 +21,8 @@ await writeFile(join(data, 'state/config.yaml'), 'llm:\n  maxOutput: 713\n  comp
 const token = 'synthetic-models-api', oldSecret = 'synthetic-old-provider', newSecret = 'synthetic-new-provider'
 const dotnet = process.env.DOTNET_ROOT ? join(process.env.DOTNET_ROOT, 'dotnet') : 'dotnet'
 const hostPort = await port(), origin = `http://127.0.0.1:${hostPort}`
+await writeFile(join(data, 'state/config.yaml'), (await readFile(join(data, 'state/config.yaml'), 'utf8')) + `bot: {httpPort: ${hostPort}}\n`)
+await writeFile(join(data, 'state/token'), token, { mode: 0o600 })
 let host, browser, page, current, held; const hosts = [], requests = []
 function sse(res, event) { res.write('data: ' + JSON.stringify(event) + '\n\n') }
 function finish(res, id, text) {
@@ -53,7 +56,7 @@ function yaml(server, secret, compression = 'gzip') {
 }
 async function api(method, path, body, authorized = true) { const response = await fetch(origin + path, { method, headers: { ...(authorized ? { authorization: 'Bearer ' + token } : {}), 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); return { status: response.status, body: await response.json().catch(() => ({})) } }
 async function start() {
-  const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, FOXWARM_DATA_DIR: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work, FOXWARM_EXPERIMENT_PORT: String(hostPort), FOXWARM_EXPERIMENT_API_TOKEN: token, FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist') } }); let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-20000) }); host = { child, get output() { return output } }; hosts.push(child.pid)
+  const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(data), FOXWARM_DATA_DIR: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work, FOXWARM_EXPERIMENT_API_TOKEN: token, FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist') } }); let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-20000) }); host = { child, get output() { return output } }; hosts.push(child.pid)
   await until(async () => { if (child.exitCode !== null) throw new Error(output); try { return (await api('GET', '/health')).status === 200 } catch { return false } }, 'host ready')
 }
 const route = id => '/api/sessions/' + encodeURIComponent(id)

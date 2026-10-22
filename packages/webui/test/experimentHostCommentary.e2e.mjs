@@ -6,7 +6,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
 
-const options = { normalStartup: true, env: { FOXWARM_BIND_ADDRESS: '127.0.0.1' } }
+const options = { normalStartup: true, env: {} }
 const host = await createHostFixture('commentary', options)
 options.cwd = host.root
 const requests = [], errors = []

@@ -11,11 +11,9 @@ const fixture = await createHostFixture('provider-output', options)
 options.cwd = fixture.root
 const target = join(fixture.root, 'target')
 await mkdir(target)
-env.FOXWARM_BIND_ADDRESS = '127.0.0.1'
-env.FOXWARM_PUBLIC_BASE_URL = fixture.origin
 env.FOXWARM_CONFIG_PATH = join(fixture.data, 'state/config.yaml')
 await writeFile(env.FOXWARM_CONFIG_PATH, JSON.stringify({
-  bot: { httpPort: fixture.port }, vector: false, llm: { maxOutput: 713 },
+  url: fixture.origin, bot: { httpPort: fixture.port }, vector: false, llm: { maxOutput: 713 },
   nodeProviders: { external: { type: 'executable', command: 'python3', args: [resolve('dotnet/Foxwarm.Tests/Tools/Fixtures/node-provider.py'), target], timeoutSeconds: 3 } }
 }))
 const cases = [

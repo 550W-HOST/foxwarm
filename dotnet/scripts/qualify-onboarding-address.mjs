@@ -10,14 +10,12 @@ const fallbackUrl = 'https://browser.example/browser/'
 const explicitUrl = 'https://explicit.example/node/'
 for (const scenario of [
   { name: 'normal browser fallback' },
-  { name: 'empty environment override', override: '' },
-  { name: 'empty environment suppresses configured address', override: '', configured: true },
   { name: 'configured public address', configured: true },
 ]) {
-  const env = { FOXWARM_BIND_ADDRESS: '127.0.0.1', FOXWARM_PUBLIC_BASE_URL: scenario.override }
-  const f = await createHostFixture('onboarding-empty-override', { normalStartup: true, env })
+  const env = {}
+  const f = await createHostFixture('onboarding-address', { normalStartup: true, env })
   env.FOXWARM_AGENTS_DIR = join(f.root, 'agents')
-  const prefix = scenario.configured && scenario.override !== '' ? '/mount' : ''
+  const prefix = scenario.configured ? '/mount' : ''
   const expected = prefix ? 'https://configured.example/mount' : fallbackUrl.replace(/\/$/, '')
   const post = (route, body) => f.api('POST', prefix + '/api/nodes/onboarding/' + route, body)
   const check = async (name, action) => {

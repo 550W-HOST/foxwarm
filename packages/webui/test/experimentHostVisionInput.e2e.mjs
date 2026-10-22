@@ -8,7 +8,7 @@ import sharp from 'sharp'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
 import { writeModelFixture } from './experimentModelFixture.mjs'
 let browserPage
-const fixture = await createHostFixture('vision-input', { env: { FOXWARM_EXPERIMENT_BIND_ADDRESS: '127.0.0.1' }, onPage: page => { browserPage = page; page.on('pageerror', error => console.error('Page error:', error));  } }), records = [], uploads = []
+const fixture = await createHostFixture('vision-input', { env: {}, onPage: page => { browserPage = page; page.on('pageerror', error => console.error('Page error:', error));  } }), records = [], uploads = []
 const sources = {
   small: await sharp({ create: { width: 3, height: 2, channels: 3, background: 'red' } }).png().toBuffer(),
   overBytes: await sharp({ create: { width: 4096, height: 3072, channels: 3, background: 'red' } }).png({ compressionLevel: 0 }).toBuffer(),

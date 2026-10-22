@@ -16,7 +16,7 @@ const call = (id, name, args) => ({ type: 'function_call', call_id: id, name: na
 const dll = resolve('dotnet/Foxwarm.CliNode/bin/Debug/net10.0/Foxwarm.CliNode.dll')
 for (const runtime of ['source', 'dotnet']) {
   const env = {}, fixture = await createHostFixture('browser-cli-' + runtime, { runtime, normalStartup: true, env })
-  Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '', FOXWARM_BIND_ADDRESS: '127.0.0.1' })
+  Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
   const site = createServer((req, res) => { res.setHeader('content-type', 'text/html'); res.end('<!doctype html><title>Local browser</title><h1>Local browser fixture</h1>') })
   site.listen(0, '127.0.0.1'); await once(site, 'listening'); const origin = `http://127.0.0.1:${site.address().port}`
   const plans = new Map(), rounds = new Map(), requests = [], errors = [], processes = []

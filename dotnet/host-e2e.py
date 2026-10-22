@@ -162,7 +162,8 @@ def send(port, sid, text):
 def start_host(dotnet, dll, env, port, log_dir, label):
     stdout = open(log_dir / f'{label}.out', 'w')
     stderr = open(log_dir / f'{label}.err', 'w')
-    env = dict(env, FOXWARM_EXPERIMENT_PORT=str(port))
+    config = pathlib.Path(env['FOXWARM_DATA_DIR']) / 'state/config.yaml'
+    config.write_text(f'bot: {{httpPort: {port}}}\n')
     process = subprocess.Popen([dotnet, str(dll)], env=env, stdout=stdout, stderr=stderr,
                                start_new_session=True)
     stdout.close()
@@ -220,13 +221,13 @@ def main():
     env = dict(os.environ)
     for key in list(env):
         if key.startswith('FOXWARM_EXPERIMENT_') or key in (
-                'FOXWARM_APP_ROOT', 'FOXWARM_HTTP_PORT', 'FOXWARM_MAIN_LIFETIME_PIPE',
+                'FOXWARM_APP_ROOT', 'FOXWARM_MAIN_LIFETIME_PIPE',
                 'FOXWARM_WINDOWS_CONTROL_PIPE', 'FOXWARM_CLI_LIFETIME_PIPE',
-                'FOXWARM_PUBLIC_BASE_URL', 'ASPNETCORE_URLS'):
+                'ASPNETCORE_URLS'):
             del env[key]
     env.update(FOXWARM_DATA_DIR=str(data), FOXWARM_CONFIG_PATH='', CONFIG_PATH='',
                MCP_CONFIG_PATH='', FOXWARM_AGENT_DIR='', FOXWARM_AGENTS_DIR=str(data / 'agents'),
-               FOXWARM_BIND_ADDRESS='127.0.0.1', FOXWARM_EXPERIMENT_TOOL_ROOT=str(tools))
+               FOXWARM_EXPERIMENT_TOOL_ROOT=str(tools))
     first = second = None
     try:
         first = start_host(dotnet, dll, env, port, logs, 'first')
@@ -248,7 +249,7 @@ def main():
                     if line.startswith(b'data: '):
                         event = json.loads(line[6:])
                         progress.append(event)
-                        if event['type'] == 'session-event' and 'alp' in event['event'].get('text', ''):
+                        if event['type'] == 'session-event' and 'alp' in event['event'].get('textDelta', {}).get('text', ''):
                             PROGRESS_SEEN.set()
             except (OSError, ValueError):
                 pass
@@ -260,15 +261,15 @@ def main():
         assert B_REQUEST_SEEN.wait(10), 'beta provider request did not arrive while alpha was held'
         send(port, a, 'alpha second')  # Same-session input while first provider body is held.
         ALPHA_RELEASE.set()
-        wait_until(lambda: len(history(port, a)) >= 4, 'alpha queued second turn')
-        wait_until(lambda: len(history(port, b)) >= 4, 'beta write/read/final tool loop')
+        wait_until(lambda: not state(port, a)['busy'] and len(history(port, a)) >= 4, 'alpha queued second turn')
+        wait_until(lambda: not state(port, b)['busy'] and len(history(port, b)) >= 6, 'beta write/read/final tool loop')
         ah, bh = history(port, a), history(port, b)
         assert [row['role'] for row in ah] == ['user', 'model', 'user', 'model']
         assert [row['role'] for row in bh] == ['user', 'model', 'tool', 'model', 'tool', 'model']
         assert [row['__meta']['seq'] for row in bh] == list(range(1, 7))
         assert bh[4]['parts'][0]['functionResponse']['response']['output'] == 'héllo\n---\nFile has 1 line.\nFile size: 6 bytes.\nFile has no trailing newline.'
         assert (tools / 'note.txt').read_bytes() == 'héllo'.encode()
-        assert any(event['type'] == 'session-event' and event['event'].get('text') == 'alp' for event in progress)
+        assert any(event['type'] == 'session-event' and event['event'].get('textDelta', {}).get('text') == 'alp' for event in progress)
         assert any(event['type'] == 'message' for event in progress)
         send(port, a, 'alpha stop')
         assert HELD_REQUEST.wait(10), 'held provider never accepted request'
@@ -290,7 +291,10 @@ def main():
         assert [row['__meta']['seq'] for row in result] == list(range(1, 15))
         assert result[7]['role'] == 'model' and result[8]['role'] == 'tool'
         assert result[8]['parts'][0]['functionResponse']['response']['error']['type'] == 'file_exists'
-        assert result[10]['parts'][0]['functionResponse']['response']['error']['type'] == 'invalid_path'
+        # This ordinary, non-isolated owner may resolve a parent-relative path.
+        # The owned sibling is absent; path validity is not a workspace-root fence.
+        assert not (tools.parent / 'outside.txt').exists()
+        assert result[10]['parts'][0]['functionResponse']['response']['error']['type'] == 'not_file'
         assert (tools / 'note.txt').read_text() == 'updated'
         assert state(port, b)['messageCount'] == 14 and not state(port, b)['busy']
         assert state(port, a)['queueLength'] == 0
@@ -311,8 +315,8 @@ def main():
                 authority.unlink()
             else:
                 authority.write_text('{invalid')
-            case_env = dict(env, FOXWARM_DATA_DIR=str(case_root), FOXWARM_AGENTS_DIR=str(case_root / 'agents'),
-                            FOXWARM_EXPERIMENT_PORT=str(open_port()))
+            case_env = dict(env, FOXWARM_DATA_DIR=str(case_root), FOXWARM_AGENTS_DIR=str(case_root / 'agents'))
+            (case_root / 'state/config.yaml').write_text(f'bot: {{httpPort: {open_port()}}}\n')
             with open(logs / f'{kind}.out', 'w') as out, open(logs / f'{kind}.err', 'w') as err:
                 candidate = subprocess.Popen([dotnet, str(dll)], env=case_env, stdout=out, stderr=err,
                                              start_new_session=True)

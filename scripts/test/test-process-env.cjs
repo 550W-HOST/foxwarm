@@ -35,9 +35,9 @@ function isolatedApplicationEnv(dataRoot, inherited = process.env) {
   // Managed entry settings must not override the owned paths, ports or lifetime.
   for (const key of Object.keys(environment)) {
     if (key.startsWith('FOXWARM_EXPERIMENT_') || [
-      'FOXWARM_APP_ROOT', 'FOXWARM_HTTP_PORT', 'FOXWARM_BIND_ADDRESS',
+      'FOXWARM_APP_ROOT',
       'FOXWARM_MAIN_LIFETIME_PIPE', 'FOXWARM_WINDOWS_CONTROL_PIPE',
-      'FOXWARM_CLI_LIFETIME_PIPE', 'FOXWARM_PUBLIC_BASE_URL', 'ASPNETCORE_URLS',
+      'FOXWARM_CLI_LIFETIME_PIPE', 'ASPNETCORE_URLS',
     ].includes(key)) delete environment[key];
   }
   return {

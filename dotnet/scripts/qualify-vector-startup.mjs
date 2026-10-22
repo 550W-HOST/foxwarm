@@ -42,7 +42,7 @@ const provider = `http://127.0.0.1:${peer.address().port}`
 async function fixture(label) {
   const env = {}
   const f = await createHostFixture(label, { env })
-  Object.assign(env, testEnvironment.isolatedApplicationEnv(f.data), { FOXWARM_BIND_ADDRESS: '127.0.0.1', FOXWARM_SYNC_FILE_LOG: '0' })
+  Object.assign(env, testEnvironment.isolatedApplicationEnv(f.data), { FOXWARM_SYNC_FILE_LOG: '0' })
   await writeFile(f.modelPath, JSON.stringify({ default: 'fixture', providers: { fixture: {
     providerType: 'openai-responses', baseUrl: provider, models: ['synthetic'],
   } } }))

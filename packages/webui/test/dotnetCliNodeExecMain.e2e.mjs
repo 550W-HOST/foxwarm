@@ -16,7 +16,7 @@ const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, ar
 const exists = path => access(path).then(() => true, () => false)
 for (const runtime of ['source', 'dotnet']) {
   const env = {}, fixture = await createHostFixture('cli-exec-' + runtime, { runtime, normalStartup: true, env })
-  Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '', FOXWARM_BIND_ADDRESS: '127.0.0.1' })
+  Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
   const cwd = join(fixture.root, 'cli'), registry = join(cwd, 'agents/main/.temp/exec/running-exec.json')
   await mkdir(join(cwd, 'agents/main'), { recursive: true })
   const plans = new Map(), rounds = new Map(), failures = [], clients = [], wire = [], connections = new Set(), held = new Set()

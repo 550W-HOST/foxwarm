@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import testEnvironment from '../../../scripts/test/test-process-env.cjs'
 import { writeModelFixture } from './experimentModelFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 // Concentrated original-App -> scripted Responses -> real official-SDK MCP workflow.
@@ -64,8 +65,8 @@ async function startHost() {
   await mkdir(join(data, 'state'), { recursive: true })
   await writeFile(join(data, 'state', 'token'), token, { mode: 0o600 })
   await writeModelFixture(data, { default: 'local', providers: { 'local': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.address().port}`, apiKey: providerToken, models: ['wire'] } } })
-  const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env,
-    FOXWARM_EXPERIMENT_DATA_ROOT: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work, FOXWARM_EXPERIMENT_PORT: String(port), FOXWARM_EXPERIMENT_API_TOKEN: token,
+  const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(data),
+    FOXWARM_EXPERIMENT_DATA_ROOT: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work, FOXWARM_EXPERIMENT_API_TOKEN: token,
     FOXWARM_EXPERIMENT_RESPONSES_BASE_URI: `http://127.0.0.1:${provider.address().port}`, FOXWARM_EXPERIMENT_PROVIDER_TOKEN: providerToken,
     FOXWARM_EXPERIMENT_REQUEST_MODEL: 'wire', FOXWARM_EXPERIMENT_CONCRETE_MODEL: 'local/wire', FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist'),
     MCP_HOST_ONLY_SENTINEL: 'synthetic-host-only-credential' } })
@@ -109,6 +110,9 @@ try {
   let ready = ''; httpPeer.stdout.on('data', bytes => { ready += bytes }); httpPeer.stderr.on('data', bytes => failures.push('HTTP peer: ' + bytes))
   await until(() => ready.includes('\n'), 'real HTTP peer'); httpPort = JSON.parse(ready.trim().split('\n')[0]).port
   const reserve = createServer(); reserve.listen(0, '127.0.0.1'); await once(reserve, 'listening'); port = reserve.address().port; await new Promise(done => reserve.close(done))
+  await mkdir(join(data, 'state'), { recursive: true })
+  await writeFile(join(data, 'state/config.yaml'), `bot: {httpPort: ${port}}\n`)
+  await writeFile(join(data, 'state/token'), token, { mode: 0o600 })
   await startHost(); assert.equal((await request('POST', '/api/agents', { agentId: 'team' })).status, 201)
   current = await create('driver'); const admin = await create('operator')
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'], userDataDir: join(root, 'browser') })

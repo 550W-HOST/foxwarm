@@ -33,7 +33,7 @@ const peer = createServer(async (req, res) => {
 peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
 try {
   for (const configured of [false, true]) {
-    const env = { FOXWARM_BIND_ADDRESS: '127.0.0.1' }
+    const env = {}
     const f = await createHostFixture('bootstrap-default-tools', { runtime: source ? 'source' : undefined, normalStartup: !source, env })
     env.FOXWARM_AGENTS_DIR = join(f.root, 'agents')
     const prefix = configured && !source ? '/mount' : ''

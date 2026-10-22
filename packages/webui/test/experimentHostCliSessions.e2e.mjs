@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
 
-const fixture = await createHostFixture('cli-sessions', { env: { FOXWARM_BIND_ADDRESS: '127.0.0.1' } })
+const fixture = await createHostFixture('cli-sessions', { env: {} })
 // Establish owned runtime paths before importing the application client or its logger/configuration.
 const require = createRequire(import.meta.url)
 const { isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')

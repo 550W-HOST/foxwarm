@@ -25,7 +25,6 @@ await writeFile(join(payload, 'data_dir'), data)
 await writeFile(join(data, 'state/config.yaml'), `bot:\n  httpPort: ${port}\nvector:\n  enabled: false\n`)
 const env = { ...process.env }
 for (const key of Object.keys(env)) if (key.startsWith('FOXWARM_') || ['CONFIG_PATH', 'MCP_CONFIG_PATH', 'ASPNETCORE_URLS'].includes(key)) delete env[key]
-env.FOXWARM_BIND_ADDRESS = '127.0.0.1'
 env.NODE_OPTIONS = ''
 let child, output = '', browser, token, browserErrors = []
 function startHost() {

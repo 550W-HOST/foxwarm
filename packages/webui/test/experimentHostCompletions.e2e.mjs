@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import testEnvironment from '../../../scripts/test/test-process-env.cjs'
 // Real original-App Chat Completions requests, paired effects, compaction and restart.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
@@ -21,6 +22,8 @@ await mkdir(join(data, 'state'), { recursive: true }); await mkdir(work)
 await writeFile(join(data, 'state/config.yaml'), 'llm:\n  maxOutput: 713\n  compactKeepPercent: 0.3\n')
 const apiToken = 'synthetic-completions-api', oldToken = 'synthetic-completions-old', newToken = 'synthetic-completions-new'
 const dotnet = join(process.env.DOTNET_ROOT, 'dotnet'), hostPort = await freePort(), origin = `http://127.0.0.1:${hostPort}`
+await writeFile(join(data, 'state/config.yaml'), (await readFile(join(data, 'state/config.yaml'), 'utf8')) + `bot: {httpPort: ${hostPort}}\n`)
+await writeFile(join(data, 'state/token'), apiToken, { mode: 0o600 })
 const modelPath = join(data, 'state/models.yaml'), effectPath = join(work, 'note.txt')
 let host, browser, page, current, flowHold, stopHold, plannerRound = 0
 const requests = [], hostPids = [], errors = [], closed = new Set(), intervals = new Set()
@@ -139,7 +142,7 @@ const route = id => '/api/sessions/' + encodeURIComponent(id)
 async function history() { return (await api('GET', route(current) + '/history')).body }
 async function state() { return (await api('GET', route(current) + '/state')).body.session }
 async function start() {
-  const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, FOXWARM_DATA_DIR: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work, FOXWARM_EXPERIMENT_PORT: String(hostPort), FOXWARM_EXPERIMENT_API_TOKEN: apiToken, FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist') } }); let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-20000) }); host = { child, get output() { return output } }; hostPids.push(child.pid)
+  const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(data), FOXWARM_DATA_DIR: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work, FOXWARM_EXPERIMENT_API_TOKEN: apiToken, FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist') } }); let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-20000) }); host = { child, get output() { return output } }; hostPids.push(child.pid)
   await until(async () => { if (child.exitCode !== null) throw new Error(output); try { return (await api('GET', '/health')).status === 200 } catch { return false } }, 'host ready')
 }
 async function save(raw) { assert.equal((await api('POST', '/api/setup/models', { yaml: raw })).status, 200); assert.equal(await readFile(modelPath, 'utf8'), raw) }

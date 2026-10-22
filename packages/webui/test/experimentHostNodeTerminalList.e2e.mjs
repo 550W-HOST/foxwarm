@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
 
-const fixture = await createHostFixture('pty-list', { env: { FOXWARM_BIND_ADDRESS: '127.0.0.1' } })
+const fixture = await createHostFixture('pty-list', { env: {} })
 const runtime = join(fixture.root, 'cli'), home = join(fixture.root, 'home')
 await mkdir(runtime); await mkdir(home)
 const proxyServer = createServer(), proxy = new WebSocketServer({ server: proxyServer })

@@ -91,10 +91,10 @@ proxy.on('upgrade', (request, socket, head) => {
 })
 proxy.listen(0, '127.0.0.1'); await once(proxy, 'listening')
 options.publicRoot = 'https://127.0.0.1:' + proxy.address().port + prefix; options.normalStartup = true; options.cwd = owned.root
-options.env = { HOME: join(owned.root, 'home'), ASPNETCORE_TEMP: join(owned.root, 'spool'), FOXWARM_CONFIG_PATH: join(owned.data, 'state/config.yaml'), FOXWARM_PUBLIC_BASE_URL: options.publicRoot }
+options.env = { HOME: join(owned.root, 'home'), ASPNETCORE_TEMP: join(owned.root, 'spool'), FOXWARM_CONFIG_PATH: join(owned.data, 'state/config.yaml') }
 options.chromeArgs = ['--ignore-certificate-errors', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--use-file-for-fake-audio-capture=' + audioPath]
 await writeFile(join(owned.data, 'state/token'), owned.token, { mode: 0o600 })
-const appConfig = enabled => 'bot:\n  httpPort: ' + owned.port + '\nllm:\n  maxOutput: 713\nasrService:\n  enabled: ' + enabled + '\n  url: ' + serviceUrl + '\n  key: ' + key + '\n'
+const appConfig = enabled => 'url: ' + options.publicRoot + '\nbot:\n  httpPort: ' + owned.port + '\nllm:\n  maxOutput: 713\nasrService:\n  enabled: ' + enabled + '\n  url: ' + serviceUrl + '\n  key: ' + key + '\n'
 await writeFile(options.env.FOXWARM_CONFIG_PATH, appConfig(true))
 options.onPage = current => {
   void current.waitForFunction(() => typeof window.foxwarmTest?.switchToSession === 'function').then(() => current.evaluate(() => window.foxwarmTest.switchToSession('main')))

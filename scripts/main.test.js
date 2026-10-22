@@ -53,10 +53,8 @@ function fixture(t, built = true) {
   const env = { ...process.env, FOXWARM_APP_ROOT: '', FOXWARM_DATA_DIR: '',
     FOXWARM_CONFIG_PATH: 'app.yaml', CONFIG_PATH: 'wrong.yaml',
     FOXWARM_EXPERIMENT_DATA_ROOT: '', FOXWARM_EXPERIMENT_TOOL_ROOT: '', FOXWARM_EXPERIMENT_SKILLS_ROOT: '',
-    FOXWARM_MAIN_LIFETIME_PIPE: '', FOXWARM_HTTP_PORT: '', FOXWARM_BIND_ADDRESS: '127.0.0.1',
+    FOXWARM_MAIN_LIFETIME_PIPE: '',
     NODE_OPTIONS: `--require=${JSON.stringify(preload)}` };
-  // Empty optional host port variables are invalid overrides, not an unset selection.
-  delete env.FOXWARM_HTTP_PORT;
   const children = [];
   async function launch(args = [app], overrides = {}, launchCwd = cwd) {
     const child = spawn(process.execPath, args, { cwd: launchCwd, env: { ...env, ...overrides }, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -237,7 +235,7 @@ for (const signal of ['SIGTERM', 'SIGKILL']) {
     // held across hard launcher loss, not only an idle startup/shutdown.
     const temporary = signal === 'SIGKILL' ? longTemporaryDirectory(f) : {};
     const instance = await f.launch([f.app], temporary);
-    const pid = await f.ready(instance, `Main HTTP listening: http://127.0.0.1:${port}`);
+    const pid = await f.ready(instance, `Main HTTP listening: http://0.0.0.0:${port}`);
     async function post(route, body) {
       const result = await fetch(`http://127.0.0.1:${port}${route}`, { method: 'POST', headers: { authorization: 'Bearer synthetic-entry-token', 'content-type': 'application/json' }, body: JSON.stringify(body) });
       const value = await result.json();

@@ -19,7 +19,7 @@ const hasCode = !!process.env.FOXWARM_VSCODE_WEB_ASSET_DIR
 const options = { onPage: page => page.setViewport({ width: 1440, height: 1000 }), ...(normalRuntime ? { runtime: normalRuntime, normalStartup: true } : {}), env: { FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN: '', ...(hasCode ? { FOXWARM_VSCODE_WEB_ASSET_DIR: resolve(process.env.FOXWARM_VSCODE_WEB_ASSET_DIR) } : {}) } }
 const fixture = await createHostFixture('node-code', options)
 if (normalRuntime) {
-  Object.assign(options.env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '', FOXWARM_BIND_ADDRESS: '127.0.0.1' })
+  Object.assign(options.env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
   await writeFile(join(fixture.data, 'state/config.yaml'), `bot:\n  name: terminal-fixture\n  httpPort: ${fixture.port}\n  enableWebUI: true\n  enableTrigger: false\nvector: false\nvectorMaintenance: false\nsessionWorkers: false\ndbWorkers: false\nhandoffConfirmation: false\nchannels: {}\npaths:\n  mcpConfigPath: ${JSON.stringify(join(fixture.data, 'state/mcp.json'))}\n`)
   await writeFile(join(fixture.data, 'state/mcp.json'), '{}')
 }

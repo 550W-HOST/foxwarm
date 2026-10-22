@@ -4,7 +4,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
 
-const options = { normalStartup: true, env: { FOXWARM_BIND_ADDRESS: '127.0.0.1' } }
+const options = { normalStartup: true, env: {} }
 const fixture = await createHostFixture('session-creation', options)
 options.cwd = fixture.work
 options.publicRoot = fixture.origin + '/#session/browser%2Fmain'

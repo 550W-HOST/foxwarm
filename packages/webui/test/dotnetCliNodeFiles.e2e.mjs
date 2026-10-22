@@ -16,7 +16,7 @@ const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, ar
 const dll = resolve('dotnet/Foxwarm.CliNode/bin/Debug/net10.0/Foxwarm.CliNode.dll')
 for (const runtime of ['source', 'dotnet']) {
   const env = {}, fixture = await createHostFixture('native-cli-' + runtime, { runtime, normalStartup: true, env })
-  Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '', FOXWARM_BIND_ADDRESS: '127.0.0.1' })
+  Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
   const plans = new Map(), rounds = new Map(), requests = [], errors = [], processes = []
   const route = id => '/api/sessions/' + encodeURIComponent(id)
   const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)

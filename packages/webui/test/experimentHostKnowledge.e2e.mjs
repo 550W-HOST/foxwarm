@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import testEnvironment from '../../../scripts/test/test-process-env.cjs'
 import { migrateModelFixture } from './experimentModelFixture.mjs'
 // One original App/Architecture/local Responses workflow: inherited memory and layered skills.
 import assert from 'node:assert/strict'
@@ -63,9 +64,9 @@ async function deliver(source, target, label, extra = []) {
 async function startHost() {
   await migrateModelFixture(dataRoot, modelsFile, { KNOWLEDGE_TOKEN: providerToken })
   const child = spawn(dotnet, [process.env.FOXWARM_EXPERIMENT_HOST_DLL || resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
-    stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env,
+    stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(dataRoot),
       FOXWARM_EXPERIMENT_DATA_ROOT: dataRoot, FOXWARM_EXPERIMENT_TOOL_ROOT: workRoot,
-      FOXWARM_EXPERIMENT_PORT: String(port), FOXWARM_EXPERIMENT_API_TOKEN: token,
+      FOXWARM_EXPERIMENT_API_TOKEN: token,
       FOXWARM_EXPERIMENT_SKILLS_ROOT: globalRoot, FOXWARM_EXPERIMENT_MODELS_FILE: modelsFile, KNOWLEDGE_TOKEN: providerToken,
       FOXWARM_EXPERIMENT_RESPONSES_BASE_URI: `http://127.0.0.1:${provider.address().port}`,
       FOXWARM_EXPERIMENT_PROVIDER_TOKEN: providerToken, FOXWARM_EXPERIMENT_REQUEST_MODEL: 'wire',
@@ -106,6 +107,9 @@ try {
   })
   provider.listen(0, '127.0.0.1'); await once(provider, 'listening')
   const reserve = createServer(); reserve.listen(0, '127.0.0.1'); await once(reserve, 'listening'); port = reserve.address().port; await new Promise(done => reserve.close(done))
+  await mkdir(join(dataRoot, 'state'), { recursive: true })
+  await writeFile(join(dataRoot, 'state/config.yaml'), `bot: {httpPort: ${port}}\n`)
+  await writeFile(join(dataRoot, 'state/token'), token, { mode: 0o600 })
   await writeFile(modelsFile, JSON.stringify({ default: 'a/one', providers: {
     a: { providerType: 'openai', baseUrl: `http://127.0.0.1:${provider.address().port}`, apiKeyEnv: 'KNOWLEDGE_TOKEN', contextLimit: 25000, models: [{ id: 'one' }] },
     b: { providerType: 'openai', baseUrl: `http://127.0.0.1:${provider.address().port}`, apiKeyEnv: 'KNOWLEDGE_TOKEN', contextLimit: 25000, models: [{ id: 'two' }] }

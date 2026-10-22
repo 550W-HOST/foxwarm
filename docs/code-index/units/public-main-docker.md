@@ -13,7 +13,7 @@ After the dependency-install layer, the build stage explicitly copies `tsconfig.
 
 ## Consumers and side effects
 
-The default command is `dotnet Foxwarm.dll`, installation root `/app`, data root `/data`, port 3001. Root Compose retains its data mount, init process, healthcheck and separately paired optional sandbox Node. Test Compose uses the same recipe but preserves its existing host port and explicit legacy physical workspace; this is not the image default or an automatic data migration. Both use Main's normal stop/drain. Forced deployment grace expiry is not successful drain.
+The default command is `dotnet Foxwarm.dll`, installation root `/app`, data root `/data`, port 3001. Root Compose retains its data mount, init process, healthcheck and separately paired optional sandbox Node. Test Compose uses the same recipe but preserves its existing host port and explicit legacy physical workspace; this is not the image default or an automatic data migration. Both read ordinary mounted app YAML for the public `url` and `bot.httpPort`, with no environment port/bind/public-address override; the default listener is port 3001 on IPv4 wildcard. Both use Main's normal stop/drain. Forced deployment grace expiry is not successful drain.
 
 `Dockerfile.node` remains an independent Node-only build and is not redirected to managed Main. Source/native-job adoption, Worker/controller hosting, Main TUI and public promotion remain outside this delivery candidate. Linux x64 image qualification establishes no other architecture, operating system or Main AOT claim.
 

@@ -15,7 +15,7 @@ initializeTestEnvironment()
 const assets = process.env.FOXWARM_VSCODE_WEB_ASSET_DIR
 for (const runtime of ['source', 'dotnet']) {
   const env = {}, fixture = await createHostFixture('cli-code-' + runtime, { runtime, normalStartup: true, env })
-  Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '', FOXWARM_BIND_ADDRESS: '127.0.0.1', FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN: '', ...(assets ? { FOXWARM_VSCODE_WEB_ASSET_DIR: resolve(assets) } : {}) })
+  Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '', FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN: '', ...(assets ? { FOXWARM_VSCODE_WEB_ASSET_DIR: resolve(assets) } : {}) })
   const cwd = join(fixture.root, 'cli'), repo = join(cwd, 'repository'), wire = [], sockets = new Set(), errors = []
   for (const path of [cwd, repo]) await mkdir(path, { recursive: true })
   const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim()

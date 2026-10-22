@@ -41,15 +41,27 @@ runtime stage. External MCP servers still need their configured dependencies.
 Root Compose mounts `foxwarm-data` at `/data` and publishes port 3001. Its
 healthcheck, init process and optional separately paired sandbox Node remain.
 Read the administrator token from `foxwarm-data/state/token`; it is not an
-environment token override. Use `FOXWARM_PUBLIC_BASE_URL` with the externally
-reachable origin and optional mount path when configuring a reverse proxy.
+environment token override. Set `url` in the mounted `state/config.yaml` to the
+externally reachable origin and optional mount path when configuring a reverse proxy.
+The listener reads `bot.httpPort` from the same YAML (default 3001) and binds all
+IPv4 interfaces.
 Changing `bot.httpPort` also requires matching port/healthcheck configuration.
 
 The retained test Compose consumer publishes host port 3003 and preserves
 `test/state` at `/data/state` and `test/workspace` at `/workspace`. Its explicit
 legacy workspace setting preserves that existing physical Agent layout; it is
 not the image default or a data migration. These private directories remain
-outside Git and Docker context. Build alone does not restart a service.
+outside Git and Docker context. Build alone does not restart a service. Set
+ordinary app YAML before starting this consumer, for example:
+
+```yaml
+url: http://127.0.0.1:3003
+bot:
+  httpPort: 3001
+```
+
+The published URL and container listener port have separate roles. Use the actual
+reachable URL for the deployment; keep the container port aligned with Compose.
 
 A normal container stop requests Main's ordered Session drain before teardown.
 Set the deployment's stop grace period for its workload; a forced timeout is

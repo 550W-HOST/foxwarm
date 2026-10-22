@@ -9,11 +9,8 @@ services:
     container_name: foxwarm-dotnet-test
     environment:
       FOXWARM_DATA_DIR: /data
-      FOXWARM_EXPERIMENT_BIND_ADDRESS: 0.0.0.0
-      FOXWARM_EXPERIMENT_PORT: "3001"
       FOXWARM_EXPERIMENT_TOOL_ROOT: /workspace
       FOXWARM_EXPERIMENT_WEBUI_DIST: /app/webui-dist
-      FOXWARM_PUBLIC_BASE_URL: ${FOXWARM_PUBLIC_BASE_URL:-http://127.0.0.1:3003}
     ports:
       - "0.0.0.0:3003:3001"
     volumes:

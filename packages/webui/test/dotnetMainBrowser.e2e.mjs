@@ -20,7 +20,7 @@ for (const runtime of ['source', 'dotnet']) {
   const env = {}, options = { runtime, normalStartup: true, env }
   const fixture = await createHostFixture('main-browser-' + runtime, options)
   options.cwd = fixture.root
-  Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '', FOXWARM_BIND_ADDRESS: '127.0.0.1', HOME: join(fixture.root, 'home'), XDG_CONFIG_HOME: join(fixture.root, 'config'), XDG_CACHE_HOME: join(fixture.root, 'cache') })
+  Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '', HOME: join(fixture.root, 'home'), XDG_CONFIG_HOME: join(fixture.root, 'config'), XDG_CACHE_HOME: join(fixture.root, 'cache') })
   for (const path of ['home', 'config', 'cache']) await mkdir(join(fixture.root, path))
   const effects = [], requests = [], errors = [], plans = new Map(), rounds = new Map(), results = []
   let cli

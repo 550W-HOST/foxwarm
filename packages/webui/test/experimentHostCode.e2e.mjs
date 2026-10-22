@@ -45,10 +45,10 @@ if (declaredMode) {
     upstream.on('response', response => { socket.end('HTTP/1.1 ' + response.statusCode + ' Rejected\r\nContent-Length: 0\r\n\r\n') }); upstream.on('error', () => socket.destroy()); upstream.end()
   })
   declaredProxy.listen(0, '127.0.0.1'); await once(declaredProxy, 'listening')
-  options.publicRoot = declaredMode + '://127.0.0.1:' + declaredProxy.address().port + prefix; options.env.FOXWARM_PUBLIC_BASE_URL = options.publicRoot; options.normalStartup = true
+  options.publicRoot = declaredMode + '://127.0.0.1:' + declaredProxy.address().port + prefix; options.normalStartup = true
   if (declaredMode === 'https') options.chromeArgs = ['--ignore-certificate-errors']
   await writeFile(join(owned.data, 'state/token'), owned.token, { mode: 0o600 })
-  await writeFile(join(owned.data, 'state/config.yaml'), 'bot:\n  httpPort: ' + owned.port + '\nllm:\n  maxOutput: 713\n  compactKeepPercent: 0.3\n')
+  await writeFile(join(owned.data, 'state/config.yaml'), 'url: ' + options.publicRoot + '\nbot:\n  httpPort: ' + owned.port + '\nllm:\n  maxOutput: 713\n  compactKeepPercent: 0.3\n')
 }
 options.onPage = page => { appPage = page; page.on('pageerror', error => browserErrors.push(error.message)); page.on('response', response => { if (response.status() >= 400) codeResponses.push({ url: response.url(), status: response.status() }) }) }
 let releaseHold, holdStarted = false; const hold = new Promise(done => { releaseHold = done })

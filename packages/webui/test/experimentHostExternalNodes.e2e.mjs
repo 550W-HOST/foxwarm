@@ -12,7 +12,7 @@ import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
 const env = {}
 const fixture = await createHostFixture('external-nodes', { env })
 const hostUrl = fixture.origin + '/node-proof/'
-env.FOXWARM_PUBLIC_BASE_URL = hostUrl
+await writeFile(join(fixture.data, 'state/config.yaml'), (await readFile(join(fixture.data, 'state/config.yaml'), 'utf8')) + 'url: ' + hostUrl + '\n')
 const scripts = new Map(), rounds = new Map(), errors = [], requests = [], processes = [], sockets = []
 let browser
 const exists = path => access(path).then(() => true, () => false)
