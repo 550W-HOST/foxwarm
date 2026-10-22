@@ -55,13 +55,17 @@ public sealed partial class SessionCommandEffectsTests
         }
         await AppendAsync(f.Owner, Text("background context"));
         var resultReady = Signal();
+        var deliveredNotices = new List<JsonNode>();
         f.Owner.Changed += value =>
         {
             if (
                 value.Kind == SessionEventKind.MessageCommitted
                 && value.Data?["__meta"]?["noticeType"]?.ToString() == "btw"
             )
+            {
+                deliveredNotices.Add(value.Data!);
                 resultReady.TrySetResult();
+            }
         };
         var replies = await CommandAsync(f, "/btw side question");
         Assert.Single(replies);
@@ -72,6 +76,7 @@ public sealed partial class SessionCommandEffectsTests
             row => row["__meta"]?["noticeType"]?.ToString() == "btw"
         );
         Assert.False(notice["modelVisible"]!.GetValue<bool>());
+        Assert.True(JsonNode.DeepEquals(notice, Assert.Single(deliveredNotices)));
         Assert.Equal(2, f.Owner.History().Count);
         Assert.False(f.Owner.Metadata().Busy);
         Assert.False(

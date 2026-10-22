@@ -78,6 +78,8 @@ public sealed class EffectiveSelectionTests
         await manager.LoadAsync();
         var owner = await manager.CreateNamedAsync("main", "selection", null, null);
         owner.Registry.TriggerOverride = _ => Task.CompletedTask;
+        var notifications = new List<SessionRuntimeEvent>();
+        owner.Changed += notifications.Add;
         async Task Run()
         {
             await owner.Registry.Ingress.EnqueueAsync(owner.Id, QueueItem.UserText("next"));
@@ -120,6 +122,15 @@ public sealed class EffectiveSelectionTests
         await Run();
         await Run();
         Assert.Equal(2, Notices(owner.Entry).Length);
+        Assert.Equal(
+            Notices(owner.Entry).Select(row => row.ToJsonString()),
+            notifications
+                .Where(value =>
+                    value.Kind == SessionEventKind.MessageCommitted
+                    && value.Data!["parts"]!.ToJsonString().Contains("session-settings-changed")
+                )
+                .Select(value => value.Data!.ToJsonString())
+        );
         var persisted = JsonNode.Parse(
             await File.ReadAllTextAsync(
                 Path.Combine(temp.Path, "data/state/sessions/selection.json")
@@ -298,6 +309,8 @@ public sealed class EffectiveSelectionTests
             }
         );
         var entry = new SessionRegistry(store, new FakeChatService()).Add("selection");
+        var notifications = new List<JsonObject>();
+        entry.HistoryAppended = rows => notifications.AddRange(rows);
         await entry.SaveLane.AdoptEffectiveSelectionAsync(new("a", "master", "high"), false);
         fail = true;
         var error = await Record.ExceptionAsync(() =>
@@ -310,6 +323,10 @@ public sealed class EffectiveSelectionTests
             entry.Snapshot().Meta["lastEffectiveRequest"]!["modelId"]!.GetValue<string>()
         );
         Assert.Equal(committed ? 1 : 0, Notices(entry).Length);
+        Assert.Equal(
+            Notices(entry).Select(row => row.ToJsonString()),
+            notifications.Select(row => row.ToJsonString())
+        );
         var disk = (await store.LoadAsync("selection"))!;
         Assert.Equal(
             committed ? "b" : "a",

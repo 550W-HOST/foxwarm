@@ -15,7 +15,6 @@ internal sealed partial class SessionOwner
     internal event Action<SessionRuntimeEvent>? Changed;
     private long nextListener;
     private long nextRun;
-    private long lastNotifiedSeq;
     private int lastReportedFailureCount;
     private readonly HostModels models;
     internal Func<string, SessionMetadata?>? ResolveAncestry { get; set; }
@@ -100,14 +99,16 @@ internal sealed partial class SessionOwner
     public void EnableCommittedNotifications()
     {
         Entry.CaptureForegroundRelease = CaptureForegroundRelease;
-        lastNotifiedSeq = Entry.WithState(state => state.History.LastOrDefault()?.Sequence ?? 0);
-        Entry.QueueHistoryAppended = (snapshot, messages) =>
+        Entry.HistoryAppended = messages =>
         {
             foreach (var message in messages)
-                lastNotifiedSeq = Math.Max(
-                    lastNotifiedSeq,
-                    message["__meta"]?["seq"]?.GetValue<long>() ?? 0
-                );
+            {
+                Emit(SessionEventKind.MessageCommitted, message);
+                ClearCommittedDraft(message);
+            }
+        };
+        Entry.QueueHistoryAppended = (snapshot, messages) =>
+        {
             Emit(SessionEventKind.StateChanged);
             if (messages.Count > 0)
             {
@@ -122,20 +123,7 @@ internal sealed partial class SessionOwner
                     ClearCommittedDraft(message);
             }
         };
-        Entry.Committed = snapshot =>
-        {
-            foreach (var record in snapshot.History)
-            {
-                var seq = record.Sequence ?? 0;
-                if (seq <= lastNotifiedSeq)
-                    continue;
-                lastNotifiedSeq = seq;
-                var message = record.ToJson();
-                Emit(SessionEventKind.MessageCommitted, message);
-                ClearCommittedDraft(message);
-            }
-            Emit(SessionEventKind.StateChanged);
-        };
+        Entry.Committed = _ => Emit(SessionEventKind.StateChanged);
     }
 
     private static JsonNode JsonSerializerNode(object value) =>

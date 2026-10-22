@@ -94,7 +94,10 @@ public sealed partial class SessionSaveLane
             {
                 entry.WithState(prepared.Publish);
                 var failures = entry.BestEffortFailureCount;
-                entry.InvokeCommitted(entry.Snapshot());
+                var snapshot = entry.Snapshot();
+                if (prepared.Append)
+                    entry.InvokeHistoryAppended([prepared.Message]);
+                entry.InvokeCommitted(snapshot);
                 notice.NotificationSucceeded = entry.BestEffortFailureCount == failures;
             }
             var stagedForGoal = await PrepareGoalOnlyAsync(prepared.Staged).ConfigureAwait(false);

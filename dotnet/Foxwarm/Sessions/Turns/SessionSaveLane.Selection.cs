@@ -17,9 +17,10 @@ public sealed partial class SessionSaveLane
         )
             return false;
         var appended = false;
+        IReadOnlyList<JsonObject> rows = [];
         try
         {
-            await CommitCanonicalAppendAsync(state =>
+            await CommitCanonicalAppendWithResultAsync(state =>
                 {
                     var notice = selection.Notice(
                         EffectiveRequestSelection.Read(state.Meta["lastEffectiveRequest"]),
@@ -37,6 +38,7 @@ public sealed partial class SessionSaveLane
                     var meta = (JsonObject)operation.StagedSnapshot.Meta.DeepClone();
                     meta["lastEffectiveRequest"] = selection.ToJson();
                     var publish = operation.Publish;
+                    rows = operation.AppendedMessages;
                     return operation with
                     {
                         StagedSnapshot = operation.StagedSnapshot with { Meta = meta },
@@ -46,14 +48,16 @@ public sealed partial class SessionSaveLane
                             live.Meta["lastEffectiveRequest"] = selection.ToJson();
                         },
                     };
-                })
+                }, notifyMessages: false)
                 .ConfigureAwait(false);
         }
         catch (AuthorityCommittedException)
         {
+            entry.InvokeHistoryAppended(rows);
             entry.InvokeCommitted(entry.Snapshot());
             throw;
         }
+        entry.InvokeHistoryAppended(rows);
         entry.InvokeCommitted(entry.Snapshot());
         return appended;
     }

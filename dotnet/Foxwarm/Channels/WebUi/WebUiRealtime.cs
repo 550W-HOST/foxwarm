@@ -570,7 +570,16 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                             Subscribed(item.Data)
                             && (
                                 SessionCatalog.Text(item.Data["sessionId"]) is not { } id
-                                || ReferenceEquals(runtime.Owner(id), item.Owner)
+                                || (
+                                    runtime.Owner(id) is { } current
+                                    && ReferenceEquals(
+                                        current,
+                                        item.Owner
+                                            ?? admittedOwners.Values.FirstOrDefault(owner =>
+                                                owner?.Id == id
+                                            )
+                                    )
+                                )
                             )
                         )
                             Queue(requested, item.Data);

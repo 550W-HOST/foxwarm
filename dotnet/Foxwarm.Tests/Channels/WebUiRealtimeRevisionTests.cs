@@ -12,6 +12,184 @@ namespace Foxwarm.Tests;
 public sealed class WebUiRealtimeRevisionTests
 {
     [Fact]
+    public async Task Registered_channel_delivery_before_cold_admission_is_flushed_after_snapshots()
+    {
+        using var temp = new TempDirectory();
+        var root = temp.Path;
+        Directory.CreateDirectory(root + "/work");
+        var options = new ResponsesClientOptions(
+            new Uri("http://127.0.0.1:1"),
+            "wire",
+            "local/wire",
+            "synthetic",
+            "",
+            713
+        );
+        await using (
+            var seed = new SessionManager(
+                root + "/data",
+                root + "/work",
+                options,
+                HostModels.ForTest(options)
+            )
+        )
+        {
+            await seed.LoadAsync();
+            await seed.CreateNamedAsync("main", "current", null, null);
+            await seed.CreateNamedAsync("main", "cold", null, null);
+        }
+        await using var manager = new SessionManager(
+            root + "/data",
+            root + "/work",
+            options,
+            HostModels.ForTest(options)
+        );
+        await manager.LoadAsync();
+        var current = await manager.RequiredAsync("current");
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        manager.BeforeAdmissionRead = async (id, token) =>
+        {
+            if (id == "cold")
+            {
+                reached.TrySetResult();
+                await release.Task.WaitAsync(token);
+            }
+        };
+        await using var terminals = new Foxwarm.Terminal.TerminalRegistry(
+            root + "/data",
+            CancellationToken.None
+        );
+        var runtime = new SessionRuntime(manager);
+        var server = new HttpServer(
+            [],
+            0,
+            "owned-review",
+            null,
+            manager,
+            terminals,
+            webUiEnabled: true
+        );
+        new WebUIChannel(
+            manager,
+            runtime,
+            new MessageRouter(runtime),
+            terminals,
+            server.Downloads
+        ).Register(server.App);
+        await server.App.StartAsync();
+        var uri = new Uri(server.App.Urls.Single());
+        using var ws = new ClientWebSocket();
+        ws.Options.SetRequestHeader("Authorization", "Bearer owned-review");
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var frames = new ConcurrentQueue<JsonObject>();
+        await ws.ConnectAsync(
+            new UriBuilder(uri) { Scheme = "ws", Path = "/api/webui/stream" }.Uri,
+            stop.Token
+        );
+        var receiving = Task.Run(async () =>
+        {
+            var buffer = new byte[65536];
+            try
+            {
+                while (!stop.IsCancellationRequested)
+                {
+                    using var stream = new MemoryStream();
+                    WebSocketReceiveResult r;
+                    do
+                    {
+                        r = await ws.ReceiveAsync(buffer, stop.Token);
+                        if (r.MessageType == WebSocketMessageType.Close)
+                            return;
+                        stream.Write(buffer, 0, r.Count);
+                    } while (!r.EndOfMessage);
+                    frames.Enqueue(JsonNode.Parse(stream.ToArray())!.AsObject());
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (WebSocketException) { }
+        });
+        async Task Until(Func<bool> f)
+        {
+            while (!f())
+                await Task.Delay(2, stop.Token);
+        }
+        try
+        {
+            await Until(() => frames.Any(f => f["type"]?.ToString() == "connected"));
+            var sub = Encoding.UTF8.GetBytes(
+                new JsonObject
+                {
+                    ["type"] = "set-subscriptions",
+                    ["revision"] = 1,
+                    ["sessionIds"] = new JsonArray("cold"),
+                    ["sessionListIds"] = new JsonArray(),
+                    ["sessionListActive"] = false,
+                }.ToJsonString()
+            );
+            await ws.SendAsync(sub, WebSocketMessageType.Text, true, stop.Token);
+            await reached.Task.WaitAsync(stop.Token);
+            if (manager.Find("cold") is not null)
+                throw new Exception("Cold gate did not prevent owner admission");
+            var first = await manager.SendToChannelAsync(
+                current,
+                new JsonObject
+                {
+                    ["channelTargetId"] = "webui:cold",
+                    ["message"] = "before-cold-admission",
+                },
+                stop.Token
+            );
+            release.TrySetResult();
+            await Until(() => frames.Any(f => f["type"]?.ToString() == "subscriptions-applied"));
+            await manager.SendToChannelAsync(
+                current,
+                new JsonObject
+                {
+                    ["channelTargetId"] = "webui:cold",
+                    ["message"] = "after-cold-admission",
+                },
+                stop.Token
+            );
+            await Until(() =>
+                frames.Any(f =>
+                    f["message"]?["parts"]?[0]?["text"]?.ToString() == "after-cold-admission"
+                )
+            );
+            var count = frames.Count(f =>
+                f["message"]?["parts"]?[0]?["text"]?.ToString() == "before-cold-admission"
+            );
+            Assert.Contains("Message sent", first["output"]!.ToString());
+            Assert.Equal(1, count);
+            Assert.Empty(manager.Find("cold")!.History());
+            var observed = frames.ToArray();
+            var delivered = Array.FindIndex(
+                observed,
+                f => f["message"]?["parts"]?[0]?["text"]?.ToString() == "before-cold-admission"
+            );
+            var draft = Array.FindIndex(
+                observed,
+                f => f["type"]?.ToString() == "model-stream-snapshot"
+            );
+            var applied = Array.FindIndex(
+                observed,
+                f => f["type"]?.ToString() == "subscriptions-applied"
+            );
+            Assert.True(draft >= 0 && draft < delivered && delivered < applied);
+            Assert.Single(frames, f => f["message"]?["parts"]?[0]?["text"]?.ToString() == "after-cold-admission");
+        }
+        finally
+        {
+            release.TrySetResult();
+            stop.Cancel();
+            ws.Abort();
+            await receiving;
+            await server.App.StopAsync();
+            await server.App.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task Queue_consumption_and_Stop_publish_canonical_batches_with_the_matching_queue_snapshot()
     {
         using var temp = new TempDirectory();

@@ -107,6 +107,7 @@ public sealed class SessionEntry
     public Exception? LastBackgroundProcessorFailure =>
         Volatile.Read(ref lastBackgroundProcessorFailure);
     public Action<SessionSnapshot>? Committed { get; set; }
+    internal Action<IReadOnlyList<JsonObject>>? HistoryAppended { get; set; }
     internal Action<SessionSnapshot, IReadOnlyList<JsonObject>>? QueueHistoryAppended { get; set; }
     internal Func<Action>? CaptureForegroundRelease { get; set; }
 
@@ -345,6 +346,12 @@ public sealed class SessionEntry
             return items;
         }
     }
+
+    // Scheduling seam after the successful canonical save and before its append-owned notification.
+    internal Func<Task>? BeforeCanonicalNotification { get; set; }
+
+    internal void InvokeHistoryAppended(IReadOnlyList<JsonObject> messages) =>
+        HistoryAppended?.Invoke(messages);
 
     internal void InvokeCommitted(SessionSnapshot snapshot) => Committed?.Invoke(snapshot);
 
