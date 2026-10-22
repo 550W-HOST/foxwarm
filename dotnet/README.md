@@ -356,6 +356,8 @@ The original Composer supports current and future-child configured model/effort 
 
 The compact-threshold tool inspects when the supplied value is absent/invalid/nonpositive and floors positive overrides. A value of 0.9 is stored as 0, visibly distinct from the effective model-derived fallback. Clear uses the default max(1,floor(context window×0.85)). Setting the threshold does not start compaction; actual completed-response usage must exceed it at the normal request boundary. Raw/effective fields and policy ancestry are reported in DTO/status rather than invented UI defaults.
 
+The slash command parses and floors token/unit input before calling settings. Consequently `/session compact-threshold 0.9` supplies zero and is rejected without replacing an existing override; valid fractional values such as `8.75k` still save 8750. This preserves the original distinction between command normalization and the tool's numeric caller.
+
 Settings normalize from the latest owner state inside the ordered save lane, strict-save only changed keys and skip no-op writes. Pre-rename failure leaves the old settings; postrename failure retains the committed settings and reports the durability failure. Held requests stay frozen and prompt identity is not rewritten by a future-child setting. The concentrated ModelCompact workflow now also drives real original child controls, disjoint model/effort pairs, fresh child/grandchild behavior, threshold-triggered automatic L1, faults/held ingress/Stop and restart.
 
 ### Local file reads and writes

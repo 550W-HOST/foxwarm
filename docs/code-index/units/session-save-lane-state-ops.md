@@ -25,6 +25,8 @@ Callers: SessionManager settings/goal/timer operations, SessionOwner retry/compa
 
 Existing prompt-cache keys are read without capturing history. Retry append/replacement stages an immutable record and shares unchanged history, publishing only after the same strict store result. Model settings patches validate against the host's model configuration before publication; the verbose flag uses the same strict settings lane and requires a boolean. Retry notices are persisted as model-visible history metadata through the same canonical ordering; they do not create child-handoff receipts. Compact wake cleanup is wait-neutral and must not clear a declared Session wait accidentally.
 
+For `compactThresholdTokens`, the settings lane accepts null to clear or a finite positive number, then floors that supplied number before saving. Invalid supplied values fail before authority mutation. Callers retain their own normalization: the slash command already floors token/unit input, so `0.9` reaches settings as zero and is rejected without replacing a saved override. The threshold tool forwards positive numeric input unfloored; its `0.9` therefore still saves zero, whose effective threshold inherits the model default. Absent/nonpositive tool input remains inspection rather than a settings patch.
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/Sessions/SessionCwdCommitTests.cs`; `SessionPresentationTests.cs`; `EffectiveSelectionTests.cs`; `RetryNoticeTests.cs`; `RetryInputSafePointTests.cs`; `CompactLifecycleTests.cs`; `GoalPersistenceBoundaryTests.cs`.

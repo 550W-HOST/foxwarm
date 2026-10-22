@@ -20,8 +20,20 @@ public sealed partial class SessionSaveLane
                     ? SessionModelSettings.Normalize(envelope, patch, models)
                     : new JsonObject();
                 if (patch.ContainsKey("compactThresholdTokens"))
-                    desired["compactThresholdTokens"] = patch["compactThresholdTokens"]
-                        ?.DeepClone();
+                {
+                    var supplied = patch["compactThresholdTokens"];
+                    var threshold = SessionWait.Number(supplied);
+                    if (
+                        supplied is not null
+                        && (threshold is null || !double.IsFinite(threshold.Value) || threshold <= 0)
+                    )
+                        throw new InvalidDataException(
+                            "compactThresholdTokens must be a positive number or null."
+                        );
+                    desired["compactThresholdTokens"] = threshold is null
+                        ? null
+                        : JsonValue.Create(Math.Floor(threshold.Value));
+                }
                 if (patch.ContainsKey("verbose"))
                 {
                     if (patch["verbose"] is not JsonValue flag || !flag.TryGetValue<bool>(out _))

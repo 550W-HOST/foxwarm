@@ -55,7 +55,7 @@ internal sealed partial class SessionManager
             && threshold > 0
         )
         {
-            patch["compactThresholdTokens"] = Math.Floor(threshold);
+            patch["compactThresholdTokens"] = threshold;
             action = "updated";
         }
         if (patch.Count > 0)
