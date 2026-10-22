@@ -133,7 +133,8 @@ internal sealed partial class SessionManager
                 );
             var snapshot = owner.Entry.Snapshot();
             if (
-                snapshot.Queue.Count > 0
+                operation.Selection.Direct.Length > 0
+                || snapshot.Queue.Count > 0
                 || snapshot.History.Count > 0
                 || snapshot.Busy
                 || snapshot.Stopping
@@ -142,16 +143,25 @@ internal sealed partial class SessionManager
                 throw new InvalidOperationException(
                     "The channel candidate has accepted work and cannot be compensated."
                 );
+            operation.Owners[id] = owner;
             var branch = owner.Archive.ReadBranch();
             // Creation compensation owns only this unused candidate, not general exec cleanup.
             await RetireDeletionOwnerAsync(operation, id, owner);
+            await DeleteStageAsync(operation, "json-unlink", id);
             UnlinkActive(owner.AuthorityStore.AuthorityPath, () => operation.JsonRemoved.Add(id));
+            operation.JsonDurable.Add(id);
+            await DeleteStageAsync(operation, "frontier-unlink", id);
             UnlinkActive(
                 Path.Combine(root, "state", "sessions", id + ".frontier.json"),
                 () => operation.FrontierRemoved.Add(id)
             );
+            operation.FrontierDurable.Add(id);
+            await DeleteStageAsync(operation, "channels", id);
             deletionChannels.Detach(id);
+            operation.ChannelsCleaned.Add(id);
+            await DeleteStageAsync(operation, "archive", id);
             await CompensateCreatedBranchAsync(owner.AuthorityStore, branch);
+            await DeleteStageAsync(operation, "catalog", id);
             try
             {
                 Catalog.RemoveForDeletion(id);
@@ -163,6 +173,14 @@ internal sealed partial class SessionManager
                 throw;
             }
             CompleteDeletedOwner(operation, id, owner);
+        }
+        catch
+        {
+            // An explicit null-source delete can continue this exact retired lifetime.
+            // It retains Archive under the ordinary manual-deletion policy.
+            if (operation.RetirementStarted.Count > 0)
+                RetainPartialDelete(operation);
+            throw;
         }
         finally
         {

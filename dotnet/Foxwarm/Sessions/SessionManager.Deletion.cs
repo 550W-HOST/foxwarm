@@ -358,23 +358,7 @@ internal sealed partial class SessionManager
                 && operation.Deleted.Count == 0
             )
                 throw;
-            var remaining = RemainingDeleteClaims(operation).Length > 0;
-            lock (lifecycle)
-            {
-                if (remaining)
-                {
-                    partialDeletes[operation.Requested] = operation;
-                    partialDeletes[operation.Selection.Root] = operation;
-                }
-                else
-                    foreach (
-                        var key in partialDeletes
-                            .Where(pair => pair.Value == operation)
-                            .Select(pair => pair.Key)
-                            .ToArray()
-                    )
-                        partialDeletes.Remove(key);
-            }
+            var remaining = RetainPartialDelete(operation);
             var details = DeleteProgress(operation);
             details["failedStage"] = operation.Stage;
             details["failedSessionId"] = operation.FailedId;
@@ -394,6 +378,28 @@ internal sealed partial class SessionManager
         {
             ReleaseDelete(operation);
         }
+    }
+
+    private bool RetainPartialDelete(DeleteOperation operation)
+    {
+        var remaining = RemainingDeleteClaims(operation).Length > 0;
+        lock (lifecycle)
+        {
+            if (remaining)
+            {
+                partialDeletes[operation.Requested] = operation;
+                partialDeletes[operation.Selection.Root] = operation;
+            }
+            else
+                foreach (
+                    var key in partialDeletes
+                        .Where(pair => pair.Value == operation)
+                        .Select(pair => pair.Key)
+                        .ToArray()
+                )
+                    partialDeletes.Remove(key);
+        }
+        return remaining;
     }
 
     private async Task RetireDeletionOwnerAsync(
