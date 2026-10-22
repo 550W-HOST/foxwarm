@@ -17,22 +17,33 @@ public sealed class SessionMovedDeletionTests
         var manager = f.Manager;
         var caller = await manager.CreateNamedAsync("main", "caller", null, null);
         var owner = await manager.CreateNamedAsync("main", "old", null, null);
-        await ForkClearLifecycleTests.AppendAsync(owner, new JsonObject
-        {
-            ["role"] = "user",
-            ["parts"] = new JsonArray(new JsonObject { ["text"] = "Retained moved original." }),
-        });
+        await ForkClearLifecycleTests.AppendAsync(
+            owner,
+            new JsonObject
+            {
+                ["role"] = "user",
+                ["parts"] = new JsonArray(new JsonObject { ["text"] = "Retained moved original." }),
+            }
+        );
         await manager.MoveIdentityAsync(owner, new JsonObject { ["newSessionId"] = "middle" });
         await manager.MoveIdentityAsync(owner, new JsonObject { ["newSessionId"] = "current" });
         var ids = new[] { "old", "middle", "current" };
         var endpoints = new[] { "history", "history/continuous", "state" };
-        async Task<JsonObject> Tool(string id) => (await manager.ExecuteAgentToolAsync(
-            caller, "get_session_messages", new JsonObject { ["sessionId"] = id }
-        )).Response.AsObject();
+        async Task<JsonObject> Tool(string id) =>
+            (
+                await manager.ExecuteAgentToolAsync(
+                    caller,
+                    "get_session_messages",
+                    new JsonObject { ["sessionId"] = id }
+                )
+            ).Response.AsObject();
         foreach (var id in ids)
         {
             Assert.Same(owner, await manager.GetExistingAsync(id));
-            Assert.Contains("Retained moved original.", (await Tool(id))["output"]!.GetValue<string>());
+            Assert.Contains(
+                "Retained moved original.",
+                (await Tool(id))["output"]!.GetValue<string>()
+            );
             foreach (var endpoint in endpoints)
             {
                 using var response = await f.Admin.GetAsync($"api/sessions/{id}/{endpoint}");
@@ -60,7 +71,10 @@ public sealed class SessionMovedDeletionTests
         {
             foreach (var id in ids)
             {
-                Assert.Equal("SESSION_STATE_UNAVAILABLE", (await Tool(id))["error"]!["type"]!.GetValue<string>());
+                Assert.Equal(
+                    "SESSION_STATE_UNAVAILABLE",
+                    (await Tool(id))["error"]!["type"]!.GetValue<string>()
+                );
                 foreach (var endpoint in endpoints)
                 {
                     using var response = await f.Admin.GetAsync($"api/sessions/{id}/{endpoint}");
@@ -85,7 +99,10 @@ public sealed class SessionMovedDeletionTests
             var failure = await Assert.ThrowsAsync<SessionDeletionException>(() => deleting);
             Assert.Equal("SESSION_TREE_DELETE_PARTIAL", failure.Code);
             Assert.Equal("json-unlink", failure.Details["failedStage"]!.GetValue<string>());
-            Assert.Equal("current", Assert.Single(failure.Details["remainingSessionIds"]!.AsArray())!.GetValue<string>());
+            Assert.Equal(
+                "current",
+                Assert.Single(failure.Details["remainingSessionIds"]!.AsArray())!.GetValue<string>()
+            );
             Assert.NotNull(manager.Catalog.Get("current"));
             await Unavailable();
             Directory.Delete(authority);
@@ -113,10 +130,17 @@ public sealed class SessionMovedDeletionTests
             }
             var archive = manager.ArchiveReader(id);
             Assert.Equal("current", archive.CanonicalSessionId);
-            Assert.Contains("Retained moved original.", Assert.Single(archive.ReadMessages()).MessageJson);
-            await Assert.ThrowsAsync<InvalidDataException>(() => manager.CreateNamedAsync("main", id, null, null));
+            Assert.Contains(
+                "Retained moved original.",
+                Assert.Single(archive.ReadMessages()).MessageJson
+            );
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                manager.CreateNamedAsync("main", id, null, null)
+            );
         }
-        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => owner.Entry.SaveLane.SaveStrictAsync());
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() =>
+            owner.Entry.SaveLane.SaveStrictAsync()
+        );
         Assert.Same(caller, await manager.GetExistingAsync(caller.Id));
     }
 }

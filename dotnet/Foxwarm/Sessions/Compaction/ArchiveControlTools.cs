@@ -210,7 +210,8 @@ internal static class ArchiveControlTools
             // Source resolves live catalog aliases first and falls back to the requested
             // identity's Agent segment when no live membership remains. Do not hydrate
             // an owner or inspect retained Archive contents to admit this read.
-            var targetAgent = manager.AuthorizationTarget(sessionId)?.Agent ?? sessionId.Split('/')[0];
+            var targetAgent =
+                manager.AuthorizationTarget(sessionId)?.Agent ?? sessionId.Split('/')[0];
             if (targetAgent != source.Agent)
                 throw new ToolAuthorizationDeniedException(
                     $"Isolated session can only use {name} for sessions under its own agent ({source.Agent})."

@@ -13,9 +13,8 @@ public sealed class ArchiveReadIsolationTests
     {
         const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
         var hosts = typeof(SessionRegistry).GetField("hosts", flags)!.GetValue(owner.Registry)!;
-        return (SessionToolExecutor)typeof(LocalSessionTurnHostFactory)
-            .GetField("tools", flags)!
-            .GetValue(hosts)!;
+        return (SessionToolExecutor)
+            typeof(LocalSessionTurnHostFactory).GetField("tools", flags)!.GetValue(hosts)!;
     }
 
     private static async Task<JsonObject> Read(
@@ -30,26 +29,54 @@ public sealed class ArchiveReadIsolationTests
             args["sessionId"] = target;
         var executor = Tools(source);
         executor.BeginTurn();
-        return (await executor.ExecuteAsync(new JsonObject
-        {
-            ["id"] = Guid.NewGuid().ToString("N"),
-            ["name"] = unified ? "call_tool" : tool,
-            ["args"] = unified
-                ? new JsonObject { ["source"] = "builtin", ["name"] = tool, ["args"] = args }
-                : args,
-        }, default))!.AsObject();
+        return (
+            await executor.ExecuteAsync(
+                new JsonObject
+                {
+                    ["id"] = Guid.NewGuid().ToString("N"),
+                    ["name"] = unified ? "call_tool" : tool,
+                    ["args"] = unified
+                        ? new JsonObject
+                        {
+                            ["source"] = "builtin",
+                            ["name"] = tool,
+                            ["args"] = args,
+                        }
+                        : args,
+                },
+                default
+            )
+        )!.AsObject();
     }
 
     private static async Task Seed(SessionOwner owner, string marker)
     {
-        await ForkClearLifecycleTests.AppendAsync(owner, new JsonObject
-        {
-            ["role"] = "user",
-            ["parts"] = new JsonArray(new JsonObject { ["text"] = marker }),
-        });
+        await ForkClearLifecycleTests.AppendAsync(
+            owner,
+            new JsonObject
+            {
+                ["role"] = "user",
+                ["parts"] = new JsonArray(new JsonObject { ["text"] = marker }),
+            }
+        );
         owner.Archive.WriteBlocks([
-            new ArchiveBlockRecord(owner.Id, owner.Agent, 1, 1, "message", 1, 1,
-                null, 1, 1, 1000, 1000, marker, null, 1000),
+            new ArchiveBlockRecord(
+                owner.Id,
+                owner.Agent,
+                1,
+                1,
+                "message",
+                1,
+                1,
+                null,
+                1,
+                1,
+                1000,
+                1000,
+                marker,
+                null,
+                1000
+            ),
         ]);
     }
 
@@ -79,8 +106,20 @@ public sealed class ArchiveReadIsolationTests
         var data = Path.Combine(temp.Path, "data");
         var work = Path.Combine(temp.Path, "work");
         Directory.CreateDirectory(work);
-        var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
-        await using var manager = new SessionManager(data, work, options, HostModels.ForTest(options));
+        var options = new ResponsesClientOptions(
+            new Uri("http://127.0.0.1:1"),
+            "wire",
+            "a",
+            "",
+            "",
+            713
+        );
+        await using var manager = new SessionManager(
+            data,
+            work,
+            options,
+            HostModels.ForTest(options)
+        );
         await manager.LoadAsync();
         var admin = await manager.CreateNamedAsync("main", "admin", null, null);
         var foreign = await manager.CreateNamedAsync("main", "foreign", null, null);
@@ -94,12 +133,15 @@ public sealed class ArchiveReadIsolationTests
         // Catalog identity, not the apparent Agent prefix of a live alias, owns the target.
         var moved = await manager.CreateNamedAsync("main", "former-main", null, null);
         await Seed(moved, "MOVED-OWN-CONTENT");
-        await manager.MoveIdentityAsync(admin, new JsonObject
-        {
-            ["sessionId"] = moved.Id,
-            ["newSessionId"] = "moved",
-            ["newAgentName"] = "reader",
-        });
+        await manager.MoveIdentityAsync(
+            admin,
+            new JsonObject
+            {
+                ["sessionId"] = moved.Id,
+                ["newSessionId"] = "moved",
+                ["newAgentName"] = "reader",
+            }
+        );
         await manager.SetAgentIsolationAsync("reader", "offline-bound-node", true, new JsonArray());
         Contains(await Read(reader, tool, unified), "OWN-CONTENT");
         Contains(await Read(reader, tool, unified, sibling.Id), "SIBLING-CONTENT");
@@ -114,9 +156,19 @@ public sealed class ArchiveReadIsolationTests
         Assert.NotNull(unrelatedMissing["error"]);
 
         // An exact capability grant cannot bypass the independent read restriction.
-        await manager.SetAgentIsolationAsync("reader", "offline-bound-node", true, new JsonArray(
-            new JsonObject { ["effect"] = "allow", ["source"] = "builtin", ["tool"] = tool }
-        ));
+        await manager.SetAgentIsolationAsync(
+            "reader",
+            "offline-bound-node",
+            true,
+            new JsonArray(
+                new JsonObject
+                {
+                    ["effect"] = "allow",
+                    ["source"] = "builtin",
+                    ["tool"] = tool,
+                }
+            )
+        );
         Denied(await Read(reader, tool, unified, foreign.Id), "FOREIGN-RETAINED-CONTENT");
         await manager.ClearAsync(foreign);
         await manager.ClearAsync(sibling);
@@ -131,8 +183,12 @@ public sealed class ArchiveReadIsolationTests
         Assert.Null(manager.Catalog.Get(sibling.Id));
         Assert.Null(await manager.GetExistingAsync(sibling.Id));
 
-        await manager.Authorization.InstallAsync(System.Text.Encoding.UTF8.GetBytes(
-            $"version: 1\nrules:\n  - action: deny\n    tool: {{source: builtin, name: {tool}}}\n"), default);
+        await manager.Authorization.InstallAsync(
+            System.Text.Encoding.UTF8.GetBytes(
+                $"version: 1\nrules:\n  - action: deny\n    tool: {{source: builtin, name: {tool}}}\n"
+            ),
+            default
+        );
         Denied(await Read(reader, tool, unified), "OWN-CONTENT");
         Denied(await Read(admin, tool, unified, foreign.Id), "FOREIGN-RETAINED-CONTENT");
     }
