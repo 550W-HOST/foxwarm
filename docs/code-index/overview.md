@@ -11,12 +11,32 @@ This is the entry point for the project map and repository-specific index conven
 
 ## Behavior entry points
 
-For developers and Agents changing what a human or runtime Agent observes, start with the relevant behavior page, then follow its technical and test links:
+For developers and Agents changing what a human or runtime Agent observes, choose the relevant question below. Read that page and its necessary technical links; these are independent entry points, not a sequence that every change must traverse.
 
-- [Conversation and history](./behaviors/conversation-and-history.md): active context, Conversation, Archive, memory, deletion/clear, historical reading and accounting boundaries.
-- [Execution and waiting](./behaviors/execution-and-waiting.md): process versus foreground-wait lifetime, Stop/Run queued/Continue, completion events, explicit waits and normal ToolScript completion.
+### Conversation and ongoing work
 
-These bounded pages own the product semantics they describe; they are not end-user manuals or a second implementation inventory. Threads retain cross-module mechanisms and invariants, modules retain subsystem boundaries, and units retain source/test entry points. For these topics, keep full observable rules at the behavior owner and use short links elsewhere; stable older decision anchors remain navigation points. Source and historical decisions still need checking when a change exposes uncertainty.
+- [Conversation and history](./behaviors/conversation-and-history.md): which history is current, displayed, archived, or durable memory; what clear, deletion, Search, and recall change.
+- [Messages and turns](./behaviors/messages-and-turns.md): when input is queued or committed, how busy-time steering joins requests, and which events wake the model.
+- [Execution and waiting](./behaviors/execution-and-waiting.md): process versus foreground-wait lifetime, Stop/Run queued/Continue, completion events, explicit waits, and normal ToolScript completion.
+
+### Delegation and delivery
+
+- [Collaboration and Tasks](./behaviors/collaboration-and-tasks.md): child versus Task versus message, parent and Agent relations, actor/owner rights, assignment, completion, and handoffs.
+- [Channels and replies](./behaviors/channels-and-replies.md): conversation bindings, triggers and buffered context, automatic replies versus explicit sends, progress, and platform limits.
+
+### Requests, configuration, and recovery
+
+- [Models and requests](./behaviors/models-and-requests.md): selected versus attempted model, retry/failover, adoption, provider-sensitive history, and attribution.
+- [Configuration and activation](./behaviors/configuration-and-activation.md): validated saves, live application, connection fencing, direct file edits, and restart requirements.
+- [Persistence and recovery](./behaviors/persistence-and-recovery.md): authoritative records, restart selection, independently committed effects, unknown outcomes, and rollback limits.
+
+### Environments and browser surfaces
+
+- [Nodes, workspaces, and permissions](./behaviors/nodes-workspaces-and-permissions.md): placement, paths/cwd, authorization, lifecycle, and environment limits.
+- [Files, images, and attachments](./behaviors/files-images-and-attachments.md): draft/upload/history/model/delivery boundaries, image preparation and replay, previews, and download authority.
+- [Workbench and Chat](./behaviors/workbench-and-chat.md): navigation, pane/component/Session/PTY lifetimes, reader intent, Code, and Terminal.
+
+Behavior pages own the observable contracts within their stated scope, not end-user tutorials or a second implementation inventory. Threads retain cross-module mechanisms and precise protocol/storage invariants, modules retain subsystem boundaries, and units retain source/test entry points. Keep the full observable rule at one behavior owner and short linked summaries at technical anchors; keep numerical/current-platform limits and unresolved intent explicitly distinguished from confirmed product decisions. Source and historical decisions still need checking when a change exposes uncertainty.
 
 ## Overview
 

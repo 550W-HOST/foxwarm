@@ -133,12 +133,15 @@ upload flow.
   byte-probed JPEG/PNG/GIF/WebP/BMP within the image cap; other images downgrade
   to generic files within the file cap. Outbound local files are hard-capped at
   100 MiB; this is lower than the 200 MiB inbound configuration hard cap.
-- Normal `SessionTurnRunner`, automatic attachment delivery, and `send_file`
-  tool context carry no QQ message IDs. Legacy option readers in the adapter and
-  the read-old/drop QueueSource normalizer are not current producers. Explicit
-  request replies bind their own original inbound ID; generic direct text is
-  proactive unless actual call options select a passive route. File delivery
-  independently prefers the adapter's latest conversation-local ID.
+- Current automatic reply context stays adapter-local; `SessionTurnRunner`,
+  automatic attachment delivery and `send_file` tool context carry no QQ message
+  IDs. Legacy option readers and the read-old/drop QueueSource normalizer are
+  not current producers. `sendFile` can still validate an explicitly supplied
+  exact-match legacy fallback; this does not restore source-targeted Session
+  routing. Explicit request replies bind their original inbound ID, generic
+  direct text is proactive unless actual call options select passive delivery,
+  and file delivery independently prefers the latest conversation-local ID.
+  Observable behavior is owned by [latest passive context](../behaviors/channels-and-replies.md#why-can-a-newer-inbound-message-change-where-a-passive-reply-appears).
 
 ## Runtime and configuration
 

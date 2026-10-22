@@ -18,7 +18,7 @@ Owns the platform-neutral channel contract/registry/authorization/runtime plus M
 - [src-channels-qqbot](../units/src-channels-qqbot.md) — official QQ Bot gateway, group policy, deferred ingress media and REST/upload delivery.
 - [src-weixin](../units/src-weixin.md) — Weixin polling/send/QR-login protocol helpers.
 
-Persisted conversation attachments and broadcast selection are owned by [session channels](../units/src-session-channels.md).
+Observable bindings, triggers, reply selection, progress and adapter limits are owned by [Channels and replies](../behaviors/channels-and-replies.md). Persisted conversation attachments and broadcast selection are implemented by [session channels](../units/src-session-channels.md).
 
 ## Public interfaces
 
@@ -32,13 +32,7 @@ Persisted conversation attachments and broadcast selection are owned by [session
 
 ## Identity vocabulary
 
-- `channelType` — adapter/platform type such as `telegram` or `weixin`.
-- `channelInstanceId` / configured channel ID — one registered configured instance.
-- `conversationId` — room/chat/direct target inside that instance.
-- `senderId` — actual sending user where available.
-- `channelTargetId` — direct-send string `<channel-instance-id>:<conversation-id>`.
-
-`platform` and `channelUserId` remain narrow interface/history compatibility fields; new code should not confuse the latter with sender identity.
+[Channel identities](../behaviors/channels-and-replies.md#which-identity-or-binding-should-i-change) distinguish adapter type, configured instance, conversation, sender, and explicit target. The source/API contract uses `channelType`, `channelInstanceId`, `conversationId`, `senderId`, and `<channel-instance-id>:<conversation-id>` targets. `platform` and `channelUserId` remain narrow compatibility fields; the latter is not a sender identity.
 
 ## Runtime behavior
 
@@ -94,17 +88,15 @@ Session broadcast has no aggregate failure promise. It dispatches to eligible ch
 
 ### D-channel-ordinary-text-progress
 
-[2026-09-01, updated 2026-09-06] Ordinary-text tool progress is a generic per-channel-instance presentation option, configured as `channelProgress: { intervalMs }` with a 30,000–1,800,000 ms bound; omission or `false` disables it. Main owns one transient in-memory coordinator keyed by turn, channel instance, and conversation. It consumes only provider-neutral top-level tool start/finish facts, stores bounded sanitized names/counts/running call IDs, uses fixed non-sliding per-target timers, and never writes Session history, archives, catalog state, or recovery data. Sanitization preserves underscores so canonical tool names remain readable and distinct while retaining the existing control-character and channel-markup removal.
+[2026-09-01, updated 2026-09-06] The observable enablement, cadence, target exclusions, silent wait and delivery consequences are owned by [Channel progress](../behaviors/channels-and-replies.md#is-progress-another-reply-or-another-model-input).
 
-Each target has an independent interval and report baseline. A due timer sends a best-effort standalone summary when starts are new or tools remain running. Before ordinary intermediate/final/stop/error text is delivered, that target's unreported summary is prepended and only its baseline is consumed; a terminal turn with pending activity and no ordinary text gets one final standalone flush. Delivery failure cannot poison the semantic turn, and reload/terminal cleanup plus a TTL fence remove stale timers. Explicit tool-owned channel sends, file delivery, typing, WebUI realtime/history, and canonical model content bypass decoration. Active WeWork stream-card delivery remains native and receives no duplicate text fallback; non-stream WeWork and other configured ordinary-text targets use the common path. QQ and WeWork resolve passive context inside their adapters; progress and decorated turn text carry only generic turn metadata.
-
-The exact builtin tool name `wait` is presentation-silent for this fallback: its start/result is excluded from counts, running state, timers, heartbeats, prepends, and terminal flushes. This does not match aliases or suffixes and does not change the tool's Session wait semantics.
+Main's transient coordinator is keyed by turn, configured instance and conversation. It consumes only provider-neutral top-level tool start/finish facts, storing bounded sanitized names/counts/running IDs. Sanitization preserves underscores while removing controls/Channel markup. Fixed non-sliding timers and independent target baselines determine standalone summaries versus prepends; terminal cleanup flushes only pending unreported activity and reload/TTL fences remove stale timers. It writes no Session history, Archive, catalog or recovery state. Delivery failure does not poison the semantic turn. Explicit tool-owned sends/files/typing bypass decoration; QQ/WeWork resolve passive context inside the adapter. The silent-tool matcher is the exact builtin `wait`, not an alias or suffix match. Detailed scheduled/in-flight cleanup races remain in [Channel core](../units/src-channel-core.md#runtime-behavior).
 
 ### D-channel-conversation-latest-passive-context
 
-[2026-09-21] QQ Bot message IDs, WeWork stream-card IDs, and WeWork non-stream `response_url` callbacks are bounded adapter-local passive-delivery context, not Router state, queue boundaries, Worker RPC fields, or tool context. Within one configured Channel instance and scoped conversation, the latest valid inbound context owns subsequent automatic typing, progress, intermediate, final, lifecycle, and ordinary text delivery. Automatic Session output is broadcast to every eligible attachment; each adapter independently selects its passive context or proactive route.
+[2026-09-21] [Latest passive-context behavior](../behaviors/channels-and-replies.md#why-can-a-newer-inbound-message-change-where-a-passive-reply-appears) is adapter-local per instance/conversation; no Router, queue, Worker RPC or tool-context receipt fields select automatic replies.
 
-QQ Bot keeps a bounded in-memory latest-message map and does not persist or receive serialized message IDs from the Session turn. Explicit QQ request-level replies still bind their original inbound ID. Generic direct text is proactive unless real call options select passive delivery; file sends independently prefer adapter-local latest context. WeWork supersedes the previous active card, preserves substantive model text while removing transient thinking/tool status, and finishes it before routing ongoing updates to the latest card. Any ordinary text uses that latest unfinished card without requiring turn metadata; `turnFinal` controls only completion and structured progress controls only progress content. After the card finishes or expires, the existing proactive route applies. Without a stream card, WeWork keeps a bounded in-memory latest `response_url` per conversation; one terminal attachment delivery takes and removes that callback before awaiting the send, so a newer inbound callback cannot be deleted by the older attempt. Explicit webhook overrides and ordinary proactive sends bypass that terminal context. Different instances or conversations never share passive context. This policy adds no delivery ledger, outbox, persisted adapter state, receipt layer, or strategy registry.
+QQ keeps a bounded in-memory latest-message map; normal Session/tool producers do not carry or persist QQ message IDs. Explicit request-level replies retain their original inbound ID, generic direct text is proactive unless real call options select passive delivery, and file sends independently prefer adapter-local latest context. WeWork keeps latest-card aggregation or a bounded latest `response_url` map. Superseding a card removes transient status while preserving substantive text; ordinary text uses the latest unfinished card without requiring turn metadata. `turnFinal` controls completion and structured progress controls progress content; card completion/expiry selects the existing proactive route. A terminal non-stream attachment delivery takes and removes its callback before awaiting send, so the older attempt cannot delete a newer inbound callback. Explicit webhook overrides/proactive sends retain their dedicated routes. These mechanisms add no persisted delivery state, ledger, outbox, or strategy registry.
 
 ### D-channel-wework-think-fold
 

@@ -6,7 +6,7 @@ The React client is shared with the .NET host. Backend-specific access identitie
 
 ## Responsibility
 
-Owns the browser application and WebUI-facing server surface: workbench/session navigation, chat/history streaming, message/tool rendering, composer/ASR, setup/settings, terminal client, and optional Code integration.
+Owns the browser application and WebUI-facing server surface: workbench/session navigation, chat/history streaming, message/tool rendering, composer/ASR, setup/settings, terminal client, and optional Code integration. Start with [Workbench and Chat](../behaviors/workbench-and-chat.md) for surface/resource lifetimes, [files and attachments](../behaviors/files-images-and-attachments.md) for ingress/delivery, or [conversation and history](../behaviors/conversation-and-history.md) for history authority and projection.
 
 ## Modules and units
 

@@ -1,6 +1,6 @@
 ---
 name: code-index
-description: "Use and maintain layered project code indexes: architecture overview, module/thread docs, semantic units, and governed design decisions."
+description: "Use and maintain layered project code indexes: architecture overview, optional behavior contracts, module/thread docs, semantic units, and governed design decisions."
 ---
 
 # Code Index
@@ -21,6 +21,7 @@ In the rest of this skill, `<index-root>` means that resolved directory.
 ```text
 <index-root>/
 ├── overview.md          # Project entry, architecture, principles, local conventions
+├── behaviors/           # Optional observable user/runtime-Agent contracts
 ├── threads/             # Cross-module end-to-end contracts and flows
 ├── modules/             # Module/subtree summaries
 ├── units/               # Bottom-level semantic unit summaries
@@ -32,7 +33,7 @@ In the rest of this skill, `<index-root>` means that resolved directory.
 Before inspecting or modifying code:
 
 1. Resolve the index root. A fresh Session must read relevant Code Index context before changing source or assigning implementation; a source search alone does not replace this step.
-2. Start at the smallest entry that covers the task. Read `overview.md` when the repository or subsystem is unfamiliar; otherwise use the relevant module, thread, or unit directly.
+2. Start at the smallest entry that covers the task. Read `overview.md` when the repository or subsystem is unfamiliar; otherwise use the relevant behavior, module, thread, or unit directly. A repository may omit the behavior layer; read it only when relevant, not as an extra mandatory traversal step.
 3. Identify the few governing contracts and reasons relevant to the task. Follow dependencies when a boundary or material question needs clarification; do not visit every index layer merely to complete a sequence.
 4. Reuse relevant context already read in this Session when it is still current. Read the affected sections after a branch change, conflicting evidence, or new scope; a new small edit does not by itself require rereading unchanged documents.
 5. Verify material claims against source. For translation or replacement, compare the original caller path from entry to observable effects with the new path; a feature summary or the new implementation's own tests cannot establish parity. If source and a recorded contract disagree, identify whether the code or documentation needs correction rather than assuming either is correct.
@@ -49,6 +50,10 @@ After changing source:
 ### `overview.md`
 
 The project entry point: architecture, project-wide principles, module/thread navigation, and necessary repository-specific conventions. Avoid a separate governance entry that readers must discover; do not copy the full generic skill into the overview.
+
+### `behaviors/{name}.md` (optional)
+
+Observable user/runtime-Agent contracts organized around developer questions, actions, and consequences. Link to technical owners for mechanisms, precise protocol/storage invariants, and source/test entry points. Keep each contract at one canonical owner rather than duplicating full rules across behavior and technical pages.
 
 ### `modules/{name}.md`
 
@@ -92,6 +97,7 @@ Every decision has exactly one canonical owner:
 
 | Owner | Use when the contract applies to |
 | --- | --- |
+| Behavior (optional) | An observable user/runtime-Agent contract, with linked technical owners |
 | Unit | One semantic unit only |
 | Module | Multiple units inside one module |
 | Thread | Multiple modules in one end-to-end contract or flow |
@@ -112,9 +118,9 @@ Use project-provided lint/check scripts when available. Otherwise review or auto
 - secrets, credential-shaped values, local usernames, and home-directory paths;
 - CJK or other non-English prose in maintained docs;
 - inconsistent terminology and unstable line-number-heavy references;
-- suspiciously similar Design Decisions across unit/module/thread/overview layers.
+- suspiciously similar Design Decisions across behavior/unit/module/thread/overview layers.
 
-Similar decisions should trigger owner reconciliation, not automatic deletion: select the canonical owner, replace other copies with summary links, and create/use a thread when the contract crosses modules.
+Similar decisions should trigger owner reconciliation, not automatic deletion: select the canonical owner and replace other copies with summary links. Use an optional behavior page for observable contracts where that layer exists, or a thread for cross-module mechanisms.
 
 ## Creating a New Index
 

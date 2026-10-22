@@ -4,7 +4,7 @@ Files: packages/webui/src/components/WorkbenchStatusBar.tsx, packages/webui/src/
 
 ## Purpose
 
-Manages a multi-pane workbench UI with tabbed panels, tab and whole-pane drag-and-drop, direction-aware pane collapse, resizable split layouts, and persistent state. Provides the layout tree structure, tab management store, and rendering components for a VS Code-style tabbed shell.
+Manages a multi-pane workbench UI with tabbed panels, tab and whole-pane drag-and-drop, direction-aware pane collapse, resizable split layouts, and persistent state. Provides the layout tree structure, tab management store, and rendering components for a VS Code-style tabbed shell. [Workbench and Chat](../behaviors/workbench-and-chat.md) owns action/resource consequences; this unit retains layout algorithms, persistence normalization, gestures and source/test navigation.
 
 ## Key Exports
 
@@ -133,7 +133,7 @@ Manual wheel/range scrolling remains in place through Session metadata updates, 
 
 The pane toolbar exposes Collapse only when the workbench has multiple panes. Collapse uses a horizontal minimize line; Expand keeps its direction-aware expansion icon and remains available for a collapsed pane even when it is the only pane, including a persisted collapsed root or a pane left after its siblings close; clicking a collapsed tab also expands it. A pane's direct parent split sets the direction: row splits use a narrow vertical tab list, column splits use a horizontal tab bar, and a single root pane defaults to the horizontal bar. Fixed-pixel panel constraints release space to siblings; expansion restores the pane's recorded size after the panel library applies its new constraints. Separator dragging does not silently collapse panes. Stored split sizes are not overwritten while a direct child pane is collapsed, so reload retains a reasonable expansion size. Live Group defaults are reseeded only when the child topology changes, not on every size publication. When all direct children are collapsed panes, compact chrome is rendered without a resizable Group rather than forcing a tab bar to fill the empty space.
 
-Collapsed chrome renders only tab labels, pane controls, and DND targets for ordinary tabs. Ordinary active content is not admitted while collapsed; the tab strip and content header are also absent. Tab records and selection remain intact; clicking a collapsed tab selects it and expands the pane. Terminal component cleanup detaches its browser connection without deleting the PTY. Code and History retain their existing hidden-instance semantics through the shared content host, as defined by [D-workbench-stable-content](./webui-workbench-content.md#d-workbench-stable-content).
+[Collapse and resource behavior](../behaviors/workbench-and-chat.md#tabs-select-surfaces-panes-arrange-them) retains tab records without invoking resource Close. Collapsed chrome admits only labels, controls and DND targets; content admission follows [the stable host](./webui-workbench-content.md#d-workbench-stable-content).
 
 Pane `collapsed` state is saved in the existing v4 layout. Normalization defaults missing or non-true values to expanded and preserves true values while pruning obsolete tabs, without a new storage version.
 
@@ -143,13 +143,13 @@ Pane `collapsed` state is saved in the existing v4 layout. Normalization default
 
 Pane dragging uses the existing DND context, sensor, overlay, pane edge highlights, and layout-tree removal/split helpers. Header blank-area presses do not navigate the old active tab. Divider-resize handling retains priority at its boundary. Left/right/top/bottom edges dock the intact pane beside the target; center and tab-row targets do not merge or swap panes. Self-drops and cancellation leave the layout unchanged. A moved collapsed pane derives its chrome direction from its new direct parent split.
 
-Pane movement does not Keep previews, duplicate tabs, or close resources. Ordinary tab and Sidebar dragging retain their existing reorder, Keep, center, and edge behavior.
+[Pane movement consequences](../behaviors/workbench-and-chat.md#tabs-select-surfaces-panes-arrange-them) differ from ordinary tab/Sidebar reorder, Keep and center/edge actions; the existing DND dispatch keeps those paths separate.
 
 ### D-workbench-terminal-panel
 
 [2026-10-12] Desktop Terminal launch belongs to the leftmost status-bar control. It opens a lower ordinary workbench pane, initially around 260px (bounded to 25–50% of its source pane), or reuses an exact normalized node/cwd target. Restored terminal tabs sharing the focused editor are docked below it; a terminal already dragged into another pane is reused there rather than moved back. New panel sizing is optional in `splitPaneWithNewTab`/`dockTabToPaneEdge`; ordinary splits retain 50/50 defaults.
 
-The panel uses the existing pane/tab DND, divider resize, persisted layout, and terminal resource lifecycle. Status-button toggle and Collapse retain the PTY; Close on a terminal-only pane closes its terminal tabs through the ordinary backend DELETE path and removes the pane. Close must not migrate terminal tabs into another pane. Collapse and Close remain distinct actions. A mixed pane retains its ordinary close/migration behavior and its other content is not hidden by the Terminal toggle. Terminal-only Close unmounts its content before deletion; disposed connection starts must not create replacement PTYs after an awaited lookup. Mobile retains its Session options launcher because it has no desktop status bar.
+[Terminal panel action/resource behavior](../behaviors/workbench-and-chat.md#tabs-select-surfaces-panes-arrange-them) distinguishes toggle/collapse from Close. The panel reuses pane/tab DND, divider sizing and v4 persistence. Terminal-only Close unmounts contents before the backend DELETE path and never migrates those tabs; disposed connection starts cannot create replacement PTYs after an awaited lookup. Mixed-pane migration and mobile Session-options dispatch remain separate paths.
 
 ## Tests
 
