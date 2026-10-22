@@ -111,7 +111,11 @@ internal sealed partial class SessionManager
         using var creation = TrackCreation();
         var id = owner.Id;
         var operation = new DeleteOperation(
-            Catalog.SelectDeletion(id, false), false, id, null, false
+            Catalog.SelectDeletion(id, false),
+            false,
+            id,
+            null,
+            false
         );
         try
         {
