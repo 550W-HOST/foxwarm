@@ -159,14 +159,20 @@ public sealed class StartupDiagnosticsTests
             Environment.SetEnvironmentVariable("FOXWARM_SYNC_FILE_LOG", sync);
         }
     }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Actual_WS_timeout_is_an_error_but_caller_cancellation_is_ordinary_lifecycle(bool cancel)
+    public async Task Actual_WS_timeout_is_an_error_but_caller_cancellation_is_ordinary_lifecycle(
+        bool cancel
+    )
     {
         using var temp = new TempDirectory();
         Directory.CreateDirectory(Path.Combine(temp.Path, "state"));
-        await File.WriteAllTextAsync(Path.Combine(temp.Path, "state", "config.yaml"), "vector: false\n");
+        await File.WriteAllTextAsync(
+            Path.Combine(temp.Path, "state", "config.yaml"),
+            "vector: false\n"
+        );
         var configuration = new ModelConfiguration(temp.Path);
         await using var peer = await WsPeer.StartAsync();
         var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -178,8 +184,13 @@ public sealed class StartupDiagnosticsTests
         };
         var clock = new ManualWsClock();
         await using var transport = new ResponsesWsTransport(clock);
-        var service = new ResponsesWsChatService(ResponsesWsTests.Options(peer.Uri), transport,
-            ModelRequestScope.Canonical, false, "diagnostics");
+        var service = new ResponsesWsChatService(
+            ResponsesWsTests.Options(peer.Uri),
+            transport,
+            ModelRequestScope.Canonical,
+            false,
+            "diagnostics"
+        );
         using var caller = new CancellationTokenSource();
         var sync = Environment.GetEnvironmentVariable("FOXWARM_SYNC_FILE_LOG");
         try
@@ -187,19 +198,27 @@ public sealed class StartupDiagnosticsTests
             Environment.SetEnvironmentVariable("FOXWARM_SYNC_FILE_LOG", "1");
             using (var log = new MainLog(configuration))
             {
-                var request = service.ChatAsync("fixture", [ResponsesWsTests.Message("user", "fixture")], caller.Token);
+                var request = service.ChatAsync(
+                    "fixture",
+                    [ResponsesWsTests.Message("user", "fixture")],
+                    caller.Token
+                );
                 await reached.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 if (cancel)
                     caller.Cancel();
                 else
                     clock.Advance(TimeSpan.FromSeconds(181));
-                var error = await Record.ExceptionAsync(() => request.WaitAsync(TimeSpan.FromSeconds(5)));
+                var error = await Record.ExceptionAsync(() =>
+                    request.WaitAsync(TimeSpan.FromSeconds(5))
+                );
                 Assert.NotNull(error);
                 Assert.True(request.IsCompleted);
             }
             var discard = File.ReadLines(MainLog.Destination(configuration))
                 .Select(line => JsonNode.Parse(line)!.AsObject())
-                .Single(row => JsonNode.Parse(row["msg"]!.ToString())!["boundary"]!.ToString() == "discard");
+                .Single(row =>
+                    JsonNode.Parse(row["msg"]!.ToString())!["boundary"]!.ToString() == "discard"
+                );
             Assert.Equal(cancel ? 30 : 50, discard["level"]!.GetValue<int>());
         }
         finally
@@ -209,5 +228,4 @@ public sealed class StartupDiagnosticsTests
             Environment.SetEnvironmentVariable("FOXWARM_SYNC_FILE_LOG", sync);
         }
     }
-
 }

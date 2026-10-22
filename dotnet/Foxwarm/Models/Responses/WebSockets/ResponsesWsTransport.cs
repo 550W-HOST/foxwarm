@@ -334,7 +334,11 @@ internal sealed class ResponsesWsTransport(
             }
             var lease = resource.Begin(watched, lifetimeCaller ?? caller, watchdog.Finish);
             using var abortDeadline = deadline.Token.Register(() =>
-                resource.Abort((lifetimeCaller ?? caller).IsCancellationRequested ? "caller-abort" : "attempt-timeout")
+                resource.Abort(
+                    (lifetimeCaller ?? caller).IsCancellationRequested
+                        ? "caller-abort"
+                        : "attempt-timeout"
+                )
             );
             var wire = (JsonObject)body.DeepClone();
             wire.Remove("stream");
@@ -432,9 +436,12 @@ internal sealed class ResponsesWsTransport(
         }
         catch (Exception error)
         {
-            resource?.Abort((lifetimeCaller ?? caller).IsCancellationRequested ? "caller-abort"
-                : caller.IsCancellationRequested || deadline.IsCancellationRequested ? "attempt-timeout"
-                : "request-failure");
+            resource?.Abort(
+                (lifetimeCaller ?? caller).IsCancellationRequested ? "caller-abort"
+                : caller.IsCancellationRequested || deadline.IsCancellationRequested
+                    ? "attempt-timeout"
+                : "request-failure"
+            );
             if (caller.IsCancellationRequested)
                 throw new OperationCanceledException(caller);
             if (deadline.IsCancellationRequested)
