@@ -42,11 +42,13 @@ internal sealed partial class ImageBlobStore
                     parts.Add(part);
                     continue;
                 }
-                var generatedOutput = part["providerMeta"]?["openaiResponses"]?["outputItem"] as JsonObject;
+                var generatedOutput =
+                    part["providerMeta"]?["openaiResponses"]?["outputItem"] as JsonObject;
                 var generatedSource = SessionWait.Text(
                     part["providerMeta"]?["openaiResponses"]?["sourceModelId"]
                 );
-                var nativeGenerated = generatedOutput is not null
+                var nativeGenerated =
+                    generatedOutput is not null
                     && HostedResponsesTools.IsGeneratedImage(generatedOutput);
                 var nativeReplay =
                     SessionWait.Text(message["role"]) == "model"
