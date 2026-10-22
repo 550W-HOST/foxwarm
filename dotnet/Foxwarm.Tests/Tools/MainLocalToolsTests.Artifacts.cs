@@ -124,7 +124,7 @@ public sealed partial class MainLocalToolsTests
         var args = new JsonObject { ["action"] = "publish", ["filePath"] = file };
         Assert.Null((await f.Call("artifact", args))["error"]);
         await File.AppendAllTextAsync(file, " ");
-        Assert.NotNull((await f.Call("artifact", args))["error"]);
+        Assert.NotNull((await f.Call("artifact", (JsonObject)args.DeepClone()))["error"]);
         Assert.Single(
             Directory.GetDirectories(Path.Combine(f.Temp.Path, "data", "state", "artifacts"))
         );

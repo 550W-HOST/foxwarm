@@ -44,7 +44,8 @@ internal sealed partial class WebUIChannel
                     WebUiAccess.Request(request)?.Require(exact);
                     request.HttpContext.Response.Headers.CacheControl = "private, no-store";
                     request.HttpContext.Response.Headers.XContentTypeOptions = "nosniff";
-                    return Results.Json(record);
+                    // Artifact documents are authored JSON, not Message transport envelopes.
+                    return Results.Text(record.ToJsonString(), "application/json");
                 }
                 catch (Exception error)
                     when (error
