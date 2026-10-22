@@ -6,7 +6,7 @@ namespace Foxwarm;
 
 internal sealed partial class MessageRouter
 {
-    private const string CommandSpace =
+    internal const string CommandSpace =
         "[\u0009\u000A\u000B\u000C\u000D\u0020\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]";
 
     internal static bool IsPresentationCommand(string text) =>

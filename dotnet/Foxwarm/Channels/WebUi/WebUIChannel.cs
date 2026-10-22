@@ -288,7 +288,11 @@ internal sealed partial class WebUIChannel(
                     bool Slash(string value) =>
                         System.Text.RegularExpressions.Regex.IsMatch(
                             value,
-                            @"^\s*(?:@[a-zA-Z_\-.]+\s+)?/"
+                            "^"
+                                + MessageRouter.CommandSpace
+                                + "*(?:@[a-zA-Z_\\-.]+"
+                                + MessageRouter.CommandSpace
+                                + "+)?/"
                         );
                     var partsText = string.Join(
                         "\n",
