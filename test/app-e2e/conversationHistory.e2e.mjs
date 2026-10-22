@@ -99,6 +99,13 @@ test('Conversation honors real delete and clear commands across paging, remount 
     assert.deepEqual(await rows(), [], 'reload cannot reconstruct cleared active history from Archive')
     await send('APP_E2E_AFTER_STOP new conversation after clear')
     await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('after stop complete'))
+    // The timeline also renders the live draft; wait for the owner to commit
+    // and release before treating the answer's presence as durable history.
+    await page.waitForFunction(async id => {
+      const response = await fetch(`./api/sessions/${encodeURIComponent(id)}/state`)
+      if (!response.ok) return false
+      return (await response.json()).session?.busy === false
+    }, { timeout: 20_000 }, sessionId)
     const active = (await api('/history')).messages
     assert.equal(active.length, 2)
     assert.ok(active.every(message => message.__meta.seq > archiveHighWater))
