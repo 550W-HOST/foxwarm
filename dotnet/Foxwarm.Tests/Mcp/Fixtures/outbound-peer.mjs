@@ -13,6 +13,7 @@ await mkdir(root, { recursive: true });
 const events = [];
 const holds = new Map();
 const connections = new Map();
+let delayedListUsed = false;
 const record = event => {
   events.push(event);
   return appendFile(join(root, 'events.ndjson'), JSON.stringify(event) + '\n');
@@ -40,7 +41,7 @@ function result(kind) {
     default: return { content: [text({ kind })] };
   }
 }
-function peer(id, authorization = "", transport, notifications = false) {
+function peer(id, authorization = "", transport, notifications = false, delayedList = false) {
   const invalidResults = new Map();
   if (transport) {
     const send = transport.send.bind(transport);
@@ -55,6 +56,10 @@ function peer(id, authorization = "", transport, notifications = false) {
   const server = new Server({ name: 'outbound-qualification-peer', version: '1' }, { capabilities: { tools: {}, ...(notifications ? { experimental: { 'foxwarm/session-notifications': { version: 1 } } } : {}) } });
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     await record({ kind: 'list', id });
+    if (delayedList && !delayedListUsed) {
+      delayedListUsed = true;
+      await new Promise(resolve => setTimeout(resolve, 61000));
+    }
     return { tools: ['probe', 'result', 'hold', 'fail'].map(name => ({ name, description: 'Synthetic outbound qualification', inputSchema: { type: 'object', additionalProperties: true } })).concat(authorization ? [{ name: 'unsafe_descriptor', description: authorization, inputSchema: { type: 'object' } }] : []) };
   });
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
@@ -161,7 +166,7 @@ if (mode === 'stdio') {
       if (!bound && req.method === 'POST' && body?.method === 'initialize') {
         const session = randomUUID();
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => session });
-        const server = peer(session, url.searchParams.get("descriptorSecret") ?? req.headers.authorization ?? "", transport, url.searchParams.has('notifications'));
+        const server = peer(session, url.searchParams.get("descriptorSecret") ?? req.headers.authorization ?? "", transport, url.searchParams.has('notifications'), url.searchParams.has('delayedList'));
         bound = { transport, server };
         connections.set(session, bound);
         await server.connect(transport);

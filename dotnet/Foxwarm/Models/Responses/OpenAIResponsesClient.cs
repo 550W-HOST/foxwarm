@@ -44,20 +44,28 @@ public sealed class UnsupportedResponsesFeatureException(string feature)
     public string Feature { get; } = feature;
 }
 
-public sealed class ResponsesHttpException(
-    HttpStatusCode statusCode,
-    string responseBody,
-    bool bodyTruncated
-)
-    : HttpRequestException(
-        $"OpenAI Responses HTTP request failed with status {(int)statusCode}.",
-        null,
-        statusCode
-    )
+public sealed class ResponsesHttpException : HttpRequestException
 {
-    public string ResponseBody { get; } =
-        Foxwarm.Images.ImageTransport.DiagnosticBody(responseBody);
-    public bool BodyTruncated { get; } = bodyTruncated;
+    public ResponsesHttpException(
+        HttpStatusCode statusCode,
+        string responseBody,
+        bool bodyTruncated
+    )
+        : base(
+            $"OpenAI Responses HTTP request failed with status {(int)statusCode}.",
+            null,
+            statusCode
+        )
+    {
+        ClassificationBody = responseBody;
+        var diagnostic = ModelAttemptFailure.DiagnosticBody(responseBody);
+        ResponseBody = Foxwarm.Images.ImageTransport.DiagnosticBody(diagnostic.Body);
+        BodyTruncated = bodyTruncated || diagnostic.Truncated;
+    }
+
+    internal string ClassificationBody { get; }
+    public string ResponseBody { get; }
+    public bool BodyTruncated { get; }
 }
 
 public static partial class ResponsesRequestSerializer
