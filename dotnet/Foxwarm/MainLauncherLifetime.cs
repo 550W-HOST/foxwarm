@@ -27,12 +27,14 @@ internal sealed class MainLauncherLifetime : IAsyncDisposable
         // Node supplies a connected extra stdio pipe on Unix. It has no socket
         // pathname limit and remains separate from the caller's prompt stream.
         if (!OperatingSystem.IsWindows())
-            return new(new NamedPipeClientStream(
-                PipeDirection.In,
-                isAsync: true,
-                isConnected: true,
-                new SafePipeHandle((IntPtr)int.Parse(name), ownsHandle: true)
-            ));
+            return new(
+                new NamedPipeClientStream(
+                    PipeDirection.In,
+                    isAsync: true,
+                    isConnected: true,
+                    new SafePipeHandle((IntPtr)int.Parse(name), ownsHandle: true)
+                )
+            );
         var pipe = new NamedPipeClientStream(
             ".",
             name,
