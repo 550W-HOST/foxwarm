@@ -102,6 +102,55 @@ test('direct backend tests isolate inherited and module-relative installation co
   await fixture.unchanged()
 })
 
+test('Source lifecycle fixture ignores caller configuration under direct race and cold-reopen entries', { timeout: 60_000 }, async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'fw-lifecycle-canary-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const caller = path.join(root, 'caller')
+  await fs.mkdir(caller)
+  const configPath = path.join(caller, 'config.yaml')
+  const mcpPath = path.join(caller, 'mcp.json')
+  const callerConfig = JSON.stringify({ sessionWorkers: true, dbWorkers: true,
+    paths: { agentsDir: path.join(caller, 'agents') } })
+  await fs.writeFile(configPath, callerConfig)
+  await fs.writeFile(mcpPath, 'synthetic invalid MCP configuration')
+  const env = { ...process.env, NODE_OPTIONS: '', NODE_TEST_CONTEXT: undefined,
+    FOXWARM_TS_ROOT: repo, FOXWARM_DATA_DIR: caller, FOXWARM_CONFIG_PATH: configPath,
+    CONFIG_PATH: configPath, MCP_CONFIG_PATH: mcpPath,
+    FOXWARM_AGENT_DIR: path.join(caller, 'agent'), FOXWARM_AGENTS_DIR: path.join(caller, 'agents') }
+  // The real Source reader selects the owned sibling when not protected by the fixture.
+  const control = await execFileAsync(process.execPath, ['-e', `
+    const c = require('./lib/config');
+    console.log(JSON.stringify({ config: c.APP_CONFIG_PATH, agents: c.AGENTS_DIR,
+      sessionWorkers: c.SESSION_WORKERS_ENABLED, dbWorkers: c.DB_WORKERS_ENABLED }));
+  `], { cwd: repo, env, timeout: 10_000 })
+  assert.deepEqual(JSON.parse(control.stdout.trim().split('\n').at(-1)), {
+    config: configPath, agents: path.join(caller, 'agents'), sessionWorkers: true, dbWorkers: true,
+  })
+  t.diagnostic(`Unprotected Source config control: ${control.stdout.trim()}`)
+  // A successful direct entry cannot have consumed this malformed caller YAML.
+  const poison = 'synthetic-caller-config: [unterminated\n'
+  await fs.writeFile(configPath, poison)
+  const raceRoot = path.join(root, 'race')
+  const coldRoot = path.join(root, 'cold')
+  for (const [mode, dataRoot, preferredOverride] of [
+    ['race', raceRoot, configPath], ['seed', coldRoot, ''], ['reopen', coldRoot, configPath],
+  ]) {
+    const result = await execFileAsync(process.execPath,
+      ['dotnet/lifecycle-transition-fixture-ts.mjs', mode, dataRoot], {
+        cwd: repo, env: { ...env, FOXWARM_CONFIG_PATH: preferredOverride }, timeout: 15_000,
+      })
+    const line = result.stdout.split('\n').find(line => line.startsWith('LIFECYCLE_FIXTURE:'))
+    assert.ok(line, `${mode}: ${result.stdout}${result.stderr}`)
+    const outcome = JSON.parse(line.slice('LIFECYCLE_FIXTURE:'.length))
+    if (mode === 'race') assert.equal(outcome.failedForkRemoved, true)
+    if (mode === 'reopen') assert.equal(outcome.completed, true)
+    t.diagnostic(`${mode}: ${line}`)
+  }
+  assert.equal(await fs.readFile(configPath, 'utf8'), poison)
+  assert.equal(await fs.readFile(mcpPath, 'utf8'), 'synthetic invalid MCP configuration')
+  assert.deepEqual((await fs.readdir(caller)).sort(), ['config.yaml', 'mcp.json'])
+})
+
 test('runtime browser files refuse raw invocation even when a URL and installation token are supplied', { timeout: 30_000 }, async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'fw-e2e-canary-'))
   t.after(() => fs.rm(root, { recursive: true, force: true }))

@@ -161,10 +161,11 @@ public sealed partial class SqliteArchiveMessageStore
                 command.CommandText =
                     "DELETE FROM archive_branches WHERE session_id=$s AND parent_session_id IS $p AND fork_message_seq=$m AND fork_block_id=$b AND created_at=$at AND updated_at=$updated";
                 command.Parameters.AddWithValue("$s", branch.SessionId);
-                command.Parameters.AddWithValue(
-                    "$p",
-                    (object?)branch.ParentSessionId ?? DBNull.Value
-                );
+                // A committed parent move rewrites the branch edge, not this creation's ownership.
+                var parent = branch.ParentSessionId is null
+                    ? null
+                    : ResolveReadOnly(connection, branch.ParentSessionId);
+                command.Parameters.AddWithValue("$p", (object?)parent ?? DBNull.Value);
                 command.Parameters.AddWithValue("$m", branch.MessageCap);
                 command.Parameters.AddWithValue("$b", branch.BlockCap);
                 command.Parameters.AddWithValue("$at", branch.CreatedAt);
