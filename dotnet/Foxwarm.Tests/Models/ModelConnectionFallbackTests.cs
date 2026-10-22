@@ -18,63 +18,95 @@ public sealed class ModelConnectionFallbackTests
         var response = type switch
         {
             "anthropic" => "{\"content\":[{\"type\":\"text\",\"text\":\"fallback answer\"}]}",
-            "openai-completions" => "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"fallback answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
-            _ => "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"fallback answer\"}]}]}}\n\n",
+            "openai-completions" =>
+                "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"fallback answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+            _ =>
+                "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"fallback answer\"}]}]}}\n\n",
         };
-        await using var peer = new LoopbackResponsesServer((stream, _) =>
-            LoopbackResponsesServer.WriteResponseAsync(
-                stream, 200, type == "anthropic" ? "application/json" : "text/event-stream", Encoding.UTF8.GetBytes(response)
-            )
+        await using var peer = new LoopbackResponsesServer(
+            (stream, _) =>
+                LoopbackResponsesServer.WriteResponseAsync(
+                    stream,
+                    200,
+                    type == "anthropic" ? "application/json" : "text/event-stream",
+                    Encoding.UTF8.GetBytes(response)
+                )
         );
-        var baseUri = type == "anthropic" ? new Uri(peer.BaseUri.GetLeftPart(UriPartial.Authority)) : peer.BaseUri;
+        var baseUri =
+            type == "anthropic"
+                ? new Uri(peer.BaseUri.GetLeftPart(UriPartial.Authority))
+                : peer.BaseUri;
         using var temp = new TempDirectory();
         var paths = HostPaths.ForDataRoot(temp.Path, environment: _ => null);
         Directory.CreateDirectory(Path.GetDirectoryName(paths.ConfigPath)!);
         var family = type == "anthropic" ? "anthropic" : "openai";
-        await File.WriteAllTextAsync(paths.ConfigPath, new JsonObject
-        {
-            ["llm"] = new JsonObject
+        await File.WriteAllTextAsync(
+            paths.ConfigPath,
+            new JsonObject
             {
-                [family + "BaseUrl"] = baseUri.ToString(),
-                [family + "ApiKey"] = "synthetic-legacy-key",
-            },
-        }.ToJsonString());
-        var configuration = new ModelConfiguration(paths);
-        await configuration.SaveAsync(new JsonObject
-        {
-            ["yaml"] = new JsonObject
-            {
-                ["providers"] = new JsonObject
+                ["llm"] = new JsonObject
                 {
-                    ["local"] = new JsonObject
-                    {
-                        ["providerType"] = type,
-                        ["baseUrl"] = "",
-                        ["apiKey"] = "",
-                        ["models"] = new JsonArray("wire"),
-                        ["extraFields"] = type == "anthropic" ? new JsonObject { ["stream"] = false } : new JsonObject(),
-                    },
+                    [family + "BaseUrl"] = baseUri.ToString(),
+                    [family + "ApiKey"] = "synthetic-legacy-key",
                 },
-            }.ToJsonString(),
-        });
-        var receipt = await configuration.SaveAppAsync(new JsonObject
-        {
-            ["llm"] = new JsonObject
+            }.ToJsonString()
+        );
+        var configuration = new ModelConfiguration(paths);
+        await configuration.SaveAsync(
+            new JsonObject
             {
-                [family + "BaseUrl"] = baseUri.ToString(),
-                [family + "ApiKey"] = "synthetic-changed-key",
-            },
-        }.ToJsonString());
+                ["yaml"] = new JsonObject
+                {
+                    ["providers"] = new JsonObject
+                    {
+                        ["local"] = new JsonObject
+                        {
+                            ["providerType"] = type,
+                            ["baseUrl"] = "",
+                            ["apiKey"] = "",
+                            ["models"] = new JsonArray("wire"),
+                            ["extraFields"] =
+                                type == "anthropic"
+                                    ? new JsonObject { ["stream"] = false }
+                                    : new JsonObject(),
+                        },
+                    },
+                }.ToJsonString(),
+            }
+        );
+        var receipt = await configuration.SaveAppAsync(
+            new JsonObject
+            {
+                ["llm"] = new JsonObject
+                {
+                    [family + "BaseUrl"] = baseUri.ToString(),
+                    [family + "ApiKey"] = "synthetic-changed-key",
+                },
+            }.ToJsonString()
+        );
         Assert.Contains("llm", receipt["restartRequired"]!.ToJsonString());
-        await configuration.SaveAsync(new JsonObject { ["yaml"] = await File.ReadAllTextAsync(configuration.ActivePath) });
-        Assert.Equal("synthetic-changed-key", new ModelConfiguration(paths).Capture().Resolve("local/wire").Token);
+        await configuration.SaveAsync(
+            new JsonObject { ["yaml"] = await File.ReadAllTextAsync(configuration.ActivePath) }
+        );
+        Assert.Equal(
+            "synthetic-changed-key",
+            new ModelConfiguration(paths).Capture().Resolve("local/wire").Token
+        );
         var model = configuration.Capture().Resolve("local/wire");
         Assert.Equal(baseUri, model.BaseUri);
         Assert.Equal("synthetic-legacy-key", model.Token);
         var defaults = new ResponsesClientOptions(peer.BaseUri, "unused", "unused", "", "", 713);
-        var options = ConfiguredModelRequests.Plan(model, defaults, "low", "prompt", "cache", "turn");
+        var options = ConfiguredModelRequests.Plan(
+            model,
+            defaults,
+            "low",
+            "prompt",
+            "cache",
+            "turn"
+        );
         using var http = ProviderHttpRequest.CreateClient();
-        var result = await ConfiguredModelRequests.CreateService(http, model, options, "cache")
+        var result = await ConfiguredModelRequests
+            .CreateService(http, model, options, "cache")
             .ChatAsync("s", [], default);
         Assert.Contains("fallback answer", result.AssistantMessage!.ToJsonString());
         var request = await peer.Request;
@@ -90,7 +122,9 @@ public sealed class ModelConnectionFallbackTests
     [InlineData("openai-ws", "openai", "https://api.openai.com/v1")]
     [InlineData("anthropic", "anthropic", "https://api.anthropic.com")]
     public void Empty_connections_fall_through_but_nonempty_provider_values_keep_precedence(
-        string type, string family, string defaultUrl
+        string type,
+        string family,
+        string defaultUrl
     )
     {
         var provider = new JsonObject
