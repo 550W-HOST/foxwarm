@@ -354,15 +354,14 @@ public sealed class WebUiAccessTests
             };
             for (var index = 0; index < ordinary.Length; index++)
             {
-                var body =
-                    ordinary[index].Parts
-                        ? new JsonObject
-                        {
-                            ["parts"] = new JsonArray(
-                                new JsonObject { ["text"] = ordinary[index].Text }
-                            ),
-                        }
-                        : new JsonObject { ["text"] = ordinary[index].Text };
+                var body = ordinary[index].Parts
+                    ? new JsonObject
+                    {
+                        ["parts"] = new JsonArray(
+                            new JsonObject { ["text"] = ordinary[index].Text }
+                        ),
+                    }
+                    : new JsonObject { ["text"] = ordinary[index].Text };
                 using var response = await http.PostAsJsonAsync("/api/sessions/chat/message", body);
                 Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
                 var queue = chat.Entry.Snapshot().Queue;
@@ -374,7 +373,9 @@ public sealed class WebUiAccessTests
                     );
                 Assert.NotNull(runtime.Catalog.Get("outside-normal"));
                 Assert.NotNull(runtime.Catalog.Get("outside-delete"));
-                Assert.False(SessionCatalog.Flag(runtime.Catalog.Get("outside-archive")!["archived"]));
+                Assert.False(
+                    SessionCatalog.Flag(runtime.Catalog.Get("outside-archive")!["archived"])
+                );
             }
             Assert.Equal(ordinary.Length, chat.Entry.Snapshot().Queue.Count);
             Assert.False(SessionCatalog.Flag(runtime.Catalog.Get("outside-archive")!["archived"]));
