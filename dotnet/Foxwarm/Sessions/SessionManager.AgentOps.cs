@@ -104,7 +104,8 @@ internal sealed partial class SessionManager
                     childDefaults: (
                         SessionWait.Text(source?["childModelDefault"]),
                         SessionWait.Text(source?["childEffortDefault"])
-                    )
+                    ),
+                    agentMainCreation: true
                 );
                 return (agentName, session.Id);
             }
@@ -480,7 +481,8 @@ internal sealed partial class SessionManager
         bool timerCreation = false,
         string? timerNode = null,
         string? initialNode = null,
-        (string? Model, string? Effort)? childDefaults = null
+        (string? Model, string? Effort)? childDefaults = null,
+        bool agentMainCreation = false
     )
     {
         using var membership = BeginAgentAdmission(agentName);
@@ -507,7 +509,11 @@ internal sealed partial class SessionManager
             id,
             async () =>
             {
-                var (model, effort) = ValidateModelSettings(inherited, forceModel);
+                var (model, effort) = ValidateModelSettings(
+                    inherited,
+                    forceModel,
+                    preserveInheritedModel: agentMainCreation
+                );
                 if (timerCreation)
                     model = inherited?.Model;
                 var selectedModel = models.All.Count == 0 ? null : models.Resolve(model);
@@ -604,7 +610,8 @@ internal sealed partial class SessionManager
 
     private (string? Model, string? Effort) ValidateModelSettings(
         (string? Model, string? Effort)? inherited,
-        JsonObject? forceModel
+        JsonObject? forceModel,
+        bool preserveInheritedModel = false
     )
     {
         if (
@@ -627,7 +634,11 @@ internal sealed partial class SessionManager
                 ? id
                 : throw new InvalidDataException("Unknown configured model key.")
             : inherited?.Model;
-        if (model is not null && !models.Contains(model))
+        // Agent mains copy stored raw selection across configuration removal. Resolution below
+        // still uses the current default for effort and snapshot selection when that key is absent.
+        if (preserveInheritedModel && model is not null)
+            model = SessionGoal.Trim(model) is { Length: > 0 } rawModel ? rawModel : null;
+        if (!preserveInheritedModel && model is not null && !models.Contains(model))
             model = null;
         var allowedEfforts =
             models.All.Count == 0 ? HostModels.Efforts : models.Resolve(model).AllowedEfforts;

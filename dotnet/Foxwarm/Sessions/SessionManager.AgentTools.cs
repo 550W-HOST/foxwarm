@@ -169,7 +169,9 @@ internal sealed partial class SessionManager
                         var selectedSource = sourceId is null
                             ? source
                             : await ResolveAgentCreationSourceAsync(sourceId);
-                        await MoveIdentityAsync(
+                        // Agent conversion is authorized for a nonisolated caller above. Source
+                        // enters identity rename directly, not ordinary move_session isolation policy.
+                        await RenameIdentityAsync(
                             source,
                             new JsonObject
                             {
@@ -177,7 +179,9 @@ internal sealed partial class SessionManager
                                 ["createAgent"] = true,
                                 ["newAgentName"] = nameValue,
                                 ["createAgentInheritMemory"] = copyMemory,
-                            }
+                            },
+                            IdentityMovePurpose.AgentConversion,
+                            semanticCaller.Value ?? default
                         );
                         mainId = selectedSource.Id;
                     }
