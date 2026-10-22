@@ -7,16 +7,21 @@ WINDOW_NAME="foxwarm"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 FOXWARM_DIR="$(dirname "$SCRIPT_DIR")"
 
-# Build first
-echo "Building foxwarm..."
-cd "$FOXWARM_DIR"
-npm run build-all || exit 1
-
 NODE_BIN="${FOXWARM_NODE_BIN:-$(command -v node || true)}"
 if [ -z "$NODE_BIN" ]; then
     echo "Error: node not found. Set FOXWARM_NODE_BIN=/path/to/node"
     exit 1
 fi
+
+# Capture an explicit installation root before changing the caller's directory.
+if [ -n "${FOXWARM_APP_ROOT:-}" ]; then
+    FOXWARM_APP_ROOT="$("$NODE_BIN" -e 'process.stdout.write(require(process.argv[1]).coreEnvironment().FOXWARM_APP_ROOT)' "$SCRIPT_DIR/core-executable.js")" || exit 1
+fi
+
+# Build first
+echo "Building foxwarm..."
+cd "$FOXWARM_DIR"
+npm run build-all || exit 1
 
 UNSET_ENV=""
 SET_ENV=""

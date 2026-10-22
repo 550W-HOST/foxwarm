@@ -8,7 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const net = require('node:net');
-const { spawn, execFileSync } = require('node:child_process');
+const { spawn, spawnSync, execFileSync } = require('node:child_process');
 const { once } = require('node:events');
 
 const repository = path.resolve(__dirname, '..');
@@ -343,3 +343,123 @@ for (const signal of ['SIGTERM', 'SIGKILL']) {
     assert(!running(pid));
   });
 }
+
+function tmuxFixture(t) {
+  const cleanup = [];
+  const f = fixture({ after: fn => cleanup.push(fn) });
+  const bin = path.join(f.root, 'bin');
+  const socket = path.join(f.root, 'tmux.socket');
+  fs.mkdirSync(bin);
+  for (const file of ['start.sh', 'restart.sh'])
+    fs.copyFileSync(path.join(__dirname, file), path.join(f.app, 'scripts', file));
+  const tmuxBin = execFileSync('bash', ['-c', 'command -v tmux'], { encoding: 'utf8' }).trim();
+  // Only build acquisition is stubbed; the launcher and managed Main are real.
+  fs.writeFileSync(path.join(bin, 'npm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\nexec "$TEST_TMUX_BIN" -S "$TEST_TMUX_SOCKET" -f /dev/null "$@"\n`, { mode: 0o755 });
+  const env = { ...f.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+    TEST_TMUX_BIN: tmuxBin, TEST_TMUX_SOCKET: socket, TMUX: '',
+    FOXWARM_NODE_BIN: process.execPath, FOXWARM_TMUX_SESSION: 'root-selection',
+    FOXWARM_DATA_DIR: 'selected data', FOXWARM_CONFIG_PATH: 'chosen.yaml',
+    FOXWARM_SYNC_FILE_LOG: '0' };
+  function tmux(...args) {
+    return execFileSync(tmuxBin, ['-S', socket, '-f', '/dev/null', ...args], { env, encoding: 'utf8' }).trim();
+  }
+  t.after(async () => {
+    spawnSync(tmuxBin, ['-S', socket, 'kill-server']);
+    for (const release of cleanup) await release();
+  });
+  // A stale server root must not decide what this invocation selects.
+  tmux('new-session', '-d', '-s', 'fixture');
+  tmux('set-option', '-g', 'default-shell', '/bin/bash');
+  tmux('set-option', '-g', 'automatic-rename', 'off');
+  tmux('set-environment', '-g', 'FOXWARM_APP_ROOT', path.join(f.root, 'stale installation'));
+  function install(app) {
+    fs.mkdirSync(path.join(app, 'selected data/state'), { recursive: true });
+    fs.writeFileSync(path.join(app, 'chosen.yaml'), 'vector: false\nbot: {enableWebUI: false, enableTrigger: false}\npaths: {agentsDir: "owned agents"}\n');
+    fs.writeFileSync(path.join(app, 'wrong.yaml'), 'bot: {httpPort: -1}\n');
+  }
+  function pane() {
+    return tmux('list-panes', '-t', '=root-selection:=foxwarm', '-F', '#{pane_id}');
+  }
+  function text() { return tmux('capture-pane', '-p', '-S', '-1000', '-t', pane()); }
+  async function ready(count = 1) {
+    await until(() => (text().match(/Main started without HTTP\./g) || []).length === count, 'Managed Main did not start in the private tmux pane.');
+  }
+  function run(script, root) {
+    const launchEnv = { ...env };
+    if (root === undefined) delete launchEnv.FOXWARM_APP_ROOT;
+    else launchEnv.FOXWARM_APP_ROOT = root;
+    const result = spawnSync('bash', [path.join(f.app, 'scripts', script)], {
+      cwd: f.cwd, env: launchEnv, encoding: 'utf8', timeout: 15000,
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  }
+  async function stop() {
+    const before = (text().match(/Main stopped\./g) || []).length;
+    tmux('send-keys', '-t', pane(), 'C-c');
+    await until(() => (text().match(/Main stopped\./g) || []).length === before + 1, 'Managed Main did not stop.');
+  }
+  return { ...f, env, tmux, install, run, ready, stop, pane, text };
+}
+
+const tmuxMain = { skip: process.platform !== 'linux' || spawnSync('tmux', ['-V']).status !== 0
+  ? 'Requires Linux, Bash and tmux' : false };
+for (const script of ['start.sh', 'restart.sh']) {
+  for (const mode of ['relative', 'absolute', 'omitted', 'empty']) {
+    test(`Bash ${script} selects ${mode} installation from the caller`, tmuxMain, async t => {
+      const f = tmuxFixture(t);
+      const relative = 'selected installation';
+      const explicit = path.join(f.cwd, relative);
+      const wrong = path.join(f.app, relative);
+      const expected = ['relative', 'absolute'].includes(mode) ? explicit : f.app;
+      // Both roots are valid so the old bug starts successfully in the wrong one.
+      for (const app of [explicit, wrong, f.app]) f.install(app);
+      const input = { relative, absolute: explicit, omitted: undefined, empty: '' }[mode];
+      f.run(script, input);
+      await f.ready();
+      assert(fs.existsSync(path.join(expected, 'owned agents/main/memory')), `Missing selected installation ${expected}; checkout sibling initialized: ${fs.existsSync(path.join(wrong, 'owned agents/main/memory'))}`);
+      assert(fs.existsSync(path.join(expected, 'selected data/state/logs')), 'Diagnostic logs did not use installation-relative data.');
+      for (const other of [explicit, wrong, f.app].filter(app => app !== expected))
+        assert(!fs.existsSync(path.join(other, 'owned agents')), `Initialized unselected installation ${other}`);
+      assert(!fs.existsSync(path.join(f.cwd, 'selected data')), 'Relative data escaped the selected installation.');
+      await f.stop();
+    });
+  }
+}
+
+test('Bash restart stops the running Main before selecting a new caller-relative installation', tmuxMain, async t => {
+  const f = tmuxFixture(t);
+  const relative = 'next installation';
+  const selected = path.join(f.cwd, relative);
+  const wrong = path.join(f.app, relative);
+  for (const app of [f.app, selected, wrong]) f.install(app);
+  f.run('start.sh');
+  await f.ready();
+  const shell = f.tmux('display-message', '-p', '-t', f.pane(), '#{pane_pid}');
+  const launcher = execFileSync('pgrep', ['-P', shell], { encoding: 'utf8' }).trim();
+  const main = Number(execFileSync('pgrep', ['-P', launcher], { encoding: 'utf8' }).trim());
+  f.run('restart.sh', relative);
+  await f.ready(2);
+  assert(!running(main), 'Previous managed Main survived restart.');
+  const log = f.text();
+  assert(log.indexOf('Main stopped.') < log.lastIndexOf('Main started without HTTP.'), log);
+  assert(fs.existsSync(path.join(selected, 'owned agents/main/memory')));
+  assert(!fs.existsSync(path.join(wrong, 'owned agents')));
+  await f.stop();
+});
+
+test('direct package launch resolves a relative explicit installation from the caller', linux, async t => {
+  const f = fixture(t);
+  const relative = 'direct installation';
+  const other = path.join(f.cwd, relative);
+  fs.mkdirSync(other);
+  fs.writeFileSync(path.join(other, 'chosen.yaml'), 'vector: false\nbot: {enableWebUI: false, enableTrigger: false}\n');
+  const instance = await f.launch([f.app], { FOXWARM_APP_ROOT: relative,
+    FOXWARM_DATA_DIR: 'selected data', FOXWARM_CONFIG_PATH: 'chosen.yaml' });
+  const pid = await f.ready(instance);
+  assert(fs.existsSync(path.join(other, 'selected data/agents/main/memory')));
+  assert(!fs.existsSync(path.join(f.app, relative)));
+  instance.child.kill('SIGTERM');
+  assert.deepEqual(await instance.exited, { code: 0, signal: null }, instance.text);
+  await until(() => !running(pid), 'Managed Main survived direct relative-root shutdown.');
+});
