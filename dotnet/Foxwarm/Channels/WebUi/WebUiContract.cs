@@ -105,42 +105,30 @@ internal static class WebUiContract
             if (item.Type != QueueItemType.User)
                 continue;
             var parts = new JsonArray();
+            void AddPreviewParts(IEnumerable<JsonObject> source)
+            {
+                foreach (var part in source)
+                {
+                    var projected = new JsonObject();
+                    foreach (var field in new[] { "text", "system", "thinking" })
+                        if (part[field] is JsonValue text && text.TryGetValue<string>(out var raw))
+                            projected[field] = raw.Length > 4000
+                                ? raw[..4000] + "\n… [preview truncated]"
+                                : raw;
+                    if (projected.Count > 0)
+                        parts.Add(projected);
+                    else if (
+                        part["inlineDataRef"] is not null
+                        || part["inlineData"] is not null
+                        || part["inlineDataUnavailable"] is not null
+                    )
+                        parts.Add(Foxwarm.Images.ImageTransport.Project(part));
+                }
+            }
             if (item.Message?["parts"] is JsonArray existing)
-                foreach (var part in existing.OfType<JsonObject>())
-                    if (part["text"] is JsonValue text && text.TryGetValue<string>(out var raw))
-                        parts.Add(
-                            new JsonObject
-                            {
-                                ["text"] =
-                                    raw.Length > 4000
-                                        ? raw[..4000] + "\n… [preview truncated]"
-                                        : raw,
-                            }
-                        );
-                    else if (
-                        part["inlineDataRef"] is not null
-                        || part["inlineData"] is not null
-                        || part["inlineDataUnavailable"] is not null
-                    )
-                        parts.Add(Foxwarm.Images.ImageTransport.Project(part));
+                AddPreviewParts(existing.OfType<JsonObject>());
             if (item.Parts is not null)
-                foreach (var part in item.Parts)
-                    if (part["text"] is JsonValue text && text.TryGetValue<string>(out var raw))
-                        parts.Add(
-                            new JsonObject
-                            {
-                                ["text"] =
-                                    raw.Length > 4000
-                                        ? raw[..4000] + "\n… [preview truncated]"
-                                        : raw,
-                            }
-                        );
-                    else if (
-                        part["inlineDataRef"] is not null
-                        || part["inlineData"] is not null
-                        || part["inlineDataUnavailable"] is not null
-                    )
-                        parts.Add(Foxwarm.Images.ImageTransport.Project(part));
+                AddPreviewParts(item.Parts);
             if (parts.Count == 0)
                 continue;
             preview.Add(

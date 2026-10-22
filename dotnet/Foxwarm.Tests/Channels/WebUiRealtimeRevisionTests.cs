@@ -11,6 +11,89 @@ namespace Foxwarm.Tests;
 
 public sealed class WebUiRealtimeRevisionTests
 {
+    [Theory]
+    [InlineData("retained")]
+    [InlineData("removed")]
+    [InlineData("deleted")]
+    public async Task Superseded_initialization_keeps_command_replies_only_for_retained_current_owners(string outcome)
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        var work = Path.Combine(temp.Path, "work");
+        Directory.CreateDirectory(work);
+        var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "local/wire", "", "", 713);
+        await using (var seed = new SessionManager(data, work, options, HostModels.ForTest(options)))
+        {
+            await seed.LoadAsync();
+            await seed.CreateNamedAsync("main", "current", null, null);
+            await seed.CreateNamedAsync("main", "cold", null, null);
+        }
+        await using var manager = new SessionManager(data, work, options, HostModels.ForTest(options));
+        await manager.LoadAsync();
+        var owner = await manager.RequiredAsync("current");
+        var reached = Signal();
+        var release = Signal();
+        manager.BeforeAdmissionRead = async (id, token) =>
+        {
+            if (id == "cold")
+            {
+                reached.TrySetResult();
+                await release.Task.WaitAsync(token);
+            }
+        };
+        using var stopped = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var socket = new ProbeSocket();
+        var runtime = new SessionRuntime(manager);
+        var router = new MessageRouter(runtime);
+        var running = new WebUiRealtime(runtime).RunAsync(socket, stopped.Token);
+        bool Applied(long revision) => socket.Frames.Any(frame => frame["type"]?.ToString() == "subscriptions-applied" && frame["revision"]?.GetValue<long>() == revision);
+        bool Reply(JsonObject frame) => frame["type"]?.ToString() == "message" && frame["message"]?["__meta"]?["isCommandResponse"]?.GetValue<bool>() == true;
+        try
+        {
+            socket.SetSessionUnion(1, ["current"]);
+            await Until(() => Applied(1), stopped.Token);
+            socket.SetSessionUnion(2, ["current", "cold"]);
+            await reached.Task.WaitAsync(stopped.Token);
+            var reply = await router.HandleMessageAsync(new("current", "webui"), new("/help", null));
+            Assert.Equal(200, reply.Status);
+            Assert.DoesNotContain(socket.Frames, Reply);
+            Assert.Empty(owner.History());
+            if (outcome == "deleted")
+                await manager.DeleteAsync("current");
+            socket.SetSessionUnion(3, outcome == "removed" ? [] : ["current"]);
+            await Until(() => Applied(3), stopped.Token);
+            var frames = socket.Frames.ToArray();
+            Assert.Equal(outcome == "retained" ? 1 : 0, frames.Count(Reply));
+            if (outcome == "retained")
+            {
+                var accepted = Array.FindIndex(frames, f => f["type"]?.ToString() == "subscriptions-accepted" && f["revision"]?.GetValue<long>() == 3);
+                var draft = Array.FindIndex(frames, accepted, f => f["type"]?.ToString() == "model-stream-snapshot");
+                var delivered = Array.FindIndex(frames, Reply);
+                Assert.True(draft > accepted && delivered > draft);
+                Assert.True(delivered < Array.FindIndex(frames, f => f["type"]?.ToString() == "subscriptions-applied" && f["revision"]?.GetValue<long>() == 3));
+            }
+            Assert.DoesNotContain(frames, f => f["revision"]?.ToString() == "2");
+            Assert.Equal(outcome == "deleted" ? 1 : 0, frames.Count(f => f["type"]?.ToString() == "session-deleted"));
+            release.TrySetResult();
+            await manager.RequiredAsync("cold").WaitAsync(stopped.Token);
+            // Re-register after the superseded loader finishes: neither a stale reply nor snapshot may resurface.
+            if (outcome == "deleted")
+                owner = await manager.CreateNamedAsync("main", "next", null, null);
+            socket.SetSessionUnion(4, [owner.Id]);
+            await Until(() => Applied(4), stopped.Token);
+            await router.HandleMessageAsync(new(owner.Id, "webui"), new("/help", null));
+            await Until(() => socket.Frames.Count(Reply) == (outcome == "retained" ? 2 : 1), stopped.Token);
+            Assert.Empty(owner.History());
+            Assert.DoesNotContain(socket.Frames, f => f["revision"]?.ToString() == "2");
+        }
+        finally
+        {
+            release.TrySetResult();
+            stopped.Cancel();
+            await running;
+        }
+    }
+
     [Fact]
     public async Task QueuedOldBusyFrameCannotFollowNewIdleSubscriptionSnapshot()
     {

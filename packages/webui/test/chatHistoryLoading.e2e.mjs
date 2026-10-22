@@ -1245,6 +1245,52 @@ test('queue-origin append atomically moves one logical input between timelines',
   await page.close()
 })
 
+test('individual queued commits wait for one covered queue/history correction without hiding command replies', async () => {
+  page = await browser.newPage()
+  await page.setViewport({ width: 1000, height: 720 })
+  await page.goto(fixtureUrl, { waitUntil: 'load' })
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 1)
+  await page.evaluate(() => window.resolveFixtureHistory(2, [
+    { role: 'model', parts: [{ text: 'prior committed row' }], __meta: { seq: 1, timestamp: 10 } },
+  ], 0, {
+    messageCount: 1, latestSeq: 1,
+    queuedMessages: ['individual queued A', 'individual queued B'].map((text, index) => ({
+      role: 'user', parts: [{ text }], __meta: { temporary: true, queuedPreview: true, synthetic: 'individual-' + index },
+    })),
+  }))
+  await page.waitForFunction(() => document.querySelector('[data-queued-preview]')?.textContent.includes('individual queued B'))
+  await page.evaluate(() => window.emitFixtureMessage({ role: 'user', parts: [{ text: 'individual queued A' }], __meta: { seq: 2, timestamp: 20 } }))
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 2)
+  await page.evaluate(() => {
+    window.emitFixtureMessage({ role: 'user', parts: [{ text: 'individual queued B' }], __meta: { seq: 3, timestamp: 30 } })
+    window.emitFixtureMessage({ role: 'model', parts: [{ text: 'transient command feedback' }], __meta: { temporary: true, isCommandResponse: true, timestamp: 40 } })
+    window.emitFixtureEvent({
+      type: 'session-state',
+      session: { id: 'fixture/main', busy: true, runtimeState: { state: 'requesting-model' }, queueLength: 0, messageCount: 3, historyVersion: 0, modelKey: 'fixture/model' },
+    })
+    // This response was captured before the second commit and must not publish half the transition.
+    window.resolveFixtureHistory(1, [
+      { role: 'user', parts: [{ text: 'individual queued A' }], __meta: { seq: 2, timestamp: 20 } },
+    ], 0, { messageCount: 2, latestSeq: 2, queuedMessages: [{ role: 'user', parts: [{ text: 'individual queued B' }], __meta: { temporary: true, queuedPreview: true, synthetic: 'individual-1' } }] })
+  })
+  await page.waitForFunction(() => window.fixtureHistoryRequestCount === 3)
+  assert.deepEqual(await page.evaluate(() => ({
+    committed: document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('individual queued A') === true,
+    queued: document.querySelector('[data-queued-preview]')?.textContent.includes('individual queued A') === true,
+    command: document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('transient command feedback') === true,
+  })), { committed: false, queued: true, command: true })
+  await page.evaluate(() => window.resolveFixtureHistory(0, [
+    { role: 'user', parts: [{ text: 'individual queued A' }], __meta: { seq: 2, timestamp: 20 } },
+    { role: 'user', parts: [{ text: 'individual queued B' }], __meta: { seq: 3, timestamp: 30 } },
+  ], 0, { messageCount: 3, latestSeq: 3, queuedMessages: [] }))
+  await page.waitForFunction(() => document.querySelector('[data-chat-timeline="committed"]')?.textContent.includes('individual queued B'))
+  assert.equal(await page.$('[data-queued-preview]'), null)
+  assert.equal(await page.$$eval('[data-chat-message-anchor-key="seq-local-2"]', rows => rows.length), 1)
+  assert.equal(await page.$$eval('[data-chat-message-anchor-key="seq-local-3"]', rows => rows.length), 1)
+  assert.equal(await page.evaluate(() => document.body.textContent.includes('transient command feedback')), true)
+  await page.close()
+})
+
 test('queue-origin append after an earlier missing canonical row preserves the safe frontier and recovers atomically', async () => {
   page = await browser.newPage()
   await page.setViewport({ width: 1000, height: 720 })
