@@ -270,9 +270,17 @@ internal static class AgentToolDefinitions
                     {
                         ["agentName"] = String("Existing agent that will own the session."),
                         ["sessionName"] = String(
-                            "Session name without the agent prefix; it cannot contain /."
+                            "Session name without the agent prefix. Use only ASCII letters, digits, underscores, and hyphens."
                         ),
                         ["displayName"] = String("Display name for the new session."),
+                        ["parentSessionId"] = String("Existing session to record as the new session's parent."),
+                        ["node"] = String("Node for the new session. Omit to inherit this session's current Node. An isolated target agent uses its bound Node."),
+                        ["systemPromptFiles"] = new JsonObject
+                        {
+                            ["type"] = "array",
+                            ["description"] = "Memory source files for the new prompt snapshot. When supplied, these replace the default memory-file selection; other system instructions remain.",
+                            ["items"] = String("File path. Relative paths use the agent directory; absolute paths and ~/ paths are accepted."),
+                        },
                         ["forceModel"] = ForceModel(),
                     },
                     "agentName",
@@ -281,7 +289,7 @@ internal static class AgentToolDefinitions
             ),
             Tool(
                 "create_child_session",
-                "Create a child Session under the current Session. If taskId is supplied, attach the new Session to that task; when the task-linked child completes, use task(action:\"complete\", ...) for the completion report instead of sending a separate completion message. Without taskId, preserve the normal completion-report behavior.",
+                "Create a child Session under the current Session. With taskId, assign or transfer the task to the child, deliver its full description and any message as one assignment, and start work. Complete the task with the task tool. Completion notifies a Session creator automatically; do not send a separate routine completion report. Without taskId, message is optional and normal completion reporting applies.",
                 Parameters(
                     new JsonObject
                     {
@@ -292,14 +300,14 @@ internal static class AgentToolDefinitions
                             "Existing task to assign or transfer to the new Session. The child receives the full task description and starts work. Completed or cancelled tasks cannot be assigned."
                         ),
                         ["suffix"] = String(
-                            "Name used to form the child's Session ID. A numeric suffix is added when needed to avoid an existing ID."
+                            "Name for the child. Within the same agent, it replaces a main leaf or is appended to the parent ID. Under a different agent, it becomes that agent's session name. A numeric suffix is added when needed to avoid an existing ID."
                         ),
                         ["fork"] = new JsonObject
                         {
                             ["type"] = "boolean",
                             ["default"] = false,
                             ["description"] =
-                                "Copy the parent's conversation history and prompt snapshot into the child. Defaults to false. Forks must remain in the same agent.",
+                                "Copy the parent's current context into the child. Defaults to false. Context copying is available only when the child belongs to the same agent as the parent.",
                         },
                         ["displayName"] = String(
                             "Display name for the new child session. This does not change its session ID."
@@ -316,6 +324,7 @@ internal static class AgentToolDefinitions
                             "finish",
                             "wait"
                         ),
+                        ["node"] = String("Node for the new child session. Omit to inherit the parent's current Node. An isolated target agent uses its bound Node."),
                         ["forceModel"] = ForceModel(),
                         ["handoffConfirmation"] = String(
                             "Put handoffConfirmation last. Use the exact required opening and closing sentences with your own specific review."

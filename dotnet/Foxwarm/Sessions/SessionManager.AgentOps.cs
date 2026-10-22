@@ -50,6 +50,8 @@ internal sealed partial class SessionManager
         await gate.WaitAsync();
         try
         {
+            if (createMainSession && await IdReservedAsync(SessionIdentity.Build(agentName, "main")))
+                throw new InvalidDataException("Agent main Session ID is already reserved.");
             try
             {
                 await agents.CreateAsync(agentName, initialMemory, inherit, initialSoul);
@@ -95,33 +97,45 @@ internal sealed partial class SessionManager
 
     public async Task<SessionOwner> CreateNamedAsync(
         string agentName,
-        string sessionName,
+        string? sessionName,
         string? displayName,
         JsonObject? forceModel,
         string? initialNode = null,
         (string? Model, string? Effort)? inherited = null,
-        IReadOnlyList<string>? selectedFiles = null
+        IReadOnlyList<string>? selectedFiles = null,
+        string? parentSessionId = null
     )
     {
         using var operation = TrackCreation();
-        var gate = CreationKey(SessionIdentity.Build(agentName, sessionName));
-        await gate.WaitAsync();
-        try
+        using var parentMutation = parentSessionId is null
+            ? null
+            : BeginOwnerMutation(await RequiredAsync(parentSessionId));
+        while (true)
         {
-            return await CreateNamedLockedAsync(
-                agentName,
-                sessionName,
-                null,
-                displayName,
-                inherited,
-                forceModel,
-                selectedFiles: selectedFiles,
-                initialNode: initialNode
-            );
-        }
-        finally
-        {
-            gate.Release();
+            var candidate = sessionName ?? GenerateSessionId();
+            ValidateNewSessionName(candidate);
+            var id = SessionIdentity.Build(agentName, candidate);
+            var gate = CreationKey(id);
+            await gate.WaitAsync();
+            try
+            {
+                if (sessionName is null && await IdReservedAsync(id))
+                    continue;
+                return await CreateNamedLockedAsync(
+                    agentName,
+                    candidate,
+                    parentSessionId,
+                    displayName,
+                    inherited,
+                    forceModel,
+                    selectedFiles: selectedFiles,
+                    initialNode: initialNode
+                );
+            }
+            finally
+            {
+                gate.Release();
+            }
         }
     }
 
@@ -133,7 +147,8 @@ internal sealed partial class SessionManager
         string? initialMessage,
         JsonObject? forceModel,
         bool fork = false,
-        string? taskId = null
+        string? taskId = null,
+        string? initialNode = null
     )
     {
         if (
@@ -168,7 +183,8 @@ internal sealed partial class SessionManager
                     true,
                     displayName,
                     forceModel,
-                    taskId
+                    taskId,
+                    initialNode: initialNode
                 );
             else
             {
@@ -198,7 +214,8 @@ internal sealed partial class SessionManager
                     (childRawModel, childRawEffort),
                     forceModel,
                     candidate,
-                    targetAgent == parent.Agent ? AgentMemory.Selection(parentEnvelope) : null
+                    targetAgent == parent.Agent ? AgentMemory.Selection(parentEnvelope) : null,
+                    initialNode: initialNode ?? CurrentNode(parent)
                 );
                 try
                 {
@@ -404,6 +421,7 @@ internal sealed partial class SessionManager
             throw new InvalidOperationException("Host is shutting down.");
         if (!agents.Exists(agentName))
             throw new InvalidDataException($"Agent '{agentName}' does not exist.");
+        ValidateNewSessionName(sessionName);
         var id = exactId ?? SessionIdentity.Build(agentName, sessionName);
         if (!SessionIdentity.IsValid(id) || SessionIdentity.Agent(id) != agentName)
             throw new InvalidDataException("Invalid Session identity.");
@@ -411,13 +429,7 @@ internal sealed partial class SessionManager
             throw new InvalidDataException($"Session ID '{id}' is already reserved.");
         if (parentId is not null && Find(parentId) is null)
             throw new InvalidDataException("Parent Session does not exist.");
-        var selectedNode =
-            BoundNode(agentName)
-            ?? (
-                timerCreation ? timerNode
-                : parentId is not null ? CurrentNode(Find(parentId)!)
-                : initialNode
-            );
+        var selectedNode = BoundNode(agentName) ?? (timerCreation ? timerNode : initialNode);
         if (selectedNode is null && agentName != "main")
         {
             var main = await GetExistingAsync(SessionIdentity.Build(agentName, "main"));
@@ -431,7 +443,8 @@ internal sealed partial class SessionManager
                 var (model, effort) = ValidateModelSettings(inherited, forceModel);
                 if (timerCreation)
                     model = inherited?.Model;
-                var snapshotModel = models.Resolve(model).Key;
+                var selectedModel = models.All.Count == 0 ? null : models.Resolve(model);
+                var snapshotModel = selectedModel is null || selectedModel.IsVirtual ? null : selectedModel.Key;
                 var snapshotText = snapshotModel is null
                     ? ""
                     : await memory.BuildAsync(
@@ -544,15 +557,15 @@ internal sealed partial class SessionManager
             : inherited?.Model;
         if (model is not null && !models.Contains(model))
             model = null;
-        var leaf = models.Resolve(model);
+        var allowedEfforts = models.All.Count == 0 ? HostModels.Efforts : models.Resolve(model).AllowedEfforts;
         var effort = forceModel?["effort"] is JsonNode effortValue
             ? effortValue is JsonValue e
             && e.TryGetValue<string>(out var raw)
-            && leaf.AllowedEfforts.Contains(raw, StringComparer.Ordinal)
+            && allowedEfforts.Contains(raw, StringComparer.Ordinal)
                 ? raw
                 : throw new InvalidDataException("Requested model effort is not allowed.")
             : inherited?.Effort;
-        if (effort is not null && !leaf.AllowedEfforts.Contains(effort, StringComparer.Ordinal))
+        if (effort is not null && !allowedEfforts.Contains(effort, StringComparer.Ordinal))
             effort = null;
         return (model, effort);
     }

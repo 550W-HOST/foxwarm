@@ -131,7 +131,7 @@ internal sealed partial class SessionManager
                     );
                 return await CreateNamedAsync(
                     agent,
-                    "s_" + Guid.NewGuid().ToString("N"),
+                    null,
                     null,
                     null
                 );

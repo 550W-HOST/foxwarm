@@ -15,7 +15,7 @@ internal sealed partial class MessageRouter
     )
     {
         var parsed = Regex.Match(rawArgs ?? "", @"^(\S+)(?:\s+([\s\S]*))?$");
-        var suffix = parsed.Success ? parsed.Groups[1].Value : "s_" + Guid.NewGuid().ToString("N");
+        var suffix = parsed.Success ? parsed.Groups[1].Value : runtime.Manager.GenerateSessionId();
         var initial =
             parsed.Groups[2].Success && parsed.Groups[2].Value.Length > 0
                 ? parsed.Groups[2].Value

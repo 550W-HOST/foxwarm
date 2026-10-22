@@ -52,7 +52,7 @@ internal sealed partial class SessionManager
         bool childMode = false
     )
     {
-        suffix = string.IsNullOrEmpty(suffix) ? "fork" : suffix;
+        suffix ??= "fork";
         ValidateForkSuffix(suffix);
         using var operation = TrackCreation();
         using var mutation = BeginOwnerMutation(parent);
@@ -94,7 +94,8 @@ internal sealed partial class SessionManager
         string? displayName,
         JsonObject? forceModel,
         string? taskId = null,
-        bool userInitiated = false
+        bool userInitiated = false,
+        string? initialNode = null
     )
     {
         using var membership = BeginAgentAdmission(parent.Agent);
@@ -107,6 +108,7 @@ internal sealed partial class SessionManager
             childMode && parent.Id.Split('/').Last() == "main"
                 ? SessionIdentity.Build(parent.Agent, suffix)
                 : parent.Id + "_" + suffix;
+        ValidateNewSessionName(baseId.Split('/').Last());
         var id = baseId;
         for (var serial = 2; await IdReservedAsync(id); serial++)
             id = baseId + "_" + serial.ToString(CultureInfo.InvariantCulture);
@@ -134,6 +136,8 @@ internal sealed partial class SessionManager
                 foreach (var field in new[] { "systemPromptFiles", "verbose", "currentNode" })
                     if (original.AuthorityEnvelope.ContainsKey(field))
                         envelope[field] = original.AuthorityEnvelope[field]?.DeepClone();
+                if (initialNode is not null)
+                    envelope["currentNode"] = initialNode;
                 if (displayName is not null)
                     envelope["displayName"] = displayName;
                 if (settings.Model is not null)

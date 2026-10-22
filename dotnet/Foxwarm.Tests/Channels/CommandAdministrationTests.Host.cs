@@ -289,7 +289,7 @@ public sealed partial class CommandAdministrationTests
             .Manager.Catalog.List()
             .Single(row => !before.Contains(SessionWait.Text(row["id"])));
         Assert.Matches(
-            "^" + System.Text.RegularExpressions.Regex.Escape(f.Owner.Id) + "_s_[a-f0-9]{32}$",
+            "^" + System.Text.RegularExpressions.Regex.Escape(f.Owner.Id) + @"_\d{4}_[a-z0-9]{5}$",
             SessionWait.Text(generated["id"])!
         );
         Assert.Equal(
