@@ -144,12 +144,16 @@ public sealed class WeWorkLifecycleTests
                 return Task.CompletedTask;
             }
         );
-        var second = await f.Configuration.SaveChannelsAsync(channels);
+        var second = await f.Configuration.SaveAppAsync(
+            new JsonObject { ["channels"] = channels.DeepClone() }.ToJsonString()
+        );
         Assert.Equal(4, second["reload"]!["stopped"]!.AsArray().Count);
         Assert.Equal(4, second["reload"]!["started"]!.AsArray().Count);
         var collision = peer.Config(port);
         channels["z-collision"] = collision;
-        var partial = await f.Configuration.SaveChannelsAsync(channels);
+        var partial = await f.Configuration.SaveAppAsync(
+            new JsonObject { ["channels"] = channels.DeepClone() }.ToJsonString()
+        );
         Assert.Equal(4, partial["reload"]!["started"]!.AsArray().Count);
         Assert.NotNull(f.Manager.ChannelRegistry.Get("work"));
         Assert.Null(f.Manager.ChannelRegistry.Get("z-collision"));

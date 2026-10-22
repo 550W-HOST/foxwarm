@@ -66,7 +66,9 @@ public sealed class TelegramLifecycleTests
         };
         try
         {
-            var save = f.Configuration.SaveChannelsAsync(channels);
+            var save = f.Configuration.SaveAppAsync(
+                new JsonObject { ["channels"] = channels.DeepClone() }.ToJsonString()
+            );
             await sync.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await save.WaitAsync(TimeSpan.FromSeconds(2));
             Assert.Contains(

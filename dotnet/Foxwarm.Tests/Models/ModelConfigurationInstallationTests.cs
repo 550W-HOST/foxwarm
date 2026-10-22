@@ -7,7 +7,7 @@ namespace Foxwarm.Tests;
 public sealed class ModelConfigurationInstallationTests
 {
     [Fact]
-    public async Task Channel_section_saves_preserve_numeric_identity_strings_progress_numbers_and_complete_JSON_app_documents()
+    public async Task Weixin_login_preserves_numeric_identity_strings_progress_numbers_and_complete_JSON_app_documents()
     {
         using var temp = new TempDirectory();
         var configuration = new ModelConfiguration(temp.Path);
@@ -21,23 +21,50 @@ public sealed class ModelConfigurationInstallationTests
                 ["channelProgress"] = new JsonObject { ["intervalMs"] = 30000 },
             },
         };
-        await configuration.SaveChannelsAsync(channels);
+        await configuration.SaveAppAsync(
+            "channels:\n  alpha:\n    type: telegram\n    allowedUsers: ['11']\n    mainAttachUser: '42'\n    channelProgress: {intervalMs: 30000}\n# between channel entries\n  weixin: {enabled: false, token: old-token}\n\n# retained following section\nother: {preserve: true}\n"
+        );
+        var settings = configuration.WeixinSettings(new JsonObject { ["channelId"] = "weixin" });
+        await configuration.SaveWeixinLoginAsync(
+            settings,
+            new(true, "confirmed", "synthetic-login-token", "11"),
+            setup: true
+        );
         var block = ConfigurationYaml.Parse(configuration.ReadCurrentAppRaw(), "config");
+        Assert.Equal(
+            "synthetic-login-token",
+            block["channels"]!["weixin"]!["token"]!.GetValue<string>()
+        );
+        Assert.Equal(2, block["channels"]!.AsObject().Count);
+        Assert.Contains(
+            "# retained following section\nother: {preserve: true}",
+            configuration.ReadCurrentAppRaw()
+        );
         Assert.Equal("11", block["channels"]!["alpha"]!["allowedUsers"]![0]!.GetValue<string>());
         Assert.Equal("42", block["channels"]!["alpha"]!["mainAttachUser"]!.GetValue<string>());
         Assert.Equal(
             30000d,
             block["channels"]!["alpha"]!["channelProgress"]!["intervalMs"]!.GetValue<double>()
         );
-        await configuration.SaveAppAsync("{\"channels\":{},\"unrelated\":{\"retained\":true}}");
-        await configuration.SaveChannelsAsync(channels);
+        await configuration.SaveAppAsync(
+            new JsonObject
+            {
+                ["channels"] = channels.DeepClone(),
+                ["unrelated"] = new JsonObject { ["retained"] = true },
+            }.ToJsonString()
+        );
+        await configuration.SaveWeixinLoginAsync(
+            settings,
+            new(true, "confirmed", "synthetic-login-token", "11"),
+            setup: true
+        );
         var json = JsonNode.Parse(configuration.ReadCurrentAppRaw())!;
         Assert.True(json["unrelated"]!["retained"]!.GetValue<bool>());
         Assert.Equal("11", json["channels"]!["alpha"]!["allowedUsers"]![0]!.GetValue<string>());
     }
 
     [Fact]
-    public async Task Queued_section_save_reads_the_latest_installed_document_inside_the_shared_lane()
+    public async Task Queued_Weixin_login_reads_the_latest_installed_document_inside_the_shared_lane()
     {
         using var temp = new TempDirectory();
         Directory.CreateDirectory(Path.Combine(temp.Path, "state"));
@@ -60,15 +87,10 @@ public sealed class ModelConfigurationInstallationTests
             }
         );
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var section = configuration.SaveChannelsAsync(
-            new JsonObject
-            {
-                ["webui"] = new JsonObject
-                {
-                    ["type"] = "webui",
-                    ["token"] = "synthetic-section-token",
-                },
-            }
+        var section = configuration.SaveWeixinLoginAsync(
+            configuration.WeixinSettings(new JsonObject { ["channelId"] = "weixin" }),
+            new(true, "confirmed", "synthetic-login-token", "11"),
+            setup: true
         );
         Assert.False(section.IsCompleted);
         release.SetResult();
@@ -77,7 +99,7 @@ public sealed class ModelConfigurationInstallationTests
         var current = await File.ReadAllTextAsync(configuration.AppPath);
         Assert.Contains("# latest unrelated comment", current);
         Assert.Contains("maxOutput: 714", current);
-        Assert.Contains("synthetic-section-token", current);
+        Assert.Contains("synthetic-login-token", current);
         var parsed = ConfigurationYaml.Parse(current, "app config");
         Assert.Equal(714d, parsed["llm"]!["maxOutput"]!.GetValue<double>());
         Assert.Contains(

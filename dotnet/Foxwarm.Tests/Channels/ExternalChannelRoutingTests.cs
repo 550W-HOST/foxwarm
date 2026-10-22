@@ -192,7 +192,9 @@ public sealed class ExternalChannelRoutingTests
         var next = ExternalChannelFixture.Channel();
         next["enabled"] = false;
         next["allowedUsers"] = new JsonArray("22");
-        await f.Configuration.SaveChannelsAsync(new JsonObject { ["alpha"] = next });
+        await f.Configuration.SaveAppAsync(
+            new JsonObject { ["channels"] = new JsonObject { ["alpha"] = next } }.ToJsonString()
+        );
         Assert.True(f.Manager.ChannelAuthorization!.Inspect(source).Direct);
         Assert.True(f.Manager.ChannelAuthorization.Inspect(source with { Sender = "22" }).Direct);
         Assert.False(

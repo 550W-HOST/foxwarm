@@ -142,7 +142,9 @@ public sealed class WeixinChannelTests
                     .Text(call.Body["get_updates_buf"])
                     ?.StartsWith("cursor-", StringComparison.Ordinal) == true
         );
-        await f.Configuration.SaveChannelsAsync(channels);
+        await f.Configuration.SaveAppAsync(
+            new JsonObject { ["channels"] = channels.DeepClone() }.ToJsonString()
+        );
         Assert.Equal("shared-token", f.Manager.ManagedChannels.Weixin.Context("alice"));
         await f.Manager.ChannelRegistry.SendAsync("alpha:alice", "after reload", default);
         Assert.Equal(

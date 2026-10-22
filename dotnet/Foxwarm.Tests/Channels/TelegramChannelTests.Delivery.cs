@@ -172,7 +172,9 @@ public sealed partial class TelegramChannelTests
                 ["webhookUrl"] = "http://127.0.0.1:1/fixture",
             },
         };
-        var result = await f.Configuration.SaveChannelsAsync(channels);
+        var result = await f.Configuration.SaveAppAsync(
+            new JsonObject { ["channels"] = channels.DeepClone() }.ToJsonString()
+        );
         Assert.True(SessionCatalog.Flag(result["saved"]));
         Assert.Contains(
             "channels.broken",

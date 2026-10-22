@@ -190,8 +190,8 @@ public sealed class TelegramHostTests
                 .Any(call => (SessionWait.Text(call.Body["text"]) ?? "").Contains("alpha"))
         );
         var setup = await http.PostAsJsonAsync(
-            "api/setup/channels",
-            new JsonObject { ["channels"] = channels.DeepClone() }
+            "api/setup/config",
+            new { yaml = config.ReadCurrentAppRaw() }
         );
         setup.EnsureSuccessStatusCode();
         var installation = (await setup.Content.ReadFromJsonAsync<JsonObject>())!;

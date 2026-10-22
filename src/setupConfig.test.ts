@@ -5,7 +5,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs-extra';
 import yaml from 'js-yaml';
-import { buildModelsConfigFromSetupForm, validateAppConfigYaml, writeAppConfigWithChannels, writeRawAppConfig, writeRawModelsConfig } from './setupConfig';
+import { buildModelsConfigFromSetupForm, validateAppConfigYaml, buildAppConfigWithChannelsYaml, writeRawAppConfig, writeRawModelsConfig } from './setupConfig';
 import { loadModelsConfigFromObject, normalizeHandoffConfirmationEnabled, normalizeNodeProvidersConfig, normalizeProviderImageOutputFormat } from './config';
 
 test('provider image output format accepts WebP or JPEG and rejects unsupported values', () => {
@@ -447,7 +447,7 @@ test('structured virtual setup rejects failover fields on session-hash and non-p
   }
 });
 
-test('structured channel setup updates channels without rewriting unrelated config text', async () => {
+test('Weixin channel candidate building retains unrelated config text', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-setup-channels-'));
   const filePath = path.join(dir, 'config.yaml');
   const rawYaml = `# keep leading comment
@@ -459,6 +459,10 @@ channels:
   old:
     type: telegram
     enabled: false
+# between entries, not a new top-level mapping
+  stale:
+    type: weixin
+    enabled: false
 
 # keep trailing section
 asrService:
@@ -466,7 +470,7 @@ asrService:
 `;
   await fs.writeFile(filePath, rawYaml, 'utf8');
 
-  writeAppConfigWithChannels({
+  const saved = buildAppConfigWithChannelsYaml({
     telegram: {
       type: 'telegram',
       enabled: true,
@@ -475,9 +479,12 @@ asrService:
     },
   }, filePath);
 
-  const saved = await fs.readFile(filePath, 'utf8');
   assert.match(saved, /^# keep leading comment\nbot:\n  name: foxwarm/m);
   assert.match(saved, /# keep trailing section\nasrService:\n  enabled: false\n?$/m);
   assert.match(saved, /channels:\n  telegram:\n    type: telegram\n    enabled: true\n    botToken: 123456:token\n    customChannelField: keep/m);
+  assert.deepEqual(Object.keys(validateAppConfigYaml(saved).channels || {}), ['telegram']);
+  const cleared = buildAppConfigWithChannelsYaml({}, filePath);
+  assert.deepEqual(validateAppConfigYaml(cleared).channels, {});
+  assert.match(cleared, /# keep trailing section\nasrService:\n  enabled: false\n?$/m);
   await fs.remove(dir);
 });

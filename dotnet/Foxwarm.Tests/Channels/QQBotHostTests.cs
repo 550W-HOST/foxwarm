@@ -154,8 +154,8 @@ public sealed class QQBotHostTests
             Console.WriteLine(await stdout);
         }
         var setup = await http.PostAsJsonAsync(
-            "api/setup/channels",
-            new JsonObject { ["channels"] = channels.DeepClone() }
+            "api/setup/config",
+            new { yaml = configuration.ReadCurrentAppRaw() }
         );
         setup.EnsureSuccessStatusCode();
         var installed = (await setup.Content.ReadFromJsonAsync<JsonObject>())!;

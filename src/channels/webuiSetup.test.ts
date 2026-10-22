@@ -44,7 +44,7 @@ test('Setup and model catalog routes reject anonymous and restricted WebUI ident
     const routes: [string, unknown?][] = [
       ['/api/models'], ['/api/setup/status'], ['/api/setup/models', {}],
       ['/api/setup/models/list', {}], ['/api/setup/models/test', {}],
-      ['/api/setup/config', {}], ['/api/setup/channels', {}],
+      ['/api/setup/config', {}],
       ['/api/setup/weixin/login/start', {}], ['/api/setup/weixin/login/wait', {}],
     ];
     for (const [route, body] of routes) {

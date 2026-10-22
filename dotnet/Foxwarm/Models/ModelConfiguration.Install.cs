@@ -21,9 +21,6 @@ internal sealed partial class ModelConfiguration
     internal Task<JsonObject> SaveAppAsync(string raw) =>
         InstallAsync("config", _ => Task.FromResult(Encoding.UTF8.GetBytes(raw)));
 
-    internal Task<JsonObject> SaveChannelsAsync(JsonObject channels) =>
-        InstallAsync("config", _ => Task.FromResult(BuildChannelsBytes(channels)));
-
     private byte[] BuildChannelsBytes(JsonObject channels)
     {
         var currentRaw = ReadCurrentAppRaw();

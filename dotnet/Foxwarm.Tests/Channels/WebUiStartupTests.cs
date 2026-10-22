@@ -457,36 +457,6 @@ public sealed partial class WebUiStartupTests
         Assert.True(config["reload"]!["available"]!.GetValue<bool>());
         Assert.Equal(raw, await File.ReadAllTextAsync(h.ConfigPath));
 
-        var channelResponse = await h.Client.PostAsJsonAsync(
-            "/api/setup/channels",
-            new { channels = new { webui = new { enabled = true } } }
-        );
-        Assert.Equal(HttpStatusCode.OK, channelResponse.StatusCode);
-        var channels = (await channelResponse.Content.ReadFromJsonAsync<JsonObject>())!;
-        Assert.True(channels["success"]!.GetValue<bool>());
-        Assert.True(channels["saved"]!.GetValue<bool>());
-        Assert.Equal("config", channels["target"]!.GetValue<string>());
-        Assert.Equal(
-            new[] { "access.identities", "access.surfaces.mcp", "channels" },
-            channels["applied"]!.AsArray().Select(value => value!.GetValue<string>())
-        );
-        Assert.Equal(
-            new[] { "channels.webui" },
-            channels["notApplied"]!.AsArray().Select(v => v!.GetValue<string>())
-        );
-        Assert.Contains(
-            "channels.webui",
-            channels["restartRequired"]!.AsArray().Select(v => v!.GetValue<string>())
-        );
-        Assert.NotNull(channels["channelsYaml"]);
-        Assert.Equal(1, channels["channelCount"]!.GetValue<int>());
-        Assert.True(channels["reload"]!["available"]!.GetValue<bool>());
-        Assert.Equal(
-            714d,
-            ConfigurationYaml.Parse(await File.ReadAllTextAsync(h.ConfigPath), "config")["llm"]![
-                "maxOutput"
-            ]!.GetValue<double>()
-        );
         // A saved disabled WebUI setting does not unmount the startup-captured administrator route.
         Assert.Equal(
             "admin",
