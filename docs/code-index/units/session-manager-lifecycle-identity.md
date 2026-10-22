@@ -36,4 +36,4 @@ Removal owns only the named Agent's process-local membership admission. Create/c
 
 ## Tests
 
-`AgentDeletionTests*.cs`; `AgentDeletionHttpTests.cs`; `SessionCommandEffectsTests.AgentDeletion.cs`; `SessionIdentityMoveTests.cs`; `SessionIdentityRecoveryTests.cs`; `SessionDeletionTests.cs`; `SessionMovedDeletionTests.cs`; `ForkClearLifecycleTests.cs`; identity interleaving tests.
+`AgentDeletionTests*.cs`; `AgentDeletionHttpTests.cs`; `SessionCommandEffectsTests.AgentDeletion.cs`; `SessionIdentityMoveTests.cs`; `SessionIdentityRecoveryTests.cs`; `SessionDeletionTests.cs`; `SessionMovedDeletionTests.cs`; `ForkClearLifecycleTests.cs`; identity interleaving tests. `LifecycleTransitionTests.cs` covers accepted child publication across a parent move and cold task completion, committed clear followed by move/fork/delete and cold queue recovery, and recursive deletion waiting for an accepted unpublished fork. Its failed-fork/parent-move regression exercises [exact branch compensation](./archive-branch-lineage.md).
