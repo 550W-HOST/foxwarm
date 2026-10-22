@@ -121,20 +121,63 @@ internal sealed partial class SessionManager
                 }
                 case "create_agent":
                 {
-                    Keys(args, ["agentName", "createMainSession", "inherit"], ["agentName"]);
+                    Keys(args, ["agentName", "createMainSession", "inherit", "inheritMemory", "sourceSessionId", "convertSession", "isolatedNode", "toolRules"], ["agentName"]);
                     var nameValue = RequiredString(args, "agentName");
                     var createMain = OptionalBool(args, "createMainSession") ?? true;
-                    var created = await CreateAgentAsync(
-                        nameValue,
-                        createMain,
-                        inherit: OptionalString(args, "inherit")
-                    );
+                    var convert = OptionalBool(args, "convertSession") ?? false;
+                    if (convert && !createMain)
+                        throw new InvalidDataException("convertSession requires createMainSession=true.");
+                    var copyMemory = OptionalBool(args, "inheritMemory") ?? false;
+                    var sourceId = OptionalString(args, "sourceSessionId");
+                    sourceId = string.IsNullOrEmpty(sourceId) ? null : sourceId;
+                    JsonArray? rules = null;
+                    if (args.ContainsKey("toolRules"))
+                        rules = IsolatedToolCompatibility.Metadata(new JsonObject { ["toolRules"] = args["toolRules"]?.DeepClone() }).Rules;
+                    var inherit = OptionalString(args, "inherit");
+                    inherit = string.IsNullOrWhiteSpace(inherit) ? null : inherit.Trim();
+                    if (inherit is not null && !agents.Exists(inherit))
+                        throw new InvalidDataException($"Inherited Agent '{inherit}' does not exist.");
+                    string? mainId;
+                    if (convert)
+                    {
+                        AgentCatalog.ValidateName(nameValue);
+                        if (await IdReservedAsync(SessionIdentity.Build(nameValue, "main")))
+                            throw new InvalidDataException("Agent main Session ID is already reserved.");
+                        var selectedSource = sourceId is null ? source : await ResolveAgentCreationSourceAsync(sourceId);
+                        await MoveIdentityAsync(source, new JsonObject
+                        {
+                            ["sessionId"] = selectedSource.Id,
+                            ["createAgent"] = true,
+                            ["newAgentName"] = nameValue,
+                            ["createAgentInheritMemory"] = copyMemory,
+                        });
+                        mainId = selectedSource.Id;
+                    }
+                    else
+                    {
+                        var created = await CreateAgentAsync(
+                            nameValue,
+                            createMain,
+                            sourceSession: sourceId is null ? source : null,
+                            sourceSessionId: sourceId,
+                            initialModel: SessionWait.Text(source.Entry.Snapshot().AuthorityEnvelope["model"]),
+                            initialNode: CurrentNode(source),
+                            inheritMemory: copyMemory
+                        );
+                        mainId = created.MainSessionId;
+                    }
+                    var isolatedNode = OptionalString(args, "isolatedNode");
+                    isolatedNode = string.IsNullOrWhiteSpace(isolatedNode) ? null : isolatedNode.Trim();
+                    if (isolatedNode is not null || rules is not null)
+                        await SetAgentIsolationAsync(nameValue, isolatedNode, isolatedNode is not null, rules);
+                    if (inherit is not null)
+                        await SetAgentInheritAsync(nameValue, inherit);
+                    if (mainId is not null && (inherit is not null || isolatedNode is not null))
+                        await RefreshSnapshotAsync(await RequiredAsync(mainId));
                     return (
-                        Output(
-                            created.MainSessionId is null
-                                ? $"Created Agent {created.AgentName} without a main Session."
-                                : $"Created Agent {created.AgentName} with main Session {created.MainSessionId}."
-                        ),
+                        Output(mainId is null
+                            ? $"Created Agent {nameValue} without a main Session."
+                            : $"Created Agent {nameValue} with main Session {mainId}."),
                         false
                     );
                 }
@@ -345,11 +388,13 @@ internal sealed partial class SessionManager
                 }
                 case "refresh_session_snapshot":
                 {
-                    Keys(args, [], []);
-                    var model = await RefreshSnapshotAsync(source);
+                    Keys(args, ["sessionId"], []);
+                    var targetId = OptionalString(args, "sessionId");
+                    var target = string.IsNullOrEmpty(targetId) ? source : await RequiredAsync(targetId);
+                    var model = await RefreshSnapshotAsync(target);
                     return (
                         Output(
-                            $"Refreshed Session {source.Id} prompt snapshot for concrete model {model}."
+                            $"Refreshed Session {target.Id} prompt snapshot" + (model is null ? "." : $" for concrete model {model}.")
                         ),
                         false
                     );

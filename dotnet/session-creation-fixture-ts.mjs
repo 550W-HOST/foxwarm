@@ -10,7 +10,10 @@ const text = execFileSync('git', ['show', `${revision}:src/sessionManager.ts`], 
 const ast = ts.createSourceFile('sessionManager.ts', text, ts.ScriptTarget.Latest, true)
 const names = ['generateSessionId', 'allocateGeneratedSessionId', 'generateAvailableSessionName']
 const code = ast.statements.filter(node => ts.isFunctionDeclaration(node) && names.includes(node.name?.text)).map(node => node.getText(ast)).join('\n')
-const js = ts.transpileModule(code, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
+const guestText = execFileSync('git', ['show', `${revision}:src/messageRouter.ts`], { cwd: repository, encoding: 'utf8' })
+const guestAst = ts.createSourceFile('messageRouter.ts', guestText, ts.ScriptTarget.Latest, true)
+const guestCode = guestAst.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'generateGuestAgentName').getText(guestAst)
+const js = ts.transpileModule(code + '\n' + guestCode, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText
 let raw = ''; for await (const chunk of process.stdin) raw += chunk
 const input = JSON.parse(raw)
 const results = []
@@ -24,9 +27,11 @@ for (const item of input.cases) {
     Date: class extends OriginalDate { constructor() { super(item.time) } },
     Math: Object.assign(Object.create(Math), { random: () => { if (!random.length) throw new Error('random sequence exhausted'); return random.shift() } }),
     isSessionIdReserved: async id => { tried.push(id); return (item.reserved || []).includes(id) },
+    fs: { pathExists: async name => { tried.push(name); return (item.reserved || []).includes(name) } },
+    getAgentDir: name => name,
   })
-  vm.runInContext(js + '\nglobalThis.allocate = agent => agent === null ? allocateGeneratedSessionId() : generateAvailableSessionName(agent);', context)
-  const allocated = item.allocate ? await context.allocate(item.agent ?? null) : context.exports.generateSessionId()
+  vm.runInContext(js + '\nglobalThis.allocate = agent => agent === null ? allocateGeneratedSessionId() : generateAvailableSessionName(agent); globalThis.guest = generateGuestAgentName;', context)
+  const allocated = item.guest ? await context.guest(item.agent) : item.allocate ? await context.allocate(item.agent ?? null) : context.exports.generateSessionId()
   results.push({ allocated, tried })
 }
 console.log(JSON.stringify(results))

@@ -136,7 +136,7 @@ internal sealed partial class WebUIChannel(
                     var body =
                         await JsonNode.ParseAsync(request.Body) as JsonObject
                         ?? throw new InvalidDataException("Model settings must be an object.");
-                    return Results.Ok(await runtime.UpdateSettingsAsync(hosted.Id, body));
+                    return Results.Ok(await runtime.UpdateSettingsAsync(hosted.Id, NormalizeHttpModelSettings(body, child: false)));
                 }
                 catch (Exception error)
                     when (error
@@ -163,7 +163,7 @@ internal sealed partial class WebUIChannel(
                     var body =
                         await JsonNode.ParseAsync(request.Body) as JsonObject
                         ?? throw new InvalidDataException("Child settings must be an object.");
-                    return Results.Ok(await hosted.UpdateSettingsAsync(body, child: true));
+                    return Results.Ok(await hosted.UpdateSettingsAsync(NormalizeHttpModelSettings(body, child: true), child: true));
                 }
                 catch (Exception error)
                     when (error
@@ -611,4 +611,46 @@ internal sealed partial class WebUIChannel(
         value = parsed;
         return true;
     }
+    private JsonObject NormalizeHttpModelSettings(JsonObject body, bool child)
+    {
+        var allowed = child
+            ? new[] { "model", "childModelDefault", "clear", "effort", "childEffortDefault" }
+            : ["model", "clear", "effort"];
+        if (body.Any(pair => !allowed.Contains(pair.Key)))
+            throw new InvalidDataException("Unsupported model settings.");
+        var patch = new JsonObject();
+        var modelKey = child && body.ContainsKey("childModelDefault") ? "childModelDefault" : "model";
+        if (body.ContainsKey(modelKey))
+        {
+            var raw = HttpSettingString(body[modelKey], "model");
+            var value = raw is null ? null : SessionGoal.Trim(raw);
+            if (value is "" or "default" or "unset" or "clear")
+                value = null;
+            if (value is not null && !sessions.Models.Contains(value))
+                throw new InvalidDataException("Unknown or unsupported model key.");
+            patch["model"] = value;
+        }
+        else if (body["clear"] is JsonValue clear && clear.TryGetValue<bool>(out var flag) && flag)
+            patch["clear"] = true;
+        var effortKey = child && body.ContainsKey("childEffortDefault") ? "childEffortDefault" : "effort";
+        if (body.ContainsKey(effortKey))
+        {
+            var raw = HttpSettingString(body[effortKey], "effort");
+            var value = raw is null ? null : SessionGoal.Trim(raw).ToLowerInvariant();
+            if (value is "" or "default" or "unset")
+                value = null;
+            if (value is not null && !HostModels.Efforts.Contains(value, StringComparer.Ordinal))
+                throw new InvalidDataException("effort must be a canonical effort string, default, unset, or null.");
+            patch[child ? "childEffortDefault" : "effort"] = value;
+        }
+        return patch;
+    }
+
+    private static string? HttpSettingString(JsonNode? value, string name) => value switch
+    {
+        null => null,
+        JsonValue scalar when scalar.TryGetValue<string>(out var text) => text,
+        _ => throw new InvalidDataException($"{name} must be a string or null."),
+    };
+
 }

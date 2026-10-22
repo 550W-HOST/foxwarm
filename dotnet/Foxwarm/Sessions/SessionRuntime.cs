@@ -176,7 +176,7 @@ internal sealed class SessionRuntime(SessionManager manager)
 
     public Task UpdateDisplayNameAsync(string id, string? name) => manager.RenameAsync(id, name);
 
-    public async Task<string> RefreshSnapshotAsync(string id) =>
+    public async Task<string?> RefreshSnapshotAsync(string id) =>
         await manager.RefreshSnapshotAsync(await manager.RequiredAsync(id));
 
     public async Task<StopResult> StopAsync(string id)

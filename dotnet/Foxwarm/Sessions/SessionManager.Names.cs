@@ -12,10 +12,15 @@ internal sealed partial class SessionManager
     internal string GenerateSessionId()
     {
         var now = SessionNameClock();
+        return now.ToString("MMdd", CultureInfo.InvariantCulture) + "_" + RandomBase36Fraction(5);
+    }
+
+    private string RandomBase36Fraction(int length)
+    {
         var random = SessionNameRandom();
-        // Source uses Math.random().toString(36).substr(2, 5), not five independent
-        // random characters. Keep its short exact fractions (including zero).
-        var fraction = new StringBuilder(5);
+        // Source slices a Math.random().toString(36) fraction rather than choosing
+        // independent characters. Keep its short exact fractions (including zero).
+        var fraction = new StringBuilder(length);
         if (random > 0)
         {
             const string digits = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -41,9 +46,9 @@ internal sealed partial class SessionManager
                     }
                     break;
                 }
-            } while (random >= delta && fraction.Length < 5);
+            } while (random >= delta && fraction.Length < length);
         }
-        return now.ToString("MMdd", CultureInfo.InvariantCulture) + "_" + fraction;
+        return fraction.ToString();
     }
 
     private static void ValidateNewSessionName(string name)

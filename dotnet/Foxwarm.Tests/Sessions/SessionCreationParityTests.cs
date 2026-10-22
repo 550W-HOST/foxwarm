@@ -69,7 +69,7 @@ public sealed partial class SessionCreationParityTests
     private static void RegisterAgentTools(ExternalChannelFixture f)
     {
         var definitions = WorkspaceTools.Definitions();
-        foreach (var definition in AgentToolDefinitions.Definitions())
+        foreach (var definition in AgentToolDefinitions.Definitions().Concat(KnowledgeToolDefinitions.Definitions()).Concat(UnifiedToolDefinitions.All().OfType<JsonObject>()))
             definitions.Add(
                 HandoffConfirmation.Definition(definition, f.Manager.HandoffConfirmationEnabled)
             );
