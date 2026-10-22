@@ -172,7 +172,7 @@ test('queued Weixin login merges only its channel against the latest app configu
     const login = await fixture.save('weixin/login/start', { channelId: 'login-weixin', baseUrl: fixture.upstreamUrl });
     const { pending: first } = await fixture.beginHeldSave();
     const secondAdmitted = fixture.expectAdmission(2);
-    const latest = '# Preserve the latest document\n' + fixture.newer.replace('channels: {}', `channels:\n  other-weixin: { type: weixin, enabled: false, customField: retained }\n  login-weixin: { type: weixin, enabled: false, allowedUsers: [latest-user], customField: latest }`);
+    const latest = '# Preserve the latest document\n' + fixture.newer.replace('channels: {}', `channels:\n  other-weixin: { type: weixin, enabled: false, customField: retained }\n# inside the channel mapping\n  login-weixin: { type: weixin, enabled: false, allowedUsers: [latest-user], customField: latest }`);
     const second = fixture.save('config', { yaml: latest });
     await secondAdmitted;
     const thirdAdmitted = fixture.expectAdmission(3);
@@ -186,6 +186,7 @@ test('queued Weixin login merges only its channel against the latest app configu
     assert.equal(config.url, 'https://new.example.invalid');
     assert.equal(fixture.access.snapshot.identities.reader.token, 'rotated-token');
     const channels = config.channels as any;
+    assert.deepEqual(Object.keys(channels).sort(), ['login-weixin', 'other-weixin']);
     assert.equal(channels['other-weixin'].customField, 'retained');
     assert.equal(channels['login-weixin'].customField, 'latest');
     assert.deepEqual(channels['login-weixin'].allowedUsers, ['latest-user', 'new-user']);

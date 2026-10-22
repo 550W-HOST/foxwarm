@@ -459,6 +459,10 @@ channels:
   old:
     type: telegram
     enabled: false
+# between entries, not a new top-level mapping
+  stale:
+    type: weixin
+    enabled: false
 
 # keep trailing section
 asrService:
@@ -478,5 +482,9 @@ asrService:
   assert.match(saved, /^# keep leading comment\nbot:\n  name: foxwarm/m);
   assert.match(saved, /# keep trailing section\nasrService:\n  enabled: false\n?$/m);
   assert.match(saved, /channels:\n  telegram:\n    type: telegram\n    enabled: true\n    botToken: 123456:token\n    customChannelField: keep/m);
+  assert.deepEqual(Object.keys(validateAppConfigYaml(saved).channels || {}), ['telegram']);
+  const cleared = buildAppConfigWithChannelsYaml({}, filePath);
+  assert.deepEqual(validateAppConfigYaml(cleared).channels, {});
+  assert.match(cleared, /# keep trailing section\nasrService:\n  enabled: false\n?$/m);
   await fs.remove(dir);
 });

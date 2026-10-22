@@ -22,7 +22,7 @@ public sealed class ModelConfigurationInstallationTests
             },
         };
         await configuration.SaveAppAsync(
-            "channels:\n  alpha:\n    type: telegram\n    allowedUsers: ['11']\n    mainAttachUser: '42'\n    channelProgress: {intervalMs: 30000}\n"
+            "channels:\n  alpha:\n    type: telegram\n    allowedUsers: ['11']\n    mainAttachUser: '42'\n    channelProgress: {intervalMs: 30000}\n# between channel entries\n  weixin: {enabled: false, token: old-token}\n\n# retained following section\nother: {preserve: true}\n"
         );
         var settings = configuration.WeixinSettings(new JsonObject { ["channelId"] = "weixin" });
         await configuration.SaveWeixinLoginAsync(
@@ -31,6 +31,9 @@ public sealed class ModelConfigurationInstallationTests
             setup: true
         );
         var block = ConfigurationYaml.Parse(configuration.ReadCurrentAppRaw(), "config");
+        Assert.Equal("synthetic-login-token", block["channels"]!["weixin"]!["token"]!.GetValue<string>());
+        Assert.Equal(2, block["channels"]!.AsObject().Count);
+        Assert.Contains("# retained following section\nother: {preserve: true}", configuration.ReadCurrentAppRaw());
         Assert.Equal("11", block["channels"]!["alpha"]!["allowedUsers"]![0]!.GetValue<string>());
         Assert.Equal("42", block["channels"]!["alpha"]!["mainAttachUser"]!.GetValue<string>());
         Assert.Equal(

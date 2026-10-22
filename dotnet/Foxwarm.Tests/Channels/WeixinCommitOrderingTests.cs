@@ -63,7 +63,8 @@ public sealed class WeixinCommitOrderingTests
                     .Split('\n')
                     .Select(line => "  " + line)
             )
-            + "\n";
+                .Replace("\n  weixin:", "\n# between Weixin entries\n  weixin:")
+            + "\n\n# retained following section\nlast: {preserve: true}\n";
         await File.WriteAllTextAsync(Path.Combine(data, "state", "config.yaml"), raw);
         var settings = await HttpServerSettings.CaptureDesktopAsync(data);
         var configuration = new ModelConfiguration(data);
@@ -132,6 +133,8 @@ public sealed class WeixinCommitOrderingTests
             Assert.Equal("preserve", SessionWait.Text(current["wx-first"]!["custom"]));
             var saved = await File.ReadAllTextAsync(configuration.AppPath);
             Assert.Contains("# retained YAML comment", saved);
+            Assert.Contains("# retained following section\nlast: {preserve: true}", saved);
+            Assert.Equal(2, current.Count);
             Assert.True(
                 SessionCatalog.Flag(ConfigurationYaml.Parse(saved, "app")["other"]!["preserve"])
             );

@@ -162,10 +162,15 @@ function replaceTopLevelSection(rawYaml: string, sectionKey: string, sectionText
   let end = lines.length;
   for (let index = start + 1; index < lines.length; index += 1) {
     const line = lines[index];
-    if (line.trim() && /^\S/.test(line)) {
+    if (line.trim() && /^\S/.test(line) && !line.startsWith('#')) {
       end = index;
       break;
     }
+  }
+
+  // Keep trailing comments and spacing with the surrounding document, not old entries.
+  while (end > start + 1 && (!lines[end - 1].trim() || lines[end - 1].trimStart().startsWith('#'))) {
+    end -= 1;
   }
 
   const nextLines = [
