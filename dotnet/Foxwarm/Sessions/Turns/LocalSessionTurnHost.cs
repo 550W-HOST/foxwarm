@@ -94,8 +94,8 @@ public sealed partial class LocalSessionTurnHost
         foreach (var item in items)
             SessionIngress.EnsureSupportedForRunner(item);
         var appended = await entry
-            .SaveLane.CommitCanonicalAppendWithResultAsync(state =>
-                PrepareQueuedAppend(state, items, finalizing: false, clock),
+            .SaveLane.CommitCanonicalAppendWithResultAsync(
+                state => PrepareQueuedAppend(state, items, finalizing: false, clock),
                 notifyMessages: false
             )
             .ConfigureAwait(false);
@@ -528,8 +528,8 @@ public sealed partial class LocalSessionTurnHost
         foreach (var item in items.Where(item => item.Type != QueueItemType.CompactCommit))
             SessionIngress.EnsureSupportedForRunner(item);
         var appended = await entry
-            .SaveLane.CommitCanonicalAppendWithResultAsync(state =>
-                PrepareQueuedAppend(state, items, finalizing: true, clock),
+            .SaveLane.CommitCanonicalAppendWithResultAsync(
+                state => PrepareQueuedAppend(state, items, finalizing: true, clock),
                 notifyMessages: false
             )
             .ConfigureAwait(false);

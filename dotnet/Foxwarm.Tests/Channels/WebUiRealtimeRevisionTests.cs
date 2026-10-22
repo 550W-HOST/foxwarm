@@ -176,7 +176,10 @@ public sealed class WebUiRealtimeRevisionTests
                 f => f["type"]?.ToString() == "subscriptions-applied"
             );
             Assert.True(draft >= 0 && draft < delivered && delivered < applied);
-            Assert.Single(frames, f => f["message"]?["parts"]?[0]?["text"]?.ToString() == "after-cold-admission");
+            Assert.Single(
+                frames,
+                f => f["message"]?["parts"]?[0]?["text"]?.ToString() == "after-cold-admission"
+            );
         }
         finally
         {

@@ -20,35 +20,38 @@ public sealed partial class SessionSaveLane
         IReadOnlyList<JsonObject> rows = [];
         try
         {
-            await CommitCanonicalAppendWithResultAsync(state =>
-                {
-                    var notice = selection.Notice(
-                        EffectiveRequestSelection.Read(state.Meta["lastEffectiveRequest"]),
-                        failover
-                    );
-                    appended = notice is not null;
-                    var operation = LocalSessionTurnHost.PrepareCanonicalAppend(
-                        state,
-                        notice is null ? [] : [notice],
-                        [],
-                        false,
-                        false,
-                        () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                    );
-                    var meta = (JsonObject)operation.StagedSnapshot.Meta.DeepClone();
-                    meta["lastEffectiveRequest"] = selection.ToJson();
-                    var publish = operation.Publish;
-                    rows = operation.AppendedMessages;
-                    return operation with
+            await CommitCanonicalAppendWithResultAsync(
+                    state =>
                     {
-                        StagedSnapshot = operation.StagedSnapshot with { Meta = meta },
-                        Publish = live =>
+                        var notice = selection.Notice(
+                            EffectiveRequestSelection.Read(state.Meta["lastEffectiveRequest"]),
+                            failover
+                        );
+                        appended = notice is not null;
+                        var operation = LocalSessionTurnHost.PrepareCanonicalAppend(
+                            state,
+                            notice is null ? [] : [notice],
+                            [],
+                            false,
+                            false,
+                            () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                        );
+                        var meta = (JsonObject)operation.StagedSnapshot.Meta.DeepClone();
+                        meta["lastEffectiveRequest"] = selection.ToJson();
+                        var publish = operation.Publish;
+                        rows = operation.AppendedMessages;
+                        return operation with
                         {
-                            publish(live);
-                            live.Meta["lastEffectiveRequest"] = selection.ToJson();
-                        },
-                    };
-                }, notifyMessages: false)
+                            StagedSnapshot = operation.StagedSnapshot with { Meta = meta },
+                            Publish = live =>
+                            {
+                                publish(live);
+                                live.Meta["lastEffectiveRequest"] = selection.ToJson();
+                            },
+                        };
+                    },
+                    notifyMessages: false
+                )
                 .ConfigureAwait(false);
         }
         catch (AuthorityCommittedException)

@@ -76,7 +76,10 @@ public sealed class ForkClearLifecycleTests
         Assert.Equal(2, child.Archive.ReadBranch()!.MessageCap);
         Assert.Equal(3, child.Archive.ReadMessages().Count);
         // Creation appends the suffix before publishing the owner; initial history is snapshot-only.
-        Assert.DoesNotContain(notifications, value => value.Kind == SessionEventKind.MessageCommitted);
+        Assert.DoesNotContain(
+            notifications,
+            value => value.Kind == SessionEventKind.MessageCommitted
+        );
         var manual = await fixture.Manager.ForkAsync(parent, "copy");
         Assert.All(
             manual.Entry.Snapshot().History[before.History.Count].ToJson()["parts"]!.AsArray(),
@@ -138,7 +141,10 @@ public sealed class ForkClearLifecycleTests
             "manual-fork-created",
             parent.Entry.Snapshot().History.Last().ToJsonString()
         );
-        var parentNotice = Assert.Single(notifications, value => value.Kind == SessionEventKind.MessageCommitted);
+        var parentNotice = Assert.Single(
+            notifications,
+            value => value.Kind == SessionEventKind.MessageCommitted
+        );
         Assert.True(JsonNode.DeepEquals(parent.History().Last(), parentNotice.Data));
         var (delegated, delivered) = await fixture.Manager.CreateChildAsync(
             parent,

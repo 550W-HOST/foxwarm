@@ -109,7 +109,8 @@ internal sealed partial class SessionOwner
         {
             try
             {
-                await Entry.SaveLane.CommitCanonicalAppendWithResultAsync(state =>
+                await Entry.SaveLane.CommitCanonicalAppendWithResultAsync(
+                    state =>
                     {
                         var operation = LocalSessionTurnHost.PrepareCanonicalAppend(
                             state,
@@ -121,7 +122,8 @@ internal sealed partial class SessionOwner
                         );
                         rows = operation.AppendedMessages;
                         return operation;
-                    }, notifyMessages: false
+                    },
+                    notifyMessages: false
                 );
                 appended = true;
                 Entry.InvokeHistoryAppended(rows);

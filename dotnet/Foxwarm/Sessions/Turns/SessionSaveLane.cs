@@ -329,14 +329,17 @@ public sealed partial class SessionSaveLane
     )
     {
         IReadOnlyList<JsonObject> rows = [];
-        await CommitCanonicalAppendCoreAsync(state =>
-            {
-                var operation = prepare(state);
-                rows = operation.AppendedMessages
-                    .Select(row => (JsonObject)row.DeepClone())
-                    .ToArray();
-                return operation;
-            }, cancellationToken)
+        await CommitCanonicalAppendCoreAsync(
+                state =>
+                {
+                    var operation = prepare(state);
+                    rows = operation
+                        .AppendedMessages.Select(row => (JsonObject)row.DeepClone())
+                        .ToArray();
+                    return operation;
+                },
+                cancellationToken
+            )
             .ConfigureAwait(false);
         if (entry.BeforeCanonicalNotification is { } before)
             await before();
