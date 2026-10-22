@@ -1,6 +1,6 @@
 # Foxwarm Code Index
 
-This is the entry point for the project map and repository-specific index conventions. The `code-index` skill (`skills/code-index/SKILL.md`) describes the general reading and maintenance method.
+This is the entry point for the project map and repository-specific index conventions. The `code-index` skill (`skills/code-index/SKILL.md`) describes the general reading, evidence-led writing, and maintenance method.
 
 ## Reading and changing the code
 
@@ -36,7 +36,7 @@ For developers and Agents changing what a human or runtime Agent observes, choos
 - [Files, images, and attachments](./behaviors/files-images-and-attachments.md): draft/upload/history/model/delivery boundaries, image preparation and replay, previews, and download authority.
 - [Workbench and Chat](./behaviors/workbench-and-chat.md): navigation, pane/component/Session/PTY lifetimes, reader intent, Code, and Terminal.
 
-Behavior pages own the observable contracts within their stated scope, not end-user tutorials or a second implementation inventory. Threads retain cross-module mechanisms and precise protocol/storage invariants, modules retain subsystem boundaries, and units retain source/test entry points. Keep the full observable rule at one behavior owner and short linked summaries at technical anchors; keep numerical/current-platform limits and unresolved intent explicitly distinguished from confirmed product decisions. Source and historical decisions still need checking when a change exposes uncertainty.
+Behavior pages own the observable contracts within their stated scope, not end-user tutorials or a second implementation inventory. Write them from supported usage paths through their actual consumers, comparing meaningful entry-point and lifecycle differences rather than listing modules or past bugs. The skill's “Writing Behavior Documentation from Supported Use” section owns the evidence and writing method. Threads retain cross-module mechanisms and precise protocol/storage invariants, modules retain subsystem boundaries, and units retain source/test entry points. Keep the full observable rule at one behavior owner and short linked summaries at technical anchors; keep numerical/current-platform limits and unresolved intent explicitly distinguished from confirmed product decisions.
 
 ## Overview
 
