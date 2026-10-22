@@ -94,10 +94,17 @@ internal sealed partial class SessionManager
                     "main",
                     null,
                     null,
-                    (initialModel ?? SessionWait.Text(source?["model"]), SessionWait.Text(source?["effort"])),
+                    (
+                        initialModel ?? SessionWait.Text(source?["model"]),
+                        SessionWait.Text(source?["effort"])
+                    ),
                     null,
-                    initialNode: initialNode ?? (sourceSession is null ? null : CurrentNode(sourceSession)),
-                    childDefaults: (SessionWait.Text(source?["childModelDefault"]), SessionWait.Text(source?["childEffortDefault"]))
+                    initialNode: initialNode
+                        ?? (sourceSession is null ? null : CurrentNode(sourceSession)),
+                    childDefaults: (
+                        SessionWait.Text(source?["childModelDefault"]),
+                        SessionWait.Text(source?["childEffortDefault"])
+                    )
                 );
                 return (agentName, session.Id);
             }
@@ -127,10 +134,17 @@ internal sealed partial class SessionManager
         try
         {
             existing = await GetExistingAsync(id);
-            return existing ?? await CreateNamedLockedAsync(
-                SessionIdentity.Agent(id), id[(id.LastIndexOf('/') + 1)..],
-                null, null, null, null, exactId: id, initialNode: "master"
-            );
+            return existing
+                ?? await CreateNamedLockedAsync(
+                    SessionIdentity.Agent(id),
+                    id[(id.LastIndexOf('/') + 1)..],
+                    null,
+                    null,
+                    null,
+                    null,
+                    exactId: id,
+                    initialNode: "master"
+                );
         }
         finally
         {
@@ -436,7 +450,10 @@ internal sealed partial class SessionManager
         );
         if (modelId is null)
         {
-            var model = models.All.Count == 0 ? null : models.Resolve(SessionWait.Text(snapshot.AuthorityEnvelope["model"]));
+            var model =
+                models.All.Count == 0
+                    ? null
+                    : models.Resolve(SessionWait.Text(snapshot.AuthorityEnvelope["model"]));
             if (model is null || model.IsVirtual)
                 return null;
             modelId = model.Key;

@@ -137,7 +137,11 @@ internal sealed partial class SessionManager
                 {
                     var name = agent + "_" + RandomBase36Fraction(6);
                     var directory = agents.SourceDirectory(name);
-                    if (!agents.Exists(name) && !Directory.Exists(directory) && !File.Exists(directory))
+                    if (
+                        !agents.Exists(name)
+                        && !Directory.Exists(directory)
+                        && !File.Exists(directory)
+                    )
                         return name;
                 }
                 throw new InvalidOperationException("Unable to allocate a guest Agent.");
@@ -154,9 +158,16 @@ internal sealed partial class SessionManager
                     );
                     return await RequiredAsync(created.MainSessionId!);
                 }
-                catch (InvalidDataException error) when (
-                    error.Message.Contains("already reserved", StringComparison.OrdinalIgnoreCase)
-                    || error.Message.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+                catch (InvalidDataException error)
+                    when (error.Message.Contains(
+                            "already reserved",
+                            StringComparison.OrdinalIgnoreCase
+                        )
+                        || error.Message.Contains(
+                            "already exists",
+                            StringComparison.OrdinalIgnoreCase
+                        )
+                    )
                 {
                     // Source retries allocation collisions, not failures after Agent creation.
                 }

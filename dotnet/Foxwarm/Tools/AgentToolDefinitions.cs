@@ -130,7 +130,8 @@ internal static class AgentToolDefinitions
     private static JsonObject CreationIsolationRules()
     {
         var rules = IsolationRules();
-        rules["description"] = "Replace this agent's legacy isolated-tool rules. Use an empty array to clear them. These rules apply only while the agent is isolated, alongside the instance-wide authorization policy.";
+        rules["description"] =
+            "Replace this agent's legacy isolated-tool rules. Use an empty array to clear them. These rules apply only while the agent is isolated, alongside the instance-wide authorization policy.";
         return rules;
     }
 
@@ -265,10 +266,18 @@ internal static class AgentToolDefinitions
                         ["inherit"] = String(
                             "Agent whose memory should be inherited by the new agent."
                         ),
-                        ["inheritMemory"] = Boolean("Copy memory files from the source agent once. Use inherit for ongoing shared-memory inheritance."),
-                        ["sourceSessionId"] = String("Session whose current Node and model provide creation defaults. Defaults to this session."),
-                        ["convertSession"] = Boolean("Convert an existing session into this agent's main session. Requires createMainSession=true."),
-                        ["isolatedNode"] = String("Non-master Node to bind when creating an isolated agent."),
+                        ["inheritMemory"] = Boolean(
+                            "Copy memory files from the source agent once. Use inherit for ongoing shared-memory inheritance."
+                        ),
+                        ["sourceSessionId"] = String(
+                            "Session whose current Node and model provide creation defaults. Defaults to this session."
+                        ),
+                        ["convertSession"] = Boolean(
+                            "Convert an existing session into this agent's main session. Requires createMainSession=true."
+                        ),
+                        ["isolatedNode"] = String(
+                            "Non-master Node to bind when creating an isolated agent."
+                        ),
                         ["toolRules"] = CreationIsolationRules(),
                     },
                     "agentName"
@@ -384,10 +393,14 @@ internal static class AgentToolDefinitions
             Tool(
                 "refresh_session_snapshot",
                 "Refresh a session's prompt snapshot now after changes to memory, inheritance, or available skills, without waiting for an automatic refresh.",
-                Parameters(new JsonObject
-                {
-                    ["sessionId"] = String("Session to refresh now, even if it has been inactive for more than an hour. Defaults to this session."),
-                })
+                Parameters(
+                    new JsonObject
+                    {
+                        ["sessionId"] = String(
+                            "Session to refresh now, even if it has been inactive for more than an hour. Defaults to this session."
+                        ),
+                    }
+                )
             ),
             TaskDefinition(),
         ];
