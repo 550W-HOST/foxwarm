@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Scripting owns ToolScript: a constrained Python-like automation runtime implemented with Monty. It provides foreground and background runs, persistent run records, safe suspension and continuation, nested tool calls, optional model requests without session context, and managed-session orchestration.
+Scripting owns ToolScript: a constrained Python-like automation runtime implemented with Monty. Observable program/result, continuation, and scheduling behavior is owned by [ToolScript and scheduled work](../behaviors/automation-and-scheduled-work.md). It provides foreground and background runs, persistent run records, safe suspension and continuation, nested tool calls, optional model requests without session context, and managed-session orchestration.
 
 ## Key units
 
@@ -44,7 +44,7 @@ Safe timeout/snapshot suspension is canonical in [D-toolscript-safe-timeout](../
 
 ### D-toolscript-one-run-model
 
-One persisted engine implements both modes. The observable initial-slice, pause and caller-wait distinctions are canonical in [execution and waiting](../behaviors/execution-and-waiting.md#toolscript-completion-is-not-a-return-value-control-protocol).
+One persisted engine implements both modes. The observable initial-slice, pause and caller-wait distinctions are canonical in [ToolScript and scheduled work](../behaviors/automation-and-scheduled-work.md#end-the-callers-turn-deliberately).
 
 ### D-toolscript-agent-pause
 

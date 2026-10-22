@@ -5,7 +5,7 @@ Secondary files: src/conditionalMemoryRuntime.test.ts, src/skillCatalogSnapshot.
 
 ## Purpose
 
-Builds Session system-prompt snapshots and owns persisted prompt-cache key generation/reuse outside provider orchestration. Lifecycle, agent settings, compaction and LLM callers use these modules directly. Snapshot building reads metadata facts and filesystem sources; it does not load SessionManager, provider execution, the tool registry or upper-level authorization dispatch.
+Builds Session system-prompt snapshots and owns persisted prompt-cache key generation/reuse outside provider orchestration. Lifecycle, agent settings, compaction and LLM callers use these modules directly. Observable source selection and adoption are owned by [working instructions](../behaviors/conversation-and-history.md#which-instructions-are-in-the-working-context). Snapshot building reads metadata facts and filesystem sources; it does not load SessionManager, provider execution, the tool registry or upper-level authorization dispatch.
 
 ## Key exports
 

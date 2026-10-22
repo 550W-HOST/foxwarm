@@ -53,7 +53,7 @@ There is no general configuration file watcher. A successful filesystem write al
 | App configuration | Does not publish access changes or run managed-channel reload. Startup-owned values are read on restart; direct edits are not equivalent to a supported hot save. |
 | Active models configuration | The next independent model resolution reads it. An invalid edit can fail later resolution; it is not automatically replaced with the previous good configuration. |
 | Tool authorization file | Execution-time loaders can observe it after their successful-cache interval, currently ten seconds per process. After fresh read/parse and one retry fail, authorization fails closed rather than using stale good rules. |
-| Memory or prompt files | File editing and Session prompt-snapshot materialization/refresh remain distinct. Do not infer an immediate system-prompt rewrite from a file save. |
+| Memory or prompt files | Follow the separate [instruction-adoption boundaries](conversation-and-history.md#when-do-changed-instructions-reach-the-model), not installation activation or a general file watcher. |
 
 Missing and malformed files are also different. A missing active models file can read the packaged template as a read-only fallback; that does not initialize a new mutable models file. The active location is always the data root's `state/models.yaml`, not an arbitrary app path override. Model syntax errors are not the missing-file fallback. Path and compatibility readers are owned by [configuration paths](../units/src-config.md#path-resolution).
 

@@ -5,7 +5,7 @@ Secondary files: skills/web-search/web-search.js, skills/web-search/web-search.t
 
 ## Purpose
 
-Implements the skills system: discovering, resolving, and loading skill definitions from multiple sources (agent-local, inherited-agent, global directories). Skills are `SKILL.md`-based knowledge/capability units that can be listed as a catalog and loaded on demand.
+Implements the skills system: discovering, resolving, and loading skill definitions from multiple sources (agent-local, inherited-agent, global directories). Skills are `SKILL.md`-based instruction bundles that can be listed as a catalog and loaded on demand. [Working instructions](../behaviors/conversation-and-history.md#which-instructions-are-in-the-working-context) owns the catalog/entry/resource and instruction-adoption distinctions; this unit owns resolution, metadata, boundaries, and resource enumeration.
 
 ## Key Exports
 

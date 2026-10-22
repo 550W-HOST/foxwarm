@@ -65,7 +65,7 @@ Discovery, default schema injection, strict authorization, and execution are sep
 3. Strict authorization evaluates the actual arguments and affected endpoints. A multi-Node allow must cover every endpoint; a matching Node deny can stop the operation.
 4. The target still validates its own paths, advertised capabilities, connection, and service requirements. A visible tool may therefore reject a particular request.
 
-Conversely, omission from the default model schema does not mean removal: supported hidden tools may be found through discovery and invoked when authorized. A Node listed as connected may be protocol-incompatible or lack a requested capability. These are different failures, not reasons to fall back to Main. See [unified discovery](../modules/tools-and-permissions.md#d-tools-unified-discovery) and [resolved authorization](../threads/tool-dispatch-authorization.md).
+The [programmatic consumer](automation-and-scheduled-work.md#what-does-the-program-consume-and-what-does-the-model-receive) can receive structured discovery descriptors in addition to readable output; this does not widen invocation authority. Conversely, omission from the default model schema does not mean removal: supported hidden tools may be found through discovery and invoked when authorized. A Node listed as connected may be protocol-incompatible or lack a requested capability. These are different failures, not reasons to fall back to Main. See [unified discovery](../modules/tools-and-permissions.md#d-tools-unified-discovery) and [resolved authorization](../threads/tool-dispatch-authorization.md).
 
 ## Lifecycle and platform differences are explicit
 
