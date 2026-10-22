@@ -126,7 +126,12 @@ internal sealed class NodeFileTools(NodePaths paths)
                         throw new InvalidDataException(
                             $"Found {occurrences} occurrences of oldText in file. Edit tool only replaces once. Please make oldText more specific to match exactly one location."
                         );
-                    await FileToolCore.WriteBytes(path, Encoding.UTF8.GetBytes(updated!), true, default);
+                    await FileToolCore.WriteBytes(
+                        path,
+                        Encoding.UTF8.GetBytes(updated!),
+                        true,
+                        default
+                    );
                     result = new JsonObject { ["output"] = "File edited successfully" };
                     break;
                 }
@@ -314,7 +319,14 @@ internal sealed class NodeFileTools(NodePaths paths)
         }
         try
         {
-            if (!await FileToolCore.WriteBytes(path, Encoding.UTF8.GetBytes(content), overwrite, default))
+            if (
+                !await FileToolCore.WriteBytes(
+                    path,
+                    Encoding.UTF8.GetBytes(content),
+                    overwrite,
+                    default
+                )
+            )
                 throw new InvalidDataException(
                     $"File already exists: {display}. Use overwrite=true to overwrite, or use edit tool to modify existing file."
                 );

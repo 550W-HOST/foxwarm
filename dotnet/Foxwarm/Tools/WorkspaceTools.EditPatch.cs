@@ -85,11 +85,7 @@ public sealed partial class WorkspaceTools
                         await MakeDirectoryAsync(await ParentAsync(path, ct), ct);
                         // Parent components created in this operation must still be ordinary directories.
                         path = ResolvePatchPath(operation.Path, true);
-                        await WritePatchFileAsync(
-                            path,
-                            string.Join('\n', operation.Lines),
-                            ct
-                        );
+                        await WritePatchFileAsync(path, string.Join('\n', operation.Lines), ct);
                     }
                     else if (operation.Action == "delete")
                     {
@@ -214,11 +210,7 @@ public sealed partial class WorkspaceTools
         return StrictUtf8.GetString(buffer.ToArray());
     }
 
-    private async Task WritePatchFileAsync(
-        string path,
-        string content,
-        CancellationToken ct
-    )
+    private async Task WritePatchFileAsync(string path, string content, CancellationToken ct)
     {
         if (targetFiles is not null)
         {

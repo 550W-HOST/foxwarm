@@ -27,11 +27,13 @@ internal static partial class FileToolCore
             );
         }
         catch (IOException)
-            when (!overwrite && (
-                File.Exists(path)
-                || Directory.Exists(path)
-                || new FileInfo(path).LinkTarget is not null
-            ))
+            when (!overwrite
+                && (
+                    File.Exists(path)
+                    || Directory.Exists(path)
+                    || new FileInfo(path).LinkTarget is not null
+                )
+            )
         {
             return false;
         }
