@@ -262,6 +262,34 @@
     }
   },
   {
+    "name": "args parse empty array input",
+    "op": "argsParse",
+    "rawInput": []
+  },
+  {
+    "name": "args parse nested array input",
+    "op": "argsParse",
+    "rawInput": [
+      1,
+      null,
+      [
+        true,
+        "x"
+      ],
+      {}
+    ]
+  },
+  {
+    "name": "args parse false input",
+    "op": "argsParse",
+    "rawInput": false
+  },
+  {
+    "name": "args parse small number input",
+    "op": "argsParse",
+    "rawInput": 1e-07
+  },
+  {
     "name": "args parse array input",
     "op": "argsParse",
     "rawInput": [

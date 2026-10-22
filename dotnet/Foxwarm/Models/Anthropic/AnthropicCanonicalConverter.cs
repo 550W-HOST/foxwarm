@@ -72,13 +72,7 @@ internal static class AnthropicCanonicalConverter
                         throw new ModelPreparationException(
                             "Anthropic output has no stable call ID; the legacy/malformed fallback is not implemented."
                         );
-                    // Native non-object inputs are argument errors too, never executor input.
-                    var input = block["input"];
-                    var parsed = FunctionCallArguments.Parse(
-                        input is null or JsonObject || SessionWait.Text(input) is not null
-                            ? input
-                            : JsonValue.Create(input.ToJsonString())
-                    );
+                    var parsed = FunctionCallArguments.Parse(block["input"]);
                     var call = new JsonObject
                     {
                         ["id"] = id,
