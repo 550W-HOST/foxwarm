@@ -334,10 +334,16 @@ public sealed class ResponsesEventAccumulator
                     }
                 }
                 return;
+            case "response.reasoning_summary_part.added":
             case "response.reasoning_summary_part.done":
+                if (outputIndex is not null)
+                    EnsureOutputItem(
+                        outputIndex.Value,
+                        new JsonObject { ["type"] = "reasoning", ["summary"] = new JsonArray() }
+                    );
                 if (
                     eventNode["part"] is JsonObject summaryPart
-                    && String(summaryPart, "text") is { Length: > 0 } summaryText
+                    && String(summaryPart, "text") is { } summaryText
                 )
                 {
                     summaryParts[(outputIndex ?? 0, summaryIndex)] = summaryText;
@@ -345,6 +351,11 @@ public sealed class ResponsesEventAccumulator
                 }
                 return;
             case "response.reasoning_summary_text.delta":
+                if (outputIndex is not null)
+                    EnsureOutputItem(
+                        outputIndex.Value,
+                        new JsonObject { ["type"] = "reasoning", ["summary"] = new JsonArray() }
+                    );
                 if (String(eventNode, "delta") is { Length: > 0 } delta)
                     callbacks?.OnMeaningfulProgress?.Invoke();
                 summaryParts[(outputIndex ?? 0, summaryIndex)] =
@@ -356,6 +367,11 @@ public sealed class ResponsesEventAccumulator
                 EmitSummaryUpdate();
                 return;
             case "response.reasoning_summary_text.done":
+                if (outputIndex is not null)
+                    EnsureOutputItem(
+                        outputIndex.Value,
+                        new JsonObject { ["type"] = "reasoning", ["summary"] = new JsonArray() }
+                    );
                 var key = (outputIndex ?? 0, summaryIndex);
                 var doneSummary = String(eventNode, "text");
                 summaryParts[key] = !string.IsNullOrEmpty(doneSummary)
