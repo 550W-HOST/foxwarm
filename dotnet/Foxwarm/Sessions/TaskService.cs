@@ -61,7 +61,9 @@ internal sealed class TaskService : IDisposable
             )
                 normalized["ownerSessionId"] = resolveSessionId(ownerId) ?? ownerId;
             result = store.ExecuteAsUser(normalized);
-            fullDescription = result.Assignment is null ? null : store.ReadStoredDescription(Text(result.Payload["task"]?["id"])!);
+            fullDescription = result.Assignment is null
+                ? null
+                : store.ReadStoredDescription(Text(result.Payload["task"]?["id"])!);
         }
         finally
         {
@@ -72,7 +74,14 @@ internal sealed class TaskService : IDisposable
         var receipt = new NotificationReceipt();
         var taskId = Text(result.Payload["task"]?["id"]) ?? Text(normalized["taskId"]);
         if (result.Assignment is { } assignment && taskId is not null)
-            await DeliverAssignmentAsync(result.Payload["task"]!.AsObject(), fullDescription, null, assignment, warnings, receipt);
+            await DeliverAssignmentAsync(
+                result.Payload["task"]!.AsObject(),
+                fullDescription,
+                null,
+                assignment,
+                warnings,
+                receipt
+            );
         if (result.CommentOwner is { } commentOwner && taskId is not null)
         {
             try
@@ -91,9 +100,7 @@ internal sealed class TaskService : IDisposable
             }
             catch
             {
-                warnings.Add(
-                    "Comment saved, but the owner notification could not be delivered."
-                );
+                warnings.Add("Comment saved, but the owner notification could not be delivered.");
             }
         }
         if (warnings.Count > 0)
@@ -175,7 +182,9 @@ internal sealed class TaskService : IDisposable
                 selectedAnchor,
                 scopeSessionIds: scopeIds
             );
-            fullDescription = result.Assignment is null ? null : store.ReadStoredDescription(Text(result.Payload["task"]?["id"])!);
+            fullDescription = result.Assignment is null
+                ? null
+                : store.ReadStoredDescription(Text(result.Payload["task"]?["id"])!);
         }
         finally
         {
@@ -189,7 +198,14 @@ internal sealed class TaskService : IDisposable
         {
             if (resultTaskId is null)
                 throw new InvalidDataException("Task assignment did not return a task ID.");
-            await DeliverAssignmentAsync(result.Payload["task"]!.AsObject(), fullDescription, actor!, assignment, warnings, receipt);
+            await DeliverAssignmentAsync(
+                result.Payload["task"]!.AsObject(),
+                fullDescription,
+                actor!,
+                assignment,
+                warnings,
+                receipt
+            );
         }
         if (result.CommentOwner is { } commentOwner && commentOwner != actor)
         {
@@ -216,7 +232,12 @@ internal sealed class TaskService : IDisposable
         {
             if (resultTaskId is null)
                 throw new InvalidDataException("Task completion did not return a task ID.");
-            await DeliverCompletionAsync(result.Payload["task"]!.AsObject(), actor!, warnings, receipt);
+            await DeliverCompletionAsync(
+                result.Payload["task"]!.AsObject(),
+                actor!,
+                warnings,
+                receipt
+            );
         }
         if (warnings.Count > 0)
             result.Payload["warning"] = string.Join(" ", warnings);
@@ -371,7 +392,8 @@ internal sealed class TaskService : IDisposable
     )
     {
         var taskId = Text(task["id"])!;
-        var creator = Text(task["createdByKind"]) == "session" ? Text(task["createdBySessionId"]) : null;
+        var creator =
+            Text(task["createdByKind"]) == "session" ? Text(task["createdBySessionId"]) : null;
         if (creator is null || resolveSessionId(creator) == resolveSessionId(actor))
         {
             store.MarkNotification(taskId, "completionNotificationStatus", "skipped");
@@ -450,12 +472,18 @@ internal sealed class TaskService : IDisposable
         }
     }
 
-    private static string Summary(JsonObject task, bool includeResult = false, string? fullDescription = null)
+    private static string Summary(
+        JsonObject task,
+        bool includeResult = false,
+        string? fullDescription = null
+    )
     {
         var taskId = Text(task["id"])!;
         var title = Text(task["title"]) ?? taskId;
         var status = Text(task["status"]) ?? "unknown";
-        var body = includeResult ? Text(task["result"]) : fullDescription ?? Text(task["description"]);
+        var body = includeResult
+            ? Text(task["result"])
+            : fullDescription ?? Text(task["description"]);
         var limit = fullDescription is not null || includeResult ? int.MaxValue : 1000;
         return $"{taskId} — {title}\nStatus: {status}{(string.IsNullOrEmpty(body) ? "" : $"\n{body[..Math.Min(limit, body.Length)]}")}";
     }

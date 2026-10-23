@@ -305,5 +305,4 @@ internal sealed partial class SessionCatalog
         );
         stream.Flush(flushToDisk: true);
     }
-
 }
