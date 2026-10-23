@@ -480,7 +480,8 @@ internal sealed class RequestChatService(IChatService inner, SessionOwner hosted
         SessionHistory history,
         Func<CancellationToken, Task<bool>> prepareRetry,
         Func<JsonObject, bool, Task<JsonObject>> commitAssistantSegment,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        int iteration = 0
     ) =>
         ChatCoreAsync(
             sessionId,
@@ -488,7 +489,8 @@ internal sealed class RequestChatService(IChatService inner, SessionOwner hosted
             prepareRetry,
             cancellationToken,
             history,
-            commitAssistantSegment
+            commitAssistantSegment,
+            iteration
         );
 
     private async Task<ChatResult> ChatCoreAsync(
@@ -497,7 +499,8 @@ internal sealed class RequestChatService(IChatService inner, SessionOwner hosted
         Func<CancellationToken, Task<bool>>? prepareRetry,
         CancellationToken cancellationToken,
         SessionHistory? snapshot = null,
-        Func<JsonObject, bool, Task<JsonObject>>? commitAssistantSegment = null
+        Func<JsonObject, bool, Task<JsonObject>>? commitAssistantSegment = null,
+        int iteration = 0
     )
     {
         string? requestId = null;
@@ -521,7 +524,8 @@ internal sealed class RequestChatService(IChatService inner, SessionOwner hosted
                             snapshot,
                             Prepare,
                             commitAssistantSegment,
-                            cancellationToken
+                            cancellationToken,
+                            iteration
                         )
                     : await inner.ChatAsync(
                         sessionId,

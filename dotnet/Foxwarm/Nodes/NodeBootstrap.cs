@@ -4,7 +4,11 @@ using System.Text.Json.Nodes;
 
 namespace Foxwarm.Nodes;
 
-internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress address)
+internal sealed class NodeBootstrap(
+    NodeConnectionHub hub,
+    PublicWebAddress address,
+    bool hasConfiguredUrl = true
+)
 {
     private static readonly string[] Templates =
     [
@@ -27,6 +31,11 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
         || Templates.Any(name => path == "/node/" + name)
         || path == "/node/run-cli-node.sh";
 
+    private string InstructionBaseUrl =>
+        hasConfiguredUrl
+            ? address.BaseUrl.TrimEnd('/')
+            : $"http://YOUR_MASTER:{new Uri(address.Origin).Port}";
+
     private static string Quote(string value) => "'" + value.Replace("'", "'\"'\"'") + "'";
 
     private static string PowerShellQuote(string value) => "'" + value.Replace("'", "''") + "'";
@@ -40,7 +49,7 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
         string? authToken = null
     )
     {
-        var url = NormalizeBaseUrl(baseUrl ?? address.BaseUrl);
+        var url = baseUrl is null ? InstructionBaseUrl : NormalizeBaseUrl(baseUrl);
         var shellId = id ?? "my-shell";
         id ??= "my-node";
         ApprovedNodeRegistry.ValidateId(id);
@@ -172,12 +181,14 @@ internal sealed class NodeBootstrap(NodeConnectionHub hub, PublicWebAddress addr
             Templates
                 .Append("source.tar.gz")
                 .Select(name =>
-                    (JsonNode?)JsonValue.Create(address.BaseUrl.TrimEnd('/') + "/node/" + name)
+                    (JsonNode?)JsonValue.Create(InstructionBaseUrl + "/node/" + name)
                 )
                 .ToArray()
         );
         result["instruction"] =
-            "Run a setup command on the existing Node environment. Check that the public address is reachable from that environment.";
+            hasConfiguredUrl
+                ? "Commands use the configured public address. Check that it is reachable from the new Node."
+                : "Replace YOUR_MASTER in the command you copy with a reachable host.";
         return result;
     }
 

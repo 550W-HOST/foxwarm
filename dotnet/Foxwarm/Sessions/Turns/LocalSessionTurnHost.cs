@@ -133,7 +133,8 @@ public sealed partial class LocalSessionTurnHost
                             history,
                             PrepareRetryAsync,
                             CommitAssistantSegmentAsync,
-                            registered.Token
+                            registered.Token,
+                            iteration
                         )
                         .ConfigureAwait(false)
                     : await chat.ChatAsync(entry.State.Id, history.Materialize(), registered.Token)

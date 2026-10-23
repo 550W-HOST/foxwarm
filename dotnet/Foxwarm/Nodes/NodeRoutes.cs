@@ -26,11 +26,15 @@ internal static class NodeRoutes
                     }
                 )
         );
-        var bootstrap = sessions.Bootstrap = new NodeBootstrap(hub, address);
-        bootstrap.Register(app);
         var configuredBaseUrl = SessionWait.Text(
             sessions.Models.ConfigurationOwner?.AppConfiguration["url"]
         );
+        var bootstrap = sessions.Bootstrap = new NodeBootstrap(
+            hub,
+            address,
+            hasConfiguredUrl: !string.IsNullOrEmpty(configuredBaseUrl)
+        );
+        bootstrap.Register(app);
         app.Map("/node_ws", hub.HandleAsync);
         hub.RegisterShellRoutes(app);
         app.MapGet(

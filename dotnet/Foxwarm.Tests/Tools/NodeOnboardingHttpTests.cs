@@ -17,13 +17,12 @@ public sealed class NodeOnboardingHttpTests
         internal HttpClient Admin = null!;
         internal string Data => Path.Combine(Temp.Path, "data");
         internal string RegistryPath => Path.Combine(Data, "state", "nodes.json");
-        internal NodeConnectionHub Hub =>
-            (
-                (SessionManager)
-                    typeof(MainHost)
-                        .GetField("sessions", BindingFlags.Instance | BindingFlags.NonPublic)!
-                        .GetValue(Host)!
-            ).Nodes;
+        internal SessionManager Sessions =>
+            (SessionManager)
+                typeof(MainHost)
+                    .GetField("sessions", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .GetValue(Host)!;
+        internal NodeConnectionHub Hub => Sessions.Nodes;
 
         internal static async Task<Fixture> Start()
         {
@@ -83,6 +82,18 @@ public sealed class NodeOnboardingHttpTests
             await Host.DisposeAsync();
             Temp.Dispose();
         }
+    }
+
+    [Fact]
+    public async Task Unconfigured_help_uses_the_assigned_listener_port_without_advertising_loopback()
+    {
+        await using var fixture = await Fixture.Start();
+        var info = fixture.Sessions.Bootstrap!.Info();
+        var expected = $"http://YOUR_MASTER:{fixture.Admin.BaseAddress!.Port}";
+        Assert.NotEqual(0, fixture.Admin.BaseAddress.Port);
+        Assert.Equal(expected, SessionWait.Text(info["baseUrl"]));
+        Assert.Contains(expected + "/node/run.sh", SessionWait.Text(info["commands"]?["bareMetal"]));
+        Assert.All(info["endpoints"]!.AsArray(), endpoint => Assert.StartsWith(expected + "/node/", endpoint!.GetValue<string>()));
     }
 
     [Fact]

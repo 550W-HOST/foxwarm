@@ -61,7 +61,8 @@ public interface ISessionChatService : IChatService
         SessionHistory history,
         Func<CancellationToken, Task<bool>> prepareRetry,
         Func<JsonObject, bool, Task<JsonObject>> commitAssistantSegment,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        int iteration = 0
     ) => ChatAsync(sessionId, history, prepareRetry, cancellationToken);
 }
 

@@ -40,14 +40,16 @@ internal sealed class SessionChatService(
         SessionHistory history,
         Func<CancellationToken, Task<bool>> prepareRetry,
         Func<JsonObject, bool, Task<JsonObject>> commitAssistantSegment,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        int iteration = 0
     ) =>
         ChatCoreAsync(
             sessionId,
             RequestHistory.FromSnapshot(history),
             prepareRetry,
             cancellationToken,
-            commitAssistantSegment
+            commitAssistantSegment,
+            iteration
         );
 
     private async Task<ChatResult> ChatCoreAsync(
@@ -55,7 +57,8 @@ internal sealed class SessionChatService(
         RequestHistory history,
         Func<CancellationToken, Task<bool>>? prepareRetry,
         CancellationToken cancellationToken,
-        Func<JsonObject, bool, Task<JsonObject>>? commitAssistantSegment = null
+        Func<JsonObject, bool, Task<JsonObject>>? commitAssistantSegment = null,
+        int iteration = 0
     )
     {
         var catalog = models.Capture();
@@ -165,7 +168,7 @@ internal sealed class SessionChatService(
                         );
                     },
                 "normal-turn",
-                0,
+                iteration,
                 id => hosted.BeginDraft(id),
                 RequestContext,
                 () =>
