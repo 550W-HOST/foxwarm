@@ -7,7 +7,8 @@ import { join } from 'node:path'
 import { createHostFixture, until } from '../../packages/webui/test/experimentHostFixture.mjs'
 import { writeModelFixture } from '../../packages/webui/test/experimentModelFixture.mjs'
 
-const options = { env: {} }
+const source = process.argv.includes('--source')
+const options = { env: {}, ...(source ? { runtime: 'source' } : {}) }
 const fixture = await createHostFixture('retired-controls', options)
 const requests = [], failures = [], rounds = new Map()
 const retired = join(fixture.root, 'retired'), skills = join(fixture.root, 'configured-skills')
@@ -69,7 +70,7 @@ try {
   await writeModelFixture(fixture.data, { default: 'a', providers: { a: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:' + peer.address().port, models: ['wire'], contextLimit: 20000, asyncCompact: false } } })
   await fixture.start()
   assert.equal((await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'owned-boundary' })).status, 200)
-  async function send(value, status = 202) { const result = await fixture.api('POST', route + '/message', { text: value }); assert.equal(result.status, status, JSON.stringify(result)) }
+  async function send(value, status = source ? 200 : 202) { const result = await fixture.api('POST', route + '/message', { text: value }); assert.equal(result.status, status, JSON.stringify(result)) }
   await send('RETIREMENT:tools'); await settled('DONE-RETIREMENT-tools')
   const rows = await history(), pairs = rows.flatMap(row => row.parts || []).map(part => part.functionResponse).filter(Boolean)
   assert(JSON.stringify(pairs.find(pair => pair.tool_use_id === 'owned-script')).includes('OWNED-NATIVE-READ'))
@@ -84,5 +85,5 @@ try {
   assert((await history()).some(row => row.__meta?.contextBlock), 'The actual planner must commit a compact block')
   assert((await readFile(join(fixture.data, 'state/sessions/owned-boundary.json'), 'utf8')).includes('OWNED-MEMORY'))
   await fixture.stop()
-  console.log(JSON.stringify({ requests: requests.length, normal: true, nativeMonty: true, configuredSkill: true, btw: side, compact: planned, canonicalMain: fixture.work, retiredControlsIgnored: true }))
+  console.log(JSON.stringify({ runtime: source ? 'source' : 'managed', requests: requests.length, normal: true, nativeMonty: true, configuredSkill: true, btw: side, compact: planned, canonicalMain: fixture.work, retiredControlsIgnored: true }))
 } finally { await fixture.cleanup(); peer.closeAllConnections(); await new Promise(resolve => peer.close(resolve)) }
