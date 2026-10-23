@@ -86,7 +86,15 @@ public sealed class CanonicalPathsTests
             env["MCP_CONFIG_PATH"] = "~/external mcp.json";
         }
         if (kind == "retired-controls")
-            foreach (var name in new[] { "FOXWARM_APP_ROOT", "FOXWARM_EXPERIMENT_DATA_ROOT", "FOXWARM_EXPERIMENT_TOOL_ROOT", "FOXWARM_EXPERIMENT_SKILLS_ROOT" })
+            foreach (
+                var name in new[]
+                {
+                    "FOXWARM_APP_ROOT",
+                    "FOXWARM_EXPERIMENT_DATA_ROOT",
+                    "FOXWARM_EXPERIMENT_TOOL_ROOT",
+                    "FOXWARM_EXPERIMENT_SKILLS_ROOT",
+                }
+            )
                 env[name] = Path.Combine(temp.Path, "retired root");
         string? EnvironmentValue(string key) => env[key]?.GetValue<string>();
         var initial = HostPaths.Capture(app, resource, EnvironmentValue);
@@ -259,12 +267,7 @@ public sealed class CanonicalPathsTests
             713
         );
         await using (
-            var manager = new SessionManager(
-                data,
-                workspace,
-                options,
-                HostModels.ForTest(options)
-            )
+            var manager = new SessionManager(data, workspace, options, HostModels.ForTest(options))
         )
         {
             await manager.LoadMainHostAsync();
@@ -284,12 +287,7 @@ public sealed class CanonicalPathsTests
         if (version == 2)
             Assert.Equal(42, stored["metadata"]!["alpha"]!["unknown"]!.GetValue<int>());
         await using (
-            var reopened = new SessionManager(
-                data,
-                workspace,
-                options,
-                HostModels.ForTest(options)
-            )
+            var reopened = new SessionManager(data, workspace, options, HostModels.ForTest(options))
         )
         {
             await reopened.LoadMainHostAsync();

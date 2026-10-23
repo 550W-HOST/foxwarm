@@ -69,12 +69,13 @@ internal sealed partial class MainToolScript : IAsyncDisposable
     {
         store = new(root);
         this.binary = Path.GetFullPath(
-            binary ?? Path.Combine(
-                AppContext.BaseDirectory,
-                "ToolScript",
-                "native",
-                OperatingSystem.IsWindows() ? "monty.exe" : "monty"
-            )
+            binary
+                ?? Path.Combine(
+                    AppContext.BaseDirectory,
+                    "ToolScript",
+                    "native",
+                    OperatingSystem.IsWindows() ? "monty.exe" : "monty"
+                )
         );
     }
 

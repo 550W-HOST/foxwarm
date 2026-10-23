@@ -66,9 +66,7 @@ internal sealed class DesktopWindow : Form
                         "data"
                     )
             );
-            var work = Path.GetFullPath(
-                Path.Combine(Path.GetDirectoryName(data)!, "workspace")
-            );
+            var work = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(data)!, "workspace"));
             var dist = Path.Combine(AppContext.BaseDirectory, "webui-dist");
             if (
                 !File.Exists(Path.Combine(dist, "index.html"))

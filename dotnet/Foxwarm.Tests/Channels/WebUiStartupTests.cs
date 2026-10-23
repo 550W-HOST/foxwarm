@@ -46,7 +46,9 @@ public sealed partial class WebUiStartupTests
             var output = Path.GetDirectoryName(typeof(HttpServer).Assembly.Location)!;
             foreach (var file in Directory.EnumerateFiles(output))
                 File.Copy(file, Path.Combine(Installation, Path.GetFileName(file)));
-            foreach (var name in new[] { "templates", "runtimes", "ToolScript", "packages", "skills" })
+            foreach (
+                var name in new[] { "templates", "runtimes", "ToolScript", "packages", "skills" }
+            )
             {
                 var source = Path.Combine(output, name);
                 if (!Directory.Exists(source))
@@ -55,8 +57,15 @@ public sealed partial class WebUiStartupTests
                     Directory.CreateSymbolicLink(Path.Combine(Installation, name), source);
                 else if (name == "runtimes")
                     CopyDirectory(
-                        Path.Combine(source, System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier),
-                        Path.Combine(Installation, name, System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier)
+                        Path.Combine(
+                            source,
+                            System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier
+                        ),
+                        Path.Combine(
+                            Installation,
+                            name,
+                            System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier
+                        )
                     );
                 else
                     CopyDirectory(source, Path.Combine(Installation, name));
