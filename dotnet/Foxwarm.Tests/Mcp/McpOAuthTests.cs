@@ -97,10 +97,10 @@ public sealed partial class McpOAuthTests
             (await f.Mcp.ListServersAsync(default)).ToJsonString()
         );
         await using var fresh = new McpClient(f.Data, PublicBase);
-        Assert.Single(await fresh.ListToolsAsync("peer", default));
+        Assert.Single(await fresh.ListToolsAsync("peer", default, f.First, f.First.McpGeneration));
         Assert.Equal(
             "persisted",
-            McpOAuthPeer.Value(await fresh.CallAsync("peer", "state", Args("persisted"), default))[
+            McpOAuthPeer.Value(await fresh.CallAsync("peer", "state", Args("persisted"), default, f.First, f.First.McpGeneration))[
                 "value"
             ]!.GetValue<string>()
         );

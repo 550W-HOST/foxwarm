@@ -121,9 +121,9 @@ internal sealed partial class NodeProviderRegistry
             else
             {
                 ValidateId(nodeId!);
-                // Resolve all possible exact owners without requiring readiness.
+                // Resolve the exact namespace owner without requiring readiness.
                 var existing =
-                    await ResolveLifecycleNodeAsync(nodeId!, token)
+                    await ResolveAsync(nodeId!, token)
                     ?? throw new NodeProviderException(
                         "NODE_EXECUTION_NODE_UNAVAILABLE",
                         "Node is not available: " + nodeId,
@@ -141,7 +141,7 @@ internal sealed partial class NodeProviderRegistry
                 throw Unsupported(provider.Id, action);
             if (creating && nodeId is not null)
             {
-                var existing = await ResolveLifecycleNodeAsync(nodeId, token);
+                var existing = await ResolveAsync(nodeId, token);
                 if (action == "create" && existing is not null)
                     throw new NodeProviderException(
                         "NODE_LIFECYCLE_NODE_EXISTS",
@@ -167,21 +167,6 @@ internal sealed partial class NodeProviderRegistry
                     "NODE_LIFECYCLE_NODE_MISMATCH",
                     "Provider returned the wrong Node identity."
                 );
-            if (creating)
-            {
-                // All executable owners are disjoint namespaces. Check the fixed owner after
-                // the effect too; do not rediscover the effectful provider or replay its call.
-                if (
-                    native
-                        .List()
-                        .OfType<JsonObject>()
-                        .Any(item => SessionWait.Text(item["id"]) == returned)
-                )
-                    throw new NodeProviderException(
-                        "NODE_PROVIDER_DUPLICATE_NODE",
-                        "Multiple providers own the same Node identity."
-                    );
-            }
             if (result["node"] is JsonObject descriptor)
             {
                 discovered[returned!] = (JsonObject)descriptor.DeepClone();
@@ -191,28 +176,6 @@ internal sealed partial class NodeProviderRegistry
                 discovered.TryRemove(nodeId!, out _);
             return result;
         }
-    }
-
-    private async Task<JsonObject?> ResolveLifecycleNodeAsync(
-        string nodeId,
-        CancellationToken token
-    )
-    {
-        // Namespace wrappers exclude every unrelated executable before discovery. Native
-        // credential IDs cannot contain a slash, so exact lookup covers all possible owners.
-        var result = await ResolveAsync(nodeId, token);
-        if (
-            nodeId.Contains('/')
-            && native
-                .List()
-                .OfType<JsonObject>()
-                .Any(item => SessionWait.Text(item["id"]) == nodeId)
-        )
-            throw new NodeProviderException(
-                "NODE_PROVIDER_DUPLICATE_NODE",
-                "Multiple providers own the same Node identity."
-            );
-        return result;
     }
 
     private static NodeProviderException Unsupported(string id, string action) =>

@@ -350,13 +350,13 @@ public sealed class InboundMcpTests
                 default
             );
             Assert.Equal("AA==", media["content"]![0]!["data"]!.GetValue<string>());
-            Assert.NotNull(await mcp.CallAsync("peer", "state", new(), default));
+            Assert.NotNull(await mcp.CallAsync("peer", "state", new(), default, f.Target, f.Target.McpGeneration));
             await peer.SetAsync(new JsonObject { ["imageData"] = null, ["echoCredential"] = true });
             await Assert.ThrowsAsync<McpInboundSafeException>(() =>
                 mcp.CallExternalAsync(context, authorization, "peer", "state", new(), default)
             );
             await Assert.ThrowsAnyAsync<Exception>(() =>
-                mcp.CallAsync("peer", "state", new(), default)
+                mcp.CallAsync("peer", "state", new(), default, f.Target, f.Target.McpGeneration)
             );
         }
         finally

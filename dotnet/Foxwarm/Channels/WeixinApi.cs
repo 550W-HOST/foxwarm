@@ -170,25 +170,4 @@ internal sealed partial class WeixinApi
         );
     }
 
-    internal async Task SendTypingAsync(
-        string baseUrl,
-        string? token,
-        string? routeTag,
-        string user,
-        string ticket
-    ) =>
-        await PostAsync(
-            baseUrl,
-            token,
-            routeTag,
-            "ilink/bot/sendtyping",
-            new JsonObject
-            {
-                ["ilink_user_id"] = user,
-                ["typing_ticket"] = ticket,
-                ["status"] = 1,
-            },
-            10000,
-            "sendTyping"
-        );
 }

@@ -86,19 +86,6 @@ internal sealed partial class NodeProviderRegistry
         var values = new List<JsonObject>();
         foreach (var provider in providers.Values)
             values.AddRange((await provider.ListAsync(token)).OfType<JsonObject>());
-        var fixedIds = native
-            .List()
-            .OfType<JsonObject>()
-            .Select(value => SessionWait.Text(value["id"]))
-            .Append("master")
-            .ToHashSet(StringComparer.Ordinal);
-        var ids = new HashSet<string>(fixedIds!, StringComparer.Ordinal);
-        foreach (var value in values)
-            if (!ids.Add(value["id"]!.GetValue<string>()))
-                throw new NodeProviderException(
-                    "NODE_PROVIDER_DUPLICATE_NODE",
-                    "Multiple providers own the same Node identity."
-                );
         discovered.Clear();
         foreach (var value in values)
             discovered[value["id"]!.GetValue<string>()] = (JsonObject)value.DeepClone();

@@ -8,6 +8,8 @@ Secondary/integration references: `dotnet/Foxwarm/Nodes/NodeRoutes.cs`, `dotnet/
 
 Main owns startup executable-provider configuration, qualified identities, discovery, lifecycle dispatch and canonical file capabilities. Fixed Main/native resident adapters keep their existing path, credential, protocol, completion and service owners. The external executable implements the existing public primitive protocol in `docs/executable-node-provider-protocol.md`, not model tools or a new resident Node protocol.
 
+Native credential IDs contain no slash; executable IDs are qualified by their validated configured provider name. These owner namespaces are disjoint. Executable discovery validates duplicates within that provider and does not scan the resident trust registry for cross-owner collisions. Native topology and expiry cleanup retain their own owners.
+
 The registry connects files, process primitives, selection, Agent binding and their actual consumers. A ready descriptor with `exec:true` derives the existing approved exec definition. Provider exec uses the existing persistent `LocalExecManager`; native resident exec retains its authenticated completion/protocol owner. Bounded provider discovery and optional lifecycle use the existing Main builtin and native ToolScript path. [Provider lifecycle authority](../threads/tool-dispatch-node-execution.md#d-dispatch-node-provider-lifecycle) owns the shared decisions and their reasons. Native/provider jobs share the [Source-shaped bounded active registry](./tools-local-io.md#persistent-exec-storage-and-lifecycle); synthetic record interoperability is not live cross-runtime takeover. The project scope is canonical in [delivery scope](../overview.md#d-dotnet-delivery-scope).
 
 ## Stable symbols and function index
@@ -15,12 +17,12 @@ The registry connects files, process primitives, selection, Agent binding and th
 | Symbol | Responsibility |
 | --- | --- |
 | `NodeProviderRegistry` constructor | Copies validated startup executable configurations; reserves fixed provider identities and shares the Session write-reference owner. No subprocess or hot reload occurs in construction. |
-| `ListAsync` / `ResolveAsync` | Async discovery, duplicate checks and exact ownership. Fixed native lookup does not invoke optional executables. Executable local IDs are qualified once; calls remove exactly that provider prefix. |
+| `ListAsync` / `ResolveAsync` | Async discovery, same-provider duplicate checks and exact namespace ownership. Fixed native lookup does not invoke optional executables. Executable local IDs are qualified once; calls remove exactly that provider prefix. |
 | `Snapshot` / `Definitions` / `Online` / `DefaultCwd` | Synchronous presentation/capability projections only; no subprocess discovery or waiting under native connection locks. |
 | `RefreshAsync` | Refreshes an exact executable target at async selection, search, tool-resolution and turn-start boundaries. Failed exact discovery removes that target's executable projection. Actual effects re-resolve availability/capability independently. |
 | `ExecuteAsync` | Delegates resident complete tools unchanged; composes canonical file tools for a real Session owner. Captured cwd is forwarded only for that exact selected target. |
 | `InspectProviderAsync` / `ListProvidersAsync` | Fixed and executable provider descriptions, bounded summaries and isolated action disclosure; schemas belong only to full inspection. |
-| `LifecycleAsync` / `ResolveLifecycleNodeAsync` | Exact namespace/owner resolution, requested-ID and returned-ID checks, registry mutation ordering, concurrent read-only inspection and no replay after uncertain effects. |
+| `LifecycleAsync` | Exact namespace/owner resolution through `ResolveAsync`, requested-ID and returned-ID checks, registry mutation ordering, concurrent read-only inspection and no replay after uncertain effects. |
 | `ExecuteNodeToolAsync` / `ToolNodeTopologyAsync` | Action-specific arguments, JSON options fallback, bound-Node/isolated restrictions, exact confirmation and bounded policy-filtered structured programmatic list data. |
 | `ReadFileAsync` / `WriteFileAsync` | Native CLI transfer or primitive binary composition for copy, image export, delivery and attachment ingress. Relative primitive transfer paths use the adapter default, not Session cwd. |
 | `ReadSourceAsync` | Complete source bytes under the captured target cwd and materialization budget; independent of ordinary displayed read output and nested live placement. |

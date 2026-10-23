@@ -117,7 +117,7 @@ internal sealed partial class McpClient
     {
         context.Require();
         var before = ExternalCredentials();
-        var tools = await ListToolsAsync(server, token, external: context);
+        var tools = await ListToolsAsync(server, token, null, null, context);
         context.Require();
         var credentials = before
             .Concat(ExternalCredentials())
@@ -150,7 +150,7 @@ internal sealed partial class McpClient
         IReadOnlyList<JsonObject> tools;
         try
         {
-            tools = await ListToolsAsync(server, token, external: context);
+            tools = await ListToolsAsync(server, token, null, null, context);
         }
         catch
         {
@@ -176,6 +176,8 @@ internal sealed partial class McpClient
                 name,
                 args,
                 token,
+                null,
+                null,
                 external: context,
                 raw: true,
                 beforeSend: () => authorization.Require(context, permission)
