@@ -106,7 +106,9 @@ internal sealed partial class McpClient
         McpExternalContext? external = null
     )
     {
-        PoolEntry? entry = null;
+        if (owner is null && external is null)
+            throw new ArgumentException("MCP calls require a Session owner or external context.");
+        PoolEntry entry;
         JsonObject config;
         var create = false;
         lock (poolGate)
@@ -125,33 +127,24 @@ internal sealed partial class McpClient
             }
             config = configuration.Get(server);
             var stdio = SessionWait.Text(config["transport"]) == "stdio";
-            if (stdio || owner is not null || external is not null)
+            var key = new ConnectionKey(
+                server,
+                stdio ? null : owner,
+                stdio ? 0 : ownerGeneration ?? 0,
+                stdio ? ProcessSettings(config) : null,
+                stdio ? null : external
+            );
+            if (pool.TryGetValue(key, out entry!) && !MatchesConfiguration(entry, config))
+                InvalidateEntry(entry, preserveActiveStdio: true);
+            if (entry is null || entry.Invalid)
             {
-                var key = new ConnectionKey(
-                    server,
-                    stdio ? null : owner,
-                    stdio ? 0 : ownerGeneration ?? 0,
-                    stdio ? ProcessSettings(config) : null,
-                    stdio ? null : external
-                );
-                if (pool.TryGetValue(key, out entry) && !MatchesConfiguration(entry, config))
-                    InvalidateEntry(entry, preserveActiveStdio: true);
-                if (entry is null || entry.Invalid)
-                {
-                    entry = new(key, config, shutdown.Token);
-                    pool[key] = entry;
-                    create = true;
-                }
-                entry.Active++;
-                entry.Idle?.Cancel();
-                entry.Idle = null;
+                entry = new(key, config, shutdown.Token);
+                pool[key] = entry;
+                create = true;
             }
-        }
-        // Unowned administrative probes are short-lived, not an anonymous shared caller.
-        if (entry is null)
-        {
-            await using var connection = await ConnectAsync(server, config, token);
-            return await InvokeAsync(connection.Client, token);
+            entry.Active++;
+            entry.Idle?.Cancel();
+            entry.Idle = null;
         }
         if (create)
             TrackClosing(ConnectEntryAsync(entry));
@@ -429,7 +422,7 @@ internal sealed partial class McpClient
         string server,
         JsonObject config,
         CancellationToken token,
-        PoolEntry? entry = null
+        PoolEntry entry
     )
     {
         IClientTransport transport;
@@ -485,19 +478,17 @@ internal sealed partial class McpClient
                 },
             };
             HttpMessageHandler Observe(HttpMessageHandler inner) =>
-                entry is null
-                    ? inner
-                    : new ReceiveTransport.Handler(
-                        entry.Receiver,
-                        () =>
-                        {
-                            lock (poolGate)
-                                InvalidateEntry(entry);
-                        },
-                        inner,
-                        config["oauth"] is not null,
-                        OAuth.Credentials
-                    );
+                new ReceiveTransport.Handler(
+                    entry.Receiver,
+                    () =>
+                    {
+                        lock (poolGate)
+                            InvalidateEntry(entry);
+                    },
+                    inner,
+                    config["oauth"] is not null,
+                    OAuth.Credentials
+                );
             var http = config["oauth"] is not null
                 ? OAuth.ResourceClient(server, config, Observe)
                 : new HttpClient(Observe(new HttpClientHandler()))
@@ -515,13 +506,13 @@ internal sealed partial class McpClient
                     InitializationTimeout = TimeSpan.FromSeconds(60),
                     Capabilities = new()
                     {
-                        Experimental = entry?.Key.Owner is not null
+                        Experimental = entry.Key.Owner is not null
                             ? NotificationCapability()
                             : null,
                     },
                     Handlers = new()
                     {
-                        NotificationHandlers = entry?.Key.Owner is not null
+                        NotificationHandlers = entry.Key.Owner is not null
                             ?
                             [
                                 new KeyValuePair<

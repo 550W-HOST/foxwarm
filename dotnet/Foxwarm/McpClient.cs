@@ -219,8 +219,8 @@ internal sealed partial class McpClient : IAsyncDisposable
     internal Task<IReadOnlyList<JsonObject>> ListToolsAsync(
         string server,
         CancellationToken cancellationToken,
-        SessionOwner? owner = null,
-        long? ownerGeneration = null,
+        SessionOwner? owner,
+        long? ownerGeneration,
         McpExternalContext? external = null
     ) =>
         RunAsync(
@@ -290,8 +290,8 @@ internal sealed partial class McpClient : IAsyncDisposable
         string name,
         JsonObject args,
         CancellationToken cancellationToken,
-        SessionOwner? owner = null,
-        long? ownerGeneration = null,
+        SessionOwner? owner,
+        long? ownerGeneration,
         McpExternalContext? external = null,
         bool raw = false,
         Action? beforeSend = null

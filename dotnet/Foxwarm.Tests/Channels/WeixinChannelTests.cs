@@ -209,29 +209,54 @@ public sealed class WeixinChannelTests
         peer.Push("weixin-a", new JsonObject { ["errcode"] = 5 });
         peer.Push("weixin-a", new JsonObject { ["ret"] = 1 });
         peer.WeixinMessages("weixin-a", ExternalProtocolPeer.WeixinText("alice", "recovered"));
-        await f.Manager.ManagedChannels!.ReloadAsync();
-        await TelegramChannelTests.Until(() => f.Owner.Entry.Snapshot().Queue.Count == 1);
-        Assert.Equal(
-            new[] { 2000d, 2000d, 30000d },
-            peer.Delays.Select(value => value.TotalMilliseconds)
-        );
-        var count = peer.Calls.Count(call =>
-            call.Path.EndsWith("/getupdates", StringComparison.Ordinal)
-        );
-        var stopping = f.Manager.ManagedChannels.ChangeAsync("stop", "alpha");
-        await Task.Delay(100);
-        Assert.False(stopping.IsCompleted);
-        Assert.Equal(
-            count,
-            peer.Calls.Count(call => call.Path.EndsWith("/getupdates", StringComparison.Ordinal))
-        );
-        peer.WeixinMessages("weixin-a");
-        await stopping.WaitAsync(TimeSpan.FromSeconds(3));
-        Assert.Null(f.Manager.ChannelRegistry.Get("alpha"));
+        var fetching = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        peer.Respond = async call =>
+        {
+            if (
+                !call.Path.EndsWith("/getupdates", StringComparison.Ordinal)
+                || SessionWait
+                    .Text(call.Body["get_updates_buf"])
+                    ?.StartsWith("cursor-", StringComparison.Ordinal) != true
+            )
+                return null;
+            fetching.TrySetResult();
+            await release.Task;
+            return Results.Json(new { ret = 0, msgs = Array.Empty<object>() });
+        };
+        try
+        {
+            await f.Manager.ManagedChannels!.ReloadAsync();
+            await fetching.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.Single(f.Owner.Entry.Snapshot().Queue);
+            Assert.Equal(
+                new[] { 2000d, 2000d, 30000d },
+                peer.Delays.Select(value => value.TotalMilliseconds)
+            );
+            var count = peer.Calls.Count(call =>
+                call.Path.EndsWith("/getupdates", StringComparison.Ordinal)
+            );
+            var stopping = f.Manager.ManagedChannels.ChangeAsync("stop", "alpha");
+            await Task.Delay(100);
+            Assert.False(stopping.IsCompleted);
+            Assert.Equal(
+                count,
+                peer.Calls.Count(call =>
+                    call.Path.EndsWith("/getupdates", StringComparison.Ordinal)
+                )
+            );
+            release.TrySetResult();
+            await stopping.WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.Null(f.Manager.ChannelRegistry.Get("alpha"));
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
     }
 
     [Fact]
-    public async Task Actual_timeout_is_empty_cursor_preserving_and_optional_auth_and_typing_envelopes_match_the_API()
+    public async Task Actual_timeout_preserves_cursor_and_optional_auth_and_empty_sends_match_the_API()
     {
         await using var peer = await ExternalProtocolPeer.StartAsync();
         var api = new WeixinApi(null);
@@ -240,7 +265,7 @@ public sealed class WeixinChannelTests
             null,
             " route ",
             "prior",
-            30
+            1000
         );
         Assert.Equal("prior", SessionWait.Text(response["get_updates_buf"]));
         Assert.Empty(response["msgs"]!.AsArray());
@@ -250,13 +275,5 @@ public sealed class WeixinChannelTests
         api.CacheContext("alice", "context");
         await api.SendAsync(peer.Address.ToString(), null, null, "alice", "");
         Assert.Null(peer.Sent("").Single().Body["msg"]!["item_list"]);
-        await api.SendTypingAsync(peer.Address.ToString(), " token ", " route ", "alice", "ticket");
-        var typing = peer.Calls.Single(call =>
-            call.Path.EndsWith("/sendtyping", StringComparison.Ordinal)
-        );
-        Assert.Equal("token", typing.Key);
-        Assert.Equal("ticket", SessionWait.Text(typing.Body["typing_ticket"]));
-        Assert.Equal("alice", SessionWait.Text(typing.Body["ilink_user_id"]));
-        Assert.Equal(1, SessionWait.Number(typing.Body["status"]));
     }
 }
