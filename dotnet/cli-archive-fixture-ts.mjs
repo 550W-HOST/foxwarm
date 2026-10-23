@@ -6,7 +6,6 @@ import { pathToFileURL } from 'node:url'
 const [mode, root, artifacts] = process.argv.slice(2)
 if (!['seed', 'verify', 'migrate', 'read-legacy'].includes(mode) || !root) throw Error('usage: cli-archive-fixture-ts.mjs seed|verify|migrate|read-legacy ROOT [EXPORT]')
 process.env.FOXWARM_DATA_DIR = root
-process.env.FOXWARM_CONFIG_PATH = path.join(root, 'state/config.yaml')
 process.env.FOXWARM_NO_CONSOLE_LOG = '1'
 process.env.FOXWARM_SYNC_FILE_LOG = '1'
 process.env.FOXWARM_VECTOR_ENABLED = 'false'

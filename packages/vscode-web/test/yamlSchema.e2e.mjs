@@ -13,8 +13,8 @@ import { fileURLToPath } from 'node:url';
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(testDir, '..');
 const repoRoot = path.resolve(packageRoot, '../..');
-const workbenchDir = process.env.FOXWARM_VSCODE_WEB_ASSET_DIR || path.join(packageRoot, 'assets', 'vscode-web');
-const yamlExtensionDir = process.env.FOXWARM_VSCODE_YAML_EXTENSION_DIR || path.join(packageRoot, 'assets', 'extensions', 'redhat.vscode-yaml');
+const workbenchDir = path.join(packageRoot, 'assets', 'vscode-web');
+const yamlExtensionDir = path.join(packageRoot, 'assets', 'extensions', 'redhat.vscode-yaml');
 const chromium = process.env.CHROMIUM_PATH || '/usr/bin/chromium';
 const assetsReady = fsSync.existsSync(path.join(workbenchDir, 'out/vs/workbench/workbench.web.main.internal.js'))
   && fsSync.existsSync(path.join(yamlExtensionDir, 'dist/extension-web.js'))
@@ -79,12 +79,8 @@ test('pinned Red Hat YAML Web extension applies shared schemas only to exact mas
 
   const previous = {
     dataDir: process.env.FOXWARM_DATA_DIR,
-    workbenchDir: process.env.FOXWARM_VSCODE_WEB_ASSET_DIR,
-    yamlExtensionDir: process.env.FOXWARM_VSCODE_YAML_EXTENSION_DIR,
   };
   process.env.FOXWARM_DATA_DIR = dataDir;
-  process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = workbenchDir;
-  process.env.FOXWARM_VSCODE_YAML_EXTENSION_DIR = yamlExtensionDir;
 
   const require = createRequire(import.meta.url);
   const { HttpServer } = require(path.join(repoRoot, 'lib/httpServer.js'));
@@ -133,9 +129,5 @@ test('pinned Red Hat YAML Web extension applies shared schemas only to exact mas
     await fs.rm(dataDir, { recursive: true, force: true });
     if (previous.dataDir === undefined) delete process.env.FOXWARM_DATA_DIR;
     else process.env.FOXWARM_DATA_DIR = previous.dataDir;
-    if (previous.workbenchDir === undefined) delete process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;
-    else process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = previous.workbenchDir;
-    if (previous.yamlExtensionDir === undefined) delete process.env.FOXWARM_VSCODE_YAML_EXTENSION_DIR;
-    else process.env.FOXWARM_VSCODE_YAML_EXTENSION_DIR = previous.yamlExtensionDir;
   }
 });

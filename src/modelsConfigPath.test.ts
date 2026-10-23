@@ -46,7 +46,7 @@ for (const appContextLimit of [undefined, 175000]) {
     try {
       const { stdout } = await execFileAsync(process.execPath, ['-e', script], {
         cwd: process.cwd(),
-        env: { ...process.env, FOXWARM_DATA_DIR: dataRoot, FOXWARM_CONFIG_PATH: configPath },
+        env: { ...process.env, FOXWARM_DATA_DIR: dataRoot, },
       });
       const resultLine = stdout.split('\n').find(line => line.startsWith('__FOXWARM_RESULT__'));
       assert.ok(resultLine, `child process did not return a result: ${stdout}`);
@@ -173,7 +173,7 @@ for (const legacy of [undefined, { contextLimit: 150000, maxOutput: 16000, provi
     `;
     try {
       const { stdout } = await execFileAsync(process.execPath, ['-e', script], {
-        cwd: process.cwd(), env: { ...process.env, FOXWARM_DATA_DIR: dataRoot, FOXWARM_CONFIG_PATH: configPath },
+        cwd: process.cwd(), env: { ...process.env, FOXWARM_DATA_DIR: dataRoot, },
       });
       const resultLine = stdout.split('\n').find(line => line.startsWith('__FOXWARM_RESULT__'));
       assert.ok(resultLine, stdout);
@@ -186,3 +186,25 @@ for (const legacy of [undefined, { contextLimit: 150000, maxOutput: 16000, provi
     } finally { await fs.remove(dataRoot); }
   });
 }
+
+
+test('app configuration follows the selected data root despite retired filename environment values', async () => {
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-app-path-'));
+  const configPath = path.join(dataRoot, 'state', 'config.yaml');
+  const ignored = path.join(dataRoot, 'retired.yaml');
+  await fs.outputFile(configPath, 'llm:\n  maxOutput: 713\n');
+  await fs.writeFile(ignored, 'invalid: [unterminated');
+  try {
+    for (const preferred of [ignored, '']) {
+      const script = `const c = require('./lib/config'); console.log(JSON.stringify({path:c.APP_CONFIG_PATH, max:c.MAX_OUTPUT}));`;
+      const { stdout } = await execFileAsync(process.execPath, ['-e', script], {
+        cwd: process.cwd(), env: { ...process.env, FOXWARM_DATA_DIR: dataRoot,
+          FOXWARM_CONFIG_PATH: preferred, CONFIG_PATH: ignored }, timeout: 10_000,
+      });
+      const actual = JSON.parse(stdout.trim().split('\n').at(-1)!);
+      assert.equal(actual.path, configPath);
+      assert.equal(actual.max, 713);
+      assert.equal(await fs.readFile(ignored, 'utf8'), 'invalid: [unterminated');
+    }
+  } finally { await fs.remove(dataRoot); }
+});

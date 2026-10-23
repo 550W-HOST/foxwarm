@@ -568,10 +568,7 @@ export const SESSION_RUNTIME_DB_PATH = path.join(STATE_DIR, 'session-runtime.sql
 export const SESSION_ID_RESERVATIONS_LOG_PATH = path.join(STATE_DIR, 'session-id-reservations.jsonl');
 export const SESSION_ID_MOVE_JOURNAL_PATH = path.join(STATE_DIR, 'session-id-move-pending.json');
 
-const CONFIG_PATH_ENV = process.env.FOXWARM_CONFIG_PATH || process.env.CONFIG_PATH;
-export const APP_CONFIG_PATH = CONFIG_PATH_ENV
-  ? path.resolve(BASE_DIR, CONFIG_PATH_ENV)
-  : path.join(STATE_DIR, 'config.yaml');
+export const APP_CONFIG_PATH = path.join(STATE_DIR, 'config.yaml');
 
 function cleanupUndefinedDeep<T>(value: T): T {
   if (Array.isArray(value)) {

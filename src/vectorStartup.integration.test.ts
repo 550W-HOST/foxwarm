@@ -21,7 +21,6 @@ async function waitFor(check: () => Promise<boolean>, label: string): Promise<vo
 
 function childEnvironment(root: string): NodeJS.ProcessEnv {
   return { ...process.env, FOXWARM_DATA_DIR: root,
-    FOXWARM_CONFIG_PATH: path.join(root, 'state/config.yaml'),
     MCP_CONFIG_PATH: path.join(root, 'state/mcp.json'),
     HTTP_PROXY: '', HTTPS_PROXY: '', ALL_PROXY: '', NO_PROXY: '*' };
 }

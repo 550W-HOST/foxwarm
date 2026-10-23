@@ -38,8 +38,7 @@ try {
   // Use the bundled resources, outside the source tree and without importing Core.
   const adapter = resolve('dotnet/Foxwarm/bin/Debug/net10.0/skills/node-setup/examples/linux-ssh/provider.py')
   await readFile(adapter); await readFile(join(adapter, '..', 'target.py'))
-  env.FOXWARM_CONFIG_PATH = join(fixture.data, 'state/config.yaml')
-  await writeFile(env.FOXWARM_CONFIG_PATH, JSON.stringify({ url: fixture.origin, bot: { httpPort: fixture.port }, vector: false, llm: { maxOutput: 713 }, nodeProviders: {
+  await writeFile(join(fixture.data, 'state/config.yaml'), JSON.stringify({ url: fixture.origin, bot: { httpPort: fixture.port }, vector: false, llm: { maxOutput: 713 }, nodeProviders: {
     'external-ssh': { type: 'executable', command: 'python3', args: [adapter, '--config', configPath], timeoutSeconds: 5 }
   } }))
   model = createServer(async (request, response) => {

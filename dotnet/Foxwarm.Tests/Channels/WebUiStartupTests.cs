@@ -38,7 +38,7 @@ public sealed partial class WebUiStartupTests
             return port;
         }
 
-        internal Host()
+        internal Host(bool codeAssets = false)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(TokenPath)!);
             Directory.CreateDirectory(Work);
@@ -53,7 +53,7 @@ public sealed partial class WebUiStartupTests
                 var source = Path.Combine(output, name);
                 if (!Directory.Exists(source))
                     continue;
-                if (!OperatingSystem.IsWindows())
+                if (!OperatingSystem.IsWindows() && !(codeAssets && name == "packages"))
                     Directory.CreateSymbolicLink(Path.Combine(Installation, name), source);
                 else if (name == "runtimes")
                     CopyDirectory(
@@ -106,9 +106,7 @@ public sealed partial class WebUiStartupTests
                 RedirectStandardError = true,
             };
             info.ArgumentList.Add(Path.Combine(Installation, "Foxwarm.dll"));
-            info.Environment.Remove("FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN");
             info.Environment["FOXWARM_DATA_DIR"] = Data;
-            info.Environment["FOXWARM_CONFIG_PATH"] = ConfigPath;
             foreach (var (key, value) in changes ?? [])
             {
                 if (value is null)

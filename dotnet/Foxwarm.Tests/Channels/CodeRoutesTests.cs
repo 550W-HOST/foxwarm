@@ -14,44 +14,28 @@ public sealed class CodeRoutesTests
     private sealed class Fixture : IAsyncDisposable
     {
         internal readonly TempDirectory Temp = new();
-        private readonly string? oldOrigin = Environment.GetEnvironmentVariable(
-            "FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN"
-        );
-        private readonly string? oldConfig = Environment.GetEnvironmentVariable(
-            "FOXWARM_CONFIG_PATH"
-        );
-        private readonly string? oldAssets = Environment.GetEnvironmentVariable(
-            "FOXWARM_VSCODE_WEB_ASSET_DIR"
-        );
         internal SessionManager Manager = null!;
         internal HttpServer Server = null!;
         internal HttpClient Client = null!;
         internal Foxwarm.Terminal.TerminalRegistry Terminals = null!;
         internal string Data => Path.Combine(Temp.Path, "data literal%20 space 雪");
+        internal string Assets =>
+            Path.Combine(Temp.Path, "resources/packages/vscode-web/assets/vscode-web");
         internal string Work => Path.Combine(Temp.Path, "work");
 
-        internal static async Task<Fixture> Create(
-            string? origin = null,
-            bool relativeConfig = false
-        )
+        internal static async Task<Fixture> Create()
         {
             var f = new Fixture();
-            Environment.SetEnvironmentVariable(
-                "FOXWARM_VSCODE_WEB_ASSET_DIR",
-                Path.Combine(f.Temp.Path, "missing-assets")
-            );
             Directory.CreateDirectory(f.Data);
             Directory.CreateDirectory(f.Work);
-            Environment.SetEnvironmentVariable("FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN", origin);
-            if (relativeConfig)
-                Environment.SetEnvironmentVariable(
-                    "FOXWARM_CONFIG_PATH",
-                    Path.GetRelativePath(
-                        Environment.CurrentDirectory,
-                        Path.Combine(f.Temp.Path, "active-app.yaml")
-                    )
-                );
-            var config = new ModelConfiguration(f.Data);
+            Directory.CreateDirectory(Path.Combine(f.Temp.Path, "resources"));
+            var config = new ModelConfiguration(
+                HostPaths.ForDataRoot(
+                    f.Data,
+                    applicationRoot: AppContext.BaseDirectory,
+                    resourceRoot: Path.Combine(f.Temp.Path, "resources")
+                )
+            );
             var options = new ResponsesClientOptions(
                 new Uri("http://127.0.0.1:1"),
                 "local",
@@ -95,9 +79,6 @@ public sealed class CodeRoutesTests
             await Server.App.DisposeAsync();
             await Terminals.DisposeAsync();
             await Manager.DisposeAsync();
-            Environment.SetEnvironmentVariable("FOXWARM_VSCODE_WEB_ASSET_DIR", oldAssets);
-            Environment.SetEnvironmentVariable("FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN", oldOrigin);
-            Environment.SetEnvironmentVariable("FOXWARM_CONFIG_PATH", oldConfig);
             Temp.Dispose();
         }
     }
@@ -608,7 +589,7 @@ public sealed class CodeRoutesTests
     public async Task Workspace_settings_and_malformed_file_retention_with_narrow_capability_scope()
     {
         await using var f = await Fixture.Create();
-        var assets = Path.Combine(f.Temp.Path, "missing-assets");
+        var assets = f.Assets;
         foreach (
             var file in new[]
             {
@@ -701,7 +682,7 @@ public sealed class CodeRoutesTests
     )
     {
         await using var f = await Fixture.Create();
-        var assets = Path.Combine(f.Temp.Path, "missing-assets");
+        var assets = f.Assets;
         var main = Path.Combine(assets, "out/vs/workbench/workbench.web.main.internal.js");
         Directory.CreateDirectory(Path.GetDirectoryName(main)!);
         await File.WriteAllTextAsync(Path.Combine(assets, "out/nls.messages.js"), "// fixture");
@@ -789,39 +770,5 @@ public sealed class CodeRoutesTests
         }
     }
 
-    [Fact]
-    public async Task Active_relative_config_and_foreign_origin_error_leave_ordinary_host_running()
-    {
-        await using var f = await Fixture.Create("https://*.example.invalid", relativeConfig: true);
-        var roots = await f.Json(await f.Client.GetAsync("/api/vscode-web/fs/workspace-roots"));
-        Assert.Equal(
-            Path.Combine(f.Temp.Path, "active-app.yaml"),
-            roots["configFiles"]!["app"]!["path"]!.ToString()
-        );
-        Assert.Equal(
-            Path.Combine(f.Data, "state", "models.yaml"),
-            roots["configFiles"]!["models"]!["path"]!.ToString()
-        );
-        var assets = Path.Combine(f.Temp.Path, "missing-assets");
-        foreach (
-            var file in new[]
-            {
-                "out/nls.messages.js",
-                "out/vs/workbench/workbench.web.main.internal.css",
-                "out/vs/workbench/workbench.web.main.internal.js",
-            }
-        )
-        {
-            var path = Path.Combine(assets, file);
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            await File.WriteAllTextAsync(path, "metadata fixture");
-        }
-        var code = await f.Client.GetAsync("/vscode-web/");
-        Assert.Equal(HttpStatusCode.BadRequest, code.StatusCode);
-        Assert.Equal(
-            "InvalidPath",
-            JsonNode.Parse(await code.Content.ReadAsStringAsync())!["code"]!.ToString()
-        );
-        Assert.Equal(HttpStatusCode.OK, (await f.Client.GetAsync("/api/nodes")).StatusCode);
-    }
+
 }

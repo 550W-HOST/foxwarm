@@ -40,9 +40,7 @@ public sealed partial class AsrRoutesTests
         internal string PeerUrl = "";
         internal string Data => Path.Combine(Temp.Path, "data");
         internal string Work => Path.Combine(Temp.Path, "work");
-        private readonly string? oldConfig = Environment.GetEnvironmentVariable(
-            "FOXWARM_CONFIG_PATH"
-        );
+        internal string ConfigPath => Path.Combine(Data, "state", "config.yaml");
 
         internal static async Task<Fixture> Create(
             Func<string, string>? config = null,
@@ -135,8 +133,8 @@ public sealed partial class AsrRoutesTests
             );
             await f.Peer.StartAsync();
             f.PeerUrl = f.Peer.Urls.Single();
-            var path = Path.Combine(f.Temp.Path, "app.yaml");
-            Environment.SetEnvironmentVariable("FOXWARM_CONFIG_PATH", path);
+            var path = f.ConfigPath;
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(
                 path,
                 "bot:\n  enableWebUI: "
@@ -274,7 +272,6 @@ public sealed partial class AsrRoutesTests
             await Manager.DisposeAsync();
             await Peer.StopAsync();
             await Peer.DisposeAsync();
-            Environment.SetEnvironmentVariable("FOXWARM_CONFIG_PATH", oldConfig);
             Temp.Dispose();
         }
     }

@@ -19,7 +19,6 @@ internal sealed partial class CodeWorkbench
     private readonly string assetRoot;
     private readonly string extensionRoot;
     private readonly string yamlRoot;
-    private readonly string? configuredOrigin;
     private readonly string defaultFolder;
     private readonly string workspacePath;
     private readonly bool hasPty;
@@ -47,36 +46,11 @@ internal sealed partial class CodeWorkbench
         var resources = config?.Paths.ResourceRoot ?? AppContext.BaseDirectory;
         appConfig = config is null ? null : Path.GetFullPath(config.AppPath);
         modelsConfig = config is null ? null : Path.GetFullPath(config.ActivePath);
-        assetRoot = Environment.GetEnvironmentVariable("FOXWARM_VSCODE_WEB_ASSET_DIR")
-            is { Length: > 0 } assets
-            ? Path.GetFullPath(assets)
-            : Path.Combine(resources, "packages", "vscode-web", "assets", "vscode-web");
+        assetRoot = Path.Combine(resources, "packages", "vscode-web", "assets", "vscode-web");
         extensionRoot = Path.Combine(resources, "packages", "vscode-web");
-        yamlRoot = Environment.GetEnvironmentVariable("FOXWARM_VSCODE_YAML_EXTENSION_DIR")
-            is { Length: > 0 } yaml
-            ? Path.GetFullPath(yaml)
-            : Path.Combine(
-                resources,
-                "packages",
-                "vscode-web",
-                "assets",
-                "extensions",
-                "redhat.vscode-yaml"
-            );
-        configuredOrigin = Environment
-            .GetEnvironmentVariable("FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN")
-            ?.Trim()
-            .TrimEnd('/');
-        defaultFolder = Environment
-            .GetEnvironmentVariable("FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI")
-            ?.Trim()
-            is { Length: > 0 } folder
-            ? folder
-            : FoxwarmUri(applicationRoot);
-        workspacePath = Environment.GetEnvironmentVariable("FOXWARM_VSCODE_WEB_WORKSPACE_PATH")
-            is { Length: > 0 } workspace
-            ? Path.GetFullPath(workspace)
-            : Path.Combine(dataRoot, "state", "vscode-web", "foxwarm.code-workspace");
+        yamlRoot = Path.Combine(extensionRoot, "assets", "extensions", "redhat.vscode-yaml");
+        defaultFolder = FoxwarmUri(applicationRoot);
+        workspacePath = Path.Combine(dataRoot, "state", "vscode-web", "foxwarm.code-workspace");
     }
 
     private bool Prepared =>
@@ -203,11 +177,6 @@ internal sealed partial class CodeWorkbench
     {
         var address = publicAddress;
         var origin = address.Origin;
-        if (!string.IsNullOrEmpty(configuredOrigin) && configuredOrigin != origin)
-            throw new CodeServiceException(
-                "InvalidPath",
-                "Code webviews require the Main public origin."
-            );
         var folder =
             context
                 .Request.Query[

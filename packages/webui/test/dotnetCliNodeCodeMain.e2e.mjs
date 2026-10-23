@@ -12,10 +12,11 @@ import { createHostFixture, until } from './experimentHostFixture.mjs'
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
 initializeTestEnvironment()
-const assets = process.env.FOXWARM_VSCODE_WEB_ASSET_DIR
 for (const runtime of ['source', 'dotnet']) {
+  const workbenchDir = runtime === 'source' ? resolve('packages/vscode-web/assets/vscode-web') : resolve('dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web')
+  const assets = await access(join(workbenchDir, 'out/vs/workbench/workbench.web.main.internal.js')).then(() => true, () => false)
   const env = {}, fixture = await createHostFixture('cli-code-' + runtime, { runtime, normalStartup: true, env })
-  Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '', FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN: '', ...(assets ? { FOXWARM_VSCODE_WEB_ASSET_DIR: resolve(assets) } : {}) })
+  Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
   const cwd = join(fixture.root, 'cli'), repo = join(cwd, 'repository'), wire = [], sockets = new Set(), errors = []
   for (const path of [cwd, repo]) await mkdir(path, { recursive: true })
   const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim()

@@ -7,7 +7,7 @@ import { WebSocket } from 'ws'
 import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
 
 const options = { env: {} }, owned = await createHostFixture('terminal-native', options)
-options.cwd = owned.root; options.env = { HOME: join(owned.root, 'home'), FOXWARM_CONFIG_PATH: join(owned.data, 'state/config.yaml') }
+options.cwd = owned.root; options.env = { HOME: join(owned.root, 'home'), }
 await mkdir(options.env.HOME); await writeFile(join(owned.work, 'helper.txt'), 'one\ntwo\nthree\n')
 const open = async (record, control = false) => {
   const url = `ws://127.0.0.1:${owned.port}/api/terminals/stream?terminalId=${encodeURIComponent(record.id)}${control ? '&control=code' : ''}`

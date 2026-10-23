@@ -71,7 +71,8 @@ async function cleanupExecution(transport?: LocalRpcTransport): Promise<void> {
 
 test('production registry loads zero or more executable providers from startup app config', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-executable-provider-config-'));
-  const configPath = path.join(dir, 'config.yaml');
+  const configPath = path.join(dir, 'state/config.yaml');
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
   const logPath = path.join(dir, 'requests.jsonl');
   await fs.writeFile(configPath, JSON.stringify({
     nodeProviders: {
@@ -88,7 +89,7 @@ test('production registry loads zero or more executable providers from startup a
   try {
     const result = await execFileAsync(process.execPath, ['-e', script], {
       cwd: path.join(__dirname, '..', '..'),
-      env: { ...process.env, FOXWARM_CONFIG_PATH: configPath, FOXWARM_DATA_DIR: dir },
+      env: { ...process.env, FOXWARM_DATA_DIR: dir },
       timeout: 10_000,
       maxBuffer: 2 * 1024 * 1024,
     });

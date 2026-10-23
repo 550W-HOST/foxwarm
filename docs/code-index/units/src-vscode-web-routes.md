@@ -21,9 +21,9 @@ Cross-module behavior: [Code integration](../threads/code-integration.md).
 - `/vscode-web/extensions/foxwarm-{fs,terminal,scm,webui}/*` and optional `/vscode-web/extensions/redhat-vscode-yaml/*` — bundled browser-extension assets under normal authentication.
 - `/vscode-web/webview/<process-capability>/...` — narrowly scoped official `pre/` webview bootstrap; capability URL is supplied only to an authenticated workbench.
 
-Required official asset files are loaded from `FOXWARM_VSCODE_WEB_ASSET_DIR` or the ignored package asset directory. `FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN`, `FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI`, and `FOXWARM_VSCODE_WEB_WORKSPACE_PATH` select current deployment behavior.
+Required official asset files are loaded from the installed `packages/vscode-web/assets/vscode-web` directory. Optional YAML assets use the sibling `assets/extensions/redhat.vscode-yaml` directory. Embedded workspaces persist at selected `state/vscode-web/foxwarm.code-workspace`. These locations and the automatic webview origin have no environment overrides.
 
-When no explicit default-folder URI is configured, a direct workbench launch derives its master URI from the canonical `BASE_DIR`. It does not probe installation-specific filesystem paths. The fixed workspace-roots response remains authoritative for app/data commands.
+A direct workbench launch without a requested folder derives its master URI from the canonical `BASE_DIR`. It does not probe installation-specific filesystem paths. The fixed workspace-roots response remains authoritative for app/data commands.
 
 ### Filesystem API
 
@@ -57,9 +57,8 @@ Master Git uses argument-array process spawning. Remote status/content use `vsco
 ## Webview compatibility
 
 - Localhost uses Code's hashed webview host shape.
-- Production may provide an isolated wildcard origin.
 - Same-origin fallback uses an unguessable process capability and distinct per-webview path; it disables the webview service worker to avoid same-origin content-routing conflicts.
-- Plain HTTP on a non-loopback host uses a narrowly scoped parent-origin hash fallback for functionality but is not secure/origin-isolated. Exposed deployments should use HTTPS and an isolated wildcard origin.
+- Plain HTTP on a non-loopback host uses a narrowly scoped parent-origin hash fallback for functionality but is not secure/origin-isolated. Exposed deployments should use HTTPS. The fallback does not provide origin isolation.
 
 ## Dependencies
 

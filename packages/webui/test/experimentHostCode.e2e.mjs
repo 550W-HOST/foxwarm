@@ -4,17 +4,18 @@ import { createServer, request as httpRequest } from 'node:http'
 import { createServer as createTlsServer, request as tlsRequest } from 'node:https'
 import { once } from 'node:events'
 import { execFileSync } from 'node:child_process'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
 import sharp from 'sharp'
 import { WebSocket } from 'ws'
 import { writeModelFixture } from './experimentModelFixture.mjs'
 
-assert(process.env.FOXWARM_VSCODE_WEB_ASSET_DIR, 'Prepare the pinned official Code workbench assets first.')
+const workbenchDir = resolve('dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web')
+await access(join(workbenchDir, 'out/vs/workbench/workbench.web.main.internal.js'))
 const options = { env: {} }, owned = await createHostFixture('code', options)
 options.cwd = owned.root
-options.env = { HOME: join(owned.root, 'home'), FOXWARM_CONFIG_PATH: join(owned.data, 'state/config.yaml'), FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN: '', FOXWARM_VSCODE_WEB_ASSET_DIR: resolve(process.env.FOXWARM_VSCODE_WEB_ASSET_DIR) }
+options.env = { HOME: join(owned.root, 'home') }
 await mkdir(options.env.HOME)
 const git = (...args) => execFileSync('git', ['-C', owned.work, ...args], { encoding: 'utf8' }).trim()
 git('init', '-q'); git('config', 'user.name', 'Code Fixture'); git('config', 'user.email', 'code@example.invalid')

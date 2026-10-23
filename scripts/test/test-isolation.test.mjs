@@ -64,7 +64,7 @@ test('direct backend tests isolate inherited and module-relative installation co
   })
   assert.match(result.stdout, /# fail 0/);
   assert.match(result.stdout, /# tests [1-9]/);
-  // node <file> is also supported, including CONFIG_PATH without its preferred alias.
+  // node <file> is also supported.
   await execFileAsync(process.execPath, ['lib/channels/webuiSetup.test.js'], {
     cwd: fixture.root, env: { ...fixture.env, FOXWARM_CONFIG_PATH: '' }, timeout: 30_000,
   })
@@ -107,7 +107,8 @@ test('Source lifecycle fixture ignores caller configuration under direct race an
   t.after(() => fs.rm(root, { recursive: true, force: true }))
   const caller = path.join(root, 'caller')
   await fs.mkdir(caller)
-  const configPath = path.join(caller, 'config.yaml')
+  const configPath = path.join(caller, 'state/config.yaml')
+  await fs.mkdir(path.dirname(configPath))
   const mcpPath = path.join(caller, 'mcp.json')
   const callerConfig = JSON.stringify({ sessionWorkers: true, dbWorkers: true,
     paths: { agentsDir: path.join(caller, 'agents') } })
@@ -148,7 +149,7 @@ test('Source lifecycle fixture ignores caller configuration under direct race an
   }
   assert.equal(await fs.readFile(configPath, 'utf8'), poison)
   assert.equal(await fs.readFile(mcpPath, 'utf8'), 'synthetic invalid MCP configuration')
-  assert.deepEqual((await fs.readdir(caller)).sort(), ['config.yaml', 'mcp.json'])
+  assert.deepEqual((await fs.readdir(caller)).sort(), ['mcp.json', 'state'])
 })
 
 test('runtime browser files refuse raw invocation even when a URL and installation token are supplied', { timeout: 30_000 }, async t => {

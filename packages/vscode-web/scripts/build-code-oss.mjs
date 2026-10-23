@@ -20,9 +20,7 @@ function parseArgs(argv) {
   const result = {
     commit: process.env.FOXWARM_CODE_OSS_COMMIT || versionConfig.commit,
     repository: process.env.FOXWARM_CODE_OSS_REPOSITORY || versionConfig.repository,
-    outDir: process.env.FOXWARM_VSCODE_WEB_ASSET_DIR
-      ? path.resolve(process.env.FOXWARM_VSCODE_WEB_ASSET_DIR)
-      : defaultOutDir,
+    outDir: defaultOutDir,
     cacheRoot: process.env.FOXWARM_CODE_OSS_CACHE_DIR
       ? path.resolve(process.env.FOXWARM_CODE_OSS_CACHE_DIR)
       : defaultCacheRoot,
@@ -51,8 +49,7 @@ Options:
 Environment equivalents:
   FOXWARM_CODE_OSS_COMMIT
   FOXWARM_CODE_OSS_REPOSITORY
-  FOXWARM_CODE_OSS_CACHE_DIR
-  FOXWARM_VSCODE_WEB_ASSET_DIR`)
+  FOXWARM_CODE_OSS_CACHE_DIR`)
       process.exit(0)
     } else throw new Error(`Unknown argument: ${arg}`)
   }

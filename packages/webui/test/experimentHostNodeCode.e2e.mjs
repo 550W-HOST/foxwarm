@@ -15,8 +15,9 @@ const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../
 initializeTestEnvironment()
 const normalRuntime = process.env.FOXWARM_TEST_MAIN_RUNTIME
 const sourceMain = normalRuntime === 'source'
-const hasCode = !!process.env.FOXWARM_VSCODE_WEB_ASSET_DIR
-const options = { onPage: page => page.setViewport({ width: 1440, height: 1000 }), ...(normalRuntime ? { runtime: normalRuntime, normalStartup: true } : {}), env: { FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN: '', ...(hasCode ? { FOXWARM_VSCODE_WEB_ASSET_DIR: resolve(process.env.FOXWARM_VSCODE_WEB_ASSET_DIR) } : {}) } }
+const workbenchDir = sourceMain ? resolve('packages/vscode-web/assets/vscode-web') : resolve('dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web')
+const hasCode = await access(join(workbenchDir, 'out/vs/workbench/workbench.web.main.internal.js')).then(() => true, () => false)
+const options = { onPage: page => page.setViewport({ width: 1440, height: 1000 }), ...(normalRuntime ? { runtime: normalRuntime, normalStartup: true } : {}), env: {} }
 const fixture = await createHostFixture('node-code', options)
 if (normalRuntime) {
   Object.assign(options.env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })

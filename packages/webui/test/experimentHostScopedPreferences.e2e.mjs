@@ -10,10 +10,10 @@ import { waitForWebUiReady } from './webuiReadiness.mjs'
 const options = { normalStartup: true, env: {} }
 const host = await createHostFixture('scoped-preferences', options)
 options.cwd = host.root
-options.env.FOXWARM_CONFIG_PATH = join(host.data, 'state/config.yaml')
+const configPath = join(host.data, 'state/config.yaml')
 const prefix = '/nested/app'
 const readerToken = 'synthetic-preferences-reader'
-await writeFile(options.env.FOXWARM_CONFIG_PATH, JSON.stringify({
+await writeFile(configPath, JSON.stringify({
   url: host.origin + prefix,
   bot: { httpPort: host.port },
   channels: { webui: {} },

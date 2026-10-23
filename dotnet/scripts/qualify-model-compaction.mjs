@@ -107,7 +107,7 @@ try {
   hostPort = portServer.address().port; await new Promise(done => portServer.close(done))
   await writeFile(join(data, 'state/config.yaml'), (await readFile(join(data, 'state/config.yaml'), 'utf8')) + `paths: {skillsDir: ${JSON.stringify(skills)}}\nbot: {httpPort: ${hostPort}}\nurl: http://127.0.0.1:${hostPort}/\n`)
   host = spawn(join(process.env.DOTNET_ROOT, 'dotnet'), [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: {
-    ...process.env, FOXWARM_DATA_DIR: data, FOXWARM_CONFIG_PATH: join(data, 'state', 'config.yaml'),
+    ...process.env, FOXWARM_DATA_DIR: data,
   } })
   for (const stream of [host.stdout, host.stderr]) stream.on('data', chunk => { output = (output + chunk).slice(-12000) })
   await until(async () => { try { return (await api('GET', '/health')).status === 200 } catch { return false } }, 'HTTP host')

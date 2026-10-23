@@ -7,7 +7,8 @@ import test from 'node:test';
 
 test('QQ Bot config is included in managed runtime status and disabled reloads', async (t) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-qqbot-runtime-'));
-  const configPath = path.join(tempDir, 'config.yaml');
+  const configPath = path.join(tempDir, 'state', 'config.yaml');
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, [
     'channels:',
     '  qq-primary:',
@@ -18,9 +19,8 @@ test('QQ Bot config is included in managed runtime status and disabled reloads',
     '    allowedUsers:',
     '      - user-openid',
   ].join('\n'));
-  process.env.FOXWARM_CONFIG_PATH = configPath;
+  process.env.FOXWARM_DATA_DIR = tempDir;
   t.after(async () => {
-    delete process.env.FOXWARM_CONFIG_PATH;
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 

@@ -158,7 +158,6 @@ async function spawnApplication(logName) {
     env: {
       ...fixtureEnv,
       FOXWARM_DATA_DIR: dataRoot,
-      FOXWARM_CONFIG_PATH: path.join(stateRoot, 'config.yaml'),
       MCP_CONFIG_PATH: path.join(stateRoot, 'mcp.json'),
     },
     stdio: ['ignore', appLog.fd, appLog.fd],

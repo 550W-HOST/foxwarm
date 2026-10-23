@@ -7,8 +7,8 @@ import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { HttpServer } from './httpServer';
-import { registerVscodeWebRoutes } from './vscodeWebRoutes';
-import { APP_CONFIG_PATH, BASE_DIR, DATA_ROOT_DIR, DEFAULT_MODELS_CONFIG_PATH } from './config';
+import * as config from './config';
+import { APP_CONFIG_PATH, BASE_DIR, DATA_ROOT_DIR, DEFAULT_MODELS_CONFIG_PATH, STATE_DIR } from './config';
 import { nodesManager } from './nodes/manager';
 import { executeVscodeNodeService, serializeVscodeNodeServiceError } from '../packages/shared/dist/vscodeNodeService';
 import type { WebSocket } from 'ws';
@@ -16,10 +16,21 @@ import type { WebSocket } from 'ws';
 const TEST_TOKEN = 'secret-token';
 const execFileAsync = promisify(execFile);
 
-async function withServer(fn: (server: HttpServer, baseUrl: string) => Promise<void>) {
+// Give the real compiled route owned installed resources without adding a public path option.
+function routesFor(installation: string) {
+  const module = { exports: {} as typeof import('./vscodeWebRoutes') };
+  const source = fs.readFileSync(require.resolve('./vscodeWebRoutes'), 'utf8');
+  new Function('require', 'module', 'exports', source)(
+    (id: string) => id === './config' ? { ...config, BASE_DIR: installation } : require(id),
+    module, module.exports,
+  );
+  return module.exports;
+}
+
+async function withServer(fn: (server: HttpServer, baseUrl: string) => Promise<void>, installation = BASE_DIR) {
   const port = 33180 + Math.floor(Math.random() * 1000);
   const server = new HttpServer(port, TEST_TOKEN);
-  registerVscodeWebRoutes(server);
+  routesFor(installation).registerVscodeWebRoutes(server);
   await server.start();
   try {
     await fn(server, `http://127.0.0.1:${port}`);
@@ -117,28 +128,21 @@ test('VS Code Web route, extension assets, and filesystem API require the WebUI 
 });
 
 test('Code route returns a friendly actionable page when optional assets are missing', async () => {
-  const previousAssetDir = process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;
-  try {
-    await withTempDir(async (dirPath) => {
-      process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = dirPath;
-      await withServer(async (_server, baseUrl) => {
-        const response = await fetch(`${baseUrl}/vscode-web`, { headers: bearerHeaders() });
-        assert.equal(response.status, 503);
-        assert.equal(response.headers.get('cache-control'), 'no-store');
-        const html = await response.text();
-        assert.match(html, /Code is not built/);
-        assert.match(html, /npm run build:code/);
-        assert.match(html, /npm run download:code/);
-        assert.doesNotMatch(html, /<title>[^<]*VS Code/i);
+  await withTempDir(async (installation) => {
+    await withServer(async (_server, baseUrl) => {
+      const response = await fetch(`${baseUrl}/vscode-web`, { headers: bearerHeaders() });
+      assert.equal(response.status, 503);
+      assert.equal(response.headers.get('cache-control'), 'no-store');
+      const html = await response.text();
+      assert.match(html, /Code is not built/);
+      assert.match(html, /npm run build:code/);
+      assert.match(html, /npm run download:code/);
+      assert.doesNotMatch(html, /<title>[^<]*VS Code/i);
 
-        const staticResponse = await fetch(`${baseUrl}/vscode-web/static/out/nls.messages.js`, { headers: bearerHeaders() });
-        assert.equal(staticResponse.status, 404);
-      });
-    });
-  } finally {
-    if (previousAssetDir === undefined) delete process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;
-    else process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = previousAssetDir;
-  }
+      const staticResponse = await fetch(`${baseUrl}/vscode-web/static/out/nls.messages.js`, { headers: bearerHeaders() });
+      assert.equal(staticResponse.status, 404);
+    }, installation);
+  });
 });
 
 test('VS Code Web filesystem API rejects unavailable nodes and non-absolute paths', async () => {
@@ -156,18 +160,12 @@ test('VS Code Web filesystem API rejects unavailable nodes and non-absolute path
 });
 
 test('VS Code Web workbench bootstrap is emitted when official static assets are prepared and assets remain authenticated', async () => {
-  const previousAssetDir = process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;
-  const previousDefaultFolderUri = process.env.FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI;
-  const previousWorkspacePath = process.env.FOXWARM_VSCODE_WEB_WORKSPACE_PATH;
-  try {
-    await withTempDir(async (dirPath) => {
-      process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = dirPath;
-      delete process.env.FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI;
-      process.env.FOXWARM_VSCODE_WEB_WORKSPACE_PATH = path.join(dirPath, 'foxwarm.code-workspace');
-      await fs.outputFile(path.join(dirPath, 'out/nls.messages.js'), '');
-      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.css'), 'body{}');
-      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.js'), `async function hvt(a,o){if(!crypto.subtle)throw new Error("'crypto.subtle' is not available so webviews will not work.");let e=JSON.stringify({parentOrigin:a,salt:o}),i=new TextEncoder().encode(e),n=await crypto.subtle.digest("sha-256",i);return r2o(n)}function r2o(a){return a} class ClipboardService { async hasResources(){try{let e=await ao().navigator.clipboard.read();return e.length>0}catch{}return this.resources.length>0} } export const URI = {}; export class Emitter {}; export function create() {}`);
-      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/contrib/webview/browser/pre/index.html'), `<meta http-equiv="Content-Security-Policy" content="script-src 'sha256-old' 'self'">
+  await withTempDir(async (installation) => {
+    const dirPath = path.join(installation, 'packages/vscode-web/assets/vscode-web');
+    await fs.outputFile(path.join(dirPath, 'out/nls.messages.js'), '');
+    await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.css'), 'body{}');
+    await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.js'), `async function hvt(a,o){if(!crypto.subtle)throw new Error("'crypto.subtle' is not available so webviews will not work.");let e=JSON.stringify({parentOrigin:a,salt:o}),i=new TextEncoder().encode(e),n=await crypto.subtle.digest("sha-256",i);return r2o(n)}function r2o(a){return a} class ClipboardService { async hasResources(){try{let e=await ao().navigator.clipboard.read();return e.length>0}catch{}return this.resources.length>0} } export const URI = {}; export class Emitter {}; export function create() {}`);
+    await fs.outputFile(path.join(dirPath, 'out/vs/workbench/contrib/webview/browser/pre/index.html'), `<meta http-equiv="Content-Security-Policy" content="script-src 'sha256-old' 'self'">
 <script async type="module">
 const searchParams = new URLSearchParams(location.search);
 const disableServiceWorker = searchParams.has('disableServiceWorker');
@@ -182,183 +180,148 @@ if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')
 }
 </script>`);
 
-      await withServer(async (_server, baseUrl) => {
-        const noAuthStatic = await fetch(`${baseUrl}/vscode-web/static/out/nls.messages.js`);
-        assert.equal(noAuthStatic.status, 401);
+    await withServer(async (_server, baseUrl) => {
+      const noAuthStatic = await fetch(`${baseUrl}/vscode-web/static/out/nls.messages.js`);
+      assert.equal(noAuthStatic.status, 401);
 
-        const staticWithCookie = await fetch(`${baseUrl}/vscode-web/static/out/nls.messages.js`, { headers: cookieHeaders() });
-        assert.equal(staticWithCookie.status, 200);
+      const staticWithCookie = await fetch(`${baseUrl}/vscode-web/static/out/nls.messages.js`, { headers: cookieHeaders() });
+      assert.equal(staticWithCookie.status, 200);
 
-        const defaultWorkbench = await fetch(`${baseUrl}/vscode-web`, { headers: cookieHeaders() });
-        assert.equal(defaultWorkbench.status, 200);
-        const defaultHtml = await defaultWorkbench.text();
-        const defaultPath = BASE_DIR.split(path.sep).map((segment, index) => index === 0 ? '' : encodeURIComponent(segment)).join('/');
-        assert.ok(defaultHtml.includes(`&quot;path&quot;:&quot;${defaultPath}&quot;`));
+      const defaultWorkbench = await fetch(`${baseUrl}/vscode-web`, { headers: cookieHeaders() });
+      assert.equal(defaultWorkbench.status, 200);
+      const defaultHtml = await defaultWorkbench.text();
+      const defaultPath = installation.split(path.sep).map((segment, index) => index === 0 ? '' : encodeURIComponent(segment)).join('/');
+      assert.ok(defaultHtml.includes(`&quot;path&quot;:&quot;${defaultPath}&quot;`));
 
-        const folderUri = 'foxwarm://node+master/tmp/hello%20world';
-        const workbench = await fetch(`${baseUrl}/vscode-web?folderUri=${encodeURIComponent(folderUri)}`, { headers: cookieHeaders() });
-        assert.equal(workbench.status, 200);
-        const html = await workbench.text();
-        assert.match(html, /vscode-workbench-web-configuration/);
-        assert.match(html, /foxwarm-code-bridge/);
-        assert.match(html, /foxwarm-fs\.handleOpenRequest/);
-        assert.match(html, /foxwarm-scm\.openCommitDetails/);
-        assert.match(html, /Unsupported Foxwarm Code bridge request/);
-        assert.match(html, /openCommitId/);
-        assert.match(html, /__foxwarmSha256Digest/);
-        assert.match(html, /trimTrailingSlash\(webviewOrigin\) \+ routePath/);
-        assert.match(html, /\/vscode-web\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.js/);
-        assert.match(html, /\/vscode-web\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.css/);
-        assert.match(html, /\/vscode-web\/extensions\/foxwarm-fs/);
-        assert.match(html, /\/vscode-web\/extensions\/foxwarm-terminal/);
-        assert.match(html, /\/vscode-web\/extensions\/foxwarm-scm/);
-        assert.match(html, /\/vscode-web\/extensions\/foxwarm-webui/);
-        assert.match(html, /\/vscode-web\/extensions\/redhat-vscode-yaml/);
-        assert.ok((html.match(/extensions\/redhat-vscode-yaml/g) || []).length >= 2);
-        assert.match(html, /redhat\.telemetry\.enabled/);
-        assert.match(html, /yaml\.schemaStore\.enable/);
-        assert.match(html, /yaml\.kubernetesCRDStore\.enable/);
-        assert.match(html, /yaml\.extension\.recommendations/);
-        assert.match(html, /&quot;scheme&quot;:&quot;foxwarm&quot;/);
-        assert.match(html, /&quot;authority&quot;:&quot;node\+master&quot;/);
-        assert.match(html, /&quot;path&quot;:&quot;\/tmp\/hello%20world&quot;/);
-        assert.match(html, /window\.menuBarVisibility/);
-        assert.match(html, /&quot;visible&quot;/);
-        assert.match(html, /terminal\.integrated\.defaultProfile\.linux/);
-        const webviewCapability = html.match(/\/vscode-web\/webview\/([0-9a-f]{48})\//)?.[1];
-        assert.ok(webviewCapability);
-        assert.match(html, new RegExp(`http:\\/\\/\\{\\{uuid\\}\\}\\.localhost:${new URL(baseUrl).port}\\/vscode-web\\/webview\\/${webviewCapability}\\/`));
-        const webviewBootstrap = await fetch(`${baseUrl}/vscode-web/webview/${webviewCapability}/index.html`);
-        assert.equal(webviewBootstrap.status, 200);
-        const webviewBootstrapHtml = await webviewBootstrap.text();
-        assert.match(webviewBootstrapHtml, /new URL\(parentOrigin\)\.origin === new URL\(location\.href\)\.origin/);
-        assert.match(webviewBootstrapHtml, /!window\.isSecureContext/);
-        assert.match(webviewBootstrapHtml, /parentOrigin.*window\.location\.origin/);
-        assert.match(webviewBootstrapHtml, /return start\(parentOrigin\)/);
-        assert.doesNotMatch(webviewBootstrapHtml, /sha256-old/);
-        const instancedWebviewBootstrap = await fetch(`${baseUrl}/vscode-web/webview/${webviewCapability}/unit-instance/index.html`);
-        assert.equal(instancedWebviewBootstrap.status, 200);
-        assert.equal(await instancedWebviewBootstrap.text(), webviewBootstrapHtml);
-        const patchedWorkbench = await fetch(`${baseUrl}/vscode-web/static/out/vs/workbench/workbench.web.main.internal.js`, { headers: cookieHeaders() });
-        assert.equal(patchedWorkbench.status, 200);
-        const patchedWorkbenchSource = await patchedWorkbench.text();
-        assert.match(patchedWorkbenchSource, /globalThis\.__foxwarmSha256Digest/);
-        assert.doesNotMatch(patchedWorkbenchSource, /if\(!crypto\.subtle\)throw/);
-        assert.match(patchedWorkbenchSource, /Firefox\\\/.*this\.resources\.length/);
-        assert.doesNotMatch(patchedWorkbenchSource, /async hasResources\(\)\{try\{let e=await ao\(\)\.navigator\.clipboard\.read/);
-        const wrongCapability = await fetch(`${baseUrl}/vscode-web/webview/${'0'.repeat(48)}/index.html`);
-        assert.equal(wrongCapability.status, 404);
+      const folderUri = 'foxwarm://node+master/tmp/hello%20world';
+      const workbench = await fetch(`${baseUrl}/vscode-web?folderUri=${encodeURIComponent(folderUri)}`, { headers: cookieHeaders() });
+      assert.equal(workbench.status, 200);
+      const html = await workbench.text();
+      assert.match(html, /vscode-workbench-web-configuration/);
+      assert.match(html, /foxwarm-code-bridge/);
+      assert.match(html, /foxwarm-fs\.handleOpenRequest/);
+      assert.match(html, /foxwarm-scm\.openCommitDetails/);
+      assert.match(html, /Unsupported Foxwarm Code bridge request/);
+      assert.match(html, /openCommitId/);
+      assert.match(html, /__foxwarmSha256Digest/);
+      assert.match(html, /trimTrailingSlash\(webviewOrigin\) \+ routePath/);
+      assert.match(html, /\/vscode-web\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.js/);
+      assert.match(html, /\/vscode-web\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.css/);
+      assert.match(html, /\/vscode-web\/extensions\/foxwarm-fs/);
+      assert.match(html, /\/vscode-web\/extensions\/foxwarm-terminal/);
+      assert.match(html, /\/vscode-web\/extensions\/foxwarm-scm/);
+      assert.match(html, /\/vscode-web\/extensions\/foxwarm-webui/);
+      assert.match(html, /\/vscode-web\/extensions\/redhat-vscode-yaml/);
+      assert.ok((html.match(/extensions\/redhat-vscode-yaml/g) || []).length >= 2);
+      assert.match(html, /redhat\.telemetry\.enabled/);
+      assert.match(html, /yaml\.schemaStore\.enable/);
+      assert.match(html, /yaml\.kubernetesCRDStore\.enable/);
+      assert.match(html, /yaml\.extension\.recommendations/);
+      assert.match(html, /&quot;scheme&quot;:&quot;foxwarm&quot;/);
+      assert.match(html, /&quot;authority&quot;:&quot;node\+master&quot;/);
+      assert.match(html, /&quot;path&quot;:&quot;\/tmp\/hello%20world&quot;/);
+      assert.match(html, /window\.menuBarVisibility/);
+      assert.match(html, /&quot;visible&quot;/);
+      assert.match(html, /terminal\.integrated\.defaultProfile\.linux/);
+      const webviewCapability = html.match(/\/vscode-web\/webview\/([0-9a-f]{48})\//)?.[1];
+      assert.ok(webviewCapability);
+      assert.match(html, new RegExp(`http:\\/\\/\\{\\{uuid\\}\\}\\.localhost:${new URL(baseUrl).port}\\/vscode-web\\/webview\\/${webviewCapability}\\/`));
+      const webviewBootstrap = await fetch(`${baseUrl}/vscode-web/webview/${webviewCapability}/index.html`);
+      assert.equal(webviewBootstrap.status, 200);
+      const webviewBootstrapHtml = await webviewBootstrap.text();
+      assert.match(webviewBootstrapHtml, /new URL\(parentOrigin\)\.origin === new URL\(location\.href\)\.origin/);
+      assert.match(webviewBootstrapHtml, /!window\.isSecureContext/);
+      assert.match(webviewBootstrapHtml, /parentOrigin.*window\.location\.origin/);
+      assert.match(webviewBootstrapHtml, /return start\(parentOrigin\)/);
+      assert.doesNotMatch(webviewBootstrapHtml, /sha256-old/);
+      const instancedWebviewBootstrap = await fetch(`${baseUrl}/vscode-web/webview/${webviewCapability}/unit-instance/index.html`);
+      assert.equal(instancedWebviewBootstrap.status, 200);
+      assert.equal(await instancedWebviewBootstrap.text(), webviewBootstrapHtml);
+      const patchedWorkbench = await fetch(`${baseUrl}/vscode-web/static/out/vs/workbench/workbench.web.main.internal.js`, { headers: cookieHeaders() });
+      assert.equal(patchedWorkbench.status, 200);
+      const patchedWorkbenchSource = await patchedWorkbench.text();
+      assert.match(patchedWorkbenchSource, /globalThis\.__foxwarmSha256Digest/);
+      assert.doesNotMatch(patchedWorkbenchSource, /if\(!crypto\.subtle\)throw/);
+      assert.match(patchedWorkbenchSource, /Firefox\\\/.*this\.resources\.length/);
+      assert.doesNotMatch(patchedWorkbenchSource, /async hasResources\(\)\{try\{let e=await ao\(\)\.navigator\.clipboard\.read/);
+      const wrongCapability = await fetch(`${baseUrl}/vscode-web/webview/${'0'.repeat(48)}/index.html`);
+      assert.equal(wrongCapability.status, 404);
 
-        const embeddedWorkbench = await fetch(`${baseUrl}/vscode-web?embedded=true&initialFolderUri=${encodeURIComponent(folderUri)}`, { headers: cookieHeaders() });
-        assert.equal(embeddedWorkbench.status, 200);
-        const embeddedHtml = await embeddedWorkbench.text();
-        assert.match(embeddedHtml, /&quot;workspaceUri&quot;/);
-        assert.match(embeddedHtml, /foxwarm\.code-workspace/);
-        const workspacePath = process.env.FOXWARM_VSCODE_WEB_WORKSPACE_PATH!;
-        const workspace = await fs.readJson(workspacePath) as { settings: Record<string, unknown> };
-        assert.deepEqual(workspace.settings, {
-          'redhat.telemetry.enabled': false,
-          'yaml.schemaStore.enable': false,
-          'yaml.kubernetesCRDStore.enable': false,
-          'yaml.extension.recommendations': false,
-        });
-        workspace.settings['redhat.telemetry.enabled'] = true;
-        await fs.writeJson(workspacePath, workspace);
-        const repeatedEmbedded = await fetch(`${baseUrl}/vscode-web?embedded=true&initialFolderUri=${encodeURIComponent(folderUri)}`, { headers: cookieHeaders() });
-        assert.equal(repeatedEmbedded.status, 200);
-        assert.equal((await fs.readJson(workspacePath) as { settings: Record<string, unknown> }).settings['redhat.telemetry.enabled'], true);
+      const embeddedWorkbench = await fetch(`${baseUrl}/vscode-web?embedded=true&initialFolderUri=${encodeURIComponent(folderUri)}`, { headers: cookieHeaders() });
+      assert.equal(embeddedWorkbench.status, 200);
+      const embeddedHtml = await embeddedWorkbench.text();
+      assert.match(embeddedHtml, /&quot;workspaceUri&quot;/);
+      assert.match(embeddedHtml, /foxwarm\.code-workspace/);
+      const workspacePath = path.join(STATE_DIR, 'vscode-web', 'foxwarm.code-workspace');
+      const workspace = await fs.readJson(workspacePath) as { settings: Record<string, unknown> };
+      assert.deepEqual(workspace.settings, {
+        'redhat.telemetry.enabled': false,
+        'yaml.schemaStore.enable': false,
+        'yaml.kubernetesCRDStore.enable': false,
+        'yaml.extension.recommendations': false,
       });
-    });
-  } finally {
-    if (previousDefaultFolderUri === undefined) {
-      delete process.env.FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI;
-    } else {
-      process.env.FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI = previousDefaultFolderUri;
-    }
-    if (previousWorkspacePath === undefined) {
-      delete process.env.FOXWARM_VSCODE_WEB_WORKSPACE_PATH;
-    } else {
-      process.env.FOXWARM_VSCODE_WEB_WORKSPACE_PATH = previousWorkspacePath;
-    }
-    if (previousAssetDir === undefined) {
-      delete process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;
-    } else {
-      process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = previousAssetDir;
-    }
-  }
+      workspace.settings['redhat.telemetry.enabled'] = true;
+      await fs.writeJson(workspacePath, workspace);
+      const repeatedEmbedded = await fetch(`${baseUrl}/vscode-web?embedded=true&initialFolderUri=${encodeURIComponent(folderUri)}`, { headers: cookieHeaders() });
+      assert.equal(repeatedEmbedded.status, 200);
+      assert.equal((await fs.readJson(workspacePath) as { settings: Record<string, unknown> }).settings['redhat.telemetry.enabled'], true);
+    }, installation);
+  });
 });
 
 test('VS Code Web workbench bootstrap honors forwarded base path prefixes', async () => {
-  const previousAssetDir = process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;
-  try {
-    await withTempDir(async (dirPath) => {
-      process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = dirPath;
-      await fs.outputFile(path.join(dirPath, 'out/nls.messages.js'), '');
-      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.css'), 'body{}');
-      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.js'), 'export const URI = {}; export class Emitter {}; export function create() {}');
+  await withTempDir(async (installation) => {
+    const dirPath = path.join(installation, 'packages/vscode-web/assets/vscode-web');
+    await fs.outputFile(path.join(dirPath, 'out/nls.messages.js'), '');
+    await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.css'), 'body{}');
+    await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.js'), 'export const URI = {}; export class Emitter {}; export function create() {}');
 
-      await withServer(async (_server, baseUrl) => {
-        const workbench = await fetch(`${baseUrl}/vscode-web`, {
-          headers: cookieHeaders({
-            'x-forwarded-prefix': '/proxy-prefix',
-            'x-forwarded-proto': 'https',
-            'x-forwarded-host': 'example.test',
-          }),
-        });
-        assert.equal(workbench.status, 200);
-        const html = await workbench.text();
-        assert.match(html, /\/proxy-prefix\/vscode-web\/static\/out\/nls\.messages\.js/);
-        assert.match(html, /\/proxy-prefix\/vscode-web\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.js/);
-        assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-fs/);
-        assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-terminal/);
-        assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-scm/);
-        assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-webui/);
-        assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/redhat-vscode-yaml/);
-        assert.match(html, /\/proxy-prefix\/vscode-web\/webview\/[0-9a-f]{48}\//);
-        assert.match(html, /https:\/\/example\.test\/proxy-prefix\/vscode-web\/webview\/[0-9a-f]{48}\/\{\{uuid\}\}\//);
-        assert.match(html, /&quot;webEndpointUrlTemplate&quot;:&quot;https:\/\/example\.test\/proxy-prefix\/vscode-web\/static&quot;/);
-        assert.match(html, /&quot;path&quot;:&quot;\/proxy-prefix\/vscode-web\/extensions\/foxwarm-fs&quot;/);
-        assert.match(html, /&quot;callbackRoute&quot;:&quot;\/proxy-prefix\/vscode-web\/callback&quot;/);
-        assert.doesNotMatch(html, /https:\/\/example\.test\/vscode-web\/static/);
-        assert.doesNotMatch(html, /href="\/vscode-web\/static/);
+    await withServer(async (_server, baseUrl) => {
+      const workbench = await fetch(`${baseUrl}/vscode-web`, {
+        headers: cookieHeaders({
+          'x-forwarded-prefix': '/proxy-prefix',
+          'x-forwarded-proto': 'https',
+          'x-forwarded-host': 'example.test',
+        }),
       });
-    });
-  } finally {
-    if (previousAssetDir === undefined) {
-      delete process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;
-    } else {
-      process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = previousAssetDir;
-    }
-  }
+      assert.equal(workbench.status, 200);
+      const html = await workbench.text();
+      assert.match(html, /\/proxy-prefix\/vscode-web\/static\/out\/nls\.messages\.js/);
+      assert.match(html, /\/proxy-prefix\/vscode-web\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.js/);
+      assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-fs/);
+      assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-terminal/);
+      assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-scm/);
+      assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/foxwarm-webui/);
+      assert.match(html, /\/proxy-prefix\/vscode-web\/extensions\/redhat-vscode-yaml/);
+      assert.match(html, /\/proxy-prefix\/vscode-web\/webview\/[0-9a-f]{48}\//);
+      assert.match(html, /https:\/\/example\.test\/proxy-prefix\/vscode-web\/webview\/[0-9a-f]{48}\/\{\{uuid\}\}\//);
+      assert.match(html, /&quot;webEndpointUrlTemplate&quot;:&quot;https:\/\/example\.test\/proxy-prefix\/vscode-web\/static&quot;/);
+      assert.match(html, /&quot;path&quot;:&quot;\/proxy-prefix\/vscode-web\/extensions\/foxwarm-fs&quot;/);
+      assert.match(html, /&quot;callbackRoute&quot;:&quot;\/proxy-prefix\/vscode-web\/callback&quot;/);
+      assert.doesNotMatch(html, /https:\/\/example\.test\/vscode-web\/static/);
+      assert.doesNotMatch(html, /href="\/vscode-web\/static/);
+    }, installation);
+  });
 });
 
 test('VS Code Web workbench bootstrap can use relative assets from a trailing-slash route', async () => {
-  const previousAssetDir = process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;
-  try {
-    await withTempDir(async (dirPath) => {
-      process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = dirPath;
-      await fs.outputFile(path.join(dirPath, 'out/nls.messages.js'), '');
-      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.css'), 'body{}');
-      await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.js'), 'export const URI = {}; export class Emitter {}; export function create() {}');
+  await withTempDir(async (installation) => {
+    const dirPath = path.join(installation, 'packages/vscode-web/assets/vscode-web');
+    await fs.outputFile(path.join(dirPath, 'out/nls.messages.js'), '');
+    await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.css'), 'body{}');
+    await fs.outputFile(path.join(dirPath, 'out/vs/workbench/workbench.web.main.internal.js'), 'export const URI = {}; export class Emitter {}; export function create() {}');
 
-      await withServer(async (_server, baseUrl) => {
-        const workbench = await fetch(`${baseUrl}/vscode-web/`, { headers: cookieHeaders() });
-        assert.equal(workbench.status, 200);
-        const html = await workbench.text();
-        assert.match(html, /href="\.\/static\/favicon\.ico"/);
-        assert.match(html, /src="\.\/static\/out\/nls\.messages\.js"/);
-        assert.match(html, /import \{ create, commands, Emitter, URI \} from '\.\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.js'/);
-        assert.match(html, /new URL\('static', routeBaseUrl\)/);
-        assert.match(html, /extensionUrl\('extensions\/foxwarm-terminal'\)/);
-      });
-    });
-  } finally {
-    if (previousAssetDir === undefined) {
-      delete process.env.FOXWARM_VSCODE_WEB_ASSET_DIR;
-    } else {
-      process.env.FOXWARM_VSCODE_WEB_ASSET_DIR = previousAssetDir;
-    }
-  }
+    await withServer(async (_server, baseUrl) => {
+      const workbench = await fetch(`${baseUrl}/vscode-web/`, { headers: cookieHeaders() });
+      assert.equal(workbench.status, 200);
+      const html = await workbench.text();
+      assert.match(html, /href="\.\/static\/favicon\.ico"/);
+      assert.match(html, /src="\.\/static\/out\/nls\.messages\.js"/);
+      assert.match(html, /import \{ create, commands, Emitter, URI \} from '\.\/static\/out\/vs\/workbench\/workbench\.web\.main\.internal\.js'/);
+      assert.match(html, /new URL\('static', routeBaseUrl\)/);
+      assert.match(html, /extensionUrl\('extensions\/foxwarm-terminal'\)/);
+    }, installation);
+  });
 });
 
 test('VS Code Web git API reports status and returns base/working content', async () => {

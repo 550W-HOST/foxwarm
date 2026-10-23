@@ -35,7 +35,6 @@ for (const file of ['orderedResponsesDraft.e2e.mjs', 'authorizations.e2e.mjs']) 
           FOXWARM_TEST_RUN_ROOT: '', FOXWARM_TEST_PROCESS_ROOT: '', FOXWARM_TEST_TEMP_ROOT: '',
           FOXWARM_E2E_BROWSER: 'chromium',
           FOXWARM_DATA_DIR: installation,
-          FOXWARM_CONFIG_PATH: path.join(state, 'config.yaml'), CONFIG_PATH: path.join(state, 'config.yaml'),
           MCP_CONFIG_PATH: path.join(state, 'mcp.json'),
           FOXWARM_AGENT_DIR: path.join(installation, 'agent'), FOXWARM_AGENTS_DIR: path.join(installation, 'agents'),
         },

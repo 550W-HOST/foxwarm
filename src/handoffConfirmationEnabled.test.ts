@@ -15,8 +15,8 @@ const confirmationSuffix = 'I have completed the check, found no issue, and conf
 const recall = `${recallPrefix}\nI recalled the applicable communication rules, the user request, and the recipient scope for this test handoff.`;
 const confirmation = `${confirmationPrefix}\nI checked that this enabled-mode handoff is necessary and actionable, not duplicate or inherited-rule acknowledgement, and that its message is useful to the recipient.\n${confirmationSuffix}`;
 
-function envFor(dataRoot: string, configPath: string): NodeJS.ProcessEnv {
-  return { ...process.env, FOXWARM_DATA_DIR: dataRoot, FOXWARM_CONFIG_PATH: configPath };
+function envFor(dataRoot: string): NodeJS.ProcessEnv {
+  return { ...process.env, FOXWARM_DATA_DIR: dataRoot };
 }
 
 test('disabled startup config omits guidance and accepts ordinary handoffs without review fields', async () => {
@@ -64,7 +64,7 @@ const reminders = require('./lib/session/childSessionReminder');
 })().then(() => process.exit(0), error => { console.error(error); process.exit(1); });
 `;
   try {
-    const { stdout } = await execFileAsync(process.execPath, ['-e', script], { cwd: process.cwd(), env: envFor(dataRoot, configPath), timeout: 30_000 });
+    const { stdout } = await execFileAsync(process.execPath, ['-e', script], { cwd: process.cwd(), env: envFor(dataRoot), timeout: 30_000 });
     assert.match(stdout, /disabled-ok/);
   } finally {
     await fs.remove(dataRoot);
@@ -137,7 +137,7 @@ const { tool_search_tools } = require('./lib/tools/unifiedSearch');
 })().then(() => process.exit(0), error => { console.error(error); process.exit(1); });
 `;
   try {
-    const { stdout } = await execFileAsync(process.execPath, ['-e', script], { cwd: process.cwd(), env: envFor(dataRoot, configPath), timeout: 30_000 });
+    const { stdout } = await execFileAsync(process.execPath, ['-e', script], { cwd: process.cwd(), env: envFor(dataRoot), timeout: 30_000 });
     assert.match(stdout, /enabled-ok/);
   } finally {
     await fs.remove(dataRoot);
@@ -150,7 +150,7 @@ test('runtime startup rejects non-boolean handoff confirmation YAML through the 
   await fs.outputFile(configPath, 'handoffConfirmation: yes\n');
   try {
     await assert.rejects(
-      () => execFileAsync(process.execPath, ['-e', "require('./lib/config')"], { cwd: process.cwd(), env: envFor(dataRoot, configPath), timeout: 10_000 }),
+      () => execFileAsync(process.execPath, ['-e', "require('./lib/config')"], { cwd: process.cwd(), env: envFor(dataRoot), timeout: 10_000 }),
       (error: any) => /handoffConfirmation.*boolean/.test(String(error?.stderr || error?.message)),
     );
   } finally {

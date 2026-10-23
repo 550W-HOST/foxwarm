@@ -11,9 +11,9 @@ const fixture = await createHostFixture('provider-files', options)
 options.cwd = fixture.root
 const target = join(fixture.root, 'target')
 await mkdir(target)
-env.FOXWARM_CONFIG_PATH = join(fixture.data, 'state/config.yaml')
+const configPath = join(fixture.data, 'state/config.yaml')
 const provider = { type: 'executable', command: 'python3', args: [resolve('dotnet/Foxwarm.Tests/Tools/Fixtures/node-provider.py'), target], timeoutSeconds: 3 }
-await writeFile(env.FOXWARM_CONFIG_PATH, JSON.stringify({ url: fixture.origin, bot: { httpPort: fixture.port }, vector: false, llm: { maxOutput: 713 }, nodeProviders: { external: provider } }))
+await writeFile(configPath, JSON.stringify({ url: fixture.origin, bot: { httpPort: fixture.port }, vector: false, llm: { maxOutput: 713 }, nodeProviders: { external: provider } }))
 let modelCalls = 0
 const failures = []
 const model = createServer(async (request, response) => {

@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-qq-source-'));
 await mkdir(join(root, 'state')); await writeFile(join(root, 'state/config.yaml'), '{}');
-process.env.FOXWARM_DATA_DIR = root; process.env.FOXWARM_CONFIG_PATH = join(root, 'state/config.yaml');
+process.env.FOXWARM_DATA_DIR = root;
 const require = createRequire(import.meta.url);
 const { WebSocket, WebSocketServer } = require('ws');
 const { QQBotChannel } = require(resolve(process.env.FOXWARM_TS_ROOT || '.', 'lib/channels/qqbotChannel.js'));

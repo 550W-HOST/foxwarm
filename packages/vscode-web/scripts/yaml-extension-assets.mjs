@@ -10,9 +10,6 @@ export const yamlExtensionPin = JSON.parse(await fs.readFile(path.join(vscodeWeb
 export const defaultYamlExtensionDir = path.join(vscodeWebPackageRoot, 'assets', 'extensions', 'redhat.vscode-yaml');
 
 export function yamlExtensionDirForWorkbenchOut(workbenchOutDir) {
-  if (process.env.FOXWARM_VSCODE_YAML_EXTENSION_DIR) {
-    return path.resolve(process.env.FOXWARM_VSCODE_YAML_EXTENSION_DIR);
-  }
   return path.join(path.dirname(path.resolve(workbenchOutDir)), 'extensions', 'redhat.vscode-yaml');
 }
 

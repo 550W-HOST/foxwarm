@@ -20,9 +20,15 @@ Status/content select local `CodeGitService` or `vscode-git`; commit details req
 
 The fixed workspace-root response remains Master-only and authoritative for app/data/config commands, independent of Session-selected Node/cwd. Normal instance-token authentication remains distinct from capability and exact browser bridge checks; there is no generic Origin URL gate or fabricated model caller. [Code integration](../threads/code-integration.md) owns these shared contracts.
 
+## Installed resources and workspace defaults
+
+Code workbench assets use `<resource-root>/packages/vscode-web/assets/vscode-web`; optional Red Hat YAML assets use `<resource-root>/packages/vscode-web/assets/extensions/redhat.vscode-yaml`. The resource root is the executable payload, independently of the selected application/data roots. Deployments may mount existing prepared assets at those locations. Build tools retain their existing CLI output arguments and defaults, without runtime asset environment controls.
+
+Direct launches without a folder request open the application root. Embedded launches retain selected `state/vscode-web/foxwarm.code-workspace`; persisted folders, explicit settings and malformed files keep their existing behavior. Managed webviews retain the same-public-origin process capability. Source retains its automatic hashed localhost origin and same-origin capability fallback elsewhere. No configured-origin, default-folder or workspace-path environment branch participates.
+
 ## Asset adaptation and version evidence
 
-The authenticated static route adapts only `out/vs/workbench/workbench.web.main.internal.js` from the configured optional asset directory. `PatchWorkbench` matches the Source-supported webview-origin hash helper and clipboard-probe bodies, capturing current generated identifiers rather than pinning minifier names. Only the first supported helper/probe is rewritten; changed shapes fail with an explicit unavailable response. The original asset file is not modified. Capability bootstrap/CSP rewriting, normal auth and deployment-relative URLs keep their existing owners.
+The authenticated static route adapts only `out/vs/workbench/workbench.web.main.internal.js` from the installed optional asset directory. `PatchWorkbench` matches the Source-supported webview-origin hash helper and clipboard-probe bodies, capturing current generated identifiers rather than pinning minifier names. Only the first supported helper/probe is rewritten; changed shapes fail with an explicit unavailable response. The original asset file is not modified. Capability bootstrap/CSP rewriting, normal auth and deployment-relative URLs keep their existing owners.
 
 The source preparation pin is Code-OSS 1.141.0; route-shape tests do not prove a prepared or running asset version. The owned original-App browser fixture has qualified the existing separately prepared Code-OSS 1.128.0 payload. Newer Code-OSS assets require their own preparation and browser/extension qualification. Optional YAML assistance requires its separately prepared vendor payload and is not inferred from route registration.
 

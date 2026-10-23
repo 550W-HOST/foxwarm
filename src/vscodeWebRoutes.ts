@@ -21,11 +21,6 @@ const VSCODE_WEB_WEBUI_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/foxwarm
 const VSCODE_WEB_YAML_EXTENSION_ROUTE = `${VSCODE_WEB_ROUTE}/extensions/redhat-vscode-yaml`;
 const VSCODE_WEB_WEBVIEW_RELATIVE_ROUTE = `webview/${crypto.randomBytes(24).toString('hex')}`;
 const VSCODE_WEB_WEBVIEW_ROUTE = `${VSCODE_WEB_ROUTE}/${VSCODE_WEB_WEBVIEW_RELATIVE_ROUTE}`;
-const VSCODE_WEB_ASSET_DIR_ENV = 'FOXWARM_VSCODE_WEB_ASSET_DIR';
-const VSCODE_WEB_DEFAULT_FOLDER_URI_ENV = 'FOXWARM_VSCODE_WEB_DEFAULT_FOLDER_URI';
-const VSCODE_WEB_WORKSPACE_PATH_ENV = 'FOXWARM_VSCODE_WEB_WORKSPACE_PATH';
-const VSCODE_WEB_WEBVIEW_ORIGIN_ENV = 'FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN';
-const VSCODE_WEB_YAML_EXTENSION_DIR_ENV = 'FOXWARM_VSCODE_YAML_EXTENSION_DIR';
 const DEFAULT_VSCODE_WEB_ASSET_DIR = path.join(BASE_DIR, 'packages', 'vscode-web', 'assets', 'vscode-web');
 const DEFAULT_VSCODE_WEB_WORKSPACE_PATH = path.join(STATE_DIR, 'vscode-web', 'foxwarm.code-workspace');
 const MAX_WRITE_BYTES = 50 * 1024 * 1024;
@@ -595,17 +590,11 @@ function registerCapabilityDynamicStatic(httpServer: HttpServer, mountPath: stri
 }
 
 function resolveVscodeWebAssetDir(): string {
-  const configured = process.env[VSCODE_WEB_ASSET_DIR_ENV]?.trim();
-  if (!configured) {
-    return DEFAULT_VSCODE_WEB_ASSET_DIR;
-  }
-  return path.isAbsolute(configured) ? configured : path.resolve(BASE_DIR, configured);
+  return DEFAULT_VSCODE_WEB_ASSET_DIR;
 }
 
 function resolveVscodeYamlExtensionDir(): string {
-  const configured = process.env[VSCODE_WEB_YAML_EXTENSION_DIR_ENV]?.trim();
-  if (configured) return path.isAbsolute(configured) ? configured : path.resolve(BASE_DIR, configured);
-  return path.join(path.dirname(resolveVscodeWebAssetDir()), 'extensions', 'redhat.vscode-yaml');
+  return path.join(BASE_DIR, 'packages', 'vscode-web', 'assets', 'extensions', 'redhat.vscode-yaml');
 }
 
 function getPreparedVscodeWebAssetDir(): string | undefined {
@@ -619,10 +608,6 @@ function getPreparedVscodeWebAssetDir(): string | undefined {
 }
 
 function getDefaultFolderUri(): string {
-  const configured = process.env[VSCODE_WEB_DEFAULT_FOLDER_URI_ENV]?.trim();
-  if (configured) {
-    return configured;
-  }
   return buildMasterFoxwarmUri(BASE_DIR);
 }
 
@@ -689,9 +674,7 @@ function buildMasterFoxwarmUri(fullPath: string): string {
 
 function ensureFoxwarmWorkspace(initialFolderUri: string): string {
   toFoxwarmFolderUriComponents(initialFolderUri);
-  const workspacePath = process.env[VSCODE_WEB_WORKSPACE_PATH_ENV]?.trim()
-    ? path.resolve(process.env[VSCODE_WEB_WORKSPACE_PATH_ENV]!.trim())
-    : DEFAULT_VSCODE_WEB_WORKSPACE_PATH;
+  const workspacePath = DEFAULT_VSCODE_WEB_WORKSPACE_PATH;
   if (!fs.existsSync(workspacePath)) {
     fs.outputJsonSync(workspacePath, {
       folders: [{ uri: initialFolderUri }],
@@ -754,14 +737,10 @@ function buildWorkbenchConfiguration(req: express.Request) {
   const webUiExtensionUri = `${origin}${webUiExtensionPath}`;
   const yamlExtensionUri = `${origin}${yamlExtensionPath}`;
   const externalUrl = new URL(origin);
-  const configuredWebviewOrigin = process.env[VSCODE_WEB_WEBVIEW_ORIGIN_ENV]?.trim().replace(/\/+$/, '');
-  if (configuredWebviewOrigin && !/^https?:\/\/\{\{uuid\}\}\.[A-Za-z0-9.-]+(?::\d+)?$/.test(configuredWebviewOrigin)) {
-    throw new VscodeWebFsError('InvalidPath', `${VSCODE_WEB_WEBVIEW_ORIGIN_ENV} must be an http(s) origin beginning with {{uuid}}.`);
-  }
   const localWebviewOrigin = (externalUrl.hostname === '127.0.0.1' || externalUrl.hostname === 'localhost')
     ? `${externalUrl.protocol}//{{uuid}}.localhost${externalUrl.port ? `:${externalUrl.port}` : ''}`
     : undefined;
-  const webviewOriginTemplate = configuredWebviewOrigin || localWebviewOrigin;
+  const webviewOriginTemplate = localWebviewOrigin;
   const webviewBaseUrl = webviewOriginTemplate
     ? `${webviewOriginTemplate}${webviewPath}`
     : `${origin}${webviewPath}/{{uuid}}`;
@@ -1164,7 +1143,7 @@ function buildCodeUnavailableHtml(): string {
       <strong>Download Microsoft's prebuilt workbench for development or licensed internal use</strong>
       <code>npm run download:code</code>
     </section>
-    <p class="hint">Both commands are intentionally excluded from the normal <code style="display:inline;padding:2px 5px">npm run build</code> because preparing Code is large and slow. Assets are expected at <span class="path">${escapedAssetDir}</span>; alternatively configure <code style="display:inline;padding:2px 5px">${VSCODE_WEB_ASSET_DIR_ENV}</code>.</p>
+    <p class="hint">Both commands are intentionally excluded from the normal <code style="display:inline;padding:2px 5px">npm run build</code> because preparing Code is large and slow. Assets are expected at <span class="path">${escapedAssetDir}</span>.</p>
   </main>
 </body>
 </html>`;

@@ -16,8 +16,8 @@ const options = { normalStartup: true, env: {}, onPage: page => page.evaluateOnN
 }) }
 const fixture = await createHostFixture('runtime-delta', options)
 options.cwd = fixture.work
-options.env.FOXWARM_CONFIG_PATH = join(fixture.data, 'state/config.yaml')
-await writeFile(options.env.FOXWARM_CONFIG_PATH, `url: ${fixture.origin}/nested\nbot:\n  httpPort: ${fixture.port}\nllm:\n  maxOutput: 713\n  compactKeepPercent: 0.3\n`)
+const configPath = join(fixture.data, 'state/config.yaml')
+await writeFile(configPath, `url: ${fixture.origin}/nested\nbot:\n  httpPort: ${fixture.port}\nllm:\n  maxOutput: 713\n  compactKeepPercent: 0.3\n`)
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const history = async id => { const value = await fixture.api('GET', route(id) + '/history?tail=100'); assert.equal(value.status, 200, JSON.stringify(value)); return value.body }
 const text = value => ({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: value }] })

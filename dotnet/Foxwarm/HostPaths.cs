@@ -44,16 +44,11 @@ internal sealed record HostPaths(
         var resources = Path.GetFullPath(resourceRoot ?? AppContext.BaseDirectory);
         var app = Path.GetFullPath(applicationRoot ?? resources);
         var data = Resolve(dataRoot, app, (env("HOME") ?? ""));
-        var config = env("FOXWARM_CONFIG_PATH");
-        if (string.IsNullOrEmpty(config))
-            config = env("CONFIG_PATH");
         return new(
             app,
             resources,
             data,
-            string.IsNullOrEmpty(config)
-                ? Path.Combine(data, "state", "config.yaml")
-                : Path.GetFullPath(config, app),
+            Path.Combine(data, "state", "config.yaml"),
             Path.Combine(data, "agents"),
             Path.Combine(app, "skills"),
             Path.Combine(data, "state", "mcp.json")

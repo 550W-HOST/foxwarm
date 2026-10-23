@@ -84,7 +84,7 @@ test('real public model caller uses only Core, captured settings, one-shot reque
   const data = path.join(root, 'selected data');
   fs.mkdirSync(path.join(data, 'state'), { recursive: true });
   fs.writeFileSync(path.join(root, 'data_dir'), ' selected data \n');
-  fs.writeFileSync(path.join(root, 'app.yaml'), 'llm:\n  maxOutput: 17\n');
+  fs.writeFileSync(path.join(data, 'state/config.yaml'), 'llm:\n  maxOutput: 17\n');
   fs.writeFileSync(path.join(root, 'wrong.yaml'), 'llm:\n  maxOutput: 99\n');
   const preload = path.join(root, 'no-ts-backend.cjs');
   fs.writeFileSync(preload, `const Module=require('node:module'); const load=Module._load; Module._load=function(id,...args){ if(typeof id==='string' && id.includes(${JSON.stringify(path.resolve(__dirname, '../lib') + path.sep)})) throw Error('TypeScript backend loaded'); return load.call(this,id,...args); };`);
@@ -195,7 +195,6 @@ test('terminating the public frontend stops the one-shot provider process after 
     }));
     const child = spawn(process.execPath, [path.join(__dirname, 'foxwarm.js'), 'model', '-p', signal, '-t', '1'], {
       env: { ...process.env, FOXWARM_APP_ROOT: root, FOXWARM_DATA_DIR: root,
-        FOXWARM_CONFIG_PATH: path.join(root, 'config.yaml'), CONFIG_PATH: '',
         FOXWARM_EXPERIMENT_DATA_ROOT: '', FOXWARM_EXPERIMENT_TOOL_ROOT: '' },
       stdio: ['pipe', 'pipe', 'pipe'],
     });

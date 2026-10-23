@@ -35,7 +35,7 @@ public sealed partial class AsrRoutesTests
         Assert.DoesNotContain(Fixture.Key, status.ToJsonString());
         Assert.DoesNotContain("/private/path", status.ToJsonString());
         File.WriteAllText(
-            Environment.GetEnvironmentVariable("FOXWARM_CONFIG_PATH")!,
+            f.ConfigPath,
             "asrService:\n  enabled: false\n"
         );
         f.Health["ok"] = true;
@@ -79,24 +79,16 @@ public sealed partial class AsrRoutesTests
     public void Configured_administrator_remote_HTTP_is_supported_without_a_network_probe()
     {
         using var temp = new TempDirectory();
-        var previous = Environment.GetEnvironmentVariable("FOXWARM_CONFIG_PATH");
-        try
+        var path = Path.Combine(temp.Path, "state", "config.yaml");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        foreach (var url in new[] { "http://gpu.example:8091", "https://gpu.example/service" })
         {
-            var path = Path.Combine(temp.Path, "config.yaml");
-            Environment.SetEnvironmentVariable("FOXWARM_CONFIG_PATH", path);
-            foreach (var url in new[] { "http://gpu.example:8091", "https://gpu.example/service" })
-            {
-                File.WriteAllText(path, "asrService:\n  url: " + url + "\n");
-                using var proxy = new AsrProxy(
-                    new ModelConfiguration(temp.Path),
-                    CancellationToken.None
-                );
-                Assert.True(proxy.Configured);
-            }
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("FOXWARM_CONFIG_PATH", previous);
+            File.WriteAllText(path, "asrService:\n  url: " + url + "\n");
+            using var proxy = new AsrProxy(
+                new ModelConfiguration(temp.Path),
+                CancellationToken.None
+            );
+            Assert.True(proxy.Configured);
         }
     }
 

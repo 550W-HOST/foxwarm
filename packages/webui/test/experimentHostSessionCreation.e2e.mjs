@@ -9,8 +9,8 @@ const fixture = await createHostFixture('session-creation', options)
 options.cwd = fixture.work
 options.publicRoot = fixture.origin + '/#session/browser%2Fmain'
 options.onPage = opened => { page = opened }
-options.env.FOXWARM_CONFIG_PATH = join(fixture.data, 'state/config.yaml')
-await writeFile(options.env.FOXWARM_CONFIG_PATH, `bot: {httpPort: ${fixture.port}}\nvector: false\n`)
+const configPath = join(fixture.data, 'state/config.yaml')
+await writeFile(configPath, `bot: {httpPort: ${fixture.port}}\nvector: false\n`)
 await writeFile(fixture.modelPath, JSON.stringify({ default: 'local/wire', providers: { local: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:1', models: ['wire'] } } }))
 const roots = async () => (await fixture.api('GET', '/api/session-list/sidebar?limit=50')).body.sessions.map(row => row.id)
 const saved = async id => JSON.parse(await readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8'))

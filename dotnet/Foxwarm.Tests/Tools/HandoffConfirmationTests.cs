@@ -236,29 +236,20 @@ public sealed class HandoffConfirmationTests
             "default: a\nproviders: {a: {providerType: openai-responses, baseUrl: 'http://127.0.0.1:1', models: [wire]}}\n";
         await File.WriteAllTextAsync(modelPath, modelRaw);
         await File.WriteAllTextAsync(appPath, "# startup-only\nhandoffConfirmation: true\n");
-        var previous = Environment.GetEnvironmentVariable("FOXWARM_CONFIG_PATH");
-        Environment.SetEnvironmentVariable("FOXWARM_CONFIG_PATH", appPath);
-        try
+        var current = new ModelConfiguration(root);
+        Assert.True(current.HandoffConfirmationEnabled);
+        Assert.True(current.Models.HandoffConfirmationEnabled);
+        const string edited = "# retained app bytes\nhandoffConfirmation: false\n";
+        await File.WriteAllTextAsync(appPath, edited);
+        await current.SaveAsync(new JsonObject { ["yaml"] = modelRaw });
+        Assert.True(current.HandoffConfirmationEnabled);
+        Assert.True(current.Models.HandoffConfirmationEnabled);
+        Assert.Equal(edited, await File.ReadAllTextAsync(appPath));
+        Assert.False(new ModelConfiguration(root).HandoffConfirmationEnabled);
+        foreach (var invalid in new[] { "null", "'true'", "0", "[]", "{}" })
         {
-            var current = new ModelConfiguration(root);
-            Assert.True(current.HandoffConfirmationEnabled);
-            Assert.True(current.Models.HandoffConfirmationEnabled);
-            const string edited = "# retained app bytes\nhandoffConfirmation: false\n";
-            await File.WriteAllTextAsync(appPath, edited);
-            await current.SaveAsync(new JsonObject { ["yaml"] = modelRaw });
-            Assert.True(current.HandoffConfirmationEnabled);
-            Assert.True(current.Models.HandoffConfirmationEnabled);
-            Assert.Equal(edited, await File.ReadAllTextAsync(appPath));
-            Assert.False(new ModelConfiguration(root).HandoffConfirmationEnabled);
-            foreach (var invalid in new[] { "null", "'true'", "0", "[]", "{}" })
-            {
-                await File.WriteAllTextAsync(appPath, "handoffConfirmation: " + invalid);
-                Assert.Throws<InvalidDataException>(() => new ModelConfiguration(root));
-            }
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("FOXWARM_CONFIG_PATH", previous);
+            await File.WriteAllTextAsync(appPath, "handoffConfirmation: " + invalid);
+            Assert.Throws<InvalidDataException>(() => new ModelConfiguration(root));
         }
     }
 

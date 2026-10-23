@@ -48,7 +48,6 @@ public sealed class CanonicalPathsTests
     [InlineData("pointer-tilde-no-home")]
     [InlineData("env-relative")]
     [InlineData("env-tilde")]
-    [InlineData("config-alias")]
     [InlineData("path-overrides")]
     [InlineData("retired-controls")]
     public async Task Captured_paths_match_frozen_Source_without_shell_cwd_or_parent_discovery(
@@ -77,12 +76,8 @@ public sealed class CanonicalPathsTests
             );
         if (kind.StartsWith("env", StringComparison.Ordinal))
             env["FOXWARM_DATA_DIR"] = kind == "env-tilde" ? " ~/selected data " : " selected data ";
-        if (kind == "config-alias")
-            env["CONFIG_PATH"] = "alternate/config.yaml";
         if (kind == "path-overrides")
         {
-            env["CONFIG_PATH"] = "ignored.yaml";
-            env["FOXWARM_CONFIG_PATH"] = "alternate/config.yaml";
             env["MCP_CONFIG_PATH"] = "~/external mcp.json";
         }
         if (kind == "retired-controls")

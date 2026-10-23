@@ -9,9 +9,9 @@ public sealed partial class WebUiStartupTests
     [Fact]
     public async Task YAML_address_is_shared_by_HTTP_Node_Code_and_OAuth_and_changes_only_after_restart()
     {
-        await using var h = new Host();
+        await using var h = new Host(codeAssets: true);
         await File.WriteAllTextAsync(h.TokenPath, h.Token);
-        var assets = Path.Combine(h.Temp.Path, "code-assets");
+        var assets = Path.Combine(h.Installation, "packages/vscode-web/assets/vscode-web");
         foreach (
             var file in new[]
             {
@@ -29,7 +29,6 @@ public sealed partial class WebUiStartupTests
         await File.WriteAllTextAsync(h.ConfigPath, Config("https://yaml.example/first"));
         var environment = new Dictionary<string, string?>
         {
-            ["FOXWARM_VSCODE_WEB_ASSET_DIR"] = assets,
             ["FOXWARM_PUBLIC_BASE_URL"] = "https://retired.example/wrong",
             ["FOXWARM_HTTP_PORT"] = "invalid",
             ["FOXWARM_BIND_ADDRESS"] = "invalid",

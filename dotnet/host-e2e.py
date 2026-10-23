@@ -225,7 +225,7 @@ def main():
                 'FOXWARM_WINDOWS_CONTROL_PIPE', 'FOXWARM_CLI_LIFETIME_PIPE',
                 'ASPNETCORE_URLS'):
             del env[key]
-    env.update(FOXWARM_DATA_DIR=str(data), FOXWARM_CONFIG_PATH='', CONFIG_PATH='',
+    env.update(FOXWARM_DATA_DIR=str(data),
                MCP_CONFIG_PATH='', FOXWARM_AGENT_DIR='', FOXWARM_AGENTS_DIR=str(data / 'agents'))
     first = second = None
     try:

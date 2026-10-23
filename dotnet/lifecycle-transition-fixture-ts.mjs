@@ -10,12 +10,12 @@ if (!requestedRoot || !['seed', 'reopen', 'race'].includes(mode)) throw new Erro
 const root = path.resolve(requestedRoot)
 const { isolatedApplicationEnv } = createRequire(import.meta.url)('../scripts/test/test-process-env.cjs')
 Object.assign(process.env, isolatedApplicationEnv(root))
-process.env.FOXWARM_CONFIG_PATH = path.join(root, 'state/config.yaml')
+const configPath = path.join(root, 'state/config.yaml')
 const repository = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '..')
 if (mode !== 'reopen') {
   await fs.mkdir(path.join(root, 'state'), { recursive: true })
   await fs.writeFile(path.join(root, 'state/models.yaml'), 'default: a\nproviders:\n  a:\n    providerType: openai-responses\n    baseUrl: http://127.0.0.1:1\n    apiKey: fixture-not-a-key\n    models: [wire]\n')
-  await fs.writeFile(process.env.FOXWARM_CONFIG_PATH, JSON.stringify({
+  await fs.writeFile(configPath, JSON.stringify({
     paths: { agentsDir: path.join(root, 'agents'), skillsDir: path.join(root, 'skills') },
     sessionWorkers: false, dbWorkers: false, vector: { enabled: false },
     bot: { enableWebUI: false, enableTrigger: false },

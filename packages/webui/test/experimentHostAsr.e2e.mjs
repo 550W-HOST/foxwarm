@@ -91,11 +91,12 @@ proxy.on('upgrade', (request, socket, head) => {
 })
 proxy.listen(0, '127.0.0.1'); await once(proxy, 'listening')
 options.publicRoot = 'https://127.0.0.1:' + proxy.address().port + prefix; options.normalStartup = true; options.cwd = owned.root
-options.env = { HOME: join(owned.root, 'home'), ASPNETCORE_TEMP: join(owned.root, 'spool'), FOXWARM_CONFIG_PATH: join(owned.data, 'state/config.yaml') }
+options.env = { HOME: join(owned.root, 'home'), ASPNETCORE_TEMP: join(owned.root, 'spool') }
 options.chromeArgs = ['--ignore-certificate-errors', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--use-file-for-fake-audio-capture=' + audioPath]
 await writeFile(join(owned.data, 'state/token'), owned.token, { mode: 0o600 })
+const configPath = join(owned.data, 'state/config.yaml')
 const appConfig = enabled => 'url: ' + options.publicRoot + '\nbot:\n  httpPort: ' + owned.port + '\nllm:\n  maxOutput: 713\nasrService:\n  enabled: ' + enabled + '\n  url: ' + serviceUrl + '\n  key: ' + key + '\n'
-await writeFile(options.env.FOXWARM_CONFIG_PATH, appConfig(true))
+await writeFile(configPath, appConfig(true))
 options.onPage = current => {
   void current.waitForFunction(() => typeof window.foxwarmTest?.switchToSession === 'function').then(() => current.evaluate(() => window.foxwarmTest.switchToSession('main')))
   page = current; current.on('pageerror', error => browserErrors.push(error.message))
@@ -152,7 +153,7 @@ try {
   assert.equal(healthRequests, 1, 'one page-lifetime status Promise across recordings/Sessions')
   streamingSupported = false; await page.reload({ waitUntil: 'networkidle0' }); assert.equal(statusResponses.at(-1).available, true); assert.equal(statusResponses.at(-1).streamingSupported, false)
   healthy = false; await page.reload({ waitUntil: 'networkidle0' }); assert.equal(await page.$(start), null); assert.equal(healthRequests, 3)
-  await writeFile(options.env.FOXWARM_CONFIG_PATH, appConfig(false)); await owned.stop(); const count = healthRequests; await owned.start(); await page.reload({ waitUntil: 'networkidle0' }); assert.equal(await page.$(start), null); assert.equal(healthRequests, count, 'disabled captured ASR does not probe')
+  await writeFile(configPath, appConfig(false)); await owned.stop(); const count = healthRequests; await owned.start(); await page.reload({ waitUntil: 'networkidle0' }); assert.equal(await page.$(start), null); assert.equal(healthRequests, count, 'disabled captured ASR does not probe')
   assert(asrRequests.every(url => url.startsWith(options.publicRoot) && !url.includes(key))); assert.deepEqual(failures, []); assert.deepEqual(browserErrors, []); await owned.stop(); assert.deepEqual(await readdir(join(owned.root, 'spool')), [])
   console.log(JSON.stringify({ status: 'passed', decodedFinalPosts: postRequests, pcmBytes: recordings.reduce((sum, record) => sum + record.bytes, 0), nonzeroSamples: recordings.reduce((sum, record) => sum + record.nonzero, 0), recordings: recordings.length, healthRequests, modelRequests: modelRequests.length, upgrades, browserErrors, longContextEvidence, inferenceQualified: false }))
 } catch (error) { console.error(owned.output); console.error(JSON.stringify({ recordings, failures, browserErrors })); throw error }

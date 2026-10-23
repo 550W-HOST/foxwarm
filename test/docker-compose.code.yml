@@ -1,6 +1,4 @@
 services:
   foxwarm-dotnet-test:
-    environment:
-      FOXWARM_VSCODE_WEB_ASSET_DIR: /opt/foxwarm/code-assets
     volumes:
-      - ./.temp/code-assets:/opt/foxwarm/code-assets:ro
+      - ./.temp/code-assets:/app/packages/vscode-web/assets/vscode-web:ro

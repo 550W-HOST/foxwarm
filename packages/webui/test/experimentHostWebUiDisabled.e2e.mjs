@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
 import { writeModelFixture } from './experimentModelFixture.mjs'
 const options = { env: {}, normalStartup: true }, owned = await createHostFixture('webui-disabled', options)
-options.cwd = owned.root; options.env.HOME = join(owned.root, 'home'); options.env.FOXWARM_CONFIG_PATH = join(owned.data, 'state/config.yaml'); await mkdir(options.env.HOME)
+options.cwd = owned.root; options.env.HOME = join(owned.root, 'home'); await mkdir(options.env.HOME)
 await mkdir(join(owned.work, 'memory')); await writeFile(join(owned.work, 'memory/ONBOOT.md'), ' \n'); await writeFile(join(owned.work, 'delivery.txt'), 'owned delivery\n')
 await writeFile(join(owned.data, 'state/token'), owned.token, { mode: 0o600 })
 const config = enabled => 'bot:\n  httpPort: ' + owned.port + '\n  enableWebUI: ' + enabled + '\nllm:\n  maxOutput: 713\n'

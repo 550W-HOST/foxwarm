@@ -3,22 +3,16 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { execFileSync } from 'node:child_process'
-import { readFile, writeFile } from 'node:fs/promises'
+import { access, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 
-assert(process.env.FOXWARM_VSCODE_WEB_ASSET_DIR, 'Set the separately prepared Code-OSS asset directory.')
+const workbenchDir = resolve('dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web')
+await access(join(workbenchDir, 'out/vs/workbench/workbench.web.main.internal.js'))
 const options = { normalStartup: true, env: {} }
 const host = await createHostFixture('workbench-parity', options)
 options.cwd = host.root
-options.env = {
-  FOXWARM_CONFIG_PATH: join(host.data, 'state/config.yaml'),
-  FOXWARM_VSCODE_WEB_ASSET_DIR: resolve(process.env.FOXWARM_VSCODE_WEB_ASSET_DIR),
-  FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN: '',
-  // YAML assistance is a separate optional preparation contract, not implied by routes.
-  FOXWARM_VSCODE_YAML_EXTENSION_DIR: join(host.root, 'unprepared-yaml'),
-}
 await writeFile(join(host.data, 'state/config.yaml'), `bot:\n  httpPort: ${host.port}\nllm:\n  maxOutput: 713\n`)
 const requests = [], errors = [], http = [], browserErrors = []
 let releaseFirst, page
@@ -184,7 +178,7 @@ try {
   await popup.close()
   assert.deepEqual(errors, [])
   assert(!http.some(row => row.status >= 500 && row.path !== '/api/history/search'), JSON.stringify(http.filter(row => row.status >= 500)))
-  const assets = JSON.parse(await readFile(join(options.env.FOXWARM_VSCODE_WEB_ASSET_DIR, 'foxwarm-vscode-web-assets.json'), 'utf8'))
+  const assets = JSON.parse(await readFile(join(workbenchDir, 'foxwarm-vscode-web-assets.json'), 'utf8'))
   console.log(JSON.stringify({ result: 'passed', normalHost: true, originalApp: true, requests: requests.length, measuredRequests: modelRows.length, toolTiming: receipt.executionTiming, summary: summary.summary, codeAssets: assets, yamlAssistanceQualified: false, browserErrors, limits: ['No Vector search; real VECTOR_DISABLED response preserved.', 'Remote Node/OAuth/Anthropic use prior unchanged qualifications.', '1.141 runtime assets not prepared or qualified.'] }))
   await host.stop()
 } catch (error) { console.error(JSON.stringify({ host: host.output, browserErrors, httpFailures: http.filter(row => row.status >= 400), terminals: (await host.api('GET', '/api/terminals')).body, text: await page?.evaluate(() => document.body.innerText).catch(() => ''), frames: page?.frames().map(frame => frame.url()) })); throw error }

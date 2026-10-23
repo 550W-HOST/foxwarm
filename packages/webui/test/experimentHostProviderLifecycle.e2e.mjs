@@ -17,8 +17,8 @@ const unicodeSchema = '\u2028'.repeat(3000) + '\u2029😀\u0085\u200b'
 const unicodeBytes = Buffer.byteLength(JSON.stringify(unicodeSchema))
 assert(unicodeBytes < 16 * 1024)
 await writeFile(join(unicodeTarget, 'description.json'), JSON.stringify({ label: 'Unicode schema', description: 'Plain JSON schema data.', lifecycle: [], createParameters: unicodeSchema }))
-env.FOXWARM_CONFIG_PATH = join(fixture.data, 'state/config.yaml')
-await writeFile(env.FOXWARM_CONFIG_PATH, JSON.stringify({ url: fixture.origin, bot: { httpPort: fixture.port }, vector: false, llm: { maxOutput: 713 }, nodeProviders: {
+const configPath = join(fixture.data, 'state/config.yaml')
+await writeFile(configPath, JSON.stringify({ url: fixture.origin, bot: { httpPort: fixture.port }, vector: false, llm: { maxOutput: 713 }, nodeProviders: {
   external: { type: 'executable', command: 'python3', args: [resolve('dotnet/Foxwarm.Tests/Tools/Fixtures/node-provider.py'), target, 'lifecycle'], timeoutSeconds: 3 },
   unicode: { type: 'executable', command: 'python3', args: [resolve('dotnet/Foxwarm.Tests/Tools/Fixtures/node-provider.py'), unicodeTarget], timeoutSeconds: 3 }
 } }))

@@ -8,7 +8,6 @@ const root = await mkdtemp(join(tmpdir(), 'foxwarm-channel-lifecycle-'));
 await mkdir(join(root, 'state'));
 await writeFile(join(root, 'state/config.yaml'), JSON.stringify({ channels: { alpha: { type: 'telegram', enabled: false }, weixin: { type: 'weixin', enabled: false } } }));
 process.env.FOXWARM_DATA_DIR = root;
-process.env.FOXWARM_CONFIG_PATH = join(root, 'state/config.yaml');
 const require = createRequire(import.meta.url);
 const runtime = require(resolve(process.env.FOXWARM_TS_ROOT || '.', 'lib/channelRuntime.js'));
 const registry = require(resolve(process.env.FOXWARM_TS_ROOT || '.', 'lib/channel.js'));

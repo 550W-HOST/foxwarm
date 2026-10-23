@@ -9,8 +9,8 @@ import { createHostFixture, until } from './experimentHostFixture.mjs'
 const options = { normalStartup: true, env: {} }
 const fixture = await createHostFixture('agent-unbind-projection', options)
 options.cwd = fixture.root
-options.env.FOXWARM_CONFIG_PATH = join(fixture.data, 'state/config.yaml')
-await writeFile(options.env.FOXWARM_CONFIG_PATH, `bot:\n  httpPort: ${fixture.port}\nllm:\n  maxOutput: 713\n`)
+const configPath = join(fixture.data, 'state/config.yaml')
+await writeFile(configPath, `bot:\n  httpPort: ${fixture.port}\nllm:\n  maxOutput: 713\n`)
 await writeFile(fixture.modelPath, JSON.stringify({ default: 'local', providers: { local: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:1', models: ['wire'] } } }))
 await writeFile(join(fixture.data, 'state/agents.json'), JSON.stringify({ main: { isolated: true, isolatedNode: 'retained-bound' } }))
 const sessions = join(fixture.data, 'state/sessions')

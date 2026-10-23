@@ -46,12 +46,13 @@ function fixture(t, built = true) {
   const data = path.join(app, 'selected data');
   fs.mkdirSync(path.join(data, 'state'), { recursive: true });
   fs.writeFileSync(path.join(app, 'data_dir'), ' selected data \n');
-  fs.writeFileSync(path.join(app, 'app.yaml'), 'vector: false\nbot:\n  enableWebUI: false\n  enableTrigger: false\n  enableTUI: true\n');
+  fs.writeFileSync(path.join(data, 'state/config.yaml'), 'vector: false\nbot:\n  enableWebUI: false\n  enableTrigger: false\n  enableTUI: true\n');
   fs.writeFileSync(path.join(app, 'wrong.yaml'), 'bot: {httpPort: -1}\n');
   const preload = path.join(root, 'no-typescript.cjs');
   fs.writeFileSync(preload, `const Module=require('node:module'); const load=Module._load; Module._load=function(id,...args){ if(typeof id==='string' && (id.includes('/lib/index') || id.includes(${JSON.stringify(path.join(repository, 'lib') + path.sep)}))) throw Error('TS Main loaded'); return load.call(this,id,...args); };`);
   const env = { ...process.env, FOXWARM_SYNC_FILE_LOG: '0', FOXWARM_NO_CONSOLE_LOG: '', FOXWARM_LOG_STDERR: '',
     FOXWARM_APP_ROOT: '', FOXWARM_DATA_DIR: '',
+    // Retired filename controls cannot redirect the selected data/state/config.yaml.
     FOXWARM_CONFIG_PATH: 'app.yaml', CONFIG_PATH: 'wrong.yaml',
     FOXWARM_EXPERIMENT_DATA_ROOT: '', FOXWARM_EXPERIMENT_TOOL_ROOT: '', FOXWARM_EXPERIMENT_SKILLS_ROOT: '',
     FOXWARM_MAIN_LIFETIME_PIPE: '',
@@ -231,7 +232,7 @@ for (const signal of ['SIGTERM', 'SIGKILL']) {
     });
     peer.listen(0, '127.0.0.1'); await once(peer, 'listening');
     t.after(() => { release(); peer.closeAllConnections(); peer.close(); });
-    fs.writeFileSync(path.join(f.app, 'app.yaml'), `vector: false\nbot: {httpPort: ${port}}\n`);
+    fs.writeFileSync(path.join(f.data, 'state/config.yaml'), `vector: false\nbot: {httpPort: ${port}}\n`);
     fs.writeFileSync(path.join(f.data, 'state/token'), 'synthetic-entry-token');
     fs.writeFileSync(path.join(f.data, 'state/models.yaml'), JSON.stringify({ default: 'a', providers: { a: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${peer.address().port}`, models: ['wire'] } } }));
     // Also exercise the long-directory IPC correction through an accepted owner
@@ -298,7 +299,7 @@ for (const signal of ['SIGTERM', 'SIGKILL']) {
     listener.listen(0, '127.0.0.1'); await once(listener, 'listening');
     const port = listener.address().port;
     await new Promise(resolve => listener.close(resolve));
-    fs.writeFileSync(path.join(f.app, 'app.yaml'), JSON.stringify({ vector: false, bot: { httpPort: port }, channels: { matrix: {
+    fs.writeFileSync(path.join(f.data, 'state/config.yaml'), JSON.stringify({ vector: false, bot: { httpPort: port }, channels: { matrix: {
       homeserver: `http://127.0.0.1:${peer.address().port}`, accessToken: 'synthetic-matrix-token', botUserId: '@fixture:owned.invalid',
     } } }));
     fs.writeFileSync(path.join(f.data, 'state/token'), 'synthetic-startup-token');
@@ -339,7 +340,7 @@ function tmuxFixture(t) {
   const env = { ...f.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`,
     TEST_TMUX_BIN: tmuxBin, TEST_TMUX_SOCKET: socket, TMUX: '',
     FOXWARM_NODE_BIN: process.execPath, FOXWARM_TMUX_SESSION: 'root-selection',
-    FOXWARM_DATA_DIR: 'selected data', FOXWARM_CONFIG_PATH: 'chosen.yaml',
+    FOXWARM_DATA_DIR: 'selected data',
     FOXWARM_SYNC_FILE_LOG: '0' };
   function tmux(...args) {
     return execFileSync(tmuxBin, ['-S', socket, '-f', '/dev/null', ...args], { env, encoding: 'utf8' }).trim();
@@ -355,7 +356,7 @@ function tmuxFixture(t) {
   tmux('set-environment', '-g', 'FOXWARM_APP_ROOT', path.join(f.root, 'stale installation'));
   function install(app) {
     fs.mkdirSync(path.join(app, 'selected data/state'), { recursive: true });
-    fs.writeFileSync(path.join(app, 'chosen.yaml'), 'vector: false\nbot: {enableWebUI: false, enableTrigger: false}\npaths: {agentsDir: "owned agents"}\n');
+    fs.writeFileSync(path.join(app, 'selected data/state/config.yaml'), 'vector: false\nbot: {enableWebUI: false, enableTrigger: false}\npaths: {agentsDir: "owned agents"}\n');
     fs.writeFileSync(path.join(app, 'wrong.yaml'), 'bot: {httpPort: -1}\n');
   }
   function pane() {

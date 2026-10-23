@@ -46,7 +46,7 @@ Owns application/model configuration types, path resolution, YAML readers/writer
 
 - Program root: `BASE_DIR`.
 - Data root precedence: `FOXWARM_DATA_DIR`, then the checkout's `data_dir` pointer file, then `BASE_DIR`.
-- App config path: `FOXWARM_CONFIG_PATH` or compatibility `CONFIG_PATH`, otherwise `<data-root>/state/config.yaml`.
+- App config path: always `<data-root>/state/config.yaml`.
 - Models path: always `<data-root>/state/models.yaml`. Neither app config nor the generic `MODELS_CONFIG_PATH` environment variable overrides it. When the active file is absent, the packaged template is a read-only runtime fallback.
 - MCP path: `MCP_CONFIG_PATH`, then `paths.mcpConfigPath`, then `<state>/mcp.json`.
 - Agent, skill, and MCP paths may also be selected through their documented app-config fields.
@@ -66,7 +66,7 @@ Worker placement is startup configuration:
 - `nodeProviders` is a startup-only map keyed by bounded provider ID. `type: executable` accepts a fixed command/arguments and bounded request timeout. Provider definitions reject unknown fields and require restart.
 - Disabling/draining Session workers does not erase durable Worker lineage. Current-code `sessionWorkers:false` remains supported; after a nonzero cursor, pre-Session-worker code is unsupported as a writer and no lineage-retirement tooling is required. See [D-process-topology-session-worker-downgrade](../threads/process-topology-and-rpc.md#d-process-topology-session-worker-downgrade).
 
-These are selected runtime overrides, not an environment-to-YAML migration. Tests establish owned data and clear inherited app-config/MCP path overrides before application imports; production resolution is unchanged. The direct-entry initialization and synthetic installation canary regressions are owned by [local-test-runner](./test-runner.md).
+These are selected runtime overrides, not an environment-to-YAML migration. Tests establish owned data and clear inherited MCP path overrides before application imports. The direct-entry initialization and synthetic installation canary regressions are owned by [local-test-runner](./test-runner.md).
 
 ## Current defaults
 
@@ -121,7 +121,7 @@ These are selected runtime overrides, not an environment-to-YAML migration. Test
 
 ## Compatibility
 
-- `CONFIG_PATH`, model-root `models`, provider `model`, provider `provider`, legacy `llm.ollamaBaseUrl`, and legacy `llm.compactPercent` are documented readers. Legacy `compactPercent` supplies the compact keep fraction only when current `llm.compactKeepPercent` is absent; current configuration and schemas expose only `compactKeepPercent`. Legacy Ollama roots normalize to a Vector API root ending in `/v1` only when top-level `vector` is absent. The removed app-config `paths.modelsConfigPath` and generic `MODELS_CONFIG_PATH` override are not readers.
+- Model-root `models`, provider `model`, provider `provider`, legacy `llm.ollamaBaseUrl`, and legacy `llm.compactPercent` are documented readers. Legacy `compactPercent` supplies the compact keep fraction only when current `llm.compactKeepPercent` is absent; current configuration and schemas expose only `compactKeepPercent`. Legacy Ollama roots normalize to a Vector API root ending in `/v1` only when top-level `vector` is absent. The removed app-config `paths.modelsConfigPath` and generic `MODELS_CONFIG_PATH` override are not readers.
 - Pre-Session-worker code may read and rewrite a never-enabled/cursor-0 Session, after which the current legacy reader restores cursor `0`. A nonzero Worker lineage is not backward-compatible with old saves because they remove the authoritative JSON cursor while SQLite retains its acknowledgement; current code deliberately fails that SQLite-ahead condition closed.
 - `TRIGGER_PORT`, `WEBUI_PORT`, and `WORKSPACE_DIR` remain exported compatibility aliases.
 - New writes use current YAML shapes; no `.env` migration contract exists.

@@ -85,9 +85,10 @@ After service replacement is authorized, the retained read-only override is:
 docker compose -f test/docker-compose.yml -f test/docker-compose.code.yml up -d --no-build foxwarm-dotnet-test
 ```
 
-It sets `FOXWARM_VSCODE_WEB_ASSET_DIR=/opt/foxwarm/code-assets`. Without it, Main
-runs and Code reports missing optional workbench assets. The optional YAML
-contributor has its own workbench asset configuration.
+It mounts the prepared payload read-only at Main's installed resource location,
+`/app/packages/vscode-web/assets/vscode-web`. Without prepared assets, Main runs
+and Code reports missing optional workbench assets. Optional Red Hat YAML assets
+belong at `/app/packages/vscode-web/assets/extensions/redhat.vscode-yaml`.
 
 NuGet publish supplies Skia raster input support. Optional libheif 1.23.5 /
 libde265 1.1.3 are not installed; HEIC/HEIF input reports its local prerequisite

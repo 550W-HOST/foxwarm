@@ -55,7 +55,7 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 ## Webview deployment
 
 - Localhost uses hashed webview origins.
-- Exposed production should use HTTPS plus a configured isolated wildcard origin.
+- Exposed production should use HTTPS. Webview origins are selected automatically; there is no wildcard-origin setting.
 - Same-origin capability fallback is functional but not origin-isolated; plain HTTP is not made secure by its narrow hash/service-worker compatibility patches.
 
 ## Compatibility
@@ -108,5 +108,5 @@ Dynamic public-path ownership is canonical in [D-webui-dynamic-base-path](../mod
 
 ## Open questions
 
-- Scoped authentication for embedded leaf views on a separately configured isolated webview origin remains undesigned.
+- Cross-origin credential exchange for a future isolated webview host remains undesigned.
 - UNC/device workspace paths, search providers, and filesystem watching remain out of scope.

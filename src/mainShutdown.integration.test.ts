@@ -91,7 +91,7 @@ async function fixture(vector = false, compactWait = false) {
   const start = async () => {
     log = await fs.open(path.join(root, `app-${++starts}.log`), 'w');
     child = spawn(process.execPath, [path.join(__dirname, 'index.js')], {
-      env: { ...process.env, FOXWARM_DATA_DIR: root, FOXWARM_CONFIG_PATH: path.join(stateDir, 'config.yaml'),
+      env: { ...process.env, FOXWARM_DATA_DIR: root,
         MCP_CONFIG_PATH: path.join(stateDir, 'mcp.json'), HTTP_PROXY: '', HTTPS_PROXY: '', ALL_PROXY: '', NO_PROXY: '*' },
       stdio: ['ignore', log.fd, log.fd],
     });
