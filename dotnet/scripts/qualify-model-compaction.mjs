@@ -11,7 +11,7 @@ import sharp from 'sharp'
 
 assert(process.env.DOTNET_ROOT, 'Select a .NET 10 SDK with DOTNET_ROOT.')
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-model-compact-'))
-const data = join(root, 'data'), work = join(root, 'work'), skills = join(root, 'skills')
+const data = join(root, 'data'), work = join(data, 'agents', 'main'), skills = join(root, 'skills')
 const token = 'localhost-model-compact-fixture'
 const requests = [], failures = []
 let host, output = '', sessionId, preservedIds, planMode = 'preserve'
@@ -87,7 +87,7 @@ async function history() { const result = await api('GET', `/api/sessions/${sess
 async function idle() { return until(async () => !(await api('GET', `/api/sessions/${sessionId}/state`)).body.session.busy, 'idle Session') }
 async function send(text) { assert.equal((await api('POST', `/api/sessions/${sessionId}/message`, { text })).status, 202); await idle() }
 try {
-  await mkdir(join(data, 'state'), { recursive: true }); await mkdir(work); await mkdir(join(skills, 'fixture'), { recursive: true })
+  await mkdir(join(data, 'state'), { recursive: true }); await mkdir(work, { recursive: true }); await mkdir(join(skills, 'fixture'), { recursive: true })
   await writeFile(join(data, 'state', 'token'), token)
   await writeFile(join(data, 'state', 'config.yaml'), 'llm:\n  contextLimit: 40000\n  maxOutput: 400\n  providerImageOutputFormat: jpeg\n')
   await writeFile(join(skills, 'fixture', 'SKILL.md'), '---\nname: fixture\ndescription: Local qualification skill.\n---\n\nSKILL_MIDDLE_SENTINEL\n' + 'skill body '.repeat(500))
@@ -105,10 +105,9 @@ try {
   await writeFile(join(data, 'state', 'models.yaml'), installed)
   const portServer = createServer(); portServer.listen(0, '127.0.0.1'); await once(portServer, 'listening')
   hostPort = portServer.address().port; await new Promise(done => portServer.close(done))
-  await writeFile(join(data, 'state/config.yaml'), (await readFile(join(data, 'state/config.yaml'), 'utf8')) + `bot: {httpPort: ${hostPort}}\nurl: http://127.0.0.1:${hostPort}/\n`)
+  await writeFile(join(data, 'state/config.yaml'), (await readFile(join(data, 'state/config.yaml'), 'utf8')) + `paths: {skillsDir: ${JSON.stringify(skills)}}\nbot: {httpPort: ${hostPort}}\nurl: http://127.0.0.1:${hostPort}/\n`)
   host = spawn(join(process.env.DOTNET_ROOT, 'dotnet'), [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: {
-    ...process.env, FOXWARM_DATA_DIR: data, FOXWARM_CONFIG_PATH: join(data, 'state', 'config.yaml'), FOXWARM_EXPERIMENT_TOOL_ROOT: work,
-    FOXWARM_EXPERIMENT_SKILLS_ROOT: skills,
+    ...process.env, FOXWARM_DATA_DIR: data, FOXWARM_CONFIG_PATH: join(data, 'state', 'config.yaml'),
   } })
   for (const stream of [host.stdout, host.stderr]) stream.on('data', chunk => { output = (output + chunk).slice(-12000) })
   await until(async () => { try { return (await api('GET', '/health')).status === 200 } catch { return false } }, 'HTTP host')

@@ -12,7 +12,7 @@ options.cwd = fixture.root
 options.env.FOXWARM_CONFIG_PATH = join(fixture.data, 'state/config.yaml')
 await writeFile(options.env.FOXWARM_CONFIG_PATH, `bot:\n  httpPort: ${fixture.port}\nllm:\n  maxOutput: 713\n`)
 await writeFile(fixture.modelPath, JSON.stringify({ default: 'local', providers: { local: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:1', models: ['wire'] } } }))
-await writeFile(join(fixture.data, 'state/agents.json'), JSON.stringify({ version: 2, agents: [], metadata: { main: { isolated: true, isolatedNode: 'retained-bound' } } }))
+await writeFile(join(fixture.data, 'state/agents.json'), JSON.stringify({ main: { isolated: true, isolatedNode: 'retained-bound' } }))
 const sessions = join(fixture.data, 'state/sessions')
 await mkdir(sessions, { recursive: true })
 const variants = [['legacy-absent', {}], ['legacy-null', { currentNode: null }], ['explicit-remote', { currentNode: 'retained-remote' }]]

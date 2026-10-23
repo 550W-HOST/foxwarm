@@ -53,8 +53,8 @@ await mkdir(join(fixture.work, 'memory'), { recursive: true }); await writeFile(
 await writeModelFixture(fixture.data, { default: 'a', providers: { a: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:' + peer.address().port, models: ['wire'], contextLimit: 20000, asyncCompact: true } } })
 const state = join(fixture.data, 'state'), sessions = join(state, 'sessions'), faults = join(state, 'experiment-faults'), rows = [], legacy = new Set()
 await mkdir(sessions, { recursive: true }); await mkdir(faults, { recursive: true }); await writeFile(join(faults, 'record-admissions'), '')
-await mkdir(join(fixture.work, 'agents', 'locked', 'memory'), { recursive: true })
-await writeFile(join(state, 'agents.json'), JSON.stringify({ version: 2, agents: ['locked'], metadata: { locked: { isolated: true } } }))
+await mkdir(join(fixture.data, 'agents', 'locked', 'memory'), { recursive: true })
+await writeFile(join(state, 'agents.json'), JSON.stringify({ locked: { isolated: true } }))
 async function seed(id, metadata = {}, extra = {}, reserve = true) {
   const agent = id.includes('/') ? id.split('/')[0] : 'main'
   rows.push({ id, agent, aliases: [], busy: false, queueLength: 0, meta: { lastMessageTime: 100, messageCount: 0 }, ...metadata })

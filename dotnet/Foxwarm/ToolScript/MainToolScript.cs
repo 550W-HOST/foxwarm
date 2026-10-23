@@ -69,19 +69,13 @@ internal sealed partial class MainToolScript : IAsyncDisposable
     {
         store = new(root);
         this.binary = Path.GetFullPath(
-            binary
-                ?? Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_MONTY_BINARY")
-                ?? DefaultBinary(root)
+            binary ?? Path.Combine(
+                AppContext.BaseDirectory,
+                "ToolScript",
+                "native",
+                OperatingSystem.IsWindows() ? "monty.exe" : "monty"
+            )
         );
-    }
-
-    private static string DefaultBinary(string root)
-    {
-        var name = OperatingSystem.IsWindows() ? "monty.exe" : "monty";
-        var shipped = Path.Combine(AppContext.BaseDirectory, "ToolScript", "native", name);
-        return File.Exists(shipped)
-            ? shipped
-            : Path.Combine(root, ".temp", "monty-native", "bin", name);
     }
 
     internal async Task<JsonObject> ExecuteAsync(

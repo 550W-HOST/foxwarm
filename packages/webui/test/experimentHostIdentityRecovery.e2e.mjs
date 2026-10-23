@@ -43,10 +43,10 @@ try {
     const value = await fixture(key); await value.start(); const hold = await fault(value, 'main', '.identity-' + stage + '-hold'); await send(value, key)
     await until(() => exists(hold + '.reached'), 'actual ' + stage + ' crash boundary')
     const journal = JSON.parse(await readFile(journalPath(value), 'utf8')); assert.equal(journal.phase, direction); assert.equal(journal.ownsTargetAgentDirectory, true)
-    if (key === 'copy-after') assert.equal(await readFile(join(value.work, 'agents/copied/memory/nested/notes.md'), 'utf8'), 'Source memory byte proof: 漢字\n')
+    if (key === 'copy-after') assert.equal(await readFile(join(value.data, 'agents/copied/memory/nested/notes.md'), 'utf8'), 'Source memory byte proof: 漢字\n')
     await crashWithData(value); await noProviderReplay(value, key)
     const target = direction === 'finishing' ? 'copied/main' : 'main'; assert.equal((await authority(value, target)).busy, true)
-    assert.equal(await exists(join(value.work, 'agents/copied')), direction === 'finishing')
+    assert.equal(await exists(join(value.data, 'agents/copied')), direction === 'finishing')
     assert.deepEqual(value.sql('SELECT DISTINCT session_id FROM archive_messages'), [[target]])
     if (direction === 'finishing') assert.deepEqual(value.sql('SELECT canonical_session_id FROM archive_session_id_reservations WHERE session_id=?', ['main']), [['copied/main']])
   }

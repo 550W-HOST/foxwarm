@@ -240,7 +240,7 @@ try {
   assert.equal((await fixture.api('POST', route(parent) + '/model', { model: 'sync' })).status, 200)
   const httpRequests = await send(parent, 'selected-http'); assert(httpRequests.every(row => row.kind === 'http')); assert(httpRequests.at(-1).body.instructions.includes('Changed file must not be read by fork snapshot copy.'))
   assert.equal(httpRequests.at(-1).body.cache, (await authority(parent)).promptCacheKey)
-  await send(parent, 'create-agent'); await writeFile(join(fixture.work, 'agents', crossAgent, 'memory', 'MEMORY.md'), 'Separate Agent memory.'); await send(parent, 'cross-fresh')
+  await send(parent, 'create-agent'); await writeFile(join(fixture.data, 'agents', crossAgent, 'memory', 'MEMORY.md'), 'Separate Agent memory.'); await send(parent, 'cross-fresh')
   const crossFresh = crossAgent + '/cross-fresh'; assert.equal((await authority(crossFresh)).systemPromptFiles, undefined); assert((await authority(crossFresh)).persistentMemorySnapshot.includes('Separate Agent memory.')); assert.equal(branch(crossFresh)[0], null)
   const crossCount = fixture.sql('SELECT COUNT(*) FROM archive_branches')[0][0]; await send(parent, 'cross-fork')
   assert.equal(fixture.sql('SELECT COUNT(*) FROM archive_branches')[0][0], crossCount); assert.equal((await fixture.api('GET', route(crossAgent + '/cross-fork') + '/history')).status, 404)

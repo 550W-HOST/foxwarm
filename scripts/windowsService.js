@@ -7,14 +7,14 @@ const net = require('net');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
-const { coreExecutable, coreEnvironment } = require('./core-executable');
+const { coreExecutable } = require('./core-executable');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 const CONTROL_TIMEOUT_MS = 2_000;
 const START_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 30_000;
 
-function resolveDataRoot(rootDir = process.env.FOXWARM_APP_ROOT || ROOT_DIR, env = process.env) {
+function resolveDataRoot(rootDir = ROOT_DIR, env = process.env) {
   rootDir = path.resolve(rootDir);
   function resolve(value) {
     const home = env.HOME;
@@ -22,7 +22,7 @@ function resolveDataRoot(rootDir = process.env.FOXWARM_APP_ROOT || ROOT_DIR, env
     if (home && value.startsWith('~/')) return path.resolve(home, value.slice(2));
     return path.resolve(rootDir, value);
   }
-  const configured = String(env.FOXWARM_DATA_DIR || '').trim() || String(env.FOXWARM_EXPERIMENT_DATA_ROOT || '').trim();
+  const configured = String(env.FOXWARM_DATA_DIR || '').trim();
   if (configured) return resolve(configured);
 
   const pointerPath = path.join(rootDir, 'data_dir');
@@ -133,7 +133,7 @@ async function startService(dataRoot, controlPath) {
       cwd: ROOT_DIR,
       detached: true,
       env: {
-        ...coreEnvironment(),
+        ...process.env,
         FOXWARM_DATA_DIR: dataRoot,
         FOXWARM_MAIN_LIFETIME_PIPE: '',
         FOXWARM_WINDOWS_CONTROL_PIPE: path.win32.basename(controlPath),

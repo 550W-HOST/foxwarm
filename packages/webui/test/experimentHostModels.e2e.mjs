@@ -15,7 +15,7 @@ import yamlReader from 'js-yaml'
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 async function until(fn, label, ms = 18000) { const end = Date.now() + ms; while (Date.now() < end) { const value = await fn(); if (value) return value; await sleep(25) } throw new Error('Timed out: ' + label) }
 async function port() { const server = tcpServer(); server.listen(0, '127.0.0.1'); await once(server, 'listening'); const number = server.address().port; await new Promise(resolve => server.close(resolve)); return number }
-const root = await mkdtemp(join(tmpdir(), 'foxwarm-models-yaml-')); const data = join(root, 'data'), work = join(root, 'work')
+const root = await mkdtemp(join(tmpdir(), 'foxwarm-models-yaml-')); const data = join(root, 'data'), work = join(data, 'agents', 'main')
 await mkdir(join(data, 'state'), { recursive: true }); const modelPath = join(data, 'state/models.yaml')
 await writeFile(join(data, 'state/config.yaml'), 'llm:\n  maxOutput: 713\n  compactKeepPercent: 0.3\nchannels:\n  configured-only:\n    type: telegram\n    enabled: false\n    token: synthetic-channel-only\n')
 const token = 'synthetic-models-api', oldSecret = 'synthetic-old-provider', newSecret = 'synthetic-new-provider'
@@ -56,7 +56,7 @@ function yaml(server, secret, compression = 'gzip') {
 }
 async function api(method, path, body, authorized = true) { const response = await fetch(origin + path, { method, headers: { ...(authorized ? { authorization: 'Bearer ' + token } : {}), 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); return { status: response.status, body: await response.json().catch(() => ({})) } }
 async function start() {
-  const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(data), FOXWARM_DATA_DIR: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work, FOXWARM_EXPERIMENT_API_TOKEN: token, FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist') } }); let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-20000) }); host = { child, get output() { return output } }; hosts.push(child.pid)
+  const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(data), FOXWARM_DATA_DIR: data, FOXWARM_EXPERIMENT_API_TOKEN: token, } }); let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-20000) }); host = { child, get output() { return output } }; hosts.push(child.pid)
   await until(async () => { if (child.exitCode !== null) throw new Error(output); try { return (await api('GET', '/health')).status === 200 } catch { return false } }, 'host ready')
 }
 const route = id => '/api/sessions/' + encodeURIComponent(id)

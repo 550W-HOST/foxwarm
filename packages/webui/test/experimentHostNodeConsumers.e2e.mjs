@@ -9,7 +9,7 @@ import WebSocket from 'ws'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 
-const env = { FOXWARM_EXPERIMENT_MONTY_BINARY: process.env.FOXWARM_EXPERIMENT_MONTY_BINARY }
+const env = {  }
 const options = { env, normalStartup: true }
 const fixture = await createHostFixture('node-consumers', options)
 options.cwd = fixture.root

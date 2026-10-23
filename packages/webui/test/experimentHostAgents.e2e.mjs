@@ -12,7 +12,7 @@ import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-agents-e2e-'))
-const dataRoot = join(root, 'data'); const workRoot = join(root, 'work')
+const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main')
 const apiToken = 'synthetic-agents-api-secret'; const providerToken = 'synthetic-agents-provider-secret'
 const dll = process.env.FOXWARM_EXPERIMENT_HOST_DLL || resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')
 const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
@@ -43,10 +43,10 @@ const idFrom = body => {
 const userFrom = body => body.input.filter(item => item.type === 'message' && item.role === 'user').at(-1)
   ?.content?.map(item => item.text || '').join('\n') || ''
 try {
-  await mkdir(dataRoot); await mkdir(workRoot)
-  await mkdir(join(workRoot, 'agents'))
+  await mkdir(dataRoot); await mkdir(workRoot, { recursive: true })
+  await mkdir(join(dataRoot, 'agents'), { recursive: true })
   await mkdir(join(workRoot, 'memory'))
-  await writeFile(join(workRoot, 'agents', '00_SYSTEM.md'), 'FRAME-SHARED\n<foxwarm-if model-id="local-b/two">\nFRAME-B-ONLY\n</foxwarm-if>\n')
+  await writeFile(join(dataRoot, 'agents', '00_SYSTEM.md'), 'FRAME-SHARED\n<foxwarm-if model-id="local-b/two">\nFRAME-B-ONLY\n</foxwarm-if>\n')
   await writeFile(join(workRoot, 'memory', 'MEMORY.md'), 'LEGACY-MAIN-MEMORY')
   const modelsFile = join(root, 'models.json')
   await writeFile(modelsFile, JSON.stringify({ default: 'local-a/one', providers: {
@@ -66,7 +66,6 @@ try {
       assert(id, 'Canonical Session identity must reach the actual provider request')
       const count = (counts.get(id) || 0) + 1; counts.set(id, count)
       const snapshot = body.instructions || ''
-      assert(snapshot.includes('EXPLICIT-BASE-INSTRUCTIONS'))
       assert(snapshot.includes('FRAME-SHARED'))
       if (id.startsWith('beta/')) {
         assert(snapshot.includes('BETA-'), `${id} missing beta memory`)
@@ -157,11 +156,10 @@ try {
   async function startHost() {
   await migrateModelFixture(dataRoot, modelsFile, { LOCAL_A_SECRET: providerToken, LOCAL_B_SECRET: providerToken })
     const child = spawn(dotnet, [dll], { stdio: ['ignore', 'pipe', 'pipe'], env: {
-      ...testEnvironment.isolatedApplicationEnv(dataRoot), FOXWARM_EXPERIMENT_DATA_ROOT: dataRoot, FOXWARM_EXPERIMENT_TOOL_ROOT: workRoot,
+      ...testEnvironment.isolatedApplicationEnv(dataRoot),
       FOXWARM_EXPERIMENT_MODELS_FILE: modelsFile,
-      FOXWARM_EXPERIMENT_API_TOKEN: apiToken, FOXWARM_EXPERIMENT_INSTRUCTIONS: 'EXPLICIT-BASE-INSTRUCTIONS',
+      FOXWARM_EXPERIMENT_API_TOKEN: apiToken,
       LOCAL_A_SECRET: providerToken, LOCAL_B_SECRET: providerToken,
-      FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist'),
     } })
     let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', data => { output = (output + data).slice(-18000) })
     await until(async () => {
@@ -210,15 +208,15 @@ try {
     await until(async () => (await request('GET', '/api/agents')).body.agents.some(item => item.id === name), 'original Agent creation DTO')
     await until(async () => (await request('GET', `/api/sessions/${encodeURIComponent(name + '/main')}/state`)).status === 200, 'Agent main ready')
     await page.waitForSelector('form[role="dialog"]', { hidden: true })
-    await writeFile(join(workRoot, 'agents', name, 'memory', 'MEMORY.md'), memoryText)
+    await writeFile(join(dataRoot, 'agents', name, 'memory', 'MEMORY.md'), memoryText)
     assert.equal((await request('POST', `/api/sessions/${encodeURIComponent(name + '/main')}/refresh-memory`)).status, 200)
     return `${name}/main`
   }
   parentId = await browserCreateAgent('alpha', 'ALPHA-V1')
   betaId = await browserCreateAgent('beta', 'BETA-V1')
-  await writeFile(join(workRoot, 'agents', 'beta', 'memory', 'notes.md'),
+  await writeFile(join(dataRoot, 'agents', 'beta', 'memory', 'notes.md'),
     '---\ninclude-session: beta/probe\n---\nBETA-CHILD-ONLY\n')
-  await writeFile(join(workRoot, 'agents', 'beta', 'memory', 'unknown.md'),
+  await writeFile(join(dataRoot, 'agents', 'beta', 'memory', 'unknown.md'),
     '---\nunknown-header: preserved-as-ordinary-frontmatter\n---\nUNKNOWN-HEADER-VISIBLE\n')
   assert.deepEqual((await request('GET', '/api/agents')).body.agents.map(item => item.id), ['alpha', 'beta', 'main'])
   assert.equal((await request('GET', '/api/sessions/main/state')).status, 200, 'Source startup owns a real Main lifetime')
@@ -238,7 +236,7 @@ try {
   assert.equal((await request('GET', '/api/sessions/gamma%2Fmain/state')).body.session.agent, 'gamma')
   assert.equal((await request('GET', '/api/sessions/gamma%2Fmain/state')).body.session.parentSessionId, null)
   await send('gamma/main', 'GAMMA-WORK'); await finished('gamma/main', 'GAMMA-WORK-DONE')
-  assert.equal(await readFile(join(workRoot, 'agents', 'gamma', 'result.txt'), 'utf8'), 'GAMMA-OWNED')
+  assert.equal(await readFile(join(dataRoot, 'agents', 'gamma', 'result.txt'), 'utf8'), 'GAMMA-OWNED')
   assert.match(valueOf(await history('gamma/main'), 'gamma-exec').output, /agents\/gamma/)
   const literalId = 'literal%2Fname'
   assert.equal((await request('POST', '/api/sessions', { agentId: 'main', sessionId: literalId })).body.sessionId, literalId)
@@ -262,7 +260,7 @@ try {
   const childRows = await history(childId)
   assert(childRows.some(row => row.parts?.some(part => part.functionCall?.id === 'child-error')))
   assert(childRows.some(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'child-error')))
-  assert.equal((await readFile(join(workRoot, 'agents', 'beta', 'child-work.txt'), 'utf8')), 'BETA-WORK')
+  assert.equal((await readFile(join(dataRoot, 'agents', 'beta', 'child-work.txt'), 'utf8')), 'BETA-WORK')
   assert.match(valueOf(childRows, 'child-exec').output, /agents\/beta/)
   assert.match(valueOf(childRows, 'child-read').output, /BETA-V1/)
   assert.equal((await request('GET', `/api/sessions/${encodeURIComponent(childId)}/state`)).body.session.parentSessionId, parentId)
@@ -297,7 +295,7 @@ try {
   await page.waitForFunction(value => decodeURIComponent(location.hash).includes('chat:' + value), {}, childId)
   assert(await page.evaluate(value => !!document.querySelector(`[data-session-id="${value}"]`), parentId))
   // No automatic refresh at the same concrete identity, then explicit strict owner refresh.
-  await writeFile(join(workRoot, 'agents', 'beta', 'memory', 'MEMORY.md'), 'BETA-V2')
+  await writeFile(join(dataRoot, 'agents', 'beta', 'memory', 'MEMORY.md'), 'BETA-V2')
   await send(childId, 'BETA-SAME'); await finished(childId, 'BETA-SAME-DONE')
   const same = requests.filter(item => item.id === childId && item.latest.includes('BETA-SAME')).at(-1)
   assert(same.instructions.includes('BETA-V1') && !same.instructions.includes('BETA-V2'))
@@ -306,7 +304,7 @@ try {
     .persistentMemorySnapshot.includes('BETA-V2'), 'strict beta snapshot refresh')
   await send(childId, 'BETA-REFRESH'); await finished(childId, 'BETA-REFRESH-DONE')
   assert(requests.filter(item => item.id === childId && item.latest.includes('BETA-REFRESH')).at(-1).instructions.includes('BETA-V2'))
-  await writeFile(join(workRoot, 'agents', 'beta', 'memory', 'MEMORY.md'), 'BETA-V3')
+  await writeFile(join(dataRoot, 'agents', 'beta', 'memory', 'MEMORY.md'), 'BETA-V3')
   await send(childId, 'BETA-MODEL-REFRESH'); await finished(childId, 'BETA-MODEL-REFRESH-DONE')
   assert(requests.filter(item => item.id === childId && item.latest.includes('BETA-MODEL-REFRESH')).at(-1).instructions.includes('BETA-V3'))
   assert(JSON.parse(await readFile(join(dataRoot, 'state', 'sessions', 'beta', 'probe.json'), 'utf8'))
@@ -427,7 +425,7 @@ try {
   assert((await request('GET', '/api/agents')).body.agents.some(item => item.id === 'beta'))
   assert.equal((await request('GET', `/api/sessions/${encodeURIComponent(childId)}/state`)).body.session.parentSessionId, parentId)
   assert((await readFile(join(dataRoot, 'state', 'sessions', 'beta', 'probe.json'), 'utf8')).includes('BETA-V3'))
-  assert((await readFile(join(workRoot, 'agents', 'beta', 'child-work.txt'), 'utf8')).includes('BETA-WORK'))
+  assert((await readFile(join(dataRoot, 'agents', 'beta', 'child-work.txt'), 'utf8')).includes('BETA-WORK'))
   const archive = execFileSync('python3', ['-c', `import json,sqlite3,sys; db=sqlite3.connect(sys.argv[1]); print(json.dumps(db.execute('SELECT session_id,agent,COUNT(*),MAX(seq) FROM archive_messages GROUP BY session_id,agent ORDER BY session_id').fetchall()))`, join(dataRoot, 'state', 'archive-store.sqlite')], { encoding: 'utf8' })
   const records = JSON.parse(archive)
   assert(records.some(row => row[0] === childId && row[1] === 'beta' && row[2] >= 7))

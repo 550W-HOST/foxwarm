@@ -55,7 +55,7 @@ Build the original App, Sidebar and Workbench for the separate .NET host from th
 npm --prefix packages/webui run build
 ```
 
-Build `dotnet/Foxwarm.sln`, set `FOXWARM_EXPERIMENT_WEBUI_DIST` to this checkout's `packages/webui/dist`, and start the host on its configured loopback port. The server serves the ordinary login page before rendering the generic frontend. Login writes an HttpOnly/Strict cookie at the declared public root and retains the existing browser-local token for Bearer callers; credentials do not enter URLs, provider requests or the bundle.
+Build the WebUI before `dotnet/Foxwarm.sln` so the normal delivery resource graph collects `webui-dist`, then start the host on its configured loopback port. The server serves the ordinary login page before rendering the generic frontend. Login writes an HttpOnly/Strict cookie at the declared public root and retains the existing browser-local token for Bearer callers; credentials do not enter URLs, provider requests or the bundle.
 
 The frontend keeps the original Agent/session creation menu, bounded Sidebar/list search/realtime, Chat, composer, timeline, preview/Keep tabs, splits and stored routing. A fixed server-owned host meta marker preserves the existing two narrow Main Chat props. It does not introduce a second App, dynamic capability detection or a feature-hiding layer. Main-local official Code is supported; unavailable Terminal/remote/media services remain unavailable. Source HTML without this marker keeps its original entry behavior.
 

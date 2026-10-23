@@ -10,7 +10,7 @@ const route = id => '/api/sessions/' + encodeURIComponent(id)
 const exists = path => access(path).then(() => true, () => false)
 const history = async id => (await fixture.api('GET', route(id) + '/history')).body
 const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
-const own = join(fixture.work, 'agents/team'), marks = join(own, 'marks')
+const own = join(fixture.data, 'agents/team'), marks = join(own, 'marks')
 const tool = (id, name, args, raw) => ({ type: 'function_call', id: 'output-' + id, call_id: id, name, arguments: raw ?? JSON.stringify(args) })
 const call = (id, command, args = {}) => tool(id, 'exec', { command, timeout: 60, ...args })
 function shell(id, extra = '') {

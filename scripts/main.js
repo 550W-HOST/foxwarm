@@ -4,7 +4,7 @@
 const net = require('node:net');
 const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
-const { coreExecutable, coreEnvironment } = require('./core-executable');
+const { coreExecutable } = require('./core-executable');
 
 // This is the package/directory Main execution boundary, not the public foxwarm CLI.
 // Keep stdin and terminal ownership unchanged. A separate connection asks Main to
@@ -35,7 +35,7 @@ async function main() {
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, stop);
   try {
     const child = spawn(executable.command, [...executable.args, ...process.argv.slice(2)], {
-      env: { ...coreEnvironment(), FOXWARM_MAIN_LIFETIME_PIPE: name },
+      env: { ...process.env, FOXWARM_MAIN_LIFETIME_PIPE: name },
       // Unix inherits a separate connected pipe at fd 3: no filesystem address or
       // TMPDIR restriction, and no change to the caller's stdin/stdout/stderr.
       stdio: windows ? 'inherit' : ['inherit', 'inherit', 'inherit', 'pipe'],

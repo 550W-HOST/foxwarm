@@ -9,12 +9,10 @@ services:
     container_name: foxwarm-dotnet-test
     environment:
       FOXWARM_DATA_DIR: /data
-      FOXWARM_EXPERIMENT_TOOL_ROOT: /workspace
-      FOXWARM_EXPERIMENT_WEBUI_DIST: /app/webui-dist
     ports:
       - "0.0.0.0:3003:3001"
     volumes:
       - ./state:/data/state
-      - ./workspace:/workspace
+      - ./workspace:/data/agents
     restart: unless-stopped
     stop_grace_period: 5s

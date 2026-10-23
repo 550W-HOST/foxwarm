@@ -17,7 +17,7 @@ const require = createRequire(import.meta.url)
 const { createMcpOAuthFixture } = require(resolve('lib/mcpOAuthTestFixture.js'))
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK')
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-dotnet-oauth-'))
-const data = join(root, 'data'), work = join(root, 'work')
+const data = join(root, 'data'), work = join(data, 'agents', 'main')
 const token = 'synthetic-oauth-administrator', providerToken = 'synthetic-oauth-model'
 const scripts = new Map(), failures = [], records = []
 const selected = process.env.FOXWARM_E2E_BROWSER || 'all'
@@ -37,9 +37,7 @@ async function api(method, path, body, extra = {}) {
 async function start() {
   const child = spawn(join(process.env.DOTNET_ROOT, 'dotnet'), [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
     stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(data), FOXWARM_DATA_DIR: data, FOXWARM_CONFIG_PATH: join(data, 'state/config.yaml'),
-      FOXWARM_EXPERIMENT_DATA_ROOT: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work,
-      FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist'),
-      FOXWARM_EXPERIMENT_MONTY_BINARY: resolve('node_modules/@pydantic/monty-linux-x64-gnu/monty') } })
+       } })
   let output = ''
   for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-12000) })
   host = { child, get output() { return output } }
@@ -103,7 +101,7 @@ async function toolTurn(owner, calls) {
 }
 const value = result => result.context ? result : JSON.parse(result.content[0].text)
 try {
-  await mkdir(join(data, 'state'), { recursive: true }); await mkdir(work)
+  await mkdir(join(data, 'state'), { recursive: true }); await mkdir(work, { recursive: true })
   await writeFile(join(data, 'state/token'), token, { mode: 0o600 })
   peer = await createMcpOAuthFixture(); peer.state.browserConsent = true
   const reserve = httpServer(); reserve.listen(0, '127.0.0.1'); await once(reserve, 'listening'); port = reserve.address().port

@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
 import { writeModelFixture } from './experimentModelFixture.mjs'
-const options = { env: { FOXWARM_EXPERIMENT_SKILLS_ROOT: resolve('skills') } }, fixture = await createHostFixture('timer-lifecycle', options), requests = [], failures = [], rounds = new Map(), held = new Map()
+const options = { env: {} }, fixture = await createHostFixture('timer-lifecycle', options), requests = [], failures = [], rounds = new Map(), held = new Map()
 const home = join(fixture.root, 'home'); await mkdir(home); options.env.HOME = home; options.cwd = fixture.root
 await mkdir(join(fixture.work, 'memory'), { recursive: true }); await writeFile(join(fixture.work, 'memory/ONBOOT.md'), ' \n')
 const route = id => '/api/sessions/' + encodeURIComponent(id), authority = async id => JSON.parse(await readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8')), timerPath = join(fixture.data, 'state/timers.json'), rows = async () => JSON.parse(await readFile(timerPath, 'utf8')).timers

@@ -5,7 +5,7 @@ const os = require('node:os');
 const net = require('node:net');
 const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
-const { coreExecutable, coreEnvironment } = require('./core-executable');
+const { coreExecutable } = require('./core-executable');
 
 // One parsed-options header, optional prompt stdin and ordinary stdout/stderr.
 // These operations never connect to Main or start an HTTP server or Session engine.
@@ -28,7 +28,7 @@ async function runCoreCli(operation, input, options = {}) {
     child = spawn(executable.command, [
       ...executable.args, `--cli-${operation}`,
     ], {
-      env: { ...coreEnvironment(),
+      env: { ...process.env,
         FOXWARM_CLI_LIFETIME_PIPE: process.platform === 'win32' ? name : pipe },
       stdio: ['pipe', 'pipe', 'pipe'],
     });

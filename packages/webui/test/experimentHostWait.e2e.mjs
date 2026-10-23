@@ -12,7 +12,7 @@ import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-wait-e2e-'))
-const dataRoot = join(root, 'data'); const workRoot = join(root, 'work')
+const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main')
 const token = 'synthetic-wait-api-token'; const providerToken = 'synthetic-wait-provider-token'
 const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK')
@@ -64,11 +64,10 @@ async function startHost() {
   await writeModelFixture(dataRoot, { default: 'local', providers: { 'local': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.address().port}`, apiKey: providerToken, models: ['wire'] } } })
   const child = spawn(dotnet, [process.env.FOXWARM_EXPERIMENT_HOST_DLL || resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
     stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(dataRoot),
-      FOXWARM_EXPERIMENT_DATA_ROOT: dataRoot, FOXWARM_EXPERIMENT_TOOL_ROOT: workRoot,
       FOXWARM_EXPERIMENT_API_TOKEN: token,
       FOXWARM_EXPERIMENT_RESPONSES_BASE_URI: `http://127.0.0.1:${provider.address().port}`,
       FOXWARM_EXPERIMENT_PROVIDER_TOKEN: providerToken, FOXWARM_EXPERIMENT_REQUEST_MODEL: 'wire',
-      FOXWARM_EXPERIMENT_CONCRETE_MODEL: 'local/wire', FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist') } })
+      FOXWARM_EXPERIMENT_CONCRETE_MODEL: 'local/wire', } })
   let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-14000) })
   const owned = { child, get output() { return output } }; host = owned
   await until(async () => { try { return (await request('GET', '/health')).status === 200 } catch { assert.equal(child.exitCode, null, output); return false } }, 'host health')
@@ -80,7 +79,7 @@ async function stopHost() {
   assert.equal(code, 0, host.output)
 }
 try {
-  await mkdir(dataRoot); await mkdir(workRoot)
+  await mkdir(dataRoot); await mkdir(workRoot, { recursive: true })
   await mkdir(join(workRoot, 'memory')); await writeFile(join(workRoot, 'memory', 'ONBOOT.md'), ' \n')
   provider = createServer(async (req, res) => {
     try {
@@ -134,7 +133,7 @@ try {
   held.release(); await final(sink, 'SINK-DONE'); await idle(continued)
   assert.equal(counts.get(continued), 4); assert.equal((await command(continued, '/continue')).status, 409)
   assert.equal((await history(continued)).filter(row => row.role === 'user' && row.parts.some(part => part.text === 'INTERRUPT-ME')).length, 1)
-  assert.equal(await readFile(join(workRoot, 'agents', 'team', 'once.txt'), 'utf8'), 'one-effect')
+  assert.equal(await readFile(join(dataRoot, 'agents', 'team', 'once.txt'), 'utf8'), 'one-effect')
 
   // Handoff wait still survives a sibling error and a child result releases the same parent processor.
   const releaseChild = signal(); holds.push(releaseChild)

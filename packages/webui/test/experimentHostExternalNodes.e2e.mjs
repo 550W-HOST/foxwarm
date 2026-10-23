@@ -162,7 +162,7 @@ try {
   assert.equal((await saved(self)).currentNode, 'official-cli'); assert.equal((await saved(self)).cwd, selfCwd)
   state = await turn(self, 'http-clear-next-write', [call('http-clear-write', 'write', { filePath: 'http-clear-effect', content: 'still-on-Node' })])
   assert(!pair(state, 'http-clear-write').error); assert.equal(await readFile(join(selfCwd, 'http-clear-effect'), 'utf8'), 'still-on-Node')
-  assert(!await exists(join(fixture.work, 'agents/self-bound/http-clear-effect')))
+  assert(!await exists(join(fixture.data, 'agents/self-bound/http-clear-effect')))
   // Bound Agents are placed on the Node; explicit Main effects are denied, not locally executed.
   assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'bound' })).status, 201)
   const boundCwd = join(remote, 'bound-project'); await mkdir(boundCwd, { recursive: true })
@@ -177,7 +177,7 @@ try {
   assert(pair(state, 'unbind-agent').success); assert.equal((await saved('bound/main')).currentNode, 'official-cli'); assert.equal((await saved('bound/main')).cwd, boundCwd)
   state = await turn('bound/main', 'model-clear-next-write', [call('model-clear-write', 'write', { filePath: 'model-clear-effect', content: 'retained-Node-cwd' })])
   assert(!pair(state, 'model-clear-write').error); assert.equal(await readFile(join(boundCwd, 'model-clear-effect'), 'utf8'), 'retained-Node-cwd')
-  assert(!await exists(join(fixture.work, 'agents/bound/model-clear-effect')))
+  assert(!await exists(join(fixture.data, 'agents/bound/model-clear-effect')))
   state = await turn(actor, 'model-rebinding', [call('rebind-agent', 'call_tool', { toolId: 'builtin:set_agent_isolated', args: { agentName: 'bound', nodeId: 'direct-official' } })]); assert(pair(state, 'rebind-agent').success)
   assert.equal((await saved('bound/main')).currentNode, 'direct-official'); assert.equal((await saved('bound/main')).cwd, boundCwd)
   state = await turn('bound/main', 'rebound-write', [call('rebound-write', 'write', { filePath: 'rebound-effect', content: 'rebound-Node' })]); assert(!pair(state, 'rebound-write').error)
@@ -195,7 +195,7 @@ try {
   assert.equal(state.currentNode, 'official-cli'); assert(!pair(state, 'bound-write').error)
   assert.equal(pair(state, 'main-denied').error.type, 'tool_authorization_denied'); assert.equal(pair(state, 'pair-denied').error.type, 'tool_authorization_denied')
   assert.equal(await readFile(join(remote, 'agents/bound/bound-only'), 'utf8'), 'bound')
-  assert(!await exists(join(fixture.work, 'agents/bound/bound-escape')))
+  assert(!await exists(join(fixture.data, 'agents/bound/bound-escape')))
   // Official CLI restart uses persisted direct credentials. Main restart preserves both trust and selection.
   await stopClient(cli); await until(async () => !(await nodes()).find(node => node.id === 'official-cli').online, 'official disconnected')
   state = await turn(actor, 'offline', [call('offline', 'read', { filePath: 'remote.txt' }), call('status', 'session', { action: 'status' })])
@@ -239,7 +239,7 @@ try {
     const invocation = await probe.take('tool_call'); assert.equal(invocation.tool, 'write'); assert.equal(invocation.sessionId, namespace); assert.equal(invocation.sessionCwd, namespaceCwd)
     probe.send({ type: 'tool_call_response', callId: invocation.callId, result: { output: 'effect-on-exact-Node-' + clearPath } })
     state = await effect; assert.equal(pair(state, effectId).output, 'effect-on-exact-Node-' + clearPath)
-    assert(!await exists(join(fixture.work, 'agents/namespace', effectId)))
+    assert(!await exists(join(fixture.data, 'agents/namespace', effectId)))
   }
   const defaultPeer = await socket(probeCredentials); defaultPeer.send(offer({ min: 1, max: 3 }, [{ name: 'probe' }, { name: 'get_default_cwd' }])); await defaultPeer.take('registered'); probe = defaultPeer
   await begin('unavailable-default', [call('select-unavailable-default', 'node', { action: 'select', nodeId: 'probe-peer' })])

@@ -13,7 +13,7 @@ import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-unified-mcp-'))
-const data = join(root, 'data'); const work = join(root, 'work'); const peerRoot = join(root, 'peer')
+const data = join(root, 'data'); const work = join(data, 'agents', 'main'); const peerRoot = join(root, 'peer')
 const peerFile = resolve(import.meta.dirname, 'experimentHostMcp.peer.mjs')
 const token = 'synthetic-mcp-api-token'; const providerToken = 'synthetic-mcp-provider-token'
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK')
@@ -65,10 +65,9 @@ async function startHost() {
   await mkdir(join(data, 'state'), { recursive: true })
   await writeFile(join(data, 'state', 'token'), token, { mode: 0o600 })
   await writeModelFixture(data, { default: 'local', providers: { 'local': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.address().port}`, apiKey: providerToken, models: ['wire'] } } })
-  const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(data),
-    FOXWARM_EXPERIMENT_DATA_ROOT: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work, FOXWARM_EXPERIMENT_API_TOKEN: token,
+  const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(data), FOXWARM_EXPERIMENT_API_TOKEN: token,
     FOXWARM_EXPERIMENT_RESPONSES_BASE_URI: `http://127.0.0.1:${provider.address().port}`, FOXWARM_EXPERIMENT_PROVIDER_TOKEN: providerToken,
-    FOXWARM_EXPERIMENT_REQUEST_MODEL: 'wire', FOXWARM_EXPERIMENT_CONCRETE_MODEL: 'local/wire', FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist'),
+    FOXWARM_EXPERIMENT_REQUEST_MODEL: 'wire', FOXWARM_EXPERIMENT_CONCRETE_MODEL: 'local/wire',
     MCP_HOST_ONLY_SENTINEL: 'synthetic-host-only-credential' } })
   let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-20000) })
   host = { child, get output() { return output } }; pids.push(child.pid)
@@ -81,7 +80,7 @@ async function stopHost() {
 }
 function alive(pid) { try { process.kill(pid, 0); return true } catch { return false } }
 try {
-  await mkdir(data); await mkdir(work); await mkdir(peerRoot)
+  await mkdir(data); await mkdir(work, { recursive: true }); await mkdir(peerRoot)
   provider = createServer(async (req, res) => {
     try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
@@ -137,7 +136,7 @@ try {
   assert(!(await readFile(join(data, 'state', 'sessions', admin + '.json'), 'utf8')).includes('MCP-WORKFLOW-GOAL'))
   await task([invoke('bad-builtin-node', 'builtin:write', { filePath: 'wrong.txt', content: 'bad' }), invoke('bad-nonmaster', 'node:remote/write', { filePath: 'wrong.txt', content: 'bad' }), invoke('bad-recursion', 'builtin:call_tool', { toolId: 'node:master/write', args: { filePath: 'wrong.txt', content: 'bad' } })])
   for (const id of ['bad-builtin-node', 'bad-nonmaster', 'bad-recursion']) assert((await pair(id)).error)
-  assert(!await exists(join(work, 'agents', 'team', 'wrong.txt')))
+  assert(!await exists(join(data, 'agents', 'team', 'wrong.txt')))
 
   const config = { name: 'local', transport: 'stdio', command: process.execPath, args: [peerFile, 'stdio', peerRoot, 'initial-label'], cwd: peerRoot,
     envJson: JSON.stringify({ MCP_SYNTHETIC_ENV: 'configured-test-value', MCP_SYNTHETIC_SECRET: 'synthetic-only-secret' }), timeoutSeconds: 4 }
@@ -152,10 +151,10 @@ try {
   const before = (await lines('processes.ndjson')).length
   await task([fn('cancelled-discovery', 'search_tools', { sources: ['mcp'] }), fn('cancel-entire', 'write', { filePath: 'cancel-all.txt', content: 'bad', __cancelAllToolsThisTurn: true })])
   assert.equal((await pair('cancelled-discovery')).canceled, true); assert.equal((await lines('processes.ndjson')).length, before)
-  assert(!await exists(join(work, 'agents', 'team', 'cancel-all.txt')))
+  assert(!await exists(join(data, 'agents', 'team', 'cancel-all.txt')))
   await task([fn('single-cancel', 'write', { filePath: 'cancel-one.txt', content: 'bad', __cancelTool: true }), fn('invalid-control', 'write', { filePath: 'cancel-invalid.txt', content: 'bad', __cancelTool: false }), invoke('normal-after-cancel', 'node:master/write', { filePath: 'after-cancel.txt', content: 'ok' })])
   assert.equal((await pair('single-cancel')).canceled, true); assert((await pair('invalid-control')).error)
-  assert(!await exists(join(work, 'agents', 'team', 'cancel-one.txt')))
+  assert(!await exists(join(data, 'agents', 'team', 'cancel-one.txt')))
   const controls = (await history()).flatMap(row => row.parts || []).find(part => part.functionCall?.id === 'single-cancel').functionCall
   assert.equal(controls.args.__cancelTool, true)
   await task([fn('primary-object-wins', 'call_tool', { toolId: 'node:master/write', args: { filePath: 'fallback.txt', content: 'primary' }, argsJson: '{malformed-ignored' }),
@@ -249,7 +248,7 @@ try {
   const sinkScript = 'task-' + (++serial); scripts.set(sinkScript, { calls: [], owner: sink })
   await task([invoke('unified-handoff', 'builtin:send_to_session', { sessionId: sink, message: 'MCP-TASK ' + sinkScript, afterSend: 'finish' }), invoke('handoff-following-write', 'node:master/write', { filePath: 'handoff-paired.txt', content: 'complete-batch' })], { final: false })
   await pair('unified-handoff'); await pair('handoff-following-write'); await idle()
-  assert.equal(await readFile(join(work, 'agents', 'team', 'handoff-paired.txt'), 'utf8'), 'complete-batch')
+  assert.equal(await readFile(join(data, 'agents', 'team', 'handoff-paired.txt'), 'utf8'), 'complete-batch')
   await until(async () => (await history(sink)).some(row => row.parts?.some(part => part.text === 'DONE-' + sinkScript)), 'delivered peer')
   await task([invoke('unified-wait', 'builtin:wait', { wakeIfNoActivityAfterSeconds: 0.2 }), invoke('wait-isError-data', 'mcp:local/result_case', { kind: 'isError' })], { final: false })
   await pair('unified-wait'); assert.equal((await pair('wait-isError-data')).isError, true)
@@ -264,7 +263,7 @@ try {
   assert.equal((await request('POST', route(current) + '/message', { text: 'MCP-TASK ' + parentTask })).status, 202)
   await pair('unified-create-child'); await pair('child-parent-following-write'); await pair('child-report', childId)
   await until(async () => (await history()).some(row => row.parts?.some(part => part.text === 'DONE-' + parentTask)), 'resolved child wait/report')
-  await idle(); assert.equal(await readFile(join(work, 'agents', 'team', 'child-parent-paired.txt'), 'utf8'), 'paired-before-postaction')
+  await idle(); assert.equal(await readFile(join(data, 'agents', 'team', 'child-parent-paired.txt'), 'utf8'), 'paired-before-postaction')
   const saved = await readFile(join(data, 'state', 'mcp.json'), 'utf8'); const countBeforeRestart = (await lines('calls.ndjson')).filter(row => row.event === 'call').length
   await stopHost(); const stdio = (await lines('processes.ndjson')).filter(row => row.mode === 'stdio'); await until(() => stdio.every(row => !alive(row.pid)), 'owned stdio cleanup')
   await startHost(); assert.equal(await readFile(join(data, 'state', 'mcp.json'), 'utf8'), saved)

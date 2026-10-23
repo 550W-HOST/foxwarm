@@ -8,7 +8,7 @@ import { join, resolve } from 'node:path'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
 
-const fixture = await createHostFixture('remote-exec', { env: { FOXWARM_EXPERIMENT_MONTY_BINARY: process.env.FOXWARM_EXPERIMENT_MONTY_BINARY } })
+const fixture = await createHostFixture('remote-exec', { env: {} })
 const plans = new Map(), rounds = new Map(), failures = [], wire = [], clients = [], connections = new Set()
 const exists = file => access(file).then(() => true, () => false)
 const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)

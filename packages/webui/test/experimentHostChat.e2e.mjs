@@ -16,7 +16,6 @@ const providerToken = 'local-browser-test-provider-token'
 const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
 const dll = process.env.FOXWARM_EXPERIMENT_HOST_DLL || resolve(import.meta.dirname, '../../../dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK.')
-const dist = resolve('packages/webui/dist')
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-chat-browser-'))
 let provider, browser, host
 const held = new Set()
@@ -66,14 +65,11 @@ async function startHost(port, providerPort, dataRoot, toolRoot) {
   await writeModelFixture(dataRoot, { default: 'local-browser-model', providers: { 'local-browser-model': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${providerPort}`, apiKey: providerToken, models: ['local-browser-model'] } } })
   const env = {
     ...testEnvironment.isolatedApplicationEnv(dataRoot),
-    FOXWARM_EXPERIMENT_DATA_ROOT: dataRoot,
-    FOXWARM_EXPERIMENT_TOOL_ROOT: toolRoot,
     FOXWARM_EXPERIMENT_API_TOKEN: token,
     FOXWARM_EXPERIMENT_PROVIDER_TOKEN: providerToken,
     FOXWARM_EXPERIMENT_RESPONSES_BASE_URI: `http://127.0.0.1:${providerPort}`,
     FOXWARM_EXPERIMENT_REQUEST_MODEL: 'local-browser-model',
     FOXWARM_EXPERIMENT_CONCRETE_MODEL: 'local-browser-model',
-    FOXWARM_EXPERIMENT_WEBUI_DIST: dist,
   }
   const child = spawn(dotnet, [dll], { env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
   let output = ''
@@ -112,9 +108,9 @@ async function browserHistory(page, id) {
 
 try {
   const dataRoot = join(root, 'data')
-  const toolRoot = join(root, 'workspace')
+  const toolRoot = join(dataRoot, 'agents', 'main')
   await mkdir(dataRoot)
-  await mkdir(toolRoot)
+  await mkdir(toolRoot, { recursive: true })
   provider = createServer(async (req, res) => {
     try {
       assert.equal(req.url, '/responses')

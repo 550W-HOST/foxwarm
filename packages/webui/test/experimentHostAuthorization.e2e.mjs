@@ -61,7 +61,7 @@ try {
   await writeFile(fixture.modelPath, JSON.stringify({ default: 'local', providers: { local: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:' + provider.address().port, apiKey: 'synthetic-authorization-provider', models: ['wire'], asyncCompact: true, contextLimit: 2000 } } }))
   await fixture.start(); assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'team' })).status, 201)
   current = await create('driver'); page = await fixture.openApp(); await page.evaluate(id => window.foxwarmTest.switchToSession(id), current)
-  const own = join(fixture.work, 'agents/team'); await mkdir(join(own, 'allowed')); await mkdir(join(own, 'forbidden'))
+  const own = join(fixture.data, 'agents/team'); await mkdir(join(own, 'allowed')); await mkdir(join(own, 'forbidden'))
   await writeFile(join(own, 'allowed/existing'), 'unchanged'); await writeFile(join(own, 'forbidden/second'), 'unchanged')
   await run(current, 'visibility', [tool('search-node', 'search_tools', { sources: ['node'], query: 'exec', limit: 10 }), tool('search-mcp', 'search_tools', { sources: ['mcp'] }),
     tool('direct-denied', 'exec', { command: 'touch forbidden-exec' }), invoke('neutral-denied', 'node:master/exec', { command: 'touch forbidden-exec' }),
@@ -115,7 +115,7 @@ try {
   await send(current, 'preflight-unavailable'); await idle(current); await sleep(300); assert.equal(records.length, beforePreflight)
   await writeFile(policy, 'version: 1\n'); await run(current, 'preflight-repaired')
   assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'other' })).status, 201)
-  await writeFile(join(fixture.work, 'agents/other', 'foreign'), 'foreign bytes')
+  await writeFile(join(fixture.data, 'agents/other', 'foreign'), 'foreign bytes')
   await fixture.stop(); stopped = true
   const agentPath = join(fixture.data, 'state/agents.json'), agentCatalog = JSON.parse(await readFile(agentPath, 'utf8'))
   agentCatalog.metadata.team = { ...agentCatalog.metadata.team, isolated: true, isolatedNode: 'future-recorded-node', toolRules: [
@@ -127,11 +127,11 @@ try {
   assert.equal((await fixture.api('PUT', '/api/agents/team', { inheritAgent: 'main', isolatedNode: null })).status, 501); assert.deepEqual(await readFile(agentPath), agentBytes)
   await run(current, 'isolated', [tool('isolated-exec', 'exec', { command: 'touch forbidden-isolated-exec' }), invoke('isolated-neutral-exec', 'node:master/exec', { command: 'touch forbidden-isolated-exec' }),
     tool('isolated-management', 'create_agent', { agentName: 'forbidden-agent' }), tool('isolated-own-read', 'read', { filePath: 'after-invalid' }),
-    tool('isolated-foreign-read', 'read', { filePath: join(fixture.work, 'agents/other', 'foreign') }), tool('isolated-list', 'session', { action: 'list' }), tool('isolated-status', 'session', { action: 'status' }),
+    tool('isolated-foreign-read', 'read', { filePath: join(fixture.data, 'agents/other', 'foreign') }), tool('isolated-list', 'session', { action: 'list' }), tool('isolated-status', 'session', { action: 'status' }),
     tool('isolated-skill', 'skill', { action: 'list', agentName: 'other' }), tool('isolated-recall', 'recall', { sessionId: 'other/main' }), tool('isolated-history', 'get_session_messages', { sessionId: current })])
   for (const call of ['isolated-exec', 'isolated-neutral-exec', 'isolated-management', 'isolated-foreign-read', 'isolated-list', 'isolated-skill', 'isolated-recall', 'isolated-history']) assert.equal((await paired(current, call)).error.type, 'tool_authorization_denied')
   assert(!(await paired(current, 'isolated-own-read')).error); assert(!(await paired(current, 'isolated-status')).error)
-  assert(!await exists(join(own, 'forbidden-isolated-exec'))); assert(!await exists(join(fixture.work, 'agents/forbidden-agent')))
+  assert(!await exists(join(own, 'forbidden-isolated-exec'))); assert(!await exists(join(fixture.data, 'agents/forbidden-agent')))
   assert.deepEqual(await readFile(agentPath), agentBytes); assert.deepEqual(failures, [])
   await fixture.stop(); stopped = true
   console.log(JSON.stringify({ ok: true, root: fixture.root, hostPids: fixture.hostPids, peerPids: (await readFile(join(peerRoot, 'processes.ndjson'), 'utf8')).trim().split('\n').map(value => JSON.parse(value).pid), requests: records.length, planning: records.filter(row => row.planning).length, peerCalls: (await peerCalls()).length }))

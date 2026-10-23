@@ -50,10 +50,10 @@ async function json(hostPort, method, path, body) {
 async function hostStart(hostPort, dataRoot, toolRoot, modelsFile) {
   await migrateModelFixture(dataRoot, modelsFile, { FOXWARM_ALPHA_PROVIDER_KEY: alphaToken, FOXWARM_BETA_PROVIDER_KEY: betaToken })
   const child = spawn(dotnet, [dll], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: {
-    ...testEnvironment.isolatedApplicationEnv(dataRoot), FOXWARM_EXPERIMENT_DATA_ROOT: dataRoot, FOXWARM_EXPERIMENT_TOOL_ROOT: toolRoot,
+    ...testEnvironment.isolatedApplicationEnv(dataRoot),
     FOXWARM_EXPERIMENT_API_TOKEN: token,
     FOXWARM_EXPERIMENT_MODELS_FILE: modelsFile, FOXWARM_ALPHA_PROVIDER_KEY: alphaToken,
-    FOXWARM_BETA_PROVIDER_KEY: betaToken, FOXWARM_EXPERIMENT_WEBUI_DIST: dist,
+    FOXWARM_BETA_PROVIDER_KEY: betaToken,
     FOXWARM_EXPERIMENT_MAX_OUTPUT_TOKENS: '8192',
   } })
   let output = ''
@@ -100,8 +100,8 @@ async function visit(page, hostPort, id) {
 }
 
 try {
-  const dataRoot = join(root, 'data'); const toolRoot = join(root, 'workspace')
-  await mkdir(dataRoot); await mkdir(toolRoot)
+  const dataRoot = join(root, 'data'); const toolRoot = join(dataRoot, 'agents', 'main')
+  await mkdir(dataRoot); await mkdir(toolRoot, { recursive: true })
   const middleMarker = 'SENTINEL_MIDDLE_UNREWRITTEN_ARCHIVE'
   await writeFile(join(toolRoot, 'long.txt'), 'BEGIN:' + 'a'.repeat(19800) + middleMarker + 'b'.repeat(19800) + ':END', 'utf8')
   await writeFile(join(toolRoot, 'toolpair.txt'), 'PAIRED_TOOL_CONTENT', 'utf8')

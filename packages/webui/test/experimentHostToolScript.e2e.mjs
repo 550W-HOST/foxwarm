@@ -10,7 +10,7 @@ import { writeModelFixture } from './experimentModelFixture.mjs'
 // Three real stdio peers have sequential bounded SDK disposal; allow that actual drain workload.
 const options = { env: {}, stopTimeout: 30000 }, owned = await createHostFixture('toolscript', options), requests = [], failures = [], scripts = new Map()
 const home = join(owned.root, 'home'), sdk = join(owned.root, 'sdk'), image = join(owned.work, 'pixel.png')
-await mkdir(home); await mkdir(sdk); options.env = { HOME: home, FOXWARM_EXPERIMENT_MONTY_BINARY: process.env.FOXWARM_EXPERIMENT_MONTY_BINARY }; options.cwd = owned.root
+await mkdir(home); await mkdir(sdk); options.env = { HOME: home }; options.cwd = owned.root
 const png = await sharp({ create: { width: 3, height: 2, channels: 4, background: { r: 90, g: 20, b: 200, alpha: 1 } } }).png().toBuffer()
 await writeFile(image, png); await writeFile(join(owned.work, 'input.txt'), '  raw\r\nlast\n'); await mkdir(join(owned.work, 'memory')); await writeFile(join(owned.work, 'memory/ONBOOT.md'), ' \n')
 await writeFile(join(owned.data, 'state/mcp.json'), JSON.stringify({ servers: {

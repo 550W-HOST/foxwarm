@@ -93,7 +93,7 @@ internal sealed class MainHost : IAsyncDisposable
         CreateAsync(
             args,
             configuration.Paths.DataRoot,
-            configuration.Paths.WorkspaceRoot,
+            configuration.Paths.AgentsRoot,
             configuration,
             http,
             distRoot,
@@ -120,7 +120,7 @@ internal sealed class MainHost : IAsyncDisposable
             "",
             "",
             "",
-            Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_INSTRUCTIONS") ?? "",
+            "",
             configuration.MaxOutput
         );
         var log = captureDiagnostics ? new MainLog(configuration) : null;
@@ -132,8 +132,7 @@ internal sealed class MainHost : IAsyncDisposable
                 workspaceRoot,
                 options,
                 configuration.Models,
-                paths?.SkillsRoot
-                    ?? Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_SKILLS_ROOT"),
+                paths?.SkillsRoot,
                 paths
             );
         }

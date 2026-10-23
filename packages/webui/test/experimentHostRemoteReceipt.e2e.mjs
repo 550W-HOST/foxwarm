@@ -7,7 +7,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
 
-const fixture = await createHostFixture('remote-receipt', { env: { FOXWARM_EXPERIMENT_MONTY_BINARY: process.env.FOXWARM_EXPERIMENT_MONTY_BINARY } })
+const fixture = await createHostFixture('remote-receipt', { env: {} })
 const plans = new Map(), rounds = new Map(), failures = []
 let client, clientOutput = '', requests = 0
 const route = id => '/api/sessions/' + encodeURIComponent(id)

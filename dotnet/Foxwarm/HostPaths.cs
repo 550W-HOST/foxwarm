@@ -12,12 +12,10 @@ internal sealed record HostPaths(
     string ConfigPath,
     string AgentsRoot,
     string SkillsRoot,
-    string McpConfigPath,
-    string? LegacyWorkspace = null
+    string McpConfigPath
 )
 {
     internal string ModelsPath => Path.Combine(DataRoot, "state", "models.yaml");
-    internal string WorkspaceRoot => LegacyWorkspace ?? AgentsRoot;
 
     internal static HostPaths Capture(
         string? applicationRoot = null,
@@ -27,19 +25,12 @@ internal sealed record HostPaths(
     {
         var env = environment ?? Environment.GetEnvironmentVariable;
         var resources = Path.GetFullPath(resourceRoot ?? AppContext.BaseDirectory);
-        var app = Path.GetFullPath(applicationRoot ?? env("FOXWARM_APP_ROOT") ?? resources);
+        var app = Path.GetFullPath(applicationRoot ?? resources);
         var selected = Nonblank(env("FOXWARM_DATA_DIR"));
-        // Retained console automation may still select its original experiment data.
-        selected ??= Nonblank(env("FOXWARM_EXPERIMENT_DATA_ROOT"));
         var pointer = Path.Combine(app, "data_dir");
         selected ??= File.Exists(pointer) ? Nonblank(File.ReadAllText(pointer)) : null;
         var data = selected is null ? app : Resolve(selected, app, (env("HOME") ?? ""));
-        return ForDataRoot(data, app, resources, env) with
-        {
-            LegacyWorkspace = Nonblank(env("FOXWARM_EXPERIMENT_TOOL_ROOT")) is { } legacy
-                ? Resolve(legacy, app, (env("HOME") ?? ""))
-                : null,
-        };
+        return ForDataRoot(data, app, resources, env);
     }
 
     internal static HostPaths ForDataRoot(
@@ -79,9 +70,7 @@ internal sealed record HostPaths(
         return this with
         {
             AgentsRoot = Configured("agentsDir", AgentsRoot),
-            SkillsRoot = Nonblank(env("FOXWARM_EXPERIMENT_SKILLS_ROOT")) is { } skills
-                ? Resolve(skills, ApplicationRoot, (env("HOME") ?? ""))
-                : Configured("skillsDir", SkillsRoot),
+            SkillsRoot = Configured("skillsDir", SkillsRoot),
             McpConfigPath = env("MCP_CONFIG_PATH") is { Length: > 0 } mcp
                 ? Resolve(mcp, ApplicationRoot, (env("HOME") ?? ""))
                 : Configured("mcpConfigPath", McpConfigPath),

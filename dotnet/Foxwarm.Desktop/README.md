@@ -46,8 +46,7 @@ its `data` subdirectory and the workspace is a separate `workspace` subdirectory
 app is restarted or the ZIP is replaced. Do not share that directory: it can
 contain provider credentials and chat history. Exit Foxwarm before backing it up.
 For isolated development, `FOXWARM_DATA_DIR` changes the host data directory; by default its sibling
-`workspace` is the tool workspace. `FOXWARM_EXPERIMENT_TOOL_ROOT` explicitly
-changes that workspace. These two directories must not overlap. Server port/bind/public-URL
+`workspace` is the tool workspace. These two directories must not overlap. Server port/bind/public-URL
 settings do not change the desktop's loopback listener.
 
 ## Prototype limits

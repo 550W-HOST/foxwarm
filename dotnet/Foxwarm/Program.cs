@@ -3,6 +3,15 @@ using Foxwarm.Channels.WebUi;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
 
+// The launcher supplies its known installation identity independently of payload resources.
+// This internal entry metadata is not a public CLI configuration option.
+string? applicationRoot = null;
+if (args is ["--installation-root", var installationRoot, ..])
+{
+    applicationRoot = installationRoot;
+    args = args[2..];
+}
+
 if (Foxwarm.Tools.ExecNative.Helper(args) is int execHelperExit)
 {
     Environment.ExitCode = execHelperExit;
@@ -17,7 +26,7 @@ if (await Foxwarm.Terminal.NativeHelperEntry.TryRunAsync(args))
 
 if (CliCommands.IsCommand(args))
 {
-    Environment.ExitCode = await CliCommands.RunAsync(args[0]);
+    Environment.ExitCode = await CliCommands.RunAsync(args[0], applicationRoot);
     return;
 }
 
@@ -45,21 +54,15 @@ try
     if (launcher?.StopRequested.IsCancellationRequested == true)
         return;
 
-    var configuration = new ModelConfiguration(HostPaths.Capture());
+    var configuration = new ModelConfiguration(HostPaths.Capture(applicationRoot));
     var paths = configuration.Paths;
     var http = await HttpServerSettings.CaptureAsync(configuration, paths.DataRoot);
-    var distRoot = Environment.GetEnvironmentVariable("FOXWARM_EXPERIMENT_WEBUI_DIST");
-    if (distRoot is not null)
-        distRoot = HostPaths.Resolve(distRoot, paths.ApplicationRoot);
-    else
-    {
-        var packaged = Path.Combine(paths.ResourceRoot, "webui-dist");
-        var installed = Path.Combine(paths.ApplicationRoot, "packages", "webui", "dist");
-        distRoot =
-            Directory.Exists(packaged) ? packaged
-            : Directory.Exists(installed) ? installed
-            : null;
-    }
+    var packaged = Path.Combine(paths.ResourceRoot, "webui-dist");
+    var installed = Path.Combine(paths.ApplicationRoot, "packages", "webui", "dist");
+    var distRoot =
+        Directory.Exists(packaged) ? packaged
+        : Directory.Exists(installed) ? installed
+        : null;
     if (
         http.WebUiEnabled
         && distRoot is not null

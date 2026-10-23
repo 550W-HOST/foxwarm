@@ -50,6 +50,7 @@ public sealed class CanonicalPathsTests
     [InlineData("env-tilde")]
     [InlineData("config-alias")]
     [InlineData("path-overrides")]
+    [InlineData("retired-controls")]
     public async Task Captured_paths_match_frozen_Source_without_shell_cwd_or_parent_discovery(
         string kind
     )
@@ -84,6 +85,9 @@ public sealed class CanonicalPathsTests
             env["FOXWARM_CONFIG_PATH"] = "alternate/config.yaml";
             env["MCP_CONFIG_PATH"] = "~/external mcp.json";
         }
+        if (kind == "retired-controls")
+            foreach (var name in new[] { "FOXWARM_APP_ROOT", "FOXWARM_EXPERIMENT_DATA_ROOT", "FOXWARM_EXPERIMENT_TOOL_ROOT", "FOXWARM_EXPERIMENT_SKILLS_ROOT" })
+                env[name] = Path.Combine(temp.Path, "retired root");
         string? EnvironmentValue(string key) => env[key]?.GetValue<string>();
         var initial = HostPaths.Capture(app, resource, EnvironmentValue);
         Directory.CreateDirectory(Path.GetDirectoryName(initial.ConfigPath)!);
@@ -108,13 +112,12 @@ public sealed class CanonicalPathsTests
                 ("agents", paths.AgentsRoot),
                 ("skills", paths.SkillsRoot),
                 ("mcp", paths.McpConfigPath),
-                ("workspace", paths.WorkspaceRoot),
+                ("workspace", paths.AgentsRoot),
             }
         )
             Assert.Equal(expected[key]!.GetValue<string>(), actual);
         Assert.Equal(resource, paths.ResourceRoot);
         Assert.Equal(app, paths.ApplicationRoot);
-        Assert.Null(paths.LegacyWorkspace);
         Assert.Equal(3001, expected["port"]!.GetValue<int>());
     }
 
@@ -247,7 +250,6 @@ public sealed class CanonicalPathsTests
             new AgentCatalog(data, Path.Combine(data, "agents"), canonicalLayout: true)
         );
         Assert.False(Directory.Exists(Path.Combine(data, "agents")));
-        var paths = HostPaths.ForDataRoot(data) with { LegacyWorkspace = workspace };
         var options = new ResponsesClientOptions(
             new Uri("http://127.0.0.1:1"),
             "wire",
@@ -261,8 +263,7 @@ public sealed class CanonicalPathsTests
                 data,
                 workspace,
                 options,
-                HostModels.ForTest(options),
-                hostPaths: paths
+                HostModels.ForTest(options)
             )
         )
         {
@@ -287,8 +288,7 @@ public sealed class CanonicalPathsTests
                 data,
                 workspace,
                 options,
-                HostModels.ForTest(options),
-                hostPaths: paths
+                HostModels.ForTest(options)
             )
         )
         {
@@ -588,7 +588,7 @@ public sealed class CanonicalPathsTests
         );
         await using var manager = new SessionManager(
             data,
-            config.Paths.WorkspaceRoot,
+            config.Paths.AgentsRoot,
             options,
             HostModels.ForTest(options),
             hostPaths: config.Paths
@@ -624,13 +624,11 @@ public sealed class CanonicalPathsTests
         }
         Assert.False(File.Exists(Path.Combine(data, "state", "agents.json")));
         await File.WriteAllTextAsync(Path.Combine(original, "keep.txt"), "original main file");
-        var paths = HostPaths.ForDataRoot(data) with { LegacyWorkspace = original };
         await using var reopened = new SessionManager(
             data,
             original,
             options,
-            HostModels.ForTest(options),
-            hostPaths: paths
+            HostModels.ForTest(options)
         );
         await reopened.LoadMainHostAsync();
         Assert.Equal("retained-main-only", (await reopened.RequiredAsync("retained-main-only")).Id);

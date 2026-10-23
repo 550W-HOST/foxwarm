@@ -74,7 +74,7 @@ const peer = createServer(async (request, response) => {
       assert.deepEqual(results.slice(-4).map(result => result.tool_use_id), ['write-ok', 'read-ok', 'write-invalid', 'write-nonobject'])
       assert(results.at(-1).content.includes('invalid_tool_arguments')); assert(JSON.stringify(replay.find(block => block.id === 'write-invalid').input).includes('Invalid tool arguments JSON'))
       assert(!JSON.stringify(body.messages).includes('The response stopped at the output limit.'))
-      assert.equal(await readFile(join(fixture.work, 'agents/team/note.txt'), 'utf8'), 'héllo'); assert(!await exists(join(fixture.work, 'agents/team/forbidden.txt'))); assert(!await exists(join(fixture.work, 'agents/team/array-forbidden.txt')))
+      assert.equal(await readFile(join(fixture.data, 'agents/team/note.txt'), 'utf8'), 'héllo'); assert(!await exists(join(fixture.data, 'agents/team/forbidden.txt'))); assert(!await exists(join(fixture.data, 'agents/team/array-forbidden.txt')))
       answer(response, 'FLOW-DONE'); return
     }
     if (key === 'image') {
@@ -124,7 +124,7 @@ try {
   await until(() => holds.has('flow'), 'all blocks closed, terminal withheld')
   await until(async () => (await page.evaluate(() => document.body.innerText)).includes('Live streamed answer'), 'actual original App text progress')
   const frames = await page.evaluate(() => window.observedFrames.join('\n')); assert(frames.includes('reasoningDelta')); assert(frames.includes('toolCallDeltas')); assert(!frames.includes(signature)); assert(!frames.includes(redacted))
-  assert(!(await saved(actor)).history.some(row => row.role === 'model' && row.modelVisible !== false)); assert(!await exists(join(fixture.work, 'agents/team/note.txt')))
+  assert(!(await saved(actor)).history.some(row => row.role === 'model' && row.modelVisible !== false)); assert(!await exists(join(fixture.data, 'agents/team/note.txt')))
   holds.get('flow')()
   await until(async () => (await saved(actor)).history.some(row => row.parts?.some(part => part.text === 'FLOW-DONE')) && !(await history(actor)).session.busy, 'message_stop settles held socket and normal tool continuation')
   await until(() => closed.has('flow:1'), 'owned socket closed without peer EOF')
@@ -147,7 +147,7 @@ try {
   }
   const canceled = await create('cancel'); await fixture.api('POST', route(canceled) + '/message', { text: 'ANTH:cancel' }); await until(() => holds.has('cancel'), 'partial tool Stop')
   assert.equal((await fixture.api('POST', route(canceled) + '/stop')).status, 200); await until(async () => !(await history(canceled)).session.busy && closed.has('cancel:1'), 'Stop settles owned transport')
-  assert(!(await saved(canceled)).history.some(row => row.role === 'model' && row.modelVisible !== false)); assert(!await exists(join(fixture.work, 'agents/team/stopped.txt')))
+  assert(!(await saved(canceled)).history.some(row => row.role === 'model' && row.modelVisible !== false)); assert(!await exists(join(fixture.data, 'agents/team/stopped.txt')))
   state = await send(await create('context'), 'context'); assert(state.history.some(row => row.parts?.some(part => part.text === 'CONTEXT-PARTIAL'))); assert(state.history.some(row => row.modelVisible === false && row.__meta.stopReason === 'model_context_window_exceeded'))
   await sharp({ create: { width: 4097, height: 2, channels: 3, background: { r: 90, g: 80, b: 70 } } }).png().toFile(join(fixture.root, 'input.png'))
   const image = await create('image'), attachment = new FormData(); attachment.append('file', new Blob([await readFile(join(fixture.root, 'input.png'))], { type: 'image/png' }), 'input.png')
@@ -155,7 +155,7 @@ try {
   // Use the normal staged-image admission route, not a result injected into Session history.
   const beforeImage = records.length; const imageSend = await fixture.api('POST', route(image) + '/message', { text: 'ANTH:image', uploadedFiles: [uploaded] }); assert.equal(imageSend.status, 202, JSON.stringify(imageSend.body)); await until(() => records.length > beforeImage, 'physical image request'); await until(async () => !(await history(image)).session.busy, 'image settled')
   await fixture.api('POST', route(actor) + '/model', { model: 'a' }); await fixture.stop(); await fixture.start(); await send(actor, 'restart')
-  assert.equal(await readFile(join(fixture.work, 'agents/team/note.txt'), 'utf8'), 'héllo'); assert.equal(errors.length, 0, errors.join('\n'))
+  assert.equal(await readFile(join(fixture.data, 'agents/team/note.txt'), 'utf8'), 'héllo'); assert.equal(errors.length, 0, errors.join('\n'))
   await fixture.stop(); console.log(JSON.stringify({ result: 'ok', requests: records.length, originalAppStreaming: true, terminalWithoutSocketEOF: true, invalidToolNonexecution: true, signatureReplay: true, JSONOptOut: true, journalAndArchive: true, hostPids: fixture.hostPids }))
 } catch (error) { console.error('OWNED_ROOT', fixture.root); console.error('HOST_OUTPUT', fixture.output); console.error('PEER_ERRORS', errors); throw error }
 finally { for (const interval of intervals) clearInterval(interval); await fixture.cleanup(); peer.closeAllConnections(); await new Promise(done => peer.close(done)) }

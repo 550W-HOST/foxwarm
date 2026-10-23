@@ -48,9 +48,11 @@ IPv4 interfaces.
 Changing `bot.httpPort` also requires matching port/healthcheck configuration.
 
 The retained test Compose consumer publishes host port 3003 and preserves
-`test/state` at `/data/state` and `test/workspace` at `/workspace`. Its explicit
-legacy workspace setting preserves that existing physical Agent layout; it is
-not the image default or a data migration. These private directories remain
+`test/state` at `/data/state` and `test/workspace` at `/data/agents`. The latter
+is the ordinary Agents root: `main/` and other Agent folders live beneath it,
+with the global `00_SYSTEM.md` at its root. Existing main-at-workspace data
+requires a separately authorized stopped-instance layout adjustment before
+using this mount; Main does not migrate it at startup. These private directories remain
 outside Git and Docker context. Build alone does not restart a service. Set
 ordinary app YAML before starting this consumer, for example:
 

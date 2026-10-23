@@ -30,8 +30,8 @@ export async function saveModelsInOriginalApp(page, raw, modelPath) {
   await page.waitForSelector('.foxwarm-model-selector-trigger')
 }
 export async function createHostFixture(name, options = {}) {
-  const root = await mkdtemp(join(tmpdir(), 'foxwarm-' + name + '-')), data = join(root, 'data'), work = join(root, 'work')
-  await mkdir(join(data, 'state'), { recursive: true }); await mkdir(work)
+  const root = await mkdtemp(join(tmpdir(), 'foxwarm-' + name + '-')), data = join(root, 'data'), work = join(data, 'agents', 'main')
+  await mkdir(join(data, 'state'), { recursive: true }); await mkdir(work, { recursive: true })
   const socket = createServer(); socket.listen(0, '127.0.0.1'); await once(socket, 'listening')
   const port = socket.address().port; await new Promise(done => socket.close(done))
   await writeFile(join(data, 'state/config.yaml'), `bot:\n  httpPort: ${port}\nllm:\n  maxOutput: 713\n  compactKeepPercent: 0.3\n`)
@@ -44,7 +44,7 @@ export async function createHostFixture(name, options = {}) {
     return { status: response.status, body: await response.json().catch(() => ({})) }
   }
   async function start() {
-    const startup = { ...testEnvironment.isolatedApplicationEnv(data), ...(options.env || {}), FOXWARM_DATA_DIR: data, FOXWARM_EXPERIMENT_TOOL_ROOT: work, FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist') }
+    const startup = { ...testEnvironment.isolatedApplicationEnv(data), ...(options.env || {}), FOXWARM_DATA_DIR: data, }
     if (options.normalStartup) delete startup.FOXWARM_EXPERIMENT_API_TOKEN
     else startup.FOXWARM_EXPERIMENT_API_TOKEN = token
     ownedListener = false

@@ -25,8 +25,8 @@ const peer = createServer(async (request, response) => {
 peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
 const model = { default: 'a', providers: { a: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:' + peer.address().port, models: ['wire'], contextLimit: 20000 }, b: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:' + peer.address().port, models: ['wire-b'], contextLimit: 20000 } } }
 await writeModelFixture(fixture.data, model)
-await mkdir(join(fixture.data, 'state/sessions'), { recursive: true }); await mkdir(join(fixture.work, 'agents/team/memory'), { recursive: true })
-await writeFile(join(fixture.data, 'state/agents.json'), JSON.stringify({ version: 1, agents: ['team'] }))
+await mkdir(join(fixture.data, 'state/sessions'), { recursive: true }); await mkdir(join(fixture.data, 'agents/team/memory'), { recursive: true })
+await writeFile(join(fixture.data, 'state/agents.json'), JSON.stringify({}))
 const rows = []
 function seed(id, time, extra = {}) {
   const agent = id.includes('/') ? id.split('/')[0] : 'main'

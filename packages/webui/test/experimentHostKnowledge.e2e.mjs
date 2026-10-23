@@ -12,7 +12,7 @@ import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-wait-e2e-'))
-const dataRoot = join(root, 'data'); const workRoot = join(root, 'work'); const globalRoot = join(root, 'global-skills')
+const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main'); const globalRoot = join(root, 'global-skills')
 const modelsFile = join(root, 'models.json')
 const token = 'synthetic-wait-api-token'; const providerToken = 'synthetic-wait-provider-token'
 const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
@@ -65,12 +65,11 @@ async function startHost() {
   await migrateModelFixture(dataRoot, modelsFile, { KNOWLEDGE_TOKEN: providerToken })
   const child = spawn(dotnet, [process.env.FOXWARM_EXPERIMENT_HOST_DLL || resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
     stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(dataRoot),
-      FOXWARM_EXPERIMENT_DATA_ROOT: dataRoot, FOXWARM_EXPERIMENT_TOOL_ROOT: workRoot,
       FOXWARM_EXPERIMENT_API_TOKEN: token,
-      FOXWARM_EXPERIMENT_SKILLS_ROOT: globalRoot, FOXWARM_EXPERIMENT_MODELS_FILE: modelsFile, KNOWLEDGE_TOKEN: providerToken,
+      FOXWARM_EXPERIMENT_MODELS_FILE: modelsFile, KNOWLEDGE_TOKEN: providerToken,
       FOXWARM_EXPERIMENT_RESPONSES_BASE_URI: `http://127.0.0.1:${provider.address().port}`,
       FOXWARM_EXPERIMENT_PROVIDER_TOKEN: providerToken, FOXWARM_EXPERIMENT_REQUEST_MODEL: 'wire',
-      FOXWARM_EXPERIMENT_CONCRETE_MODEL: 'local/wire', FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist') } })
+      FOXWARM_EXPERIMENT_CONCRETE_MODEL: 'local/wire', } })
   let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-14000) })
   const owned = { child, get output() { return output } }; host = owned
   await until(async () => { try { return (await request('GET', '/health')).status === 200 } catch { assert.equal(child.exitCode, null, output); return false } }, 'host health')
@@ -82,11 +81,11 @@ async function stopHost() {
   assert.equal(code, 0, host.output)
 }
 try {
-  await mkdir(dataRoot); await mkdir(workRoot); await mkdir(globalRoot)
-  await mkdir(join(workRoot, 'memory')); await mkdir(join(workRoot, 'agents')); await writeFile(join(workRoot, 'memory', 'ONBOOT.md'), ' \n')
-  await mkdir(join(dataRoot, 'state')); await mkdir(join(workRoot, 'agents', 'legacy', 'memory'), { recursive: true })
-  await writeFile(join(dataRoot, 'state', 'agents.json'), JSON.stringify({ version: 1, agents: ['legacy'] }))
-  await writeFile(join(workRoot, 'agents', '00_SYSTEM.md'), 'FRAMEWORK-FIRST')
+  await mkdir(dataRoot); await mkdir(workRoot, { recursive: true }); await mkdir(globalRoot)
+  await mkdir(join(workRoot, 'memory')); await mkdir(join(dataRoot, 'agents'), { recursive: true }); await writeFile(join(workRoot, 'memory', 'ONBOOT.md'), ' \n')
+  await mkdir(join(dataRoot, 'state')); await mkdir(join(dataRoot, 'agents', 'legacy', 'memory'), { recursive: true })
+  await writeFile(join(dataRoot, 'state', 'agents.json'), JSON.stringify({}))
+  await writeFile(join(dataRoot, 'agents', '00_SYSTEM.md'), 'FRAMEWORK-FIRST')
   await mkdir(join(globalRoot, 'common')); await writeFile(join(globalRoot, 'common', 'SKILL.md'), '---\ndescription: GLOBAL-COMMON\n---\n# Common\nGLOBAL-ENTRY')
   await writeFile(join(globalRoot, 'common', 'resource.txt'), 'GLOBAL-RESOURCE')
   provider = createServer(async (req, res) => {
@@ -108,7 +107,7 @@ try {
   provider.listen(0, '127.0.0.1'); await once(provider, 'listening')
   const reserve = createServer(); reserve.listen(0, '127.0.0.1'); await once(reserve, 'listening'); port = reserve.address().port; await new Promise(done => reserve.close(done))
   await mkdir(join(dataRoot, 'state'), { recursive: true })
-  await writeFile(join(dataRoot, 'state/config.yaml'), `bot: {httpPort: ${port}}\n`)
+  await writeFile(join(dataRoot, 'state/config.yaml'), `bot: {httpPort: ${port}}\npaths: {skillsDir: ${JSON.stringify(globalRoot)}}\n`)
   await writeFile(join(dataRoot, 'state/token'), token, { mode: 0o600 })
   await writeFile(modelsFile, JSON.stringify({ default: 'a/one', providers: {
     a: { providerType: 'openai', baseUrl: `http://127.0.0.1:${provider.address().port}`, apiKeyEnv: 'KNOWLEDGE_TOKEN', contextLimit: 25000, models: [{ id: 'one' }] },
@@ -122,7 +121,7 @@ try {
   await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' }); await page.waitForSelector('#token')
   await page.type('#token', token); await page.click('button[type="submit"]'); await page.waitForSelector('button[aria-label="New session"]')
 
-  const agentDir = agent => join(workRoot, 'agents', agent)
+  const agentDir = agent => join(dataRoot, 'agents', agent)
   const snapshot = async id => (await authority(id)).persistentMemorySnapshot
   const prompt = body => body.instructions || ''
   const toolValue = (rows, id) => rows.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === id)?.functionResponse.response
@@ -155,7 +154,7 @@ try {
     await send(id, label); await final(id, label + '-DONE')
   }
   await browserAgent('base')
-  assert.equal(JSON.parse(await readFile(join(dataRoot, 'state', 'agents.json'), 'utf8')).version, 2)
+  assert.equal(JSON.parse(await readFile(join(dataRoot, 'state', 'agents.json'), 'utf8')).version, undefined)
   assert((await request('GET', '/api/agents')).body.agents.some(agent => agent.id === 'legacy'))
   await skill('base', 'shared', 'BASE-SHARED', 'BASE-SHARED-ENTRY')
   await skill('base', 'inherited', 'BASE-INHERITED', 'INHERITED-FULL-ENTRY', { 'resource.txt': 'INHERITED-RESOURCE' })
@@ -261,7 +260,7 @@ try {
   oldSuccessJson.meta.lastMessageTime = Date.now() - 2 * 60 * 60 * 1000; await writeFile(oldSuccessPath, JSON.stringify(oldSuccessJson))
   // Read-old cycle includes one missing directory; mutation remains separately validated.
   const catalogPath = join(dataRoot, 'state', 'agents.json'); const catalog = JSON.parse(await readFile(catalogPath, 'utf8'))
-  catalog.metadata.base = { inherit: 'ghost' }; catalog.metadata.ghost = { inherit: 'base' }; await writeFile(catalogPath, JSON.stringify(catalog))
+  catalog.base = { inherit: 'ghost' }; catalog.ghost = { inherit: 'base' }; await writeFile(catalogPath, JSON.stringify(catalog))
   host = await startHost(); secondPid = host.child.pid; assert.notEqual(firstPid, secondPid)
   const readOld = (await request('GET', '/api/agents')).body.agents.find(agent => agent.id === 'leaf')
   assert.deepEqual(readOld.inheritanceChain, ['ghost', 'base', 'leaf'])

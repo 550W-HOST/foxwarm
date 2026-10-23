@@ -12,7 +12,7 @@ import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-files-e2e-'))
-const dataRoot = join(root, 'data'); const workRoot = join(root, 'work')
+const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main')
 const apiToken = 'synthetic-devtools-api-secret'; const providerToken = 'synthetic-provider-secret'
 const dll = process.env.FOXWARM_EXPERIMENT_HOST_DLL || resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')
 const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
@@ -44,7 +44,7 @@ function sendSse(response, output) {
 const text = body => ({ type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text: body }] })
 const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
 try {
-  await mkdir(dataRoot); await mkdir(workRoot)
+  await mkdir(dataRoot); await mkdir(workRoot, { recursive: true })
   provider = createServer(async (req, res) => {
     try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
@@ -64,11 +64,10 @@ try {
   async function startHost() {
   await writeModelFixture(dataRoot, { default: 'scripted-wire', providers: { 'scripted-wire': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${providerPort}`, apiKey: providerToken, models: ['scripted-wire'] } } })
     const child = spawn(dotnet, [dll], { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env: {
-      ...testEnvironment.isolatedApplicationEnv(dataRoot), FOXWARM_EXPERIMENT_DATA_ROOT: dataRoot, FOXWARM_EXPERIMENT_TOOL_ROOT: workRoot,
+      ...testEnvironment.isolatedApplicationEnv(dataRoot),
       FOXWARM_EXPERIMENT_API_TOKEN: apiToken,
       FOXWARM_EXPERIMENT_PROVIDER_TOKEN: providerToken, FOXWARM_EXPERIMENT_RESPONSES_BASE_URI: `http://127.0.0.1:${providerPort}`,
       FOXWARM_EXPERIMENT_REQUEST_MODEL: 'scripted-wire', FOXWARM_EXPERIMENT_CONCRETE_MODEL: 'scripted-wire',
-      FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist'),
     } })
     let output = ''; child.stdout.on('data', value => { output = (output + value).slice(-12000) })
     child.stderr.on('data', value => { output = (output + value).slice(-12000) })

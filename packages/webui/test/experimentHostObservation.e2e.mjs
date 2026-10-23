@@ -12,7 +12,7 @@ import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-observation-e2e-'))
-const dataRoot = join(root, 'data'); const workRoot = join(root, 'work')
+const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main')
 const token = 'synthetic-wait-api-token'; const providerToken = 'synthetic-wait-provider-token'
 const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK')
@@ -64,11 +64,10 @@ async function startHost() {
   await writeModelFixture(dataRoot, { default: 'local', providers: { 'local': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.address().port}`, apiKey: providerToken, models: ['wire'] } } })
   const child = spawn(dotnet, [process.env.FOXWARM_EXPERIMENT_HOST_DLL || resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
     stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(dataRoot),
-      FOXWARM_EXPERIMENT_DATA_ROOT: dataRoot, FOXWARM_EXPERIMENT_TOOL_ROOT: workRoot,
       FOXWARM_EXPERIMENT_API_TOKEN: token,
       FOXWARM_EXPERIMENT_RESPONSES_BASE_URI: `http://127.0.0.1:${provider.address().port}`,
       FOXWARM_EXPERIMENT_PROVIDER_TOKEN: providerToken, FOXWARM_EXPERIMENT_REQUEST_MODEL: 'wire',
-      FOXWARM_EXPERIMENT_CONCRETE_MODEL: 'local/wire', FOXWARM_EXPERIMENT_WEBUI_DIST: resolve('packages/webui/dist') } })
+      FOXWARM_EXPERIMENT_CONCRETE_MODEL: 'local/wire', } })
   let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-14000) })
   const owned = { child, get output() { return output } }; host = owned
   await until(async () => { try { return (await request('GET', '/health')).status === 200 } catch { assert.equal(child.exitCode, null, output); return false } }, 'host health')
@@ -80,7 +79,7 @@ async function stopHost() {
   assert.equal(code, 0, host.output)
 }
 try {
-  await mkdir(dataRoot); await mkdir(workRoot)
+  await mkdir(dataRoot); await mkdir(workRoot, { recursive: true })
   provider = createServer(async (req, res) => {
     try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
@@ -157,7 +156,7 @@ try {
   held.release(); await final(target, 'HELD-DONE')
 
   // Real canonical history and tool effect: full hidden content is searchable, display remains folded.
-  await writeFile(join(workRoot, 'agents', 'team', 'needle.txt'), 'EARLY-RESOURCE ' + '🦊'.repeat(1300) + ' HIDDEN_TOOL_NEEDLE ' + 'tail '.repeat(300))
+  await writeFile(join(dataRoot, 'agents', 'team', 'needle.txt'), 'EARLY-RESOURCE ' + '🦊'.repeat(1300) + ' HIDDEN_TOOL_NEEDLE ' + 'tail '.repeat(300))
   await turn(target, 'READ-SEED', [call('read-needle', 'read', { filePath: 'needle.txt' })])
   for (let i = 0; i < 7; i++) await turn(target, 'FOLLOW-' + i)
   const selected = await history(target); const toolIndex = selected.findIndex(row => row.parts.some(part => part.functionResponse?.tool_use_id === 'read-needle'))
@@ -258,7 +257,7 @@ try {
   assert.equal((await authority(faulty)).goalState.anchorSeq, committedReminder.__meta.goalAnchorSeq)
   plans.get(faulty).push([text('CONTINUE-POST-RECOVERED')]); assert.equal((await command(faulty, '/continue')).status, 200); await final(faulty, 'CONTINUE-POST-RECOVERED')
   assert.equal(goalRows(await history(faulty)).filter(row => row.__meta.goalAnchorSeq === committedReminder.__meta.goalAnchorSeq).length, 1)
-  assert.equal(await readFile(join(workRoot, 'agents', 'team', 'goal-effect.txt'), 'utf8'), 'ONE')
+  assert.equal(await readFile(join(dataRoot, 'agents', 'team', 'goal-effect.txt'), 'utf8'), 'ONE')
   const goalBeforeRestart = (await authority(goal)).goalState; const rowsBeforeRestart = goalRows(await history(goal)).length
   await stopHost(); host = await startHost(); secondPid = host.child.pid; assert.notEqual(firstPid, secondPid)
   assert.deepEqual((await authority(goal)).goalState, goalBeforeRestart)

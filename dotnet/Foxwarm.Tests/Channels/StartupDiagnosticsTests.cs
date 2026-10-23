@@ -48,7 +48,6 @@ public sealed class StartupDiagnosticsTests
                 .ToArray()
         )
             start.Environment.Remove(key);
-        start.Environment["FOXWARM_APP_ROOT"] = temp.Path;
         start.Environment["FOXWARM_DATA_DIR"] = temp.Path;
         start.Environment["FOXWARM_AGENTS_DIR"] = Path.Combine(temp.Path, "agents");
         await File.AppendAllTextAsync(

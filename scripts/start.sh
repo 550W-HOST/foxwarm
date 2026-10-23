@@ -13,11 +13,6 @@ if [ -z "$NODE_BIN" ]; then
     exit 1
 fi
 
-# Capture an explicit installation root before changing the caller's directory.
-if [ -n "${FOXWARM_APP_ROOT:-}" ]; then
-    FOXWARM_APP_ROOT="$("$NODE_BIN" -e 'process.stdout.write(require(process.argv[1]).coreEnvironment().FOXWARM_APP_ROOT)' "$SCRIPT_DIR/core-executable.js")" || exit 1
-fi
-
 # Build first
 echo "Building foxwarm..."
 cd "$FOXWARM_DIR"
@@ -27,7 +22,7 @@ UNSET_ENV=""
 SET_ENV=""
 START_CMD="cd $(printf '%q' "$FOXWARM_DIR") && env "
 # A long-lived tmux server may have a different environment from this invocation.
-for name in FOXWARM_APP_ROOT FOXWARM_DATA_DIR FOXWARM_CONFIG_PATH CONFIG_PATH MCP_CONFIG_PATH DOTNET_ROOT; do
+for name in FOXWARM_DATA_DIR FOXWARM_CONFIG_PATH CONFIG_PATH MCP_CONFIG_PATH DOTNET_ROOT; do
     if [ -n "${!name:-}" ]; then
         SET_ENV+="$(printf '%q' "$name=${!name}") "
     else

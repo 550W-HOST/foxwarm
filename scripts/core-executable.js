@@ -17,12 +17,8 @@ function coreExecutable() {
   }
   const apphost = path.join(root, process.platform === 'win32' ? 'Foxwarm.exe' : 'Foxwarm');
   return published && fs.existsSync(apphost)
-    ? { command: apphost, args: [] }
-    : { command: 'dotnet', args: [assembly] };
+    ? { command: apphost, args: ['--installation-root', root] }
+    : { command: 'dotnet', args: [assembly, '--installation-root', root] };
 }
 
-function coreEnvironment(env = process.env) {
-  return { ...env, FOXWARM_APP_ROOT: path.resolve(env.FOXWARM_APP_ROOT || root) };
-}
-
-module.exports = { coreExecutable, coreEnvironment };
+module.exports = { coreExecutable };

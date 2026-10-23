@@ -44,7 +44,7 @@ public sealed class CanonicalEntryTests
         )
         {
             WorkingDirectory = cwd,
-            ArgumentList = { typeof(HttpServer).Assembly.Location },
+            ArgumentList = { typeof(HttpServer).Assembly.Location, "--installation-root", app },
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
@@ -57,7 +57,7 @@ public sealed class CanonicalEntryTests
                 .ToArray()
         )
             start.Environment.Remove(key);
-        start.Environment["FOXWARM_APP_ROOT"] = app; // Known install base, not cwd discovery.
+        start.Environment["FOXWARM_APP_ROOT"] = cwd; // Retired inherited setting cannot select state.
         using var process = Process.Start(start)!;
         var error = process.StandardError.ReadToEndAsync();
         var ready = new TaskCompletionSource<string>(

@@ -46,7 +46,7 @@ internal sealed partial class AgentCatalog
             {
                 if (canonicalLayout)
                     throw new InvalidDataException(
-                        "Retained C# Agent data requires its original workspace. Supply the existing FOXWARM_EXPERIMENT_TOOL_ROOT override; no files were relocated."
+                        "Retained C# Agent data requires its original workspace. Use an explicit embedded workspace caller or migrate the physical layout before normal startup; no files were relocated."
                     );
                 var version = index["version"]!.GetValue<int>();
                 if (

@@ -50,7 +50,8 @@ function fixture(t, built = true) {
   fs.writeFileSync(path.join(app, 'wrong.yaml'), 'bot: {httpPort: -1}\n');
   const preload = path.join(root, 'no-typescript.cjs');
   fs.writeFileSync(preload, `const Module=require('node:module'); const load=Module._load; Module._load=function(id,...args){ if(typeof id==='string' && (id.includes('/lib/index') || id.includes(${JSON.stringify(path.join(repository, 'lib') + path.sep)}))) throw Error('TS Main loaded'); return load.call(this,id,...args); };`);
-  const env = { ...process.env, FOXWARM_APP_ROOT: '', FOXWARM_DATA_DIR: '',
+  const env = { ...process.env, FOXWARM_SYNC_FILE_LOG: '0', FOXWARM_NO_CONSOLE_LOG: '', FOXWARM_LOG_STDERR: '',
+    FOXWARM_APP_ROOT: '', FOXWARM_DATA_DIR: '',
     FOXWARM_CONFIG_PATH: 'app.yaml', CONFIG_PATH: 'wrong.yaml',
     FOXWARM_EXPERIMENT_DATA_ROOT: '', FOXWARM_EXPERIMENT_TOOL_ROOT: '', FOXWARM_EXPERIMENT_SKILLS_ROOT: '',
     FOXWARM_MAIN_LIFETIME_PIPE: '',
@@ -123,16 +124,18 @@ test('directory and resolved package execution keep installation identity, confi
   }
 });
 
-test('explicit app/data/config environment wins without moving state to binary output', linux, async t => {
+test('retired installation environment cannot redirect package state', linux, async t => {
   const f = fixture(t);
-  const other = path.join(f.root, 'explicit installation');
-  const selected = path.join(other, 'explicit-data');
-  fs.mkdirSync(selected, { recursive: true });
-  fs.writeFileSync(path.join(other, 'chosen.yaml'), 'vector: false\nbot: {enableWebUI: false, enableTrigger: false}\n');
-  const instance = await f.launch([f.app], { FOXWARM_APP_ROOT: other, FOXWARM_DATA_DIR: 'explicit-data', FOXWARM_CONFIG_PATH: 'chosen.yaml' });
+  const other = path.join(f.cwd, 'retired installation');
+  fs.mkdirSync(other);
+  fs.writeFileSync(path.join(other, 'app.yaml'), 'bot: {httpPort: -1}\n');
+  const instance = await f.launch([f.app], { FOXWARM_APP_ROOT: other,
+    FOXWARM_EXPERIMENT_DATA_ROOT: other, FOXWARM_EXPERIMENT_TOOL_ROOT: other,
+    FOXWARM_EXPERIMENT_SKILLS_ROOT: other });
   const pid = await f.ready(instance);
-  assert(fs.existsSync(path.join(selected, 'agents/main/memory')));
-  assert(!fs.existsSync(path.join(f.data, 'agents')));
+  assert(fs.existsSync(path.join(f.data, 'agents/main/memory')));
+  assert(!fs.existsSync(path.join(other, 'state')));
+  assert(!fs.existsSync(path.join(other, 'memory')));
   instance.child.kill('SIGINT');
   assert.deepEqual(await instance.exited, { code: 0, signal: null }, instance.text);
   await until(() => !running(pid), 'Managed Main survived SIGINT.');
@@ -275,27 +278,6 @@ for (const signal of ['SIGTERM', 'SIGKILL']) {
   });
 }
 
-test('relative explicit installation root is captured before a launcher changes cwd', linux, async t => {
-  const f = fixture(t);
-  const other = path.join(f.cwd, 'relative installation');
-  fs.mkdirSync(path.join(other, 'state'), { recursive: true });
-  fs.writeFileSync(path.join(other, 'chosen.yaml'), 'vector: false\nbot: {enableWebUI: false, enableTrigger: false}\n');
-  const relative = path.relative(f.cwd, other);
-  // The Windows client selects data before spawning from its installation cwd.
-  const selector = execFileSync(process.execPath, ['-e', `const {resolveDataRoot}=require(${JSON.stringify(path.join(__dirname, 'windowsService'))}); const {coreEnvironment}=require(${JSON.stringify(path.join(__dirname, 'core-executable'))}); console.log(JSON.stringify({app:coreEnvironment().FOXWARM_APP_ROOT,data:resolveDataRoot()}));`], {
-    cwd: f.cwd, env: { ...f.env, FOXWARM_APP_ROOT: relative }, encoding: 'utf8',
-  });
-  const selected = JSON.parse(selector);
-  assert.deepEqual(selected, { app: other, data: other });
-  const instance = await f.launch([f.app], { FOXWARM_APP_ROOT: selected.app, FOXWARM_DATA_DIR: selected.data, FOXWARM_CONFIG_PATH: 'chosen.yaml' }, f.app);
-  const pid = await f.ready(instance);
-  assert(fs.existsSync(path.join(other, 'agents/main/memory')));
-  assert(!fs.existsSync(path.join(other, relative, 'agents')));
-  instance.child.kill('SIGTERM');
-  assert.deepEqual(await instance.exited, { code: 0, signal: null }, instance.text);
-  await until(() => !running(pid), 'Managed Main survived relative-root shutdown.');
-});
-
 for (const signal of ['SIGTERM', 'SIGKILL']) {
   test(`foreground ${signal} stops Main while the production Matrix startup response remains held`, linux, async t => {
     const f = fixture(t);
@@ -404,13 +386,13 @@ const tmuxMain = { skip: process.platform !== 'linux' || spawnSync('tmux', ['-V'
   ? 'Requires Linux, Bash and tmux' : false };
 for (const script of ['start.sh', 'restart.sh']) {
   for (const mode of ['relative', 'absolute', 'omitted', 'empty']) {
-    test(`Bash ${script} selects ${mode} installation from the caller`, tmuxMain, async t => {
+    test(`Bash ${script} ignores a ${mode} retired installation setting`, tmuxMain, async t => {
       const f = tmuxFixture(t);
       const relative = 'selected installation';
       const explicit = path.join(f.cwd, relative);
       const wrong = path.join(f.app, relative);
-      const expected = ['relative', 'absolute'].includes(mode) ? explicit : f.app;
-      // Both roots are valid so the old bug starts successfully in the wrong one.
+      const expected = f.app;
+      // Valid competing roots ensure ignored settings cannot quietly initialize another tree.
       for (const app of [explicit, wrong, f.app]) f.install(app);
       const input = { relative, absolute: explicit, omitted: undefined, empty: '' }[mode];
       f.run(script, input);
@@ -425,7 +407,7 @@ for (const script of ['start.sh', 'restart.sh']) {
   }
 }
 
-test('Bash restart stops the running Main before selecting a new caller-relative installation', tmuxMain, async t => {
+test('Bash restart stops the running Main and ignores retired installation overrides', tmuxMain, async t => {
   const f = tmuxFixture(t);
   const relative = 'next installation';
   const selected = path.join(f.cwd, relative);
@@ -441,23 +423,8 @@ test('Bash restart stops the running Main before selecting a new caller-relative
   assert(!running(main), 'Previous managed Main survived restart.');
   const log = f.text();
   assert(log.indexOf('Main stopped.') < log.lastIndexOf('Main started without HTTP.'), log);
-  assert(fs.existsSync(path.join(selected, 'owned agents/main/memory')));
+  assert(fs.existsSync(path.join(f.app, 'owned agents/main/memory')));
+  assert(!fs.existsSync(path.join(selected, 'owned agents')));
   assert(!fs.existsSync(path.join(wrong, 'owned agents')));
   await f.stop();
-});
-
-test('direct package launch resolves a relative explicit installation from the caller', linux, async t => {
-  const f = fixture(t);
-  const relative = 'direct installation';
-  const other = path.join(f.cwd, relative);
-  fs.mkdirSync(other);
-  fs.writeFileSync(path.join(other, 'chosen.yaml'), 'vector: false\nbot: {enableWebUI: false, enableTrigger: false}\n');
-  const instance = await f.launch([f.app], { FOXWARM_APP_ROOT: relative,
-    FOXWARM_DATA_DIR: 'selected data', FOXWARM_CONFIG_PATH: 'chosen.yaml' });
-  const pid = await f.ready(instance);
-  assert(fs.existsSync(path.join(other, 'selected data/agents/main/memory')));
-  assert(!fs.existsSync(path.join(f.app, relative)));
-  instance.child.kill('SIGTERM');
-  assert.deepEqual(await instance.exited, { code: 0, signal: null }, instance.text);
-  await until(() => !running(pid), 'Managed Main survived direct relative-root shutdown.');
 });

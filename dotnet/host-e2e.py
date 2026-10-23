@@ -203,10 +203,10 @@ def main():
     assert dll.is_file(), 'Build the host solution before running this driver.'
     base = pathlib.Path(tempfile.mkdtemp(prefix='foxwarm-dotnet-host-e2e-'))
     data = base / 'data'
-    tools = base / 'workspace'
+    tools = data / 'agents' / 'main'
     logs = base / 'logs'
     data.mkdir()
-    tools.mkdir()
+    tools.mkdir(parents=True)
     logs.mkdir()
     provider = ThreadingHTTPServer(('127.0.0.1', 0), Provider)
     provider.daemon_threads = True
@@ -226,8 +226,7 @@ def main():
                 'ASPNETCORE_URLS'):
             del env[key]
     env.update(FOXWARM_DATA_DIR=str(data), FOXWARM_CONFIG_PATH='', CONFIG_PATH='',
-               MCP_CONFIG_PATH='', FOXWARM_AGENT_DIR='', FOXWARM_AGENTS_DIR=str(data / 'agents'),
-               FOXWARM_EXPERIMENT_TOOL_ROOT=str(tools))
+               MCP_CONFIG_PATH='', FOXWARM_AGENT_DIR='', FOXWARM_AGENTS_DIR=str(data / 'agents'))
     first = second = None
     try:
         first = start_host(dotnet, dll, env, port, logs, 'first')

@@ -9,7 +9,7 @@ import WebSocket from 'ws'
 import Ajv from 'ajv'
 import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
 
-const env = { FOXWARM_EXPERIMENT_MONTY_BINARY: process.env.FOXWARM_EXPERIMENT_MONTY_BINARY }
+const env = {  }
 const fixture = await createHostFixture('shell-http', { env })
 const prefix = '/shell-proof'
 await writeFile(join(fixture.data, 'state/config.yaml'), (await readFile(join(fixture.data, 'state/config.yaml'), 'utf8')) + 'url: ' + fixture.origin + prefix + '\n')

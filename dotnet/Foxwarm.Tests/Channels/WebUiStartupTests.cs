@@ -16,10 +16,11 @@ public sealed partial class WebUiStartupTests
         internal readonly TempDirectory Temp = new();
         internal readonly int Port = FreePort();
         internal string Data => Path.Combine(Temp.Path, "data");
-        internal string Work => Path.Combine(Temp.Path, "work");
+        internal string Work => Path.Combine(Data, "agents", "main");
         internal string TokenPath => Path.Combine(Data, "state", "token");
         internal string ConfigPath => Path.Combine(Data, "state", "config.yaml");
-        internal string Dist => Path.Combine(Temp.Path, "dist");
+        internal string Installation => Path.Combine(Temp.Path, "installation");
+        internal string Dist => Path.Combine(Installation, "webui-dist");
         internal readonly string Token = "opaque-fixture-%-credential";
         internal Process Process = null!;
         private Task<string>? stdout,
@@ -41,6 +42,25 @@ public sealed partial class WebUiStartupTests
         {
             Directory.CreateDirectory(Path.GetDirectoryName(TokenPath)!);
             Directory.CreateDirectory(Work);
+            Directory.CreateDirectory(Installation);
+            var output = Path.GetDirectoryName(typeof(HttpServer).Assembly.Location)!;
+            foreach (var file in Directory.EnumerateFiles(output))
+                File.Copy(file, Path.Combine(Installation, Path.GetFileName(file)));
+            foreach (var name in new[] { "templates", "runtimes", "ToolScript", "packages", "skills" })
+            {
+                var source = Path.Combine(output, name);
+                if (!Directory.Exists(source))
+                    continue;
+                if (!OperatingSystem.IsWindows())
+                    Directory.CreateSymbolicLink(Path.Combine(Installation, name), source);
+                else if (name == "runtimes")
+                    CopyDirectory(
+                        Path.Combine(source, System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier),
+                        Path.Combine(Installation, name, System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier)
+                    );
+                else
+                    CopyDirectory(source, Path.Combine(Installation, name));
+            }
             Directory.CreateDirectory(Path.Combine(Dist, "assets"));
             File.WriteAllText(
                 Path.Combine(Dist, "index.html"),
@@ -58,6 +78,15 @@ public sealed partial class WebUiStartupTests
             };
         }
 
+        private static void CopyDirectory(string source, string destination)
+        {
+            Directory.CreateDirectory(destination);
+            foreach (var file in Directory.EnumerateFiles(source))
+                File.Copy(file, Path.Combine(destination, Path.GetFileName(file)));
+            foreach (var directory in Directory.EnumerateDirectories(source))
+                CopyDirectory(directory, Path.Combine(destination, Path.GetFileName(directory)));
+        }
+
         internal void Start(Dictionary<string, string?>? changes = null)
         {
             var root = Environment.GetEnvironmentVariable("DOTNET_ROOT");
@@ -67,12 +96,10 @@ public sealed partial class WebUiStartupTests
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
-            info.ArgumentList.Add(typeof(HttpServer).Assembly.Location);
+            info.ArgumentList.Add(Path.Combine(Installation, "Foxwarm.dll"));
             info.Environment.Remove("FOXWARM_VSCODE_WEB_WEBVIEW_ORIGIN");
             info.Environment["FOXWARM_DATA_DIR"] = Data;
             info.Environment["FOXWARM_CONFIG_PATH"] = ConfigPath;
-            info.Environment["FOXWARM_EXPERIMENT_TOOL_ROOT"] = Work;
-            info.Environment["FOXWARM_EXPERIMENT_WEBUI_DIST"] = Dist;
             foreach (var (key, value) in changes ?? [])
             {
                 if (value is null)

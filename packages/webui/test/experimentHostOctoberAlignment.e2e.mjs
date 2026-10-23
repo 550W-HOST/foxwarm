@@ -75,7 +75,7 @@ const models = { default: 'local', providers: {
   anth: { providerType: 'anthropic', extraFields: { stream: false }, baseUrl: `http://127.0.0.1:${peer.address().port}`, models: ['wire'] }
 } }
 await writeFile(fixture.modelPath, JSON.stringify(models))
-const own = join(fixture.work, 'agents/team')
+const own = join(fixture.data, 'agents/team')
 async function create(name, agent = 'team') {
   const result = await fixture.api('POST', '/api/sessions', { agentId: agent, sessionId: name })
   assert.equal(result.status, 200, JSON.stringify(result.body)); return result.body.sessionId

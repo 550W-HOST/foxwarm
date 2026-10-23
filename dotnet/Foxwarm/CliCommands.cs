@@ -14,7 +14,7 @@ internal static class CliCommands
 
     internal static bool IsCommand(string[] args) => args is ["--cli-model"] or ["--cli-archive"];
 
-    internal static async Task<int> RunAsync(string command)
+    internal static async Task<int> RunAsync(string command, string? applicationRoot = null)
     {
         try
         {
@@ -24,7 +24,7 @@ internal static class CliCommands
             var input =
                 JsonNode.Parse(await Console.In.ReadLineAsync() ?? "") as JsonObject
                 ?? throw new InvalidDataException("Expected a CLI input document.");
-            var configuration = new ModelConfiguration(HostPaths.Capture());
+            var configuration = new ModelConfiguration(HostPaths.Capture(applicationRoot));
             if (command == "--cli-model")
                 await ModelAsync(configuration, input);
             else

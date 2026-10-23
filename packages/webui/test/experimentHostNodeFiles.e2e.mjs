@@ -9,7 +9,7 @@ import sharp from 'sharp'
 import WebSocket, { WebSocketServer } from 'ws'
 import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
 
-const fixture = await createHostFixture('node-files', { env: { FOXWARM_EXPERIMENT_MONTY_BINARY: process.env.FOXWARM_EXPERIMENT_MONTY_BINARY } })
+const fixture = await createHostFixture('node-files', { env: {} })
 const plans = new Map(), rounds = new Map(), requests = [], wire = [], failures = [], clients = [], sockets = new Set(), connections = new Map()
 const held = new Map(), holdWrites = new Set(), credentialsByNode = new Map()
 const exists = path => access(path).then(() => true, () => false)
@@ -264,16 +264,16 @@ rules:
   assert(descriptors.every(text => text.includes('node="one"') && text.includes(join(homes.one.agents, 'bound'))))
   const uploadedPaths = descriptors.map(text => /path="([^"]+)"/.exec(text)[1])
   assert.equal(await readFile(uploadedPaths[0], 'utf8'), '上传 Unicode 🦊'); assert.deepEqual(await readFile(uploadedPaths[1]), png)
-  assert(!await exists(join(fixture.work, 'agents/bound/.temp/channel-files/webui')))
+  assert(!await exists(join(fixture.data, 'agents/bound/.temp/channel-files/webui')))
   const ref = state.history.flatMap(row => row.parts || []).find(part => part.inlineDataRef)?.inlineDataRef; assert(ref?.blobId)
   response = await fetch(fixture.origin + '/api/blobs/' + ref.blobId, { headers }); assert.equal(response.status, 200); assert.deepEqual(Buffer.from(await response.arrayBuffer()), png)
   assert.equal((await fetch(fixture.origin + '/api/blobs/' + ref.blobId)).status, 401)
   await page.waitForSelector('.foxwarm-image-item img'); assert.equal(await page.$eval('.foxwarm-image-item img', image => image.naturalWidth), 3)
   state = await turn(bound, 'isolated-copy', [[copy('isolated-copy', 'one', uploadedPaths[0], 'master', 'copied.txt'), call('isolated-send', 'send_file', { filePath: uploadedPaths[0] }), copy('isolated-outside', 'master', outsideCopy, 'one', 'must-not-copy-outside'), copy('isolated-other-node', 'two', 'café.txt', 'master', 'must-not-copy-other-node'), call('isolated-target', 'send_file', { filePath: uploadedPaths[0], sessionId: actor })]])
   good(state, 'isolated-copy'); good(state, 'isolated-send')
-  assert.equal(await readFile(join(fixture.work, 'agents/bound/copied.txt'), 'utf8'), '上传 Unicode 🦊')
+  assert.equal(await readFile(join(fixture.data, 'agents/bound/copied.txt'), 'utf8'), '上传 Unicode 🦊')
   for (const id of ['isolated-outside', 'isolated-other-node', 'isolated-target']) assert(pair(state, id).error)
-  assert(!await exists(join(homes.one.agents, 'bound/must-not-copy-outside'))); assert(!await exists(join(fixture.work, 'agents/bound/must-not-copy-other-node')))
+  assert(!await exists(join(homes.one.agents, 'bound/must-not-copy-outside'))); assert(!await exists(join(fixture.data, 'agents/bound/must-not-copy-other-node')))
   // Partial ingress keeps already-written remote bytes and reports the real destination without a turn commit.
   const first = await upload('partial remote', 'partial.txt'), outside = join(fixture.root, 'outside.txt'); await writeFile(outside, 'outside')
   const partial = await fixture.api('POST', route(bound) + '/message', { text: 'NODEFILES:partial', uploadedFiles: [first, { path: outside, filename: 'bad.txt' }] })
@@ -285,7 +285,7 @@ rules:
   await writeFile(join(fixture.work, 'policy.yaml'), 'version: 1\nrules: []\n')
   state = await turn(actor, 'node-file-clear', [[call('node-file-clear', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'tool-rules', filePath: join(fixture.work, 'policy.yaml') } })]])
   good(state, 'node-file-clear')
-  const isolatedSource = join(fixture.work, 'agents/bound/source.py')
+  const isolatedSource = join(fixture.data, 'agents/bound/source.py')
   await writeFile(isolatedSource, 'return "own Main source"'); await writeFile(join(homes.one.agents, 'bound/source.py'), 'return "own bound source"')
   state = await turn(bound, 'isolated-sources', [[call('isolated-main-source', 'run_script', { node: 'master', filePath: isolatedSource }), call('isolated-bound-source', 'run_script', { filePath: 'source.py' }), call('isolated-other-source', 'run_script', { node: 'two', filePath: 'other-source.py' }), call('isolated-outside-source', 'run_script', { node: 'master', filePath: join(fixture.work, 'main-source.py') })]])
   assert.equal(good(state, 'isolated-main-source').result, 'own Main source'); assert.equal(good(state, 'isolated-bound-source').result, 'own bound source')

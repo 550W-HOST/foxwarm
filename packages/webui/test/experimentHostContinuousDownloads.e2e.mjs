@@ -10,7 +10,7 @@ import { createHostFixture, until } from './experimentHostFixture.mjs'
 
 const options = { env: {} }, host = await createHostFixture('continuous-downloads', options)
 options.cwd = host.root
-options.env = { FOXWARM_EXPERIMENT_MONTY_BINARY: process.env.FOXWARM_EXPERIMENT_MONTY_BINARY }
+options.env = {  }
 options.publicRoot = host.origin + '/nested/app/#session/continuous-parent'
 await writeFile(join(host.data, 'state/config.yaml'), (await readFile(join(host.data, 'state/config.yaml'), 'utf8')) + 'url: ' + host.origin + '/nested/app' + '\n')
 const requests = [], failures = [], pages = [], http = [], browserErrors = [], nativeRequests = [], signRequests = [], paused = [], requestFailures = []

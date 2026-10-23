@@ -119,7 +119,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             recoveringMove is { OwnsAgent: true, Phase: "rolling-back" }
                 ? recoveringMove.OwnedAgent
                 : null,
-            canonicalLayout: hostPaths is { LegacyWorkspace: null }
+            canonicalLayout: hostPaths is not null
         );
         skills = new Skills(
             agents,
