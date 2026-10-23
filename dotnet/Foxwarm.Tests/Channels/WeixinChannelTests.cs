@@ -213,8 +213,12 @@ public sealed class WeixinChannelTests
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         peer.Respond = async call =>
         {
-            if (!call.Path.EndsWith("/getupdates", StringComparison.Ordinal)
-                || SessionWait.Text(call.Body["get_updates_buf"])?.StartsWith("cursor-", StringComparison.Ordinal) != true)
+            if (
+                !call.Path.EndsWith("/getupdates", StringComparison.Ordinal)
+                || SessionWait
+                    .Text(call.Body["get_updates_buf"])
+                    ?.StartsWith("cursor-", StringComparison.Ordinal) != true
+            )
                 return null;
             fetching.TrySetResult();
             await release.Task;
@@ -237,7 +241,9 @@ public sealed class WeixinChannelTests
             Assert.False(stopping.IsCompleted);
             Assert.Equal(
                 count,
-                peer.Calls.Count(call => call.Path.EndsWith("/getupdates", StringComparison.Ordinal))
+                peer.Calls.Count(call =>
+                    call.Path.EndsWith("/getupdates", StringComparison.Ordinal)
+                )
             );
             release.TrySetResult();
             await stopping.WaitAsync(TimeSpan.FromSeconds(3));

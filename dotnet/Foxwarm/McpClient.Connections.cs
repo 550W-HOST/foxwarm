@@ -479,16 +479,16 @@ internal sealed partial class McpClient
             };
             HttpMessageHandler Observe(HttpMessageHandler inner) =>
                 new ReceiveTransport.Handler(
-                        entry.Receiver,
-                        () =>
-                        {
-                            lock (poolGate)
-                                InvalidateEntry(entry);
-                        },
-                        inner,
-                        config["oauth"] is not null,
-                        OAuth.Credentials
-                    );
+                    entry.Receiver,
+                    () =>
+                    {
+                        lock (poolGate)
+                            InvalidateEntry(entry);
+                    },
+                    inner,
+                    config["oauth"] is not null,
+                    OAuth.Credentials
+                );
             var http = config["oauth"] is not null
                 ? OAuth.ResourceClient(server, config, Observe)
                 : new HttpClient(Observe(new HttpClientHandler()))

@@ -100,9 +100,16 @@ public sealed partial class McpOAuthTests
         Assert.Single(await fresh.ListToolsAsync("peer", default, f.First, f.First.McpGeneration));
         Assert.Equal(
             "persisted",
-            McpOAuthPeer.Value(await fresh.CallAsync("peer", "state", Args("persisted"), default, f.First, f.First.McpGeneration))[
-                "value"
-            ]!.GetValue<string>()
+            McpOAuthPeer.Value(
+                await fresh.CallAsync(
+                    "peer",
+                    "state",
+                    Args("persisted"),
+                    default,
+                    f.First,
+                    f.First.McpGeneration
+                )
+            )["value"]!.GetValue<string>()
         );
         await Assert.ThrowsAsync<McpOAuthException>(() =>
             fresh.OAuth.FinishAsync(callback, default)

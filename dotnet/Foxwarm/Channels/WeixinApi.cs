@@ -169,5 +169,4 @@ internal sealed partial class WeixinApi
             "sendMessage"
         );
     }
-
 }
