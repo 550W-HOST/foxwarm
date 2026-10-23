@@ -34,10 +34,7 @@ public sealed partial class AsrRoutesTests
         Assert.False(status["available"]!.GetValue<bool>());
         Assert.DoesNotContain(Fixture.Key, status.ToJsonString());
         Assert.DoesNotContain("/private/path", status.ToJsonString());
-        File.WriteAllText(
-            f.ConfigPath,
-            "asrService:\n  enabled: false\n"
-        );
+        File.WriteAllText(f.ConfigPath, "asrService:\n  enabled: false\n");
         f.Health["ok"] = true;
         Assert.True(
             (await Json(await f.Client.GetAsync("/api/asr/status")))["configured"]!.GetValue<bool>()

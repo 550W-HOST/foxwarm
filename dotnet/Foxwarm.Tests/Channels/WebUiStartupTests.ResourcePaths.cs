@@ -68,8 +68,11 @@ public sealed partial class WebUiStartupTests
         var bootstrap = JsonNode.Parse(WebUtility.HtmlDecode(match.Groups[1].Value))!;
         Assert.Equal(
             Foxwarm.Code.CodeWorkbench.FoxwarmUri(h.Installation),
-            ("foxwarm://" + bootstrap["folderUri"]!["authority"] + bootstrap["folderUri"]!["path"])
-                .TrimEnd('/')
+            (
+                "foxwarm://"
+                + bootstrap["folderUri"]!["authority"]
+                + bootstrap["folderUri"]!["path"]
+            ).TrimEnd('/')
         );
         Assert.DoesNotContain(
             "redhat-vscode-yaml",
@@ -77,8 +80,9 @@ public sealed partial class WebUiStartupTests
         );
         Assert.StartsWith(
             h.Client.BaseAddress!.GetLeftPart(UriPartial.Authority) + "/vscode-web/webview/",
-            bootstrap["productConfiguration"]!["webviewContentExternalBaseUrlTemplate"]!
-                .GetValue<string>()
+            bootstrap["productConfiguration"]![
+                "webviewContentExternalBaseUrlTemplate"
+            ]!.GetValue<string>()
         );
         await h.Client.GetStringAsync("/vscode-web/?embedded=true");
         Assert.True(File.Exists(Path.Combine(h.Data, "state/vscode-web/foxwarm.code-workspace")));
