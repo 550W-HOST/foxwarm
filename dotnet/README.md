@@ -4,7 +4,7 @@ The .NET 10 solution provides managed Main, a standalone CLI Node, shared native
 
 - `Foxwarm` is the console host, with an optional HTTP listener (ordinary default `0.0.0.0:3001`). Its `Sessions`, `Models`, `Tools`, `Channels/WebUi`, and `Memory` folders organize the existing Message JSON, Session turns/persistence/compaction, Responses HTTP/WebSocket and Chat Completions client/stream/model selection, and interactive Chat host in one assembly.
 - `Foxwarm.Tests` contains memory, streaming/client, storage and Session contract tests, including current admitted-state and persisted compatibility checks.
-- `Foxwarm.DevTools` runs the original development probes through explicit `conditional-memory`, `responses-request`, `responses-stream`, and `session-restart`, and explicit `catalog-import-dotnet-v1` subcommands. Its corpus JSON and process-restart result shape are unchanged.
+- `Foxwarm.DevTools` runs the original development probes through explicit `conditional-memory`, `responses-request`, `responses-stream`, and `session-restart` subcommands. Its corpus JSON and process-restart result shape are unchanged.
 
 ## CLI Node
 
@@ -184,16 +184,6 @@ JSON/frontier unlink precedes catalog removal, so cross-storage failure reports 
 Active history, queue, prompt/cache and other semantic state remain in current-v1 per-Session JSON. The ordered save commits Archive and atomic JSON before publishing its bounded catalog projection. Catalog failure after JSON publication retains committed audit/authority and owned hot deltas, reports strict failure before provider/effect dispatch, and leaves an incremental current visible overlay, including idle differences. An ordinary later save or explicit clean shutdown can complete projection; no crash receipt or orphan reconstruction is added.
 
 Normal startup opens v2 or upgrades real source v1 SQLite. Without SQLite, it checks source sessions.json candidates in source order, preserves exact migration evidence, validates every selected authoritative file, stages supported legacy authority upgrades and publishes a temporary checked database atomically before retiring candidates. Structurally invalid candidates may fall through; missing/corrupt/unsupported authority for a selected candidate is fatal. Existing catalog membership never falls back to directory enumeration. Truly fresh roots can create an empty catalog; unknown lifetime evidence cannot masquerade as fresh.
-
-For the predecessor experiment's catalog-less .NET-v1 layout, use the explicit existing DevTools entry once, on a separately owned compatibility root:
-
-```sh
-dotnet run --no-build --project dotnet/Foxwarm.DevTools -- \
-  catalog-import-dotnet-v1 /path/to/predecessor-data /path/to/its-workspace \
-  --declare-pre-catalog-dotnet-v1
-```
-
-The command refuses existing catalogs/source candidates, validates current-v1 files, real Agent bindings and Archive coverage, rechecks the frozen file set before atomic publication, and creates no persistent import flag or manifest. Normal serve never invokes it automatically.
 
 Bounded Sidebar/Architecture/child/exact/path/watch queries use Main SQL seeks, compound child batches, BINARY ordering, maintained counts and incremental local visible signatures, without Owner/history lookup. Sequence counts batch actual local Archive maxima minus immutable branch caps, not nextSeq or graph parents. Source metadata search and legacy GET retain their explicit metadata-scan contracts; lowercase search matches the source's full locale-independent Unicode behavior. Related parent normalization may visit affected references on writes; no constant-cost write claim is made. The real original-App workflow is `experimentHostCatalog.e2e.mjs`; source/schema-v1/Unicode differential and SQLite publication tests live in `SessionCatalog*Tests`.
 

@@ -41,30 +41,14 @@ internal sealed class TaskService : IDisposable
 
     internal string? OwnerSessionId(string taskId) => store.OwnerSessionId(taskId);
 
-    internal async Task<TaskStoreResult> ExecuteAsync(
-        JsonObject args,
-        string? actor,
-        int? httpLimit = null,
-        long? anchor = null
-    )
-    {
-        await mutationLane.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            return await ExecuteCoreAsync(args, actor, httpLimit, anchor).ConfigureAwait(false);
-        }
-        finally
-        {
-            mutationLane.Release();
-        }
-    }
-
     internal async Task<JsonObject> ExecuteAsUserAsync(JsonObject args)
     {
+        var normalized = (JsonObject)args.DeepClone();
+        TaskStoreResult result;
+        string? fullDescription;
         await mutationLane.WaitAsync().ConfigureAwait(false);
         try
         {
-            var normalized = (JsonObject)args.DeepClone();
             if (
                 normalized["ownerSessionId"] is JsonValue owner
                 && owner.TryGetValue<string>(out var requested)
@@ -76,112 +60,128 @@ internal sealed class TaskService : IDisposable
                 && ownerValue.TryGetValue<string>(out var ownerId)
             )
                 normalized["ownerSessionId"] = resolveSessionId(ownerId) ?? ownerId;
-            var result = store.ExecuteAsUser(normalized);
-            var warnings = new List<string>();
-            var receipt = new NotificationReceipt();
-            var taskId = Text(result.Payload["task"]?["id"]) ?? Text(normalized["taskId"]);
-            if (result.Assignment is { } assignment && taskId is not null)
-                await DeliverAssignmentAsync(taskId, null, assignment, warnings, receipt);
-            if (result.CommentOwner is { } commentOwner && taskId is not null)
-            {
-                try
-                {
-                    var title = Text(result.Payload["task"]?["title"]) ?? taskId;
-                    await manager.SendTaskNotificationAsync(
-                        null,
-                        commentOwner,
-                        $"Note on task {taskId} — {title}\n{Text(normalized["note"])}",
-                        true,
-                        taskId,
-                        "note",
-                        "note"
-                    );
-                    receipt.Count++;
-                }
-                catch
-                {
-                    warnings.Add(
-                        "Comment saved, but the owner notification could not be delivered."
-                    );
-                }
-            }
-            if (warnings.Count > 0)
-                result.Payload["warning"] = string.Join(" ", warnings);
-            if (result.Assignment is not null || result.CommentOwner is not null)
-                result.Payload["task"] = store
-                    .Execute(new JsonObject { ["action"] = "get", ["taskId"] = taskId! }, null)
-                    .Payload["task"]!.DeepClone();
-            result.Payload["sentNotifications"] = receipt.Count;
-            return result.Payload;
+            result = store.ExecuteAsUser(normalized);
+            fullDescription = result.Assignment is null ? null : store.ReadStoredDescription(Text(result.Payload["task"]?["id"])!);
         }
         finally
         {
             mutationLane.Release();
         }
+
+        var warnings = new List<string>();
+        var receipt = new NotificationReceipt();
+        var taskId = Text(result.Payload["task"]?["id"]) ?? Text(normalized["taskId"]);
+        if (result.Assignment is { } assignment && taskId is not null)
+            await DeliverAssignmentAsync(result.Payload["task"]!.AsObject(), fullDescription, null, assignment, warnings, receipt);
+        if (result.CommentOwner is { } commentOwner && taskId is not null)
+        {
+            try
+            {
+                var title = Text(result.Payload["task"]?["title"]) ?? taskId;
+                await manager.SendTaskNotificationAsync(
+                    null,
+                    commentOwner,
+                    $"Note on task {taskId} — {title}\n{Text(normalized["note"])}",
+                    true,
+                    taskId,
+                    "note",
+                    "note"
+                );
+                receipt.Count++;
+            }
+            catch
+            {
+                warnings.Add(
+                    "Comment saved, but the owner notification could not be delivered."
+                );
+            }
+        }
+        if (warnings.Count > 0)
+            result.Payload["warning"] = string.Join(" ", warnings);
+        if (result.Assignment is not null || result.CommentOwner is not null)
+            result.Payload["task"] = store
+                .Execute(new JsonObject { ["action"] = "get", ["taskId"] = taskId! }, null)
+                .Payload["task"]!.DeepClone();
+        result.Payload["sentNotifications"] = receipt.Count;
+        return result.Payload;
     }
 
-    private async Task<TaskStoreResult> ExecuteCoreAsync(
+    internal async Task<TaskStoreResult> ExecuteAsync(
         JsonObject args,
         string? actor,
-        int? httpLimit,
-        long? anchor
+        int? httpLimit = null,
+        long? anchor = null
     )
     {
         TaskStore.Validate(args, httpLimit);
         var action = Text(args["action"]);
-        if (actor is null && action is not ("list" or "get"))
-            actor = store.DefaultActor(args);
-        if (action is not ("list" or "get") && actor is null)
-            throw new TaskError(
-                "TASK_SESSION_REQUIRED",
-                "Select an existing Session for this operation."
-            );
-        actor = actor is null ? null : resolveSessionId(actor) ?? actor;
-        var normalizedArgs = (JsonObject)args.DeepClone();
-        if (
-            action is "assign" or "create"
-            && args["ownerSessionId"] is JsonValue ownerValue
-            && ownerValue.TryGetValue<string>(out var requestedOwner)
-            && resolveSessionId(requestedOwner) is not { } canonicalOwner
-        )
-            throw new TaskError("TASK_SESSION_NOT_FOUND", "Target Session was not found.", 404);
-        if (
-            action is "assign" or "create"
-            && args["ownerSessionId"] is JsonValue ownerString
-            && ownerString.TryGetValue<string>(out var ownerId)
-        )
-            normalizedArgs["ownerSessionId"] = resolveSessionId(ownerId) ?? ownerId;
-        var selectedAnchor = actor is null ? null : anchor ?? anchorSeq(actor);
-        IReadOnlyList<string>? scopeIds = null;
-        if (action == "list" && Text(args["scope"]) is string scope && scope != "all")
+        var read = action is "list" or "get";
+        TaskStoreResult result;
+        string? fullDescription;
+        if (!read)
+            await mutationLane.WaitAsync().ConfigureAwait(false);
+        try
         {
-            if (actor is null)
+            if (actor is null && action is not ("list" or "get"))
+                actor = store.DefaultActor(args);
+            if (action is not ("list" or "get") && actor is null)
                 throw new TaskError(
                     "TASK_SESSION_REQUIRED",
-                    "A current Session is required for this task list scope."
+                    "Select an existing Session for this operation."
                 );
-            var agent =
-                resolveSessionAgent(actor)
-                ?? throw new TaskError(
-                    "TASK_SESSION_NOT_FOUND",
-                    "The current Session Agent could not be resolved for this task list scope.",
-                    404
-                );
-            scopeIds = scope is "current-session" or "owned"
-                ? new[] { actor }
-                : manager
-                    .Catalog.List()
-                    .Where(row => Text(row["agent"]) == agent)
-                    .Select(row => Text(row["id"])!)
-                    .ToArray();
+            actor = actor is null ? null : resolveSessionId(actor) ?? actor;
+            var normalizedArgs = (JsonObject)args.DeepClone();
+            if (
+                action is "assign" or "create"
+                && args["ownerSessionId"] is JsonValue ownerValue
+                && ownerValue.TryGetValue<string>(out var requestedOwner)
+                && resolveSessionId(requestedOwner) is not { } canonicalOwner
+            )
+                throw new TaskError("TASK_SESSION_NOT_FOUND", "Target Session was not found.", 404);
+            if (
+                action is "assign" or "create"
+                && args["ownerSessionId"] is JsonValue ownerString
+                && ownerString.TryGetValue<string>(out var ownerId)
+            )
+                normalizedArgs["ownerSessionId"] = resolveSessionId(ownerId) ?? ownerId;
+            var selectedAnchor = actor is null ? null : anchor ?? anchorSeq(actor);
+            IReadOnlyList<string>? scopeIds = null;
+            if (action == "list" && Text(args["scope"]) is string scope && scope != "all")
+            {
+                if (actor is null)
+                    throw new TaskError(
+                        "TASK_SESSION_REQUIRED",
+                        "A current Session is required for this task list scope."
+                    );
+                var agent =
+                    resolveSessionAgent(actor)
+                    ?? throw new TaskError(
+                        "TASK_SESSION_NOT_FOUND",
+                        "The current Session Agent could not be resolved for this task list scope.",
+                        404
+                    );
+                scopeIds = scope is "current-session" or "owned"
+                    ? new[] { actor }
+                    : manager
+                        .Catalog.List()
+                        .Where(row => Text(row["agent"]) == agent)
+                        .Select(row => Text(row["id"])!)
+                        .ToArray();
+            }
+            result = store.Execute(
+                normalizedArgs,
+                actor,
+                httpLimit,
+                selectedAnchor,
+                scopeSessionIds: scopeIds
+            );
+            fullDescription = result.Assignment is null ? null : store.ReadStoredDescription(Text(result.Payload["task"]?["id"])!);
         }
-        var result = store.Execute(
-            normalizedArgs,
-            actor,
-            httpLimit,
-            selectedAnchor,
-            scopeSessionIds: scopeIds
-        );
+        finally
+        {
+            if (!read)
+                mutationLane.Release();
+        }
         var warnings = new List<string>();
         var receipt = new NotificationReceipt();
         var resultTaskId = Text(result.Payload["task"]?["id"]) ?? Text(args["taskId"]);
@@ -189,7 +189,7 @@ internal sealed class TaskService : IDisposable
         {
             if (resultTaskId is null)
                 throw new InvalidDataException("Task assignment did not return a task ID.");
-            await DeliverAssignmentAsync(resultTaskId, actor!, assignment, warnings, receipt);
+            await DeliverAssignmentAsync(result.Payload["task"]!.AsObject(), fullDescription, actor!, assignment, warnings, receipt);
         }
         if (result.CommentOwner is { } commentOwner && commentOwner != actor)
         {
@@ -216,7 +216,7 @@ internal sealed class TaskService : IDisposable
         {
             if (resultTaskId is null)
                 throw new InvalidDataException("Task completion did not return a task ID.");
-            await DeliverCompletionAsync(resultTaskId, actor!, warnings, receipt);
+            await DeliverCompletionAsync(result.Payload["task"]!.AsObject(), actor!, warnings, receipt);
         }
         if (warnings.Count > 0)
             result.Payload["warning"] = string.Join(" ", warnings);
@@ -251,6 +251,7 @@ internal sealed class TaskService : IDisposable
     {
         var source = resolveSessionId(sourceSessionId) ?? sourceSessionId;
         TaskStoreResult attached;
+        string? fullDescription;
         SessionOwner child;
         await mutationLane.WaitAsync().ConfigureAwait(false);
         try
@@ -282,6 +283,7 @@ internal sealed class TaskService : IDisposable
                     source
                 );
                 store.AttachChild(taskId, child.Id);
+                fullDescription = store.ReadStoredDescription(taskId);
             }
             catch (Exception error)
             {
@@ -302,7 +304,8 @@ internal sealed class TaskService : IDisposable
         if (assignment is null)
             return new AttachedChildResult(child, true, null, 0);
         var delivered = await DeliverAssignmentAsync(
-            taskId,
+            attached.Payload["task"]!.AsObject(),
+            fullDescription,
             source,
             assignment,
             warnings,
@@ -318,7 +321,8 @@ internal sealed class TaskService : IDisposable
     }
 
     private async Task<bool> DeliverAssignmentAsync(
-        string taskId,
+        JsonObject task,
+        string? fullDescription,
         string? actor,
         TaskAssignmentPlan plan,
         List<string> warnings,
@@ -326,13 +330,14 @@ internal sealed class TaskService : IDisposable
         string? additionalMessage = null
     )
     {
+        var taskId = Text(task["id"])!;
         var newOwnerDelivered = plan.NewOwner is null;
         if (plan.PreviousOwner is { } previous)
             await DeliverAsync(
                 taskId,
                 actor,
                 previous,
-                $"Task ownership {(plan.NewOwner is null ? "released" : $"transferred to {plan.NewOwner}")}: {Summary(taskId)}",
+                $"Task ownership {(plan.NewOwner is null ? "released" : $"transferred to {plan.NewOwner}")}: {Summary(task)}",
                 false,
                 "previousOwnerNotificationStatus",
                 plan.Revision,
@@ -346,7 +351,7 @@ internal sealed class TaskService : IDisposable
                 taskId,
                 actor,
                 next,
-                $"You have been assigned a task: {Summary(taskId, fullDescription: true)}{(additionalMessage is null ? "" : $"\n\nAdditional instruction:\n{additionalMessage}")}",
+                $"You have been assigned a task: {Summary(task, fullDescription: fullDescription)}{(additionalMessage is null ? "" : $"\n\nAdditional instruction:\n{additionalMessage}")}",
                 true,
                 "assignmentNotificationStatus",
                 plan.Revision,
@@ -359,20 +364,14 @@ internal sealed class TaskService : IDisposable
     }
 
     private async Task DeliverCompletionAsync(
-        string taskId,
+        JsonObject task,
         string actor,
         List<string> warnings,
         NotificationReceipt receipt
     )
     {
-        var row = store
-            .Execute(new JsonObject { ["action"] = "get", ["taskId"] = taskId }, null)
-            .Payload["task"]
-            ?.AsObject();
-        var creator =
-            row?["createdByKind"]?.GetValue<string>() == "session"
-                ? row?["createdBySessionId"]?.GetValue<string>()
-                : null;
+        var taskId = Text(task["id"])!;
+        var creator = Text(task["createdByKind"]) == "session" ? Text(task["createdBySessionId"]) : null;
         if (creator is null || resolveSessionId(creator) == resolveSessionId(actor))
         {
             store.MarkNotification(taskId, "completionNotificationStatus", "skipped");
@@ -382,7 +381,7 @@ internal sealed class TaskService : IDisposable
             taskId,
             actor,
             creator,
-            $"Task completed: {Summary(taskId, includeResult: true)}",
+            $"Task completed: {Summary(task, includeResult: true)}",
             true,
             "completionNotificationStatus",
             null,
@@ -451,19 +450,13 @@ internal sealed class TaskService : IDisposable
         }
     }
 
-    private string Summary(string taskId, bool includeResult = false, bool fullDescription = false)
+    private static string Summary(JsonObject task, bool includeResult = false, string? fullDescription = null)
     {
-        var task = store
-            .Execute(new JsonObject { ["action"] = "get", ["taskId"] = taskId }, null)
-            .Payload["task"]!.AsObject();
-        var title = task["title"]?.GetValue<string>() ?? taskId;
-        var status = task["status"]?.GetValue<string>() ?? "unknown";
-        var description = fullDescription
-            ? store.ReadStoredDescription(taskId)
-            : task["description"]?.GetValue<string>();
-        var result = task["result"]?.GetValue<string>();
-        var body = includeResult ? result : description;
-        var limit = fullDescription || includeResult ? int.MaxValue : 1000;
+        var taskId = Text(task["id"])!;
+        var title = Text(task["title"]) ?? taskId;
+        var status = Text(task["status"]) ?? "unknown";
+        var body = includeResult ? Text(task["result"]) : fullDescription ?? Text(task["description"]);
+        var limit = fullDescription is not null || includeResult ? int.MaxValue : 1000;
         return $"{taskId} — {title}\nStatus: {status}{(string.IsNullOrEmpty(body) ? "" : $"\n{body[..Math.Min(limit, body.Length)]}")}";
     }
 

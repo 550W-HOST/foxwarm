@@ -225,45 +225,6 @@ public sealed class SessionCatalogPublicationTests
     }
 
     [Fact]
-    public async Task Declared_predecessor_import_rechecks_the_frozen_file_set_before_publication()
-    {
-        using var temp = new TempDirectory();
-        var data = Path.Combine(temp.Path, "data");
-        var work = Path.Combine(temp.Path, "work");
-        Directory.CreateDirectory(work);
-        await SessionCatalogMigrationTests.Authority(data, "one");
-        using var catalog = new SessionCatalog(data);
-        catalog.BeforeImportFreezeCheck = () =>
-            File.WriteAllText(Path.Combine(data, "state", "sessions", "one.json"), "changed");
-        Assert.Throws<IOException>(() => catalog.ImportDotNetV1(new AgentCatalog(data, work)));
-        Assert.False(File.Exists(catalog.FilePath));
-        Assert.Empty(Directory.GetFiles(Path.Combine(data, "state"), "catalog.sqlite.migrating-*"));
-    }
-
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Declared_import_rejects_a_new_Archive_input_or_nonempty_WAL_before_catalog_publication(
-        bool wal
-    )
-    {
-        using var temp = new TempDirectory();
-        var data = Path.Combine(temp.Path, "data");
-        var work = Path.Combine(temp.Path, "work");
-        Directory.CreateDirectory(work);
-        await SessionCatalogMigrationTests.Authority(data, "one");
-        var archive = Path.Combine(data, "state", "archive-store.sqlite");
-        if (!wal)
-            File.Delete(archive);
-        using var catalog = new SessionCatalog(data);
-        catalog.BeforeImportFreezeCheck = () =>
-            File.WriteAllText(archive + (wal ? "-wal" : ""), "New input after validation.");
-        Assert.Throws<IOException>(() => catalog.ImportDotNetV1(new AgentCatalog(data, work)));
-        Assert.False(File.Exists(catalog.FilePath));
-        Assert.Empty(Directory.GetFiles(Path.Combine(data, "state"), "catalog.sqlite.migrating-*"));
-    }
-
-    [Fact]
     public async Task Self_and_committed_redirect_reservations_stay_nonlive_and_read_without_changing_ownership()
     {
         using var temp = new TempDirectory();

@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -154,7 +153,7 @@ internal sealed partial class SessionCatalog
         }
         if (seen || AuthorityFiles().Length > 0 || HasArchiveHistory())
             throw new InvalidDataException(
-                "No valid source Session catalog migration candidate. Pre-catalog .NET roots require the explicit DevTools import. "
+                "No valid source Session catalog migration candidate. "
                     + string.Join("; ", failures)
             );
         PublishNew([], null);
@@ -197,11 +196,7 @@ internal sealed partial class SessionCatalog
         return false;
     }
 
-    private void PublishNew(
-        IReadOnlyList<MigrationRow> rows,
-        string? source,
-        Action? verifyFrozen = null
-    )
+    private void PublishNew(IReadOnlyList<MigrationRow> rows, string? source)
     {
         var temp =
             FilePath + ".migrating-" + Environment.ProcessId + "-" + Guid.NewGuid().ToString("N");
@@ -239,7 +234,6 @@ internal sealed partial class SessionCatalog
                     throw new InvalidDataException("Catalog integrity check failed.");
             }
             SyncFile(temp);
-            verifyFrozen?.Invoke();
             if (source is not null)
             {
                 var bytes = File.ReadAllBytes(source);
@@ -312,148 +306,4 @@ internal sealed partial class SessionCatalog
         stream.Flush(flushToDisk: true);
     }
 
-    private static byte[] Digest(string path)
-    {
-        using var stream = File.OpenRead(path);
-        return SHA256.HashData(stream);
-    }
-
-    internal Action? BeforeImportFreezeCheck { get; set; }
-
-    internal int ImportDotNetV1(AgentCatalog agents)
-    {
-        lock (gate)
-        {
-            if (db is not null || File.Exists(FilePath))
-                throw new InvalidOperationException(
-                    "Catalog already exists; it cannot be reimported."
-                );
-            if (Candidates().Any(File.Exists))
-                throw new InvalidOperationException(
-                    "Source legacy catalog candidates exist; use normal source migration."
-                );
-            var files = AuthorityFiles();
-            var rows = new List<MigrationRow>();
-            var ids = new HashSet<string>(StringComparer.Ordinal);
-            var frozen = new Dictionary<string, byte[]>(StringComparer.Ordinal);
-            var agentsFile = Path.Combine(root, "state", "agents.json");
-            if (File.Exists(agentsFile))
-                frozen[agentsFile] = Digest(agentsFile);
-            foreach (var path in files)
-            {
-                var id = Path.GetRelativePath(AuthorityDirectory, path[..^5])
-                    .Replace(Path.DirectorySeparatorChar, '/');
-                if (!SessionIdentity.IsValid(id) || !ids.Add(id))
-                    throw new InvalidDataException("Invalid predecessor authority filename.");
-                var bytes = File.ReadAllBytes(path);
-                frozen[path] = SHA256.HashData(bytes);
-                var raw =
-                    JsonNode.Parse(bytes) as JsonObject
-                    ?? throw new InvalidDataException("Predecessor authority must be an object.");
-                if (Number(raw["sessionStateVersion"]) != 1)
-                    throw new InvalidDataException(
-                        "The predecessor import only accepts declared .NET-v1 authorities."
-                    );
-                var agent = Text(raw["agent"]) ?? SessionIdentity.Agent(id);
-                if (!agents.Exists(agent) || agent != SessionIdentity.Agent(id))
-                    throw new InvalidDataException("Predecessor Agent binding is invalid.");
-                _ = NormalizeAuthority(raw, id, agent);
-                var authority = (JsonObject)raw.DeepClone();
-                authority["id"] = id;
-                rows.Add(new(id, Project(authority)));
-            }
-            var archivePath = Path.Combine(root, "state", "archive-store.sqlite");
-            if (File.Exists(archivePath))
-            {
-                foreach (var candidate in new[] { archivePath, archivePath + "-wal" })
-                    if (
-                        File.Exists(candidate)
-                        && (candidate == archivePath || new FileInfo(candidate).Length > 0)
-                    )
-                        frozen[candidate] = Digest(candidate);
-                using var connection = new SqliteConnection(
-                    new SqliteConnectionStringBuilder
-                    {
-                        DataSource = archivePath,
-                        Mode = SqliteOpenMode.ReadOnly,
-                        Pooling = false,
-                    }.ToString()
-                );
-                connection.Open();
-                foreach (var table in new[] { "archive_messages", "archive_blocks" })
-                {
-                    if (
-                        Scalar(
-                            connection,
-                            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=$p0",
-                            table
-                        )
-                        is null
-                    )
-                        continue;
-                    using var command = Command(
-                        connection,
-                        $"SELECT DISTINCT session_id FROM {table}"
-                    );
-                    using var reader = command.ExecuteReader();
-                    while (reader.Read())
-                        if (!ids.Contains(reader.GetString(0)))
-                            throw new InvalidDataException(
-                                "Unknown predecessor Archive history has no authority evidence."
-                            );
-                }
-            }
-            // New-parent operations remain strict; import is source-tolerant stored topology.
-            PublishNew(
-                rows,
-                null,
-                () =>
-                {
-                    BeforeImportFreezeCheck?.Invoke();
-                    if (
-                        !AuthorityFiles()
-                            .Order(StringComparer.Ordinal)
-                            .SequenceEqual(files.Order(StringComparer.Ordinal))
-                    )
-                        throw new IOException(
-                            "Predecessor authority file set changed during import."
-                        );
-                    foreach (var (path, expected) in frozen)
-                        if (!File.Exists(path) || !Digest(path).SequenceEqual(expected))
-                            throw new IOException("Predecessor input changed during import.");
-                    if (File.Exists(agentsFile) != frozen.ContainsKey(agentsFile))
-                        throw new IOException("Predecessor Agent catalog changed during import.");
-                    if (File.Exists(archivePath) != frozen.ContainsKey(archivePath))
-                        throw new IOException(
-                            "Predecessor Archive file set changed during import."
-                        );
-                    // SQLite may create/remove an empty WAL during this read-only inspection.
-                    if (
-                        !frozen.ContainsKey(archivePath + "-wal")
-                        && File.Exists(archivePath + "-wal")
-                        && new FileInfo(archivePath + "-wal").Length > 0
-                    )
-                        throw new IOException("Predecessor Archive WAL changed during import.");
-                }
-            );
-            Open();
-            return rows.Count;
-        }
-    }
-}
-
-/// <summary>Explicit one-shot compatibility entry point; normal startup never calls it.</summary>
-public static class SessionCatalogImport
-{
-    public static int ImportPreCatalogDotNetV1(string root, string workspace)
-    {
-        root = Path.GetFullPath(root);
-        workspace = Path.GetFullPath(workspace);
-        if (!Directory.Exists(root) || !Directory.Exists(workspace))
-            throw new ArgumentException(
-                "Import needs existing data and tool-workspace directories."
-            );
-        using var catalog = new SessionCatalog(root);
-        return catalog.ImportDotNetV1(new AgentCatalog(root, workspace));
-    }
 }

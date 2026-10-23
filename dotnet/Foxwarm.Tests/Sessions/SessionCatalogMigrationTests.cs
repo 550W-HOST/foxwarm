@@ -129,30 +129,27 @@ public sealed class SessionCatalogMigrationTests
     }
 
     [Fact]
-    public async Task Explicit_predecessor_import_is_once_only_and_normal_serve_cannot_infer_missing_membership()
+    public async Task Missing_catalog_cannot_be_reconstructed_from_authority_files()
+    {
+        using var temp = new TempDirectory();
+        await Authority(temp.Path, "one");
+        using var catalog = new SessionCatalog(temp.Path);
+        Assert.Throws<InvalidDataException>(catalog.Initialize);
+        Assert.False(File.Exists(catalog.FilePath));
+    }
+
+    [Fact]
+    public async Task Catalog_membership_does_not_admit_orphan_files_or_replace_a_missing_authority()
     {
         using var temp = new TempDirectory();
         var root = Path.Combine(temp.Path, "data");
         var work = Path.Combine(temp.Path, "work");
         Directory.CreateDirectory(work);
         await Authority(root, "one");
-        var path = Path.Combine(root, "state", "sessions", "one.json");
-        var raw = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
-        raw["archived"] = true;
-        raw["pinned"] = true;
-        raw["sidebarOrder"] = 3;
-        await File.WriteAllTextAsync(path, raw.ToJsonString());
-        using (var normal = new SessionCatalog(root))
-            Assert.Throws<InvalidDataException>(normal.Initialize);
-        Assert.Equal(1, SessionCatalogImport.ImportPreCatalogDotNetV1(root, work));
-        Assert.Throws<InvalidOperationException>(() =>
-            SessionCatalogImport.ImportPreCatalogDotNetV1(root, work)
-        );
+        await WriteCandidate(root, "one");
         using var catalog = new SessionCatalog(root);
         catalog.Initialize();
-        Assert.True(catalog.Get("one")!["archived"]!.GetValue<bool>());
-        Assert.True(catalog.Get("one")!["pinned"]!.GetValue<bool>());
-        Assert.False(File.Exists(Path.Combine(root, "state", "sessions.json")));
+        var path = Path.Combine(root, "state", "sessions", "one.json");
         // Catalog membership now proves retained IDs versus expected authority; it is not rebuilt from files.
         await Authority(root, "orphan");
         Assert.Equal("missing", catalog.Resolve("orphan")["kind"]!.GetValue<string>());
