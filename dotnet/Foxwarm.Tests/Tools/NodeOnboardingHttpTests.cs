@@ -92,8 +92,14 @@ public sealed class NodeOnboardingHttpTests
         var expected = $"http://YOUR_MASTER:{fixture.Admin.BaseAddress!.Port}";
         Assert.NotEqual(0, fixture.Admin.BaseAddress.Port);
         Assert.Equal(expected, SessionWait.Text(info["baseUrl"]));
-        Assert.Contains(expected + "/node/run.sh", SessionWait.Text(info["commands"]?["bareMetal"]));
-        Assert.All(info["endpoints"]!.AsArray(), endpoint => Assert.StartsWith(expected + "/node/", endpoint!.GetValue<string>()));
+        Assert.Contains(
+            expected + "/node/run.sh",
+            SessionWait.Text(info["commands"]?["bareMetal"])
+        );
+        Assert.All(
+            info["endpoints"]!.AsArray(),
+            endpoint => Assert.StartsWith(expected + "/node/", endpoint!.GetValue<string>())
+        );
     }
 
     [Fact]

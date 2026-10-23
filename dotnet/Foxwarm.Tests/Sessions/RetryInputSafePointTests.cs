@@ -207,15 +207,36 @@ public sealed class RetryInputSafePointTests
                     .ToJsonString()
             );
             Assert.Null(f.Owner.Entry.LastBackgroundProcessorFailure);
-            var journal = await f.Manager.Journal.ListAsync(f.Owner.Id, "normal-turn", null, null, 10);
+            var journal = await f.Manager.Journal.ListAsync(
+                f.Owner.Id,
+                "normal-turn",
+                null,
+                null,
+                10
+            );
             Assert.Equal(3, journal.Count);
-            Assert.Equal(0, journal.Single(row => SessionWait.Text(row!["requestId"]) == initialIdentity)!["iteration"]!.GetValue<int>());
-            var answers = state.History.Materialize().Where(row =>
-                row["role"]?.GetValue<string>() == "model" && row["modelVisible"]?.GetValue<bool>() != false
-            ).ToArray();
-            Assert.Equal(new[] { 0, 1 }, answers.Select(answer =>
-                journal.Single(row => SessionWait.Text(row!["requestId"]) == SessionWait.Text(answer["__meta"]?["llmRequestId"]))!["iteration"]!.GetValue<int>()
-            ));
+            Assert.Equal(
+                0,
+                journal.Single(row => SessionWait.Text(row!["requestId"]) == initialIdentity)![
+                    "iteration"
+                ]!.GetValue<int>()
+            );
+            var answers = state
+                .History.Materialize()
+                .Where(row =>
+                    row["role"]?.GetValue<string>() == "model"
+                    && row["modelVisible"]?.GetValue<bool>() != false
+                )
+                .ToArray();
+            Assert.Equal(
+                new[] { 0, 1 },
+                answers.Select(answer =>
+                    journal.Single(row =>
+                        SessionWait.Text(row!["requestId"])
+                        == SessionWait.Text(answer["__meta"]?["llmRequestId"])
+                    )!["iteration"]!.GetValue<int>()
+                )
+            );
             Assert.Equal(
                 new[] { "seed", "queued-one", "queued-two", "queued-three", "late-input" },
                 state

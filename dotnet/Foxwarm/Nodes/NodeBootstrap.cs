@@ -180,15 +180,12 @@ internal sealed class NodeBootstrap(
         result["endpoints"] = new JsonArray(
             Templates
                 .Append("source.tar.gz")
-                .Select(name =>
-                    (JsonNode?)JsonValue.Create(InstructionBaseUrl + "/node/" + name)
-                )
+                .Select(name => (JsonNode?)JsonValue.Create(InstructionBaseUrl + "/node/" + name))
                 .ToArray()
         );
-        result["instruction"] =
-            hasConfiguredUrl
-                ? "Commands use the configured public address. Check that it is reachable from the new Node."
-                : "Replace YOUR_MASTER in the command you copy with a reachable host.";
+        result["instruction"] = hasConfiguredUrl
+            ? "Commands use the configured public address. Check that it is reachable from the new Node."
+            : "Replace YOUR_MASTER in the command you copy with a reachable host.";
         return result;
     }
 
