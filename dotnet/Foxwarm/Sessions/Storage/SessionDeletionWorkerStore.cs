@@ -160,76 +160,7 @@ internal sealed class SessionDeletionWorkerStore(string root)
             || !pendingSql.EndsWith("where applied_at is null", StringComparison.Ordinal)
         )
             throw new InvalidDataException("Worker pending index is unsupported.");
-        if (
-            Scalar(
-                db,
-                """
-SELECT session_id FROM session_worker_ownership WHERE generation < 0 OR mailbox_cursor < 0 OR last_activity_at < 0 OR updated_at < 0 OR
-(state='inactive' AND (incarnation_id IS NOT NULL OR worker_pid IS NOT NULL OR process_identity IS NOT NULL OR activated_at IS NOT NULL)) OR
-(state='candidate' AND (incarnation_id IS NULL OR activated_at IS NOT NULL OR ((worker_pid IS NULL) != (process_identity IS NULL)))) OR
-(state='ready' AND (incarnation_id IS NULL OR worker_pid IS NULL OR process_identity IS NULL OR activated_at IS NULL)) OR
-(state='draining' AND (incarnation_id IS NULL OR ((process_identity IS NULL) != (activated_at IS NULL)) OR (process_identity IS NOT NULL AND worker_pid IS NULL))) LIMIT 1
-"""
-            )
-            is not null
-        )
-            throw new InvalidDataException("Worker ownership evidence is invalid.");
-        if (
-            Scalar(
-                db,
-                """
-SELECT m.id FROM session_worker_mailbox m LEFT JOIN session_worker_ownership o ON o.session_id=m.session_id WHERE
-(m.applied_at IS NOT NULL AND o.session_id IS NULL) OR m.created_at < 0 OR
-((m.applied_at IS NULL) != (m.applied_generation IS NULL)) OR ((m.applied_at IS NULL) != (m.applied_incarnation_id IS NULL)) OR
-(m.applied_at IS NOT NULL AND (m.applied_generation < 0 OR m.applied_at < m.created_at)) OR
-(m.applied_at IS NULL AND m.id <= o.mailbox_cursor) OR (m.applied_at IS NOT NULL AND m.id > o.mailbox_cursor) LIMIT 1
-"""
-            )
-            is not null
-        )
-            throw new InvalidDataException("Worker mailbox evidence is invalid.");
-        using var payloads = Command(db, "SELECT payload_json FROM session_worker_mailbox");
-        using var values = payloads.ExecuteReader();
-        while (values.Read())
-        {
-            var raw = values.GetString(0);
-            try
-            {
-                if (StableJson(System.Text.Json.Nodes.JsonNode.Parse(raw)) != raw)
-                    throw new InvalidDataException("Worker mailbox payload is not canonical.");
-            }
-            catch (Exception error)
-                when (error
-                        is System.Text.Json.JsonException
-                            or ArgumentException
-                            or InvalidOperationException
-                )
-            {
-                throw new InvalidDataException("Worker mailbox payload is invalid.", error);
-            }
-        }
     }
-
-    private static string StableJson(System.Text.Json.Nodes.JsonNode? node) =>
-        node switch
-        {
-            null => "null",
-            System.Text.Json.Nodes.JsonObject map => "{"
-                + string.Join(
-                    ",",
-                    map.OrderBy(pair => pair.Key, StringComparer.Ordinal)
-                        .Select(pair =>
-                            EcmaJson.Stringify(System.Text.Json.Nodes.JsonValue.Create(pair.Key)!)
-                            + ":"
-                            + StableJson(pair.Value)
-                        )
-                )
-                + "}",
-            System.Text.Json.Nodes.JsonArray array => "["
-                + string.Join(",", array.Select(StableJson))
-                + "]",
-            _ => EcmaJson.Stringify(node),
-        };
 
     private static string Normalize(string text) =>
         System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim().ToLowerInvariant();
