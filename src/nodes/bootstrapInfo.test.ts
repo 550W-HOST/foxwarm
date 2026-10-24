@@ -44,7 +44,7 @@ test('PowerShell commands inline literal addresses with explicit origin or deplo
   }
 });
 
-test('generated manual Compose commands preserve a path with shell/Compose metacharacters', async () => {
+test('generated manual Compose commands preserve a path with shell/Compose metacharacters', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-node-compose-example-'));
   try {
     const bin = path.join(root, 'bin');
@@ -63,7 +63,16 @@ test('generated manual Compose commands preserve a path with shell/Compose metac
       assert.match(envFile, /NODE_SOURCE_URL='https:\/\/example.invalid\/fox\\'base\/\$literal\/node\/source.tar.gz'/);
       assert.equal((await fs.stat(path.join(root, '.env'))).mode & 0o077, 0);
       await fs.copy(path.resolve(__dirname, '../../templates/node/docker-compose.yaml'), path.join(root, 'docker-compose.yaml'));
-      const { stdout } = await execFileAsync('docker', ['compose', 'config', '--format', 'json'], { cwd: root, timeout: 5000 });
+      const started = performance.now();
+      const { stdout } = await execFileAsync('docker', ['compose', 'config', '--format', 'json'], { cwd: root, timeout: 5000 }).catch(async error => {
+        t.diagnostic(`Compose config (${authToken ? 'direct auth' : 'pairing'}) failed after ${Math.round(performance.now() - started)} ms; deadline: 5000 ms.`);
+        // Probe only after failure: do not warm the plugin before the config under test.
+        const version = await execFileAsync('docker', ['compose', 'version'], { cwd: root, timeout: 5000 })
+          .then(result => result.stdout.trim(), failure => failure.message);
+        t.diagnostic(`Compose version after failure: ${version}`);
+        throw error;
+      });
+      t.diagnostic(`Compose config (${authToken ? 'direct auth' : 'pairing'}): ${Math.round(performance.now() - started)} ms.`);
       const service = JSON.parse(stdout).services['foxwarm-node'];
       // Compose represents a literal dollar using $$ in serialized service values.
       assert.equal(service.environment.NODE_URL.replace(/\$\$/g, '$'), url);
