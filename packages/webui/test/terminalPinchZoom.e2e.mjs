@@ -127,9 +127,11 @@ before(async () => {
   })
   const script = result.outputFiles.find(file => file.path.endsWith('.js'))?.text || ''
   const styles = result.outputFiles.find(file => file.path.endsWith('.css'))?.text || ''
+  // Unfitted control screens can grow wider than their offscreen hosts when
+  // a larger font is restored. Clip them so they cannot intercept real input.
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no"><style>${styles}\nbody{margin:0}#terminal,#control-terminal,#other-terminal{width:390px;height:700px;background:#111}#control-terminal,#other-terminal{position:absolute;left:-1000px;top:0}</style></head><body><script>if(localStorage.getItem('foxwarm.terminal.fontSize')===null)localStorage.setItem('foxwarm.terminal.fontSize','12')</script><div id="terminal"></div><div id="control-terminal"></div><div id="other-terminal"></div><script>${script}</script></body></html>`)
+    response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no"><style>${styles}\nbody{margin:0}#terminal,#control-terminal,#other-terminal{width:390px;height:700px;background:#111}#control-terminal,#other-terminal{position:absolute;left:-1000px;top:0;overflow:hidden}</style></head><body><script>if(localStorage.getItem('foxwarm.terminal.fontSize')===null)localStorage.setItem('foxwarm.terminal.fontSize','12')</script><div id="terminal"></div><div id="control-terminal"></div><div id="other-terminal"></div><script>${script}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -151,6 +153,11 @@ async function touch(type, touchPoints) {
 }
 
 async function startPinch(left, right, y = 200) {
+  const targets = await page.evaluate((points) => points.map(([x, y]) => {
+    const hit = document.elementFromPoint(x, y)
+    return { terminal: hit?.closest('#terminal,#control-terminal,#other-terminal')?.id, target: hit?.className }
+  }), [[left, y], [right, y]])
+  assert.deepEqual(targets.map(hit => hit.terminal), ['terminal', 'terminal'], `pinch must hit the active terminal: ${JSON.stringify(targets)}`)
   await touch('touchStart', [touchPoint(1, left, y), touchPoint(2, right, y)])
 }
 
