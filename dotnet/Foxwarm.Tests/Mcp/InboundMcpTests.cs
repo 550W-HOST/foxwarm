@@ -404,7 +404,7 @@ public sealed class InboundMcpTests
         );
         Assert.True(denied["isError"]!.GetValue<bool>());
         await f.PolicyAsync(
-            "version: 1\nrules:\n  - id: session\n    action: allow\n    match:\n      externalId: alpha\n      tool: {source: builtin, name: [session, get_session_messages, send_to_session]}\n"
+            "version: 1\nrules:\n  - id: session\n    action: allow\n    match:\n      externalId: alpha\n      tool: {source: builtin, name: [session, view_session, send_to_session]}\n"
         );
         var listed = Value(
             await InboundMcpFixture.CallAsync(

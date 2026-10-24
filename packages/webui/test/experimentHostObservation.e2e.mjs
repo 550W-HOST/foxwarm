@@ -86,7 +86,8 @@ try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
       const body = JSON.parse(Buffer.concat(chunks).toString())
       assert.equal(req.headers.authorization, `Bearer ${providerToken}`); assert.equal(req.url, '/responses')
-      assert(body.tools.some(tool => tool.name === 'get_session_messages'))
+      assert(body.tools.some(tool => tool.name === 'view_session'))
+      assert(!body.tools.some(tool => tool.name === 'get_session_messages'))
       const compact = body.input.filter(item => item.type === 'message').flatMap(item => item.content || []).map(part => part.text || '').findLast(item => item.includes('COMPACTION STARTED:'))
       if (compact) {
         assert(plannerTarget)
@@ -138,15 +139,15 @@ try {
   const held = signal(); holds.push(held)
   plans.get(target).push(async () => { await held.promise; return [text('HELD-DONE')] })
   await send(target, 'HELD-REQUEST'); await until(() => counts.get(target) === 1, 'actual held model')
-  await turn(actor, 'LIVE-OBSERVE', [call('live-page', 'get_session_messages', { sessionId: target, count: 0 }),
-    call('live-filter', 'get_session_messages', { sessionId: target, start: 0, count: 1, contentFilter: 'ABSENT' }),
+  await turn(actor, 'LIVE-OBSERVE', [call('live-page', 'view_session', { sessionId: target, count: 0 }),
+    call('live-filter', 'view_session', { sessionId: target, start: 0, count: 1, contentFilter: 'ABSENT' }),
     call('target-status', 'session', { sessionId: target }), call('current-status', 'session', {}), call('current-list', 'session', { action: 'list', count: 1 }),
     call('all-list', 'session', { action: 'list', scope: 'all', count: 1 }),
     call('rename', 'session', { action: 'update-display-name', sessionId: target, name: '  Observed name  ' }),
     call('rename-noop', 'session', { action: 'update-display-name', sessionId: target, name: 'Observed name' })])
   const observed = await history(actor)
-  assert(value(observed, 'live-page').output.includes('requesting-model') && value(observed, 'live-page').output.includes('No messages found'))
-  assert(value(observed, 'live-filter').output.includes('requesting-model') && value(observed, 'live-filter').output.includes('No messages matched'))
+  assert(value(observed, 'live-page').output.includes('requesting-model') && value(observed, 'live-page').output.includes('Header only'))
+  assert(value(observed, 'live-filter').output.includes('requesting-model') && value(observed, 'live-filter').output.includes('No selected records matched'))
   assert(value(observed, 'current-status').output.includes('session id: `' + actor + '`'))
   assert(value(observed, 'target-status').output.includes('session id: `' + target + '`'))
   assert(value(observed, 'target-status').output.includes('requesting-model'))
@@ -164,23 +165,25 @@ try {
   const selected = await history(target); const toolIndex = selected.findIndex(row => row.parts.some(part => part.functionResponse?.tool_use_id === 'read-needle'))
   assert(toolIndex > 0 && selected.length > 10)
   await turn(actor, 'PAGES', [
-    call('default-tail', 'get_session_messages', { sessionId: target }),
-    call('negative-tail', 'get_session_messages', { sessionId: target, start: -2 }),
-    call('start-only', 'get_session_messages', { sessionId: target, start: selected.length - 2 }),
-    call('count-only', 'get_session_messages', { sessionId: target, count: 1 }),
-    call('page-filter', 'get_session_messages', { sessionId: target, start: -2, contentFilter: 'EARLY-RESOURCE' }),
-    call('tool-fold', 'get_session_messages', { sessionId: target, start: toolIndex, count: 1, contentFilter: 'hidden_tool_needle' }),
-    call('tool-snippet', 'get_session_messages', { sessionId: target, start: toolIndex, count: 1, contentFilter: 'HIDDEN_TOOL_NEEDLE', toolDetail: 'snippets', previewLength: 1000 }),
-    call('tool-full', 'get_session_messages', { sessionId: target, start: toolIndex, count: 1, toolDetail: 'full', previewLength: 1000 }),
-    call('regex-page', 'get_session_messages', { sessionId: target, start: 0, count: selected.length, includeRegex: 'follow-[56]', excludeRegex: 'follow-5', previewLength: 1000 }),
-    call('out-of-range', 'get_session_messages', { sessionId: target, start: 10000 }),
-    call('bad-regex', 'get_session_messages', { sessionId: target, includeRegex: '[' })])
+    call('default-tail', 'view_session', { sessionId: target }),
+    call('negative-tail', 'view_session', { sessionId: target, start: -2 }),
+    call('start-only', 'view_session', { sessionId: target, start: selected.length - 2 }),
+    call('count-only', 'view_session', { sessionId: target, count: 1 }),
+    call('page-filter', 'view_session', { sessionId: target, start: -2, contentFilter: 'EARLY-RESOURCE' }),
+    call('tool-fold', 'view_session', { sessionId: target, start: toolIndex, count: 1, contentFilter: 'hidden_tool_needle' }),
+    call('tool-snippet', 'view_session', { sessionId: target, start: toolIndex, count: 1, contentFilter: 'HIDDEN_TOOL_NEEDLE', toolDetail: 'snippets', previewLength: 1000 }),
+    call('tool-full', 'view_session', { sessionId: target, start: toolIndex, count: 1, toolDetail: 'full', previewLength: 1000 }),
+    call('regex-page', 'view_session', { sessionId: target, start: 0, count: selected.length, includeRegex: 'follow-[56]', excludeRegex: 'follow-5', previewLength: 1000 }),
+    call('out-of-range', 'view_session', { sessionId: target, start: 10000 }),
+    call('prose-page', 'view_session', { sessionId: target, start: toolIndex - 1, count: 1, parts: ['text'] }),
+    call('literal-archive', 'recall', { sessionId: target, text_query: 'FOLLOW-6', limit: 2, previewLength: 4000 }),
+    call('bad-regex', 'view_session', { sessionId: target, includeRegex: '[' })])
   const pages = await history(actor)
   assert(!value(pages, 'default-tail').output.includes('EARLY-RESOURCE'))
   assert(value(pages, 'negative-tail').output.includes('FOLLOW-6')); assert.equal(value(pages, 'negative-tail').output, value(pages, 'start-only').output)
-  assert(value(pages, 'count-only').output.includes('HELD-REQUEST')); assert(!value(pages, 'count-only').output.includes('HELD-DONE'))
-  assert(value(pages, 'page-filter').output.includes('No messages matched'))
-  assert(value(pages, 'tool-fold').output.includes('content omitted') && value(pages, 'tool-fold').output.includes('Matched in omitted tool'))
+  assert(value(pages, 'count-only').output.includes('FOLLOW-6')); assert(!value(pages, 'count-only').output.includes('HELD-REQUEST'))
+  assert(value(pages, 'page-filter').output.includes('No selected records matched'))
+  assert(value(pages, 'tool-fold').output.includes('Tool content folded') && value(pages, 'tool-fold').output.includes('Matched in omitted tool'))
   assert(!value(pages, 'tool-fold').output.includes('HIDDEN_TOOL_NEEDLE'))
   assert(value(pages, 'tool-snippet').output.includes('HIDDEN_TOOL_NEEDLE'))
   for (const id of ['tool-snippet', 'tool-full', 'regex-page']) {
@@ -188,17 +191,22 @@ try {
     assert(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(output), id + ' Unicode')
   }
   assert(value(pages, 'regex-page').output.includes('FOLLOW-6') && !value(pages, 'regex-page').output.includes('FOLLOW-5'))
-  assert(value(pages, 'out-of-range').output.includes('idle') && value(pages, 'out-of-range').output.includes('No messages found'))
+  assert(value(pages, 'out-of-range').output.includes('idle') && value(pages, 'out-of-range').output.includes('No eligible content'))
   assert(value(pages, 'bad-regex').error)
+  assert(value(pages, 'prose-page').output.includes('READ-SEED-DONE'))
+  assert(!value(pages, 'prose-page').output.includes('HIDDEN_TOOL_NEEDLE'))
+  assert(value(pages, 'literal-archive').output.includes('FOLLOW-6'))
+  assert(value(pages, 'literal-archive').output.includes('Examined'))
+  assert(value(pages, 'literal-archive').output.includes('Older literal search: recall('))
 
   // Waiting remains quiet; observe a real tool-active peer during an exec foreground await.
   plans.get(target).push([call('wait-target', 'wait', { waitForInput: true })]); await send(target, 'DECLARE-WAIT'); await waiting(target)
   const beforeQuiet = requests.length; await sleep(500); assert.equal(requests.length, beforeQuiet)
-  await turn(actor, 'WAIT-OBSERVE', [call('waiting-page', 'get_session_messages', { sessionId: target, count: 0 }), call('clear-name', 'session', { action: 'update-display-name', sessionId: target, name: '' })])
+  await turn(actor, 'WAIT-OBSERVE', [call('waiting-page', 'view_session', { sessionId: target, count: 0 }), call('clear-name', 'session', { action: 'update-display-name', sessionId: target, name: '' })])
   assert(value(await history(actor), 'waiting-page').output.includes('waiting (input)')); assert(value(await history(actor), 'clear-name').output.includes('to unset'))
   const execTarget = await create('executing', [[call('held-exec', 'exec', { command: 'sleep 1.5; printf EXEC-DONE', timeout: 5 })], [text('EXEC-FINISHED')]])
   await send(execTarget, 'RUN-EXEC'); await until(async () => (await session(execTarget)).runtimeState.state === 'running-tool', 'actual tool active')
-  await turn(actor, 'TOOL-OBSERVE', [call('tool-active-page', 'get_session_messages', { sessionId: execTarget, count: 0 })])
+  await turn(actor, 'TOOL-OBSERVE', [call('tool-active-page', 'view_session', { sessionId: execTarget, count: 0 })])
   assert(value(await history(actor), 'tool-active-page').output.includes('running-tool')); await final(execTarget, 'EXEC-FINISHED')
 
   // Real active-history rewrites preserve Archive-backed observations and restart without model work.
@@ -219,7 +227,7 @@ try {
   await stopHost(); host = await startHost(); secondPid = host.child.pid; assert.notEqual(firstPid, secondPid)
   assert.deepEqual(await history(target), compacted)
   assert.equal(requests.length, requestsBeforeRestart, 'cold restart does not start an idle observation target')
-  await turn(actor, 'OBSERVE-RESTORED', [call('restored-page', 'get_session_messages', { sessionId: target, count: 0 })])
+  await turn(actor, 'OBSERVE-RESTORED', [call('restored-page', 'view_session', { sessionId: target, count: 0 })])
   assert(value(await history(actor), 'restored-page').output.includes('idle'))
   assert.equal(errors.length, 0, errors.join('\n'))
   const archiveCount = Number(execFileSync('python3', ['-c', 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("select count(*) from archive_messages").fetchone()[0])', join(dataRoot, 'state', 'archive-store.sqlite')], { encoding: 'utf8' }))

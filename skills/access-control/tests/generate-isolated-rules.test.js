@@ -140,7 +140,7 @@ test('Session defaults and canonical relationships retain parent reports but rej
   assert.equal(decision('get_archived_messages', {}), 'allow');
   assert.equal(decision('get_archived_blocks', { sessionId: 'reviewer/sibling' }), 'allow');
   assert.equal(decision('get_archived_blocks', { sessionId: 'other/child' }), 'deny');
-  assert.equal(decision('get_session_messages', { sessionId: caller.id }), 'deny');
+  assert.equal(decision('view_session', { sessionId: caller.id }), 'deny');
   assert.equal(decision('recall', { sessionId: 'reviewer/sibling', target: 'overview' }), 'allow');
   assert.equal(decision('recall', { vector_query: 'context' }), 'deny');
   assert.equal(decision('recall', { vector_query: 'context', scope: 'current-session' }), 'allow');

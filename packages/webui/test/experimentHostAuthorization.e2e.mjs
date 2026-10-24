@@ -136,7 +136,7 @@ try {
   await run(current, 'isolated', [tool('isolated-exec', 'exec', { command: 'touch forbidden-isolated-exec' }), invoke('isolated-neutral-exec', 'node:master/exec', { command: 'touch forbidden-isolated-exec' }),
     tool('isolated-management', 'create_agent', { agentName: 'forbidden-agent' }), tool('isolated-own-read', 'read', { filePath: 'after-invalid' }),
     tool('isolated-foreign-read', 'read', { filePath: join(fixture.data, 'agents/other', 'foreign') }), tool('isolated-list', 'session', { action: 'list' }), tool('isolated-status', 'session', { action: 'status' }),
-    tool('isolated-skill', 'skill', { action: 'list', agentName: 'other' }), tool('isolated-recall', 'recall', { sessionId: 'other/main' }), tool('isolated-history', 'get_session_messages', { sessionId: current })])
+    tool('isolated-skill', 'skill', { action: 'list', agentName: 'other' }), tool('isolated-recall', 'recall', { sessionId: 'other/main' }), tool('isolated-history', 'view_session', { sessionId: current })])
   for (const call of ['isolated-exec', 'isolated-neutral-exec', 'isolated-management', 'isolated-foreign-read', 'isolated-list', 'isolated-skill', 'isolated-recall', 'isolated-history']) assert.equal((await paired(current, call)).error.type, 'tool_authorization_denied')
   assert(!(await paired(current, 'isolated-own-read')).error); assert(!(await paired(current, 'isolated-status')).error)
   assert(!await exists(join(own, 'forbidden-isolated-exec'))); assert(!await exists(join(fixture.data, 'agents/forbidden-agent')))

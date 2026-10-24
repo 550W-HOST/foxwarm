@@ -804,7 +804,7 @@ internal sealed partial class SessionToolExecutor(
                 "skill",
                 "set_agent_inherit",
                 "session",
-                "get_session_messages",
+                "view_session",
                 "set_session_child_model",
                 "set_session_compact_threshold",
                 "compact_session",

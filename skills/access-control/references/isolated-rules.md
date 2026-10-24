@@ -42,7 +42,7 @@ Each Agent receives its own allow rules followed by a deny-all for that caller. 
 | File delivery | Current Session attachments only, using the tool's default target or canonical self/alias. `channelTargetId` must be absent. File paths must be own-Agent on master, or use the declared Node. |
 | Image save/crop | Save to own-Agent master paths or the declared Node; crop existing Session images. |
 | Session messaging | Direct parent or child, including cross-Agent delegation reports. Siblings are not included, even within the same Agent. Self-send remains rejected by the handler. |
-| Archive reads | Registered archive tools and non-vector `recall` target same-Agent Sessions, including default self. No `get_session_messages` grant. |
+| Archive reads | Registered archive tools and non-vector `recall` target same-Agent Sessions, including default self. No `view_session` grant. |
 | Vector recall | Canonical self only; an omitted `sessionId` requires `scope: current-session`. Explicit self/alias already selects Session scope. `agentName` is absent or exactly the caller Agent. |
 | Session status | `sessionId` absent, with `action` absent or exactly `status`. No list, display-name change, or parent change. |
 | Skills | Exactly `action: list` or `load`; `agentName` absent or exactly the caller Agent. Inherited/global skill discovery still uses the normal skill resolver. |

@@ -83,39 +83,21 @@ internal static class ObservationToolDefinitions
                 }
             ),
             Definition(
-                "get_session_messages",
-                "Review a Session's live context (its current message list, not archived history) to recover context, check evidence, or investigate a specific issue. Returns a page of messages and the current execution state. For delegated work, normally use completion reports or wait rather than repeatedly reading progress. With neither start nor count, returns the latest 10 messages. Filters apply to the selected page. To open a message referenced as `msg#N` (the archived sequence), use `recall`.",
+                "view_session",
+                "Read a Session's current conversation and execution state. Defaults to the latest 10 visible records, with tools summarized by name and count. Use parts to select content and the returned older-page call to continue reading. Use recall for archived originals.",
                 new JsonObject
                 {
                     ["sessionId"] = Field("string", "Session to read."),
-                    ["start"] = Field(
-                        "number",
-                        "Zero-based offset into this Session's live context, not the archived `msg#N` sequence. Negative values count back from the end; -10 starts at the tenth-last message."
-                    ),
-                    ["count"] = Field("number", "Number of messages to retrieve."),
-                    ["previewLength"] = Field(
-                        "number",
-                        "Total character budget for the response. Omit or use 0 for the default; other values are bounded to 1,000-20,000."
-                    ),
-                    ["contentFilter"] = Field(
-                        "string",
-                        "Keep selected messages whose full text or tool content contains this text, ignoring case. Previews show the matching area when possible."
-                    ),
-                    ["includeRegex"] = Field(
-                        "string",
-                        "Keep selected messages matching this regular expression, ignoring case."
-                    ),
-                    ["excludeRegex"] = Field(
-                        "string",
-                        "Exclude selected messages matching this regular expression, ignoring case."
-                    ),
-                    ["toolDetail"] = Field(
-                        "string",
-                        "Tool display detail: names (default) shows name, ID, and status; snippets adds short excerpts; full includes arguments and results within the response budget.",
-                        "names",
-                        "snippets",
-                        "full"
-                    ),
+                    ["start"] = Field("number", "Active-history index to read forward from. Negative values count from the end. Omit start and before to read the newest page; do not combine them."),
+                    ["before"] = Field("number", "Exclusive active-history index to read backward from. Use the value returned for the older page; do not combine with start."),
+                    ["count"] = Field("number", "Maximum visible source records to select after applying parts. Defaults to 10; 0 returns only the header and execution state. Text filters can leave fewer matches."),
+                    ["historyVersion"] = Field("number", "History version returned by an earlier view. Supply with start or before to detect a structurally changed range."),
+                    ["parts"] = new JsonObject { ["type"] = "array", ["description"] = "Content to show: text, tools, or images. Defaults to all three. Hiding tools preserves commentary in mixed messages; text and images belonging to tool results stay with tools.", ["items"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("text", "tools", "images") } },
+                    ["previewLength"] = Field("number", "Total character budget for the response. Omit or use 0 for the default; other values are bounded to 1,000–20,000."),
+                    ["contentFilter"] = Field("string", "Keep selected records containing this literal text, ignoring case. Searches the included content of the selected page, not the entire history."),
+                    ["includeRegex"] = Field("string", "Keep selected records whose included content matches this regular expression, ignoring case."),
+                    ["excludeRegex"] = Field("string", "Exclude selected records whose included content matches this regular expression, ignoring case."),
+                    ["toolDetail"] = Field("string", "Tool display detail: names (default) groups names and counts; snippets adds short argument/result excerpts; full expands them within the response budget.", "names", "snippets", "full"),
                 },
                 "sessionId"
             ),

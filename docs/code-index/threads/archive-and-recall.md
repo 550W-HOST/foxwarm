@@ -2,7 +2,7 @@
 
 ## Overview
 
-Owns durable raw-message and block archives, lineage, the optional Vector derived layer, exact and semantic recall, and read-only WebUI history inspection. Archive rows are immutable recall, audit, and lineage sources; they never reconstruct active history, which is owned by the parent [thread](./context-compaction-and-recall.md#d-context-active-history-authority). Planning and commit behavior are in [context compaction](./context-compaction.md).
+Owns durable raw-message and block archives, lineage, the optional Vector derived layer, exact/literal/semantic recall, and read-only WebUI history inspection. Archive rows are immutable recall, audit, and lineage sources; they never reconstruct active history, which is owned by the parent [thread](./context-compaction-and-recall.md#d-context-active-history-authority). Planning and commit behavior are in [context compaction](./context-compaction.md).
 
 ## Archive storage and lineage
 
@@ -31,7 +31,7 @@ Owns durable raw-message and block archives, lineage, the optional Vector derive
 - Recent current-Session rows remain available in live history while persistent Dense/FTS recall is intentionally eventually consistent. Ordinary semantic recall performs no checkpoint/deadline status lookup and emits no model-facing lag notice; checkpoint and maximum-latency status remain diagnostic/indexing APIs only. Phase2A is limited to disabled/unconfigured, unready/rebuilding, startup-backfilling, or query-error bootstrap paths. Priority notices from selected source windows and an exact empty-result sentence or meaningful item body are reserved before lower-priority title text; long query/title text clips first. `previewLength` bounds emitted JavaScript string length (UTF-16 code units), while every new budget clamp retains whole grapheme segments and never emits lone surrogates.
 - `previewLength` is one total output budget, clamped to 1,000–20,000. Tool details are folded unless explicitly expanded.
 - Filtering notices remain visible when every item is excluded or the preview is truncated.
-- `get_session_messages` uses the same preview renderer and filter vocabulary for selected session-history messages.
+- `view_session` uses the shared preview renderer for current eligible source records; its structural-before-count and selected-page filter contract is owned by [conversation and history](../behaviors/conversation-and-history.md#search-recall-and-statistics). Bounded `recall.text_query` Archive lookup is independent of Vector; its native page/continuation mechanics live in [Archive recall](../units/session-compaction.md#recall-and-lineage-contract).
 - Explicit session-message and recalled raw-message previews mark `modelVisible:false` rows as `[non-context]` and render their stored content under the same filters, tool folding, and total preview budget. This inspection boundary does not make those rows model-visible or add them to semantic indexing.
 
 ## WebUI expansion
@@ -71,7 +71,7 @@ The sole malformed-line recovery exception is migration-only and evidence-bound:
 
 ### D-context-recall-vocabulary
 
-Exact selection (`target`), semantic location (`vector_query`), and literal post-filtering (`contentFilter`) are separate inputs. The preview renderer owns output budgets, regex filters, tool folding, and exclusion notices.
+Exact selection (`target`), bounded one-Session literal lookup (`text_query`), semantic location (`vector_query`), and selected-result literal post-filtering (`contentFilter`) are separate inputs. The preview renderer owns output budgets, regex filters, tool folding, and exclusion notices.
 
 ### D-context-source-backed-recall
 

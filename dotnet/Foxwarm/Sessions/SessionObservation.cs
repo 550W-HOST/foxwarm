@@ -3,43 +3,61 @@ using Foxwarm.Models;
 
 namespace Foxwarm.Sessions;
 
-internal sealed record SessionMessagePage(
-    double Start,
-    int Total,
-    long HistoryVersion,
-    JsonObject Runtime,
-    JsonObject[] Messages
+internal sealed record SessionViewPage(
+    int Begin, int End, int Total, int Count, long HistoryVersion,
+    JsonObject Runtime, (int Index, JsonObject Message)[] Messages, bool Stale = false
 );
 
 internal sealed partial class SessionOwner
 {
-    internal SessionMessagePage MessagePage(double? start, double? count) =>
+    internal SessionViewPage ViewPage(JsonObject args, ContextPreviewRenderer renderer) =>
         Entry.WithState(state =>
         {
             var total = state.History.Count;
-            var actualStart = start ?? (count is null ? Math.Max(0, total - 10) : 0);
-            var actualCount = count ?? (start is null ? 10 : total - actualStart);
-            if (actualStart < 0)
-                actualStart = Math.Max(0, total + actualStart);
-            actualStart = Math.Clamp(actualStart, 0, total);
-            actualCount = Math.Min(actualCount, total - actualStart);
-            var begin = (int)Math.Truncate(actualStart);
-            var rawEnd = actualStart + actualCount;
-            var end = (int)
-                Math.Truncate(rawEnd < 0 ? Math.Max(0, total + rawEnd) : Math.Min(total, rawEnd));
-            var rows = state
-                .History.Skip(begin)
-                .Take(Math.Max(0, end - begin))
-                .Select(row => row.ToJson())
-                .ToArray();
-            var metadata = Metadata();
-            return new SessionMessagePage(
-                actualStart,
-                total,
-                state.HistoryVersion,
-                RuntimeSnapshot(metadata),
-                rows
-            );
+            static int? Integer(JsonObject args, string name, int min, int max)
+            {
+                if (!args.ContainsKey(name))
+                    return null;
+                if (SessionWait.Number(args[name]) is not { } value || !double.IsFinite(value)
+                    || value != Math.Truncate(value) || value < min || value > max)
+                    throw new InvalidDataException(name + " must be an integer in [" + min + "," + max + "].");
+                return (int)value;
+            }
+            var start = Integer(args, "start", int.MinValue, int.MaxValue);
+            var before = Integer(args, "before", 0, int.MaxValue);
+            var count = Integer(args, "count", 0, 100) ?? 10;
+            if (start.HasValue && before.HasValue)
+                throw new InvalidDataException("start and before cannot be combined.");
+            if (args.ContainsKey("historyVersion"))
+            {
+                if (SessionWait.Number(args["historyVersion"]) is not { } version
+                    || !double.IsFinite(version) || version < 0 || version > 9007199254740991L
+                    || version != Math.Truncate(version))
+                    throw new InvalidDataException("historyVersion must be a nonnegative safe integer.");
+                if ((start.HasValue || before.HasValue) && version != state.HistoryVersion)
+                    return new SessionViewPage(0, 0, total, count, state.HistoryVersion,
+                        RuntimeSnapshot(Metadata()), [], Stale: true);
+            }
+            var forward = start.HasValue;
+            var boundary = forward ? (int)Math.Clamp(start!.Value < 0 ? (long)total + start.Value : start.Value, 0, total)
+                : Math.Min(before ?? total, total);
+            var index = forward ? boundary : boundary - 1;
+            var begin = boundary;
+            var end = boundary;
+            var rows = new List<(int Index, JsonObject Message)>();
+            while (rows.Count < count && index >= 0 && index < total)
+            {
+                begin = Math.Min(begin, index);
+                end = Math.Max(end, index + 1);
+                var row = state.History[index].ToJson();
+                if (renderer.Eligible(row))
+                    rows.Add((index, row));
+                index += forward ? 1 : -1;
+            }
+            if (!forward)
+                rows.Reverse();
+            return new SessionViewPage(begin, end, total, count, state.HistoryVersion,
+                RuntimeSnapshot(Metadata()), rows.ToArray());
         });
 
     internal (int Estimate, JsonObject? Usage, long? Threshold, int Images) ContextSummary() =>
@@ -121,14 +139,17 @@ internal sealed partial class SessionManager
 {
     internal async Task<JsonObject> ObserveAsync(SessionOwner source, string name, JsonObject args)
     {
-        if (name == "get_session_messages")
+        if (name == "view_session")
         {
             Keys(
                 args,
                 [
                     "sessionId",
                     "start",
+                    "before",
                     "count",
+                    "historyVersion",
+                    "parts",
                     "previewLength",
                     "contentFilter",
                     "includeRegex",
@@ -148,19 +169,16 @@ internal sealed partial class SessionManager
                 semanticCaller.Value ?? CancellationToken.None,
                 target
             );
-            var page = target.MessagePage(
-                OptionalNumber(args, "start"),
-                OptionalNumber(args, "count")
-            );
-            return Output(
-                new ContextPreviewRenderer(args).Render(
-                    targetId,
-                    SessionStatus.Runtime(page.Runtime),
-                    page.Total,
-                    page.Start,
-                    page.Messages
-                )
-            );
+            var renderer = new ContextPreviewRenderer(args);
+            var page = target.ViewPage(args, renderer);
+            if (page.Stale)
+                return new JsonObject {
+                    ["error"] = "stale_history_boundary",
+                    ["historyVersion"] = page.HistoryVersion,
+                    ["output"] = "The active range changed structurally. Read a fresh page: view_session("
+                        + EcmaJson.Stringify(new JsonObject { ["sessionId"] = targetId }) + ")"
+                };
+            return Output(renderer.RenderLive(targetId, page, args));
         }
         Keys(
             args,

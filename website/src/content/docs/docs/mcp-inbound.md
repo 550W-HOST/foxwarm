@@ -108,7 +108,7 @@ Each row below describes a separate rule. Put the listed fields under `match` al
 | Run a command | `{ source: node, name: exec }` | `targetNode: worker-one` |
 | Call an outbound MCP tool | `{ source: mcp, server: configured-server, name: allowed_tool }` | No Node target |
 | List Sessions | `{ source: builtin, name: session }` | `args: { action: list }` |
-| Read a Session | `{ source: builtin, name: get_session_messages }` | `args: { sessionId: existing-session-id }` |
+| Read a Session | `{ source: builtin, name: view_session }` | `args: { sessionId: existing-session-id }` |
 | Send to a Session | `{ source: builtin, name: send_to_session }` | `args: { sessionId: existing-session-id }` |
 | List pending pairings | `{ source: builtin, name: node_pair_list }` | No Node target |
 | Approve a pairing | `{ source: builtin, name: node_pair_approve }` | `args: { nodeId: new-worker }`; no Node target |

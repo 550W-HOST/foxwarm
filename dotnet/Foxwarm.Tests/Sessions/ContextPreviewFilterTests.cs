@@ -31,12 +31,12 @@ public sealed class ContextPreviewFilterTests
         };
         var result = await fixture.Manager.ObserveAsync(
             fixture.First,
-            "get_session_messages",
+            "view_session",
             args
         );
         var output = result["output"]!.GetValue<string>();
         Assert.True(output.Length <= 1000);
-        Assert.Contains("showing 1 of 2", output);
+        Assert.Contains("1 matches from 2 selected", output);
         Assert.Equal(includesMessage, output.Contains("alpha\r\nbeta", StringComparison.Ordinal));
         Assert.Equal(
             !includesMessage,

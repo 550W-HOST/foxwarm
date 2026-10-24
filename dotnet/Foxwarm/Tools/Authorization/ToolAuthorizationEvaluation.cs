@@ -78,11 +78,17 @@ internal static class ToolAuthorizationEvaluation
 
     internal static bool ToolMatches(JsonNode? matcher, string source, string name, string? server)
     {
+        // Read old persisted selectors as the renamed builtin only. This is not a
+        // dispatch alias, and MCP/Node tools with the same name retain their identities.
+        bool Name(JsonNode? selector) =>
+            Scalar(selector, AuthorizationFact.Of(name))
+            || source == "builtin" && name == "view_session"
+                && Scalar(selector, AuthorizationFact.Of("get_session_messages"));
         if (matcher is JsonObject map)
             return Optional(map, "source", AuthorizationFact.Of(source))
                 && Optional(map, "server", AuthorizationFact.Of(server))
-                && Optional(map, "name", AuthorizationFact.Of(name));
-        return Scalar(matcher, AuthorizationFact.Of(name));
+                && (!map.ContainsKey("name") || Name(map["name"]));
+        return Name(matcher);
     }
 
     internal static bool Identity(

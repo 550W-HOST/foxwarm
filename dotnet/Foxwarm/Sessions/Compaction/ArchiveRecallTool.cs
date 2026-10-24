@@ -12,25 +12,25 @@ internal static class ArchiveRecallTool
                 {
                   "type": "function",
                   "name": "recall",
-                  "description": "Recover earlier conversation context. Use target to open a known context block or message range, or vector_query to search by meaning. Filters narrow the retrieved items; they do not change which range is opened or replace semantic search.",
+                  "description": "Read archived conversation context or find historical evidence. Use target for known message/block references, text_query for a bounded literal search in one Session without Vector, or vector_query for semantic search. Filters narrow the selected results; they do not search unselected history.",
                   "parameters": {
                     "type": "object",
                     "properties": {
                       "sessionId": {
                         "type": "string",
-                        "description": "Session for exact context lookup. Defaults to this session."
+                        "description": "Session for exact lookup or literal search. Defaults to this Session."
                       },
                       "target": {
                         "type": "string",
-                        "description": "What to open: overview (default), blocks, a block such as B#126, its raw messages with msg:B#126, or messages such as msg#10637 or msg#10637-10680. block#126 is also accepted. `msg#N` is the archived message sequence shown in logs and user references; it reads archived context and is not an offset into a Session's live context (see `get_session_messages.start`)."
+                        "description": "What to open: overview (default), blocks, B#126, msg:B#126, or msg#10637-10680. block#126 is also accepted. Message numbers are Archive sequences, not active-history indices. Omit when using text_query or vector_query."
                       },
                       "vector_query": {
                         "type": "string",
-                        "description": "Search earlier context by meaning and return matching messages or block summaries."
+                        "description": "Search earlier context by meaning and return matching source messages or block summaries."
                       },
                       "limit": {
                         "type": "number",
-                        "description": "Maximum semantic search results. Defaults to 5, up to 20."
+                        "description": "Maximum search results. Defaults to 5, up to 20."
                       },
                       "scope": {
                         "type": "string",
@@ -67,12 +67,20 @@ internal static class ArchiveRecallTool
                       },
                       "toolDetail": {
                         "type": "string",
-                        "description": "Tool display detail: names (default) shows name, ID, and status; snippets adds short excerpts; full includes arguments and results within the response budget.",
+                        "description": "Tool display detail: names (default) summarizes names, counts and errors; snippets adds short excerpts; full expands arguments and results within the response budget.",
                         "enum": [
                           "names",
                           "snippets",
                           "full"
                         ]
+                      },
+                      "text_query": {
+                        "type": "string",
+                        "description": "Literal text to find in archived messages of one Session, ignoring case. Reads a bounded range and reports its extent and older continuation. Do not combine with target or vector_query."
+                      },
+                      "beforeSeq": {
+                        "type": "number",
+                        "description": "Exclusive Archive message sequence for continuing a text_query into older messages. Omit to search from the newest messages."
                       }
                     },
                     "required": [],
@@ -149,6 +157,8 @@ internal static class ArchiveRecallTool
                 "sessionId",
                 "target",
                 "vector_query",
+                "text_query",
+                "beforeSeq",
                 "limit",
                 "scope",
                 "agentName",
@@ -171,6 +181,14 @@ internal static class ArchiveRecallTool
                 );
             if (args["sessionId"] is not null && SessionWait.Text(args["sessionId"]) is null)
                 throw new InvalidDataException("sessionId must be a string.");
+            var literalMode = args.ContainsKey("text_query");
+            if (literalMode && (args.ContainsKey("target") || args.ContainsKey("vector_query")))
+                throw new InvalidDataException("text_query cannot be combined with target or vector_query.");
+            if (!literalMode && args.ContainsKey("beforeSeq"))
+                throw new InvalidDataException("beforeSeq requires text_query.");
+            if (literalMode && (SessionWait.Text(args["text_query"]) is not string textQuery
+                || ContextPreviewRenderer.NormalizeSearch(textQuery).Length == 0))
+                throw new InvalidDataException("text_query must be a nonempty literal string.");
             var id = SessionGoal.Trim(SessionWait.Text(args["sessionId"]) ?? source.Id);
             if (id.Length == 0)
                 id = source.Id;
@@ -213,6 +231,25 @@ internal static class ArchiveRecallTool
                         maxItems: limit
                     )
                 );
+            }
+            if (literalMode)
+            {
+                // Catalog identity and read-only Archive access do not hydrate a
+                // target owner. Retained/deleted exact-target expansion stays separate.
+                var existing = manager.AuthorizationTarget(id);
+                if (existing is null)
+                    return Output($"Session `{id}` not found.");
+                await manager.AuthorizeToolAsync(source, new("recall", "builtin", "recall", args), null, cancellationToken);
+                var archive = manager.ArchiveReader(existing.Id);
+                if (archive.CanonicalSessionId != existing.Id)
+                    throw new InvalidOperationException("Archive identity changed; retry the lookup.");
+                var result = Literal(archive, existing.Id, args, cancellationToken);
+                await manager.AuthorizeToolAsync(source, new("recall", "builtin", "recall", args), null, cancellationToken);
+                var current = manager.AuthorizationTarget(id);
+                if (current?.Id != existing.Id || current.Agent != existing.Agent
+                    || archive.CanonicalSessionId != existing.Id)
+                    throw new InvalidOperationException("Archive identity changed; retry the lookup.");
+                return result;
             }
             var owner = await manager.GetExistingAsync(id, cancellationToken);
             if (owner is null)
@@ -379,6 +416,60 @@ internal static class ArchiveRecallTool
         {
             return UnsupportedTurnToolExecutor.ToolError("recall_error", error.Message);
         }
+    }
+
+    private static JsonObject Literal(SqliteArchiveMessageStore archive, string id, JsonObject args, CancellationToken token)
+    {
+        var query = ContextPreviewRenderer.NormalizeSearch(SessionWait.Text(args["text_query"])!);
+        var limit = Foxwarm.Vector.VectorRecall.Limit(args["limit"]);
+        long? before = null;
+        if (args.ContainsKey("beforeSeq"))
+        {
+            if (SessionWait.Number(args["beforeSeq"]) is not { } number
+                || !double.IsFinite(number) || number != Math.Truncate(number)
+                || number < 1 || number > 9007199254740991L)
+                throw new InvalidDataException("beforeSeq must be a positive safe integer.");
+            before = (long)number;
+        }
+        var options = (JsonObject)args.DeepClone();
+        // Reuse the existing match-centered preview, without changing the user's
+        // separate page filters or the semantic retrieval/ranking path.
+        if (!options.ContainsKey("contentFilter"))
+            options["contentFilter"] = query;
+        var renderer = new ContextPreviewRenderer(options, 1000);
+        // One native effective Archive page bounds message decoding and matching.
+        // Stop examination at the hit limit so older hits are reachable next time.
+        var candidates = archive.ReadEffectiveMessagesPage(null, before - 1, 100, descending: true);
+        var hits = new List<PreviewItem>();
+        long? newest = null;
+        long? oldest = null;
+        var scanned = 0;
+        foreach (var record in candidates)
+        {
+            token.ThrowIfCancellationRequested();
+            newest ??= record.Seq;
+            oldest = record.Seq;
+            scanned++;
+            var item = renderer.ArchivedMessage(record, id);
+            if (!ContextPreviewRenderer.NormalizeSearch(item.Search).Contains(query, StringComparison.OrdinalIgnoreCase))
+                continue;
+            hits.Add(item);
+            if (hits.Count == limit)
+                break;
+        }
+        var remaining = oldest is { } last && archive.ReadEffectiveMessagesPage(null, last - 1, 1).Count > 0;
+        var next = (JsonObject)args.DeepClone();
+        next["sessionId"] = id;
+        next["beforeSeq"] = oldest;
+        var continuation = remaining ? "Older literal search: recall(" + EcmaJson.Stringify(next) + ")"
+            : "No older messages remain in this Session's accessible Archive range.";
+        var extent = scanned == 0 ? "No messages examined in the requested range."
+            : $"Examined {scanned} archived messages at seq #{oldest}–#{newest} (newest first).";
+        return Output(renderer.RenderItems(hits,
+            $"Literal Archive lookup in Session `{id}`. {extent}",
+            matched => $"{matched} displayed match(es) from {hits.Count} literal hit(s) in this bounded range.",
+            hits.Count == 0 ? "No literal matches in the examined range." : "Literal hits were excluded by the result filters.",
+            [continuation]));
     }
 
     private static JsonObject Output(string text) => new() { ["output"] = text };

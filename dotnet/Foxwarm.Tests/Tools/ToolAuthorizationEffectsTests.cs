@@ -396,7 +396,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         await using var mcp = execution.Mcp;
         await Policy(
             manager,
-            "version: 1\ndefaultAction: deny\nrules:\n- id: children\n  action: allow\n  match: {tool: {source: builtin, name: send_to_session}, args: {sessionId: {session: {sameAgent: true, relation: child}}}}\n- id: self\n  action: allow\n  match: {tool: {source: builtin, name: recall}, args: {sessionId: {session: {self: true}}}}\n- id: history-self\n  action: allow\n  match: {tool: {source: builtin, name: get_session_messages}, args: {sessionId: {session: {self: true}}}}"
+            "version: 1\ndefaultAction: deny\nrules:\n- id: children\n  action: allow\n  match: {tool: {source: builtin, name: send_to_session}, args: {sessionId: {session: {sameAgent: true, relation: child}}}}\n- id: self\n  action: allow\n  match: {tool: {source: builtin, name: recall}, args: {sessionId: {session: {self: true}}}}\n- id: history-self\n  action: allow\n  match: {tool: {source: builtin, name: view_session}, args: {sessionId: {session: {self: true}}}}"
         );
         await manager.AuthorizeToolAsync(
             owner,
@@ -418,7 +418,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         await Assert.ThrowsAsync<ToolAuthorizationDeniedException>(() =>
             manager.AuthorizeToolAsync(
                 owner,
-                new("get_session_messages", "builtin", "get_session_messages", new()),
+                new("view_session", "builtin", "view_session", new()),
                 null,
                 CancellationToken.None
             )
@@ -556,7 +556,7 @@ public sealed partial class ToolAuthorizationEffectsTests
             Error(
                 await Call(
                     execution.Tools,
-                    "get_session_messages",
+                    "view_session",
                     Obj("""{"sessionId":"opaque"}""")
                 )
             )

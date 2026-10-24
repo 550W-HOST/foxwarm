@@ -26,6 +26,10 @@ The [Main browser boundary](./dotnet-main-browser.md#exact-isolated-agent-compat
 
 The hidden Archive message and block tools retain an independent same-Agent read guard for isolated callers, in addition to generic policy. The shared handler resolves live catalog identity and aliases first; absent live membership uses Source's requested-ID Agent fallback. It checks before reading retained Archive data, without hydrating a target owner or requiring its Node to be online. Clear/deletion retain Archive records and do not relax this boundary; an exact capability allow cannot bypass it. Nonisolated callers retain selected-target reads, and missing permitted targets remain pure empty reads.
 
+## Renamed Session observation policy identity
+
+The executable builtin is `view_session`. Persisted generic selectors naming `get_session_messages` still match the new builtin through `ToolMatches`, including scalar/list and name equals/oneOf forms. Ordered rules, argument/actor scopes and target-resolver families remain intact; MCP/Node tools with the old name retain their own identities. This read compatibility does not register an executable alias or rewrite authored automation. Exact Agent metadata reads normalize the old builtin rule identity to the new one; duplicate identities fail closed. Independent structural isolation continues to deny Session observation even with an exact allow. The stable inbound `foxwarm_session(action:read)` uses this policy identity while retaining raw start/count pagination and its response shape. Maintained scripts must call the new builtin; stored executable scripts need deliberate owner updates rather than source substitution.
+
 ## Policy selectors and authoritative facts
 
 Main path facts name physical destinations: home expansion is followed by real symlink resolution through the nearest existing ancestor before any missing suffix is appended. Path-policy expectations use filesystem evidence for a symlinked home rather than its lexical profile alias.

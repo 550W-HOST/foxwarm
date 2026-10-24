@@ -18,7 +18,8 @@ internal static class IsolatedToolCompatibility
         "create_session",
         "create_child_session",
         "delete_session",
-        "get_session_messages",
+        "view_session",
+        "get_session_messages", // Retained policy evaluation; not an executable alias.
     };
     private static readonly HashSet<string> DefaultBuiltins = new(StringComparer.Ordinal)
     {
@@ -89,6 +90,8 @@ internal static class IsolatedToolCompatibility
                         );
                     copy[key] = text;
                 }
+                if (source == "builtin" && SessionWait.Text(copy["tool"]) == "get_session_messages")
+                    copy["tool"] = "view_session";
                 var tool = SessionWait.Text(copy["tool"]);
                 if (source == "builtin" && tool is "call_tool" or "update_session_snapshot")
                     throw new InvalidDataException(

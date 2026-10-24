@@ -284,7 +284,8 @@ internal static class VectorRecall
                                 .Select(message => message.OmittedTools)
                                 .Where(text => !string.IsNullOrEmpty(text))
                         ),
-                        window.Notices
+                        window.Notices,
+                        DrillDown: ContextPreviewRenderer.ArchiveDrill(readId, $"msg#{window.FirstSeq}-{window.LastSeq}")
                     );
                     source = new()
                     {

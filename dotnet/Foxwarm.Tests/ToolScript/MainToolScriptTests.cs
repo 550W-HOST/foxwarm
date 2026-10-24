@@ -45,6 +45,7 @@ public sealed class MainToolScriptTests
                 f.Owner.Registry.TriggerOverride = _ => Task.CompletedTask;
                 f.mcp = new(f.Data);
                 var definitions = WorkspaceTools.Definitions();
+                definitions.Add(ArchiveRecallTool.Definition());
                 foreach (var item in FileDeliveryDefinitions.Definitions())
                     definitions.Add(item?.DeepClone());
                 foreach (var item in KnowledgeToolDefinitions.Definitions())

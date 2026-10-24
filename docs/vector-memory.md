@@ -63,7 +63,7 @@ Before Vector placement, reset/rollback repairs every existing recoverable lexic
 With Vector disabled:
 
 - archive writes and compaction remain fully functional;
-- exact `recall.target` and `get_session_messages` continue to read SQLite;
+- exact `recall.target` and bounded `recall.text_query` read the Archive without Vector; `view_session` reads current live history;
 - semantic `recall.vector_query` and direct semantic/index operations report that Vector is disabled;
 - LanceDB, embeddings, vector maintenance, startup vector backfill, and the optional vector worker are not started;
 - best-effort indexing hooks become quiet no-ops.

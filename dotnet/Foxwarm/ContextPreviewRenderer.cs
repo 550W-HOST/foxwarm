@@ -9,6 +9,7 @@ internal sealed partial class ContextPreviewRenderer
 {
     private readonly int budget;
     private readonly string detail;
+    private readonly HashSet<string> parts;
     private readonly string? literal;
     private readonly Regex? include;
     private readonly Regex? exclude;
@@ -18,6 +19,14 @@ internal sealed partial class ContextPreviewRenderer
 
     internal ContextPreviewRenderer(JsonObject options, int defaultBudget = 6000)
     {
+        parts = new HashSet<string>(["text", "tools", "images"], StringComparer.Ordinal);
+        if (options.ContainsKey("parts"))
+        {
+            if (options["parts"] is not JsonArray values
+                || values.Any(value => SessionWait.Text(value) is not ("text" or "tools" or "images")))
+                throw new InvalidDataException("parts must be an array of text, tools, or images.");
+            parts = values.Select(value => SessionWait.Text(value)!).ToHashSet(StringComparer.Ordinal);
+        }
         var requested = SessionWait.Number(options["previewLength"]);
         if (options["previewLength"] is not null && requested is null)
             throw new InvalidDataException("previewLength must be a number when provided.");
@@ -116,7 +125,7 @@ internal sealed partial class ContextPreviewRenderer
             + (end < text.Length ? "…" : "");
     }
 
-    private static string NormalizeSearch(string text) =>
+    internal static string NormalizeSearch(string text) =>
         SessionGoal.Trim(text.Replace("\r\n", "\n", StringComparison.Ordinal));
 
     private static string SearchText(PreviewItem item) =>
@@ -130,40 +139,33 @@ internal sealed partial class ContextPreviewRenderer
             && (exclude is null || !exclude.IsMatch(search));
     }
 
-    private string RenderItem(PreviewItem item, int max)
+    private string? RenderItem(PreviewItem item, int max)
     {
         var prefix = item.Heading + "\n";
-        var usable = Math.Max(80, max - prefix.Length);
-        var body =
-            item.Body.Length <= usable ? item.Body
-            : Active ? Snippet(item.Body, usable)
-            : Clip(item.Body, usable);
-        if (Active && !string.IsNullOrEmpty(item.OmittedTools) && Matches(item.OmittedTools))
+        var folded = detail != "full" && !string.IsNullOrEmpty(item.OmittedTools);
+        var toolMatch = Active && folded && Matches(item.OmittedTools!);
+        string Notice(bool truncated)
         {
-            const string note =
-                "[Matched in omitted tool call/result content; rerun with toolDetail:\"snippets\" or \"full\" to inspect.]";
-            body =
-                body.Length + note.Length + 1 <= usable
-                    ? body + "\n" + note
-                    : Snippet(body, Math.Max(40, usable - note.Length - 1)) + "\n" + note;
+            if (!truncated && !folded)
+                return "";
+            return "[" + (truncated ? "Truncated preview. " : "Tool content folded. ")
+                + (toolMatch ? "Matched in omitted tool call/result content. " : "")
+                + (item.DrillDown is { Length: > 0 } drill ? "Archive original: " + drill
+                    : "Narrow the range or increase previewLength/toolDetail.") + "]";
         }
-        if (Active)
+        var note = Notice(false);
+        var usable = max - prefix.Length - (note.Length > 0 ? note.Length + 1 : 0);
+        var truncated = item.Body.Length > usable;
+        if (truncated)
         {
-            var count = 0;
-            foreach (var regex in new[] { literalRegex, include }.Where(regex => regex is not null))
-            {
-                foreach (Match _ in regex!.Matches(item.Search))
-                {
-                    if (++count > 4)
-                        break;
-                }
-                if (count > 4)
-                    break;
-            }
-            if (count > 1 && body.Length + 48 < usable)
-                body += $"\n[{count - 1} more match(es) may be omitted by preview budget]";
+            note = Notice(true);
+            usable = max - prefix.Length - note.Length - 1;
         }
-        return prefix + body;
+        // Never cut a recovery call or present a budget excerpt as the full body.
+        if (usable < Math.Min(20, item.Body.Length))
+            return null;
+        var body = truncated ? (Active ? Snippet(item.Body, usable) : Clip(item.Body, usable)) : item.Body;
+        return prefix + body + (note.Length > 0 ? "\n" + note : "");
     }
 
     internal string Render(
@@ -174,7 +176,7 @@ internal sealed partial class ContextPreviewRenderer
         IReadOnlyList<JsonObject> messages
     )
     {
-        var items = messages.Select((message, index) => Item(message, start + index)).ToArray();
+        var items = messages.Select((message, index) => Item(message, (int)start + index, sessionId)).ToArray();
         return RenderItems(
             items,
             runtime,
@@ -196,20 +198,39 @@ internal sealed partial class ContextPreviewRenderer
 
     internal PreviewItem ArchivedMessage(ArchiveMessageRecord record, string? ownerId = null)
     {
-        var item = Item(record.Message, record.Seq);
-        var source =
-            ownerId is not null && ownerId != record.SessionId
-                ? "[inherited: " + record.SessionId + "]"
-                : "[local]";
+        var item = Item(record.Message, sessionId: ownerId ?? record.SessionId);
+        var source = ownerId is not null && ownerId != record.SessionId
+            ? "[inherited: " + record.SessionId + "]" : "[local]";
         return item with
         {
-            Heading = item.Heading.Replace(
-                $"[{record.Seq}]",
-                $"[#{record.Seq} time {DateTimeOffset.FromUnixTimeMilliseconds((long)record.Timestamp):O}] "
-                    + source,
-                StringComparison.Ordinal
-            ),
+            Heading = $"[#{record.Seq}{Time(record.Timestamp)}] "
+                + source + " " + Text(record.Message["role"]) + ":",
+            SourceIndex = record.Seq,
+            ArchiveSession = ownerId ?? record.SessionId,
+            Sequence = record.Seq, EndSequence = record.Seq,
+            DrillDown = ArchiveDrill(ownerId ?? record.SessionId, "msg#" + record.Seq)
         };
+    }
+
+    internal string RenderLive(string sessionId, SessionViewPage page, JsonObject options)
+    {
+        var items = page.Messages.Select(row => Item(row.Message, row.Index, sessionId)).ToArray();
+        var older = (JsonObject)options.DeepClone();
+        older["sessionId"] = sessionId;
+        older.Remove("start");
+        older["before"] = page.Begin;
+        older["count"] = page.Count;
+        older["historyVersion"] = page.HistoryVersion;
+        var navigation = page.Begin > 0 && page.Count > 0
+            ? "Older: view_session(" + EcmaJson.Stringify(older) + ")"
+            : "No older eligible page.";
+        return RenderItems(items,
+            $"Session `{sessionId}` · active indices [{page.Begin},{page.End}) of {page.Total}; historyVersion:{page.HistoryVersion}.\n"
+                + SessionStatus.Runtime(page.Runtime),
+            matched => $"{matched} matches from {items.Length} selected eligible source records.",
+            page.Count == 0 ? "Header only." : items.Length == 0 ? "No eligible content in this range."
+                : "No selected records matched these page filters; older history was not searched.",
+            [navigation]);
     }
 
     internal string RenderItems(
@@ -252,8 +273,9 @@ internal sealed partial class ContextPreviewRenderer
                 item => !exclude.IsMatch(SearchText(item)),
                 "[filter] excludeRegex excluded {count} additional item(s) that remained after earlier filter stages."
             );
-        var matched = (maxItems is { } maximum ? selected.Take(maximum) : selected).ToArray();
-        var selectionOmitted = selected.Count() - matched.Length;
+        var sourceMatches = (maxItems is { } maximum ? selected.Take(maximum) : selected).ToArray();
+        var matched = GroupTools(sourceMatches);
+        var selectionOmitted = selected.Count() - sourceMatches.Length;
         if (selectionOmitted > 0)
             notices.Add(
                 $"[selection] {selectionOmitted} additional matched item(s) omitted by the requested result limit."
@@ -263,8 +285,8 @@ internal sealed partial class ContextPreviewRenderer
             .Select(SessionGoal.Trim)
             .Where(notice => notice.Length > 0)
             .Take(4)
-            .Select(notice => Clip(notice, 560));
-        var title = titleFor(matched.Length);
+            .ToArray();
+        var title = titleFor(sourceMatches.Length);
         string Prefix(int reserveForBody)
         {
             var available = Math.Max(0, budget - reserveForBody);
@@ -281,14 +303,20 @@ internal sealed partial class ContextPreviewRenderer
                 sections.Add(bounded);
                 used += bounded.Length + separator;
             }
-            var priorityText = string.Join('\n', priority);
-            Append(
-                priorityText,
-                Math.Min(priorityText.Length, Math.Max(0, Math.Min(700, available - used)))
-            );
+            var titleReserve = Math.Min(160, title.Length) + 1;
+            Append(context, Math.Max(0, Math.Min(360, available - used - titleReserve)));
+            foreach (var notice in priority)
+            {
+                var remaining = available - used - titleReserve;
+                var action = notice.Contains("recall(", StringComparison.Ordinal)
+                    || notice.Contains("view_session(", StringComparison.Ordinal);
+                if (action && notice.Length + 1 > remaining)
+                    Append("[Navigation exceeds this preview budget; rerun with previewLength:20000 or shorter page filters.]", remaining);
+                else
+                    Append(notice, Math.Max(0, action ? remaining : Math.Min(560, remaining)));
+            }
             var medium = string.Join('\n', notices);
-            Append(medium, Math.Min(medium.Length, Math.Max(0, available - used)));
-            Append(context, Math.Max(0, Math.Min(560, available - used)));
+            Append(medium, Math.Min(medium.Length + 1, Math.Max(0, available - used - titleReserve)));
             Append(title, Math.Max(0, available - used));
             return string.Join('\n', sections);
         }
@@ -299,6 +327,16 @@ internal sealed partial class ContextPreviewRenderer
         }
         var prefix = Prefix(242);
         var output = prefix.Length > 0 ? prefix + "\n\n" : "";
+        string Omission(PreviewItem[] rows)
+        {
+            var first = rows[0];
+            var last = rows[^1];
+            var drill = first.ArchiveSession is { } session && first.Sequence is { } seq
+                && last.EndSequence is { } end && rows.All(row => row.ArchiveSession == session && row.Sequence is not null)
+                ? ArchiveDrill(session, $"msg#{Math.Min(seq, end)}-{Math.Max(seq, end)}") : first.DrillDown;
+            return $"[{rows.Length} item(s) not displayed: previewLength budget {budget}. "
+                + (drill is { Length: > 0 } ? "Omitted Archive original(s): " + drill : "Narrow the range or raise previewLength.") + "]";
+        }
         var omitted = 0;
         for (var index = 0; index < matched.Length; index++)
         {
@@ -309,14 +347,12 @@ internal sealed partial class ContextPreviewRenderer
                 omitted = remaining;
                 break;
             }
-            var reserve = remaining > 1 ? 80 : 0;
-            var itemBudget = Math.Max(160, (available - reserve) / remaining);
-            var item = RenderItem(matched[index], itemBudget);
+            var reserve = remaining > 1 ? Omission(matched[(index + 1)..]).Length + 2 : 0;
             var separator = index == 0 ? "" : "\n\n";
-            var max = budget - output.Length - separator.Length - reserve;
-            if (item.Length > max)
-                item = Active ? Snippet(item, Math.Max(60, max)) : Clip(item, Math.Max(60, max));
-            if (item.Length == 0)
+            var max = available - separator.Length - reserve;
+            var itemBudget = Math.Min(max, Math.Max(320, max / remaining));
+            var item = RenderItem(matched[index], itemBudget);
+            if (item is null)
             {
                 omitted = remaining;
                 break;
@@ -325,8 +361,7 @@ internal sealed partial class ContextPreviewRenderer
         }
         if (omitted > 0)
         {
-            var note =
-                $"\n\n[{omitted} item(s) omitted due to previewLength budget {budget}. Narrow the range/filter or raise previewLength up to 20000.]";
+            var note = "\n\n" + Omission(matched[^omitted..]);
             output = Clip(output, budget - note.Length) + note;
         }
         return Clip(output, budget).TrimEnd();

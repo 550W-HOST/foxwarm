@@ -23,7 +23,7 @@ Session context owns model-context budgeting, layered compaction and direct acti
 - Direct history compaction helpers, CTX-BLOCK formatting/rendering, and structured provenance helpers.
 - `initArchiveStore`, `hasArchivedSessionId`, `ensureSessionBranch`, effective/local archive message stats and bounded readers, `readEffectiveArchiveBlocks`, and vector checkpoint APIs.
 - `vector.search`, archive indexing/backfill APIs, and compact-fact indexing.
-- Tool-layer `recall` and `get_session_messages` retrieval/preview paths.
+- Retained TypeScript tool-layer `recall` and `get_session_messages` retrieval/preview paths. The active managed tools are mapped in [context and memory](./dotnet-context.md).
 
 ## Current defaults
 

@@ -33,7 +33,7 @@ public sealed class SessionMovedDeletionTests
             (
                 await manager.ExecuteAgentToolAsync(
                     caller,
-                    "get_session_messages",
+                    "view_session",
                     new JsonObject { ["sessionId"] = id }
                 )
             ).Response.AsObject();

@@ -4,12 +4,22 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm;
 
+internal sealed record PreviewTool(string Name, string? Id, bool Result, bool Error);
+
 internal sealed record PreviewItem(
     string Heading,
     string Body,
     string Search,
     string? OmittedTools,
-    IReadOnlyList<string>? PriorityNotices = null
+    IReadOnlyList<string>? PriorityNotices = null,
+    IReadOnlyList<PreviewTool>? Tools = null,
+    bool ToolOnly = false,
+    long? SourceIndex = null,
+    string? DrillDown = null,
+    string? UnfoldedBody = null,
+    string? ArchiveSession = null,
+    long? Sequence = null,
+    long? EndSequence = null
 );
 
 internal sealed partial class ContextPreviewRenderer
@@ -18,9 +28,6 @@ internal sealed partial class ContextPreviewRenderer
 
     private static string Unknown(JsonNode? node) =>
         node is null ? "" : SessionWait.Text(node) ?? EcmaJson.Stringify(node);
-
-    private static string Id(JsonNode? node) =>
-        Text(node).Length == 0 ? "" : "(" + Text(node) + ")";
 
     private static string Args(JsonObject call) =>
         SessionWait.Text(call["rawArgsText"])
@@ -70,120 +77,161 @@ internal sealed partial class ContextPreviewRenderer
         return "[system] " + text;
     }
 
-    private PreviewItem Item(JsonObject message, double offset)
+    internal bool Eligible(JsonObject message) => Item(message).Search.Length > 0;
+
+    internal PreviewItem Item(JsonObject message, int? sourceIndex = null, string? sessionId = null)
     {
         var body = new List<string>();
         var search = new List<string>();
         var tool = new List<string>();
-        var calls = new List<string>();
-        var responses = new List<string>();
+        var events = new List<PreviewTool>();
+        var prose = false;
+        var role = Text(message["role"]);
         foreach (var part in (message["parts"] as JsonArray)?.OfType<JsonObject>() ?? [])
         {
-            if (
-                SessionWait.Text(part["system"]) is string system
-                && SystemText(system) is string visible
-                && visible.Length > 0
-            )
+            var linked = role == "tool" || part["functionResponse"] is JsonObject;
+            var textIncluded = parts.Contains(linked ? "tools" : "text");
+            void AddText(string text)
             {
-                body.Add(visible);
-                search.Add(visible);
+                if (!textIncluded || text.Length == 0)
+                    return;
+                body.Add(text);
+                search.Add(text);
+                if (linked)
+                    tool.Add(text);
+                else
+                    prose = true;
             }
-            if (
-                SessionWait.Text(part["text"]) is string text
-                && SessionGoal.Trim(text).Length > 0
-                && !text.Contains(
-                    "--- RELEVANT MEMORY SNIPPETS (RAG) ---",
-                    StringComparison.Ordinal
-                )
-            )
-            {
-                body.Add(SessionGoal.Trim(text));
-                search.Add(SessionGoal.Trim(text));
-            }
-            if (
-                SessionWait.Text(part["thinking"]) is string thinking
-                && SessionGoal.Trim(thinking).Length > 0
-            )
-                search.Add("[thinking] " + thinking);
+            if (SessionWait.Text(part["system"]) is string system && SystemText(system) is string visible)
+                AddText(visible);
+            if (SessionWait.Text(part["text"]) is string text
+                && !text.Contains("--- RELEVANT MEMORY SNIPPETS (RAG) ---", StringComparison.Ordinal))
+                AddText(SessionGoal.Trim(text));
             var image = part["inlineDataRef"] as JsonObject ?? part["inlineData"] as JsonObject;
-            if (image is not null)
+            if (image is not null && parts.Contains(linked || part["functionCall"] is JsonObject ? "tools" : "images"))
             {
-                var line =
-                    "[image:"
-                    + (
-                        SessionWait.Text(image["mimeType"])
-                        ?? SessionWait.Text(image["mime_type"])
-                        ?? "application/octet-stream"
-                    )
-                    + "]";
-                var imageId =
-                    SessionWait.Text(image["imageId"])
+                var line = "[image:" + (SessionWait.Text(image["mimeType"])
+                    ?? SessionWait.Text(image["mime_type"]) ?? "application/octet-stream") + "]";
+                var imageId = SessionWait.Text(image["imageId"])
                     ?? SessionWait.Text((part["imageMeta"] as JsonObject)?["imageId"]);
                 if (imageId is not null)
                     line += " " + imageId;
                 body.Add(line);
                 search.Add(line);
+                if (!linked && part["functionCall"] is null)
+                    prose = true;
             }
+            if (!parts.Contains("tools"))
+                continue;
             if (part["functionCall"] is JsonObject call)
             {
-                var label = Text(call["name"]) + Id(call["id"]);
+                var name = Text(call["name"]);
                 var args = Args(call);
-                var line = $"[call:{label}] {args}";
-                tool.Add(line);
-                search.Add(line);
-                calls.Add(label);
+                var line = $"[call:{name}] {args}";
+                events.Add(new(name, SessionWait.Text(call["id"]), false, false));
+                tool.Add(name + "\n" + args);
+                search.Add(name + "\n" + args);
                 if (detail != "names")
-                    body.Add(
-                        detail == "full"
-                            ? line
-                            : $"[call:{label}] " + Snippet(args, Active ? 360 : 240)
-                    );
+                    body.Add(detail == "full" ? line : $"[call:{name}] " + Snippet(args, Active ? 360 : 240));
             }
             if (part["functionResponse"] is JsonObject response)
             {
                 var name = SessionWait.Text(response["name"]) ?? "unknown";
-                var label = name + Id(response["tool_use_id"]);
                 var content = Response(response);
-                var line = $"[tool:{label}] {content}";
-                tool.Add(line);
-                search.Add(line);
-                responses.Add(
-                    label
-                        + ": "
-                        + ((response["response"] as JsonObject)?["error"] is null ? "ok" : "error")
-                        + " (content omitted)"
-                );
+                var line = $"[tool:{name}] {content}";
+                events.Add(new(name, SessionWait.Text(response["tool_use_id"]), true,
+                    (response["response"] as JsonObject)?["error"] is not null));
+                tool.Add(name + "\n" + content);
+                search.Add(name + "\n" + content);
                 if (detail != "names")
-                    body.Add(
-                        detail == "full"
-                            ? line
-                            : $"[tool:{label}] " + Snippet(content, Active ? 420 : 260)
-                    );
+                    body.Add(detail == "full" ? line : $"[tool:{name}] " + Snippet(content, Active ? 420 : 260));
             }
         }
-        if (detail == "names")
+        var meta = message["__meta"] as JsonObject;
+        var block = meta?["contextBlock"] as JsonObject;
+        var identity = block is not null ? "CTX B#" + Unknown(block["id"])
+            : SessionWait.Number(meta?["seq"]) is { } seq ? "#" + EcmaNumber.Format(seq) : "unsequenced";
+        var time = Time(SessionWait.Number(meta?["timestamp"]));
+        var visibility = message["modelVisible"] is JsonValue flag
+            && flag.TryGetValue<bool>(out var value) && !value ? " [non-context]" : "";
+        string? drill = null;
+        if (sessionId is not null && (block is not null || SessionWait.Number(meta?["seq"]) is not null))
+            drill = ArchiveDrill(sessionId, block is not null ? "B#" + Unknown(block["id"]) : "msg#" + Unknown(meta?["seq"]));
+        var item = new PreviewItem($"[{identity}{time}] {role}{visibility}:",
+            string.Join('\n', body), string.Join('\n', search),
+            detail != "full" ? string.Join('\n', tool) : null,
+            Tools: events, ToolOnly: !prose && events.Count > 0, SourceIndex: sourceIndex, DrillDown: drill,
+            UnfoldedBody: string.Join('\n', body), ArchiveSession: sessionId,
+            Sequence: (long?)SessionWait.Number(meta?["seq"]), EndSequence: (long?)SessionWait.Number(meta?["seq"]));
+        return detail == "names" && events.Count > 0
+            ? item with { Body = JoinBody(item.Body, ToolSummary(events, events)) } : item;
+    }
+
+    internal static string Time(double? stamp) => stamp is null ? ""
+        : " time " + (stamp >= DateTimeOffset.MinValue.ToUnixTimeMilliseconds()
+            && stamp <= DateTimeOffset.MaxValue.ToUnixTimeMilliseconds()
+            ? DateTimeOffset.FromUnixTimeMilliseconds((long)stamp.Value).ToString("O")
+            : EcmaNumber.Format(stamp.Value) + " ms");
+
+    internal static string ArchiveDrill(string sessionId, string target) =>
+        "recall(" + EcmaJson.Stringify(new JsonObject {
+            ["sessionId"] = sessionId, ["target"] = target,
+            ["toolDetail"] = "full", ["previewLength"] = 20000
+        }) + ")";
+
+    private static string JoinBody(string text, string summary) =>
+        text.Length == 0 ? summary : text + "\n" + summary;
+
+    private static string ToolSummary(IReadOnlyList<PreviewTool> events, IReadOnlyList<PreviewTool> page)
+    {
+        bool Paired(PreviewTool item) => item.Id is not null
+            && page.Count(other => other.Id == item.Id && other.Name == item.Name && !other.Result) == 1
+            && page.Count(other => other.Id == item.Id && other.Name == item.Name && other.Result) == 1;
+        return "Tools: " + string.Join(" · ", events.GroupBy(item => item.Name).Select(group =>
         {
-            if (calls.Count > 0)
-                body.Add("Tool calls: " + string.Join(", ", calls));
-            if (responses.Count > 0)
-                body.Add("Tool results: " + string.Join(", ", responses));
+            var calls = group.Count(item => !item.Result);
+            var results = group.Where(item => item.Result).ToArray();
+            var unpaired = group.Count(item => !Paired(item));
+            var errors = results.Count(item => item.Error);
+            return group.Key + (calls > 0 ? " ×" + calls : " results")
+                + (errors > 0 ? $" ({errors} error(s))" : "")
+                + (unpaired > 0 ? $" ({unpaired} partial/unpaired)" : "");
+        }));
+    }
+
+    private PreviewItem[] GroupTools(PreviewItem[] items)
+    {
+        if (detail != "names")
+            return items;
+        var page = items.SelectMany(item => item.Tools ?? []).ToArray();
+        var groups = new List<PreviewItem>();
+        for (var index = 0; index < items.Length; index++)
+        {
+            var item = items[index];
+            if (!item.ToolOnly)
+            {
+                groups.Add(item.Tools is { Count: > 0 } mixedTools
+                    ? item with { Body = JoinBody(item.UnfoldedBody ?? "", ToolSummary(mixedTools, page)) }
+                    : item);
+                continue;
+            }
+            var end = index;
+            while (end + 1 < items.Length && items[end + 1].ToolOnly
+                && items[end].SourceIndex is { } previous && items[end + 1].SourceIndex == previous + 1)
+                end++;
+            var members = items[index..(end + 1)];
+            var tools = members.SelectMany(member => member.Tools ?? []).ToArray();
+            groups.Add(item with {
+                Heading = end == index ? item.Heading : item.Heading + " — " + items[end].Heading,
+                Body = ToolSummary(tools, page),
+                OmittedTools = string.Join('\n', members.Select(member => member.OmittedTools)),
+                DrillDown = item.ArchiveSession is { } session && item.Sequence is { } first
+                    && items[end].EndSequence is { } last
+                    ? ArchiveDrill(session, $"msg#{first}-{last}") : item.DrillDown,
+                EndSequence = items[end].EndSequence
+            });
+            index = end;
         }
-        var role = Text(message["role"]);
-        var emoji =
-            role == "user" ? "👤"
-            : role == "model" ? "🤖"
-            : "🔧";
-        var visibility =
-            message["modelVisible"] is JsonValue flag
-            && flag.TryGetValue<bool>(out var value)
-            && !value
-                ? " [non-context]"
-                : "";
-        return new(
-            $"[{EcmaNumber.Format(offset)}] {emoji} {role}{visibility}:",
-            body.Count == 0 ? "[empty message]" : string.Join('\n', body),
-            string.Join('\n', search),
-            detail == "names" ? string.Join('\n', tool) : null
-        );
+        return groups.ToArray();
     }
 }

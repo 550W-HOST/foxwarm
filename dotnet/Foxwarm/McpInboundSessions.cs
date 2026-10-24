@@ -91,7 +91,7 @@ internal sealed class McpInboundSessions(
         };
         if (start is not null)
             args["start"] = start;
-        var permission = authorization.Request(context, "builtin", "get_session_messages", args);
+        var permission = authorization.Request(context, "builtin", "view_session", args);
         await authorization.RequireAsync(context, permission, token);
         var owner =
             await runtime.GetOwnerAsync(id, token)

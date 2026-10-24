@@ -170,7 +170,7 @@ rules:
     action: deny
 ```
 
-The `session` matcher supports `self: true`, `sameAgent: true`, and `relation: parent | child | [parent, child]`. Present fields are AND; parent/child are direct canonical links and can cross Agents. Self does not include siblings or descendants. This is supported only for exact registered builtin families: `send_to_session`, `send_file`, timer CRUD, `recall`, archive reads, and `get_session_messages`. Names combined in one selector must share one registered target resolver. It is not available for arbitrary MCP/Node arguments or external callers. Missing-argument/alias behavior follows each tool, not a universal “missing means self” rule; channel-target file delivery has no Session target. Nonexistent or invalid targets do not match.
+The `session` matcher supports `self: true`, `sameAgent: true`, and `relation: parent | child | [parent, child]`. Present fields are AND; parent/child are direct canonical links and can cross Agents. Self does not include siblings or descendants. This is supported only for exact registered builtin families: `send_to_session`, `send_file`, timer CRUD, `recall`, archive reads, and `view_session`. Names combined in one selector must share one registered target resolver. It is not available for arbitrary MCP/Node arguments or external callers. Missing-argument/alias behavior follows each tool, not a universal “missing means self” rule; channel-target file delivery has no Session target. Nonexistent or invalid targets do not match.
 
 | Registered family | Target/default behavior |
 | --- | --- |
@@ -179,7 +179,7 @@ The `session` matcher supports `self: true`, `sameAgent: true`, and `relation: p
 | `create_timer`, `list_timers`, `update_timer`, `delete_timer` | `sessionId` defaults to self. This matcher scopes the owner, not persisted timer settings or `agentName` for new-session delivery. |
 | `get_archived_messages`, `get_archived_blocks` | `sessionId` defaults to self. |
 | `recall` | Exact recall defaults to self. Vector search without `sessionId` has a self target only with `scope: current-session`; broader/default search has no single Session target. |
-| `get_session_messages` | Required `sessionId`; no universal default. |
+| `view_session` | Required `sessionId`; no universal default. |
 
 Each table row is a separate resolver family; combine names only within the same row when a rule uses the Session matcher. The parser's family registry is in `src/toolAuthorization.ts`, and target/default resolution is in `src/toolAuthorizationSessionTargets.ts`; see the [canonical policy contract](../../../docs/code-index/units/src-tool-authorization.md#policy-contract).
 

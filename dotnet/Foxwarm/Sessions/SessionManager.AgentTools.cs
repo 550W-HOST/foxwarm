@@ -230,7 +230,7 @@ internal sealed partial class SessionManager
                 case "compact_session":
                     return (await CompactSessionAsync(source, args), false);
                 case "session":
-                case "get_session_messages":
+                case "view_session":
                     return (await ObserveAsync(source, name, args), false);
                 case "skill":
                     return (await SkillAsync(source, args), false);

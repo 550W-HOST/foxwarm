@@ -17,7 +17,8 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
         ["send_to_session"] = "send",
         ["send_file"] = "file",
         ["recall"] = "recall",
-        ["get_session_messages"] = "required",
+        ["view_session"] = "required",
+        ["get_session_messages"] = "required", // Persisted Session-target selectors.
         ["create_timer"] = "timer",
         ["list_timers"] = "timer",
         ["update_timer"] = "timer",
