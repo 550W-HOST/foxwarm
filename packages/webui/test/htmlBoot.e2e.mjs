@@ -32,7 +32,7 @@ before(async () => {
   theme = await import(pathToFileURL(themeFile))
 
   // Two actual hashed deployments: the second output contains no old assets.
-  const loaded = await loadConfigFromFile({ command: 'build', mode: 'test' }, path.join(webui, 'vite.config.ts'))
+  const loaded = await loadConfigFromFile({ command: 'build', mode: 'test' }, path.join(webui, 'vite.config.ts'), undefined, undefined, undefined, 'runner')
   const bootPlugin = loaded.config.plugins.find(plugin => plugin.name === 'foxwarm-boot-html')
   fixtures = {}
   fixtureHtml = {}

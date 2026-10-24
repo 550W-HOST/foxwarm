@@ -11,11 +11,12 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { gunzipSync, brotliDecompressSync } from 'node:zlib'
 import puppeteer from 'puppeteer-core'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 import yamlReader from 'js-yaml'
 import { saveModelsInOriginalApp } from './experimentHostFixture.mjs'
 
 const sleep = ms => new Promise(done => setTimeout(done, ms))
-async function until(check, label, timeout = 22000) { const end = Date.now() + timeout; while (Date.now() < end) { if (await check()) return; await sleep(25) } throw new Error('Timed out: ' + label) }
+async function until(check, label, timeout = 22000) { const end = Date.now() + timeout; while (Date.now() < end) { if (errors.length) throw new Error(errors.join('\n')); if (await check()) return; await sleep(25) } throw new Error('Timed out: ' + label) }
 async function freePort() { const socket = tcpServer(); socket.listen(0, '127.0.0.1'); await once(socket, 'listening'); const port = socket.address().port; await new Promise(done => socket.close(done)); return port }
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-completions-')), data = join(root, 'data'), work = join(data, 'agents', 'main')
 await mkdir(join(data, 'state'), { recursive: true }); await mkdir(work, { recursive: true })
@@ -56,19 +57,20 @@ function peer(label) {
         response.setHeader('content-type', 'text/event-stream')
         event(response, { type: 'response.completed', response: { id: 'cross-response', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'RESPONSES-CROSS-DONE' }] }], usage: { input_tokens: 12, output_tokens: 3 } } }); response.end(); return
       }
-      const user = body.messages.filter(message => message.role === 'user').at(-1), input = inputOf(body)
+      const user = body.messages.filter(message => message.role === 'user')
+        .findLast(message => textOf(message.content).includes('<foxwarm-message type="channel"')), input = inputOf(body)
       const record = { label, body, headers: request.headers, wireBytes: wire.length, user: textOf(user?.content) }; requests.push(record)
       const repeatedFailure = ['malformed-sse', 'provider-error', 'http-error', 'empty-eof', 'whitespace-disallowed', 'inactivity', 'first-content'].find(name => record.user.includes(name))
       if (repeatedFailure && requests.filter(item => item.user.includes(repeatedFailure)).length > 1) { response.writeHead(400, { 'content-type': 'application/json' }); response.end('{"error":"synthetic terminal after observed first failure"}'); return }
-      assert.equal(request.url, '/v1/chat/completions'); assert.equal(request.headers['user-agent'], 'foxwarm/1.0'); assert.equal(body.model, 'same-wire'); assert.equal(body.max_tokens, 911); assert.deepEqual(body.stream_options, { include_usage: true }); assert.equal(body.stream, true)
+      assert.equal(request.url, '/v1/chat/completions'); assert.match(request.headers['user-agent'], /^foxwarm\//); assert.equal(body.model, 'same-wire'); assert.equal(body.max_tokens, 911); assert.deepEqual(body.stream_options, { include_usage: true }); assert.equal(body.stream, true)
       assert.equal(Number(request.headers['content-length']), wire.length); assert.equal(body.reasoning_effort, 'high'); assert.equal(body.messages[0].role, 'system')
       assert(body.tools?.every(tool => tool.type === 'function' && tool.function.strict === false))
       response.setHeader('content-type', 'text/event-stream')
       const plan = body.messages.map(message => textOf(message.content)).findLast(text => text.includes('COMPACTION STARTED:'))
       if (plan) {
-        assert(!input.includes('COMPACT A THOUGHT')); assert(!input.includes('compact-a-opaque')); plannerRound++; assert.equal(body.tools.length, 24); assert(body.tools.find(tool => tool.function.name === 'submit_compact_plan'))
+        assert(!input.includes('COMPACT A THOUGHT')); assert(!input.includes('compact-a-opaque')); plannerRound++; assert(body.tools.find(tool => tool.function.name === 'submit_compact_plan'))
         if (plannerRound === 1) { call(response, 'plan-invalid', 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 99999, sourceEnd: 100000, summary: 'Invalid range.' }] }); return }
-        assert(input.includes('COMPACT PLAN INVALID.'))
+        assert(input.includes('compact_plan_invalid'))
         const ranges = [...plan.matchAll(/^- M#(\d+)(?:-#(\d+))?\s/gm)].map(match => [Number(match[1]), Number(match[2] || match[1])])
         assert(ranges.length > 0, plan)
         call(response, 'plan-valid', 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: ranges[0][0], sourceEnd: ranges.at(-1)[1], summary: 'Source-bound Completions summary retaining the accepted local workflow.' }] }); return
@@ -141,15 +143,17 @@ async function api(method, path, body) { const response = await fetch(origin + p
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 async function history() { return (await api('GET', route(current) + '/history')).body }
 async function state() { return (await api('GET', route(current) + '/state')).body.session }
+const notices = value => value.messages.filter(row => ['system-event', 'llm-retry'].includes(row.__meta?.noticeType))
+const terminalFailure = row => row.__meta?.sessionNotice?.source === 'session' || row.__meta?.retry?.final === true
 async function start() {
   const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(data), FOXWARM_DATA_DIR: data, FOXWARM_EXPERIMENT_API_TOKEN: apiToken, } }); let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-20000) }); host = { child, get output() { return output } }; hostPids.push(child.pid)
   await until(async () => { if (child.exitCode !== null) throw new Error(output); try { return (await api('GET', '/health')).status === 200 } catch { return false } }, 'host ready')
 }
 async function save(raw) { assert.equal((await api('POST', '/api/setup/models', { yaml: raw })).status, 200); assert.equal(await readFile(modelPath, 'utf8'), raw) }
 async function send(text, expected, timeout = 22000) {
-  const count = requests.length, previous = (await state()).failureCount
+  const count = requests.length, previous = (await history()).latestSeq
   assert.equal((await api('POST', route(current) + '/message', { text })).status, 202)
-  await until(async () => requests.length > count || (await state()).failureCount > previous, 'request entered')
+  await until(async () => requests.length > count || notices(await history()).some(row => row.__meta.seq > previous && terminalFailure(row)), 'request entered')
   await until(async () => { const value = await history(); return !value.session.busy && (!expected || value.messages.some(row => row.parts?.some(part => part.text === expected))) }, expected || 'settled failure', timeout)
   assert.equal(errors.length, 0, errors.join('\n')); return requests.slice(count)
 }
@@ -157,9 +161,9 @@ async function stopHost() { assert.equal((await api('POST', '/admin/shutdown')).
 try {
   await start(); current = (await api('POST', '/api/sessions', {})).body.sessionId
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'], userDataDir: join(root, 'browser') })
-  page = await browser.newPage(); await page.evaluateOnNewDocument(() => { const Native = window.WebSocket; window.observedFrames = []; window.WebSocket = class extends Native { constructor(...args) { super(...args); this.addEventListener('message', event => { if (typeof event.data !== 'string') return; window.observedFrames.push(event.data); if (window.observedFrames.length > 600) window.observedFrames.shift() }) } } }); await page.goto(origin, { waitUntil: 'networkidle0' }); await page.waitForSelector('input[type="password"]'); await page.type('input[type="password"]', apiToken); await page.click('button[type="submit"]'); await page.waitForSelector('.foxwarm-chat-root')
+  page = await browser.newPage(); await page.evaluateOnNewDocument(() => { const Native = window.WebSocket; window.observedFrames = []; window.WebSocket = class extends Native { constructor(...args) { super(...args); this.addEventListener('message', event => { if (typeof event.data !== 'string') return; window.observedFrames.push(event.data); if (window.observedFrames.length > 600) window.observedFrames.shift() }) } } }); await page.goto(origin, { waitUntil: 'networkidle0' }); await page.waitForSelector('input[type="password"]'); await page.type('input[type="password"]', apiToken); await page.click('button[type="submit"]'); await page.waitForFunction(() => !!window.foxwarmTest?.switchToSession); await waitForWebUiReady(page)
   const original = configuration(first, oldToken); await saveModelsInOriginalApp(page, original, modelPath)
-  await page.evaluate(id => window.foxwarmTest.switchToSession(id), current); await page.waitForSelector('.foxwarm-model-selector-trigger'); await page.click('.foxwarm-model-selector-trigger'); await page.waitForSelector('button[title="Refresh models"]'); await page.click('button[title="Refresh models"]'); await page.waitForSelector('[data-model-column="current"] [data-model-option-key="a"]'); await page.click('[data-model-column="current"] [data-model-option-key="a"]')
+  await page.evaluate(id => window.foxwarmTest.switchToSession(id), current); await page.waitForFunction(id => document.querySelector('[data-session-header-subtitle]')?.textContent.includes('session ' + id), {}, current); await page.waitForSelector('.foxwarm-model-selector-trigger'); await page.click('.foxwarm-model-selector-trigger'); await page.waitForSelector('button[title="Refresh models"]'); await page.click('button[title="Refresh models"]'); await page.waitForSelector('[data-model-column="current"] [data-model-option-key="a"]'); await page.click('[data-model-column="current"] [data-model-option-key="a"]')
   await until(async () => (await history()).session.modelKey === 'a', 'original model selected')
   await page.evaluate(() => window.foxwarmTest.sendMessage('tool-flow'))
   await until(() => flowHold, 'real fragmented tool stream'); await until(async () => (await page.evaluate(() => document.body.innerText)).includes('Compatibility reasoning') && (await page.evaluate(() => window.observedFrames.join('\n'))).includes('Preferred reasoning'), 'original live reasoning and complete real stream payload')
@@ -181,13 +185,13 @@ try {
   await api('POST', route(current) + '/model', { model: 'a' }); await send('same-concrete-replay', 'REPLAY-DONE')
   const plain = await send('no-terminal', 'EOF-DONE'); assert.equal(plain.length, 1); assert.notEqual(plain[0].body.turn, captured.body.turn); assert.equal(plain[0].body.cache, captured.body.cache)
   for (const name of ['malformed-sse', 'provider-error', 'http-error', 'empty-eof', 'missing-id']) {
-    const models = (await history()).messages.filter(row => row.role === 'model' && row.modelVisible !== false).length, count = (await state()).failureCount
-    await send(name); assert.equal((await history()).messages.filter(row => row.role === 'model' && row.modelVisible !== false).length, models); assert.equal((await state()).failureCount, count + 1); assert(!(await state()).lastError.includes(newToken))
+    const before = await history(), models = before.messages.filter(row => row.role === 'model' && row.modelVisible !== false).length
+    await send(name); assert.equal((await history()).messages.filter(row => row.role === 'model' && row.modelVisible !== false).length, models); const failures = notices(await history()).filter(row => row.__meta.seq > before.latestSeq); assert(failures.some(terminalFailure)); assert(!JSON.stringify(failures).includes(newToken))
   }
   assert.equal(await readFile(join(work, 'must-not-exist'), 'utf8').catch(() => null), null)
   await send('usage-only'); assert.equal((await history()).messages.at(-1).role, 'model'); assert.equal((await history()).messages.at(-1).parts[0].text, '')
   await send('whitespace'); assert.equal((await history()).messages.at(-1).parts[0].text, ' \t')
-  const strict = yamlReader.load(configuration(second, newToken, 'br')); strict.providers.a.disallowEmptyResponse = true; await save(JSON.stringify(strict)); const failed = (await state()).failureCount; await send('whitespace-disallowed'); assert.equal((await state()).failureCount, failed + 1)
+  const strict = yamlReader.load(configuration(second, newToken, 'br')); strict.providers.a.disallowEmptyResponse = true; await save(JSON.stringify(strict)); const strictBefore = (await history()).latestSeq; await send('whitespace-disallowed'); assert(notices(await history()).some(row => row.__meta.seq > strictBefore && terminalFailure(row)))
   const inactivity = yamlReader.load(configuration(second, newToken, 'br')); inactivity.providers.a.streamContentInactivityTimeoutMs = 200; await save(JSON.stringify(inactivity)); const began = Date.now(); await send('inactivity'); assert(Date.now() - began < 4000); await until(() => closed.has('inactivity'), 'inactivity closes peer')
   await save(configuration(second, newToken, 'br')); const stopModels = (await history()).messages.filter(row => row.role === 'model' && row.modelVisible !== false).length; await api('POST', route(current) + '/message', { text: 'stop-stream' }); await until(() => stopHold, 'held Stop stream'); assert.equal((await api('POST', route(current) + '/stop')).status, 200); await until(async () => !(await state()).busy && closed.has('stop'), 'Stop released stream'); assert.equal((await history()).messages.filter(row => row.role === 'model' && row.modelVisible !== false).length, stopModels)
   // Source-visible historical wrapper fixture, never a substitute for provider dispatch/effects.

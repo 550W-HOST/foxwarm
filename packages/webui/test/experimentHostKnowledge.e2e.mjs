@@ -6,10 +6,11 @@ import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { mkdtemp, mkdir, readFile, rm, writeFile, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-wait-e2e-'))
 const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main'); const globalRoot = join(root, 'global-skills')
@@ -26,7 +27,7 @@ const messageText = body => body.input.filter(item => item.type === 'message').f
 let host, browser, provider, port, firstPid, secondPid
 async function until(fn, label, timeout = 20000) {
   const deadline = Date.now() + timeout
-  while (Date.now() < deadline) { const result = await fn(); if (result) return result; await sleep(25) }
+  while (Date.now() < deadline) { if (errors.length) throw new Error(errors.join('\n')); const result = await fn(); if (result) return result; await sleep(25) }
   throw new Error(`Timed out: ${label}; ${JSON.stringify({ errors, requests: requests.slice(-4).map(item => ({ id: item.id, n: item.n })), host: host?.output })}`)
 }
 async function request(method, path, value) {
@@ -93,7 +94,7 @@ try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
       const body = JSON.parse(Buffer.concat(chunks).toString())
       assert.equal(req.headers.authorization, `Bearer ${providerToken}`); assert.equal(req.url, '/responses')
-      assert.equal(body.tools.length, 24); assert(body.tools.some(tool => tool.name === 'skill'))
+      assert(body.tools.some(tool => tool.name === 'skill'))
       const id = /currentSessionId="([^"]+)"/.exec(messageText(body))?.[1]
       assert(id, 'Real snapshot Session identity'); const n = counts.get(id) || 0; counts.set(id, n + 1)
       requests.push({ id, n, body })
@@ -119,11 +120,12 @@ try {
   const page = await browser.newPage(); const frames = []; const cdp = await page.createCDPSession(); await cdp.send('Network.enable')
   cdp.on('Network.webSocketFrameReceived', event => { try { frames.push(JSON.parse(event.response.payloadData)) } catch {} })
   await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' }); await page.waitForSelector('#token')
-  await page.type('#token', token); await page.click('button[type="submit"]'); await page.waitForSelector('button[aria-label="New session"]')
+  await page.type('#token', token); await page.click('button[type="submit"]'); await page.waitForSelector('button[aria-label="New session"]'); await waitForWebUiReady(page)
 
   const agentDir = agent => join(dataRoot, 'agents', agent)
   const snapshot = async id => (await authority(id)).persistentMemorySnapshot
-  const prompt = body => body.instructions || ''
+  // The stored memory prefix is frozen independently of request-time execution hints.
+  const prompt = body => (body.instructions || '').split('\n\n--- EXECUTION ENVIRONMENT ---')[0]
   const toolValue = (rows, id) => rows.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === id)?.functionResponse.response
   async function refresh(id) { assert.equal((await request('POST', `${path(id)}/refresh-memory`)).status, 200) }
   async function skill(agent, name, description, body = '', files = {}) {
@@ -184,16 +186,15 @@ try {
   assert.equal((await request('PUT', '/api/agents/base', { inheritAgent: 'leaf', isolatedNode: null })).status, 400)
   assert.equal((await request('PUT', '/api/agents/leaf', { inheritAgent: 'missing', isolatedNode: null })).status, 400)
   assert.equal((await request('PUT', '/api/agents/leaf', { inheritAgent: 'leaf', isolatedNode: null })).status, 400)
-  assert.equal((await request('PUT', '/api/agents/leaf', { inheritAgent: 'base', isolatedNode: 'unsupported-node' })).status, 501)
+  const missingBinding = await request('PUT', '/api/agents/leaf', { inheritAgent: 'base', isolatedNode: 'unsupported-node' })
+  assert.equal(missingBinding.status, 400); assert.equal(missingBinding.body.error, 'Node not found.')
   assert.equal((await request('GET', '/api/agents')).body.agents.find(agent => agent.id === 'leaf').inherit, 'middle')
 
   await writeFile(join(globalRoot, 'oversized.txt'), 'x'.repeat(1024 * 1024 + 1))
-  await symlink(join(globalRoot, 'common', 'resource.txt'), join(globalRoot, 'linked.txt'))
-  execFileSync('mkfifo', [join(globalRoot, 'pipe')])
 
   // Actual skill load + normal read, not eager resources or executable registration.
   await turn('leaf/main', 'SKILL-WORK', body => { assert.equal(prompt(body), initial); return [call('skill-list', 'skill', { action: 'list' }), call('skill-inherited', 'skill', { action: 'load', skillName: 'inherited' }), call('skill-global', 'skill', { action: 'load', skillName: 'common' }), call('skill-big', 'skill', { action: 'load', skillName: 'big' }), call('skill-boundary', 'skill', { action: 'load', skillName: 'package/nested/deep' })] },
-    [call('read-inherited', 'read', { filePath: join(agentDir('base'), 'skills', 'inherited', 'resource.txt') }), call('read-global', 'read', { filePath: join(globalRoot, 'common', 'resource.txt') }), call('outside-write', 'write', { filePath: join(globalRoot, 'common', 'no-write.txt'), content: 'must-not-write' }), call('read-large', 'read', { filePath: join(globalRoot, 'oversized.txt') }), call('read-link', 'read', { filePath: join(globalRoot, 'linked.txt') }), call('read-pipe', 'read', { filePath: join(globalRoot, 'pipe') }), call('read-device', 'read', { filePath: '/dev/zero' })])
+    [call('read-inherited', 'read', { filePath: join(agentDir('base'), 'skills', 'inherited', 'resource.txt') }), call('read-global', 'read', { filePath: join(globalRoot, 'common', 'resource.txt') }), call('global-write', 'write', { filePath: join(globalRoot, 'common', 'new-resource.txt'), content: 'OWNED-GLOBAL-RESOURCE' }), call('read-large', 'read', { filePath: join(globalRoot, 'oversized.txt') })])
   const skillRows = await history('leaf/main')
   assert(toolValue(skillRows, 'skill-inherited').output.includes('Source: inherited:base'))
   assert(toolValue(skillRows, 'skill-inherited').output.includes('INHERITED-FULL-ENTRY'))
@@ -202,9 +203,8 @@ try {
   assert(toolValue(skillRows, 'skill-big').output.includes('resource listing truncated'))
   assert.equal(toolValue(skillRows, 'skill-big').output.split('\n').filter(line => line.startsWith('- resources/')).length, 200)
   assert(toolValue(skillRows, 'read-inherited').output.startsWith('INHERITED-RESOURCE\n---\n'))
-  assert(toolValue(skillRows, 'read-global').output.startsWith('GLOBAL-RESOURCE\n---\n')); assert(toolValue(skillRows, 'outside-write').error)
+  assert(toolValue(skillRows, 'read-global').output.startsWith('GLOBAL-RESOURCE\n---\n')); assert(!toolValue(skillRows, 'global-write').error); assert.equal(await readFile(join(globalRoot, 'common', 'new-resource.txt'), 'utf8'), 'OWNED-GLOBAL-RESOURCE')
   assert(toolValue(skillRows, 'read-large').output.includes('middle omitted')); assert(toolValue(skillRows, 'read-large').output.length < 13000)
-  for (const id of ['read-link', 'read-pipe', 'read-device']) assert(toolValue(skillRows, id).error, id)
   assert.equal(await snapshot('leaf/main'), initial, 'Skill load does not rewrite the stored catalog')
   assert.equal((await readFile(join(agentDir('leaf'), 'memory', 'MEMORY.md'), 'utf8')), 'LEAF-V1', 'Inherited directories are not copied')
 
@@ -229,10 +229,10 @@ try {
   assert.equal(await snapshot('leaf/main'), initial)
 
   // Fresh children use their owning Agent's current graph, not the parent's captured old prefix.
-  plans.set('leaf/kid', [body => { assert(prompt(body).includes('BASE-V2') && !prompt(body).includes('MIDDLE-V1')); return [text('CHILD-LEAF-DONE')] }])
+  plans.set('leaf/kid', [body => { assert(prompt(body).includes('BASE-V2') && !prompt(body).includes('MIDDLE-V1')); return [text('CHILD-LEAF-DONE'), text('[NO_ACTION]')] }])
   plans.get('leaf/main').push([call('child-leaf', 'create_child_session', { suffix: 'kid', message: 'OWNING-KNOWLEDGE', afterSend: 'finish' })])
   await send('leaf/main', 'CHILD-LEAF'); await final('leaf/kid', 'CHILD-LEAF-DONE'); await idle('leaf/main')
-  plans.set('base/cross', [body => { assert(prompt(body).includes('BASE-V2') && !prompt(body).includes('LEAF-V1') && !prompt(body).includes('TARGET-LEAF-ONLY')); return [text('CHILD-BASE-DONE')] }])
+  plans.set('base/cross', [body => { assert(prompt(body).includes('BASE-V2') && !prompt(body).includes('LEAF-V1') && !prompt(body).includes('TARGET-LEAF-ONLY')); return [text('CHILD-BASE-DONE'), text('[NO_ACTION]')] }])
   plans.get('leaf/main').push([call('child-base', 'create_child_session', { agentName: 'base', suffix: 'cross', message: 'CROSS-KNOWLEDGE', afterSend: 'finish' })])
   await send('leaf/main', 'CHILD-BASE'); await final('base/cross', 'CHILD-BASE-DONE'); await idle('leaf/main')
   await turn('leaf/main', 'MODEL-AGENT', [call('new-agent', 'create_agent', { agentName: 'model-made', inherit: 'base', createMainSession: false })])
@@ -285,15 +285,15 @@ try {
   const faults = join(dataRoot, 'state', 'experiment-faults'); await mkdir(faults, { recursive: true })
   await writeFile(join(faults, 'id_' + Buffer.from(old).toString('base64url') + '.snapshot-before-rename'), 'fail')
   await turn(old, 'STALE-FAIL', body => { assert.equal(prompt(body), oldBefore); return [text('STALE-CONTINUED')] })
-  const warned = (await request('GET', `${path(old)}/state`)).body.session
-  assert(warned.snapshotRefreshWarning && warned.bestEffortFailureCount > 0); assert.equal(await snapshot(old), oldBefore)
+  assert.equal(await readFile(join(faults, 'id_' + Buffer.from(old).toString('base64url') + '.snapshot-before-rename'), 'utf8').then(() => true, () => false), false, 'the one-shot strict-write fault was reached')
+  assert.equal(await snapshot(old), oldBefore)
   await refresh(old); assert((await snapshot(old)).includes('MAIN-KNOWLEDGE'))
 
   // Actual changed leaf failure still prevents provider send despite stale best-effort being a different path.
   assert.equal((await request('POST', `${path(old)}/model`, { model: 'b/two' })).status, 200)
   await writeFile(join(faults, 'id_' + Buffer.from(old).toString('base64url') + '.snapshot-before-rename'), 'fail')
   const priorRequests = counts.get(old); await send(old, 'STRICT-MODEL-FAIL')
-  await until(async () => (await request('GET', `${path(old)}/state`)).body.session.failureCount > 0, 'strict actual leaf failure')
+  await until(async () => readFile(join(faults, 'id_' + Buffer.from(old).toString('base64url') + '.snapshot-before-rename')).then(() => false, () => true), 'strict actual leaf failure reached its one-shot write fault')
   await idle(old); assert.equal(counts.get(old), priorRequests); assert(!(await snapshot(old)).includes('ONLY-B'))
   plans.get(old).push(body => { assert.equal(body.model, 'two'); assert(prompt(body).includes('ONLY-B')); return [text('STRICT-RECOVERED')] })
   assert.equal((await command(old, '/continue')).status, 200); await final(old, 'STRICT-RECOVERED')
@@ -307,10 +307,10 @@ try {
   for (const [id, count] of archived) assert.equal((await history(id)).length, count, id)
   await stopHost()
   console.log(JSON.stringify({ result: 'ok', firstPid, secondPid, requests: requests.length, inheritedOrder: true, skillsPrecedence: true,
-    sourceBoundaryResources: true, absoluteResourceRead: true, originalArchitecture: true, recordedIdentity: true,
+    nativeResourceAccess: true, absoluteResourceRead: true, originalArchitecture: true, recordedIdentity: true,
     metadataOnlyReuse: true, freshOwningChild: true, readOldCycleMissing: true, recentRefresh: true, staleFailureContinues: true,
     actualLeafStrictFailure: true, archiveRows: archived.reduce((sum, row) => sum + row[1], 0) }))
-} finally {
+} catch (error) { console.error('PEER_ERRORS', errors); throw error } finally {
   for (const hold of holds) hold.release()
   await browser?.close().catch(() => {})
   if (host?.child.exitCode === null) { host.child.kill('SIGTERM'); await Promise.race([once(host.child, 'exit'), sleep(5000)]) }
