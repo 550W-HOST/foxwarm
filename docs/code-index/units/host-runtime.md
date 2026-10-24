@@ -56,6 +56,8 @@ Windows Main includes native PowerShell exec, ConPTY terminals/Code helper entry
 
 ## Tests
 
+`packages/webui/test/experimentHostOnboot.e2e.mjs` exercises inert retired startup files, retained typed queue recovery, explicit Setup and first-turn snapshots, deferred virtual selection, cold alias/catalog preservation, and mandatory-authority failure before effects through the ordinary [startup admission](./session-manager-bootstrap.md) path.
+
 `packages/webui/test/experimentHostWebUiDisabled.e2e.mjs` explicitly creates its bound Session, keeps a retired ONBOOT file as a negative control, and uses authenticated Trigger ingress with WebUI disabled to verify unavailable file delivery, unchanged attachments and independent Node administration. `experimentHostOctoberAlignment.e2e.mjs` checks the administrator role/features through HTTP and the original App before exercising trusted activity receipts, native tools/waits, Anthropic replay, exact configuration installation and durable compaction facts.
 
 `WebUiStartupTests.HttpCompression.cs` drives an owned installed Main through a nested HTTPS-public deployment prefix: raw gzip/Brotli and decoded parity for real static/SendFile/Code/API paths, identity/unsupported encodings, static ranges, login/auth and scoped controls. `HttpCompressionTests.cs` checks real signed download GET/HEAD and global/Session blobs, raw Code reads, eligible signing JSON, bootstrap/archive outputs, the first live Session SSE event, and MCP JSON errors/SDK events/attached SSE through owned HTTP hosts.
