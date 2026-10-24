@@ -92,7 +92,10 @@ internal sealed class HttpServer
         builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
             options.MultipartBodyLengthLimit = 51L * 1024 * 1024
         );
-        builder.Services.AddSingleton<IResponseCompressionProvider, HttpResponseCompressionProvider>();
+        builder.Services.AddSingleton<
+            IResponseCompressionProvider,
+            HttpResponseCompressionProvider
+        >();
         builder.Services.AddResponseCompression(options =>
         {
             options.EnableForHttps = true;
