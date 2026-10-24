@@ -284,7 +284,7 @@ async function runStep(group, step, log) {
       clearTimeout(timer)
       clearTimeout(killTimer)
       activeChild = null
-      resolve({ code: code ?? (signal ? 1 : 0), signal, timedOut, counts: parseTestResultCounts(captured) })
+      resolve({ code: timedOut ? 1 : (code ?? (signal ? 1 : 0)), signal, timedOut, counts: parseTestResultCounts(captured) })
     })
   })
 }

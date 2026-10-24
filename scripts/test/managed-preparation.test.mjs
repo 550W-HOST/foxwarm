@@ -19,6 +19,10 @@ async function fixture(t) {
   t.after(() => fs.rm(root, { recursive: true, force: true }))
   const bin = path.join(root, 'bin'), journal = path.join(root, 'calls.jsonl')
   await fs.mkdir(bin)
+  const timerPreload = path.join(root, 'timer.cjs')
+  await fs.writeFile(timerPreload, `const original = global.setTimeout;
+global.setTimeout = (callback, delay, ...args) => original(callback, delay === 1_200_000 ? 1000 : delay, ...args);
+`)
   await fs.writeFile(path.join(bin, 'dotnet'), `#!${process.execPath}
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
 const args = process.argv.slice(2), root = ${JSON.stringify(root)};
@@ -37,14 +41,21 @@ if (args[0] === 'restore') {
   assert.equal(process.env.OPENAI_API_KEY, '');
   assert.equal(process.env.CONFIG_PATH, '');
   assert(process.env.FOXWARM_DATA_DIR.startsWith(path.join(root, 'artifacts') + path.sep));
-  console.log('Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1, Duration: 1 ms - Fixture.Tests.dll (net10.0)');
+  if (process.env.FIXTURE_TEST_PENDING) {
+    process.on('SIGTERM', () => {
+      fs.appendFileSync(${JSON.stringify(journal)}, JSON.stringify({stoppedWithZero:true}) + '\\n');
+      process.exit(0);
+    });
+    setInterval(() => {}, 1000);
+  } else console.log('Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1, Duration: 1 ms - Fixture.Tests.dll (net10.0)');
 }
 `, { mode: 0o755 })
-  async function run(fail = false) {
+  async function run({ fail = false, pending = false } = {}) {
     try {
       const result = await execFileAsync(process.execPath, ['scripts/test/run-tests.mjs', 'managed'], {
         cwd: repo, timeout: 20_000,
-        env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH, NODE_OPTIONS: '',
+        env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH,
+          NODE_OPTIONS: pending ? `--require=${timerPreload}` : '', FIXTURE_TEST_PENDING: pending ? '1' : '',
           FOXWARM_TEST_ARTIFACT_DIR: path.join(root, 'artifacts'), FIXTURE_RESTORE_FAIL: fail ? '1' : '',
           HTTPS_PROXY: 'http://toolchain-proxy.invalid:8123', HTTP_PROXY: 'http://toolchain-proxy.invalid:8123',
           OPENAI_API_KEY: 'synthetic-must-not-reach-test', CONFIG_PATH: path.join(root, 'unused-config.yaml') },
@@ -52,7 +63,13 @@ if (args[0] === 'restore') {
       return { code: 0, ...result }
     } catch (error) { return error }
   }
-  return { run, async calls() { return (await fs.readFile(journal, 'utf8')).trim().split('\n').map(JSON.parse) } }
+  return { run,
+    async calls() { return (await fs.readFile(journal, 'utf8')).trim().split('\n').map(JSON.parse) },
+    async summary() {
+      const [run] = await fs.readdir(path.join(root, 'artifacts'))
+      return JSON.parse(await fs.readFile(path.join(root, 'artifacts', run, 'summary.json'), 'utf8'))
+    },
+  }
 }
 
 test('managed dependency preparation uses the caller toolchain before isolated no-restore execution', unix, async t => {
@@ -67,6 +84,16 @@ test('managed dependency preparation uses the caller toolchain before isolated n
 
 test('a failed managed dependency preparation does not start managed tests', unix, async t => {
   const f = await fixture(t)
-  assert.equal((await f.run(true)).code, 1)
+  assert.equal((await f.run({ fail: true })).code, 1)
   assert.deepEqual((await f.calls()).map(call => call.args[0]), ['restore'])
+})
+
+test('a managed runtime deadline fails even when the child handles termination with exit zero', unix, async t => {
+  const f = await fixture(t)
+  const result = await f.run({ pending: true })
+  assert.equal(result.code, 1, result.stdout + result.stderr)
+  assert.equal((await f.calls()).at(-1).stoppedWithZero, true)
+  const runtime = (await f.summary()).at(-1)
+  assert.equal(runtime.timedOut, true)
+  assert.equal(runtime.code, 1)
 })
