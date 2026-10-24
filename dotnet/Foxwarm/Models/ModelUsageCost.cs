@@ -9,12 +9,18 @@ internal static class ModelUsageCost
     internal static JsonObject ValidatePrices(JsonNode? node)
     {
         if (node is not JsonObject prices)
-            throw new InvalidDataException("tokenPricesPerMillion must be a complete cached/input/output object.");
+            throw new InvalidDataException(
+                "tokenPricesPerMillion must be a complete cached/input/output object."
+            );
         foreach (var key in new[] { "cached", "input", "output" })
             if (Nonnegative(prices[key]) is null)
-                throw new InvalidDataException("tokenPricesPerMillion." + key + " must be a finite nonnegative number.");
+                throw new InvalidDataException(
+                    "tokenPricesPerMillion." + key + " must be a finite nonnegative number."
+                );
         if (prices.Any(pair => pair.Key is not ("cached" or "input" or "output")))
-            throw new InvalidDataException("tokenPricesPerMillion only accepts cached, input and output.");
+            throw new InvalidDataException(
+                "tokenPricesPerMillion only accepts cached, input and output."
+            );
         return (JsonObject)prices.DeepClone();
     }
 
@@ -28,12 +34,14 @@ internal static class ModelUsageCost
         if (model.Configuration["tokenPricesPerMillion"] is not JsonObject prices)
             return usage;
         var cost = 0d;
-        foreach (var (tokens, rate) in new[]
-        {
-            ("cachedTokens", "cached"),
-            ("inputTokens", "input"),
-            ("outputTokens", "output"),
-        })
+        foreach (
+            var (tokens, rate) in new[]
+            {
+                ("cachedTokens", "cached"),
+                ("inputTokens", "input"),
+                ("outputTokens", "output"),
+            }
+        )
         {
             if (Nonnegative(usage[tokens]) is not double count)
                 return usage;
@@ -47,7 +55,9 @@ internal static class ModelUsageCost
     internal static string FormatUsd(double amount) =>
         amount is > 0 and < .0001
             ? "< $0.0001 USD"
-            : "$" + amount.ToString("#,##0.00##", System.Globalization.CultureInfo.InvariantCulture) + " USD";
+            : "$"
+                + amount.ToString("#,##0.00##", System.Globalization.CultureInfo.InvariantCulture)
+                + " USD";
 
     private static double? Nonnegative(JsonNode? node) =>
         SessionWait.Number(node) is double number && double.IsFinite(number) && number >= 0

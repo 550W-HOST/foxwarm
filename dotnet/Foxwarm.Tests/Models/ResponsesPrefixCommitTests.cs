@@ -101,7 +101,12 @@ public sealed class ResponsesPrefixCommitTests
                 }
             }
         );
-        await using var owned = owner = new Owner(peer.Uri, websocket, diagnostics: true, priced: true);
+        await using var owned = owner = new Owner(
+            peer.Uri,
+            websocket,
+            diagnostics: true,
+            priced: true
+        );
         owner.Entry.AssistantCommitted = row =>
         {
             delivered.TrySetResult(row);
@@ -130,8 +135,18 @@ public sealed class ResponsesPrefixCommitTests
         Assert.Contains("retained-prefix", rows[1].ToJsonString());
         Assert.DoesNotContain("retained-prefix", rows[2].ToJsonString());
         Assert.Null(rows[1]["__meta"]?["usage"]);
-        Assert.Equal(0.000023, SessionCatalog.Number(rows[2]["__meta"]?["usage"]?["cost"])!.Value, 10);
-        Assert.Equal(0.000023, SessionCatalog.Number(owner.Entry.Snapshot().AuthorityEnvelope["stats"]?["totalCost"])!.Value, 10);
+        Assert.Equal(
+            0.000023,
+            SessionCatalog.Number(rows[2]["__meta"]?["usage"]?["cost"])!.Value,
+            10
+        );
+        Assert.Equal(
+            0.000023,
+            SessionCatalog
+                .Number(owner.Entry.Snapshot().AuthorityEnvelope["stats"]?["totalCost"])!
+                .Value,
+            10
+        );
         Assert.Equal(0, rows[1]["__meta"]!["llmSegment"]!["outputStart"]!.GetValue<int>());
         Assert.Equal(3, rows[1]["__meta"]!["llmSegment"]!["outputEndExclusive"]!.GetValue<int>());
         Assert.Equal(
@@ -390,7 +405,9 @@ public sealed class ResponsesPrefixCommitTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Completed_commentary_only_still_commits_the_empty_complete_suffix_and_usage_once(bool websocket)
+    public async Task Completed_commentary_only_still_commits_the_empty_complete_suffix_and_usage_once(
+        bool websocket
+    )
     {
         var prefix = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var peer = await StreamingModelPeer.StartAsync(
@@ -418,8 +435,18 @@ public sealed class ResponsesPrefixCommitTests
         Assert.Equal(1, rows[2]["__meta"]!["llmSegment"]!["outputEndExclusive"]!.GetValue<int>());
         Assert.Equal(3, rows[2]["__meta"]!["usage"]!["outputTokens"]!.GetValue<long>());
         Assert.Null(rows[1]["__meta"]?["usage"]);
-        Assert.Equal(0.000023, SessionCatalog.Number(rows[2]["__meta"]?["usage"]?["cost"])!.Value, 10);
-        Assert.Equal(0.000023, SessionCatalog.Number(owner.Entry.Snapshot().AuthorityEnvelope["stats"]?["totalCost"])!.Value, 10);
+        Assert.Equal(
+            0.000023,
+            SessionCatalog.Number(rows[2]["__meta"]?["usage"]?["cost"])!.Value,
+            10
+        );
+        Assert.Equal(
+            0.000023,
+            SessionCatalog
+                .Number(owner.Entry.Snapshot().AuthorityEnvelope["stats"]?["totalCost"])!
+                .Value,
+            10
+        );
     }
 
     [Fact]
@@ -628,7 +655,18 @@ public sealed class ResponsesPrefixCommitTests
                             ["providerType"] = websocket ? "openai-ws" : "openai-responses",
                             ["baseUrl"] = uri.ToString(),
                             ["models"] = priced
-                                ? new JsonArray(new JsonObject { ["id"] = "m", ["tokenPricesPerMillion"] = new JsonObject { ["cached"] = 1, ["input"] = 2, ["output"] = 3 } })
+                                ? new JsonArray(
+                                    new JsonObject
+                                    {
+                                        ["id"] = "m",
+                                        ["tokenPricesPerMillion"] = new JsonObject
+                                        {
+                                            ["cached"] = 1,
+                                            ["input"] = 2,
+                                            ["output"] = 3,
+                                        },
+                                    }
+                                )
                                 : new JsonArray("m"),
                             ["keepReasoningOnError"] = keep,
                             ["imageGeneration"] = new JsonObject { ["enabled"] = generated },

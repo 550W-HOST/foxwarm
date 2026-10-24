@@ -4,7 +4,12 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionListQueries
 {
-    private static void AdjustSummary(JsonObject summary, JsonObject[] live, JsonObject[] persisted, long costCount)
+    private static void AdjustSummary(
+        JsonObject summary,
+        JsonObject[] live,
+        JsonObject[] persisted,
+        long costCount
+    )
     {
         var byId = persisted.ToDictionary(Id, StringComparer.Ordinal);
         foreach (var row in live)
@@ -14,7 +19,8 @@ internal sealed partial class SessionListQueries
             var cost = SessionCatalog.Number(row["tokenUsage"]?["cost"]);
             var oldCost = SessionCatalog.Number(old["stats"]?["totalCost"]);
             costCount += (cost.HasValue ? 1 : 0) - (oldCost.HasValue ? 1 : 0);
-            summary["cost"] = (SessionCatalog.Number(summary["cost"]) ?? 0) + ((cost ?? 0) - (oldCost ?? 0));
+            summary["cost"] =
+                (SessionCatalog.Number(summary["cost"]) ?? 0) + ((cost ?? 0) - (oldCost ?? 0));
             void Add(string key, double difference) =>
                 summary[key] = (SessionCatalog.Number(summary[key]) ?? 0) + difference;
             Add(

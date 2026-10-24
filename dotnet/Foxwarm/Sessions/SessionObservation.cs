@@ -366,7 +366,11 @@ internal sealed partial class SessionManager
                         : ""
                 )
                 + $", total={cached + input + output:N0}"
-                + (SessionWait.Number(usage["cost"]) is double cost ? $", estimated cost={ModelUsageCost.FormatUsd(cost)}" : "");
+                + (
+                    SessionWait.Number(usage["cost"]) is double cost
+                        ? $", estimated cost={ModelUsageCost.FormatUsd(cost)}"
+                        : ""
+                );
         return Output(
             "📊 *Session Status*\n\n"
                 + $"- session id: `{meta.Id}`\n- name: {meta.DisplayName ?? "unset"}\n- agent id/name: `{statusTarget.Agent}`\n- current node: `{currentNode}` (connected={(NodeProviders.Connected(currentNode) ? "true" : "false")}, type={(currentNode == "master" ? "master" : NodeSummaries().OfType<JsonObject>().FirstOrDefault(node => SessionWait.Text(node["id"]) == currentNode)?["type"]?.GetValue<string>() ?? "unknown")}){(isolated ? " (isolated)" : "")}\n- agent directory: `{agents.AgentDirectory(statusTarget.Agent)}`\n- current cwd: {(currentCwd is string cwd && SessionGoal.Trim(cwd).Length > 0 ? $"`{SessionGoal.Trim(cwd)}`" : $"not set (defaults to current node agent directory; master: `{agents.AgentDirectory(statusTarget.Agent)}`)")}\n"
@@ -378,7 +382,11 @@ internal sealed partial class SessionManager
                 + (meta.Archived ? "- 📦 archived\n" : "")
                 + $"- model: `{leaf?.Key ?? catalog.DefaultKey}`\n- effort: raw={meta.Effort ?? "unset"}, effective={(SessionWait.Text(dto["effectiveEffort"]) ?? "per-leaf default")}, allowed={string.Join('|', leaf?.AllowedEfforts ?? HostModels.Efforts)}, default={(leaf is null ? "high" : leaf.DefaultEffort)}\n"
                 + $"- messages: {meta.MessageCount}\n- token estimate: ~{summary.Estimate} / {leaf?.ContextLimit ?? catalog.PresentationContextLimit}\n- images: {summary.Images}\n- last usage: {usageText}\n- last message: {SessionStatus.Date(meta.LastMessageTime)}\n- auto-compact threshold: ~{dto["effectiveCompactThresholdTokens"]} tokens ({(summary.Threshold is > 0 ? "override" : "model default")})\n"
-                + (meta.Cost is double totalCost ? $"- recorded estimated cost: {ModelUsageCost.FormatUsd(totalCost)}\n" : "")
+                + (
+                    meta.Cost is double totalCost
+                        ? $"- recorded estimated cost: {ModelUsageCost.FormatUsd(totalCost)}\n"
+                        : ""
+                )
                 + $"- child model: raw={meta.ChildModel ?? "follow current"}, effective={dto["effectiveChildModelKey"]}; child effort: raw={meta.ChildEffort ?? "unset"}, effective={dto["effectiveChildEffort"]}\n"
                 + $"- runtime state: {SessionStatus.Runtime(dto["runtimeState"]!.AsObject())}\n"
                 + (meta.Busy ? "- busy: yes\n" : "")

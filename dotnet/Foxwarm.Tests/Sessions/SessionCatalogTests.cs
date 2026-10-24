@@ -93,9 +93,17 @@ public sealed class SessionCatalogTests
         var root = Row("root", 0);
         var unknown = Row("unknown", 1, "root");
         var zero = Row("zero", 2, "root");
-        zero["stats"] = new JsonObject { ["totalCost"] = 0, ["lastUsage"] = new JsonObject { ["cost"] = 0 } };
+        zero["stats"] = new JsonObject
+        {
+            ["totalCost"] = 0,
+            ["lastUsage"] = new JsonObject { ["cost"] = 0 },
+        };
         var priced = Row("priced", 3, "root");
-        priced["stats"] = new JsonObject { ["totalCost"] = .125, ["lastUsage"] = new JsonObject { ["cost"] = .125 } };
+        priced["stats"] = new JsonObject
+        {
+            ["totalCost"] = .125,
+            ["lastUsage"] = new JsonObject { ["cost"] = .125 },
+        };
         catalog.Upsert([root, unknown]);
         Assert.Null(catalog.Summary()["cost"]);
         Assert.Null(catalog.Descendants("root", 10).Summary["cost"]);
@@ -105,7 +113,10 @@ public sealed class SessionCatalogTests
         catalog.Upsert([zero, priced, other, unknown]);
         Assert.Equal(.375, SessionCatalog.Number(catalog.Summary()["cost"]));
         Assert.Equal(.375, SessionCatalog.Number(catalog.Descendants("root", 1).Summary["cost"]));
-        Assert.Equal(0, SessionCatalog.Number(catalog.Get("zero")?["stats"]?["lastUsage"]?["cost"]));
+        Assert.Equal(
+            0,
+            SessionCatalog.Number(catalog.Get("zero")?["stats"]?["lastUsage"]?["cost"])
+        );
         Assert.Null(catalog.Get("unknown")?["stats"]?["totalCost"]);
         priced["stats"]!["totalCost"] = .375;
         catalog.Upsert([priced]);

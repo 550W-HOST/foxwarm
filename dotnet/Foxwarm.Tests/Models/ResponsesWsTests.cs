@@ -26,27 +26,55 @@ public sealed class ResponsesWsTests
             }
         );
         await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
-        var catalog = HostModels.Parse(new JsonObject
-        {
-            ["providers"] = new JsonObject
+        var catalog = HostModels.Parse(
+            new JsonObject
             {
-                ["p"] = new JsonObject
+                ["providers"] = new JsonObject
                 {
-                    ["providerType"] = "openai-ws",
-                    ["baseUrl"] = peer.Uri.ToString(),
-                    ["models"] = new JsonArray(new JsonObject
+                    ["p"] = new JsonObject
                     {
-                        ["id"] = "wire",
-                        ["tokenPricesPerMillion"] = new JsonObject { ["cached"] = 1, ["input"] = 2, ["output"] = 3 },
-                    }),
+                        ["providerType"] = "openai-ws",
+                        ["baseUrl"] = peer.Uri.ToString(),
+                        ["models"] = new JsonArray(
+                            new JsonObject
+                            {
+                                ["id"] = "wire",
+                                ["tokenPricesPerMillion"] = new JsonObject
+                                {
+                                    ["cached"] = 1,
+                                    ["input"] = 2,
+                                    ["output"] = 3,
+                                },
+                            }
+                        ),
+                    },
                 },
             },
-        }, new JsonObject());
+            new JsonObject()
+        );
         using var http = new HttpClient();
-        var requests = new ModelRequestOwner(http, Options(peer.Uri), new ModelRouting(), websockets: transport);
-        var result = await requests.RequestAsync("session", catalog, "p", null, "lineage", "turn",
-            [Message("user", "input")], (_, _) => Task.FromResult("prompt"), null, null, null, null,
-            CancellationToken.None, ModelRequestScope.Canonical);
+        var requests = new ModelRequestOwner(
+            http,
+            Options(peer.Uri),
+            new ModelRouting(),
+            websockets: transport
+        );
+        var result = await requests.RequestAsync(
+            "session",
+            catalog,
+            "p",
+            null,
+            "lineage",
+            "turn",
+            [Message("user", "input")],
+            (_, _) => Task.FromResult("prompt"),
+            null,
+            null,
+            null,
+            null,
+            CancellationToken.None,
+            ModelRequestScope.Canonical
+        );
         Assert.Null(result.AssistantMessage);
         Assert.Equal(13, result.Usage!["inputTokens"]!.GetValue<long>());
         Assert.Equal(2, result.Usage["outputTokens"]!.GetValue<long>());

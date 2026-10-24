@@ -143,7 +143,17 @@ public sealed class ModelConfigurationFormTests
                     ["apiKey"] = "synthetic-retained-key",
                     ["extraFields"] = new JsonObject { ["retained_marker"] = "provider-override" },
                     ["models"] = new JsonArray(
-                        new JsonObject { ["id"] = "wire-b", ["maxOutput"] = 123, ["tokenPricesPerMillion"] = new JsonObject { ["cached"] = 0, ["input"] = .25, ["output"] = 1.5 } }
+                        new JsonObject
+                        {
+                            ["id"] = "wire-b",
+                            ["maxOutput"] = 123,
+                            ["tokenPricesPerMillion"] = new JsonObject
+                            {
+                                ["cached"] = 0,
+                                ["input"] = .25,
+                                ["output"] = 1.5,
+                            },
+                        }
                     ),
                 },
                 ["omitted"] = new JsonObject { ["models"] = new JsonArray("unused") },
@@ -244,7 +254,12 @@ public sealed class ModelConfigurationFormTests
         Assert.Equal("b/wire-b", singleReceipt["payload"]!["defaultKey"]!.GetValue<string>());
         Assert.Equal("b", Assert.Single(configuration.Capture().Options).ProviderKey);
         Assert.Equal(123, configuration.Capture().Resolve(null).MaxOutput);
-        Assert.Equal(.25, configuration.Capture().Resolve(null).Configuration["tokenPricesPerMillion"]!["input"]!.GetValue<double>());
+        Assert.Equal(
+            .25,
+            configuration.Capture().Resolve(null).Configuration["tokenPricesPerMillion"]![
+                "input"
+            ]!.GetValue<double>()
+        );
 
         var raw =
             "# exact raw bytes\r\ndefault: raw/wire\r\nproviders:\r\n  raw: {providerType: openai-responses, models: [wire]}\r\n";

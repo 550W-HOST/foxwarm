@@ -104,7 +104,10 @@ public sealed class SessionCatalogSourceTests
         );
         var v2Root = Path.Combine(temp.Path, "v2");
         Directory.CreateDirectory(Path.Combine(v2Root, "state"));
-        File.Copy(Path.Combine(temp.Path, "source-v2.sqlite"), Path.Combine(v2Root, "state", "catalog.sqlite"));
+        File.Copy(
+            Path.Combine(temp.Path, "source-v2.sqlite"),
+            Path.Combine(v2Root, "state", "catalog.sqlite")
+        );
         using (var v2 = new SessionCatalog(v2Root))
         {
             v2.Initialize();
@@ -305,10 +308,22 @@ public sealed class SessionCatalogSourceTests
         );
         all.Remove(index);
         // Keep the Source core oracle while allowing the additive USD projection schema.
-        foreach (var trigger in all.OfType<JsonObject>().Where(row => row["name"]!.GetValue<string>().StartsWith("session_catalog_cost_", StringComparison.Ordinal)).ToArray())
+        foreach (
+            var trigger in all.OfType<JsonObject>()
+                .Where(row =>
+                    row["name"]!
+                        .GetValue<string>()
+                        .StartsWith("session_catalog_cost_", StringComparison.Ordinal)
+                )
+                .ToArray()
+        )
             all.Remove(trigger);
-        foreach (var table in all.OfType<JsonObject>().Where(row => row["type"]!.GetValue<string>() == "table"))
-            table["sql"] = table["sql"]!.GetValue<string>()
+        foreach (
+            var table in all.OfType<JsonObject>()
+                .Where(row => row["type"]!.GetValue<string>() == "table")
+        )
+            table["sql"] = table["sql"]!
+                .GetValue<string>()
                 .Replace(",costrealnotnulldefault0", "", StringComparison.Ordinal)
                 .Replace(",cost_countintegernotnulldefault0", "", StringComparison.Ordinal)
                 .Replace(",costreal", "", StringComparison.Ordinal);

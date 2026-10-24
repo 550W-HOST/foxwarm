@@ -496,7 +496,10 @@ SELECT focus_id,session_id,depth FROM paths ORDER BY focus_id,depth DESC
     private const string DescendantCte =
         "WITH RECURSIVE subtree(session_id) AS (VALUES($p0) UNION SELECT child.session_id FROM session_catalog child JOIN subtree ON child.parent_session_id=subtree.session_id) ";
 
-    internal (JsonObject Summary, JsonObject[] Rows, long CostCount) Descendants(string id, int limit)
+    internal (JsonObject Summary, JsonObject[] Rows, long CostCount) Descendants(
+        string id,
+        int limit
+    )
     {
         lock (gate)
         {
