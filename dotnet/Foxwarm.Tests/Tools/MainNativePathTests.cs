@@ -58,7 +58,10 @@ public sealed class MainNativePathTests
         Assert.Equal(Path.Combine(agent, "tmp"), paths.ExecCwd(" $fw_tmp "));
         Assert.Equal(Path.Combine(agent, "tmp"), paths.ExecCwd(" \t "));
         Assert.Equal(Path.Combine(agent, "tmp", "$fw_tmp"), paths.ExecCwd("./$fw_tmp"));
-        Assert.Equal(Path.Combine(agent, "tmp"), (paths with { SessionCwd = " $fw_tmp " }).ExecCwd(null));
+        Assert.Equal(
+            Path.Combine(agent, "tmp"),
+            (paths with { SessionCwd = " $fw_tmp " }).ExecCwd(null)
+        );
         Assert.Equal(agent, (paths with { SessionCwd = null }).ExecCwd(" \t "));
         Assert.Equal(agent, paths.ExecCwd(" $fw_agentdir "));
         Assert.Equal(Path.Combine(agent, "note"), paths.FilePath("$fw_agentdir//note"));
