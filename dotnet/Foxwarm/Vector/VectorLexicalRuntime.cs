@@ -544,7 +544,9 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
         }
         catch
         {
-            return Task.FromResult(new VectorSearchResult([], Metadata(error: "LEXICAL_QUERY_FAILED")));
+            return Task.FromResult(
+                new VectorSearchResult([], Metadata(error: "LEXICAL_QUERY_FAILED"))
+            );
         }
     }
 

@@ -13,7 +13,9 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
     );
     private readonly Dictionary<string, string[]> dependencies = new(StringComparer.Ordinal);
     private readonly Dictionary<string, HashSet<string>> reverse = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, (string WaitId, QueueItem Item)> pending = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (string WaitId, QueueItem Item)> pending = new(
+        StringComparer.Ordinal
+    );
     private readonly Queue<string> order = new();
     private readonly Dictionary<string, TaskCompletionSource> active = new(StringComparer.Ordinal);
     private readonly HashSet<Task> tasks = [];

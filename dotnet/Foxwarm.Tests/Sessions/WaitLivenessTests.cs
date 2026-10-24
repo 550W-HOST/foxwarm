@@ -11,10 +11,20 @@ namespace Foxwarm.Tests;
 public sealed class WaitLivenessTests
 {
     private static SessionManager Manager(string root, Peer peer) =>
-        new(Path.Combine(root, "data"), Path.Combine(root, "work"), peer.Options, HostModels.ForTest(peer.Options));
+        new(
+            Path.Combine(root, "data"),
+            Path.Combine(root, "work"),
+            peer.Options,
+            HostModels.ForTest(peer.Options)
+        );
 
     private static JsonObject WaitingFor(params string[] ids) =>
-        new() { ["waitAnySessions"] = new JsonArray(ids.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()) };
+        new()
+        {
+            ["waitAnySessions"] = new JsonArray(
+                ids.Select(id => (JsonNode?)JsonValue.Create(id)).ToArray()
+            ),
+        };
 
     private static async Task Until(Func<bool> condition)
     {
@@ -77,13 +87,19 @@ public sealed class WaitLivenessTests
             }
             catch (Exception error)
                 when (stop.IsCancellationRequested
-                    && error is OperationCanceledException or HttpListenerException or ObjectDisposedException) { }
+                    && error
+                        is OperationCanceledException
+                            or HttpListenerException
+                            or ObjectDisposedException
+                ) { }
         }
 
         private async Task Respond(HttpListenerContext context)
         {
             Requests.Enqueue(
-                JsonNode.Parse(await new StreamReader(context.Request.InputStream).ReadToEndAsync())!.AsObject()
+                JsonNode
+                    .Parse(await new StreamReader(context.Request.InputStream).ReadToEndAsync())!
+                    .AsObject()
             );
             if (BeforeResponse is not null)
                 await BeforeResponse();
@@ -107,11 +123,7 @@ public sealed class WaitLivenessTests
                             ),
                         }
                     ),
-                    ["usage"] = new JsonObject
-                    {
-                        ["input_tokens"] = 10,
-                        ["output_tokens"] = 3,
-                    },
+                    ["usage"] = new JsonObject { ["input_tokens"] = 10, ["output_tokens"] = 3 },
                 },
             };
             context.Response.ContentType = "text/event-stream";
@@ -145,7 +157,10 @@ public sealed class WaitLivenessTests
         {
             if (occurrence == 2)
             {
-                await dependency.Registry.Ingress.EnqueueAsync(dependency.Id, QueueItem.UserText("intervening work"));
+                await dependency.Registry.Ingress.EnqueueAsync(
+                    dependency.Id,
+                    QueueItem.UserText("intervening work")
+                );
                 await Settle(manager);
                 Assert.False(dependency.Metadata().Busy);
                 Assert.Empty(dependency.Entry.Snapshot().Queue);
@@ -160,7 +175,14 @@ public sealed class WaitLivenessTests
             Assert.Null(waiter.Entry.Snapshot().Meta["waitLivenessFingerprints"]);
             Diagnostic(peer.Requests.Last());
         }
-        Assert.Equal(3, waiter.History().Count(row => row.ToJsonString().Contains("wait-sources-quiescent", StringComparison.Ordinal)));
+        Assert.Equal(
+            3,
+            waiter
+                .History()
+                .Count(row =>
+                    row.ToJsonString().Contains("wait-sources-quiescent", StringComparison.Ordinal)
+                )
+        );
         Assert.Equal(4, peer.Requests.Count);
     }
 
@@ -169,7 +191,9 @@ public sealed class WaitLivenessTests
     [InlineData("cycle")]
     [InlineData("missing")]
     [InlineData("input")]
-    public async Task Cold_catalog_diagnosis_loads_only_the_waiter_and_respects_input_backed_progress(string graph)
+    public async Task Cold_catalog_diagnosis_loads_only_the_waiter_and_respects_input_backed_progress(
+        string graph
+    )
     {
         using var temp = new TempDirectory();
         await using var peer = new Peer();
@@ -182,12 +206,14 @@ public sealed class WaitLivenessTests
                 var other = await seed.CreateNamedAsync("main", "other", null, null);
                 // Supported persisted declarations without the current liveness version.
                 foreach (var (from, to) in new[] { (dependency, other), (other, dependency) })
-                    await from.Entry.SaveLane.StartWaitAsync(new JsonObject
-                    {
-                        ["id"] = Guid.NewGuid().ToString(),
-                        ["startedAt"] = 1,
-                        ["waitAnySessions"] = new JsonArray(to.Id),
-                    });
+                    await from.Entry.SaveLane.StartWaitAsync(
+                        new JsonObject
+                        {
+                            ["id"] = Guid.NewGuid().ToString(),
+                            ["startedAt"] = 1,
+                            ["waitAnySessions"] = new JsonArray(to.Id),
+                        }
+                    );
             }
             if (graph == "input")
                 await seed.DeclareWaitAsync(dependency, new JsonObject { ["waitForInput"] = true });
@@ -229,9 +255,12 @@ public sealed class WaitLivenessTests
         await manager.LoadAsync();
         var owner = await manager.CreateNamedAsync("main", "waiter", null, null);
         var oldId = await manager.DeclareWaitAsync(owner, new() { ["waitForInput"] = true });
-        var old = SessionWait.Event("wait-sources-quiescent", "old queued diagnostic",
+        var old = SessionWait.Event(
+            "wait-sources-quiescent",
+            "old queued diagnostic",
             new() { ["fingerprint"] = "old-receipt" },
-            new() { ["waitLivenessWaitId"] = oldId, ["waitLivenessFingerprint"] = "old-receipt" });
+            new() { ["waitLivenessWaitId"] = oldId, ["waitLivenessFingerprint"] = "old-receipt" }
+        );
         Assert.True(await owner.Entry.SaveLane.AdmitAsync(old, SaveKind.Strict));
         Assert.Null(owner.WaitSnapshot());
         Assert.Single(owner.Entry.Snapshot().Queue);
@@ -239,14 +268,23 @@ public sealed class WaitLivenessTests
         Assert.NotEqual(oldId, currentId);
         Assert.Empty(owner.Entry.Snapshot().Queue);
         // A new-style stale event has only the existing correlation field.
-        await manager.AdmitWaitEventAsync(owner.Id, SessionWait.Event("wait-sources-quiescent", "stale",
-            fields: new() { ["waitLivenessWaitId"] = oldId }));
+        await manager.AdmitWaitEventAsync(
+            owner.Id,
+            SessionWait.Event(
+                "wait-sources-quiescent",
+                "stale",
+                fields: new() { ["waitLivenessWaitId"] = oldId }
+            )
+        );
         await manager.AdmitWaitEventAsync(owner.Id, old);
         Assert.Equal(currentId, SessionWait.Text(owner.WaitSnapshot()?["id"]));
         Assert.Empty(owner.Entry.Snapshot().Queue);
         Assert.Empty(peer.Requests);
-        var current = SessionWait.Event("wait-sources-quiescent", "current",
-            fields: new() { ["waitLivenessWaitId"] = currentId });
+        var current = SessionWait.Event(
+            "wait-sources-quiescent",
+            "current",
+            fields: new() { ["waitLivenessWaitId"] = currentId }
+        );
         await manager.AdmitWaitEventAsync(owner.Id, current);
         await Until(() => peer.Requests.Count == 1);
         await Settle(manager);
@@ -266,19 +304,38 @@ public sealed class WaitLivenessTests
             var owner = await seed.CreateNamedAsync("main", "waiter", null, null);
             await seed.CreateNamedAsync("main", "dependency", null, null);
             var waitId = await seed.DeclareWaitAsync(owner, new() { ["waitForInput"] = true });
-            var old = SessionWait.Event("wait-sources-quiescent", "stored diagnostic",
+            var old = SessionWait.Event(
+                "wait-sources-quiescent",
+                "stored diagnostic",
                 new() { ["fingerprint"] = "old-receipt" },
-                new() { ["waitLivenessWaitId"] = waitId, ["waitLivenessFingerprint"] = "old-receipt" });
-            await ForkClearLifecycleTests.AppendAsync(owner, new JsonObject
-            {
-                ["role"] = "user",
-                ["parts"] = new JsonArray(old.Parts!.Select(part => (JsonNode)part.DeepClone()).ToArray()),
-            });
+                new()
+                {
+                    ["waitLivenessWaitId"] = waitId,
+                    ["waitLivenessFingerprint"] = "old-receipt",
+                }
+            );
+            await ForkClearLifecycleTests.AppendAsync(
+                owner,
+                new JsonObject
+                {
+                    ["role"] = "user",
+                    ["parts"] = new JsonArray(
+                        old.Parts!.Select(part => (JsonNode)part.DeepClone()).ToArray()
+                    ),
+                }
+            );
             // This is ordinary unknown metadata from an older writer, not a new receipt.
-            owner.Entry.WithState(state => state.Meta["waitLivenessFingerprints"] = new JsonArray("old-receipt"));
+            owner.Entry.WithState(state =>
+                state.Meta["waitLivenessFingerprints"] = new JsonArray("old-receipt")
+            );
             Assert.True(await owner.Entry.SaveLane.AdmitAsync(old, SaveKind.Strict));
             Assert.Null(owner.WaitSnapshot());
-            Assert.Equal("old-receipt", SessionWait.Text(owner.Entry.Snapshot().Queue[0].OpenFields?["waitLivenessFingerprint"]));
+            Assert.Equal(
+                "old-receipt",
+                SessionWait.Text(
+                    owner.Entry.Snapshot().Queue[0].OpenFields?["waitLivenessFingerprint"]
+                )
+            );
         }
         for (var opening = 0; opening < 2; opening++)
         {
@@ -289,7 +346,14 @@ public sealed class WaitLivenessTests
             if (opening == 0)
             {
                 Assert.Single(peer.Requests);
-                Assert.Equal(2, owner.History().Count(row => row.ToJsonString().Contains("fingerprint=", StringComparison.Ordinal)));
+                Assert.Equal(
+                    2,
+                    owner
+                        .History()
+                        .Count(row =>
+                            row.ToJsonString().Contains("fingerprint=", StringComparison.Ordinal)
+                        )
+                );
                 await manager.DeclareWaitAsync(owner, WaitingFor("dependency"));
                 await Until(() => peer.Requests.Count == 2);
                 await Settle(manager);
@@ -297,12 +361,22 @@ public sealed class WaitLivenessTests
                 Assert.Contains("wait-sources-quiescent", fresh);
                 Assert.DoesNotContain("fingerprint=", fresh);
             }
-            Assert.Equal(new[] { "old-receipt" }, SessionWait.Strings(owner.Entry.Snapshot().Meta["waitLivenessFingerprints"]));
+            Assert.Equal(
+                new[] { "old-receipt" },
+                SessionWait.Strings(owner.Entry.Snapshot().Meta["waitLivenessFingerprints"])
+            );
             Assert.Null(owner.WaitSnapshot());
             Assert.Empty(owner.Entry.Snapshot().Queue);
             await owner.Entry.SaveLane.SaveStrictAsync();
-            var stored = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(temp.Path, "data/state/sessions/waiter.json")))!;
-            Assert.Equal(new[] { "old-receipt" }, SessionWait.Strings(stored["meta"]?["waitLivenessFingerprints"]));
+            var stored = JsonNode.Parse(
+                await File.ReadAllTextAsync(
+                    Path.Combine(temp.Path, "data/state/sessions/waiter.json")
+                )
+            )!;
+            Assert.Equal(
+                new[] { "old-receipt" },
+                SessionWait.Strings(stored["meta"]?["waitLivenessFingerprints"])
+            );
             Assert.Equal(2, peer.Requests.Count);
         }
     }
@@ -312,7 +386,12 @@ public sealed class WaitLivenessTests
     {
         using var temp = new TempDirectory();
         await using var peer = new Peer();
-        var releases = Enumerable.Range(0, 5).Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
+        var releases = Enumerable
+            .Range(0, 5)
+            .Select(_ => new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            ))
+            .ToArray();
         var entered = -1;
         peer.BeforeResponse = () => releases[Interlocked.Increment(ref entered)].Task;
         await using var manager = Manager(temp.Path, peer);
@@ -361,15 +440,22 @@ public sealed class WaitLivenessTests
             ["waitAllSessions"] = new JsonArray(first.Id, second.Id),
             ["wakeIfNoActivityAfterSeconds"] = 3600,
         };
-        QueueItem Report(string source) => new(QueueItemType.Intersession,
-            [new JsonObject { ["text"] = "report from " + source }], SourceSessionId: source);
+        QueueItem Report(string source) =>
+            new(
+                QueueItemType.Intersession,
+                [new JsonObject { ["text"] = "report from " + source }],
+                SourceSessionId: source
+            );
         await manager.DeclareWaitAsync(owner, args);
         Assert.True(await owner.Entry.SaveLane.AdmitAsync(Report(first.Id), SaveKind.Strict));
         Assert.Empty(owner.Entry.Snapshot().Queue);
         Assert.Single(owner.Entry.Snapshot().Meta["wait"]!["waitAll"]!["deferredQueue"]!.AsArray());
         Assert.True(await owner.Entry.SaveLane.AdmitAsync(Report(second.Id), SaveKind.Strict));
         Assert.Null(owner.WaitSnapshot());
-        Assert.Equal(new[] { first.Id, second.Id }, owner.Entry.Snapshot().Queue.Select(item => item.SourceSessionId));
+        Assert.Equal(
+            new[] { first.Id, second.Id },
+            owner.Entry.Snapshot().Queue.Select(item => item.SourceSessionId)
+        );
         await owner.StartProcessing();
         await Settle(manager);
         await manager.DeclareWaitAsync(owner, args);

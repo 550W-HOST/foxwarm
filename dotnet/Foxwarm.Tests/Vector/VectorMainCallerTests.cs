@@ -260,7 +260,11 @@ public sealed class VectorMainCallerTests
             lexical ? "hybrid search" : "semantic search with bounded identifier fallback",
             result.SearchLabel
         );
-        var recalled = await Recall(manager, owner, new() { ["vector_query"] = "StableMixedIdentifier" });
+        var recalled = await Recall(
+            manager,
+            owner,
+            new() { ["vector_query"] = "StableMixedIdentifier" }
+        );
         Assert.Null(recalled["error"]);
         Assert.Contains("indexed authority", recalled.ToJsonString());
     }
