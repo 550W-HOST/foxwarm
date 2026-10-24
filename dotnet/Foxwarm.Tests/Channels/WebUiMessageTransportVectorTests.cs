@@ -55,6 +55,7 @@ public sealed class WebUiMessageTransportVectorTests
                 .MessageJson
         );
     }
+
     [Fact]
     public async Task Hosted_display_allowlist_is_applied_to_real_Vector_search_source_messages_only()
     {
@@ -64,19 +65,43 @@ public sealed class WebUiMessageTransportVectorTests
         {
             var owner = await seed.CreateNamedAsync("main", "hosted-search", null, null);
             var message = WebUiAdjacentProjectionTests.HostedMessage();
-            message["parts"]!.AsArray().Add(new JsonObject { ["text"] = "dotnet violet hosted display" });
+            message["parts"]!
+                .AsArray()
+                .Add(new JsonObject { ["text"] = "dotnet violet hosted display" });
             await ForkClearLifecycleTests.AppendAsync(owner, message);
             canonical = owner.Archive.ReadMessages().Single().MessageJson;
             await seed.ForceVectorIndexAsync(owner);
         }
         var settings = await HttpServerSettings.CaptureDesktopAsync(f.Data);
-        await using var host = await MainHost.CreateAsync([], f.Data, f.Work, new ModelConfiguration(f.Data), settings, null);
+        await using var host = await MainHost.CreateAsync(
+            [],
+            f.Data,
+            f.Work,
+            new ModelConfiguration(f.Data),
+            settings,
+            null
+        );
         await host.App.StartAsync();
         using var admin = new HttpClient { BaseAddress = new(settings.Address.BaseUrl) };
         admin.DefaultRequestHeaders.Authorization = new("Bearer", settings.Token);
-        var result = (await admin.GetFromJsonAsync<JsonObject>("api/history/search?query=dotnet%20violet&limit=1&sessionId=hosted-search"))!;
+        var result = (
+            await admin.GetFromJsonAsync<JsonObject>(
+                "api/history/search?query=dotnet%20violet&limit=1&sessionId=hosted-search"
+            )
+        )!;
         var source = Assert.Single(result["results"]!.AsArray());
-        WebUiAdjacentProjectionTests.AssertHostedDisplay(Assert.Single(source!["messages"]!.AsArray())!.AsObject());
-        Assert.Equal(canonical, new SqliteArchiveMessageStore(Path.Combine(f.Data, "state", "archive-store.sqlite"), "hosted-search").ReadMessages().Single().MessageJson);
+        WebUiAdjacentProjectionTests.AssertHostedDisplay(
+            Assert.Single(source!["messages"]!.AsArray())!.AsObject()
+        );
+        Assert.Equal(
+            canonical,
+            new SqliteArchiveMessageStore(
+                Path.Combine(f.Data, "state", "archive-store.sqlite"),
+                "hosted-search"
+            )
+                .ReadMessages()
+                .Single()
+                .MessageJson
+        );
     }
 }

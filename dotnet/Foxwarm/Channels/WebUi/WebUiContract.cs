@@ -163,19 +163,39 @@ internal static class WebUiContract
                     ? (item.Message["parts"] as JsonArray ?? []).OfType<JsonObject>()
                     : item.Parts ?? []
             );
-            if (item.Message is null && item.Type != QueueItemType.User
-                && !parts.OfType<JsonObject>().Any(part => !string.IsNullOrWhiteSpace(SessionWait.Text(part["system"]))))
+            if (
+                item.Message is null
+                && item.Type != QueueItemType.User
+                && !parts
+                    .OfType<JsonObject>()
+                    .Any(part => !string.IsNullOrWhiteSpace(SessionWait.Text(part["system"])))
+            )
             {
-                var text = string.Join("\n", parts.OfType<JsonObject>()
-                    .Select(part => SessionWait.Text(part["text"]) is { Length: > 0 } body
-                        ? body : SessionWait.Text(part["thinking"]) ?? "")
-                    .Where(body => body.Length > 0)).Trim();
+                var text = string.Join(
+                        "\n",
+                        parts
+                            .OfType<JsonObject>()
+                            .Select(part =>
+                                SessionWait.Text(part["text"]) is { Length: > 0 } body
+                                    ? body
+                                    : SessionWait.Text(part["thinking"]) ?? ""
+                            )
+                            .Where(body => body.Length > 0)
+                    )
+                    .Trim();
                 parts = new JsonArray();
                 if (text.Length > 0)
                 {
-                    var source = string.IsNullOrEmpty(item.SourceSessionId) ? ""
+                    var source = string.IsNullOrEmpty(item.SourceSessionId)
+                        ? ""
                         : $" sourceSessionId=\"{LocalSessionTurnHost.EscapeFoxwarmAttribute(item.SourceSessionId)}\"";
-                    parts.Add(new JsonObject { ["system"] = $"<foxwarm-message type=\"{type}\"{source} hint=\"queued session event preview\">\n{TruncateQueuedPreviewText(text)}\n</foxwarm-message>" });
+                    parts.Add(
+                        new JsonObject
+                        {
+                            ["system"] =
+                                $"<foxwarm-message type=\"{type}\"{source} hint=\"queued session event preview\">\n{TruncateQueuedPreviewText(text)}\n</foxwarm-message>",
+                        }
+                    );
                 }
             }
             if (parts.Count == 0)
@@ -207,9 +227,11 @@ internal static class WebUiContract
             {
                 var inline = part["inlineData"] as JsonObject;
                 var reference = part["inlineDataRef"] as JsonObject;
-                var mime = SessionWait.Text(inline?["mimeType"])
+                var mime =
+                    SessionWait.Text(inline?["mimeType"])
                     ?? SessionWait.Text(inline?["mime_type"])
-                    ?? SessionWait.Text(reference?["mimeType"]) ?? "attachment";
+                    ?? SessionWait.Text(reference?["mimeType"])
+                    ?? "attachment";
                 projected = new JsonObject { ["text"] = $"[{mime} attachment preview omitted]" };
             }
             parts.Add(projected);

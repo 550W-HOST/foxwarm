@@ -67,10 +67,12 @@ internal static class WebUiMessageTransport
         ProjectMessage(message);
         foreach (var part in (message["parts"] as JsonArray ?? []).OfType<JsonObject>())
         {
-            if (part["providerMeta"] is not JsonObject metadata
+            if (
+                part["providerMeta"] is not JsonObject metadata
                 || metadata["openaiResponses"] is not JsonObject responses
                 || responses["outputItem"] is not JsonObject item
-                || SessionWait.Text(item["type"]) != "web_search_call")
+                || SessionWait.Text(item["type"]) != "web_search_call"
+            )
                 continue;
             var display = new JsonObject();
             foreach (var field in new[] { "sourceModelId", "annotations" })
@@ -85,16 +87,27 @@ internal static class WebUiMessageTransport
                     if (SessionWait.Text(original["query"]) is { } query)
                         action["query"] = query;
                     if (original["queries"] is JsonArray queries)
-                        action["queries"] = new JsonArray(queries
-                            .OfType<JsonValue>().Where(value => value.TryGetValue<string>(out _))
-                            .Take(20).Select(value => value.DeepClone()).ToArray());
+                        action["queries"] = new JsonArray(
+                            queries
+                                .OfType<JsonValue>()
+                                .Where(value => value.TryGetValue<string>(out _))
+                                .Take(20)
+                                .Select(value => value.DeepClone())
+                                .ToArray()
+                        );
                 }
-                else if (SessionWait.Text(original["type"]) == "open_page"
-                    && SessionWait.Text(original["url"]) is { } url)
+                else if (
+                    SessionWait.Text(original["type"]) == "open_page"
+                    && SessionWait.Text(original["url"]) is { } url
+                )
                     action = new JsonObject { ["type"] = "open_page", ["url"] = url };
             }
             if (action is not null)
-                display["outputItem"] = new JsonObject { ["type"] = "web_search_call", ["action"] = action };
+                display["outputItem"] = new JsonObject
+                {
+                    ["type"] = "web_search_call",
+                    ["action"] = action,
+                };
             metadata["openaiResponses"] = display;
         }
     }

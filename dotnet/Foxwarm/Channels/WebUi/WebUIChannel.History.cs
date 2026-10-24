@@ -89,7 +89,9 @@ internal sealed partial class WebUIChannel
                         WebUiMessageTransport.ProjectMessage(message);
                     if (item["parts"] is JsonArray parts)
                     {
-                        item["parts"] = WebUiContract.SanitizeQueuedPreviewParts(parts.OfType<JsonObject>());
+                        item["parts"] = WebUiContract.SanitizeQueuedPreviewParts(
+                            parts.OfType<JsonObject>()
+                        );
                         WebUiMessageTransport.ProjectParts(item["parts"]);
                     }
                 }
