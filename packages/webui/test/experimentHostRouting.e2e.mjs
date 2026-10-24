@@ -130,7 +130,7 @@ try {
   assert(!JSON.stringify(catalog).includes('synthetic-old-a'))
   await select(main, 'route', 'max'); const beginning = requests.length, began = Date.now()
   await page.evaluate(() => window.foxwarmTest.sendMessage('CASE:default'))
-  await until(async () => (await page.evaluate(() => document.body.innerText)).includes('LLM Error: Attempt 1/6'), 'real original retry notice')
+  await page.waitForSelector('[data-runtime-presentation="retry"]', { visible: true })
   await until(async () => !(await state(main)).busy && (await history(main)).messages.some(row => row.parts?.some(part => part.text === 'DONE-default-b')), 'real default sixth attempt', 100000)
   const defaults = requests.slice(beginning), elapsed = Date.now() - began
   assert.deepEqual(defaults.slice(0, 6).map(record => record.label), ['a', 'a', 'a', 'a', 'a', 'b'])
