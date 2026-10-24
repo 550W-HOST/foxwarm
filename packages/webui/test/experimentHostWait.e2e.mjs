@@ -51,7 +51,7 @@ async function create(name, script = []) {
 async function idle(id) { return until(async () => !(await session(id)).busy, `${id} idle`) }
 async function waiting(id) { return until(async () => (await session(id)).runtimeState?.state === 'waiting', `${id} waiting`) }
 async function final(id, marker) {
-  await until(async () => (await history(id)).some(row => row.parts?.some(part => part.text?.includes(marker))), marker)
+  await until(async () => { assert.equal(errors.length, 0, errors.join('\n')); return (await history(id)).some(row => row.parts?.some(part => part.text?.includes(marker))) }, marker)
   await idle(id)
 }
 async function deliver(source, target, label, extra = []) {
@@ -62,12 +62,8 @@ async function deliver(source, target, label, extra = []) {
 }
 async function startHost() {
   await writeModelFixture(dataRoot, { default: 'local', providers: { 'local': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.address().port}`, apiKey: providerToken, models: ['wire'] } } })
-  const child = spawn(dotnet, [process.env.FOXWARM_EXPERIMENT_HOST_DLL || resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
-    stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(dataRoot),
-      FOXWARM_EXPERIMENT_API_TOKEN: token,
-      FOXWARM_EXPERIMENT_RESPONSES_BASE_URI: `http://127.0.0.1:${provider.address().port}`,
-      FOXWARM_EXPERIMENT_PROVIDER_TOKEN: providerToken, FOXWARM_EXPERIMENT_REQUEST_MODEL: 'wire',
-      FOXWARM_EXPERIMENT_CONCRETE_MODEL: 'local/wire', } })
+  const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
+    stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(dataRoot), } })
   let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-14000) })
   const owned = { child, get output() { return output } }; host = owned
   await until(async () => { try { return (await request('GET', '/health')).status === 200 } catch { assert.equal(child.exitCode, null, output); return false } }, 'host health')
@@ -121,18 +117,18 @@ try {
     [call('finished-report', 'send_to_session', { sessionId: sink, message: 'REPORT-ONCE', afterSend: 'finish' })]])
   await page.evaluate(id => { location.hash = '#session/' + encodeURIComponent(id) }, continued)
   await send(continued, 'INTERRUPT-ME'); await until(() => counts.get(continued) === 1, 'held provider')
-  assert.equal((await command(continued, '/continue')).status, 409)
+  assert.equal((await command(continued, '/continue')).status, 200)
   assert.equal((await command(continued, '/stop')).status, 200); await stopped.promise; await idle(continued)
   await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Continue'))
   await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Continue').click())
-  await until(() => counts.get(continued) === 2, 'original Continue provider'); assert.equal((await command(continued, '/continue')).status, 409)
+  await until(() => counts.get(continued) === 2, 'original Continue provider'); assert.equal((await command(continued, '/continue')).status, 200)
   assert.equal((await command(continued, '/stop')).status, 200); await stoppedContinue.promise; await idle(continued)
   await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Continue'))
   await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Continue').click())
   await until(() => counts.get(continued) === 3, 'Continue after stopped continuation')
   held.release(); await final(sink, 'SINK-DONE'); await idle(continued)
-  assert.equal(counts.get(continued), 4); assert.equal((await command(continued, '/continue')).status, 409)
-  assert.equal((await history(continued)).filter(row => row.role === 'user' && row.parts.some(part => part.text === 'INTERRUPT-ME')).length, 1)
+  assert.equal(counts.get(continued), 4); assert.equal((await command(continued, '/continue')).status, 200); assert.equal(counts.get(continued), 4)
+  assert.equal((await history(continued)).filter(row => row.role === 'user' && row.parts.some(part => part.text === 'INTERRUPT-ME' || part.system?.includes('\nINTERRUPT-ME\n</foxwarm-message>'))).length, 1)
   assert.equal(await readFile(join(dataRoot, 'agents', 'team', 'once.txt'), 'utf8'), 'one-effect')
 
   // Handoff wait still survives a sibling error and a child result releases the same parent processor.
@@ -142,7 +138,7 @@ try {
   await page.evaluate(id => { location.hash = '#session/' + encodeURIComponent(id) }, slow)
   await send(slow, 'DELEGATE'); await waiting(slow)
   await until(() => frames.some(frame => frame.type === 'session-state' && frame.sessionId === slow && frame.session.runtimeState?.state === 'waiting'), 'real Chat waiting frame')
-  assert.equal((await command(slow, '/continue')).status, 409); assert.equal((await command(slow, '/stop')).body.stoppedCurrent, false)
+  assert.equal((await command(slow, '/continue')).status, 200); assert.equal((await command(slow, '/stop')).body.success, true)
   assert.equal((await authority(slow)).meta.wait.waitAnySessions[0], 'team/slow_slow-child')
   await sleep(650); assert.equal(counts.get(slow), 1, 'Active child suppresses quiescence wake')
   releaseChild.release(); await final(slow, 'SLOW-PARENT-DONE'); assert.equal((await authority(slow)).meta.wait, undefined)
@@ -166,9 +162,9 @@ try {
   const invalidRow = (await history(invalid)).find(row => row.role === 'tool')
   assert(invalidRow.parts.every(part => part.functionResponse.response.error)); assert.equal((await authority(invalid)).meta.wait, undefined)
 
-  const stoppedTool = await create('stopped-tool', [[call('wait-before-stop', 'wait', { wakeIfNoActivityAfterSeconds: 2 }), call('stop-shell', 'exec', { command: 'sleep 1.5', timeout: 3 })], [text('STOPPED-EXEC-EVENT')]])
+  const stoppedTool = await create('stopped-tool', [[call('wait-before-stop', 'wait', { wakeIfNoActivityAfterSeconds: 2 }), call('stop-shell', 'exec', { command: 'printf begun > stop-shell-started; sleep 1.5', timeout: 3 })], [text('STOPPED-EXEC-EVENT')]])
   await send(stoppedTool, 'STOP-TOOL')
-  await until(async () => (await authority(stoppedTool)).meta.wait && (await session(stoppedTool)).runtimeState.state === 'running-tool', 'actual waiting tool batch before Stop')
+  await until(async () => (await authority(stoppedTool)).meta.wait && (await session(stoppedTool)).runtimeState.state === 'running-tool' && await readFile(join(dataRoot, 'agents/team/stop-shell-started'), 'utf8').catch(() => '') === 'begun', 'actual started shell and waiting tool batch before Stop')
   assert.equal((await command(stoppedTool, '/stop')).status, 200); await idle(stoppedTool)
   assert.equal((await authority(stoppedTool)).meta.wait, undefined)
   await final(stoppedTool, 'STOPPED-EXEC-EVENT'); await sleep(900); assert.equal(counts.get(stoppedTool), 2)
@@ -222,15 +218,15 @@ try {
   await send(unrelated, 'WAIT-ALL'); await waiting(unrelated); await deliver(sourceA, unrelated, 'PARTIAL-REPORT'); await waiting(unrelated)
   await send(unrelated, 'USER-OVERRIDE'); await final(unrelated, 'UNRELATED-DONE')
 
-  // Own actual background exec completion wakes; its old one-shot fallback must not run again.
+  // Completion polling runs every five seconds; the later fallback must not run after the actual exec event.
   const execWait = await create('exec-wait', [[call('bg', 'exec', { command: 'sleep 2; printf EXEC-FINISHED', timeout: 1 })], body => {
     const raw = body.input.find(item => item.type === 'function_call_output' && item.call_id === 'bg')?.output
     const output = typeof raw === 'string' ? raw : raw?.map(part => { assert.equal(part.type, 'input_text'); return part.text }).join('\n')
     const execId = /execId: ([^\s]+)/.exec(output)?.[1]; assert(execId, output)
-    return [call('exec-wait-call', 'wait', { waitExecIds: [execId], wakeIfNoActivityAfterSeconds: 3 })]
-  }, body => { assert(messageText(body).includes('background-process-finished')); return [text('EXEC-WAKE-DONE')] }])
-  await send(execWait, 'BACKGROUND'); await waiting(execWait); await final(execWait, 'EXEC-WAKE-DONE')
-  await sleep(1800); assert.equal(counts.get(execWait), 3); assert.equal((await authority(execWait)).meta.wait, undefined)
+    return [call('exec-wait-call', 'wait', { waitExecIds: [execId], wakeIfNoActivityAfterSeconds: 10 })]
+  }, body => { assert(messageText(body).includes('background-process-finished'), messageText(body)); return [text('EXEC-WAKE-DONE')] }])
+  await send(execWait, 'BACKGROUND'); await waiting(execWait); const execDeadline = (await authority(execWait)).meta.wait.startedAt + 10000; await final(execWait, 'EXEC-WAKE-DONE')
+  await sleep(Math.max(0, execDeadline - Date.now()) + 100); assert.equal(counts.get(execWait), 3); assert.equal((await authority(execWait)).meta.wait, undefined)
 
   // Any Session declaration remains advisory: a different real source wakes it, then stale timeout stays quiet.
   const any = await create('any', [[call('any-wait', 'wait', { waitAnySessions: [sourceA], wakeIfNoActivityAfterSeconds: 1 })], [call('any-input-next', 'wait', { waitForInput: true })], [text('ANY-DONE')]])
@@ -239,7 +235,7 @@ try {
   await sleep(1150); assert.equal(counts.get(any), 2)
   await send(any, 'INPUT-AFTER-OLD-DEADLINE'); await final(any, 'ANY-DONE')
 
-  // Source-only graph diagnostic is bounded/deduplicated, while input-backed transitive progress suppresses it.
+  // A new source-only declaration receives a fresh diagnostic; input-backed progress suppresses it.
   const backed = await create('backed', [[call('backed-input', 'wait', { waitForInput: true })]])
   await send(backed, 'BACKED'); await waiting(backed)
   const graph = await create('graph', [[call('graph-wait', 'wait', { waitAnySessions: [backed] })], [text('GRAPH-DONE')]])
@@ -247,10 +243,10 @@ try {
   await deliver(sourceB, graph, 'GRAPH-REPLY'); await final(graph, 'GRAPH-DONE')
   const quiescent = await create('quiescent', [[call('q-wait', 'wait', { waitAnySessions: [sourceA] })], body => {
     assert(messageText(body).includes('wait-sources-quiescent')); return [call('q-wait-again', 'wait', { waitAnySessions: [sourceA] })]
-  }])
-  await send(quiescent, 'QUIESCENT'); await until(() => counts.get(quiescent) === 2, 'quiescence diagnostic'); await waiting(quiescent)
-  await sleep(700); assert.equal(counts.get(quiescent), 2)
-  assert.equal((await authority(quiescent)).meta.waitLivenessFingerprints.length, 1)
+  }, body => { assert(messageText(body).includes('wait-sources-quiescent')); return [call('q-input', 'wait', { waitForInput: true })] }])
+  await send(quiescent, 'QUIESCENT'); await until(async () => counts.get(quiescent) === 3 && (await authority(quiescent)).meta.wait?.waitForInput === true, 'new declaration receives a fresh diagnostic'); await waiting(quiescent)
+  await sleep(700); assert.equal(counts.get(quiescent), 3)
+  assert.equal((await authority(quiescent)).meta.waitLivenessFingerprints, undefined)
 
   // A real two-Session cycle has no progress path; at least one bounded diagnostic breaks the silent wait.
   const releaseCycle = signal(); holds.push(releaseCycle)
@@ -277,7 +273,9 @@ try {
   console.log(JSON.stringify({ result: 'ok', firstPid, secondPid, thirdPid: host.child.pid, requests: requests.length,
     originalContinue: true, noEffectReplay: true, slowAndFastHandoff: true, explicitSiblingError: true,
     strictWaitAllBeforeAfterRename: true, deferredRestart: true, timedRestart: true, actualExecWake: true,
-    unrelatedWake: true, staleTimerQuiet: true, quiescenceDedupRestart: true, archiveRows: archive.reduce((sum, row) => sum + row[1], 0) }))
+    unrelatedWake: true, staleTimerQuiet: true, perDeclarationQuiescenceRestart: true, archiveRows: archive.reduce((sum, row) => sum + row[1], 0) }))
+} catch (error) {
+  console.error(error.stack, host?.output, JSON.stringify(errors)); throw error
 } finally {
   for (const hold of holds) hold.release()
   console.log(JSON.stringify({ root, firstPid, secondPid }))
