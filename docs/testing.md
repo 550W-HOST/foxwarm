@@ -13,7 +13,7 @@ Default unit tests run the managed solution plus retained Source/package tests. 
 
 The ordinary Chromium command also builds the Debug Main and CLI outputs used by native browser fixtures and installs Code assets below that owned executable resource root. It reuses an already prepared workbench; when assets are missing, the normal `npm run build:code` MIT Code - OSS producer runs first (requiring Docker and its documented native/network prerequisites). Preparation failures stop the browser group before fixture startup. Browser tests receive the same selected Chromium executable through both fixture conventions.
 
-Managed WebUI Logs (fixed-file history/time lookup and its realtime topic) is not implemented at this checkpoint. The required original Logs application scenario stays enabled and currently fails against managed Main. Passing managed solution, reference, publish or image proofs does not make the complete default App/CI lane green.
+Managed Main implements the existing fixed-file Logs history/time lookup and realtime topic. The unchanged original Logs application scenario remains part of full-application qualification; see the [managed Logs contract and evidence](code-index/units/dotnet-webui-logs.md). Passing managed solution, reference, publish or image proofs alone does not qualify the complete default App/CI lane.
 
 ## Commands
 

@@ -38,8 +38,8 @@ GitHub Actions uses those same public commands in separate core/unit-quality, Ch
 
 The runner consumes managed solution tests, complete-publish/browser proof, compiled Source backend/package tests, source WebUI and browser fixtures, Python tests, standalone self-test executables, and the synthetic full-application harness. Build/install prerequisites remain separate so a single build can feed repeated focused runs. Full-application ownership, including its exact scripted provider expectations, is documented in [full-application E2E](./full-app-e2e.md).
 
-## Current managed application gap
+## Full-application qualification
 
-The required full-application Logs scenario remains enabled. Managed Main has no equivalent fixed-file history/time endpoint or realtime Logs topic yet; passing solution/reference/publish or image checks is not complete default App/CI qualification. The retained [WebUI Logs contract](./webui-logs.md) owns the follow-up surface, not a reason to filter its original application scenario.
+The required full-application Logs scenario remains enabled and exercises the [managed implementation](./dotnet-webui-logs.md) of the retained [WebUI Logs contract](./webui-logs.md). Passing solution/reference/publish or image checks alone is not complete default App/CI qualification.
 
 The owned native-host browser fixture observes its normal startup notification on either configured console stream before checking its own health route. Its App opener waits for the authenticated application controls and entry-splash release; a selected Chat is supplied by each scenario rather than assumed by the shared opener. The stderr host regression exercises the real managed entry.
