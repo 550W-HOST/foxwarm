@@ -15,35 +15,51 @@ public sealed class CommittedAuthorityProjectionTests
         var data = Path.Combine(temp.Path, "data");
         var state = Path.Combine(data, "state");
         Directory.CreateDirectory(state);
-        await using var peer = await StreamingModelPeer.StartAsync(false, (context, _) =>
-            context.Send(ResponsesPrefixCommitTests.Completed(new JsonObject
-            {
-                ["type"] = "message",
-                ["role"] = "assistant",
-                ["phase"] = "final_answer",
-                ["content"] = new JsonArray(new JsonObject
-                {
-                    ["type"] = "output_text",
-                    ["text"] = "Committed lifetime reply.",
-                }),
-            }))
+        await using var peer = await StreamingModelPeer.StartAsync(
+            false,
+            (context, _) =>
+                context.Send(
+                    ResponsesPrefixCommitTests.Completed(
+                        new JsonObject
+                        {
+                            ["type"] = "message",
+                            ["role"] = "assistant",
+                            ["phase"] = "final_answer",
+                            ["content"] = new JsonArray(
+                                new JsonObject
+                                {
+                                    ["type"] = "output_text",
+                                    ["text"] = "Committed lifetime reply.",
+                                }
+                            ),
+                        }
+                    )
+                )
         );
-        await File.WriteAllTextAsync(Path.Combine(state, "models.yaml"), $"""
+        await File.WriteAllTextAsync(
+            Path.Combine(state, "models.yaml"),
+            $"""
             default: local/wire
             providers:
               local:
                 providerType: openai-responses
                 baseUrl: {peer.Uri}
                 models: [wire]
-            """);
+            """
+        );
         var faults = Path.Combine(state, "experiment-faults");
         Directory.CreateDirectory(faults);
-        await File.WriteAllTextAsync(Path.Combine(faults, "legacy-create-after-rename"), "one owned fault");
+        await File.WriteAllTextAsync(
+            Path.Combine(faults, "legacy-create-after-rename"),
+            "one owned fault"
+        );
         string? id = null;
         string? cacheKey = null;
         for (var phase = 0; phase < 2; phase++)
         {
-            var configuration = new ModelConfiguration(HostPaths.ForDataRoot(data, temp.Path, environment: _ => null));
+            var configuration = new ModelConfiguration(
+                HostPaths.ForDataRoot(data, temp.Path, environment: _ => null)
+            );
             var settings = await HttpServerSettings.CaptureDesktopAsync(data);
             await using var host = await MainHost.CreateAsync([], configuration, settings);
             await host.StartAsync();
@@ -51,7 +67,10 @@ public sealed class CommittedAuthorityProjectionTests
             client.DefaultRequestHeaders.Authorization = new("Bearer", settings.Token);
             if (phase == 0)
             {
-                using var created = await client.PostAsJsonAsync("api/sessions", new { agentId = "main", sessionId = "s_0123456789abcdef0123456789abcdef" });
+                using var created = await client.PostAsJsonAsync(
+                    "api/sessions",
+                    new { agentId = "main", sessionId = "s_0123456789abcdef0123456789abcdef" }
+                );
                 Assert.Equal(HttpStatusCode.Conflict, created.StatusCode);
                 var receipt = (await created.Content.ReadFromJsonAsync<JsonObject>())!;
                 Assert.True(receipt["committed"]!.GetValue<bool>());
@@ -71,8 +90,14 @@ public sealed class CommittedAuthorityProjectionTests
             }
             else
                 Assert.Equal(cacheKey, authority["promptCacheKey"]!.GetValue<string>());
-            using var sent = await client.PostAsJsonAsync(route + "/message", new { text = "Ordinary input " + phase });
-            Assert.True(sent.StatusCode == HttpStatusCode.Accepted, await sent.Content.ReadAsStringAsync());
+            using var sent = await client.PostAsJsonAsync(
+                route + "/message",
+                new { text = "Ordinary input " + phase }
+            );
+            Assert.True(
+                sent.StatusCode == HttpStatusCode.Accepted,
+                await sent.Content.ReadAsStringAsync()
+            );
             JsonObject history;
             var deadline = DateTime.UtcNow.AddSeconds(10);
             do
@@ -86,7 +111,10 @@ public sealed class CommittedAuthorityProjectionTests
             Assert.Equal((phase + 1) * 2, rows.Count);
             Assert.Contains("Committed lifetime reply.", rows.Last()!.ToJsonString());
             Assert.Equal(phase + 1, peer.Requests.Count);
-            var archive = new SqliteArchiveMessageStore(Path.Combine(state, "archive-store.sqlite"), id!);
+            var archive = new SqliteArchiveMessageStore(
+                Path.Combine(state, "archive-store.sqlite"),
+                id!
+            );
             Assert.Equal(rows.Count, archive.ReadMessages().Count);
         }
     }
@@ -101,7 +129,10 @@ public sealed class CommittedAuthorityProjectionTests
     [InlineData("compact", AtomicJsonWriteStage.BeforeRename)]
     [InlineData("compact", AtomicJsonWriteStage.AfterRenameBeforeDirectorySync)]
     [InlineData("compact", AtomicJsonWriteStage.AfterDirectorySync)]
-    public async Task Known_publication_updates_durable_catalog_without_compensating_Archive(string operation, AtomicJsonWriteStage stage)
+    public async Task Known_publication_updates_durable_catalog_without_compensating_Archive(
+        string operation,
+        AtomicJsonWriteStage stage
+    )
     {
         using var f = new PublicationFixture();
         await f.SeedAsync();
@@ -114,11 +145,20 @@ public sealed class CommittedAuthorityProjectionTests
         Assert.Same(f.WriteError, committed ? error!.InnerException : error);
         Assert.Equal(committed ? "new" : "old", f.Catalog.Get("s")!["model"]!.GetValue<string>());
         var loaded = (await f.Store.LoadAsync("s"))!;
-        Assert.Equal(committed ? "new" : "old", loaded.AuthorityEnvelope["model"]!.GetValue<string>());
+        Assert.Equal(
+            committed ? "new" : "old",
+            loaded.AuthorityEnvelope["model"]!.GetValue<string>()
+        );
         if (!committed)
             Assert.Equal(previous, await File.ReadAllTextAsync(f.Store.AuthorityPath));
-        Assert.Equal(committed && operation != "strict" ? 2 : 1, f.Store.Archive.ReadMessages().Count);
-        Assert.Equal(committed && operation == "compact" ? 1 : 0, f.Store.Archive.ReadBlocks().Count);
+        Assert.Equal(
+            committed && operation != "strict" ? 2 : 1,
+            f.Store.Archive.ReadMessages().Count
+        );
+        Assert.Equal(
+            committed && operation == "compact" ? 1 : 0,
+            f.Store.Archive.ReadBlocks().Count
+        );
         using var reopened = new SessionCatalog(f.Root.Path);
         reopened.Initialize();
         Assert.Equal(committed ? "new" : "old", reopened.Get("s")!["model"]!.GetValue<string>());
@@ -131,22 +171,35 @@ public sealed class CommittedAuthorityProjectionTests
     [InlineData("append", true)]
     [InlineData("compact", false)]
     [InlineData("compact", true)]
-    public async Task Failed_projection_remains_committed_with_new_JSON_and_older_catalog(string operation, bool failDurability)
+    public async Task Failed_projection_remains_committed_with_new_JSON_and_older_catalog(
+        string operation,
+        bool failDurability
+    )
     {
         using var f = new PublicationFixture();
         await f.SeedAsync();
         f.Fault = failDurability ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync : null;
         var projectionError = new IOException("Owned projection failure.");
         f.Catalog.BeforeAuthorityProjection = _ => throw projectionError;
-        var error = await Assert.ThrowsAsync<AuthorityCommittedException>(() => f.CommitAsync(operation));
+        var error = await Assert.ThrowsAsync<AuthorityCommittedException>(() =>
+            f.CommitAsync(operation)
+        );
         Assert.Equal("old", f.Catalog.Get("s")!["model"]!.GetValue<string>());
-        Assert.Equal("new", (await f.Store.LoadAsync("s"))!.AuthorityEnvelope["model"]!.GetValue<string>());
+        Assert.Equal(
+            "new",
+            (await f.Store.LoadAsync("s"))!.AuthorityEnvelope["model"]!.GetValue<string>()
+        );
         Assert.Equal(operation == "strict" ? 1 : 2, f.Store.Archive.ReadMessages().Count);
         Assert.Equal(operation == "compact" ? 1 : 0, f.Store.Archive.ReadBlocks().Count);
         if (failDurability)
         {
             var combined = Assert.IsType<AggregateException>(error.InnerException);
-            Assert.Same(f.WriteError, Assert.IsType<AuthorityCommittedException>(combined.InnerExceptions[0]).InnerException);
+            Assert.Same(
+                f.WriteError,
+                Assert
+                    .IsType<AuthorityCommittedException>(combined.InnerExceptions[0])
+                    .InnerException
+            );
             Assert.Same(projectionError, combined.InnerExceptions[1]);
         }
         else
@@ -172,31 +225,74 @@ public sealed class CommittedAuthorityProjectionTests
         {
             Catalog = new(Root.Path);
             Catalog.Initialize();
-            Store = new(Root.Path, "s", authorityStageHook: stage =>
-            {
-                if (stage == Fault)
-                    throw WriteError;
-            }, publishProjection: snapshot =>
-            {
-                var row = SessionCatalogTests.Row("s", 0);
-                row["model"] = snapshot.AuthorityEnvelope["model"]!.DeepClone();
-                row["meta"] = snapshot.Meta.DeepClone();
-                Catalog.PublishAuthority(row, allowInsert: true);
-            });
+            Store = new(
+                Root.Path,
+                "s",
+                authorityStageHook: stage =>
+                {
+                    if (stage == Fault)
+                        throw WriteError;
+                },
+                publishProjection: snapshot =>
+                {
+                    var row = SessionCatalogTests.Row("s", 0);
+                    row["model"] = snapshot.AuthorityEnvelope["model"]!.DeepClone();
+                    row["meta"] = snapshot.Meta.DeepClone();
+                    Catalog.PublishAuthority(row, allowInsert: true);
+                }
+            );
         }
 
         private static SessionSnapshot Snapshot(string name, params JsonObject[] messages) =>
-            new("s", messages, [], false, null, false, new(), messages[^1]["__meta"]!["seq"]!.GetValue<int>() + 1, 0, new() { ["model"] = name });
+            new(
+                "s",
+                messages,
+                [],
+                false,
+                null,
+                false,
+                new(),
+                messages[^1]["__meta"]!["seq"]!.GetValue<int>() + 1,
+                0,
+                new() { ["model"] = name }
+            );
 
-        internal Task SeedAsync() => Store.CommitCanonicalAppendAsync(Snapshot("old", first), [first]);
+        internal Task SeedAsync() =>
+            Store.CommitCanonicalAppendAsync(Snapshot("old", first), [first]);
 
-        internal Task CommitAsync(string operation) => operation switch
-        {
-            "strict" => Store.CommitAsync(Snapshot("new", first), SaveKind.Strict),
-            "append" => Store.CommitCanonicalAppendAsync(Snapshot("new", first, second), [second]),
-            "compact" => Store.CommitCompactionAsync(Snapshot("new", second), [new ArchiveBlockRecord("s", "main", 1, 1, "message", 1, 1, null, 1, 1, 1000, 1000, "Owned summary.", null, 2000)], [second]),
-            _ => throw new ArgumentOutOfRangeException(nameof(operation)),
-        };
+        internal Task CommitAsync(string operation) =>
+            operation switch
+            {
+                "strict" => Store.CommitAsync(Snapshot("new", first), SaveKind.Strict),
+                "append" => Store.CommitCanonicalAppendAsync(
+                    Snapshot("new", first, second),
+                    [second]
+                ),
+                "compact" => Store.CommitCompactionAsync(
+                    Snapshot("new", second),
+                    [
+                        new ArchiveBlockRecord(
+                            "s",
+                            "main",
+                            1,
+                            1,
+                            "message",
+                            1,
+                            1,
+                            null,
+                            1,
+                            1,
+                            1000,
+                            1000,
+                            "Owned summary.",
+                            null,
+                            2000
+                        ),
+                    ],
+                    [second]
+                ),
+                _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+            };
 
         public void Dispose()
         {
