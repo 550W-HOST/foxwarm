@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
 
@@ -135,8 +136,16 @@ public sealed class PersistentSessionAuthorityStore
     {
         cancellationToken.ThrowIfCancellationRequested();
         ValidateBoundSnapshot(snapshot);
-        authorityFile.Write(ToAuthority(snapshot));
-        PublishProjection(snapshot);
+        AuthorityCommittedException? publicationError = null;
+        try
+        {
+            authorityFile.Write(ToAuthority(snapshot));
+        }
+        catch (AuthorityCommittedException error)
+        {
+            publicationError = error;
+        }
+        PublishProjection(snapshot, publicationError);
         return Task.CompletedTask;
     }
 
@@ -152,6 +161,7 @@ public sealed class PersistentSessionAuthorityStore
         var receipt = await archive.EnqueueMessagesAsync(records).ConfigureAwait(false);
         IReadOnlyList<ArchiveMessageRecord> inserted = [];
         var published = false;
+        AuthorityCommittedException? publicationError = null;
         try
         {
             // Build, validate and serialize the owned snapshot while Archive persistence is pending.
@@ -166,10 +176,10 @@ public sealed class PersistentSessionAuthorityStore
             authorityFile.WriteTextPayload(payload, default);
             published = true;
         }
-        catch (AuthorityCommittedException)
+        catch (AuthorityCommittedException error)
         {
             published = true;
-            throw;
+            publicationError = error;
         }
         catch (Exception writeError)
         {
@@ -196,7 +206,7 @@ public sealed class PersistentSessionAuthorityStore
             if (published)
                 NotifyArchiveCommitted(stagedSnapshot, records, []);
         }
-        PublishProjection(stagedSnapshot);
+        PublishProjection(stagedSnapshot, publicationError);
     }
 
     public async Task CommitCompactionAsync(
@@ -213,6 +223,7 @@ public sealed class PersistentSessionAuthorityStore
         IReadOnlyList<ArchiveBlockRecord> newBlocks = [];
         IReadOnlyList<ArchiveMessageRecord> newMessages = [];
         var published = false;
+        AuthorityCommittedException? publicationError = null;
         try
         {
             var payload = ToAuthority(stagedSnapshot).ToJson(indented: true);
@@ -221,10 +232,10 @@ public sealed class PersistentSessionAuthorityStore
             authorityFile.WriteTextPayload(payload, cancellationToken);
             published = true;
         }
-        catch (AuthorityCommittedException)
+        catch (AuthorityCommittedException error)
         {
             published = true;
-            throw;
+            publicationError = error;
         }
         catch (Exception error)
         {
@@ -247,7 +258,7 @@ public sealed class PersistentSessionAuthorityStore
             if (published)
                 NotifyArchiveCommitted(stagedSnapshot, records, newBlocks);
         }
-        PublishProjection(stagedSnapshot);
+        PublishProjection(stagedSnapshot, publicationError);
     }
 
     private void NotifyArchiveCommitted(
@@ -264,8 +275,12 @@ public sealed class PersistentSessionAuthorityStore
         catch { }
     }
 
-    private void PublishProjection(SessionSnapshot snapshot)
+    private void PublishProjection(
+        SessionSnapshot snapshot,
+        AuthorityCommittedException? publicationError
+    )
     {
+        // Known publication still needs its normal projection attempt before reporting durability failure.
         try
         {
             publishProjection?.Invoke(snapshot);
@@ -274,9 +289,11 @@ public sealed class PersistentSessionAuthorityStore
         {
             throw new AuthorityCommittedException(
                 "Session authority committed, but its Main catalog projection failed.",
-                error
+                publicationError is null ? error : new AggregateException(publicationError, error)
             );
         }
+        if (publicationError is not null)
+            ExceptionDispatchInfo.Capture(publicationError).Throw();
     }
 
     public async Task<SessionSnapshot?> LoadAsync(
