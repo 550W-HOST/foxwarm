@@ -400,8 +400,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         if (startMainServices)
             Console.WriteLine($"Session startup: loadedOwners={sessions.Count}.");
         servicesReady = true;
-        foreach (var owner in sessions.Values)
-            WaitTransition(owner.Id);
+        foreach (var row in catalogRows)
+            WaitTransition(SessionCatalog.Text(row["id"])!);
         if (startMainServices)
             await StartMainServicesAsync();
         await executor.ReconcileNowAsync();

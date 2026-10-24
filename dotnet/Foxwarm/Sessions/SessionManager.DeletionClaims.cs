@@ -80,7 +80,8 @@ internal sealed partial class SessionManager
     }
 
     internal bool CanRunCallbacks(string id) =>
-        !IsDeletionClaimed(id) && Find(id) is { } owner && owner.Entry.IdentityAvailable;
+        !IsDeletionClaimed(id)
+        && (Find(id) is { } owner ? owner.Entry.IdentityAvailable : Catalog.Get(id) is not null);
 
     private bool IsDeletionClaimed(string id)
     {
