@@ -25,9 +25,8 @@ export async function saveModelsInOriginalApp(page, raw, modelPath) {
   await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent === 'Save models')?.click())
   await until(async () => (await readFile(modelPath, 'utf8').catch(() => '')).replaceAll('\r\n', '\n') === raw.replaceAll('\r\n', '\n'), 'original Models saved')
   await page.reload({ waitUntil: 'domcontentloaded' })
-  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Close'))
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Close')?.click())
-  await page.waitForSelector('.foxwarm-model-selector-trigger')
+  await page.waitForFunction(() => !!window.foxwarmTest?.switchToSession)
+  await waitForWebUiReady(page)
 }
 export async function createHostFixture(name, options = {}) {
   const root = await mkdtemp(join(tmpdir(), 'foxwarm-' + name + '-')), data = join(root, 'data'), work = join(data, 'agents', 'main')
@@ -44,7 +43,7 @@ export async function createHostFixture(name, options = {}) {
     return { status: response.status, body: await response.json().catch(() => ({})) }
   }
   async function start() {
-    const startup = { ...testEnvironment.isolatedApplicationEnv(data), ...(options.env || {}), FOXWARM_DATA_DIR: data, }
+    const startup = { ...testEnvironment.isolatedApplicationEnv(data), FOXWARM_SYNC_FILE_LOG: '0', ...(options.env || {}), FOXWARM_DATA_DIR: data, }
     if (options.normalStartup) delete startup.FOXWARM_EXPERIMENT_API_TOKEN
     else startup.FOXWARM_EXPERIMENT_API_TOKEN = token
     ownedListener = false
