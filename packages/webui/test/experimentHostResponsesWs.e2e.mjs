@@ -17,7 +17,7 @@ const inputOf = input => input.filter(item => item.role === 'user').map(textOf).
 const final = text => [{ type: 'message', role: 'assistant', phase: 'final_answer', content: [{ type: 'output_text', text }] }]
 const tool = (id, name, args) => ({ type: 'function_call', id: 'output-' + id, call_id: id, name, arguments: typeof args === 'string' ? args : JSON.stringify(args) })
 const replay = output => output.map(item => { const projected = { ...item }; delete projected.id; delete projected.status; return projected })
-let page, plannerRound = 0, compactMode = 'same', compactRanges, responseSequence = 0
+let plannerRound = 0, compactMode = 'same', compactRanges, responseSequence = 0
 const peer = createServer((request, response) => { response.writeHead(400); response.end('upgrade required') })
 const server = new WebSocketServer({ noServer: true, perMessageDeflate: { threshold: 0 } })
 peer.on('upgrade', (request, socket, head) => {
@@ -104,7 +104,7 @@ async function send(id, scenario, expected, timeout = 22000) {
   assert.equal(errors.length, 0, errors.join('\n')); return records.slice(start)
 }
 try {
-  await fixture.start(); const main = await create(); page = await fixture.openApp(); await saveModelsInOriginalApp(page, yaml.dump(configuration()), fixture.modelPath)
+  await fixture.start(); const main = await create(); const page = await fixture.openApp(); await saveModelsInOriginalApp(page, yaml.dump(configuration()), fixture.modelPath)
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), main); await page.click('.foxwarm-model-selector-trigger'); await page.waitForSelector('[data-model-column="current"] [data-model-option-key="a"]'); await page.click('[data-model-column="current"] [data-model-option-key="a"]')
   let wire = await send(main, 'first', 'DONE-first'); assert.equal(wire.length, 1); assert.equal(wire[0].body.max_output_tokens, 713); assert(!wire[0].body.previous_response_id)
   const cache = (await authority(main)).promptCacheKey, expectedCache = createHash('sha256').update(main).digest('hex')
@@ -144,7 +144,6 @@ try {
   const beforeRestart = records.length, finalHistory = await history(main); await fixture.stop(); await fixture.start(); assert.deepEqual((await history(main)).messages, finalHistory.messages)
   wire = await send(main, 'restart', 'DONE-restart'); assert(!wire[0].body.previous_response_id); assert.equal(wire[0].body.max_output_tokens, 713); assert.equal(records.length, beforeRestart + 1)
   await fixture.stop(); console.log(JSON.stringify({ result: 'ok', hostPids: fixture.hostPids, requests: records.length, connections: connections.length, plannerRounds: plannerRound, clientFrames: clientFrames.length, originalAppStatefulWs: true, clientCompressionDisabled: true, compressedResponses: true, exactPrefixCompact: true, transientInvalidFeedbackReuse: true, selectiveStop: true, failoverUpgrade: true, restart: true }))
-} catch (error) { console.error(error.stack, JSON.stringify({ errors, records: records.map(({ scenario, planning }) => ({ scenario, planning })), body: await page.evaluate(() => document.body.innerText).catch(() => '') })); throw error
 } finally {
   await fixture.cleanup(); for (const connection of connections) connection.ws.terminate(); server.close(); await Promise.all([peer, http].map(socket => new Promise(done => socket.close(done))))
 }

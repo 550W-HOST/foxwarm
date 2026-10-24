@@ -65,9 +65,7 @@ async function startHost() {
   await mkdir(join(data, 'state'), { recursive: true })
   await writeFile(join(data, 'state', 'token'), token, { mode: 0o600 })
   await writeModelFixture(data, { default: 'local', providers: { 'local': { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${provider.address().port}`, apiKey: providerToken, models: ['wire'] } } })
-  const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(data), FOXWARM_EXPERIMENT_API_TOKEN: token,
-    FOXWARM_EXPERIMENT_RESPONSES_BASE_URI: `http://127.0.0.1:${provider.address().port}`, FOXWARM_EXPERIMENT_PROVIDER_TOKEN: providerToken,
-    FOXWARM_EXPERIMENT_REQUEST_MODEL: 'wire', FOXWARM_EXPERIMENT_CONCRETE_MODEL: 'local/wire',
+  const child = spawn(dotnet, [resolve('dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...testEnvironment.isolatedApplicationEnv(data),
     MCP_HOST_ONLY_SENTINEL: 'synthetic-host-only-credential' } })
   let output = ''; for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { output = (output + bytes).slice(-20000) })
   host = { child, get output() { return output } }; pids.push(child.pid)
