@@ -178,10 +178,11 @@ public sealed class WaitLivenessSourceTests
                 peer.Options,
                 HostModels.ForTest(peer.Options)
             );
-            Assert.Contains(id, manager.Catalog.RestartIds());
+            Assert.DoesNotContain(id, manager.Catalog.RestartIds());
             await manager.LoadMainHostAsync();
-            var owner = manager.Find(id)!;
             await Settle(manager);
+            Assert.Null(manager.Find(id));
+            var owner = await manager.RequiredAsync(id);
             Assert.Empty(peer.Requests);
             Same(fixture["wait"], owner.Entry.Snapshot().Meta["wait"]);
             Same(fixture["fingerprints"], owner.Entry.Snapshot().Meta["waitLivenessFingerprints"]);
@@ -225,7 +226,7 @@ public sealed class WaitLivenessSourceTests
         )
         {
             await manager.LoadMainHostAsync();
-            var owner = manager.Find("waiter")!;
+            var owner = await manager.RequiredAsync("waiter");
             await Settle(manager);
             Assert.Empty(peer.Requests);
             await manager.CreateNamedAsync("main", "different-dependency", null, null);
@@ -265,7 +266,7 @@ public sealed class WaitLivenessSourceTests
             await manager.LoadMainHostAsync();
             await Settle(manager);
             Assert.Single(peer.Requests);
-            var owner = manager.Find("waiter")!;
+            var owner = await manager.RequiredAsync("waiter");
             Same(prints, owner.Entry.Snapshot().Meta["waitLivenessFingerprints"]);
             Same(history, History(owner));
             Assert.NotNull(owner.WaitSnapshot());
@@ -303,7 +304,7 @@ public sealed class WaitLivenessSourceTests
         await manager.LoadMainHostAsync();
         await Settle(manager);
         Assert.Single(peer.Requests);
-        var owner = manager.Find("waiter")!;
+        var owner = await manager.RequiredAsync("waiter");
         Same(fixture["wait"], owner.Entry.Snapshot().Meta["wait"]);
         Same(fixture["fingerprints"], owner.Entry.Snapshot().Meta["waitLivenessFingerprints"]);
         Same(fixture["history"], History(owner));
@@ -358,7 +359,7 @@ public sealed class WaitLivenessSourceTests
             );
             await manager.LoadMainHostAsync();
             await Settle(manager);
-            var owner = manager.Find(id)!;
+            var owner = await manager.RequiredAsync(id);
             Assert.Empty(peer.Requests);
             Same(raw["meta"]!["wait"], owner.Entry.Snapshot().Meta["wait"]);
             Same(
@@ -385,7 +386,7 @@ public sealed class WaitLivenessSourceTests
         )
         {
             await manager.LoadMainHostAsync();
-            var owner = manager.Find(id)!;
+            var owner = await manager.RequiredAsync(id);
             await manager.CreateNamedAsync("main", "different-dependency", null, null);
             await manager.DeclareWaitAsync(
                 owner,
@@ -415,6 +416,36 @@ public sealed class WaitLivenessSourceTests
     }
 
     [Fact]
+    public async Task Unseen_cold_catalog_diagnostic_admits_only_its_waiter_with_the_Source_observation()
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        var work = Path.Combine(temp.Path, "work");
+        Directory.CreateDirectory(work);
+        await Source(data, "idle", "unseen");
+        var oracle = await Source(Path.Combine(temp.Path, "oracle"), "idle");
+        await using var peer = new Peer();
+        await using var manager = new SessionManager(
+            data,
+            work,
+            peer.Options,
+            HostModels.ForTest(peer.Options)
+        );
+        var reads = new ConcurrentBag<string>();
+        manager.AdmissionReadObserved = reads.Add;
+        Assert.Empty(manager.Catalog.RestartIds());
+        await manager.LoadMainHostAsync();
+        await Settle(manager);
+        Assert.Single(peer.Requests);
+        var owner = Assert.Single(manager.Owners());
+        Assert.Equal("waiter", owner.Id);
+        Assert.Equal(new[] { "waiter" }, reads);
+        Assert.Null(manager.Find("dependency"));
+        Same(oracle["fingerprints"], owner.Entry.Snapshot().Meta["waitLivenessFingerprints"]);
+        Assert.Null(owner.WaitSnapshot());
+    }
+
+    [Fact]
     public async Task Input_backed_progress_blocks_diagnostic_until_the_dependency_becomes_idle()
     {
         using var temp = new TempDirectory();
@@ -435,7 +466,8 @@ public sealed class WaitLivenessSourceTests
         await manager.DeclareWaitAsync(dependency, new JsonObject { ["waitForInput"] = true });
         await manager.LoadMainHostAsync();
         await Settle(manager);
-        var owner = manager.Find("waiter")!;
+        Assert.Null(manager.Find("waiter"));
+        var owner = await manager.RequiredAsync("waiter");
         Assert.Empty(peer.Requests);
         Same(source["wait"], owner.Entry.Snapshot().Meta["wait"]);
         Assert.Null(owner.Entry.Snapshot().Meta["waitLivenessFingerprints"]);

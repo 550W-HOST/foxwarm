@@ -17,7 +17,7 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
     private readonly Dictionary<string, HashSet<string>> reverse = new(StringComparer.Ordinal);
     private readonly Dictionary<
         string,
-        (string WaitId, string Fingerprint, QueueItem Item)
+        (string WaitId, string Fingerprint, string LegacyFingerprint, QueueItem Item)
     > pending = new(StringComparer.Ordinal);
     private readonly Queue<string> order = new();
     private readonly Dictionary<string, TaskCompletionSource> active = new(StringComparer.Ordinal);
@@ -46,8 +46,8 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
     internal void Transition(string sessionId)
     {
         var owner = manager.Find(sessionId);
-        var wait = owner?.WaitSnapshot();
-        var meta = owner?.Metadata();
+        var meta = owner?.Metadata() ?? manager.CatalogMetadata(sessionId);
+        var wait = meta?.Wait;
         lock (gate)
         {
             if (lifetime.IsCancellationRequested)
@@ -104,7 +104,7 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
     {
         if (scheduled.Remove(id, out var prior))
             prior.Cancel();
-        var wait = manager.Find(id)?.WaitSnapshot();
+        var wait = manager.Find(id)?.WaitSnapshot() ?? manager.CatalogMetadata(id)?.Wait;
         if (!manager.CanRunCallbacks(id) || !Candidate(wait))
             return;
         var expected = SessionWait.Text(wait!["id"])!;
@@ -137,7 +137,7 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
     private void Diagnose(string id, string expected)
     {
         var owner = manager.Find(id);
-        var wait = owner?.WaitSnapshot();
+        var wait = owner?.WaitSnapshot() ?? manager.CatalogMetadata(id)?.Wait;
         if (!Candidate(wait) || SessionWait.Text(wait!["id"]) != expected)
             return;
         var visiting = new HashSet<string>(StringComparer.Ordinal);
@@ -205,13 +205,14 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
         }
         var fingerprint = Fingerprint(observed);
         var legacyFingerprint = Fingerprint(legacyObserved);
+        var prior = owner is null
+            ? SessionWait.Strings(manager.Catalog.Get(id)?["meta"]?["waitLivenessFingerprints"])
+            : owner.Entry.WithState(state =>
+                SessionWait.Strings(state.Meta["waitLivenessFingerprints"])
+            );
         if (
-            owner!.Entry.WithState(state =>
-            {
-                var prior = SessionWait.Strings(state.Meta["waitLivenessFingerprints"]);
-                return prior.Contains(fingerprint, StringComparer.Ordinal)
-                    || prior.Contains(legacyFingerprint, StringComparer.Ordinal);
-            })
+            prior.Contains(fingerprint, StringComparer.Ordinal)
+            || prior.Contains(legacyFingerprint, StringComparer.Ordinal)
         )
             return;
         var item = SessionWait.Event(
@@ -230,7 +231,7 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
                 return;
             if (!pending.ContainsKey(id))
                 order.Enqueue(id);
-            pending[id] = (expected, fingerprint, item);
+            pending[id] = (expected, fingerprint, legacyFingerprint, item);
             Pump();
         }
     }
@@ -243,7 +244,7 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
         {
             if (!pending.Remove(id, out var wake))
                 continue;
-            var wait = manager.Find(id)?.WaitSnapshot();
+            var wait = manager.Find(id)?.WaitSnapshot() ?? manager.CatalogMetadata(id)?.Wait;
             if (!Candidate(wait) || SessionWait.Text(wait!["id"]) != wake.WaitId)
                 continue;
             var settled = new TaskCompletionSource(
@@ -256,6 +257,19 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
                 {
                     try
                     {
+                        // A cold projection may lag committed JSON. Check the original C# receipt
+                        // against the admitted authority too; ordinary Source receipts and stale wait
+                        // tokens remain checked by the save lane before delivery.
+                        var owner = await manager.GetExistingAsync(id);
+                        if (
+                            owner is null
+                            || owner.Entry.WithState(state =>
+                                SessionWait
+                                    .Strings(state.Meta["waitLivenessFingerprints"])
+                                    .Contains(wake.LegacyFingerprint, StringComparer.Ordinal)
+                            )
+                        )
+                            return;
                         await manager.AdmitWaitEventAsync(id, wake.Item);
                         while (!lifetime.IsCancellationRequested)
                         {

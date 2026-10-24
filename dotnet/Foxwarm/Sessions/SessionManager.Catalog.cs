@@ -56,6 +56,7 @@ internal sealed partial class SessionManager
             ["messageCount"] = snapshot.History.Count,
         };
         SessionCatalog.Copy(snapshot.Meta, meta, "lastChannel");
+        SessionCatalog.Copy(snapshot.Meta, meta, "waitLivenessFingerprints");
         if (SessionCatalog.WaitProjection(snapshot.Meta["wait"]) is { } wait)
             meta["wait"] = wait;
         raw["meta"] = meta;

@@ -277,7 +277,7 @@ public sealed class SessionAdmissionTests
     }
 
     [Fact]
-    public async Task Mandatory_failure_does_not_arm_another_candidates_overdue_deadline()
+    public async Task Mandatory_failure_keeps_another_wait_cold_and_does_not_arm_its_overdue_deadline()
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
@@ -310,14 +310,17 @@ public sealed class SessionAdmissionTests
             Options,
             HostModels.ForTest(Options)
         );
+        var reads = new List<string>();
+        manager.AdmissionReadObserved = reads.Add;
         await Assert.ThrowsAsync<InvalidDataException>(() => manager.LoadAsync());
         await Task.Delay(450);
-        var owner = manager.Find("deadline")!;
-        Assert.NotNull(owner);
-        Assert.Equal("original", owner.WaitSnapshot()!["id"]!.GetValue<string>());
-        Assert.Empty(owner.Entry.Snapshot().Queue);
-        Assert.Empty(owner.Entry.Snapshot().History);
-        Assert.False(owner.Metadata().Busy);
+        Assert.Equal(new[] { "broken" }, reads);
+        Assert.Null(manager.Find("deadline"));
+        Assert.Equal(raw.ToJsonString(), await File.ReadAllTextAsync(file));
+        Assert.Equal(
+            "original",
+            manager.CatalogMetadata("deadline")!.Wait!["id"]!.GetValue<string>()
+        );
     }
 
     [Fact]

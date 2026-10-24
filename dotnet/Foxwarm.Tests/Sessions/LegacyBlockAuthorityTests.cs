@@ -45,7 +45,7 @@ public sealed class LegacyBlockAuthorityTests
     }
 
     [Fact]
-    public async Task Source_legacy_inherited_block_survives_mandatory_startup_save_compaction_and_reopen_without_fabricated_ids()
+    public async Task Source_legacy_inherited_block_survives_cold_startup_save_compaction_and_reopen_without_fabricated_ids()
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
@@ -123,9 +123,10 @@ public sealed class LegacyBlockAuthorityTests
         JsonObject[] committed;
         await using (var manager = new SessionManager(data, work, options, models))
         {
-            Assert.Contains(id, manager.Catalog.RestartIds());
+            Assert.DoesNotContain(id, manager.Catalog.RestartIds());
             await manager.LoadMainHostAsync();
-            var owner = Assert.Single(manager.Owners(), row => row.Id == id);
+            Assert.Null(manager.Find(id));
+            var owner = await manager.RequiredAsync(id);
             Assert.Equal(
                 "synthetic-input-wait",
                 SessionWait.Text(owner.Entry.Snapshot().Meta["wait"]?["id"])

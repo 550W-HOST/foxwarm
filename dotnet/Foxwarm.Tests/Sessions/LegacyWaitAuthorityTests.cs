@@ -45,7 +45,7 @@ public sealed class LegacyWaitAuthorityTests
     [Theory]
     [InlineData("matching")]
     [InlineData("input")]
-    public async Task Source_single_target_legacy_wait_survives_mandatory_startup_save_reopen_and_ordinary_wake(
+    public async Task Source_single_target_legacy_wait_survives_cold_startup_save_reopen_and_ordinary_wake(
         string wake
     )
     {
@@ -67,9 +67,10 @@ public sealed class LegacyWaitAuthorityTests
         var models = HostModels.ForTest(options);
         await using (var manager = new SessionManager(data, work, options, models))
         {
-            Assert.Contains(id, manager.Catalog.RestartIds());
+            Assert.DoesNotContain(id, manager.Catalog.RestartIds());
             await manager.LoadMainHostAsync();
-            var owner = Assert.Single(manager.Owners(), row => row.Id == id);
+            Assert.Null(manager.Find(id));
+            var owner = await manager.RequiredAsync(id);
             Assert.True(JsonNode.DeepEquals(expected["wait"], owner.Entry.Snapshot().Meta["wait"]));
             Assert.False(owner.Metadata().Busy);
             Assert.Empty(owner.Entry.Snapshot().Queue);
@@ -89,9 +90,9 @@ public sealed class LegacyWaitAuthorityTests
         JsonArray queued;
         await using (var manager = new SessionManager(data, work, options, models))
         {
-            Assert.Contains(id, manager.Catalog.RestartIds());
+            Assert.DoesNotContain(id, manager.Catalog.RestartIds());
             await manager.LoadMainHostAsync();
-            var owner = manager.Find(id)!;
+            var owner = await manager.RequiredAsync(id);
             Assert.NotNull(owner);
             Assert.True(JsonNode.DeepEquals(expected["wait"], owner.Entry.Snapshot().Meta["wait"]));
             Assert.False(owner.WaitSnapshot()!.ContainsKey("declarationVersion"));

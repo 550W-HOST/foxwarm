@@ -411,8 +411,9 @@ public sealed class PersistentSessionAuthorityStore
         foreach (var property in root)
             if (property.Key is not ("history" or "queue" or "meta"))
                 envelope[property.Key] = property.Value?.DeepClone();
+        envelope = DetachDocument(envelope);
         var queue = ((JsonArray)root["queue"]!)
-            .Select(node => FromQueueJson((JsonObject)node!))
+            .Select(node => FromQueueJson(DetachDocument((JsonObject)node!)))
             .ToArray();
         var busy = root["busy"]!.GetValue<bool>();
         long? busyStartedAt = root["busyStartedAt"] is JsonValue busyNode
@@ -426,12 +427,18 @@ public sealed class PersistentSessionAuthorityStore
             busy,
             busyStartedAt,
             stopping,
-            (JsonObject)root["meta"]!.DeepClone(),
+            DetachDocument((JsonObject)root["meta"]!),
             ReadInteger(root["nextMessageSeq"], "nextMessageSeq"),
             ReadInteger(root["historyVersion"], "historyVersion"),
             envelope
         );
     }
+
+    // DeepClone isolates mutations but parsed JsonValue elements may still share the original
+    // JsonDocument. Reparse each retained non-history branch once at cold ingress so small
+    // envelope/meta/queue values cannot keep the authority's unrelated history buffer alive.
+    private static JsonObject DetachDocument(JsonObject value) =>
+        (JsonObject)JsonNode.Parse(value.ToJsonString())!;
 
     internal static JsonObject ToQueueJson(QueueItem item)
     {

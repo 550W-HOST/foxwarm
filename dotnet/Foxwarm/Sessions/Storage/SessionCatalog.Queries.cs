@@ -16,7 +16,7 @@ internal sealed partial class SessionCatalog
             EnsureInitialized();
             using var command = Command(
                 db!,
-                "SELECT session_id FROM session_catalog WHERE busy=1 UNION SELECT session_id FROM session_catalog WHERE queue_length>0 UNION SELECT session_id FROM session_catalog WHERE managed_pending_count>0 UNION SELECT session_id FROM session_catalog INDEXED BY idx_session_catalog_wait_presence WHERE json_type(metadata_json,'$.meta.wait.id')='text'"
+                "SELECT session_id FROM session_catalog WHERE busy=1 UNION SELECT session_id FROM session_catalog WHERE queue_length>0 UNION SELECT session_id FROM session_catalog WHERE managed_pending_count>0"
             );
             using var reader = command.ExecuteReader();
             var ids = new List<string>();
