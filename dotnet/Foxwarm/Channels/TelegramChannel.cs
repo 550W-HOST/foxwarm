@@ -21,11 +21,12 @@ internal sealed class TelegramApiException(int code, string description, double?
 
 internal sealed class TelegramChannel : IManagedChannel
 {
-    private static readonly HttpClient DefaultHttp = new() { Timeout = TimeSpan.FromSeconds(100) };
+    private static readonly HttpClient DefaultHttp = new() { Timeout = Timeout.InfiniteTimeSpan };
     private readonly string id;
     private readonly SessionManager sessions;
     private readonly MessageRouter router;
     private readonly HttpClient http;
+    private readonly TimeSpan apiTimeout;
     private readonly Uri api;
     private readonly Uri files;
     private readonly Func<TimeSpan, CancellationToken, Task> delay;
@@ -52,6 +53,9 @@ internal sealed class TelegramChannel : IManagedChannel
         if (string.IsNullOrEmpty(token))
             throw new InvalidDataException("Telegram botToken is missing for channel " + id);
         http = dependencies?.CreateHttp?.Invoke() ?? DefaultHttp;
+        if (!ReferenceEquals(http, DefaultHttp))
+            http.Timeout = Timeout.InfiniteTimeSpan;
+        apiTimeout = dependencies?.TelegramApiTimeout ?? TimeSpan.FromSeconds(500);
         api =
             dependencies?.TelegramApi?.Invoke(token)
             ?? new Uri("https://api.telegram.org/bot" + token + "/");
@@ -425,25 +429,46 @@ internal sealed class TelegramChannel : IManagedChannel
         CancellationToken token
     )
     {
-        using var response = await http.PostAsync(new Uri(api, method), content, token);
-        // The pinned client classifies gateway/server failures before reading a JSON API payload.
-        if ((int)response.StatusCode >= 500)
-            throw new TelegramApiException(
-                (int)response.StatusCode,
-                response.ReasonPhrase ?? "Telegram API call failed."
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(apiTimeout);
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(api, method))
+            {
+                Content = content,
+            };
+            using var response = await http.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                timeout.Token
             );
-        var body =
-            await JsonNode.ParseAsync(
-                await response.Content.ReadAsStreamAsync(token),
-                cancellationToken: token
-            ) as JsonObject
-            ?? throw new IOException("Telegram returned an invalid response.");
-        if (!response.IsSuccessStatusCode || !SessionCatalog.Flag(body["ok"]))
-            throw new TelegramApiException(
-                (int)(SessionWait.Number(body["error_code"]) ?? (int)response.StatusCode),
-                SessionWait.Text(body["description"]) ?? "Telegram API call failed.",
-                SessionWait.Number(body["parameters"]?["retry_after"])
-            );
-        return body["result"]?.DeepClone();
+            // The pinned client classifies gateway/server failures before reading a JSON API payload.
+            if ((int)response.StatusCode >= 500)
+                throw new TelegramApiException(
+                    (int)response.StatusCode,
+                    response.ReasonPhrase ?? "Telegram API call failed."
+                );
+            // Telegraf's node-fetch gives headers and body consumption separate 500s budgets.
+            // Downloads use the independent Axios path, with no application timeout.
+            timeout.CancelAfter(apiTimeout);
+            var body =
+                await JsonNode.ParseAsync(
+                    await response.Content.ReadAsStreamAsync(timeout.Token),
+                    cancellationToken: timeout.Token
+                ) as JsonObject
+                ?? throw new IOException("Telegram returned an invalid response.");
+            if (!response.IsSuccessStatusCode || !SessionCatalog.Flag(body["ok"]))
+                throw new TelegramApiException(
+                    (int)(SessionWait.Number(body["error_code"]) ?? (int)response.StatusCode),
+                    SessionWait.Text(body["description"]) ?? "Telegram API call failed.",
+                    SessionWait.Number(body["parameters"]?["retry_after"])
+                );
+            return body["result"]?.DeepClone();
+        }
+        catch (OperationCanceledException error) when (!token.IsCancellationRequested)
+        {
+            // A transport deadline is a retryable network error; caller cancellation is not.
+            throw new HttpRequestException("Telegram API request timed out.", error);
+        }
     }
 }

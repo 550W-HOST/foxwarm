@@ -64,6 +64,9 @@ internal sealed partial class QQBotChannel : IManagedChannel
             ?? new HttpClient(
                 new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false }
             );
+        // API/token calls have no Source application deadline. Media and part uploads
+        // retain their own cancellation budgets on this same transport.
+        http.Timeout = Timeout.InfiniteTimeSpan;
         groupLimit = GroupOption("groupContextLimit", 10, 0, 50);
         batchWindow = GroupOption("groupBatchWindowMs", 5000, 250, 30000, true);
         media = new QQBotMedia(sessions, http, config["media"] as JsonObject, dependencies);

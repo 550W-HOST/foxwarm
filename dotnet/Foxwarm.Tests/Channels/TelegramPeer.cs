@@ -25,6 +25,7 @@ internal sealed class TelegramPeer : IAsyncDisposable
     internal readonly ConcurrentQueue<TimeSpan> Delays = new();
     internal Func<TelegramPeerCall, (int Code, string Error)?>? Fail;
     internal Func<TelegramPeerCall, Task<IResult?>>? Respond;
+    internal Func<string, IResult?>? FileResponse;
     internal readonly Dictionary<string, byte[]> Files = new(StringComparer.Ordinal);
     internal Uri Address = null!;
     private long update;
@@ -41,9 +42,9 @@ internal sealed class TelegramPeer : IAsyncDisposable
         peer.app.MapGet(
             "/file/bot{bot}/{**path}",
             (string path) =>
-                peer.Files.TryGetValue(path, out var bytes)
+                peer.FileResponse?.Invoke(path) ?? (peer.Files.TryGetValue(path, out var bytes)
                     ? Results.Bytes(bytes)
-                    : Results.NotFound()
+                    : Results.NotFound())
         );
         await peer.app.StartAsync();
         peer.Address = new Uri(peer.app.Urls.Single() + "/");

@@ -81,6 +81,8 @@ test('real public model caller uses only Core, captured settings, one-shot reque
   const assembly = path.join(__dirname, '../runtime/current/Foxwarm.dll');
   if (!fs.existsSync(assembly)) { t.skip('requires npm run build'); return; }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-cli-'));
+  const temporary = path.join(root, 'temporary directory '.repeat(6));
+  fs.mkdirSync(temporary);
   const data = path.join(root, 'selected data');
   fs.mkdirSync(path.join(data, 'state'), { recursive: true });
   fs.writeFileSync(path.join(root, 'data_dir'), ' selected data \n');
@@ -91,6 +93,7 @@ test('real public model caller uses only Core, captured settings, one-shot reque
   const env = {
     FOXWARM_APP_ROOT: path.join(root, 'ignored'), FOXWARM_CONFIG_PATH: path.join(root, 'app.yaml'), CONFIG_PATH: path.join(root, 'wrong.yaml'),
     FOXWARM_DATA_DIR: data,
+    TMPDIR: temporary,
     NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require=${preload}`,
   };
   const requests = [];
@@ -193,6 +196,8 @@ test('terminating the public frontend stops the one-shot provider process after 
   const assembly = path.join(__dirname, '../runtime/current/Foxwarm.dll');
   if (!fs.existsSync(assembly)) { t.skip('requires npm run build'); return; }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-cli-lifetime-'));
+  const temporary = path.join(root, 'temporary directory '.repeat(6));
+  fs.mkdirSync(temporary);
   fs.mkdirSync(path.join(root, 'state'));
   const server = http.createServer();
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -209,6 +214,7 @@ test('terminating the public frontend stops the one-shot provider process after 
     }));
     const child = spawn(process.execPath, [path.join(__dirname, 'foxwarm.js'), 'model', '-p', signal, '-t', '1'], {
       env: { ...process.env, FOXWARM_APP_ROOT: root, FOXWARM_DATA_DIR: root,
+        TMPDIR: temporary,
         FOXWARM_EXPERIMENT_DATA_ROOT: '', FOXWARM_EXPERIMENT_TOOL_ROOT: '' },
       stdio: ['pipe', 'pipe', 'pipe'],
     });

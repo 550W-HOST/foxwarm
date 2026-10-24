@@ -14,7 +14,8 @@ internal sealed record ChannelTransportDependencies(
     System.Net.IPAddress? CallbackAddress = null,
     Func<HttpClient>? CreateQQBotHttp = null,
     TimeSpan? QQBotMediaTimeout = null,
-    TimeSpan? QQBotPartTimeout = null
+    TimeSpan? QQBotPartTimeout = null,
+    TimeSpan? TelegramApiTimeout = null
 );
 
 internal sealed class ManagedChannels(

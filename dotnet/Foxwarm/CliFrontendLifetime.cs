@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using Microsoft.Win32.SafeHandles;
 
 namespace Foxwarm;
 
@@ -21,6 +22,15 @@ internal sealed class CliFrontendLifetime : IAsyncDisposable
         var name = Environment.GetEnvironmentVariable("FOXWARM_CLI_LIFETIME_PIPE");
         if (string.IsNullOrEmpty(name))
             throw new InvalidDataException("The CLI frontend lifetime pipe is required.");
+        if (!OperatingSystem.IsWindows())
+            return new(
+                new NamedPipeClientStream(
+                    PipeDirection.In,
+                    isAsync: true,
+                    isConnected: true,
+                    new SafePipeHandle((IntPtr)int.Parse(name), ownsHandle: true)
+                )
+            );
         var pipe = new NamedPipeClientStream(
             ".",
             name,
