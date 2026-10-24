@@ -47,7 +47,12 @@ function peer(id, authorization = "", transport, notifications = false, delayedL
     const send = transport.send.bind(transport);
     transport.send = (message, options) => {
       if (invalidResults.has(message.id) && message.result) {
-        message = { ...message, result: invalidResults.get(message.id) };
+        const raw = invalidResults.get(message.id);
+        // Keep the valid placeholder for SDK response classification/routing. Inject
+        // the raw result only when its correlated response is serialized to the wire.
+        // Invalid _meta would otherwise route as an unsolicited message and leave
+        // the original POST open, so it would not model a completed malformed reply.
+        message = { ...message, result: { ...message.result, toJSON: () => raw } };
         invalidResults.delete(message.id);
       }
       return send(message, options);
@@ -72,8 +77,8 @@ function peer(id, authorization = "", transport, notifications = false, delayedL
     if (name === 'result') {
       if (Object.hasOwn(args, 'rawResult')) {
         await record({ kind: 'effect', id, tag: args.tag });
-        // Inject only this qualified wire result, after the real counted effect.
-        // The official server otherwise validates its response before transport.send.
+        // Inject this wire result after the counted effect and SDK response routing.
+        // The official server validates the typed placeholder before transport.send.
         invalidResults.set(extra.requestId, args.rawResult);
         return { content: [text('typed placeholder')] };
       }

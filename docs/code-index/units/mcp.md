@@ -37,6 +37,8 @@ Secrets are redacted using the exact configuration which supplied a connection's
 
 `OutboundMcpLifecycleTests` uses official JavaScript SDK peers for stdio reuse, stateful initialize fallback, owner-scoped HTTP discovery/call/native Monty reuse and isolation, concurrent/single cancellation, real configuration/move/deletion/shutdown hooks, invalidated initialization, SSE, and auto initialization cleanup without effect replay.
 
+`OutboundSdkPeer` preserves official response routing before its raw-result serialization override; malformed metadata must reach the correlated response instead of changing the transport's response classification. The ordinary inbound malformed-result regression qualifies this path with the real official C# client.
+
 `OutboundMcpResultsTests` uses those peers plus an official C# SDK ASP.NET stateless/discover peer. Default SDK result metadata is preserved; an explicit official outgoing-message filter also qualifies metadata-free scalar/null/array structured results. Tests pass real values through the Session executor, native Monty, ordinary turn pairing, JSON/Archive persistence, image references/provider projection, and compaction previews. Audio and binary resource content remain result data, without playback or decoding.
 
 `experimentHostMcp.e2e.mjs` exercises the original App and actual HTTP Main through disposable SDK peers and a synthetic provider, including paired result forms, stdio process-key changes with active calls, real Stop, four HTTP/SSE/auto placements, control receipts, clean restart, Archive rows, and owned process cleanup. Existing authorization, image, ToolScript, and owner lifecycle regressions remain relevant.

@@ -151,6 +151,8 @@ public sealed class InboundMcpTests
         for (var i = 0; i < invalid.Length; i++)
         {
             var tag = "invalid-" + i;
+            // Fail this regression before the downstream production call budget elapses.
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             var result = await client.CallToolAsync(
                 new CallToolRequestParams
                 {
@@ -166,8 +168,10 @@ public sealed class InboundMcpTests
                             }
                         ),
                     },
-                }
+                },
+                cancellationToken: deadline.Token
             );
+            Assert.False(deadline.IsCancellationRequested, invalid[i]);
             Assert.True(result.IsError, invalid[i]);
             var text = Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
             Assert.Contains("outcome may be unknown", text);
@@ -179,14 +183,20 @@ public sealed class InboundMcpTests
                     && row["tag"]?.GetValue<string>() == tag
             );
         }
-        Assert.Equal(5, (await client.ListToolsAsync(new ListToolsRequestParams())).Tools.Count);
+        using var healthyDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        Assert.Equal(
+            5,
+            (await client.ListToolsAsync(new ListToolsRequestParams(), healthyDeadline.Token)).Tools.Count
+        );
         Assert.Contains(
             "id",
-            Text(await InboundMcpFixture.ConcreteAsync(client, "mcp:peer/probe"))
+            Text(await InboundMcpFixture.ConcreteAsync(client, "mcp:peer/probe").WaitAsync(healthyDeadline.Token))
         );
-        Assert.Single(
-            await peer.EventsAsync(),
-            row => row["kind"]!.GetValue<string>() == "initialize"
+        var events = await peer.EventsAsync();
+        Assert.Single(events, row => row["kind"]!.GetValue<string>() == "initialize");
+        Assert.DoesNotContain(
+            events,
+            row => row["kind"]!.GetValue<string>() is "cancelled" or "delete" or "closed"
         );
     }
 
