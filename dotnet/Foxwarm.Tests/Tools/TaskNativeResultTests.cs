@@ -92,6 +92,7 @@ public sealed class TaskNativeResultTests
             "active",
             f.Owner.Id
         );
+        var progress = new string('n', 1998) + "😀";
         Receipt(
             await Call(
                 new JsonObject
@@ -99,7 +100,7 @@ public sealed class TaskNativeResultTests
                     ["action"] = "update",
                     ["taskId"] = id,
                     ["description"] = "revised scope",
-                    ["note"] = "working",
+                    ["note"] = progress,
                 }
             ),
             id,
@@ -129,7 +130,24 @@ public sealed class TaskNativeResultTests
         Assert.Equal("revised scope", SessionWait.Text(detail["task"]?["description"]));
         Assert.Contains(
             detail["notes"]!.AsArray(),
-            note => SessionWait.Text(note?["text"]) == "working"
+            note => SessionWait.Text(note?["text"]) == progress
+        );
+        var rejected = await Call(
+            new JsonObject
+            {
+                ["action"] = "update",
+                ["taskId"] = id,
+                ["description"] = "must not be written",
+                ["note"] = progress + "x",
+                ["notifySession"] = true,
+            }
+        );
+        Assert.Equal("TASK_INVALID_ARGS", SessionWait.Text(rejected["error"]?["type"]));
+        Assert.True(
+            JsonNode.DeepEquals(
+                detail,
+                await Call(new JsonObject { ["action"] = "get", ["taskId"] = id })
+            )
         );
         Receipt(
             await Call(
