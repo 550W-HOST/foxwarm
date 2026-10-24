@@ -7,11 +7,13 @@ import { createHostFixture, until } from './experimentHostFixture.mjs'
 
 const fixture = await createHostFixture('handoff'), requests = [], failures = [], scripts = new Map(), shellPids = []
 await mkdir(join(fixture.work, 'memory'), { recursive: true }); await writeFile(join(fixture.work, 'memory', 'ONBOOT.md'), ' \n')
-const prefix = 'Before performing this inter-agent handoff, have I checked that it is necessary, accurate, self-contained, appropriately scoped, and compliant with the communication rules?'
+const recallPrefix = "Before composing this inter-agent handoff, have I recalled the applicable communication rules, the user's actual request, and the scope this recipient needs?"
+const recallPlaceholder = '<write the actual applicable rules, request, and recipient scope recalled for this handoff>'
+const prefix = 'Before sending this inter-agent handoff, have I honestly checked that it is necessary, actionable, and not merely acknowledgement, duplication, or inherited-rule repetition; if I found that it should not be sent, did I omit or cancel it instead?'
 const suffix = 'I have completed the check, found no issue, and confirm this inter-agent handoff should proceed.'
-const placeholder = '<replace this with your own non-empty review; do not copy this placeholder verbatim>'
+const placeholder = '<write the specific honest review for this handoff>'
 const review = (middle = '\nThe recipient needs this handoff to complete the assigned work.\n') => prefix + middle + suffix
-const confirmed = (args, middle) => ({ ...args, confirmation: review(middle) })
+const confirmed = (args, middle) => ({ handoffRecall: recallPrefix + '\nThe parent requested these owned fixture checks; the recipient needs the assigned result and scope.', ...args, handoffConfirmation: review(middle) })
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const history = async id => (await fixture.api('GET', route(id) + '/history')).body
 const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
@@ -31,13 +33,14 @@ const provider = createServer(async (request, output) => {
     const handoffs = body.tools.filter(value => ['send_to_session', 'create_child_session'].includes(value.name))
     assert.equal(handoffs.length, 2)
     for (const schema of handoffs) {
-      assert.equal(Object.hasOwn(schema.parameters.properties, 'confirmation'), mode)
-      assert.equal(schema.parameters.required.includes('confirmation'), mode)
-      if (mode) { assert.equal(Object.keys(schema.parameters.properties).filter(key => !key.startsWith('__cancel')).at(-1), 'confirmation'); assert.equal(schema.parameters.required.at(-1), 'confirmation') }
+      const properties = Object.keys(schema.parameters.properties), required = schema.parameters.required || []
+      assert.equal(properties.includes('confirmation'), false)
+      for (const field of ['handoffRecall', 'handoffConfirmation']) { assert.equal(properties.includes(field), mode); assert.equal(required.includes(field), mode) }
+      if (mode) { assert.equal(properties.filter(key => !key.startsWith('__cancel')).at(-1), 'handoffConfirmation'); assert.equal(required.at(-1), 'handoffConfirmation'); assert(properties.indexOf('handoffRecall') < properties.indexOf('message')) }
     }
     let calls = scripts.get(key); if (calls) scripts.delete(key)
     if (!calls && ['child-report', 'fork-report'].includes(key) && !body.input.some(item => item.type === 'function_call_output' && item.call_id?.startsWith('report-'))) {
-      assert(input.includes(prefix)); assert(input.includes(placeholder)); childReports++
+      assert(input.includes(prefix)); assert(input.includes(placeholder)); assert(input.includes(recallPrefix)); assert(input.includes(recallPlaceholder)); childReports++
       calls = [tool('report-' + key, 'send_to_session', confirmed({ sessionId: '<parent>', message: 'HAND-TASK:result-' + key, afterSend: 'finish' }))]
     }
     output.writeHead(200, { 'content-type': 'text/event-stream' })
@@ -53,10 +56,11 @@ const modelRaw = JSON.stringify({ default: 'local/wire', providers: { local: { p
 const config = join(fixture.data, 'state/config.yaml'), originalConfig = await readFile(config, 'utf8')
 try {
   await writeFile(fixture.modelPath, modelRaw); await writeFile(config, originalConfig + 'handoffConfirmation: "true"\n')
-  await assert.rejects(() => fixture.start(), /handoffConfirmation.*boolean/)
+  await assert.rejects(() => fixture.start(), /InvalidDataException/)
+  assert.equal(await readFile(config, 'utf8'), originalConfig + 'handoffConfirmation: \"true\"\n'); assert.equal(requests.length, 0)
   await writeFile(config, originalConfig); await fixture.start(); await fixture.openApp()
   for (const id of ['parent', 'recipient']) assert.equal((await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: id })).status, 200)
-  await run('disabled-old', [tool('d-empty', 'create_child_session', { suffix: 'disabled-empty' }), tool('d-send', 'send_to_session', { sessionId: 'recipient', message: 'HAND-TASK:recipient-disabled' }), tool('d-extra', 'create_child_session', { suffix: 'disabled-extra', confirmation: 42 }), tool('d-fork', 'create_child_session', { suffix: 'disabled-fork', fork: true })])
+  await run('disabled-old', [tool('d-empty', 'create_child_session', { suffix: 'disabled-empty' }), tool('d-send', 'send_to_session', { sessionId: 'recipient', message: 'HAND-TASK:recipient-disabled' }), tool('d-extra', 'create_child_session', { suffix: 'disabled-extra', handoffRecall: 42, handoffConfirmation: 42 }), tool('d-fork', 'create_child_session', { suffix: 'disabled-fork', fork: true })])
   for (const id of ['parent_disabled-empty', 'parent_disabled-extra', 'parent_disabled-fork']) { const value = await saved(id); assert(JSON.stringify(value.history).includes('send_to_session')); assert(!JSON.stringify(value.history).includes(prefix)) }
   assert.equal((await response('parent', 'd-send')).response.error, undefined)
   const oldBytes = await readFile(join(fixture.data, 'state/sessions/parent_disabled-empty.json'), 'utf8')
@@ -67,7 +71,7 @@ try {
   assert((await response('parent', 'bad-unified')).response.error); assert.equal(countTask('SHOULD-NOT-ARRIVE'), 0); assert.equal(await readFile(join(fixture.work, 'sibling.txt'), 'utf8'), 'ordinary sibling')
   assert.equal(await exists(join(fixture.data, 'state/sessions/parent_bad-direct.json')), false)
   const wrongOrder = confirmed({ suffix: 'wrong-order' }); wrongOrder.displayName = 'late'
-  await run('shape-errors', [tool('wrong-order', 'create_child_session', wrongOrder), wrapped('placeholder', 'create_child_session', { suffix: 'placeholder', confirmation: review(placeholder) }), tool('prefix-space', 'send_to_session', { sessionId: 'recipient', message: 'not delivered', confirmation: ' ' + review() }), tool('correct-neighbor', 'write', { filePath: 'neighbor.txt', content: 'not swallowed' })])
+  await run('shape-errors', [tool('wrong-order', 'create_child_session', wrongOrder), wrapped('placeholder', 'create_child_session', confirmed({ suffix: 'placeholder' }, placeholder)), tool('prefix-space', 'send_to_session', { ...confirmed({ sessionId: 'recipient', message: 'not delivered' }), handoffConfirmation: ' ' + review() }), tool('correct-neighbor', 'write', { filePath: 'neighbor.txt', content: 'not swallowed' })])
   for (const id of ['wrong-order', 'placeholder', 'prefix-space']) assert((await response('parent', id)).response.error)
   assert.equal(await readFile(join(fixture.work, 'neighbor.txt'), 'utf8'), 'not swallowed')
   await run('canceled-all', [tool('all-missing', 'create_child_session', { suffix: 'all-missing' }), tool('all-trigger', 'send_to_session', { sessionId: 'recipient', message: 'unused', __cancelAllToolsThisTurn: true }), wrapped('all-wrapped', 'create_child_session', { suffix: 'all-wrapped' }), tool('all-write', 'write', { filePath: 'canceled.txt', content: 'no' })])
@@ -77,7 +81,7 @@ try {
   assert((await response('parent', 'individual')).response.canceled); assert((await response('parent', 'wrapped-cancel')).response.canceled); assert((await response('parent', 'malformed')).response.error); assert.equal(await readFile(join(fixture.work, 'malformed-neighbor.txt'), 'utf8'), 'live')
   await run('search-concrete', [tool('search', 'search_tools', { query: 'send_to_session create_child_session', sources: ['builtin'], limit: 10, includeSchema: true })])
   const discovered = (await response('parent', 'search')).response.output
-  for (const name of ['send_to_session', 'create_child_session']) { const line = discovered.split('\n').find(value => value.includes('builtin:' + name)); assert(line); assert.match(line, /confirmation: string/); assert(line.indexOf('confirmation: string') > line.indexOf('afterSend')) }
+  for (const name of ['send_to_session', 'create_child_session']) { const line = discovered.split('\n').find(value => value.includes('builtin:' + name)); assert(line); assert.match(line, /handoffConfirmation: string/); assert.match(line, /handoffRecall: string/); assert(line.indexOf('handoffRecall: string') < line.search(/\bmessage\??:/)); assert(line.indexOf('handoffConfirmation: string') > line.indexOf('afterSend')) }
   const barrierCalls = [tool('barrier-exec-first', 'exec', { command: 'printf %s $$ > handoff-first-pid; touch handoff-start; while [ ! -f handoff-release ]; do sleep 0.02; done; printf first', timeout: 60 }), tool('barrier-child', 'create_child_session', confirmed({ suffix: 'barrier-child' })), tool('barrier-exec-next', 'exec', { command: 'printf %s $$ > handoff-next-pid; touch handoff-next; printf next', timeout: 60 })]
   scripts.set('actual-barrier', barrierCalls); assert.equal((await fixture.api('POST', route('parent') + '/message', { text: 'HAND-TASK:actual-barrier' })).status, 202)
   await until(() => exists(join(fixture.work, 'handoff-start')), 'real first exec held'); assert.equal(await exists(join(fixture.data, 'state/sessions/parent_barrier-child.json')), false); assert.equal(await exists(join(fixture.work, 'handoff-next')), false)
@@ -93,8 +97,15 @@ try {
   for (const id of ['parent_active', 'parent_forked']) { const value = await saved(id); const calls = value.history.flatMap(row => row.parts || []).filter(part => part.functionCall?.name === 'send_to_session'); assert(calls.length); assert(value.history.flatMap(row => row.parts || []).some(part => part.functionResponse?.tool_use_id?.startsWith('report-'))) }
   await run('finish-with-error', [tool('finish-bad-review', 'create_child_session', { suffix: 'finish-bad-review' }), wrapped('finish-valid', 'send_to_session', confirmed({ sessionId: 'recipient', message: 'HAND-TASK:recipient-finish', afterSend: 'finish' })), tool('finish-sibling', 'write', { filePath: 'finish-sibling.txt', content: 'complete batch' })])
   assert((await response('parent', 'finish-bad-review')).response.error); assert.equal((await response('parent', 'finish-valid')).response.error, undefined); assert.equal(await readFile(join(fixture.work, 'finish-sibling.txt'), 'utf8'), 'complete batch'); assert.equal(countTask('finish-with-error'), 1)
+  const humanPrefix = (await saved('parent')).history
   const humanFork = await fixture.api('POST', route('parent') + '/fork', { suffix: 'human-fork' }); assert.equal(humanFork.status, 200)
-  assert(JSON.stringify((await saved('parent_human-fork')).history).includes('by user command'))
+  const humanHistory = (await saved('parent_human-fork')).history
+  assert.deepEqual(humanHistory.slice(0, humanPrefix.length), humanPrefix)
+  const humanBoundary = humanHistory.slice(humanPrefix.length)
+  assert(humanBoundary.length > 0); assert(humanBoundary.every(row => row.role === 'user' && row.parts.every(part => typeof part.system === 'string')))
+  const humanInstructions = humanBoundary.flatMap(row => row.parts.map(part => part.system))
+  assert(humanInstructions.some(text => text.includes('event="history-inherited"') && text.includes('parentSessionId="parent"') && text.includes('currentSessionId="parent_human-fork"')))
+  assert(humanInstructions.every(text => !text.includes(recallPrefix) && !text.includes(prefix)))
   await writeFile(config, originalConfig + '# disabled on next startup\nhandoffConfirmation: false\n'); await fixture.save(modelRaw); assert.equal(await readFile(config, 'utf8'), originalConfig + '# disabled on next startup\nhandoffConfirmation: false\n')
   await run('no-hot-mode', [tool('still-requires', 'create_child_session', { suffix: 'still-requires' })]); assert((await response('parent', 'still-requires')).response.error)
   await fixture.stop(); mode = false; await fixture.start()

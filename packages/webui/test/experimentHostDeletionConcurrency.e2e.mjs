@@ -19,7 +19,7 @@ await writeFile(join(state, 'sessions/alias-target.json'), JSON.stringify({ sess
 const catalogModule = await import(pathToFileURL(resolve('lib/session/catalogStore.js')).href)
 const catalog = new catalogModule.SessionCatalogStore(join(state, 'catalog.sqlite')); catalog.initializeEmpty()
 catalog.replaceAll([{ id: 'alias-target', agent: 'main', aliases: ['nick'], busy: false, queueLength: 0, meta: { lastMessageTime: 100, messageCount: 0 } }]); catalog.close()
-async function create(id) { const response = await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: id }); assert.equal(response.status, 200, JSON.stringify(response)) }
+async function create(id, status = 200) { const response = await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: id }); assert.equal(response.status, status, JSON.stringify(response)); return response }
 try {
   await fixture.start()
   for (const migration of [false, true]) {
@@ -46,15 +46,20 @@ try {
   await until(() => exists(hold + '.reached'), 'actual alias target is admitted and retired before unlink')
   await rename(target, saved); await mkdir(target); await unlink(hold); const partial = await partialRequest
   assert.equal(partial.status, 500, JSON.stringify(partial)); assert.equal(partial.body.failedStage, 'json-unlink')
-  await rm(target, { recursive: true }); await rename(saved, target); await create('nick')
-  const newBytes = await readFile(join(state, 'sessions/nick.json'), 'utf8'), retry = await fixture.api('DELETE', route('nick'), {})
-  results.push({ aliasCollisionStatus: retry.status, aliasCollisionResult: retry.body, originalTargetStillPresent: await exists(target) })
-  if (retry.status !== 409 || retry.body.code !== 'SESSION_DELETE_RETRY_MISMATCH' || !(await exists(target))) problems.push('An exact new alias-named lifetime was confused with the original partial target')
-  assert.equal(await readFile(join(state, 'sessions/nick.json'), 'utf8'), newBytes)
-  if (retry.status === 409) {
-    assert.equal(retry.body.retrySessionId, 'alias-target'); const continued = await fixture.api('DELETE', route('alias-target'), {}); assert.equal(continued.status, 200, JSON.stringify(continued)); assert.equal(continued.body.continuedSameHost, true)
-    assert.equal(await readFile(join(state, 'sessions/nick.json'), 'utf8'), newBytes)
-  }
+  await rm(target, { recursive: true }); await rename(saved, target)
+  const targetBytes = await readFile(target, 'utf8')
+  const reservation = () => fixture.sql("SELECT session_id,canonical_session_id FROM archive_session_id_reservations WHERE session_id='nick'")
+  assert.deepEqual(reservation(), [['nick', 'alias-target']])
+  const rejected = await create('nick', 409); assert.match(rejected.body.error, /reserved/)
+  assert.equal(await exists(join(state, 'sessions/nick.json')), false); assert.equal(await readFile(target, 'utf8'), targetBytes)
+  const continued = await fixture.api('DELETE', route('nick'), {})
+  assert.equal(continued.status, 200, JSON.stringify(continued)); assert.equal(continued.body.continuedSameHost, true)
+  assert.deepEqual(continued.body.deletedSessionIds, ['alias-target']); assert.equal(await exists(target), false)
+  await create('nick', 409); assert.deepEqual(reservation(), [['nick', 'alias-target']])
+  await fixture.stop(); await fixture.start()
+  await create('nick', 409); assert.deepEqual(reservation(), [['nick', 'alias-target']])
+  assert.equal((await fixture.api('DELETE', route('nick'), {})).status, 404)
+  results.push({ aliasReservedDuringPartial: true, continuedCanonical: continued.body.deletedSessionIds, reservationAfterRestart: reservation() })
   await fixture.stop(); await writeFile(join(fixture.root, 'concurrency-results.json'), JSON.stringify(results, null, 2))
   console.log(JSON.stringify({ ok: problems.length === 0, root: fixture.root, hostPids: fixture.hostPids, requests: 0, results, problems }))
   assert.deepEqual(problems, [])
