@@ -217,6 +217,58 @@ public sealed class VectorMainCallerTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Current_session_recall_uses_ready_partial_hits_and_bootstraps_only_when_lexical_is_unavailable(
+        bool lexical
+    )
+    {
+        await using var f = await VectorFixture.CreateAsync();
+        await using var manager = await f.ManagerAsync(lexical: lexical);
+        await manager.Vector.WaitForStartupAsync();
+        var owner = await manager.CreateNamedAsync("main", "partial-hits", null, null);
+        await ForkClearLifecycleTests.AppendAsync(
+            owner,
+            VectorFixture.Message("StableMixedIdentifier indexed authority")
+        );
+        await manager.ForceVectorIndexAsync(owner);
+        await ForkClearLifecycleTests.AppendAsync(
+            owner,
+            VectorFixture.Message("StableMixedIdentifier committed below threshold")
+        );
+        var status = await manager.Vector.StatusAsync(owner.Id);
+        Assert.Equal(1, VectorRuntime.Integer(status["lastIndexedSeq"]));
+        Assert.Equal(2, VectorRuntime.Integer(status["latestLocalMessageSeq"]));
+        if (lexical)
+        {
+            Assert.True(status["lexical"]!["ready"]!.GetValue<bool>());
+            Assert.Equal(1, VectorRuntime.Integer(status["lexical"]!["rawLastIndexedSeq"]));
+        }
+        var scope = manager.ResolveVectorScope(owner, new() { ["scope"] = "current-session" });
+        var result = await VectorRecall.SearchAsync(
+            manager.Vector,
+            manager.ArchiveReader,
+            "StableMixedIdentifier",
+            5,
+            scope.Options,
+            scope.Scope,
+            scope.SessionId
+        );
+        Assert.NotEmpty(result.Items);
+        Assert.Equal(
+            lexical ? "hybrid search" : "semantic search with bounded identifier fallback",
+            result.SearchLabel
+        );
+        var recalled = await Recall(
+            manager,
+            owner,
+            new() { ["vector_query"] = "StableMixedIdentifier" }
+        );
+        Assert.Null(recalled["error"]);
+        Assert.Contains("indexed authority", recalled.ToJsonString());
+    }
+
     [Fact]
     public async Task Current_agent_model_recall_retains_never_moved_deleted_Archive_sources()
     {

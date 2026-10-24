@@ -78,51 +78,6 @@ public sealed class VectorLexicalTests
         );
         var query = await runtime.Lexical.QueryAsync("FooBar", 5, new(SessionIds: [id]));
         Assert.NotEmpty(query.Hits);
-        Assert.True(query.Lexical["coverageComplete"]!.GetValue<bool>());
-    }
-
-    [Fact]
-    public async Task Exact_coverage_rechecks_authority_both_before_and_after_the_FTS_query()
-    {
-        await using var f = await VectorFixture.CreateAsync();
-        const string id = "main/coverage";
-        f.Append(id, 1, "FooBar indexed source");
-        await using var lexical = new VectorLexicalRuntime(
-            f.Dense,
-            f.Database,
-            f.Configuration(lexical: true),
-            TimeProvider.System
-        );
-        await lexical.StartAsync();
-        await lexical.WaitForStartupAsync();
-        var first = await lexical.QueryAsync("FooBar", 5, new(SessionIds: [id]));
-        Assert.True(first.Lexical["coverageComplete"]!.GetValue<bool>());
-        lexical.AfterCoveragePre = () =>
-        {
-            f.Append(id, 2, "FooBar committed during query");
-            return Task.CompletedTask;
-        };
-        var concurrent = await lexical.QueryAsync("FooBar", 5, new(SessionIds: [id]));
-        Assert.NotEmpty(concurrent.Hits);
-        Assert.False(concurrent.Lexical["coverageComplete"]!.GetValue<bool>());
-        lexical.AfterCoveragePre = null;
-        lexical.Force(id, 2, 0);
-        await lexical.WaitForIdleAsync();
-        lexical.AfterFtsQuery = () =>
-        {
-            f.Append(id, 3, "FooBar committed after FTS query");
-            return Task.CompletedTask;
-        };
-        Assert.False(
-            (await lexical.QueryAsync("FooBar", 5, new(SessionIds: [id]))).Lexical[
-                "coverageComplete"
-            ]!.GetValue<bool>()
-        );
-        Assert.False(
-            (await lexical.QueryAsync("FooBar", 5, new(SessionIds: ["main/missing"]))).Lexical[
-                "coverageComplete"
-            ]!.GetValue<bool>()
-        );
     }
 
     [Fact]

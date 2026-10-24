@@ -64,22 +64,9 @@ internal static class SessionWait
     internal static IReadOnlyList<QueueItem> Apply(JsonObject meta, QueueItem item)
     {
         var wait = Current(meta);
-        var fingerprint = Text(item.OpenFields?["waitLivenessFingerprint"]);
-        if (fingerprint is not null)
-        {
-            if (wait is null || Text(item.OpenFields?["waitLivenessWaitId"]) != Text(wait["id"]))
-                return [];
-            var prior = Strings(meta["waitLivenessFingerprints"]);
-            if (prior.Contains(fingerprint, StringComparer.Ordinal))
-                return [];
-            meta["waitLivenessFingerprints"] = new JsonArray(
-                prior
-                    .Append(fingerprint)
-                    .TakeLast(16)
-                    .Select(value => (JsonNode?)JsonValue.Create(value))
-                    .ToArray()
-            );
-        }
+        var diagnosticWaitId = Text(item.OpenFields?["waitLivenessWaitId"]);
+        if (diagnosticWaitId is not null && (wait is null || diagnosticWaitId != Text(wait["id"])))
+            return [];
         var timeoutId = Text(item.OpenFields?["waitTimeoutId"]);
         if (wait is null)
             return timeoutId is null ? [item.CloneItem()] : [];
@@ -140,15 +127,6 @@ internal static class SessionWait
 
     internal static void Validate(JsonObject meta)
     {
-        if (meta.ContainsKey("waitLivenessFingerprints"))
-        {
-            if (
-                meta["waitLivenessFingerprints"] is not JsonArray prints
-                || prints.Count > 16
-                || prints.Any(value => string.IsNullOrEmpty(Text(value)))
-            )
-                throw new InvalidDataException("Invalid wait-liveness fingerprints.");
-        }
         if (!meta.ContainsKey("wait"))
             return;
         var wait = Current(meta) ?? throw new InvalidDataException("Wait state must be an object.");

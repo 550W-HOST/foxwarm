@@ -31,6 +31,6 @@ A consumed canonical queue item updates persisted `childHandoffState`; passive/u
 
 - [Task service/timers](../units/tasks-timers.md)
 - [Wait/queue save operations](../units/session-save-lane-wait.md)
-- [Wait-liveness persisted observation identity](../units/session-domain.md#wait-liveness-observation-identity)
+- [Wait-liveness observation and admission](../units/session-domain.md#wait-liveness-observation-and-admission)
 - [Session manager services](../units/session-manager-services.md)
 - `TaskStoreTests`, `MainTimersStoreTests`, `MainTimerToolsTests`, `SessionAdmissionTests`, and wait/retry tests.

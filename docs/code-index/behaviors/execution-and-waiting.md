@@ -77,7 +77,7 @@ The two Session-list modes are mutually exclusive. Session/exec sources are vali
 
 Ordinary incoming activity can interrupt these waits. In particular, `waitAllSessions` is not an uninterruptible join: unrelated messages or timeout wake it, flush deferred reports, and supply a reminder of still-missing sources. Passive/compaction maintenance can be wait-neutral rather than fabricating progress. Replacing a barrier with deferred reports is rejected instead of dropping those messages. Clear removes the wait. Stale timeout events cannot wake a later replacement wait.
 
-Declared Session dependencies also support a quiescence diagnostic: a closed dependency group with no observed active/queued work, finite fallback, exec source, or external-input path can receive a bounded `wait-sources-quiescent` wake. That is a request to reassess progress, not a report that work succeeded. Scheduling, deduplication, and bounded wake admission remain in [activity-wait mechanics](../threads/message-processing-pipeline.md#d-pipeline-activity-wait).
+Declared Session dependencies also support a quiescence diagnostic: a closed dependency group with no observed active/queued work, finite fallback, exec source, or external-input path can receive a bounded `wait-sources-quiescent` wake. That is a request to reassess progress, not a report that work succeeded. Scheduling, current-wait correlation, and bounded concurrent wake admission are documented in [activity-wait mechanics](../threads/message-processing-pipeline.md#d-pipeline-activity-wait).
 
 ### Example: long command, one completion wake
 
