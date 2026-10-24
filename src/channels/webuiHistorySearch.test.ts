@@ -161,8 +161,12 @@ test('authenticated history viewer scopes sources, pages sparse lineage, and kee
     assert.ok(generatedSource, 'actual generated source-family candidate survives ranked source fusion');
     assert.deepEqual(generatedSource.messages.map((message: any) => message.__meta.seq), [177, 178, 179, 180, 181, 182, 183]);
 
+    const emptySession = await (await request('/api/history/search?query=find&sessionId=')).json() as any;
+    assert.deepEqual(emptySession.results.map((item: any) => item.sessionId), [parent, child, other]);
     const agent = await (await request('/api/history/search?query=find&agentName=viewer-a')).json() as any;
     assert.deepEqual(agent.results.map((item: any) => item.sessionId), [parent, child]);
+    const agentEmptySession = await (await request('/api/history/search?query=find&agentName=viewer-a&sessionId=')).json() as any;
+    assert.deepEqual(agentEmptySession.results.map((item: any) => item.sessionId), [parent, child]);
     const scoped = await (await request(`/api/history/search?query=find&sessionId=${encodeURIComponent('viewer-a/old-child')}`)).json() as any;
     assert.deepEqual(scoped.results.map((item: any) => item.sessionId), [child, child]);
     assert.deepEqual((seenOptions.at(-1) as any).lineageSessions.map((entry: any) => [entry.sessionId, entry.maxMessageSeq]), [[child, undefined], [parent, 3]]);

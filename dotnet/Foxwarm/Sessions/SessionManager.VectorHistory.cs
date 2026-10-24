@@ -14,7 +14,7 @@ internal sealed partial class SessionManager
     {
         var exact = !string.IsNullOrEmpty(sessionId);
         var lineage = exact ? ArchiveReader(sessionId!).VectorLineage() : null;
-        var resolved = lineage?.FirstOrDefault()?.SessionId ?? sessionId;
+        var resolved = exact ? lineage?.FirstOrDefault()?.SessionId ?? sessionId : null;
         var options = exact
             ? new VectorSearchOptions(LineageSessions: lineage)
             : new VectorSearchOptions(Agent: string.IsNullOrEmpty(agent) ? null : agent);
