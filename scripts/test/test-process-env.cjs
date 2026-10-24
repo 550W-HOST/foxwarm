@@ -17,13 +17,17 @@ function initializeTestEnvironment() {
   Object.assign(process.env, isolatedApplicationEnv(dataRoot));
   process.env.FOXWARM_TEST_PROCESS_ROOT = processRoot;
   process.env.FOXWARM_SYNC_FILE_LOG ??= '1';
-  if (runRoot && process.env.FOXWARM_TEST_KEEP_SYSTEM_TMP !== '1') {
+  let tempRoot;
+  if (process.env.FOXWARM_TEST_KEEP_SYSTEM_TMP !== '1') {
     const tempParent = process.env.FOXWARM_TEST_TEMP_ROOT || path.join(processRoot, 'tmp');
     fs.mkdirSync(tempParent, { recursive: true });
-    const tempRoot = fs.mkdtempSync(path.join(tempParent, 't-'));
+    tempRoot = fs.mkdtempSync(path.join(tempParent, 't-'));
     Object.assign(process.env, { TMPDIR: tempRoot, TMP: tempRoot, TEMP: tempRoot });
   }
-  if (!runRoot) process.once('exit', () => fs.rmSync(processRoot, { recursive: true, force: true }));
+  if (!runRoot) process.once('exit', () => {
+    if (tempRoot) fs.rmSync(tempRoot, { recursive: true, force: true });
+    fs.rmSync(processRoot, { recursive: true, force: true });
+  });
   initialized = { processRoot, dataRoot };
   return initialized;
 }

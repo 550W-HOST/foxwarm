@@ -4,7 +4,8 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { promisify } from 'node:util'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -44,6 +45,57 @@ async function installation(t) {
     }
   } }
 }
+
+test('direct test processes keep a held upload spool private during concurrent initialization and cleanup', { timeout: 30_000 }, async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'fw-spool-canary-'))
+  const children = []
+  t.after(async () => {
+    for (const child of children) {
+      if (child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, 'exit')
+        child.kill('SIGKILL')
+        await exited
+      }
+    }
+    await fs.rm(root, { recursive: true, force: true })
+  })
+  const env = { ...process.env, NODE_OPTIONS: '', NODE_TEST_CONTEXT: undefined,
+    FOXWARM_TEST_RUN_ROOT: '', FOXWARM_TEST_PROCESS_ROOT: '', FOXWARM_TEST_KEEP_SYSTEM_TMP: '',
+    FOXWARM_TEST_TEMP_ROOT: path.join(root, 'short'), FOXWARM_DATA_DIR: path.join(root, 'unused-data'),
+    TMPDIR: root, TMP: root, TEMP: root }
+  const code = `
+    require('./lib/testEnvironment');
+    require('./lib/channels/webuiChannel');
+    const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+    const spool = path.join(os.tmpdir(), 'foxwarm-uploads');
+    fs.mkdirSync(spool, { recursive: true });
+    if (process.argv[1] === 'owner') fs.writeFileSync(path.join(spool, 'held-upload'), 'owned pending upload');
+    process.on('message', () => process.exit(0));
+    process.send({ spool, files: fs.readdirSync(spool), processRoot: process.env.FOXWARM_TEST_PROCESS_ROOT });
+  `
+  async function start(role) {
+    const child = spawn(process.execPath, ['-e', code, role], { cwd: repo, env, stdio: ['ignore', 'ignore', 'inherit', 'ipc'] })
+    children.push(child)
+    const [ready] = await once(child, 'message')
+    return { child, ...ready }
+  }
+  const owner = await start('owner')
+  const peer = await start('peer')
+  // IPC keeps the owner alive with its file present throughout the peer's import.
+  assert.deepEqual(owner.files, ['held-upload'])
+  assert.deepEqual(peer.files, [], 'A concurrent test must not observe another process\'s pending upload')
+  assert.notEqual(peer.spool, owner.spool)
+  assert.notEqual(peer.processRoot, owner.processRoot)
+  const peerExit = once(peer.child, 'exit')
+  peer.child.send('stop')
+  assert.deepEqual(await peerExit, [0, null])
+  assert.equal(await fs.readFile(path.join(owner.spool, 'held-upload'), 'utf8'), 'owned pending upload')
+  await assert.rejects(fs.stat(peer.processRoot), { code: 'ENOENT' })
+  await assert.rejects(fs.stat(path.dirname(peer.spool)), { code: 'ENOENT' })
+  const ownerExit = once(owner.child, 'exit')
+  owner.child.send('stop')
+  assert.deepEqual(await ownerExit, [0, null])
+})
 
 test('direct backend tests isolate inherited and module-relative installation configuration before imports', { timeout: 180_000 }, async t => {
   const fixture = await installation(t)
@@ -97,6 +149,16 @@ test('direct backend tests isolate inherited and module-relative installation co
       "const c=require('./lib/config'); console.log(c.DATA_ROOT_DIR)"], {encoding:'utf8'});
     assert.equal(child.status, 0, child.stderr);
     assert.equal(child.stdout.trim().split('\\n').at(-1), c.DATA_ROOT_DIR);
+    const selected = require('node:path').join(c.DATA_ROOT_DIR, 'selected-child');
+    const selectedChild = require('node:child_process').spawnSync(process.execPath, ['-e',
+      "const c=require('./lib/config'); console.log(JSON.stringify({data:c.DATA_ROOT_DIR,tmp:require('node:os').tmpdir()}))"], {
+      encoding:'utf8', env: { ...process.env, FOXWARM_DATA_DIR: selected,
+        FOXWARM_TEST_RUN_ROOT: require('node:path').join(c.DATA_ROOT_DIR, 'child-run'), NODE_TEST_CONTEXT: 'child-v8',
+        NODE_OPTIONS: '--import=' + ${JSON.stringify(pathToFileURL(path.join(fixture.root, 'scripts/test/test-process-env.mjs')).href)} },
+    });
+    assert.equal(selectedChild.status, 0, selectedChild.stderr);
+    assert.deepEqual(JSON.parse(selectedChild.stdout.trim().split('\\n').at(-1)),
+      { data: selected, tmp: require('node:os').tmpdir() });
   `
   await execFileAsync(process.execPath, ['-e', probe], { cwd: fixture.root, env: fixture.env, timeout: 20_000 })
   await fixture.unchanged()
