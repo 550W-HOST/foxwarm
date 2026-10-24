@@ -61,8 +61,14 @@ public sealed class VectorInteropTests
             Path.Combine(f.Temp.Path, "source-result.json")
         );
         Assert.Equal(id, source["canonical"]!.GetValue<string>());
-        Assert.Equal(id, Assert.Single(source["maxima"]!.AsArray())!["sessionId"]!.GetValue<string>());
-        Assert.Equal(id, Assert.Single(source["candidates"]!.AsArray())!["sessionId"]!.GetValue<string>());
+        Assert.Equal(
+            id,
+            Assert.Single(source["maxima"]!.AsArray())!["sessionId"]!.GetValue<string>()
+        );
+        Assert.Equal(
+            id,
+            Assert.Single(source["candidates"]!.AsArray())!["sessionId"]!.GetValue<string>()
+        );
         Assert.Equal(2, source["physicalMessages"]!.AsArray().Count);
         Assert.Equal(2, source["physicalBlocks"]!.AsArray().Count);
         Assert.Equal(0, source["oldCheckpoint"]!["rawLastIndexedSeq"]!.GetValue<long>());
@@ -73,7 +79,10 @@ public sealed class VectorInteropTests
         input["runSource"] = false;
         await File.WriteAllTextAsync(inputPath, EcmaJson.Stringify(input));
         await VectorFixture.SourceAsync(
-            "retained-alias", f.Data, inputPath, Path.Combine(f.Temp.Path, "managed-seed.json")
+            "retained-alias",
+            f.Data,
+            inputPath,
+            Path.Combine(f.Temp.Path, "managed-seed.json")
         );
         Assert.Equal(id, f.Archive(oldId).CanonicalSessionId);
         Assert.Equal(id, Assert.Single(f.Archive(oldId).ReadMessages()).SessionId);
@@ -99,7 +108,9 @@ public sealed class VectorInteropTests
         Assert.Equal(0, f.Archive(oldId).VectorCheckpoint().RawLastIndexedSeq);
 
         // The same retained Source data reopens through the supervised owner.
-        await using (var child = new VectorService(f.Data, f.Configuration(child: true, lexical: true)))
+        await using (
+            var child = new VectorService(f.Data, f.Configuration(child: true, lexical: true))
+        )
         {
             await child.StartAsync();
             await child.WaitForStartupAsync().WaitAsync(TimeSpan.FromSeconds(5));
@@ -119,7 +130,8 @@ public sealed class VectorInteropTests
         );
         archiveDb.Open();
         using var count = archiveDb.CreateCommand();
-        count.CommandText = "SELECT (SELECT count(*) FROM archive_messages WHERE session_id=$s) + (SELECT count(*) FROM archive_blocks WHERE session_id=$s)";
+        count.CommandText =
+            "SELECT (SELECT count(*) FROM archive_messages WHERE session_id=$s) + (SELECT count(*) FROM archive_blocks WHERE session_id=$s)";
         count.Parameters.AddWithValue("$s", oldId);
         Assert.Equal(2L, count.ExecuteScalar());
     }
