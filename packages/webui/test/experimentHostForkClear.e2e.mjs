@@ -8,7 +8,7 @@ import yaml from 'js-yaml'
 import { WebSocketServer } from 'ws'
 import { createHostFixture, saveModelsInOriginalApp, until, sleep } from './experimentHostFixture.mjs'
 
-const fixture = await createHostFixture('fork-clear'), records = [], errors = [], connections = [], held = new Map(), heldOnce = new Set()
+const fixture = await createHostFixture('fork-clear'), records = [], errors = [], connections = [], held = new Map(), heldOnce = new Set(), commandNotices = []
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const history = async id => (await fixture.api('GET', route(id) + '/history')).body
 const authorityPath = id => join(fixture.data, 'state/sessions', id + '.json')
@@ -80,7 +80,15 @@ server.on('connection', (ws, request) => {
 peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
 const base = 'http://127.0.0.1:' + peer.address().port
 const config = { default: 'a', providers: { a: { providerType: 'openai-ws', baseUrl: base + '/ws', apiKey: 'synthetic-ws', models: ['wire'], contextLimit: 20000 }, sync: { providerType: 'openai-responses', baseUrl: base + '/http', apiKey: 'synthetic-http', models: ['wire'], contextLimit: 20000, extraFields: { cache: '${SESSION_CACHE_KEY}' }, asyncCompact: false } } }
-const command = (id, text) => fixture.api('POST', route(id) + '/message', { text })
+async function command(id, text) {
+  const before = commandNotices.length
+  const response = await fixture.api('POST', route(id) + '/message', { text })
+  if (text === '/session clear' || text.startsWith('/fork ')) {
+    await until(() => commandNotices.slice(before).some(row => row.sessionId === id), 'original App command reply')
+  }
+  return response
+}
+const commandFailed = id => commandNotices.findLast(row => row.sessionId === id)?.text.startsWith('❌') === true
 async function create(model) { const result = await fixture.api('POST', '/api/sessions', {}); assert.equal(result.status, 200); if (model) assert.equal((await fixture.api('POST', route(result.body.sessionId) + '/model', { model })).status, 200); return result.body.sessionId }
 async function send(id, scenario, extra = '') {
   const count = records.length; assert.equal((await command(id, 'CASE:' + scenario + ' ' + extra)).status, 202)
@@ -90,7 +98,7 @@ async function send(id, scenario, extra = '') {
 async function seed(id, label, count = 7) { for (let index = 0; index < count; index++) await send(id, 'seed-' + label + '-' + index, ('ordered-' + label + '-' + index + '-').repeat(750)) }
 async function compact(id) {
   const before = fixture.sql('SELECT MAX(id) FROM archive_blocks WHERE session_id=?', [id])[0][0] || 0
-  assert.equal((await command(id, '/compact')).status, 202)
+  assert.equal((await command(id, '/compact')).status, 200)
   await until(async () => (fixture.sql('SELECT MAX(id) FROM archive_blocks WHERE session_id=?', [id])[0][0] || 0) > before && !(await history(id)).session.busy, 'real compact authority ' + id)
 }
 const branch = id => fixture.sql('SELECT parent_session_id,fork_message_seq,fork_block_id FROM archive_branches WHERE session_id=?', [id])[0]
@@ -101,12 +109,20 @@ async function fault(id, operation, committed) { const folder = join(fixture.dat
 try {
   await fixture.start(); const parent = await create(), page = await fixture.openApp()
   await saveModelsInOriginalApp(page, yaml.dump(config), fixture.modelPath)
+  const cdp = await page.createCDPSession(); await cdp.send('Network.enable')
+  cdp.on('Network.webSocketFrameReceived', event => {
+    try {
+      const row = JSON.parse(event.response.payloadData)
+      if (row.type === 'message' && row.message?.__meta?.isCommandResponse) commandNotices.push({ sessionId: row.sessionId, text: row.message.parts.map(part => part.text || '').join('') })
+    } catch {}
+  })
   assert.equal((await fixture.api('POST', route(parent) + '/model', { model: 'sync' })).status, 200)
   await send(parent, 'retry-hidden'); assert((await history(parent)).messages.some(row => row.modelVisible === false), 'real retry notice is canonical but hidden')
   assert.equal((await fixture.api('POST', route(parent) + '/model', { model: 'a', effort: 'low' })).status, 200)
   await seed(parent, 'parent'); await compact(parent)
   const firstBlock = fixture.sql('SELECT * FROM archive_blocks WHERE session_id=? AND id=1', [parent]), oldArchive = archive(parent), oldCache = (await authority(parent)).promptCacheKey
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), parent)
+  await page.waitForSelector(`[data-workbench-content-tab=${JSON.stringify('chat:' + parent)}] .foxwarm-chat-root[data-chat-connection-state="connected"]`, { visible: true })
   await page.evaluate(() => window.foxwarmTest.sendMessage('CASE:self-fork'))
   await until(async () => (await readFile(join(fixture.work, 'fork-started'), 'utf8').catch(() => '')) === 'started', 'actual executing parent effect')
   const child = parent + '_worker'; await until(async () => (await history(child)).messages?.some(row => row.parts?.some(part => part.text === 'DONE-child-task')), 'genuine tool-created fork task')
@@ -126,8 +142,8 @@ try {
   assert.deepEqual((await authority(parent)).history, parentCut, 'Sidebar created no parent notice')
   const beforeContinue = records.length; assert.equal((await command(manual, '/continue')).status, 200); await until(async () => !(await history(manual)).session.busy, 'Continue uses copied paired history')
   assert(records.length > beforeContinue); assert.equal((await readFile(join(fixture.work, 'fork-effect.log'), 'utf8')).trim().split('\n').length, 1)
-  await command(parent, 'captured queued input to drop'); const busyClear = await command(parent, '/session clear')
-  assert.equal(busyClear.status, 200); assert.equal(busyClear.body.requiresRetry, true); assert.equal(busyClear.body.cleared, false)
+  await page.evaluate(id => window.foxwarmTest.switchToSession(id), parent); await page.waitForSelector(`[data-workbench-content-tab=${JSON.stringify('chat:' + parent)}] .foxwarm-chat-root[data-chat-connection-state="connected"]`, { visible: true }); await command(parent, 'captured queued input to drop'); const busyClear = await command(parent, '/session clear')
+  assert.equal(busyClear.status, 200); assert.equal(busyClear.body.success, true); assert.equal(commandFailed(parent), false)
   assert((await authority(parent)).history.length > 0); assert.equal((await authority(parent)).queue.length, 0)
   await writeFile(join(fixture.work, 'fork-release'), 'release'); await until(async () => !(await history(parent)).session.busy, 'Stop does not kill or replay ordinary effect')
   assert(!(await history(parent)).messages.some(row => row.parts?.some(part => part.text === 'captured queued input to drop')))
@@ -153,7 +169,7 @@ try {
 
   const manualInstruction = 'CASE:manual-task First line.\nSecond line includes complete instructions.\nFinal line and trailing newline.\n'
   const beforeManual = records.length, idleFork = await command(parent, '/fork instructed ' + manualInstruction)
-  assert.equal(idleFork.status, 200); const instructed = idleFork.body.newSessionId
+  assert.equal(idleFork.status, 200); const instructed = parent + '_instructed'
   await until(async () => !(await history(instructed)).session.busy && (await history(instructed)).messages.some(row => row.parts?.some(part => part.text === 'DONE-manual-task')), 'manual initial task')
   const instructedState = await authority(instructed)
   assert(instructedState.history.some(row => row.role === 'user' && row.parts?.some(part => part.text === manualInstruction)))
@@ -165,17 +181,16 @@ try {
   const none = await command(parent, '/fork no-initial'); assert.equal(none.status, 200); assert((await history(parent)).messages.at(-1).parts[0].system.includes('Initial message: (none)'))
   await command(parent, 'CASE:held-notice'); await until(() => held.has('held-notice'), 'busy parent for ordinary notice queue')
   const queuedNotice = await command(parent, '/fork busy-notice'); assert.equal(queuedNotice.status, 200)
-  assert((await authority(parent)).queue.some(item => item.parts?.some(part => part.system?.includes('manual-fork-created') && part.system.includes(queuedNotice.body.newSessionId))))
+  assert((await authority(parent)).queue.some(item => item.parts?.some(part => part.system?.includes('manual-fork-created') && part.system.includes(parent + '_busy-notice'))))
   held.get('held-notice').complete(final('DONE-held-notice')); held.delete('held-notice')
   await until(async () => !(await history(parent)).session.busy && (await authority(parent)).queue.length === 0, 'ordinary busy notice was consumed')
 
   for (const committed of [false, true]) {
     const suffix = committed ? 'notice-post' : 'notice-pre', initialTask = 'CASE:' + suffix + '-task Task was actually delivered.'
     await fault(parent, 'fork-notice', committed); const reply = await command(parent, '/fork ' + suffix + ' ' + initialTask)
-    assert.equal(reply.status, 500); assert.equal(reply.body.code, 'partial_create'); assert.equal(reply.body.sessionId, parent + '_' + suffix)
-    assert.equal(reply.body.initialDeliveryCommitted, true); assert.equal(reply.body.parentNoticeCommitted, committed)
-    await until(async () => !(await history(reply.body.sessionId)).session.busy && (await history(reply.body.sessionId)).messages.some(row => row.parts?.some(part => part.text === 'DONE-' + suffix + '-task')), 'retained delivered child finishes after parent notice fault')
-    assert((await history(reply.body.sessionId)).messages.some(row => row.parts?.some(part => (part.text || part.system || '').includes(initialTask))))
+    assert.equal(reply.status, 200); assert.equal(commandFailed(parent), true); const createdId = parent + '_' + suffix
+    await until(async () => !(await history(createdId)).session.busy && (await history(createdId)).messages.some(row => row.parts?.some(part => part.text === 'DONE-' + suffix + '-task')), 'retained delivered child finishes after parent notice fault')
+    assert((await history(createdId)).messages.some(row => row.parts?.some(part => (part.text || part.system || '').includes(initialTask))))
     assert.equal((await history(parent)).messages.some(row => row.parts?.some(part => part.system?.includes(initialTask))), committed)
   }
   const rollbackId = parent + '_pre-fault'; await fault(rollbackId, 'create', false)
@@ -185,24 +200,24 @@ try {
   const committedId = parent + '_post-fault'; await fault(committedId, 'create', true)
   const partial = await fixture.api('POST', route(parent) + '/fork', { suffix: 'post-fault' }); assert.equal(partial.status, 500); assert.equal(partial.body.code, 'partial_create'); assert.equal(partial.body.sessionId, committedId)
   assert.equal((await fixture.api('GET', route(committedId) + '/history')).status, 200); assert(branch(committedId)); assert.equal(await fork(parent, 'post-fault'), committedId + '_2')
-  const beforeFault = (await authority(parent)).history; await fault(parent, 'clear', false); assert.equal((await command(parent, '/session clear')).status, 500)
+  const beforeFault = (await authority(parent)).history; await fault(parent, 'clear', false); assert.equal((await command(parent, '/session clear')).status, 200); assert.equal(commandFailed(parent), true)
   assert.deepEqual((await authority(parent)).history, beforeFault)
-  await fault(parent, 'clear', true); const retainedClear = await command(parent, '/session clear'); assert.equal(retainedClear.status, 500); assert.equal(retainedClear.body.committed, true); assert.equal((await authority(parent)).history.length, 0)
-  assert.equal((await command(parent, '/session clear')).body.cleared, true, 'lane and admission fence remain usable')
+  await fault(parent, 'clear', true); const retainedClear = await command(parent, '/session clear'); assert.equal(retainedClear.status, 200); assert.equal(commandFailed(parent), true); assert.equal((await authority(parent)).history.length, 0)
+  assert.equal((await command(parent, '/session clear')).status, 200); assert.equal(commandFailed(parent), false, 'lane and admission fence remain usable')
 
-  await seed(parent, 'cancelled'); holdPlan = true; held.delete('plan'); assert.equal((await command(parent, '/compact')).status, 202)
+  await seed(parent, 'cancelled'); holdPlan = true; held.delete('plan'); assert.equal((await command(parent, '/compact')).status, 200)
   await until(() => held.has('plan'), 'held real background planner before clear'); const cancelledPlan = held.get('plan'), beforeCancelledClear = records.length
-  assert.equal((await command(parent, '/session clear')).body.cleared, true); await until(() => cancelledPlan.connection.closed, 'clear settles exactly its planner')
+  assert.equal((await command(parent, '/session clear')).status, 200); assert.equal(commandFailed(parent), false); await until(() => cancelledPlan.connection.closed, 'clear settles exactly its planner')
   assert.equal((await authority(parent)).history.length, 0); assert(!(await authority(parent)).queue.some(item => item.type === 'compact-commit')); assert.equal(records.length, beforeCancelledClear)
   holdPlan = false; held.delete('plan')
   const clearHold = join(fixture.data, 'state/experiment-faults', segment(parent) + '.clear-hold-before-rename')
   await writeFile(clearHold, 'hold'); const heldClear = command(parent, '/session clear')
   await until(async () => (await readFile(clearHold + '.reached', 'utf8').catch(() => '')) === 'reached', 'real clear publication barrier')
-  assert.equal((await command(parent, '/compact')).status, 409, 'clear fence rejects a new compact admission')
+  assert.equal((await fixture.api('POST', route(parent) + '/message', { text: '/compact', controlRequestId: 'held-clear-compact' })).status, 409, 'clear fence rejects a new compact admission')
   let laterAcknowledged = false
   const laterIngress = command(parent, 'CASE:clear-survivor Later legal ordinary input.').then(result => { laterAcknowledged = true; return result })
   await sleep(100); assert.equal(laterAcknowledged, false, 'later ingress waits behind the real held authority publication')
-  await rm(clearHold); assert.equal((await heldClear).body.cleared, true); assert.equal((await laterIngress).status, 202)
+  await rm(clearHold); assert.equal((await heldClear).status, 200); assert.equal(commandFailed(parent), false); assert.equal((await laterIngress).status, 202)
   await until(async () => !(await history(parent)).session.busy && (await history(parent)).messages.some(row => row.parts?.some(part => part.text === 'DONE-clear-survivor')), 'later acknowledged input survives strict clear')
   const residualId = parent + '_known-residue'; await fault(residualId, 'create', false)
   await writeFile(join(fixture.data, 'state/experiment-faults', segment(residualId) + '.create-cleanup-fail'), 'once')
@@ -248,7 +263,7 @@ try {
   await until(() => held.has('plan'), 'actual selected-file awaited HTTP planner')
   const selectedPlan = held.get('plan'); assert.equal(selectedPlan.kind, 'http'); assert(selectedPlan.body.instructions.includes('Changed file must not be read by fork snapshot copy.')); assert(selectedPlan.body.instructions.includes('Selected common regular memory.'))
   await writeFile(join(fixture.work, 'selected-prompt.md'), 'Selected live commit refresh uses the current file.')
-  selectedPlan.valid(); holdPlan = false; held.delete('plan'); assert.equal((await selectedCompact).status, 202)
+  selectedPlan.valid(); holdPlan = false; held.delete('plan'); assert.equal((await selectedCompact).status, 200)
   await until(async () => !(await history(parent)).session.busy && (await authority(parent)).nextBlockId > 3, 'old frontier corrected only by real nonempty allocation')
   assert((await authority(parent)).persistentMemorySnapshot.includes('Selected live commit refresh uses the current file.'))
   assert.deepEqual(errors, []); await fixture.stop()
