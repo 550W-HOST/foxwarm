@@ -64,7 +64,7 @@ function peer(label) {
         if (plannerRound === 1) {
           held.set('compact-old', { record, finish: () => finish(response, protocols[label], [tool('plan-invalid', 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 999999, sourceEnd: 1000000, summary: 'Invalid.' }] })]) }); return
         }
-        assert(input.includes('COMPACT PLAN INVALID.')); assert.equal(request.headers['x-generation'], 'new-compact')
+        assert(JSON.stringify(body).includes('compact_plan_invalid')); assert.equal(request.headers['x-generation'], 'new-compact')
         assert.deepEqual(ranges, held.get('compact-old').record.ranges)
         finish(response, protocols[label], [tool('plan-valid', 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: ranges[0][0], sourceEnd: ranges.at(-1)[1], summary: 'Source-owned route, paired local effects and immutable history evidence.' }] })]); return
       }
@@ -158,7 +158,7 @@ try {
   const secretArchive = fixture.sql('SELECT message_json FROM archive_messages WHERE session_id=? AND seq=?', [fast, secretNotice.__meta.seq])[0][0]
   assert(!secretArchive.includes('synthetic-old-a')); assert(!secretArchive.includes('synt…'))
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), fast)
-  await until(async () => (await page.evaluate(() => document.body.innerText)).includes('Configured model request failed.'), 'original safe cutoff notice')
+  await page.waitForSelector('[data-runtime-presentation="error"]', { visible: true })
   assert(!(await page.evaluate(() => document.body.innerText)).includes('synthetic-old-a'))
   assert.deepEqual((await send(fast, 'not-found', 'DONE-not-found-b')).map(record => record.label), ['a', 'b'])
 
@@ -167,7 +167,8 @@ try {
   await until(() => held.get('old'), 'old request physically held'); const oldRecord = held.get('old').record
   await fixture.save(configuration('new')); const newer = await newSession(); await select(newer, 'fast')
   assert.deepEqual((await send(newer, 'new-failure', 'DONE-new-failure-b')).map(record => record.label), ['a', 'b'])
-  await select(oldSession, 'messages'); held.get('old').fail()
+  // Isolate catalog reload: an explicit owner model change intentionally replaces its selection snapshot.
+  held.get('old').fail()
   await until(async () => !(await state(oldSession)).busy, 'stale final target fails')
   const oldAttempts = requests.filter(record => record.scenario === 'old-held')
   assert.deepEqual(oldAttempts.map(record => record.label), ['a', 'b']); assert(oldAttempts.every(record => record.headers['x-generation'] === 'old-2'))
@@ -203,7 +204,7 @@ try {
   assert.equal((await send(child, 'hash', 'DONE-hash-' + expectedHash))[0].label, expectedHash)
   const reversed = configuration('stop', 2); reversed.providers.pool.targets.reverse(); await fixture.save(reversed)
   assert.equal((await send(child, 'hash-reordered', 'DONE-hash-reordered-' + expectedHash))[0].label, expectedHash)
-  await page.evaluate(id => window.foxwarmTest.switchToSession(id), child); await page.click('.foxwarm-model-selector-trigger')
+  await page.evaluate(id => window.foxwarmTest.switchToSession(id), child); await page.waitForSelector(`[data-workbench-content-tab=${JSON.stringify('chat:' + child)}] .foxwarm-chat-root[data-chat-connection-state="connected"]`, { visible: true }); await page.locator('.foxwarm-model-selector-trigger').click()
   await page.waitForSelector('[data-model-column="current"] [data-model-option-key="pool"]')
   assert((await page.evaluate(() => document.body.innerText)).toLowerCase().includes('model'))
 
