@@ -1,6 +1,6 @@
 # Unit: Public managed Main Docker delivery
 
-Files: Dockerfile, .dockerignore, docker-compose.yml, test/docker-compose.yml, test/README.md
+Files: Dockerfile, .dockerignore, docker-compose.yml, test/docker-compose.yml, test/docker-compose.code.yml, test/README.md
 Secondary files: dotnet/Foxwarm/Delivery.targets, Dockerfile.node, .github/workflows/tests.yml
 
 ## Contract and rationale
@@ -13,7 +13,11 @@ After the dependency-install layer, the build stage explicitly copies `tsconfig.
 
 ## Consumers and side effects
 
-The default command is `dotnet Foxwarm.dll`, installation root `/app`, data root `/data`, port 3001. Root Compose retains its data mount, init process, healthcheck and separately paired optional sandbox Node. Test Compose uses the same recipe and existing host port, with its workspace mounted as the canonical Agents root at `/data/agents`. Main lives beneath `main/` alongside other Agent directories and the global framework prompt. Existing legacy physical workspaces require a separately authorized stopped-instance adjustment; startup does not migrate them. Both read ordinary mounted app YAML for the public `url` and `bot.httpPort`, with no environment port/bind/public-address override; the default listener is port 3001 on IPv4 wildcard. Both use Main's normal stop/drain. Forced deployment grace expiry is not successful drain.
+The default command is `dotnet Foxwarm.dll`, installation root `/app`, data root `/data`, port 3001. Root Compose retains its data mount, init process, healthcheck and separately paired optional sandbox Node.
+
+Test Compose uses the same recipe as project/service `foxwarm-test` on host port 3002, with `test/state` at `/data/state` and `test/agents` as the canonical Agents root at `/data/agents`. Main lives beneath `main/` alongside other Agent directories and the global framework prompt. Its optional Code overlay mounts prepared `test/.temp/code-assets` read-only at the installed resource directory.
+
+Both read ordinary mounted app YAML for the public `url` and `bot.httpPort`, with no environment port/bind/public-address override; the default listener is port 3001 on IPv4 wildcard. Both use Main's normal stop/drain. Test Compose retains a 30-second operational allowance for the five-second foreground grace, five-second cancellation window and remaining teardown. Forced deployment grace expiry is not successful drain.
 
 `Dockerfile.node` remains an independent Node-only build and is not redirected to managed Main. Source/native-job adoption, Worker/controller hosting, Main TUI and public promotion remain outside this delivery candidate. Linux x64 image qualification establishes no other architecture, operating system or Main AOT claim.
 

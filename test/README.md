@@ -11,7 +11,7 @@ promotion or permission to replace a live installation.
 # Production candidate, without starting or replacing a service:
 docker compose build foxwarm
 # Test consumer, using the same recipe:
-docker compose -f test/docker-compose.yml build foxwarm-dotnet-test
+docker compose -f test/docker-compose.yml build foxwarm-test
 ```
 
 The existing Node 24.17.0 / Debian 13 Trixie build and runtime bases are retained.
@@ -47,17 +47,15 @@ The listener reads `bot.httpPort` from the same YAML (default 3001) and binds al
 IPv4 interfaces.
 Changing `bot.httpPort` also requires matching port/healthcheck configuration.
 
-The retained test Compose consumer publishes host port 3003 and preserves
-`test/state` at `/data/state` and `test/workspace` at `/data/agents`. The latter
+The retained test Compose consumer publishes host port 3002 and preserves
+`test/state` at `/data/state` and `test/agents` at `/data/agents`. The latter
 is the ordinary Agents root: `main/` and other Agent folders live beneath it,
-with the global `00_SYSTEM.md` at its root. Existing main-at-workspace data
-requires a separately authorized stopped-instance layout adjustment before
-using this mount; Main does not migrate it at startup. These private directories remain
+with the global `00_SYSTEM.md` at its root. These private directories remain
 outside Git and Docker context. Build alone does not restart a service. Set
 ordinary app YAML before starting this consumer, for example:
 
 ```yaml
-url: http://127.0.0.1:3003
+url: http://127.0.0.1:3002
 bot:
   httpPort: 3001
 ```
@@ -66,8 +64,10 @@ The published URL and container listener port have separate roles. Use the actua
 reachable URL for the deployment; keep the container port aligned with Compose.
 
 A normal container stop requests Main's ordered Session drain before teardown.
-Set the deployment's stop grace period for its workload; a forced timeout is
-not successful drain. Restart against the same owned volume preserves data.
+Test Compose allows 30 seconds for shutdown, covering the existing five-second
+foreground grace and five-second cancellation windows plus remaining teardown.
+A forced timeout is not successful drain. Restart against the same owned volume
+preserves data.
 Source native running jobs are not automatically adopted by managed Main:
 before an actual cutover, choose drain versus separately specified adoption.
 Keep original Worker/controller configuration and records; those hosts and
@@ -82,7 +82,7 @@ root must contain `out/`, `extensions/` and the rest of the workbench payload.
 After service replacement is authorized, the retained read-only override is:
 
 ```sh
-docker compose -f test/docker-compose.yml -f test/docker-compose.code.yml up -d --no-build foxwarm-dotnet-test
+docker compose -f test/docker-compose.yml -f test/docker-compose.code.yml up -d --no-build foxwarm-test
 ```
 
 It mounts the prepared payload read-only at Main's installed resource location,

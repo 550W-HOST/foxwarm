@@ -195,7 +195,9 @@ sudo docker compose down
 sudo docker compose up -d
 ```
 
-当前默认测试服务名为 `foxwarm-dotnet-test`，监听宿主机的 `0.0.0.0:3003`。
+当前默认测试项目和服务名为 `foxwarm-test`，监听宿主机的 `0.0.0.0:3002`。测试配置使用根目录的托管 Main Docker 构建方案，并为正常停止预留 30 秒。
+
+`test/agents/` 挂载到 `/data/agents/`，其中包含 `main/`、其他 Agent 目录及全局 `00_SYSTEM.md`。
 
 ### 测试环境登录
 
@@ -207,4 +209,4 @@ sudo docker compose up -d
 cat test/state/token
 ```
 
-浏览器访问 `http://127.0.0.1:3003/`，在登录页粘贴该 token。修改 token 时替换该文件内容，然后重启服务使其生效。在挂载的 `state/config.yaml` 中设置 `url: http://127.0.0.1:3003`（或实际对外地址）及 `bot.httpPort: 3001`；对外 URL 不参与登录校验。
+浏览器访问 `http://127.0.0.1:3002/`，在登录页粘贴该 token。修改 token 时替换该文件内容，然后重启服务使其生效。在挂载的 `state/config.yaml` 中设置 `url: http://127.0.0.1:3002`（或实际对外地址）及 `bot.httpPort: 3001`；对外 URL 不参与登录校验。

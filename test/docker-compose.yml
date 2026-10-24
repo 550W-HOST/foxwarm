@@ -1,18 +1,17 @@
-name: foxwarm-dotnet-test
+name: foxwarm-test
 
 services:
-  foxwarm-dotnet-test:
-    platform: linux/amd64
+  foxwarm-test:
     build:
       context: ..
       dockerfile: Dockerfile
-    container_name: foxwarm-dotnet-test
+    container_name: foxwarm-test
     environment:
       FOXWARM_DATA_DIR: /data
     ports:
-      - "0.0.0.0:3003:3001"
+      - "0.0.0.0:3002:3001"
     volumes:
       - ./state:/data/state
-      - ./workspace:/data/agents
+      - ./agents:/data/agents
     restart: unless-stopped
-    stop_grace_period: 5s
+    stop_grace_period: 30s

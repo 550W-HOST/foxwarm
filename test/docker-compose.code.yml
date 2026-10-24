@@ -1,4 +1,4 @@
 services:
-  foxwarm-dotnet-test:
+  foxwarm-test:
     volumes:
       - ./.temp/code-assets:/app/packages/vscode-web/assets/vscode-web:ro
