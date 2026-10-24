@@ -55,18 +55,19 @@ export async function createHostFixture(name, options = {}) {
     let output = ''
     host = { child, get output() { return output } }; hostPids.push(child.pid)
     await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => finish(new Error('Owned listener did not bind.')), 20000)
+      const timeout = setTimeout(() => finish(new Error('Owned listener did not bind: ' + output)), 20000)
       const finish = error => { clearTimeout(timeout); child.removeListener('exit', exited); error ? reject(error) : resolve() }
       const exited = code => finish(new Error('Owned host exited before binding: ' + code + ': ' + output))
       child.once('exit', exited); child.once('error', finish)
-      child.stdout.on('data', bytes => {
+      const observe = bytes => {
         output = (output + bytes).slice(-20000)
         const bound = source && output.includes('HTTP server started') ? origin : /^Main HTTP listening: ([^\r\n]+)\r?\n/m.exec(output)?.[1]
         if (bound) {
           if (bound !== (source ? origin : `http://0.0.0.0:${port}`) || child.exitCode !== null || child.signalCode !== null) finish(new Error('Owned listener address does not match fixture: ' + bound))
           else { ownedListener = true; finish() }
         }
-      }); child.stderr.on('data', bytes => { output = (output + bytes).slice(-20000) })
+      }
+      child.stdout.on('data', observe); child.stderr.on('data', observe)
     })
     if (source) await until(async () => (await api('GET', '/api/nodes')).status === 200, 'Source routes ready')
     else { const health = await api('GET', '/health'); assert.equal(health.status, 200); assert.equal(health.body?.status, 'ready') }
@@ -75,7 +76,8 @@ export async function createHostFixture(name, options = {}) {
     browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', ...(options.chromeArgs || [])], userDataDir: join(root, 'browser') })
     page = await browser.newPage(); options.onPage?.(page); await page.goto(options.publicRoot || origin, { waitUntil: 'networkidle0' })
     await page.waitForSelector('input[type="password"]'); await page.type('input[type="password"]', credential); await page.click('button[type="submit"]')
-    await page.waitForSelector('.foxwarm-chat-root'); await waitForWebUiReady(page); return page
+    await page.waitForFunction(() => !!window.foxwarmTest?.switchToSession)
+    await waitForWebUiReady(page); return page
   }
   async function save(config) {
     const raw = typeof config === 'string' ? config : JSON.stringify(config, null, 2) + '\n'

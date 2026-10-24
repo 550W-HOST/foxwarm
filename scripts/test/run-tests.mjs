@@ -176,14 +176,18 @@ function browserGroup() {
   const files = requireFiles(inventory['webui-browser'], 'WebUI browser fixtures')
   return {
     name: 'webui-browser',
-    steps: files.map(file => nodeTestStep(path.basename(file), [file], {
+    steps: [
+      { ...directStep('prepare', process.execPath, ['scripts/test/prepare-browser.mjs'], 600_000), prepareDependencies: true },
+      ...files.map(file => nodeTestStep(path.basename(file), [file], {
       concurrency: 1,
       // Workbench exercises many complete application mounts and navigation paths.
       timeoutMs: path.basename(file) === 'workbenchPreview.e2e.mjs' ? 360_000 : 240_000,
-    })),
+      })),
+    ],
     env: {
       FOXWARM_E2E_BROWSER: 'chromium',
       FOXWARM_E2E_CHROMIUM: chromium,
+      FOXWARM_CHROMIUM: chromium,
       FOXWARM_E2E_SCREENSHOT_DIR: path.join(runBase, 'screenshots'),
       FOXWARM_TEST_KEEP_SYSTEM_TMP: '1',
     },

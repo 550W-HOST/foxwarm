@@ -58,11 +58,16 @@ async function launch(mode){
   for(const stream of [child.stdout,child.stderr])stream.on('data',bytes=>item.output+=bytes)
   await until(()=>sockets.get(mode),mode+' registration',15000);return item
 }
-async function groupProcesses(){
-  const group=(await readFile('/proc/self/cgroup','utf8')).trim().split(':').at(-1)
-  const pids=(await readFile('/sys/fs/cgroup'+group+'/cgroup.procs','utf8')).trim().split(/\s+/)
-  const result=[]
-  for(const pid of pids)try{result.push({pid:Number(pid),command:(await readFile(`/proc/${pid}/cmdline`,'utf8')).replaceAll('\0',' ').trim()})}catch{}
+async function ownedProcesses(pid){
+  const result=[], pending=[pid]
+  while(pending.length){
+    const current=pending.pop()
+    try{
+      result.push({pid:current,command:(await readFile(`/proc/${current}/cmdline`,'utf8')).replaceAll('\0',' ').trim()})
+      const children=(await readFile(`/proc/${current}/task/${current}/children`,'utf8')).trim()
+      if(children)pending.push(...children.split(/\s+/).map(Number))
+    }catch(error){if(error.code!=='ENOENT')throw error}
+  }
   return result
 }
 async function corpus(mode){
@@ -76,7 +81,7 @@ async function corpus(mode){
   const evalJS=async(code)=>act('evaluate',{code})
   assert.equal((await success('browse_list',{}))[0].url,origin+'/redirect')
   const html=await success('browse_get',{tabId});assert(html.content.startsWith('<!DOCTYPE html>'));assert(html.content.includes('<input'));assert.equal(html.url,origin+'/one')
-  evidence[mode].activeGroupProcesses=await groupProcesses()
+  evidence[mode].activeGroupProcesses=await ownedProcesses(item.child.pid)
   for(const [code,expected] of [['42','42'],['"hi\\nworld"','"hi\\nworld"'],['true','true'],['null','null'],['undefined','undefined'],['NaN','null'],['Infinity','null'],['-Infinity','null'],['-0','0'],['({a:1,b:[true,null,"x"]})','{"a":1,"b":[true,null,"x"]}']]) assert.equal((await evalJS(code)).output,'Evaluated: '+expected)
   // Retain evidence for less ordinary clone/stringification consequences too.
   for(const [code,expected] of [['new Date(0)','{}'],['({date:new Date(0),nan:NaN,missing:undefined})','{"date":{},"nan":null}'],['(()=>{const x={};x.self=x;return x})()','undefined']])assert.equal((await evalJS(code)).output,'Evaluated: '+expected)
@@ -150,7 +155,7 @@ async function corpus(mode){
   if(evaluateOnly) await writeFile(join(root,mode+'-evaluate-results.json'),JSON.stringify(rows,null,2))
   const maps=await readFile(`/proc/${item.child.pid}/maps`,'utf8')
   if(mode==='candidate' && process.env.FOXWARM_CLI_EXECUTABLE)assert(!/libcoreclr|libhostfxr/.test(maps),'actual native process has no CLR mapping')
-  const processes=await groupProcesses()
+  const processes=await ownedProcesses(item.child.pid)
   await writeFile(join(root,mode+'-maps.txt'),maps)
   await writeFile(join(root,mode+'-processes.json'),JSON.stringify({active:evidence[mode].activeGroupProcesses,afterLastTab:processes},null,2))
   const exited=once(item.child,'exit');item.child.kill('SIGTERM');await exited
@@ -159,6 +164,12 @@ async function corpus(mode){
 try { for(const mode of modes) await corpus(mode) }
 catch(error){evidence.error=error.stack;throw error}
 finally{
-  for(const item of children){if(item.child.exitCode===null&&item.child.signalCode===null)item.child.kill('SIGKILL');if(evidence.error)console.error(item.mode,item.output)}
+  for(const item of children){
+    if(item.child.exitCode===null&&item.child.signalCode===null){
+      const stopped=once(item.child,'exit'), force=setTimeout(()=>item.child.kill('SIGKILL'),5000);force.unref()
+      item.child.kill('SIGTERM');await stopped;clearTimeout(force)
+    }
+    if(evidence.error)console.error(item.mode,item.output)
+  }
   for(const socket of ws.clients)socket.terminate();await new Promise(r=>ws.close(r));for(const server of servers){server.closeAllConnections();await new Promise(r=>server.close(r))}
 }

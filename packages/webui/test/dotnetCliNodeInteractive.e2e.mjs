@@ -2,7 +2,8 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { mkdir, readFile, access } from 'node:fs/promises'
+import { mkdir, readFile, access, mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { createRequire } from 'node:module'
 import { WebSocketServer } from 'ws'
@@ -11,7 +12,8 @@ import { until, sleep } from './experimentHostFixture.mjs'
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment } = require('../../../scripts/test/test-process-env.cjs')
-const { processRoot: root } = initializeTestEnvironment()
+initializeTestEnvironment()
+const root = await mkdtemp(join(tmpdir(), 'cli-ui-'))
 const http = createServer(), peer = new WebSocketServer({ server: http }), frames = [], clients = [], sockets = new Set()
 http.listen(0, '127.0.0.1'); await once(http, 'listening')
 const host = `http://127.0.0.1:${http.address().port}`
@@ -199,4 +201,4 @@ try {
   source.write('\x03'); await source.stopped()
   console.log(JSON.stringify({ actualNativeEntry: !!process.env.FOXWARM_CLI_EXECUTABLE, sourceInputComparison: true, sessionRpcAndCapturedSend: true, liveSelectionReorderWindowAndStaleResponse: true, actualManualPatternAllEffects: true, exactCancellationBusyServiceBypassAndReconnect: true, shellRestoration: true, toolCalls: serial }))
 } catch (error) { console.error(clients.map(ui => ui.name + ': ' + ui.output).join('\n')); throw error }
-finally { for (const ui of clients) await ui.dispose(); for (const socket of sockets) socket.terminate(); await new Promise(done => peer.close(done)); await new Promise(done => http.close(done)) }
+finally { for (const ui of clients) await ui.dispose(); for (const socket of sockets) socket.terminate(); await new Promise(done => peer.close(done)); await new Promise(done => http.close(done)); await rm(root, { recursive: true, force: true }) }

@@ -9,6 +9,7 @@ export async function createEditorFixtureServer(source, name) {
   const cssName = (await readdir(assets)).find(asset => /^index-.*\.css$/.test(asset))
   const css = await readFile(new URL(cssName, assets), 'utf8')
   const server = await createServer({
+    configLoader: 'runner',
     root,
     css: { postcss: { plugins: [] } },
     cacheDir: fileURLToPath(new URL(`../dist/.vite-${name}`, import.meta.url)),
