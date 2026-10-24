@@ -87,7 +87,11 @@ internal sealed partial class WebUIChannel
                 {
                     if (item["message"] is JsonObject message)
                         WebUiMessageTransport.ProjectMessage(message);
-                    WebUiMessageTransport.ProjectParts(item["parts"]);
+                    if (item["parts"] is JsonArray parts)
+                    {
+                        item["parts"] = WebUiContract.SanitizeQueuedPreviewParts(parts.OfType<JsonObject>());
+                        WebUiMessageTransport.ProjectParts(item["parts"]);
+                    }
                 }
                 await sessions.Images.ExternalizeTreeAsync(
                     payload,
@@ -419,7 +423,7 @@ internal sealed partial class WebUIChannel
                     foreach (
                         var source in (result["results"] as JsonArray ?? []).OfType<JsonObject>()
                     )
-                        WebUiMessageTransport.ProjectMessages(source["messages"]);
+                        WebUiMessageTransport.ProjectHistoryViewerMessages(source["messages"]);
                     return Results.Ok(result);
                 }
                 catch (Foxwarm.Vector.VectorUnavailableException error)
@@ -606,7 +610,7 @@ internal sealed partial class WebUIChannel
                         ["inherited"] = record.SessionId != archive.CanonicalSessionId,
                     };
                     message["__meta"] = meta;
-                    WebUiMessageTransport.ProjectMessage(message);
+                    WebUiMessageTransport.ProjectHistoryViewerMessage(message);
                     messages.Add(message);
                 }
                 await sessions.Images.ExternalizeTreeAsync(

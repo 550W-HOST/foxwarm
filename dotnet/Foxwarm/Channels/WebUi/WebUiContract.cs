@@ -144,52 +144,81 @@ internal static class WebUiContract
         for (var i = 0; i < snapshot.Queue.Count && preview.Count < 20; i++)
         {
             var item = snapshot.Queue[i];
-            if (item.Type != QueueItemType.User)
-                continue;
-            var parts = new JsonArray();
-            void AddPreviewParts(IEnumerable<JsonObject> source)
+            var type = item.Type switch
             {
-                foreach (var part in source)
+                QueueItemType.User => "user",
+                QueueItemType.Intersession => "intersession",
+                QueueItemType.Background => "background",
+                QueueItemType.Trigger => "trigger",
+                QueueItemType.OnBoot => "onboot",
+                _ => null,
+            };
+            if (type is null)
+                continue;
+            var message = item.Message is not null
+                ? WebUiMessageTransport.Message(item.Message)
+                : new JsonObject { ["role"] = "user" };
+            var parts = SanitizeQueuedPreviewParts(
+                item.Message is not null
+                    ? (item.Message["parts"] as JsonArray ?? []).OfType<JsonObject>()
+                    : item.Parts ?? []
+            );
+            if (item.Message is null && item.Type != QueueItemType.User
+                && !parts.OfType<JsonObject>().Any(part => !string.IsNullOrWhiteSpace(SessionWait.Text(part["system"]))))
+            {
+                var text = string.Join("\n", parts.OfType<JsonObject>()
+                    .Select(part => SessionWait.Text(part["text"]) is { Length: > 0 } body
+                        ? body : SessionWait.Text(part["thinking"]) ?? "")
+                    .Where(body => body.Length > 0)).Trim();
+                parts = new JsonArray();
+                if (text.Length > 0)
                 {
-                    var projected = new JsonObject();
-                    foreach (var field in new[] { "text", "system", "thinking" })
-                        if (part[field] is JsonValue text && text.TryGetValue<string>(out var raw))
-                            projected[field] =
-                                raw.Length > 4000 ? raw[..4000] + "\n… [preview truncated]" : raw;
-                    if (projected.Count > 0)
-                        parts.Add(projected);
-                    else if (
-                        part["inlineDataRef"] is not null
-                        || part["inlineData"] is not null
-                        || part["inlineDataUnavailable"] is not null
-                    )
-                        parts.Add(Foxwarm.Images.ImageTransport.Project(part));
+                    var source = string.IsNullOrEmpty(item.SourceSessionId) ? ""
+                        : $" sourceSessionId=\"{LocalSessionTurnHost.EscapeFoxwarmAttribute(item.SourceSessionId)}\"";
+                    parts.Add(new JsonObject { ["system"] = $"<foxwarm-message type=\"{type}\"{source} hint=\"queued session event preview\">\n{TruncateQueuedPreviewText(text)}\n</foxwarm-message>" });
                 }
             }
-            if (item.Message?["parts"] is JsonArray existing)
-                AddPreviewParts(existing.OfType<JsonObject>());
-            if (item.Parts is not null)
-                AddPreviewParts(item.Parts);
             if (parts.Count == 0)
                 continue;
-            preview.Add(
-                new JsonObject
-                {
-                    ["role"] = "user",
-                    ["parts"] = parts,
-                    ["__meta"] = new JsonObject
-                    {
-                        ["synthetic"] = $"queued-{i}-user",
-                        ["temporary"] = true,
-                        ["queuedPreview"] = true,
-                        ["queueIndex"] = i,
-                        ["queueType"] = "user",
-                    },
-                }
-            );
+            WebUiMessageTransport.ProjectParts(parts);
+            message["parts"] = parts;
+            var meta = message["__meta"] as JsonObject ?? new JsonObject();
+            meta["synthetic"] = $"queued-{i}-{type}";
+            meta["temporary"] = true;
+            meta["queuedPreview"] = true;
+            meta["queueIndex"] = i;
+            meta["queueType"] = type;
+            message["__meta"] = meta;
+            preview.Add(message);
         }
         return preview;
     }
+
+    internal static JsonArray SanitizeQueuedPreviewParts(IEnumerable<JsonObject> source)
+    {
+        var parts = new JsonArray();
+        foreach (var part in source)
+        {
+            var projected = (JsonObject)part.DeepClone();
+            foreach (var field in new[] { "text", "system", "thinking" })
+                if (SessionWait.Text(projected[field]) is { } text)
+                    projected[field] = TruncateQueuedPreviewText(text);
+            if (part["inlineData"] is not null || part["inlineDataRef"] is not null)
+            {
+                var inline = part["inlineData"] as JsonObject;
+                var reference = part["inlineDataRef"] as JsonObject;
+                var mime = SessionWait.Text(inline?["mimeType"])
+                    ?? SessionWait.Text(inline?["mime_type"])
+                    ?? SessionWait.Text(reference?["mimeType"]) ?? "attachment";
+                projected = new JsonObject { ["text"] = $"[{mime} attachment preview omitted]" };
+            }
+            parts.Add(projected);
+        }
+        return parts;
+    }
+
+    private static string TruncateQueuedPreviewText(string text) =>
+        text.Length > 4000 ? text[..4000] + "\n… [preview truncated]" : text;
 
     private static JsonObject QueueHistoryAppend(SessionRuntimeEvent entry)
     {
