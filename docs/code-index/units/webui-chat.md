@@ -172,6 +172,8 @@ Control requests and local delivery errors use the [runtime feedback/event bound
 
 The synchronization hook can initialize active metadata/messages and a separate bounded original Archive window from an explicit navigation handoff. It consumes that same bootstrap response through normal reconciliation, retains exact source authority, and performs normal bounded catch-up after subscribing. See [Session navigation](../threads/webui-session-navigation.md).
 
-`workbenchPreview.e2e.mjs` covers successful prepared continuous-history remount in the real built App and Workbench: native wheel input produces the saved anchor/offset, an existing Session supplies the away target, and first host sizing plus bounded catch-up preserve that position. It retains both anchor-relative preparation cursors and the small later suffix rather than requiring fewer preparation pages.
+`workbenchPreview.e2e.mjs` covers prepared continuous-history remount through native-wheel anchors, first host sizing and bounded catch-up, retaining preparation cursors and the later suffix.
 
-The no-stable-anchor prepend fixture compares the scroll-height delta with the actual scrollTop delta at the same 2px tolerance. It does not assume a fixed viewport height while App chrome settles; the supported actual-App sequence runs Core before lazy restoration.
+The no-stable-anchor prepend fixture compares actual scroll-height and scrollTop deltas at 2px tolerance, allowing App chrome to resize the viewport. The supported App sequence runs Core first.
+
+`scrollState.e2e.mjs` awaits native movement in the wheel direction before selecting its remount anchor, then switches away in that measurement task. A wheel-event frame can precede native capture. Return checks wait for the full-history context overview before comparing the saved anchor or bottom.

@@ -70,9 +70,17 @@ async function readAnchorOffset(messageKey) {
 
 async function wheelChat(deltaY) {
   await page.evaluate(() => {
-    window.chatWheelFrame = false
-    document.querySelector('.foxwarm-chat-messages').addEventListener('wheel', () => {
-      requestAnimationFrame(() => { window.chatWheelFrame = true })
+    window.chatWheelScrolled = false
+    const container = document.querySelector('.foxwarm-chat-messages')
+    container.addEventListener('wheel', (event) => {
+      const startTop = container.scrollTop
+      const direction = Math.sign(event.deltaY)
+      const onScroll = () => {
+        if (Math.sign(container.scrollTop - startTop) !== direction) return
+        container.removeEventListener('scroll', onScroll)
+        window.chatWheelScrolled = true
+      }
+      container.addEventListener('scroll', onScroll)
     }, { once: true })
   })
   const box = await page.$eval('.foxwarm-chat-messages', (container) => {
@@ -81,7 +89,9 @@ async function wheelChat(deltaY) {
   })
   await page.mouse.move(box.x, box.y)
   await page.mouse.wheel({ deltaY })
-  await page.waitForFunction(() => window.chatWheelFrame)
+  // Chat captures native movement in its scroll handler. A wheel-event frame
+  // can run before that movement and leave its direction unacknowledged.
+  await page.waitForFunction(() => window.chatWheelScrolled)
 }
 
 async function waitForTimelineScrollHandler() {
@@ -300,7 +310,7 @@ test('tab remount restores an old message anchor and bottom-follow state', async
   await wheelChat(-1)
   await page.waitForSelector('[aria-label="Scroll to bottom"]')
 
-  const expectedAnchor = await page.evaluate(() => {
+  const expectedAnchor = await page.evaluate((awaySessionId) => {
     const container = document.querySelector('.foxwarm-chat-messages')
     const timeline = document.querySelector('[data-chat-timeline="committed"]')
     if (!(container instanceof HTMLElement) || !(timeline instanceof HTMLElement)) return null
@@ -312,17 +322,20 @@ test('tab remount restores an old message anchor and bottom-follow state', async
     const viewport = container.getBoundingClientRect()
     const firstVisible = rows.find((row) => row.getBoundingClientRect().bottom > viewport.top)
     if (!(firstVisible instanceof HTMLElement)) return null
-    return {
+    const expected = {
       key: firstVisible.dataset.chatMessageAnchorKey,
       offset: firstVisible.getBoundingClientRect().top - viewport.top,
     }
-  })
+    // Leave in this task so a queued native scroll cannot rescue an uncaptured
+    // reading point between measurement and tab activation.
+    document.querySelector(`[data-tab-id=${JSON.stringify(`chat:${awaySessionId}`)}]`).click()
+    return expected
+  }, secondarySessionId)
   assert.ok(expectedAnchor?.key)
 
-  await selectTab(secondarySessionId)
+  await waitForChat(secondarySessionId)
   await selectTab(primarySessionId)
-  await page.waitForFunction((key) => !!Array.from(document.querySelectorAll('[data-chat-timeline="committed"] [data-chat-message-anchor-key]')).find((row) => row.getAttribute('data-chat-message-anchor-key') === key), { timeout: 15_000 }, expectedAnchor.key)
-  await new Promise((resolve) => setTimeout(resolve, 100))
+  await page.waitForSelector('[aria-label="Context overview"]', { timeout: 15_000 })
   const restoredOffset = await readAnchorOffset(expectedAnchor.key)
   assert.notEqual(restoredOffset, null)
   assert.ok(Math.abs(restoredOffset - expectedAnchor.offset) <= 2, `restored offset changed from ${expectedAnchor.offset} to ${restoredOffset}`)
@@ -336,7 +349,7 @@ test('tab remount restores an old message anchor and bottom-follow state', async
   })
   await selectTab(secondarySessionId)
   await selectTab(primarySessionId)
-  await new Promise((resolve) => setTimeout(resolve, 100))
+  await page.waitForSelector('[aria-label="Context overview"]', { timeout: 15_000 })
   const distanceFromBottom = await page.$eval('.foxwarm-chat-messages', (container) => container.scrollHeight - container.scrollTop - container.clientHeight)
   assert.ok(distanceFromBottom <= 2, `expected bottom restore, got distance ${distanceFromBottom}`)
 })
