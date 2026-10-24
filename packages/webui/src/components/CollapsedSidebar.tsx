@@ -2,7 +2,7 @@ import { getSessionRuntimeTone } from '../sessionRuntimeState'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
 import { PanelLeftOpen, Plus, History, ClipboardList } from 'lucide-react'
 import type { Session } from './SessionListCore'
-import { getSessionRuntimeStateName, isSessionRuntimeActive } from '../sessionRuntimeState'
+import { getSessionRuntimeStateName, isSessionRuntimeActive, getSessionRuntimeSummary } from '../sessionRuntimeState'
 
 interface CollapsedSidebarProps {
   sessions: Session[]
@@ -69,7 +69,8 @@ export default function CollapsedSidebar({
           const initial = getSessionInitial(session)
           const runtimeState = getSessionRuntimeStateName(session)
           const activeRuntime = isSessionRuntimeActive(session)
-          const showRuntimeIndicator = activeRuntime || runtimeState === 'waiting' || !!session.runtimeState?.compaction
+          const showRuntimeIndicator = activeRuntime || runtimeState === 'waiting' || runtimeState === 'llm-failed' || !!session.runtimeState?.compaction
+          const outcome = runtimeState === 'llm-failed' ? ` — ${getSessionRuntimeSummary(session)}` : ''
           const isUnread = unreadSessionIds.has(session.id)
           const tone = getSessionRuntimeTone(session)
           const indicatorColor = tone === 'muted' ? 'bg-fw-text-muted' : `bg-fw-${tone}`
@@ -78,8 +79,8 @@ export default function CollapsedSidebar({
               key={session.id}
               type="button"
               onClick={() => onSelectSession(session.id)}
-              title={`${session.displayName || session.id}${isUnread ? ' — Unread idle completion' : ''}`}
-              aria-label={`${session.displayName || session.id}${isUnread ? ', Unread idle completion' : ''}`}
+              title={`${session.displayName || session.id}${outcome}${isUnread ? ' — Unread idle completion' : ''}`}
+              aria-label={`${session.displayName || session.id}${outcome}${isUnread ? ', Unread idle completion' : ''}`}
               className={`collapsed-session-tile relative flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold transition shrink-0 ${
                 isActive
                   ? 'bg-fw-accent-surface text-fw-accent ring-1 ring-fw-focus-ring dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent dark:ring-fw-focus-ring'

@@ -51,3 +51,11 @@ test('summaries expose actual tools and pending dependencies rather than generic
   assert.equal(getRuntimeStateSummary(runtimeState('waiting', { waiting:{waitId:'demo',waitingFor:'exec',waitExecIds:['job-a','job-b']} })), 'Waiting for 2 commands')
   assert.equal(getRuntimeStateSummary(runtimeState('waiting', { waiting:{waitId:'demo',waitingFor:'input',waitForInput:true} })), 'Waiting for input')
 })
+
+test('LLM failure is inactive and has one danger summary even during independent maintenance', async () => {
+  const { isSessionRuntimeActive, getSessionRuntimeTone } = await import(pathToFileURL(bundledPath).href)
+  const session = { busy: true, runtimeState: runtimeState('llm-failed', { compaction: { operationId: 'independent', phase: 'planning', background: true } }) }
+  assert.equal(isSessionRuntimeActive(session), false)
+  assert.equal(getSessionRuntimeTone(session), 'danger')
+  assert.equal(getSessionRuntimeSummary(session), 'Request failed')
+})

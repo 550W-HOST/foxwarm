@@ -556,10 +556,13 @@ internal sealed class ModelRequestOwner(
                         catch { }
                     }
                 }
+                // Notice/channel delivery can yield to Stop or Run queued after the failed attempt.
+                cancellationToken.ThrowIfCancellationRequested();
                 if (final)
                     throw new ModelRequestException(
                         $"API request failed after {attempt} attempts: {reason}",
-                        value
+                        value,
+                        scope
                     )
                     {
                         TerminalNoticeDelivered = delivered,

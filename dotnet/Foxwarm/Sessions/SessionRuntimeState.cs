@@ -58,7 +58,8 @@ internal static class SessionRuntimeState
             toolActive,
             compacting,
             foreground,
-            compaction
+            compaction,
+            meta.LlmFailed
         );
 
     internal static JsonObject Build(
@@ -70,7 +71,8 @@ internal static class SessionRuntimeState
         bool toolActive,
         bool compacting,
         JsonObject? foreground = null,
-        JsonObject? compaction = null
+        JsonObject? compaction = null,
+        bool llmFailed = false
     )
     {
         var state = new JsonObject
@@ -81,7 +83,9 @@ internal static class SessionRuntimeState
                     : "requesting-model"
                 : wait is not null
                     ? "waiting"
-                    : "idle",
+                    : llmFailed
+                        ? "llm-failed"
+                        : "idle",
             ["busy"] = busy,
             ["queueLength"] = queueLength,
         };

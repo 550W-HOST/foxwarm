@@ -113,6 +113,7 @@ public sealed partial class SessionSaveLane
             meta["lastMessageTime"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             meta.Remove("wait");
             meta.Remove("runQueuedAfterStop");
+            meta.Remove("llmFailed");
             var staged = snapshot with
             {
                 History = SessionHistory.Empty,
@@ -141,6 +142,7 @@ public sealed partial class SessionSaveLane
                 state.Meta["lastMessageTime"] = meta["lastMessageTime"]!.DeepClone();
                 state.Meta.Remove("wait");
                 state.Meta.Remove("runQueuedAfterStop");
+                state.Meta.Remove("llmFailed");
             }
             var previous = ClearCommitScope.Value;
             ClearCommitScope.Value = true;

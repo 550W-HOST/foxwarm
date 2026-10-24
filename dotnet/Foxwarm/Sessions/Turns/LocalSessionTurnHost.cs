@@ -69,9 +69,9 @@ public sealed partial class LocalSessionTurnHost
 
     public int ReleaseCommitCount => Volatile.Read(ref releaseCommits);
 
-    public async Task<bool> TryClaimBusyAsync()
+    public async Task<bool> TryClaimBusyAsync(bool continuing = false)
     {
-        var version = entry.MarkBusy();
+        var version = entry.MarkBusy(continuing, out var previousLlmFailed);
         if (version == 0)
             return false;
         try
@@ -82,7 +82,7 @@ public sealed partial class LocalSessionTurnHost
         catch (Exception error)
         {
             if (error is not AuthorityCommittedException)
-                entry.RollbackBusy(version);
+                entry.RollbackBusy(version, previousLlmFailed);
             throw;
         }
     }
@@ -480,16 +480,20 @@ public sealed partial class LocalSessionTurnHost
         }
     }
 
-    public async Task ReleaseBusyAsync()
+    public async Task ReleaseBusyAsync(bool llmFailed = false)
     {
         var releaseForeground = entry.CaptureForegroundRelease?.Invoke();
         var beforeBusy = false;
+        var beforeLlmFailed = false;
         long? beforeBusyStartedAt = null;
         var changed = entry.WithState(state =>
         {
             if (!state.Busy && state.BusyStartedAt is null)
                 return false;
             beforeBusy = state.Busy;
+            beforeLlmFailed = state.Meta["llmFailed"]?.GetValue<bool>() == true;
+            if (llmFailed && !state.Stopping && !entry.ShutdownCancellationRequested)
+                state.Meta["llmFailed"] = true;
             beforeBusyStartedAt = state.BusyStartedAt;
             state.Busy = false;
             state.BusyStartedAt = null;
@@ -512,6 +516,8 @@ public sealed partial class LocalSessionTurnHost
                 {
                     if (!state.Busy && state.BusyStartedAt is null)
                     {
+                        if (!beforeLlmFailed)
+                            state.Meta.Remove("llmFailed");
                         state.Busy = beforeBusy;
                         state.BusyStartedAt = beforeBusyStartedAt;
                     }
@@ -657,6 +663,9 @@ public sealed partial class LocalSessionTurnHost
             .Select(item => item.CloneItem())
             .ToArray();
         var stagedMeta = (JsonObject)state.Meta.DeepClone();
+        var startsForeground = !finalizing && selectedItems.Any(SessionCompactor.Ordinary);
+        if (startsForeground)
+            stagedMeta.Remove("llmFailed");
         var stagedEnvelope = (JsonObject)state.AuthorityEnvelope.DeepClone();
         if (usage is not null)
         {
@@ -721,6 +730,8 @@ public sealed partial class LocalSessionTurnHost
                 live.NextMessageSeq = nextSeq;
                 live.HistoryVersion = stagedHistoryVersion;
                 live.Meta["messageCount"] = live.History.Count;
+                if (startsForeground)
+                    live.Meta.Remove("llmFailed");
                 if (usage is not null)
                     live.AuthorityEnvelope["stats"] = stagedEnvelope["stats"]!.DeepClone();
                 if (stagedEnvelope["childHandoffState"] is null)

@@ -728,3 +728,26 @@ test('mobile defaults to flat recent activity with no tree gutter and keeps its 
     await page.waitForSelector('button[aria-label="Session list mode: Default"]')
   } finally { await page.close() }
 })
+
+test('failed sessions use static danger indicators in both list densities and the collapsed rail', async () => {
+  const page = await open()
+  try {
+    await page.goto(`${url}?activity`)
+    await page.waitForSelector('[data-activity-rail]')
+    await page.evaluate(() => window.fixtureSetSessions([{ id: 'demo/failure', displayName: 'Failed request', parentSessionId: null, busy: false, messageCount: 1, runtimeState: {state:'llm-failed',busy:false,queueLength:0} }]))
+    const status = `${row('failure')} [data-session-status="llm-failed"]`
+    const rail = '[data-activity-rail] button[aria-label="Failed request — Request failed"]'
+    await page.waitForSelector(status)
+    await page.waitForSelector(rail)
+    for (const detailed of [false, true]) {
+      if (detailed) { await page.click(toggle); await page.waitForSelector('[data-session-list-density="detailed"]') }
+      if (!detailed) assert.equal(await page.$eval(status, el => el.getAttribute('aria-label')), 'Status: Request failed')
+      else assert.match(await page.$eval(row('failure'), el => el.textContent), /Request failed/)
+      assert.ok(await page.$(`${row('failure')} .bg-fw-danger`))
+      assert.ok(await page.$(`${rail} .bg-fw-danger`))
+      assert.equal(await page.$(`${row('failure')} .runtime-busy-spinner`), null)
+      assert.equal(await page.$(`${rail} [data-runtime-perimeter]`), null)
+      assert.equal(await page.$eval(`${row('failure')} .bg-fw-danger`, el => el.getAnimations({subtree:true}).length), 0)
+    }
+  } finally { await page.close() }
+})

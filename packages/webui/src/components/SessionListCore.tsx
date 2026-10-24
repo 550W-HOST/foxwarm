@@ -178,7 +178,9 @@ const getRuntimeBadgeTone = (session: Session): string => {
 
 const RuntimeActivityIndicator = ({ state }: { state: string }) => state === 'waiting'
   ? <span className="w-1.5 h-1.5 bg-fw-warning dark:bg-fw-warning rounded-full" />
-  : <RuntimeBusySpinner />
+  : state === 'llm-failed'
+    ? <span className="w-1.5 h-1.5 bg-fw-danger rounded-full" />
+    : <RuntimeBusySpinner />
 
 const getStoredAuthToken = () => {
   return localStorage.getItem(FOXWARM_TOKEN_KEY)

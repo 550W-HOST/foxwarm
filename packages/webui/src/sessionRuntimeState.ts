@@ -1,5 +1,5 @@
 import { getRuntimeStatusView } from './runtimeStatus'
-export type SessionRuntimeStateName = 'requesting-model' | 'running-tool' | 'waiting' | 'idle'
+export type SessionRuntimeStateName = 'requesting-model' | 'running-tool' | 'waiting' | 'idle' | 'llm-failed'
 export type SessionRuntimeWaitingFor = 'all-sessions' | 'any-session' | 'exec' | 'input' | 'fallback'
 
 export interface SessionRuntimeRetryDetails {
@@ -65,6 +65,11 @@ export interface SessionRuntimeState {
 export interface RuntimeStateSessionLike {
   busy?: boolean
   runtimeState?: SessionRuntimeState
+}
+
+/** Inactive outcomes that can accept ordinary input or an eligible Continue. */
+export function isRuntimeStateInactiveName(state: string | undefined): boolean {
+  return state === 'idle' || state === 'llm-failed'
 }
 
 export function isRuntimeStateActive(runtimeState?: SessionRuntimeState | null): boolean {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { getSessionRuntimeStateName, isSessionRuntimeActive, type RuntimeStateSessionLike } from './sessionRuntimeState'
+import { getSessionRuntimeStateName, isSessionRuntimeActive, isRuntimeStateInactiveName, type RuntimeStateSessionLike } from './sessionRuntimeState'
 import { readSessionIdleUnread, SESSION_IDLE_SESSION_DELETED_EVENT, SESSION_IDLE_UNREAD_EVENT, SESSION_IDLE_UNREAD_STORAGE_KEY, shouldMarkSessionIdleUnread, updateStoredSessionIdleUnread, type SessionIdleUnread } from './sessionIdleAttention'
 
 export type SessionIdleNotificationMode = 'once' | 'always'
@@ -81,7 +81,7 @@ export function showSessionIdleNotification(session: SessionIdleNotificationSess
   }
 
   try {
-    return new Notification('Session idle', {
+    return new Notification(getSessionRuntimeStateName(session) === 'llm-failed' ? 'Request failed' : 'Session idle', {
       body: session.displayName || session.id,
     })
   } catch {
@@ -194,7 +194,7 @@ export class SessionIdleNotificationTracker {
       }
 
       const sawBusy = previous.sawBusy || isBusy
-      if (previous.state !== 'idle' && state === 'idle' && queueLength === 0 && sawBusy) {
+      if (!isRuntimeStateInactiveName(previous.state) && isRuntimeStateInactiveName(state) && queueLength === 0 && sawBusy) {
         notifications.push(session)
         this.baselines.set(session.id, { state, sawBusy: false })
       } else {

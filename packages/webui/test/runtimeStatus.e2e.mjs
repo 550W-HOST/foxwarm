@@ -30,6 +30,7 @@ before(async () => {
         ['stopping', active('running-tool', {stopping: true})],
         ['interrupted', active('idle')],
         ['error', active('idle')],
+        ['failed', active('llm-failed')],
         ['unknown', active('requesting-model', {active: {phase: 'unknown'}, note: 'The current phase is unavailable.'})],
       ]
       function Fixture() {
@@ -39,7 +40,7 @@ before(async () => {
           <h1 className="text-lg font-medium mb-2">Runtime status</h1>
           <div className="runtime-examples grid grid-cols-1 gap-x-12 gap-y-2">
             {examples.map(([id, state]) => <div key={id} data-example={id} className="min-w-0">
-              <ProcessingStatus sessionBusy={state.busy} runtimeState={state} sessionQueueLength={0} turnIncomplete={id==='interrupted'||id==='error'} loading={false}
+              <ProcessingStatus sessionBusy={state.busy} runtimeState={state} sessionQueueLength={0} turnIncomplete={id==='interrupted'||id==='error'||id==='failed'} loading={false}
                 isMobile={innerWidth<768} timelineView="conversation" pendingControl={id==='tool'?pending:null}
                 failure={id==='error'?{title:'Request failed',details:'The connection closed before the response completed.'}:null}
                 onContinue={() => window.fixture.continues++} onCancelCompaction={() => window.fixture.cancels++} />
@@ -111,4 +112,24 @@ test('reduced motion disables every pose without dropping the status or actions'
   assert.match(await page.$eval('[data-example="waiting"]',el=>el.innerText),/Waiting for 2 sessions/)
   await page.click('[data-example="interrupted"] button');assert.equal(await page.evaluate(()=>window.fixture.continues),1)
  }finally{await page.close()}
+})
+
+test('settled failure has no live motion and exposes Continue by keyboard without an active request', async () => {
+ const page = await open()
+ try {
+  const state = await page.$eval('[data-example="failed"]', el => ({
+   text: el.innerText,
+   state: el.querySelector('[data-processing-runtime-state]').dataset.processingRuntimeState,
+   kind: el.querySelector('[data-runtime-presentation]').dataset.runtimePresentation,
+   animations: el.getAnimations({subtree:true}).filter(animation => animation.playState === 'running').length,
+  }))
+  assert.equal(state.state, 'llm-failed')
+  assert.equal(state.kind, 'error')
+  assert.match(state.text, /Request failed/)
+  assert.match(state.text, /Continue/)
+  assert.equal(state.animations, 0)
+  await page.focus('[data-example="failed"] button')
+  await page.keyboard.press('Enter')
+  assert.equal(await page.evaluate(() => window.fixture.continues), 1)
+ } finally { await page.close() }
 })

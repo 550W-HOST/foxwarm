@@ -140,3 +140,18 @@ test('successful control feedback is silent; failed or no-op controls stay out o
   assert.match(failed, /<details/)
   assert.doesNotMatch(failed, /Stop signal sent|in-flight LLM/)
 })
+
+test('settled LLM failure remains an explicit static outcome with eligible Continue and independent queue controls', () => {
+  const props = { runtimeState: activeRuntimeState('llm-failed'), turnIncomplete: true, failure: { title: 'Unrelated old diagnostic' }, sessionQueueLength: 2 }
+  const failed = render(props)
+  assert.match(failed, /data-processing-runtime-state="llm-failed"/)
+  assert.match(failed, /data-runtime-presentation="error"/)
+  assert.match(failed, /Request failed/)
+  assert.match(failed, /text-fw-danger/)
+  assert.match(failed, />Continue</)
+  assert.match(failed, />Run queued</)
+  assert.doesNotMatch(failed, /Unrelated old diagnostic|data-animated="true"|data-fox-thinking-copy|>Stop</)
+  assert.doesNotMatch(render({ ...props, onContinue: undefined }), />Continue</)
+  assert.doesNotMatch(render({ ...props, turnIncomplete: false }), />Continue</)
+  assert.match(render({ ...props, pendingControl: 'continue' }), /Continuing/)
+})

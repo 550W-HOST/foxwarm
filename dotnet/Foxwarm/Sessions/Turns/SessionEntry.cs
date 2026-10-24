@@ -206,19 +206,22 @@ public sealed class SessionEntry
             action(State);
     }
 
-    internal long MarkBusy()
+    internal long MarkBusy(bool continuing, out bool llmFailed)
     {
         lock (stateGate)
         {
+            llmFailed = State.Meta["llmFailed"]?.GetValue<bool>() == true;
             if (State.Busy || State.Stopping)
                 return 0;
+            if (continuing || State.Queue.Any(SessionCompactor.Ordinary))
+                State.Meta.Remove("llmFailed");
             State.Busy = true;
             State.BusyStartedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             return ++busyClaimVersion;
         }
     }
 
-    internal bool RollbackBusy(long version)
+    internal bool RollbackBusy(long version, bool llmFailed)
     {
         lock (stateGate)
         {
@@ -226,6 +229,8 @@ public sealed class SessionEntry
                 return false;
             State.Busy = false;
             State.BusyStartedAt = null;
+            if (llmFailed)
+                State.Meta["llmFailed"] = true;
             return true;
         }
     }

@@ -11,7 +11,7 @@ Captures model YAML, derives concrete and virtual hosts, selects failover target
 - `ModelConfiguration` loads/reloads captured config/model paths from `HostPaths` and exposes provider/model limits and setup data. Configured startup locations do not change under a live owner when saved YAML changes its `paths` section.
 - `HostModels` resolves configured concrete hosts and virtual aliases; `ConfiguredModelRequests` prepares a request owner and concrete client settings.
 - `ModelRouting.Select/RecordFailure/Health` applies deterministic target order, cooldown, and attempt attribution; `ModelRoutingFingerprint` identifies routing prefixes.
-- `ModelRequestOwner`, `ModelRequestScope`, and `ModelAttemptFailure` carry owner/attempt lifecycle into retries, streaming, journal, and Session messages.
+- `ModelRequestOwner`, `ModelRequestScope`, and `ModelAttemptFailure` carry owner/attempt lifecycle into retries, streaming, journal, and Session messages. Terminal `ModelRequestException.Scope` retains the failed request origin, including errors propagated through a different request's preparation. Caller cancellation is rechecked after awaited retry-notice delivery before throwing a terminal provider failure.
 - `SetupProviderRequests` and `AppConfigurationRules` validate WebUI setup fields without changing active Session authority.
 
 Callers: `SessionChatService`, provider adapters, `SessionModelSettings`, `HttpServer` startup, and WebUI setup routes.
