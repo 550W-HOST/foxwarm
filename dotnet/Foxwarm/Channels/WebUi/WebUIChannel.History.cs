@@ -82,6 +82,13 @@ internal sealed partial class WebUIChannel
                         ?.AsObject()
                     ?? throw new InvalidDataException("Session file JSON must be an object.");
                 payload.Remove("contextFrontier");
+                WebUiMessageTransport.ProjectMessages(payload["history"]);
+                foreach (var item in (payload["queue"] as JsonArray ?? []).OfType<JsonObject>())
+                {
+                    if (item["message"] is JsonObject message)
+                        WebUiMessageTransport.ProjectMessage(message);
+                    WebUiMessageTransport.ProjectParts(item["parts"]);
+                }
                 await sessions.Images.ExternalizeTreeAsync(
                     payload,
                     strict: false,
@@ -191,6 +198,7 @@ internal sealed partial class WebUIChannel
                 var canonicalId = hosted.Id;
                 var latest = hosted.Entry.Snapshot().NextMessageSeq - 1;
                 var page = WebUiContinuousHistory.Read(hosted.Archive, before, after, latest);
+                WebUiMessageTransport.ProjectMessages(page["messages"]);
                 await sessions.Images.ExternalizeTreeAsync(
                     page,
                     strict: false,
@@ -236,15 +244,16 @@ internal sealed partial class WebUIChannel
                         strict: false,
                         request.HttpContext.RequestAborted
                     );
+                var projectedMessage = record is null ? null : WebUiMessageTransport.Message(record.Message);
                 return record is null
                     ? Results.NotFound(new { error = "Archived message not found" })
                     : Results.Ok(
                         new
                         {
                             seq = record.Seq,
-                            message = record.Message,
+                            message = projectedMessage,
                             messageJson = EcmaJson.Stringify(
-                                Foxwarm.Images.ImageTransport.Project(record.Message)!
+                                Foxwarm.Images.ImageTransport.Project(projectedMessage)!
                             ),
                             sourceSessionId = record.SessionId,
                             inherited = record.SessionId != hosted.Id,
@@ -296,11 +305,17 @@ internal sealed partial class WebUIChannel
                     preview
                 );
                 if (result is not null)
+                {
+                    WebUiMessageTransport.ProjectMessages(result["messages"]);
+                    foreach (var item in (result["items"] as JsonArray ?? []).OfType<JsonObject>())
+                        if (item["message"] is JsonObject message)
+                            WebUiMessageTransport.ProjectMessage(message);
                     await sessions.Images.ExternalizeTreeAsync(
                         result,
                         strict: false,
                         request.HttpContext.RequestAborted
                     );
+                }
                 return result is null
                     ? Results.NotFound(
                         new
@@ -393,14 +408,15 @@ internal sealed partial class WebUIChannel
                 }
                 try
                 {
-                    return Results.Ok(
-                        await sessions.SearchVectorHistoryAsync(
-                            search,
-                            (int)(limit ?? 5),
-                            agentName,
-                            sessionId
-                        )
+                    var result = await sessions.SearchVectorHistoryAsync(
+                        search,
+                        (int)(limit ?? 5),
+                        agentName,
+                        sessionId
                     );
+                    foreach (var source in (result["results"] as JsonArray ?? []).OfType<JsonObject>())
+                        WebUiMessageTransport.ProjectMessages(source["messages"]);
+                    return Results.Ok(result);
                 }
                 catch (Foxwarm.Vector.VectorUnavailableException error)
                 {
@@ -586,6 +602,7 @@ internal sealed partial class WebUIChannel
                         ["inherited"] = record.SessionId != archive.CanonicalSessionId,
                     };
                     message["__meta"] = meta;
+                    WebUiMessageTransport.ProjectMessage(message);
                     messages.Add(message);
                 }
                 await sessions.Images.ExternalizeTreeAsync(

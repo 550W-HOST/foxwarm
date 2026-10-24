@@ -110,7 +110,12 @@ internal static class WebUiContract
                 runtimeState
             ),
             ["messages"] = new JsonArray(
-                selected.Select(message => (JsonNode?)message.ToJson()).ToArray()
+                selected.Select(message =>
+                {
+                    var projected = message.ToJson();
+                    WebUiMessageTransport.ProjectMessage(projected);
+                    return (JsonNode?)projected;
+                }).ToArray()
             ),
             ["persistentMemorySnapshot"] =
                 snapshot.AuthorityEnvelope["persistentMemorySnapshot"]?.DeepClone()
@@ -191,11 +196,13 @@ internal static class WebUiContract
             ?? throw new InvalidOperationException("Queue append snapshot is missing.");
         var preview = QueuedPreview(snapshot);
         var queueLength = snapshot.Queue.Count(SessionCompactor.Ordinary);
+        var messages = entry.Data?.DeepClone();
+        WebUiMessageTransport.ProjectMessages(messages);
         return new JsonObject
         {
             ["type"] = "history-append",
             ["sessionId"] = entry.SessionId,
-            ["messages"] = entry.Data?.DeepClone(),
+            ["messages"] = messages,
             ["queuedMessages"] = preview,
             ["queueLength"] = queueLength,
             ["queuedPreviewOmittedCount"] = Math.Max(0, queueLength - preview.Count),
@@ -213,7 +220,7 @@ internal static class WebUiContract
             {
                 ["type"] = "message",
                 ["sessionId"] = entry.SessionId,
-                ["message"] = entry.Data?.DeepClone(),
+                ["message"] = entry.Data is JsonObject message ? WebUiMessageTransport.Message(message) : entry.Data?.DeepClone(),
             },
             SessionEventKind.Deleted => new JsonObject
             {

@@ -66,10 +66,11 @@ internal sealed partial class SessionOwner
 
     public SessionEntry Entry => entry ??= Registry.GetRequired(Id);
 
-    public SessionOwner(string id, string agent, HostModels models)
+    public SessionOwner(string id, string agent, HostModels models, TimeProvider? draftClock = null)
     {
         identity = new(id, agent);
         this.models = models;
+        this.draftClock = draftClock ?? TimeProvider.System;
     }
 
     public object State()
@@ -103,8 +104,13 @@ internal sealed partial class SessionOwner
         {
             foreach (var message in messages)
             {
-                Emit(SessionEventKind.MessageCommitted, message);
-                ClearCommittedDraft(message);
+                lock (draftGate)
+                {
+                    if (draft is not null && SessionWait.Text(message["__meta"]?["llmRequestId"]) == SessionWait.Text(draft["llmRequestId"]))
+                        FlushDraftLocked();
+                    Emit(SessionEventKind.MessageCommitted, message);
+                    ClearCommittedDraft(message);
+                }
             }
         };
         Entry.QueueHistoryAppended = (snapshot, messages) =>
