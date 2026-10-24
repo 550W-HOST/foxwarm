@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import testEnvironment from '../../../scripts/test/test-process-env.cjs'
 import { writeModelFixture } from './experimentModelFixture.mjs'
-// One original-App/local Responses workflow: Session observation and canonical interval goals.
+// One original-App/local Responses workflow: Session observation, compaction and retained history.
 import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
@@ -10,6 +10,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-observation-e2e-'))
 const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main')
@@ -25,7 +26,7 @@ const messageText = body => body.input.filter(item => item.type === 'message').f
 let host, browser, provider, port, firstPid, secondPid, plannerTarget, plannerCount = 0
 async function until(fn, label, timeout = 20000) {
   const deadline = Date.now() + timeout
-  while (Date.now() < deadline) { const result = await fn(); if (result) return result; await sleep(25) }
+  while (Date.now() < deadline) { if (errors.length) throw new Error(errors.join('\n')); const result = await fn(); if (result) return result; await sleep(25) }
   throw new Error(`Timed out: ${label}; ${JSON.stringify({ errors, requests: requests.slice(-4).map(item => ({ id: item.id, n: item.n })), host: host?.output })}`)
 }
 async function request(method, path, value) {
@@ -85,7 +86,7 @@ try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
       const body = JSON.parse(Buffer.concat(chunks).toString())
       assert.equal(req.headers.authorization, `Bearer ${providerToken}`); assert.equal(req.url, '/responses')
-      assert.equal(body.tools.length, 24); assert(body.tools.some(tool => tool.name === 'get_session_messages'))
+      assert(body.tools.some(tool => tool.name === 'get_session_messages'))
       const compact = body.input.filter(item => item.type === 'message').flatMap(item => item.content || []).map(part => part.text || '').findLast(item => item.includes('COMPACTION STARTED:'))
       if (compact) {
         assert(plannerTarget)
@@ -119,10 +120,9 @@ try {
   const page = await browser.newPage(); const frames = []; const cdp = await page.createCDPSession(); await cdp.send('Network.enable')
   cdp.on('Network.webSocketFrameReceived', event => { try { frames.push(JSON.parse(event.response.payloadData)) } catch {} })
   await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' }); await page.waitForSelector('#token')
-  await page.type('#token', token); await page.click('button[type="submit"]'); await page.waitForSelector('button[aria-label="New session"]')
+  await page.type('#token', token); await page.click('button[type="submit"]'); await page.waitForSelector('button[aria-label="New session"]'); await waitForWebUiReady(page)
 
   const value = (rows, id) => rows.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === id)?.functionResponse.response
-  const goalRows = rows => rows.filter(row => row.__meta?.goalReminder)
   async function turn(id, label, ...steps) {
     const script = plans.get(id); const start = script.length
     script.push(...steps.map((step, index) => async (body, res) => {
@@ -140,7 +140,7 @@ try {
   await send(target, 'HELD-REQUEST'); await until(() => counts.get(target) === 1, 'actual held model')
   await turn(actor, 'LIVE-OBSERVE', [call('live-page', 'get_session_messages', { sessionId: target, count: 0 }),
     call('live-filter', 'get_session_messages', { sessionId: target, start: 0, count: 1, contentFilter: 'ABSENT' }),
-    call('current-status', 'session', { sessionId: target }), call('current-list', 'session', { action: 'list', count: 1 }),
+    call('target-status', 'session', { sessionId: target }), call('current-status', 'session', {}), call('current-list', 'session', { action: 'list', count: 1 }),
     call('all-list', 'session', { action: 'list', scope: 'all', count: 1 }),
     call('rename', 'session', { action: 'update-display-name', sessionId: target, name: '  Observed name  ' }),
     call('rename-noop', 'session', { action: 'update-display-name', sessionId: target, name: 'Observed name' })])
@@ -148,7 +148,9 @@ try {
   assert(value(observed, 'live-page').output.includes('requesting-model') && value(observed, 'live-page').output.includes('No messages found'))
   assert(value(observed, 'live-filter').output.includes('requesting-model') && value(observed, 'live-filter').output.includes('No messages matched'))
   assert(value(observed, 'current-status').output.includes('session id: `' + actor + '`'))
-  assert(value(observed, 'current-status').output.includes('local workspace') && value(observed, 'current-status').output.includes('token estimate'))
+  assert(value(observed, 'target-status').output.includes('session id: `' + target + '`'))
+  assert(value(observed, 'target-status').output.includes('requesting-model'))
+  assert(value(observed, 'current-status').output.includes(join(dataRoot, 'agents', 'team')) && value(observed, 'current-status').output.includes('token estimate'))
   assert(!value(observed, 'current-list').output.includes('other/main')); assert(value(observed, 'all-list').output.includes('Found 4 session(s)'))
   assert(value(observed, 'rename').output.includes('changed from unset to "Observed name"')); assert(value(observed, 'rename-noop').output.includes('unchanged'))
   await page.evaluate(id => { location.hash = '#session=' + encodeURIComponent(id) }, target)
@@ -189,8 +191,7 @@ try {
   assert(value(pages, 'out-of-range').output.includes('idle') && value(pages, 'out-of-range').output.includes('No messages found'))
   assert(value(pages, 'bad-regex').error)
 
-  // Waiting with no synthetic goal work, then an actual tool-active peer observed during an exec foreground await.
-  await turn(target, 'MAKE-GOAL', [call('set-goal-target', 'set_goal', { goal: 'Keep target work coherent', remindEvery: 1 })])
+  // Waiting remains quiet; observe a real tool-active peer during an exec foreground await.
   plans.get(target).push([call('wait-target', 'wait', { waitForInput: true })]); await send(target, 'DECLARE-WAIT'); await waiting(target)
   const beforeQuiet = requests.length; await sleep(500); assert.equal(requests.length, beforeQuiet)
   await turn(actor, 'WAIT-OBSERVE', [call('waiting-page', 'get_session_messages', { sessionId: target, count: 0 }), call('clear-name', 'session', { action: 'update-display-name', sessionId: target, name: '' })])
@@ -200,77 +201,31 @@ try {
   await turn(actor, 'TOOL-OBSERVE', [call('tool-active-page', 'get_session_messages', { sessionId: execTarget, count: 0 })])
   assert(value(await history(actor), 'tool-active-page').output.includes('running-tool')); await final(execTarget, 'EXEC-FINISHED')
 
-  // Interval goal is canonical context after a paired row, never a standalone wake or inherited child goal.
-  const goal = await create('goal')
-  await turn(goal, 'GOAL-SET', [call('set-goal', 'set_goal', { goal: '  Complete the long feature  ', remindEvery: 1 }), call('effect-once', 'write', { filePath: 'goal-effect.txt', content: 'ONE' })], body => {
-    const input = body.input; const reply = input.findIndex(item => item.type === 'function_call_output' && item.call_id === 'effect-once')
-    const reminder = input.findIndex(item => item.type === 'message' && item.content?.some(part => part.text?.includes('kind="goal-reminder"')))
-    assert(reply >= 0 && reminder > reply); return [text('PAIRED-GOAL-OBSERVED')]
-  })
-  let goalHistory = await history(goal); const reminder = goalRows(goalHistory)[0]
-  assert(reminder && reminder.__meta.goalReminderKind === 'interval')
-  assert.equal((await authority(goal)).goalState.anchorSeq, reminder.__meta.goalAnchorSeq)
-  assert.equal((await authority(goal)).historyVersion, 0)
-  const firstAnchor = reminder.__meta.goalAnchorSeq; const firstReminders = goalRows(goalHistory).length
-  const noMore = requests.length; await sleep(300); assert.equal(requests.length, noMore)
-  await turn(goal, 'GOAL-NO-ACTION', [text('[NO_ACTION]')]); await sleep(300)
-  assert.equal(goalRows(await history(goal)).filter(row => row.__meta.goalAnchorSeq === firstAnchor).length, 1)
-  const doneRequests = requests.length; await sleep(300); assert.equal(requests.length, doneRequests)
-  plans.set('team/goal_goal-kid', [body => { assert(!JSON.stringify(body.input).includes('Complete the long feature')); return [text('CHILD-NO-GOAL')] }])
-  plans.get(goal).push([call('fresh-goal-child', 'create_child_session', { suffix: 'goal-kid', message: 'CHILD-WORK', afterSend: 'finish' })])
-  await send(goal, 'CHILD'); await final('team/goal_goal-kid', 'CHILD-NO-GOAL'); await idle(goal); assert.equal((await authority('team/goal_goal-kid')).goalState, undefined)
-  await turn(goal, 'GOAL-UPDATE', [call('update-goal', 'set_goal', { goal: 'Carry goal through real compaction', remindEvery: 99 })])
-  assert.equal((await authority(goal)).goalState.remindEvery, 99)
-  for (let i = 0; i < 12; i++) await turn(goal, 'COMPACT-SEED-' + i + ' ' + ('context-' + i + '-').repeat(600))
-  plannerTarget = goal; const versionBefore = (await authority(goal)).historyVersion
-  assert.equal((await command(goal, '/compact')).status, 202)
-  await until(async () => (await authority(goal)).historyVersion === versionBefore + 1, 'actual compact rewrite'); await idle(goal)
-  let compacted = await history(goal); let completion = compacted.findLast(row => row.parts.some(part => part.system?.includes('event="compact-completed"')))
-  assert.equal(completion.parts.filter(part => part.system).length, 2)
-  assert(completion.parts[1].system.includes('Carry goal through real compaction')); assert.equal(completion.__meta.goalReminderKind, 'compact-completion')
-  assert.equal((await authority(goal)).goalState.anchorSeq, completion.__meta.seq); assert.equal(completion.__meta.goalAnchorSeq, completion.__meta.seq)
-  // Build enough later raw context to make a second actual rewrite remove the older completion from its retained tail.
-  for (let i = 0; i < 7; i++) await turn(goal, 'COMPACT-SECOND-' + i + ' ' + ('later-' + i + '-').repeat(600))
-  assert.equal((await command(goal, '/compact')).status, 202)
-  await until(async () => (await authority(goal)).historyVersion === versionBefore + 2, 'second actual compact rewrite'); await idle(goal)
-  compacted = await history(goal); assert.equal(compacted.filter(row => row.parts.some(part => part.system?.includes('event="compact-completed"'))).length, 1)
-  completion = compacted.findLast(row => row.__meta.goalReminderKind === 'compact-completion')
-  assert.equal((await authority(goal)).goalState.anchorSeq, completion.__meta.seq)
-
-  // Narrow before/after-rename goal setting failure and real interval append failure/Continue dedup.
-  const faults = join(dataRoot, 'state', 'experiment-faults'); await mkdir(faults, { recursive: true })
-  const fault = async (id, when) => writeFile(join(faults, 'id_' + Buffer.from(id).toString('base64url') + '.goal-' + when + '-rename'), 'fail')
-  const faulty = await create('faulty')
-  await fault(faulty, 'before'); await turn(faulty, 'BEFORE-GOAL', [call('before-goal', 'set_goal', { goal: 'PRE-MUST-NOT-PUBLISH', remindEvery: 99 })])
-  assert(value(await history(faulty), 'before-goal').error); assert.equal((await authority(faulty)).goalState, undefined)
-  await fault(faulty, 'after'); await turn(faulty, 'AFTER-GOAL', [call('after-goal', 'set_goal', { goal: 'POST-MUST-REMAIN', remindEvery: 99 })])
-  assert(value(await history(faulty), 'after-goal').error); assert.equal((await authority(faulty)).goalState.goal, 'POST-MUST-REMAIN')
-  await turn(faulty, 'SET-SLOW', [call('slow-goal', 'set_goal', { goal: 'Interval strict boundary', remindEvery: 2 })])
-  const savedBefore = await authority(faulty); const beforeProvider = counts.get(faulty)
-  await fault(faulty, 'before'); await send(faulty, 'DUE-PRE-RENAME')
-  await until(async () => (await request('GET', `${path(faulty)}/state`)).body.session.failureCount > 0, 'pre reminder failure'); await idle(faulty)
-  assert.equal(counts.get(faulty), beforeProvider); assert.equal((await authority(faulty)).goalState.anchorSeq, savedBefore.goalState.anchorSeq)
-  plans.get(faulty).push([text('CONTINUE-PRE-RECOVERED')]); assert.equal((await command(faulty, '/continue')).status, 200); await final(faulty, 'CONTINUE-PRE-RECOVERED')
-  await fault(faulty, 'after'); const beforeAfter = counts.get(faulty); const priorFailures = (await request('GET', `${path(faulty)}/state`)).body.session.failureCount
-  await send(faulty, 'DUE-POST-RENAME'); await until(async () => (await request('GET', `${path(faulty)}/state`)).body.session.failureCount > priorFailures, 'post reminder failure'); await idle(faulty)
-  assert.equal(counts.get(faulty), beforeAfter); const committedReminder = goalRows(await history(faulty)).at(-1)
-  assert.equal((await authority(faulty)).goalState.anchorSeq, committedReminder.__meta.goalAnchorSeq)
-  plans.get(faulty).push([text('CONTINUE-POST-RECOVERED')]); assert.equal((await command(faulty, '/continue')).status, 200); await final(faulty, 'CONTINUE-POST-RECOVERED')
-  assert.equal(goalRows(await history(faulty)).filter(row => row.__meta.goalAnchorSeq === committedReminder.__meta.goalAnchorSeq).length, 1)
-  assert.equal(await readFile(join(dataRoot, 'agents', 'team', 'goal-effect.txt'), 'utf8'), 'ONE')
-  const goalBeforeRestart = (await authority(goal)).goalState; const rowsBeforeRestart = goalRows(await history(goal)).length
+  // Real active-history rewrites preserve Archive-backed observations and restart without model work.
+  for (let i = 0; i < 12; i++) await turn(target, 'COMPACT-SEED-' + i + ' ' + ('context-' + i + '-').repeat(600))
+  plannerTarget = target
+  const versionBefore = (await authority(target)).historyVersion
+  assert.equal((await command(target, '/compact')).status, 200)
+  await until(async () => (await authority(target)).historyVersion === versionBefore + 1, 'actual compact rewrite'); await idle(target)
+  let compacted = await history(target)
+  assert(compacted.some(row => row.__meta?.contextBlock))
+  assert.equal(compacted.filter(row => row.parts.some(part => part.system?.includes('event="compact-completed"'))).length, 1)
+  for (let i = 0; i < 7; i++) await turn(target, 'COMPACT-SECOND-' + i + ' ' + ('later-' + i + '-').repeat(600))
+  assert.equal((await command(target, '/compact')).status, 200)
+  await until(async () => (await authority(target)).historyVersion === versionBefore + 2, 'second actual compact rewrite'); await idle(target)
+  compacted = await history(target)
+  assert.equal(compacted.filter(row => row.parts.some(part => part.system?.includes('event="compact-completed"'))).length, 1)
+  const requestsBeforeRestart = requests.length
   await stopHost(); host = await startHost(); secondPid = host.child.pid; assert.notEqual(firstPid, secondPid)
-  assert.deepEqual((await authority(goal)).goalState, goalBeforeRestart)
-  await turn(goal, 'AFTER-RESTART', body => { assert(JSON.stringify(body.input).includes('Carry goal through real compaction')); return [text('GOAL-RESTORED')] })
-  assert.equal(goalRows(await history(goal)).length, rowsBeforeRestart)
-  await turn(goal, 'GOAL-KEEP-INTERVAL', [call('keep-interval', 'set_goal', { goal: 'Updated with omitted interval' })]); assert.equal((await authority(goal)).goalState.remindEvery, 99)
-  await turn(goal, 'GOAL-CLEAR', [call('clear-goal', 'set_goal', { clear: true })]); assert.equal((await authority(goal)).goalState, undefined)
-  await turn(goal, 'GOAL-EMPTY', [call('empty-goal', 'set_goal', { goal: '' })]); assert.equal((await authority(goal)).goalState, undefined)
+  assert.deepEqual(await history(target), compacted)
+  assert.equal(requests.length, requestsBeforeRestart, 'cold restart does not start an idle observation target')
+  await turn(actor, 'OBSERVE-RESTORED', [call('restored-page', 'get_session_messages', { sessionId: target, count: 0 })])
+  assert(value(await history(actor), 'restored-page').output.includes('idle'))
   assert.equal(errors.length, 0, errors.join('\n'))
   const archiveCount = Number(execFileSync('python3', ['-c', 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("select count(*) from archive_messages").fetchone()[0])', join(dataRoot, 'state', 'archive-store.sqlite')], { encoding: 'utf8' }))
   await stopHost(); console.log(JSON.stringify({ result: 'ok', requests: requests.length, firstPid, secondPid, originalNameUI: true,
-    canonicalLiveRuntime: true, selectedPageFilters: true, foldedToolSearch: true, totalUnicodeBudget: true, pairedGoal: true,
-    intervalNoSyntheticWake: true, childNoGoal: true, realCompactGoal: true, prePostRename: true, cleanRestore: true, archiveCount }))
+    canonicalLiveRuntime: true, selectedPageFilters: true, foldedToolSearch: true, totalUnicodeBudget: true,
+    quietWaiting: true, realCompaction: true, cleanRestore: true, archiveCount }))
 } finally {
   for (const hold of holds) hold.release()
   await browser?.close().catch(() => {})

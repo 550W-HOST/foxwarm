@@ -98,17 +98,17 @@ try {
   await replace(compactPolicy); await run(current, 'compact-schema')
   for (let index = 0; index < 7; index++) await run(current, 'seed-' + index)
   const beforePlans = records.filter(row => row.planning).length
-  assert.equal((await fixture.api('POST', route(current) + '/message', { text: '/compact' })).status, 202)
+  assert.equal((await fixture.api('POST', route(current) + '/message', { text: '/compact' })).status, 200)
   await until(async () => (await history(current)).messages.some(row => row.__meta?.contextBlock), 'source special compact plan accepted independently of default visibility')
   assert.equal(records.filter(row => row.planning).length, beforePlans + 1)
   const background = await create('background'); for (let index = 0; index < 7; index++) await run(background, 'seed-background-' + index)
   scripts.set('held-background', []); await send(background, 'held-background'); await until(() => held.has('held-background'), 'foreground actual held provider')
   await replace('version: 1\nrules: null\n')
-  const beforeUnavailablePlan = records.length, beforeCompactFailure = (await fixture.api('GET', route(background) + '/state')).body.session.bestEffortFailureCount
-  assert.equal((await fixture.api('POST', route(background) + '/message', { text: '/compact' })).status, 202)
+  const beforeUnavailablePlan = records.length
+  assert.equal((await fixture.api('POST', route(background) + '/message', { text: '/compact' })).status, 200)
   await until(async () => (await authority(background)).queue.some(item => item.type === 'compact-commit'), 'failed background plan reaches its owned safe-point wake'); assert.equal(records.length, beforeUnavailablePlan)
   assert((await history(background)).session.busy); const release = held.get('held-background'); held.delete('held-background'); release(); await idle(background)
-  await until(async () => (await fixture.api('GET', route(background) + '/state')).body.session.bestEffortFailureCount > beforeCompactFailure, 'failed planning operation reported at the real safe point')
+  await until(async () => (await history(background)).messages.some(row => row.__meta?.sessionNotice?.source === 'compaction'), 'failed planning operation reported at the real safe point')
   await until(async () => (await history(background)).messages.some(row => row.parts?.some(part => part.text === 'DONE-held-background')), 'unrelated foreground survives planner policy failure')
   await writeFile(policy, 'version: 1\n')
   await run(current, 'preflight-seed'); await replace('version: 1\nrules: null\n'); const beforePreflight = records.length
@@ -118,13 +118,21 @@ try {
   await writeFile(join(fixture.data, 'agents/other', 'foreign'), 'foreign bytes')
   await fixture.stop(); stopped = true
   const agentPath = join(fixture.data, 'state/agents.json'), agentCatalog = JSON.parse(await readFile(agentPath, 'utf8'))
-  agentCatalog.metadata.team = { ...agentCatalog.metadata.team, isolated: true, isolatedNode: 'future-recorded-node', toolRules: [
+  agentCatalog.team = { ...agentCatalog.team, isolated: true, isolatedNode: 'future-recorded-node', toolRules: [
     { effect: 'allow', source: 'node', node: 'master', tool: 'exec' }, { effect: 'allow', source: 'node', node: 'master', tool: 'read' },
     { effect: 'allow', source: 'builtin', tool: 'session' }, { effect: 'allow', source: 'builtin', tool: 'skill' }, { effect: 'allow', source: 'builtin', tool: 'recall' }, { effect: 'allow', source: 'builtin', tool: 'create_agent' } ] }
   await writeFile(agentPath, JSON.stringify(agentCatalog)); const agentBytes = await readFile(agentPath)
   await fixture.start(); stopped = false; await page.reload({ waitUntil: 'domcontentloaded' })
   const listed = (await fixture.api('GET', '/api/agents')).body.agents.find(agent => agent.id === 'team'); assert.equal(listed.isolated, true); assert.equal(listed.isolatedNode, 'future-recorded-node')
-  assert.equal((await fixture.api('PUT', '/api/agents/team', { inheritAgent: 'main', isolatedNode: null })).status, 501); assert.deepEqual(await readFile(agentPath), agentBytes)
+  assert.equal((await fixture.api('PUT', '/api/agents/team', { inheritAgent: 'main', isolatedNode: 'missing-binding' })).status, 400); assert.deepEqual(await readFile(agentPath), agentBytes)
+  assert.equal((await fixture.api('PUT', '/api/agents/team', { isolatedNode: null })).status, 200)
+  const mainIsolation = (await fixture.api('GET', '/api/agents')).body.agents.find(agent => agent.id === 'team')
+  assert.equal(mainIsolation.isolated, false); assert.equal(mainIsolation.isolatedNode, null)
+  // A retained Main-only legacy flag is separate from active remote Node binding.
+  await fixture.stop(); stopped = true
+  const mainOnly = JSON.parse(await readFile(agentPath, 'utf8')); mainOnly.team.isolated = true
+  await writeFile(agentPath, JSON.stringify(mainOnly)); const mainIsolationBytes = await readFile(agentPath)
+  await fixture.start(); stopped = false
   await run(current, 'isolated', [tool('isolated-exec', 'exec', { command: 'touch forbidden-isolated-exec' }), invoke('isolated-neutral-exec', 'node:master/exec', { command: 'touch forbidden-isolated-exec' }),
     tool('isolated-management', 'create_agent', { agentName: 'forbidden-agent' }), tool('isolated-own-read', 'read', { filePath: 'after-invalid' }),
     tool('isolated-foreign-read', 'read', { filePath: join(fixture.data, 'agents/other', 'foreign') }), tool('isolated-list', 'session', { action: 'list' }), tool('isolated-status', 'session', { action: 'status' }),
@@ -132,7 +140,7 @@ try {
   for (const call of ['isolated-exec', 'isolated-neutral-exec', 'isolated-management', 'isolated-foreign-read', 'isolated-list', 'isolated-skill', 'isolated-recall', 'isolated-history']) assert.equal((await paired(current, call)).error.type, 'tool_authorization_denied')
   assert(!(await paired(current, 'isolated-own-read')).error); assert(!(await paired(current, 'isolated-status')).error)
   assert(!await exists(join(own, 'forbidden-isolated-exec'))); assert(!await exists(join(fixture.data, 'agents/forbidden-agent')))
-  assert.deepEqual(await readFile(agentPath), agentBytes); assert.deepEqual(failures, [])
+  assert.deepEqual(await readFile(agentPath), mainIsolationBytes); assert.deepEqual(failures, [])
   await fixture.stop(); stopped = true
   console.log(JSON.stringify({ ok: true, root: fixture.root, hostPids: fixture.hostPids, peerPids: (await readFile(join(peerRoot, 'processes.ndjson'), 'utf8')).trim().split('\n').map(value => JSON.parse(value).pid), requests: records.length, planning: records.filter(row => row.planning).length, peerCalls: (await peerCalls()).length }))
 } finally {

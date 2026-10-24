@@ -18,7 +18,7 @@ The current Setup does not expose Authorizations. The normal host retains [outbo
 
 ## Tests
 
-`AgentDeletionHttpTests.cs`; `WebUiStartupTests.cs`; `AppConfigurationRulesTests.cs`; AgentMemory/setup/model configuration tests.
+`AgentDeletionHttpTests.cs`; `WebUiStartupTests.cs`; `AppConfigurationRulesTests.cs`; AgentMemory/setup/model configuration tests. The original-App `experimentHostAgents.e2e.mjs` and `experimentHostKnowledge.e2e.mjs` retain Agent creation, owning-Agent memory, child effects and cold-restart scenarios. `experimentHostAsyncCompact.e2e.mjs` and `experimentHostCompletions.e2e.mjs` install models through the real YAML editor and authenticated save route before their provider workflows; their shared save helper reloads to authenticated application readiness without requiring a selected Chat or a retired Setup modal button.
 
 Agent creation and PUT updates accept existing `isolatedNode` metadata through the [external Node unit](./external-nodes.md). Binding changes use the established owner/save lane; they do not create a remote environment.
 
