@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Channels.WebUi;
 using Foxwarm.Sessions;
+using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.AspNetCore.Server.Kestrel.Transport.Sockets;
 using Microsoft.Extensions.FileProviders;
 
@@ -91,6 +92,13 @@ internal sealed class HttpServer
         builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
             options.MultipartBodyLengthLimit = 51L * 1024 * 1024
         );
+        builder.Services.AddSingleton<IResponseCompressionProvider, HttpResponseCompressionProvider>();
+        builder.Services.AddResponseCompression(options =>
+        {
+            options.EnableForHttps = true;
+            options.MimeTypes = ResponseCompressionDefaults.MimeTypes.Append("image/svg+xml");
+            options.ExcludedMimeTypes = ["text/event-stream"];
+        });
         InboundMcp = new(accessConfiguration, new McpInboundCatalog(sessions));
         builder.Services.AddSingleton<IHostedService>(InboundMcp);
         var app = builder.Build();
@@ -139,6 +147,7 @@ internal sealed class HttpServer
                 KeepAliveTimeout = TimeSpan.FromSeconds(10),
             }
         );
+        app.UseResponseCompression();
         var loginFile = Path.Combine(AppContext.BaseDirectory, "packages", "webui", "login.html");
         app.Use(
             async (context, next) =>
