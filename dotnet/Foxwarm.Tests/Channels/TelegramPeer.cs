@@ -42,9 +42,12 @@ internal sealed class TelegramPeer : IAsyncDisposable
         peer.app.MapGet(
             "/file/bot{bot}/{**path}",
             (string path) =>
-                peer.FileResponse?.Invoke(path) ?? (peer.Files.TryGetValue(path, out var bytes)
-                    ? Results.Bytes(bytes)
-                    : Results.NotFound())
+                peer.FileResponse?.Invoke(path)
+                ?? (
+                    peer.Files.TryGetValue(path, out var bytes)
+                        ? Results.Bytes(bytes)
+                        : Results.NotFound()
+                )
         );
         await peer.app.StartAsync();
         peer.Address = new Uri(peer.app.Urls.Single() + "/");

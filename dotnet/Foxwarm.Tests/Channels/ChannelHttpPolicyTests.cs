@@ -15,7 +15,11 @@ public sealed class ChannelHttpPolicyTests
         public Task ExecuteAsync(HttpContext context) => Write(context);
     }
 
-    private static IResult Held(bool body, TaskCompletionSource entered, TaskCompletionSource aborted) =>
+    private static IResult Held(
+        bool body,
+        TaskCompletionSource entered,
+        TaskCompletionSource aborted
+    ) =>
         new Response(async context =>
         {
             try
@@ -38,25 +42,31 @@ public sealed class ChannelHttpPolicyTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Telegram_header_and_body_deadlines_retry_but_caller_cancellation_does_not(bool body)
+    public async Task Telegram_header_and_body_deadlines_retry_but_caller_cancellation_does_not(
+        bool body
+    )
     {
         await using var peer = await TelegramPeer.StartAsync();
         await using var f = await ExternalChannelFixture.CreateAsync();
         var entered = Signal();
         var aborted = Signal();
         var attempts = 0;
-        peer.Respond = call => Task.FromResult<IResult?>(
-            call.Method == "sendMessage" && Interlocked.Increment(ref attempts) == 1
-                ? Held(body, entered, aborted)
-                : null
-        );
+        peer.Respond = call =>
+            Task.FromResult<IResult?>(
+                call.Method == "sendMessage" && Interlocked.Increment(ref attempts) == 1
+                    ? Held(body, entered, aborted)
+                    : null
+            );
         var errors = new ConcurrentQueue<Exception>();
         await using var channel = new TelegramChannel(
             "alpha",
             ExternalChannelFixture.Channel(),
             f.Manager,
             f.Router,
-            peer.Dependencies with { TelegramApiTimeout = TimeSpan.FromMilliseconds(250) },
+            peer.Dependencies with
+            {
+                TelegramApiTimeout = TimeSpan.FromMilliseconds(250),
+            },
             errors.Enqueue
         );
         await channel.SendAsync("42", "retry deadline", default).WaitAsync(TimeSpan.FromSeconds(5));
@@ -67,9 +77,10 @@ public sealed class ChannelHttpPolicyTests
 
         entered = Signal();
         aborted = Signal();
-        peer.Respond = call => Task.FromResult<IResult?>(
-            call.Method == "sendMessage" ? Held(body, entered, aborted) : null
-        );
+        peer.Respond = call =>
+            Task.FromResult<IResult?>(
+                call.Method == "sendMessage" ? Held(body, entered, aborted) : null
+            );
         using var caller = new CancellationTokenSource();
         var send = channel.SendAsync("42", "cancel caller", caller.Token);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -87,29 +98,40 @@ public sealed class ChannelHttpPolicyTests
         await using var peer = await TelegramPeer.StartAsync();
         await using var f = await ExternalChannelFixture.CreateAsync();
         var attempts = 0;
-        peer.Respond = call => Task.FromResult<IResult?>(
-            call.Method != "sendDocument" ? null : new Response(async context =>
-            {
-                if (Interlocked.Increment(ref attempts) == 1)
-                {
-                    // Combined duration exceeds the scaled API budget; each phase fits.
-                    await Task.Delay(350, context.RequestAborted);
-                    context.Response.ContentType = "application/json";
-                    await context.Response.WriteAsync("{\"ok\":true,\"result\":", context.RequestAborted);
-                    await context.Response.Body.FlushAsync(context.RequestAborted);
-                    await Task.Delay(350, context.RequestAborted);
-                    await context.Response.WriteAsync("true}", context.RequestAborted);
-                }
-                else
-                    await Results.Json(new { ok = true, result = true }).ExecuteAsync(context);
-            })
-        );
+        peer.Respond = call =>
+            Task.FromResult<IResult?>(
+                call.Method != "sendDocument"
+                    ? null
+                    : new Response(async context =>
+                    {
+                        if (Interlocked.Increment(ref attempts) == 1)
+                        {
+                            // Combined duration exceeds the scaled API budget; each phase fits.
+                            await Task.Delay(350, context.RequestAborted);
+                            context.Response.ContentType = "application/json";
+                            await context.Response.WriteAsync(
+                                "{\"ok\":true,\"result\":",
+                                context.RequestAborted
+                            );
+                            await context.Response.Body.FlushAsync(context.RequestAborted);
+                            await Task.Delay(350, context.RequestAborted);
+                            await context.Response.WriteAsync("true}", context.RequestAborted);
+                        }
+                        else
+                            await Results
+                                .Json(new { ok = true, result = true })
+                                .ExecuteAsync(context);
+                    })
+            );
         await using var channel = new TelegramChannel(
             "alpha",
             ExternalChannelFixture.Channel(),
             f.Manager,
             f.Router,
-            peer.Dependencies with { TelegramApiTimeout = TimeSpan.FromMilliseconds(600) },
+            peer.Dependencies with
+            {
+                TelegramApiTimeout = TimeSpan.FromMilliseconds(600),
+            },
             _ => { }
         );
         var path = Path.Combine(f.Work, "upload.txt");
@@ -121,15 +143,19 @@ public sealed class ChannelHttpPolicyTests
 
         var entered = Signal();
         var aborted = Signal();
-        peer.Respond = call => Task.FromResult<IResult?>(
-            call.Method == "sendDocument" && Interlocked.Increment(ref attempts) == 2
-                ? Held(true, entered, aborted)
-                : null
-        );
+        peer.Respond = call =>
+            Task.FromResult<IResult?>(
+                call.Method == "sendDocument" && Interlocked.Increment(ref attempts) == 2
+                    ? Held(true, entered, aborted)
+                    : null
+            );
         await channel.SendFileAsync("42", file, null, default).WaitAsync(TimeSpan.FromSeconds(5));
         await aborted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(3, peer.Sent("a", "sendDocument").Count());
-        Assert.All(peer.Sent("a", "sendDocument"), call => Assert.Equal("upload bytes"u8.ToArray(), call.Bytes));
+        Assert.All(
+            peer.Sent("a", "sendDocument"),
+            call => Assert.Equal("upload bytes"u8.ToArray(), call.Bytes)
+        );
         Assert.Single(peer.Delays);
     }
 
@@ -140,13 +166,14 @@ public sealed class ChannelHttpPolicyTests
         using var http = new HttpClient { Timeout = TimeSpan.FromMilliseconds(50) };
         var entered = Signal();
         var aborted = Signal();
-        peer.FileResponse = path => path == "slow"
-            ? new Response(async context =>
-            {
-                await Task.Delay(400, context.RequestAborted);
-                await context.Response.WriteAsync("download bytes", context.RequestAborted);
-            })
-            : Held(true, entered, aborted);
+        peer.FileResponse = path =>
+            path == "slow"
+                ? new Response(async context =>
+                {
+                    await Task.Delay(400, context.RequestAborted);
+                    await context.Response.WriteAsync("download bytes", context.RequestAborted);
+                })
+                : Held(true, entered, aborted);
         await using var f = await ExternalChannelFixture.CreateAsync(
             new() { ["alpha"] = ExternalChannelFixture.Channel() },
             dependencies: peer.Dependencies with
@@ -171,9 +198,11 @@ public sealed class ChannelHttpPolicyTests
         }
         peer.Push("a", Document("slow"));
         await TelegramChannelTests.Until(() => f.Owner.Entry.Snapshot().Queue.Count == 1);
-        var saved = Assert.Single(Directory.GetFiles(
-            Path.Combine(f.Manager.AgentDirectory("main"), ".temp", "channel-files", "telegram")
-        ));
+        var saved = Assert.Single(
+            Directory.GetFiles(
+                Path.Combine(f.Manager.AgentDirectory("main"), ".temp", "channel-files", "telegram")
+            )
+        );
         Assert.Equal("download bytes", await File.ReadAllTextAsync(saved));
         peer.Push("a", Document("cancel"));
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -185,34 +214,49 @@ public sealed class ChannelHttpPolicyTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task QQ_token_and_api_ignore_the_client_default_and_keep_caller_cancellation(bool body)
+    public async Task QQ_token_and_api_ignore_the_client_default_and_keep_caller_cancellation(
+        bool body
+    )
     {
         await using var peer = await QQBotPeer.StartAsync();
         var http = peer.Dependencies.CreateQQBotHttp!();
         http.Timeout = TimeSpan.FromMilliseconds(50);
         var entered = Signal();
         var aborted = Signal();
-        peer.Respond = call => Task.FromResult<IResult?>(
-            call.Path == "/app/getAppAccessToken"
-                ? new Response(async context =>
-                {
-                    await Task.Delay(100, context.RequestAborted);
-                    context.Response.ContentType = "application/json";
-                    await context.Response.WriteAsync("{\"access_token\":", context.RequestAborted);
-                    await context.Response.Body.FlushAsync(context.RequestAborted);
-                    await Task.Delay(100, context.RequestAborted);
-                    await context.Response.WriteAsync("\"fixture-token\",\"expires_in\":7200}", context.RequestAborted);
-                })
-                : call.Path.EndsWith("/messages") ? Held(body, entered, aborted) : null
-        );
+        peer.Respond = call =>
+            Task.FromResult<IResult?>(
+                call.Path == "/app/getAppAccessToken"
+                    ? new Response(async context =>
+                    {
+                        await Task.Delay(100, context.RequestAborted);
+                        context.Response.ContentType = "application/json";
+                        await context.Response.WriteAsync(
+                            "{\"access_token\":",
+                            context.RequestAborted
+                        );
+                        await context.Response.Body.FlushAsync(context.RequestAborted);
+                        await Task.Delay(100, context.RequestAborted);
+                        await context.Response.WriteAsync(
+                            "\"fixture-token\",\"expires_in\":7200}",
+                            context.RequestAborted
+                        );
+                    })
+                : call.Path.EndsWith("/messages") ? Held(body, entered, aborted)
+                : null
+            );
         await using var f = await ExternalChannelFixture.CreateAsync(
             new() { ["qq"] = peer.Config() },
-            dependencies: peer.Dependencies with { CreateQQBotHttp = () => http }
+            dependencies: peer.Dependencies with
+            {
+                CreateQQBotHttp = () => http,
+            }
         );
         await QQBotChannelTests.Start(f, peer);
         Assert.Equal(Timeout.InfiniteTimeSpan, http.Timeout);
         using var caller = new CancellationTokenSource();
-        var send = f.Manager.ChannelRegistry.Get("qq")!.Send("c2c:alice", "cancel caller", new(), caller.Token);
+        var send = f
+            .Manager.ChannelRegistry.Get("qq")!
+            .Send("c2c:alice", "cancel caller", new(), caller.Token);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await Task.Delay(100);
         Assert.False(send.IsCompleted);
@@ -229,14 +273,24 @@ public sealed class ChannelHttpPolicyTests
         await using var f = await ExternalChannelFixture.CreateAsync();
         var entered = Signal();
         var aborted = Signal();
-        peer.Respond = call => Task.FromResult<IResult?>(
-            call.Path == "/app/getAppAccessToken" ? Held(true, entered, aborted) : null
+        peer.Respond = call =>
+            Task.FromResult<IResult?>(
+                call.Path == "/app/getAppAccessToken" ? Held(true, entered, aborted) : null
+            );
+        await using var channel = new QQBotChannel(
+            "qq",
+            peer.Config(),
+            f.Manager,
+            f.Router,
+            peer.Dependencies,
+            _ => { }
         );
-        await using var channel = new QQBotChannel("qq", peer.Config(), f.Manager, f.Router, peer.Dependencies, _ => { });
         var start = channel.StartAsync();
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await channel.StopAsync();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => start.WaitAsync(TimeSpan.FromSeconds(5)));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            start.WaitAsync(TimeSpan.FromSeconds(5))
+        );
         await aborted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.DoesNotContain(peer.Calls, call => call.Path == "/gateway");
     }
