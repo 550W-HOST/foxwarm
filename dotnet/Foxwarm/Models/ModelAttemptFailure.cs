@@ -193,9 +193,13 @@ internal sealed record ModelRetryEvent(
         };
 }
 
-internal sealed class ModelRequestException(string message, ModelRetryEvent final)
-    : Exception(message)
+internal sealed class ModelRequestException(
+    string message,
+    ModelRetryEvent final,
+    ModelRequestScope scope = ModelRequestScope.LowLevel
+) : Exception(message)
 {
     internal ModelRetryEvent Final { get; } = final;
+    internal ModelRequestScope Scope { get; } = scope;
     internal bool TerminalNoticeDelivered { get; set; }
 }

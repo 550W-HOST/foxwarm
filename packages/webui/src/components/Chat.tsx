@@ -17,7 +17,7 @@ import ProcessingStatus, { QueuedMessageStatus } from './ProcessingStatus'
 import type { Message } from './chatShared'
 import { buildStreamingAssistantMessage } from '../streamingAssistantDraft'
 import { useChatConversationSync } from './useChatConversationSync'
-import { isSessionRuntimeActive } from '../sessionRuntimeState'
+import { isRuntimeStateInactiveName, isSessionRuntimeActive } from '../sessionRuntimeState'
 import SessionDebugModal from './SessionDebugModal'
 import { ToolScriptProgressContext } from './ToolScriptProgressContext'
 import { ThreadCardHeightContext } from './useThreadCardHeightTransition'
@@ -1682,7 +1682,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
               sessionBusy={sessionBusy}
               runtimeState={sessionRecord?.runtimeState}
               sessionQueueLength={sessionQueueLength}
-              turnIncomplete={sessionRecord?.runtimeState?.state === 'idle' && turnIncomplete}
+              turnIncomplete={isRuntimeStateInactiveName(sessionRecord?.runtimeState?.state) && turnIncomplete}
               loading={loading}
               pendingControl={pendingControl}
               controlFeedback={controlFeedback}

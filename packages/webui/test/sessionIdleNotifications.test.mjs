@@ -391,3 +391,37 @@ test('session context menu exposes an accessible once item with a trailing alway
   assert.match(collapsed, /bottom-0\.5 right-0\.5/)
   assert.match(collapsed, /Unread idle completion/)
 })
+
+test('failed settlement uses the existing completion watch once per observed run, with queue and reload baselines intact', () => {
+  for (const mode of ['once', 'always']) {
+    const modes = { task: mode }
+    const tracker = new notifications.SessionIdleNotificationTracker()
+    assert.deepEqual(tracker.observe([session('task', { state: 'llm-failed' })], modes), [])
+    assert.deepEqual(tracker.observe([session('task', { state: 'idle' })], modes), [])
+    assert.deepEqual(tracker.observe([session('task', { state: 'requesting-model' })], modes), [])
+    assert.deepEqual(tracker.observe([session('task', { state: 'llm-failed' })], modes).map(item => item.id), ['task'])
+    assert.deepEqual(tracker.observe([session('task', { state: 'llm-failed' })], modes), [])
+    assert.deepEqual(tracker.observe([session('task', { state: 'idle' })], modes), [])
+    assert.deepEqual(tracker.observe([session('task', { state: 'requesting-model' })], modes), [])
+    assert.deepEqual(tracker.observe([session('task', { state: 'llm-failed', queueLength: 1 })], modes), [])
+    assert.deepEqual(tracker.observe([session('task', { state: 'llm-failed' })], modes), [])
+    assert.deepEqual(tracker.observe([session('task', { state: 'requesting-model' })], modes), [])
+    assert.deepEqual(tracker.observe([session('task', { state: 'idle' })], modes).map(item => item.id), ['task'])
+  }
+})
+
+test('failed completion notification names the request outcome and retains the session destination', () => {
+  const previous = globalThis.Notification
+  const calls = []
+  class MockNotification {
+    static permission = 'granted'
+    constructor(title, options) { calls.push({ title, options }) }
+  }
+  try {
+    globalThis.Notification = MockNotification
+    assert.ok(notifications.showSessionIdleNotification(session('failed', { state: 'llm-failed' })) instanceof MockNotification)
+    assert.deepEqual(calls, [{ title: 'Request failed', options: { body: 'Session failed' } }])
+  } finally {
+    globalThis.Notification = previous
+  }
+})

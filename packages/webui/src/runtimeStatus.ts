@@ -67,6 +67,7 @@ export function getRuntimeStatusView(runtime: SessionRuntimeState | undefined, f
       if (compact.retry.reason) details.push(['Compaction error', compact.retry.reason])
     }
   }
+  if (state === 'llm-failed') return { kind: 'error', tone: 'danger', label: 'Request failed', details }
   if (runtime?.stopping) return { kind: 'stopping', tone: 'warning', label: 'Stopping…', details }
   if (runtime?.active?.phase === 'compaction') {
     const retry = compact?.retry

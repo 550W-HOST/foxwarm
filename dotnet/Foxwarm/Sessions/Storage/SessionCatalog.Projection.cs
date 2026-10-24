@@ -163,6 +163,12 @@ internal sealed partial class SessionCatalog
                 last["conversationId"] = conversation;
             meta["lastChannel"] = last;
         }
+        if (inputMeta?["llmFailed"] is JsonNode failed)
+        {
+            if (failed is not JsonValue flag || !flag.TryGetValue<bool>(out _))
+                throw new InvalidDataException("Invalid catalog llmFailed.");
+            meta["llmFailed"] = failed.DeepClone();
+        }
         if (WaitProjection(inputMeta?["wait"]) is { } wait)
             meta["wait"] = wait;
         var result = new JsonObject

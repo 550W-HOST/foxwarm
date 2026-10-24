@@ -48,7 +48,8 @@ internal sealed record SessionMetadata(
     string? ChildModel = null,
     string? ChildEffort = null,
     double? CompactThreshold = null,
-    double? Cost = null
+    double? Cost = null,
+    bool LlmFailed = false
 );
 
 /// <summary>Session-semantic in-process API. Channels receive cloned projections, never mutable owners.</summary>
@@ -294,7 +295,8 @@ internal sealed partial class SessionOwner
                 Text(envelope["childModelDefault"]),
                 Text(envelope["childEffortDefault"]),
                 SessionWait.Number(envelope["compactThresholdTokens"]),
-                SessionWait.Number(envelope["stats"]?["totalCost"])
+                Cost: SessionWait.Number(envelope["stats"]?["totalCost"]),
+                LlmFailed: Flag(state.Meta["llmFailed"])
             );
         });
         return MainMetadata?.Invoke(result) ?? result;

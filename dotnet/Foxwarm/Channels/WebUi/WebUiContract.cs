@@ -31,7 +31,8 @@ internal static class WebUiContract
             queueLength,
             SessionRuntimeState.WaitProjection(snapshot.Meta),
             toolActive,
-            compacting
+            compacting,
+            llmFailed: snapshot.Meta["llmFailed"]?.GetValue<bool>() == true
         );
         var result = new JsonObject
         {

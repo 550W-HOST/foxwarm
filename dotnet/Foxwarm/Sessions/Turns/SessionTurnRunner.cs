@@ -147,6 +147,7 @@ public sealed class SessionTurnRunner
         var interrupted = false;
         var turnSelected = retry;
         var suspended = false;
+        var llmFailed = false;
         Exception? escapingError = null;
         try
         {
@@ -163,7 +164,7 @@ public sealed class SessionTurnRunner
                         throw new SessionContinuationUnavailableException();
                 });
             var host = hosts.For(entry);
-            claimed = await host.TryClaimBusyAsync().ConfigureAwait(false);
+            claimed = await host.TryClaimBusyAsync(continuing: retry).ConfigureAwait(false);
             if (!claimed)
                 return;
             admitted?.Invoke();
@@ -270,12 +271,34 @@ public sealed class SessionTurnRunner
                     // The current turn does not auto-retry a chat failure, but an HTTP host
                     // must be able to report its terminal outcome rather than imply success.
                     failed = error is Foxwarm.Models.ModelPreparationException;
+                    llmFailed =
+                        error
+                            is Foxwarm.Models.ModelRequestException
+                            {
+                                Scope: Foxwarm.Models.ModelRequestScope.Canonical,
+                                Final.Final: true,
+                            };
                     entry.RecordBackgroundProcessorFailure(error);
                     // Retry-notice persistence is best-effort; an unrepresented model failure uses temporary presentation.
                     if (registry.OnTurnFailure is not null)
                         await registry
                             .OnTurnFailure(error, error is not Foxwarm.Models.ModelRequestException)
                             .ConfigureAwait(false);
+                    if (llmFailed && entry.WithState(state => state.Stopping))
+                    {
+                        llmFailed = false;
+                        if (await ResumeQueuedOverrideAsync(entry).ConfigureAwait(false))
+                        {
+                            AssertCanContinue();
+                            retryPending = entry.WithState(state =>
+                                !state.Queue.Any(SessionCompactor.Ordinary)
+                                && SessionContinuation.IsIncomplete(state.History)
+                            );
+                            continue;
+                        }
+                        await host.FinalizeStoppedAsync().ConfigureAwait(false);
+                        claimed = false;
+                    }
                     break;
                 }
             }
@@ -307,7 +330,7 @@ public sealed class SessionTurnRunner
                 try
                 {
                     if (claimed && !interrupted)
-                        await hosts.For(entry).ReleaseBusyAsync().ConfigureAwait(false);
+                        await hosts.For(entry).ReleaseBusyAsync(llmFailed).ConfigureAwait(false);
                 }
                 catch (Exception error)
                 {

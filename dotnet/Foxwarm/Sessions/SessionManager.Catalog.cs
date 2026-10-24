@@ -56,6 +56,7 @@ internal sealed partial class SessionManager
             ["messageCount"] = snapshot.History.Count,
         };
         SessionCatalog.Copy(snapshot.Meta, meta, "lastChannel");
+        SessionCatalog.Copy(snapshot.Meta, meta, "llmFailed");
         if (SessionCatalog.WaitProjection(snapshot.Meta["wait"]) is { } wait)
             meta["wait"] = wait;
         raw["meta"] = meta;
@@ -114,7 +115,8 @@ internal sealed partial class SessionManager
             T(row["childModelDefault"]),
             T(row["childEffortDefault"]),
             SessionCatalog.Number(row["compactThresholdTokens"]),
-            SessionCatalog.Number(row["stats"]?["totalCost"])
+            Cost: SessionCatalog.Number(row["stats"]?["totalCost"]),
+            LlmFailed: SessionCatalog.Flag(row["meta"]?["llmFailed"])
         );
     }
 
@@ -175,6 +177,7 @@ internal sealed partial class SessionManager
                 ["lastMessageTime"] = meta.LastMessageTime,
                 ["messageCount"] = meta.MessageCount,
                 ["wait"] = meta.Wait?.DeepClone(),
+                ["llmFailed"] = meta.LlmFailed,
             },
             ["stats"] = new JsonObject
             {
@@ -252,6 +255,7 @@ internal sealed partial class SessionManager
             signature[field] = SessionCatalog.Number(row["stats"]?[field]) ?? 0;
         signature["totalCost"] = SessionCatalog.Number(row["stats"]?["totalCost"]);
         signature["runtimeState"] = row["_runtimeState"]?.DeepClone();
+        signature["llmFailed"] = SessionCatalog.Flag(row["meta"]?["llmFailed"]);
         signature["wait"] = SessionCatalog.WaitProjection(row["meta"]?["wait"]);
         return signature;
     }

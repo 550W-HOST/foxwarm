@@ -234,6 +234,11 @@ public sealed class SessionAuthorityDocument
                 throw new UnsupportedSessionAuthorityException(
                     $"Session authority meta.{unsupported} is unsupported."
                 );
+        if (
+            meta.ContainsKey("llmFailed")
+            && (meta["llmFailed"] is not JsonValue failed || !failed.TryGetValue<bool>(out _))
+        )
+            throw new InvalidDataException("Session authority meta.llmFailed must be boolean.");
         SessionWait.Validate(meta);
         if (root["busy"] is not JsonValue busy || !busy.TryGetValue<bool>(out _))
             throw new InvalidDataException("Session authority busy must be boolean.");

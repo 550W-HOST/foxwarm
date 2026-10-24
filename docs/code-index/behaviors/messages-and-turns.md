@@ -28,6 +28,24 @@ One owned queue processor serializes a Session's ordinary turn work. Its busy wi
 
 A provider result can contain several ordered content items, and supported Responses commentary can commit before the response completes. Consequently, neither an assistant row nor a visible paragraph establishes a request or turn boundary. The canonical [streaming flow](../threads/streaming-pipeline.md#d-streaming-early-commentary-commit) owns the early-commit and retry details.
 
+## Terminal foreground request failure (.NET)
+
+[2026-10-25] The managed runtime projects `llm-failed` after an ordinary foreground model request reaches its final provider/response failure and its normal strict busy release settles. It is inactive (`busy:false`), so tools, API history/list responses and Chat/Sidebar/Architecture can distinguish a failed request from ordinary idle without interpreting error-looking prose. Automatic retries remain running. Stop, tool/preparation errors, BTW, low-level requests and inline/background compaction failures do not establish this outcome, even when a compact failure propagates through a foreground retry safe point.
+
+| Later action or event | Consequence |
+| --- | --- |
+| New ordinary execution, valid Continue, or nonempty Run queued starts | Clears the preceding outcome through the existing foreground admission/append path. Rejected Continue and empty Run queued leave it alone. |
+| Input already accepted during the failed request | Keeps ordinary queue consumption and trailing triggering. Failure adds no pause, retry or replay; consumed input and committed commentary remain committed. |
+| Stop on an inactive failed Session | Keeps the supported control's no-op result. Stop or Run queued accepted while failure delivery is still settling retains its cancellation/finalization behavior. |
+| Clear | Removes the outcome with the existing history-clear commit. |
+| Fork | Starts the child without this current outcome, including when inherited history contains failure notices. The parent keeps its outcome. |
+| Reload or process restart | Retains a committed outcome without resending the request. A busy checkpoint whose release did not commit keeps ordinary busy recovery. |
+| Settings/read operations or independent maintenance | Do not acknowledge or clear the foreground outcome. A maintenance-only processor does not start a new foreground request. |
+
+Only the current terminal fact is retained, not another error history or failure ledger. Strict precommit release failure leaves the busy checkpoint and does not publish a settled failure; post-rename failures retain committed authority truth. Detailed diagnostics continue using the existing retry/system-event presentation. Catalog publication retains its existing derived-data failure boundary.
+
+Existing Notify on idle watches include failed settlement, labeled **Request failed**, with the same observed-active-cycle, empty-queue, once/always, unread and reload-baseline rules. Failure is never an active spinner or running-duration claim. Continue is offered only when existing incomplete-history eligibility and permissions allow it. See [managed turn ownership](../units/session-turns.md#transient-presentation-and-failure-feedback) and [runtime presentation](../threads/session-runtime-presentation.md).
+
 ## What happens when input arrives while the Session is busy?
 
 Ordinary input queues without an automatic busy acknowledgement. The current request is not rewritten in flight, and a running tool is not interrupted merely because input arrived. The runner admits the selected queued batch at its next supported safe point:
@@ -92,7 +110,7 @@ A completed provider result is persisted before its ordinary intermediate/final 
 
 A generic final lifecycle signal can exist without nonempty text. Only adapters that need lifecycle handling consume an empty final; ordinary text-only platforms do not receive a manufactured blank message. Suspension is distinct from a terminal answer. The delivery behavior owner is [Channels and replies](channels-and-replies.md#where-should-the-agents-ordinary-reply-go); ordering and adapter mechanics remain in [the pipeline](../threads/message-processing-pipeline.md) and [Channel contracts](../modules/channels.md).
 
-An input-acceptance response proves admission at that surface, not model consumption or task success. Likewise, an idle status can coexist briefly with queued input before the runner claims it. WebUI completion notifications require their own armed active-to-idle, empty-queue transition; they are not acknowledgements for a newly submitted message. [Runtime presentation](../threads/session-runtime-presentation.md) and [Session-list notifications](../units/webui-session-list.md) own those observations.
+An input-acceptance response proves admission at that surface, not model consumption or task success. Likewise, an idle status can coexist briefly with queued input before the runner claims it. WebUI completion notifications require their own armed active-to-inactive, empty-queue transition (including [managed request failure](#terminal-foreground-request-failure-net)); they are not acknowledgements for a newly submitted message. [Runtime presentation](../threads/session-runtime-presentation.md) and [Session-list notifications](../units/webui-session-list.md) own those observations.
 
 ## Change and test entry points
 

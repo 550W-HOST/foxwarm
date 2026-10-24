@@ -9,7 +9,7 @@ import UsageDetails, { formatUsageNumber as usageNumber, type TokenUsage } from 
 import AgentCreationMenu from './AgentCreationMenu'
 import { useNodeDirectory } from '../useNodeDirectory'
 import { makeFoxwarmPopupUrl } from '../popupWebUi'
-import { getRuntimeStateSummary, getSessionRuntimeStateName, isSessionRuntimeActive } from '../sessionRuntimeState'
+import { getRuntimeStateSummary, getSessionRuntimeStateName, isSessionRuntimeActive, isRuntimeStateInactiveName } from '../sessionRuntimeState'
 import { API_BASE_PATH } from '../config'
 import { createSessionListRefreshScheduler, requestSessionListStreamOpenResync } from '../sessionListRefresh'
 import { BoundedReplayRevisionMismatch, createEpochRows, filterPresentationPathForAgent, mergeDeltaRows, mergeForcedPresentationPath, mergeHttpRows, pruneEpochRows, replayAtomicWindows, replayCursorBranches, replayCursorWindow, trackHttpRowsRequest } from '../boundedSessionReplay'
@@ -207,7 +207,7 @@ function SessionOperationRow({ session, selected, current, now, onInspect, onOpe
           {session.displayName ? <div className="mt-0.5 truncate font-mono text-[10px] text-fw-text-muted">{session.id}</div> : null}
           <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-fw-text-muted">
             <span className="font-medium text-fw-text-strong">{runtimeSummary}</span>
-            {runtimeState !== 'idle' ? <span>{formatBusyDuration(activeSince, now)}</span> : null}
+            {!isRuntimeStateInactiveName(runtimeState) ? <span>{formatBusyDuration(activeSince, now)}</span> : null}
             <span>agent {session.agent || 'main'}</span>
             {queueLength > 0 ? <span className="text-fw-warning dark:text-fw-warning">queued {queueLength}</span> : null}
             {model ? <span className="max-w-[180px] truncate" title={model}>model {model}</span> : null}
@@ -359,7 +359,7 @@ function SessionInspector({ session, parent, children, childTotal, hasMoreChildr
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
           <span className={`h-2 w-2 rounded-full ${getStatusTone(session)}`} />
           <span className="font-medium text-fw-text-strong">{getRuntimeStateSummary(runtime, !!session.busy)}</span>
-          {state !== 'idle' ? <span className="text-fw-text-muted">for {formatBusyDuration(runtime?.since || session.busyStartedAt, now)}</span> : null}
+          {!isRuntimeStateInactiveName(state) ? <span className="text-fw-text-muted">for {formatBusyDuration(runtime?.since || session.busyStartedAt, now)}</span> : null}
         </div>
       </div>
 

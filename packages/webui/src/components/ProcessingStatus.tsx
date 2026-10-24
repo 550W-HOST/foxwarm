@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import RuntimeFox from './RuntimeFox'
 import FoxThinkingText from './FoxThinkingText'
 import type { TimelineView } from '../chatPreferences'
-import type { SessionRuntimeState } from '../sessionRuntimeState'
+import { isRuntimeStateInactiveName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { getRuntimeStatusView, type RuntimeStatusView } from '../runtimeStatus'
 
 import type { SessionControlAction, SessionControlFeedback } from '../../../shared/src/sessionControlFeedback'
@@ -42,10 +42,12 @@ const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeSt
   }, [retry?.retryAt])
 
   let view: RuntimeStatusView | null = getRuntimeStatusView(runtimeState, sessionBusy, now)
-  const interrupted = (runtimeState?.state || (sessionBusy ? 'requesting-model' : 'idle')) === 'idle' && turnIncomplete && !loading
+  const state = runtimeState?.state || (sessionBusy ? 'requesting-model' : 'idle')
+  const continuable = isRuntimeStateInactiveName(state) && turnIncomplete && !loading
+  const interrupted = state === 'idle' && continuable
   if (interrupted) view = { kind: failure ? 'error' : 'interrupted', tone: failure ? 'danger' : 'warning', label: failure?.title || 'Interrupted', details: failure?.details ? [['Error', failure.details]] : [] }
   if (loading && !view) view = { kind: 'request', tone: 'accent', label: 'Sending…', details: [] }
-  if (pendingControl && !(pendingControl === 'continue' && runtimeState && runtimeState.state !== 'idle')) view = {
+  if (pendingControl && !(pendingControl === 'continue' && runtimeState && !isRuntimeStateInactiveName(runtimeState.state))) view = {
     kind: pendingControl === 'stop' || pendingControl === 'cancel-compaction' ? 'stopping' : pendingControl === 'compact' ? 'compact' : 'request',
     tone: pendingControl === 'stop' || pendingControl === 'cancel-compaction' ? 'warning' : 'accent',
     label: pendingControl === 'stop' ? 'Stopping…' : pendingControl === 'cancel-compaction' ? 'Cancelling compaction…' : pendingControl === 'dequeue' ? 'Starting queued messages…' : pendingControl === 'compact' ? 'Starting compaction…' : 'Continuing…', details: view?.details || [],
@@ -94,7 +96,7 @@ const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeSt
         {hasDetails ? <button data-runtime-caption ref={trigger} type="button" aria-label={`Runtime details: ${view.label}`} aria-expanded={open} aria-haspopup="dialog" onClick={() => setOpen(previous => !previous)} className={`inline-flex min-h-8 min-w-0 max-w-full items-center gap-2.5 text-left ${view.secondary ? 'text-sm' : 'text-lg'} leading-7 ${toneClasses[view.tone]} hover:opacity-80 focus-visible:underline`}>
           {caption}
         </button> : <div data-runtime-caption className={`inline-flex min-h-8 min-w-0 max-w-full items-center gap-2.5 ${view.secondary ? 'text-sm' : 'text-lg'} leading-7 ${toneClasses[view.tone]}`}>{caption}</div>}
-        {interrupted && onContinue && <button type="button" disabled={!!pendingControl} onClick={onContinue} className={`${controlButtonClass} h-8 text-sm`}>Continue</button>}
+        {continuable && onContinue && <button type="button" disabled={!!pendingControl} onClick={onContinue} className={`${controlButtonClass} h-8 text-sm`}>Continue</button>}
       </div>}
       {controlFeedback && controlFeedback.status !== 'accepted' && <div role={controlFeedback.status === 'error' ? 'alert' : 'status'} data-control-feedback className={`w-full text-xs ${controlFeedback.status === 'error' ? 'text-fw-danger' : 'text-fw-text-muted'}`}>{controlFeedback.message}{controlFeedback.details && <details className="mt-1 text-fw-text-muted"><summary className="w-fit cursor-pointer">Details</summary><p className="mt-1 whitespace-pre-wrap break-words">{controlFeedback.details}</p></details>}</div>}
     </div>}
