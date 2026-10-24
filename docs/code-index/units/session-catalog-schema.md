@@ -20,7 +20,7 @@ Callers: `SessionManager.LoadMainHostAsync`, `PersistentSessionAuthorityStore.Lo
 
 The catalog is a query projection. It may carry Main-only presentation metadata (`lastChannel`, parent/pinned/sidebar fields, busy/queue counters) that is intentionally not written into active Session JSON. Migration failure removes only the temporary database and leaves source files unchanged; it does not synthesize an owner from partial catalog input. Missing catalog membership is never rebuilt from an authority-directory scan; `AuthorityFiles` and `HasArchiveHistory` only distinguish a fresh root from lost membership.
 
-Schema v3 adds nullable REAL request-cost subtotals and a maintained known-cost count so all-unknown differs from recorded zero without scanning history. Migration copies only saved `stats.totalCost`; it never prices legacy tokens. See [saved USD estimates](../threads/model-request-and-streaming.md#d-model-usage-cost).
+Schema v3 adds nullable REAL request-cost subtotals and maintained known-cost and positive-contributor counts so all-unknown differs from recorded zero without scanning history. Removing or updating the last positive contributor resets the subtotal to exact zero instead of retaining floating-point subtraction residue. Migration copies only saved `stats.totalCost`; it never prices legacy tokens. See [saved USD estimates](../threads/model-request-and-streaming.md#d-model-usage-cost).
 
 ## Tests
 

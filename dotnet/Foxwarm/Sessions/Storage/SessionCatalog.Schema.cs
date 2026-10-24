@@ -246,20 +246,25 @@ BEGIN IMMEDIATE;
     ALTER TABLE session_catalog ADD COLUMN cost REAL;
     ALTER TABLE catalog_count ADD COLUMN cost REAL NOT NULL DEFAULT 0;
     ALTER TABLE catalog_count ADD COLUMN cost_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE catalog_count ADD COLUMN positive_cost_count INTEGER NOT NULL DEFAULT 0;
     UPDATE session_catalog SET cost=json_extract(metadata_json,'$.stats.totalCost');
     UPDATE catalog_count SET cost=(SELECT COALESCE(sum(cost),0) FROM session_catalog),
-      cost_count=(SELECT count(cost) FROM session_catalog) WHERE singleton=1;
+      cost_count=(SELECT count(cost) FROM session_catalog),
+      positive_cost_count=(SELECT count(*) FROM session_catalog WHERE cost>0) WHERE singleton=1;
     CREATE TRIGGER session_catalog_cost_insert AFTER INSERT ON session_catalog BEGIN
       UPDATE catalog_count SET cost=cost+COALESCE(new.cost,0),
+        positive_cost_count=positive_cost_count+CASE WHEN new.cost>0 THEN 1 ELSE 0 END,
         cost_count=cost_count+CASE WHEN new.cost IS NULL THEN 0 ELSE 1 END WHERE singleton=1;
     END;
     CREATE TRIGGER session_catalog_cost_delete AFTER DELETE ON session_catalog BEGIN
-      UPDATE catalog_count SET cost=cost-COALESCE(old.cost,0),
+      UPDATE catalog_count SET cost=CASE WHEN positive_cost_count=CASE WHEN old.cost>0 THEN 1 ELSE 0 END THEN 0 ELSE cost-COALESCE(old.cost,0) END,
+        positive_cost_count=positive_cost_count-CASE WHEN old.cost>0 THEN 1 ELSE 0 END,
         cost_count=cost_count-CASE WHEN old.cost IS NULL THEN 0 ELSE 1 END WHERE singleton=1;
     END;
     CREATE TRIGGER session_catalog_cost_update AFTER UPDATE OF cost ON session_catalog
     WHEN old.cost IS NOT new.cost BEGIN
-      UPDATE catalog_count SET cost=cost+(COALESCE(new.cost,0)-COALESCE(old.cost,0)),
+      UPDATE catalog_count SET cost=CASE WHEN positive_cost_count+CASE WHEN new.cost>0 THEN 1 ELSE 0 END-CASE WHEN old.cost>0 THEN 1 ELSE 0 END=0 THEN 0 ELSE cost+(COALESCE(new.cost,0)-COALESCE(old.cost,0)) END,
+        positive_cost_count=positive_cost_count+CASE WHEN new.cost>0 THEN 1 ELSE 0 END-CASE WHEN old.cost>0 THEN 1 ELSE 0 END,
         cost_count=cost_count+CASE WHEN new.cost IS NULL THEN 0 ELSE 1 END-CASE WHEN old.cost IS NULL THEN 0 ELSE 1 END WHERE singleton=1;
     END;
     UPDATE catalog_metadata SET value='3' WHERE key='schema_version';

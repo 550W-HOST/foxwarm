@@ -135,6 +135,72 @@ public sealed class SessionCatalogTests
         Assert.Null(reopened.Summary()["cost"]);
     }
 
+    [Theory]
+    [InlineData(.1, .2)]
+    [InlineData(.7, .1)]
+    public void Removing_paid_rows_resets_known_zero_subtotals_without_rounding_saved_costs(double first, double second)
+    {
+        using var temp = new TempDirectory();
+        using var catalog = new SessionCatalog(temp.Path);
+        catalog.Initialize();
+        JsonObject PricedRow(string id, double rate)
+        {
+            var model = HostModels.Parse(new JsonObject
+            {
+                ["providers"] = new JsonObject
+                {
+                    ["p"] = new JsonObject
+                    {
+                        ["tokenPricesPerMillion"] = new JsonObject
+                        {
+                            ["cached"] = 0,
+                            ["input"] = rate,
+                            ["output"] = 0,
+                        },
+                    },
+                },
+            }, new JsonObject()).Resolve("p");
+            var usage = ModelUsageCost.Complete(model, new ChatResult(null, new JsonObject
+            {
+                ["cachedTokens"] = 0,
+                ["inputTokens"] = 1_000_000,
+                ["outputTokens"] = 0,
+            }))!;
+            var row = Row(id, 1, "root");
+            row["stats"] = new JsonObject
+            {
+                ["totalCost"] = usage["cost"]!.DeepClone(),
+                ["lastUsage"] = usage.DeepClone(),
+            };
+            return row;
+        }
+        var zero = PricedRow("zero", 0);
+        var firstRow = PricedRow("first", first);
+        var secondRow = PricedRow("second", second);
+        catalog.Upsert([Row("root", 0), zero, firstRow, secondRow]);
+        Assert.Equal(first, SessionCatalog.Number(catalog.Get("first")?["stats"]?["totalCost"]));
+        Assert.Equal(second, SessionCatalog.Number(catalog.Get("second")?["stats"]?["totalCost"]));
+        catalog.RemoveForDeletion("first");
+        catalog.RemoveForDeletion("second");
+        Assert.Equal(0, SessionCatalog.Number(catalog.Summary()["cost"]));
+        Assert.Equal(0, SessionCatalog.Number(catalog.Descendants("root", 1).Summary["cost"]));
+        catalog.Dispose();
+        using var reopened = new SessionCatalog(temp.Path);
+        reopened.Initialize();
+        Assert.Equal(0, SessionCatalog.Number(reopened.Summary()["cost"]));
+        Assert.Equal(0, SessionCatalog.Number(reopened.Get("zero")?["stats"]?["lastUsage"]?["cost"]));
+        var tiny = PricedRow("tiny", 1e-20);
+        reopened.Upsert([tiny]);
+        Assert.Equal(1e-20, SessionCatalog.Number(reopened.Summary()["cost"]));
+        Assert.Equal(1e-20, SessionCatalog.Number(reopened.Get("tiny")?["stats"]?["totalCost"]));
+        tiny["stats"]!["totalCost"] = 0;
+        reopened.Upsert([tiny]);
+        Assert.Equal(0, SessionCatalog.Number(reopened.Summary()["cost"]));
+        reopened.RemoveForDeletion("zero");
+        reopened.RemoveForDeletion("tiny");
+        Assert.Null(reopened.Summary()["cost"]);
+    }
+
     [Fact]
     public void Projection_excludes_bodies_and_bounds_wait_without_erasing_ambiguity_or_valid_raw_settings()
     {

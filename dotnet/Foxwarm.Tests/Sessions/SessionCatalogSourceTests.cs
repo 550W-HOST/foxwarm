@@ -326,6 +326,7 @@ public sealed class SessionCatalogSourceTests
                 .GetValue<string>()
                 .Replace(",costrealnotnulldefault0", "", StringComparison.Ordinal)
                 .Replace(",cost_countintegernotnulldefault0", "", StringComparison.Ordinal)
+                .Replace(",positive_cost_countintegernotnulldefault0", "", StringComparison.Ordinal)
                 .Replace(",costreal", "", StringComparison.Ordinal);
         return all;
     }
