@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
-import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
+import { join, resolve } from 'node:path'
+import { createHostFixture, until } from './experimentHostFixture.mjs'
 import { writeModelFixture } from './experimentModelFixture.mjs'
 const options = { env: {} }, owned = await createHostFixture('native-paths', options), requests = [], failures = [], counts = new Map(), held = new Map()
 const home = join(owned.root, 'home'), changed = join(owned.root, 'changed'), relative = join(owned.root, 'relative')
@@ -46,7 +46,15 @@ async function turn(id, key, text = '') {
 }
 function result(state, id) { return state.history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === id)?.functionResponse }
 try {
-  await owned.start(); const page = await owned.openApp(); await page.evaluate(() => window.foxwarmTest.sendMessage('NATIVE-PATHS:files'))
+  await owned.start()
+  assert.equal((await owned.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'main' })).status, 200)
+  const page = await owned.openApp()
+  await page.evaluate(() => window.foxwarmTest.switchToSession('main'))
+  await page.waitForSelector('[role="textbox"][aria-label="Message"]')
+  await page.type('[role="textbox"][aria-label="Message"]', 'NATIVE-PATHS:files')
+  const admitted = page.waitForResponse(response => new URL(response.url()).pathname === route('main') + '/message' && response.request().method() === 'POST')
+  await page.click('button[aria-label="Send message"]')
+  assert.equal((await admitted).status(), 202)
   await until(async () => (await authority('main')).history.some(row => row.parts?.some(part => part.text === 'DONE-NATIVE-files')), 'original App native file turn')
   const files = await authority('main'), originalCache = files.promptCacheKey, originalSnapshot = files.persistentMemorySnapshot
   for (const id of ['token-write', 'token-read', 'token-edit', 'home-write', 'spaces', 'patch']) { const value = result(files, id); assert(!value.response.error, JSON.stringify(value)); assert.equal(value.__meta.resolvedPaths[0].nodeId, 'master') }
@@ -57,7 +65,11 @@ try {
   await page.waitForSelector('[aria-label="Open $fw_tmp/native.txt in Code"]'); await page.click('[aria-label="Open $fw_tmp/native.txt in Code"]')
   await until(() => navigation.length, 'actual Code navigation intent')
   const target = new URL(navigation[0]); assert.equal(target.searchParams.get('initialFolderUri'), 'foxwarm://node+master' + join(owned.work, 'tmp'))
-  assert.equal((await fetch(navigation[0], { headers: { authorization: 'Bearer synthetic-native-paths-api' } })).status, 404, 'No Code backend is implemented.')
+  const codeResponse = await fetch(navigation[0], { headers: { authorization: 'Bearer ' + owned.token } })
+  const hasCode = await access(resolve('dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web/out/vs/workbench/workbench.web.main.internal.js')).then(() => true, () => false)
+  assert.equal(codeResponse.status, hasCode ? 200 : 503, 'Code route retains its optional official-asset boundary.')
+  const codeFile = await fetch(owned.origin + '/api/vscode-web/fs/read-file?' + new URLSearchParams({ nodeId: 'master', path: join(owned.work, 'tmp/native.txt') }), { headers: { authorization: 'Bearer ' + owned.token } })
+  assert.equal(codeFile.status, 200); assert.equal(await codeFile.text(), 'second\n')
   await page.evaluate(() => window.foxwarmTest.switchToSession('main'))
   const missing = join(owned.root, 'not-created', 'nested'), setMissing = await owned.api('POST', route('main') + '/cwd', { cwd: '  ' + missing + '  ' }); assert.equal(setMissing.body.cwd, missing)
   await assert.rejects(access(join(owned.root, 'not-created')), { code: 'ENOENT' }); await turn('main', 'missing'); await assert.rejects(access(join(owned.root, 'not-created')), { code: 'ENOENT' })
@@ -71,18 +83,24 @@ try {
   assert.equal((await owned.api('POST', route('main') + '/cwd', { cwd: owned.work })).status, 200)
   const liveRecord = JSON.parse(await readFile(join(owned.data, 'state/running-exec.json'), 'utf8')).execs.find(record => record.command.includes('LIVE-FINISHED'))
   await until(async () => (await readFile(liveRecord.cwdPath, 'utf8').catch(() => '')).trim() === home && (await readFile(liveRecord.logPath, 'utf8')).includes('LIVE-FINISHED'), 'actual background final sidecar')
-  await sleep(150); assert.equal((await authority('main')).cwd, owned.work)
+  await until(async () => {
+    const state = await authority('main'), completions = state.history.filter(row => row.parts?.some(part => part.system?.includes('background-process-finished') && part.system.includes(liveRecord.id)))
+    const registry = JSON.parse(await readFile(join(owned.data, 'state/running-exec.json'), 'utf8'))
+    return completions.length === 1 && !state.busy && state.history.some(row => row.role === 'model' && row.__meta.seq > completions[0].__meta.seq) && !registry.execs.some(record => record.id === liveRecord.id)
+  }, 'single background completion consumed before restart')
+  assert.equal((await authority('main')).cwd, owned.work)
   assert.equal((await authority('main')).promptCacheKey, originalCache); assert.equal((await authority('main')).persistentMemorySnapshot, originalSnapshot)
   assert.equal((await owned.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'compact-cwd' })).status, 200)
   for (let i = 0; i < 7; i++) await turn('compact-cwd', 'seed-' + i, ' ' + ('owned-' + i + '-').repeat(750))
-  assert.equal((await owned.api('POST', route('compact-cwd') + '/message', { text: '/compact' })).status, 202); await until(() => held.has('plan'), 'actual cwd-only planner')
+  const compact = await owned.api('POST', route('compact-cwd') + '/message', { text: '/compact' })
+  assert.equal(compact.status, 200); assert.equal(compact.body.success, true); await until(() => held.has('plan'), 'actual cwd-only planner')
   assert.equal((await owned.api('POST', route('compact-cwd') + '/cwd', { cwd: changed })).status, 200); held.get('plan')(); held.delete('plan')
   await until(async () => { const state = await authority('compact-cwd'); return !state.busy && state.history.some(row => row.__meta?.contextBlock) }, 'cwd-only plan remains applicable')
   assert.equal((await authority('compact-cwd')).cwd, changed)
   assert.equal((await owned.api('POST', route('main') + '/cwd', { cwd: ' \t' })).body.cwd, null)
-  await owned.stop(); const count = requests.length; await owned.start(); assert.equal((await authority('compact-cwd')).cwd, changed); assert.equal((await owned.api('GET', route('main') + '/state')).body.session.cwd, undefined); assert.equal(requests.length, count); await owned.stop()
+  await owned.stop(); const count = requests.length; await owned.start(); assert.equal((await authority('compact-cwd')).cwd, changed); assert.equal((await owned.api('GET', route('main') + '/state')).body.session.cwd, null); assert.equal(requests.length, count); await owned.stop()
   assert.equal(failures.length, 0, failures.join('\n'))
-  console.log(JSON.stringify({ root: owned.root, home, hosts: owned.hostPids, requests: requests.length, originalApp: true, codeIntent: navigation[0], codeBackendStatus: 404, childHomeVerified: true, completedCwd: true, liveCwd: true, deferredModelOrder: true, compactionRetainsCwd: true }))
+  console.log(JSON.stringify({ root: owned.root, home, hosts: owned.hostPids, requests: requests.length, originalApp: true, codeIntent: navigation[0], codeBackendStatus: codeResponse.status, officialWorkbench: hasCode, codeFileBytes: true, childHomeVerified: true, completedCwd: true, liveCwd: true, deferredModelOrder: true, compactionRetainsCwd: true }))
 } finally {
   for (const release of held.values()) release()
   await writeFile(join(owned.root, 'native-paths-requests.json'), JSON.stringify({ requests, failures, hosts: owned.hostPids, home }, null, 2)).catch(() => {})

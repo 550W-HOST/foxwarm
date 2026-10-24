@@ -153,11 +153,15 @@ try {
   const options = (await fixture.api('GET', route(bound) + '/nodes')).body
   assert.equal(options.nodes.length, 1); assert.equal(options.nodes[0].selectable, false); assert.match(options.lockedReason, /owned-cli/)
   assert.equal((await fixture.api('POST', route(bound) + '/node', { nodeId: 'owned-cli' })).status, 400)
-  await page.evaluate(id => window.foxwarmTest.switchToSession(id), bound); await page.click('.foxwarm-node-picker-trigger'); await page.waitForSelector('[data-node-option="owned-cli"][disabled]'); await page.keyboard.press('Escape')
+  const boundHistory = page.waitForResponse(response => new URL(response.url()).pathname === prefix + route(bound) + '/history' && response.request().method() === 'GET')
+  await page.evaluate(id => window.foxwarmTest.switchToSession(id), bound)
+  assert.equal((await boundHistory).status(), 200)
+  await page.locator('.foxwarm-node-picker-trigger').click()
+  await page.waitForSelector('[data-node-option="owned-cli"][disabled]'); await page.keyboard.press('Escape')
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), actor)
   // Download and run the unchanged official POSIX client using the tool-created credential, never a model argument.
   const bootstrap = await fetch(host + '/node/run-shell.sh'); assert.equal(bootstrap.status, 200)
-  const script = await bootstrap.text(); assert.equal(script, (await readFile('templates/node/run-shell.sh', 'utf8')).replace('__FOXWARM_DEFAULT_BASE_URL__', host))
+  const script = await bootstrap.text(); assert.equal(script, (await readFile('templates/node/run-shell.sh', 'utf8')).replace('__FOXWARM_DEFAULT_BASE_URL__', fixture.origin))
   const downloaded = join(fixture.root, 'run-shell.sh'); await writeFile(downloaded, script)
   const startup = join(fixture.root, 'shell'); await mkdir(startup)
   const shell = client('/bin/sh', [downloaded, '--host=' + host, '--node-id=owned-shell'], { cwd: startup, env: { ...process.env, NODE_AUTH_TOKEN: shellToken, TMPDIR: startup } })
