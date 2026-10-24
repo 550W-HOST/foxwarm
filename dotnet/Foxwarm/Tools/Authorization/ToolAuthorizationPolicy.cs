@@ -12,22 +12,23 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
     internal static ToolAuthorizationPolicy Compatibility() =>
         Normalize(new JsonObject { ["version"] = 1 });
 
-    internal static readonly Dictionary<string, (string Argument, string Family)> TargetResolvers = new(StringComparer.Ordinal)
-    {
-        ["send_to_session"] = ("sessionId", "send"),
-        ["send_file"] = ("sessionId", "file"),
-        ["recall"] = ("sessionId", "recall"),
-        ["view_session"] = ("sessionId", "required"),
-        ["get_session_messages"] = ("sessionId", "required"), // Persisted Session-target selectors.
-        ["create_timer"] = ("sessionId", "timer"),
-        ["list_timers"] = ("sessionId", "timer"),
-        ["update_timer"] = ("sessionId", "timer"),
-        ["delete_timer"] = ("sessionId", "timer"),
-        ["get_archived_messages"] = ("sessionId", "archive"),
-        ["get_archived_blocks"] = ("sessionId", "archive"),
-        ["stop_session"] = ("sessionId", "required"),
-        ["task"] = ("ownerSessionId", "required"),
-    };
+    internal static readonly Dictionary<string, (string Argument, string Family)> TargetResolvers =
+        new(StringComparer.Ordinal)
+        {
+            ["send_to_session"] = ("sessionId", "send"),
+            ["send_file"] = ("sessionId", "file"),
+            ["recall"] = ("sessionId", "recall"),
+            ["view_session"] = ("sessionId", "required"),
+            ["get_session_messages"] = ("sessionId", "required"), // Persisted Session-target selectors.
+            ["create_timer"] = ("sessionId", "timer"),
+            ["list_timers"] = ("sessionId", "timer"),
+            ["update_timer"] = ("sessionId", "timer"),
+            ["delete_timer"] = ("sessionId", "timer"),
+            ["get_archived_messages"] = ("sessionId", "archive"),
+            ["get_archived_blocks"] = ("sessionId", "archive"),
+            ["stop_session"] = ("sessionId", "required"),
+            ["task"] = ("ownerSessionId", "required"),
+        };
 
     internal static void Fields(JsonObject obj, params string[] allowed)
     {
