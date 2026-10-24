@@ -378,7 +378,8 @@ internal sealed class VectorService : IAsyncDisposable
         {
             return await VectorWire.DispatchAsync(local!, method, input);
         }
-        catch (Exception error) when (error is not OperationCanceledException and not VectorUnavailableException)
+        catch (Exception error)
+            when (error is not OperationCanceledException and not VectorUnavailableException)
         {
             // Match the child owner's operation-error boundary without swallowing caller cancellation.
             throw new VectorUnavailableException("VECTOR_OPERATION_FAILED", error.Message);
