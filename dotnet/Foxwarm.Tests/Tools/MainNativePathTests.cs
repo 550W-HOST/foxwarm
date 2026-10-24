@@ -55,11 +55,17 @@ public sealed class MainNativePathTests
         Assert.Equal(Path.Combine(process, "$fw_tmp", "note"), paths.FilePath("note"));
         Assert.Equal(Path.Combine(agent, "tmp", "child"), paths.ExecCwd("child"));
         Assert.Equal(Path.Combine(agent, "tmp", "note"), paths.FilePath("$fw_tmp/note"));
-        Assert.Equal(Path.Combine(agent, "tmp", "$fw_tmp"), paths.ExecCwd(" $fw_tmp "));
+        Assert.Equal(Path.Combine(agent, "tmp"), paths.ExecCwd(" $fw_tmp "));
+        Assert.Equal(Path.Combine(agent, "tmp"), paths.ExecCwd(" \t "));
+        Assert.Equal(Path.Combine(agent, "tmp", "$fw_tmp"), paths.ExecCwd("./$fw_tmp"));
+        Assert.Equal(Path.Combine(agent, "tmp"), (paths with { SessionCwd = " $fw_tmp " }).ExecCwd(null));
+        Assert.Equal(agent, (paths with { SessionCwd = null }).ExecCwd(" \t "));
+        Assert.Equal(agent, paths.ExecCwd(" $fw_agentdir "));
         Assert.Equal(Path.Combine(agent, "note"), paths.FilePath("$fw_agentdir//note"));
         Assert.Equal(Path.Combine(process, "$fw_tmp", "$HOME"), paths.FilePath("./$HOME"));
         Assert.Throws<ArgumentException>(() => paths.FilePath("$HOME/note"));
         Assert.Throws<ArgumentException>(() => paths.ExecCwd("$other"));
+        Assert.Throws<ArgumentException>(() => paths.ExecCwd(" $other "));
         Assert.False(Directory.Exists(agent));
         Assert.False(Directory.Exists(home));
     }
