@@ -6,10 +6,13 @@ namespace Foxwarm.Tests;
 
 public sealed partial class McpNotificationTests
 {
-    [Fact]
-    public async Task OAuth_same_grant_refresh_retains_reception_and_stream_credentials_but_disconnect_fences_the_named_server()
+    [Theory]
+    [InlineData(60)]
+    [InlineData(5)]
+    public async Task OAuth_same_grant_refresh_retains_reception_and_stream_credentials_but_disconnect_fences_the_named_server(int tokenLifetime)
     {
         await using var peer = await McpOAuthPeer.StartAsync();
+        await peer.SetAsync(new() { ["tokenLifetime"] = tokenLifetime });
         await using var f = await OutboundMcpFixture.CreateAsync("https://localhost/preview");
         await f.ConfigureAsync(peer.Resource);
         await f.Mcp.SetAuthorizationAsync(
@@ -19,14 +22,16 @@ public sealed partial class McpNotificationTests
         await peer.AuthorizeAsync(f.Mcp);
         Assert.Equal("receiving", State(await Notifications(f, "start")));
         var original = McpOAuthPeer.Value(await f.CallAsync(f.First, "state"));
-        var oldAccess = (await peer.StateAsync())["accessTokens"]!
-            .AsArray()
-            .Last()!
-            .GetValue<string>();
+        // Ordinary POSTs can renew the grant independently of the still-open GET.
+        // Select the credential that actually authenticated that physical stream.
+        var get = Assert.Single((await peer.StateAsync())["resourceHeaders"]!.AsArray()
+            .OfType<JsonObject>(), headers => headers["accept"]?.GetValue<string>() == "text/event-stream");
+        var oldAccess = get["authorization"]!.GetValue<string>()["Bearer ".Length..];
         await peer.SetAsync(new() { ["force401"] = 1 });
         var refreshed = McpOAuthPeer.Value(await f.CallAsync(f.First, "state"));
         Assert.Equal(original["context"]!.GetValue<int>(), refreshed["context"]!.GetValue<int>());
         Assert.Equal("receiving", State(await Notifications(f, "status")));
+        using var handling = new NotificationHandling(Foxwarm.McpClient.SessionMessageMethod);
         using var http = new HttpClient();
         async Task Notify(string text)
         {
@@ -37,8 +42,11 @@ public sealed partial class McpNotificationTests
             response.EnsureSuccessStatusCode();
         }
         await Notify("old GET credential: " + oldAccess);
+        await handling.WaitAsync();
+        Assert.Empty(Queue(f.First));
         await Notify("ordinary after refresh");
-        await Until(() => Queue(f.First).Length == 1);
+        await handling.WaitAsync();
+        Assert.Single(Queue(f.First));
         Assert.Equal(
             "ordinary after refresh",
             Queue(f.First)[0].Parts![1]["text"]!.GetValue<string>()

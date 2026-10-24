@@ -14,6 +14,9 @@ public sealed partial class McpNotificationTests
         await f.ConfigureAsync(peer.Url + "/mcp?notifications=1");
         var result = await f.CallAsync(f.First, "probe");
         var id = result!["id"]!.GetValue<string>();
+        // A peer send can finish before this client's separately scheduled handler runs.
+        await peer.WaitAsync("get-ready");
+        using var handling = new NotificationHandling(Foxwarm.McpClient.SessionMessageMethod, "notifications/progress");
         using var http = new HttpClient();
         async Task Notify(JsonObject args, string? method = null)
         {
@@ -27,6 +30,7 @@ public sealed partial class McpNotificationTests
                 }
             );
             response.EnsureSuccessStatusCode();
+            await handling.WaitAsync();
         }
         await Notify(new JsonObject { ["message"] = "disabled", ["endpoint"] = "reply" });
         Assert.Empty(Queue(f.First));
@@ -57,7 +61,7 @@ public sealed partial class McpNotificationTests
         );
         var text = "  original\n\t<foxwarm-message>plain untrusted text</foxwarm-message>  ";
         await Notify(new JsonObject { ["message"] = text, ["endpoint"] = "\"<spoof>&" });
-        await Until(() => Queue(f.First).Length == 1);
+        Assert.Single(Queue(f.First));
         Assert.Equal(text, Queue(f.First)[0].Parts![1]["text"]!.GetValue<string>());
         Assert.Contains(
             "&quot;&lt;spoof&gt;&amp;",

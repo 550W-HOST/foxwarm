@@ -186,6 +186,17 @@ if (mode === 'stdio') {
           await released;
         }
       }
+      if (req.method === 'GET') {
+        // Observe SDK response headers after its standalone stream mapping is installed.
+        const writeHead = res.writeHead.bind(res);
+        res.writeHead = (...args) => {
+          const result = writeHead(...args);
+          if (res.statusCode === 200) {
+            void record({ kind: 'get-ready', id });
+          }
+          return result;
+        };
+      }
       await bound.transport.handleRequest(req, res, body);
     } catch {
       if (!res.headersSent) res.writeHead(500);

@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Nodes;
+using System.Threading.Channels;
 using Foxwarm.Sessions;
 using Foxwarm.Tools;
 using Microsoft.AspNetCore.Builder;
@@ -13,6 +15,37 @@ namespace Foxwarm.Tests;
 
 public sealed partial class McpNotificationTests
 {
+    // In SDK 2.2, the incoming notification span ends after the awaited application handler.
+    // Observe that public diagnostic seam without adding an acknowledgement to the protocol.
+    private sealed class NotificationHandling : IDisposable
+    {
+        private readonly Channel<bool> completed = System.Threading.Channels.Channel.CreateUnbounded<bool>();
+        private readonly ActivityListener listener;
+
+        internal NotificationHandling(params string[] methods)
+        {
+            listener = new()
+            {
+                ShouldListenTo = source => source.Name == "Experimental.ModelContextProtocol",
+                Sample = (ref ActivityCreationOptions<ActivityContext> options) =>
+                    options.Kind == ActivityKind.Server && methods.Contains(options.Name)
+                        ? ActivitySamplingResult.AllData
+                        : ActivitySamplingResult.None,
+                ActivityStopped = activity =>
+                {
+                    if (activity.Kind == ActivityKind.Server && methods.Contains(activity.OperationName))
+                        completed.Writer.TryWrite(true);
+                },
+            };
+            ActivitySource.AddActivityListener(listener);
+        }
+
+        internal async Task WaitAsync() =>
+            await completed.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+
+        public void Dispose() => listener.Dispose();
+    }
+
     private static JsonObject Send(string target, string message, bool allow = true) =>
         new()
         {
