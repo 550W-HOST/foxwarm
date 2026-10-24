@@ -75,15 +75,16 @@ internal sealed partial class SessionManager
     )
     {
         var parent = AuthorizationParent(Catalog.Get(owner.Id));
-        string? requested = SessionWait.Text(request.Args["sessionId"]);
+        if (
+            request.Source != "builtin"
+            || !ToolAuthorizationPolicy.TargetResolvers.TryGetValue(request.Name, out var resolver)
+        )
+            return request with { SourceParent = parent };
+        var family = resolver.Family;
+        string? requested = SessionWait.Text(request.Args[resolver.Argument]);
         requested = requested is null ? null : SessionGoal.Trim(requested);
         if (requested is "")
             requested = null;
-        if (
-            request.Source != "builtin"
-            || !ToolAuthorizationPolicy.TargetFamilies.TryGetValue(request.Name, out var family)
-        )
-            return request with { SourceParent = parent };
         if (family == "send")
         {
             if (requested is null)

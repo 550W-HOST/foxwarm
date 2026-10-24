@@ -12,21 +12,23 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
     internal static ToolAuthorizationPolicy Compatibility() =>
         Normalize(new JsonObject { ["version"] = 1 });
 
-    internal static readonly Dictionary<string, string> TargetFamilies = new(StringComparer.Ordinal)
-    {
-        ["send_to_session"] = "send",
-        ["send_file"] = "file",
-        ["recall"] = "recall",
-        ["view_session"] = "required",
-        ["get_session_messages"] = "required", // Persisted Session-target selectors.
-        ["create_timer"] = "timer",
-        ["list_timers"] = "timer",
-        ["update_timer"] = "timer",
-        ["delete_timer"] = "timer",
-        ["get_archived_messages"] = "archive",
-        ["get_archived_blocks"] = "archive",
-        ["stop_session"] = "required",
-    };
+    internal static readonly Dictionary<string, (string Argument, string Family)> TargetResolvers =
+        new(StringComparer.Ordinal)
+        {
+            ["send_to_session"] = ("sessionId", "send"),
+            ["send_file"] = ("sessionId", "file"),
+            ["recall"] = ("sessionId", "recall"),
+            ["view_session"] = ("sessionId", "required"),
+            ["get_session_messages"] = ("sessionId", "required"), // Persisted Session-target selectors.
+            ["create_timer"] = ("sessionId", "timer"),
+            ["list_timers"] = ("sessionId", "timer"),
+            ["update_timer"] = ("sessionId", "timer"),
+            ["delete_timer"] = ("sessionId", "timer"),
+            ["get_archived_messages"] = ("sessionId", "archive"),
+            ["get_archived_blocks"] = ("sessionId", "archive"),
+            ["stop_session"] = ("sessionId", "required"),
+            ["task"] = ("ownerSessionId", "required"),
+        };
 
     internal static void Fields(JsonObject obj, params string[] allowed)
     {
@@ -441,24 +443,24 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
                     {
                         if (
                             targets.Length != 1
-                            || targets[0].Key != "sessionId"
                             || match["tool"] is not JsonObject selector
                             || selector.ContainsKey("server")
                             || SessionWait.Text(selector["source"]) != "builtin"
                         )
                             throw new InvalidDataException(
-                                "Session-target matcher requires exact registered builtin selector and sessionId."
+                                "Session-target matcher requires an exact registered builtin selector."
                             );
                         var names = selector["name"] is JsonArray list
                             ? list.Select(SessionWait.Text).ToArray()
                             : [SessionWait.Text(selector["name"])];
                         if (
                             names.Length == 0
-                            || names.Any(name => name is null || !TargetFamilies.ContainsKey(name))
-                            || names.Select(name => TargetFamilies[name!]).Distinct().Count() != 1
+                            || names.Any(name => name is null || !TargetResolvers.ContainsKey(name))
+                            || names.Select(name => TargetResolvers[name!]).Distinct().Count() != 1
+                            || targets[0].Key != TargetResolvers[names[0]!].Argument
                         )
                             throw new InvalidDataException(
-                                "Session-target tool names must share one registered resolver family."
+                                "Session-target tool names and argument must share one registered resolver."
                             );
                     }
                     match["args"] = arguments;
