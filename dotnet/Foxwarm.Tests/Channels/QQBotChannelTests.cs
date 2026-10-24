@@ -393,10 +393,14 @@ public sealed class QQBotChannelTests
             peer.Push("C2C_MESSAGE_CREATE", body, sequence == "11" ? 1 : 200);
         }
         peer.Push("GROUP_MESSAGE_CREATE", QQBotPeer.Message("stale", "expired ambient"));
-        // A command is a wire/Router barrier, not a manufactured internal state mutation.
+        // This gateway checkpoint follows synchronous context buffering. Its reply does not
+        // wait for earlier messages to finish the Router's asynchronous queue admissions.
         peer.Push("C2C_MESSAGE_CREATE", QQBotPeer.Message("barrier", "/whoami"));
         await Until(() => peer.Sent.Any(call => call.Body["msg_id"]?.ToString() == "barrier"));
+        await Until(() => f.Owner.Entry.Snapshot().Queue.Count == 2);
         Assert.Equal(2, f.Owner.Entry.Snapshot().Queue.Count);
+        Assert.Contains("business-10", Queued(f.Owner));
+        Assert.Contains("business-11", Queued(f.Owner));
         peer.Now = peer.Now.AddMinutes(5).AddMilliseconds(1);
         peer.Push("GROUP_AT_MESSAGE_CREATE", QQBotPeer.Message("fresh", "fresh trigger"));
         await Until(() => f.Owner.Entry.Snapshot().Queue.Count == 3);
