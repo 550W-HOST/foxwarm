@@ -34,6 +34,7 @@ import { getWebSearchAction } from '../webSearchAction'
  */
 
 interface TokenUsage {
+  cost?: number
   cachedTokens?: number | null
   inputTokens?: number | null
   outputTokens?: number | null
@@ -43,6 +44,7 @@ interface TokenUsage {
 }
 
 export type NormalizedTokenUsage = {
+  cost?: number
   cachedTokens: number
   inputTokens: number
   outputTokens: number
@@ -173,6 +175,7 @@ const normalizeMessageUsage = (value: unknown): NormalizedTokenUsage | null => {
     cachedTokens: cached ?? 0,
     inputTokens: input ?? 0,
     outputTokens: output ?? 0,
+    ...(typeof raw.cost === 'number' && Number.isFinite(raw.cost) && raw.cost >= 0 ? { cost: raw.cost } : {}),
   }
 }
 
@@ -473,6 +476,7 @@ const deriveGroup = (messages: Message[], scan: GroupScan, requestTimings: Deriv
     total.cachedTokens += usage.cachedTokens
     total.inputTokens += usage.inputTokens
     total.outputTokens += usage.outputTokens
+    if (usage.cost !== undefined) total.cost = (total.cost ?? 0) + usage.cost
     callCount++
     const messageAttribution = getMessageUsageAttribution(msg, requestTimings[index])
     attribution.models.push(...messageAttribution.models)
@@ -511,7 +515,7 @@ const sameRequestTiming = (a: DerivedRequestTiming, b: DerivedRequestTiming): bo
 )
 
 const sameTokenUsage = (a: NormalizedTokenUsage | null, b: NormalizedTokenUsage | null): boolean => (
-  a === b || (!!a && !!b && a.cachedTokens === b.cachedTokens && a.inputTokens === b.inputTokens && a.outputTokens === b.outputTokens)
+  a === b || (!!a && !!b && a.cachedTokens === b.cachedTokens && a.inputTokens === b.inputTokens && a.outputTokens === b.outputTokens && a.cost === b.cost)
 )
 
 const sameTagItems = (a: ToolTagItem[], b: ToolTagItem[]): boolean => (
@@ -927,7 +931,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
         const row = rows[index]
         if (!row.activity) continue
         const owned = [...requestOwners].filter(([, key]) => key === row.key).map(([request]) => request)
-        const total = { cachedTokens: 0, inputTokens: 0, outputTokens: 0 }
+        const total: NormalizedTokenUsage = { cachedTokens: 0, inputTokens: 0, outputTokens: 0 }
         const attribution: UsageAttribution = { models: [], timestamps: [], apiDurationsMs: [], messageSeqs: [] }
         let callCount = 0
         let pendingRequests = 0
@@ -941,6 +945,7 @@ export const buildTimelineRows = (input: TimelineRowsInput, previous: TimelineRo
           total.cachedTokens += usage.cachedTokens
           total.inputTokens += usage.inputTokens
           total.outputTokens += usage.outputTokens
+          if (usage.cost !== undefined) total.cost = (total.cost ?? 0) + usage.cost
           callCount++
           const details = getMessageUsageAttribution(sample, deriveRequestTimings([sample])[0])
           attribution.models.push(...details.models)

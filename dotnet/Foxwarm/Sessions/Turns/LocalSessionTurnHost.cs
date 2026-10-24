@@ -673,6 +673,8 @@ public sealed partial class LocalSessionTurnHost
             )
                 stats[total] =
                     (SessionWait.Number(stats[total]) ?? 0) + (SessionWait.Number(usage[key]) ?? 0);
+            if (SessionWait.Number(usage["cost"]) is double cost)
+                stats["totalCost"] = (SessionWait.Number(stats["totalCost"]) ?? 0) + cost;
             stats["lastUsage"] = usage.DeepClone();
         }
         foreach (var item in selectedItems)

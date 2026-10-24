@@ -361,6 +361,7 @@ public sealed class SessionAuthorityDocument
                         ),
                     $"Session authority stats.{field}"
                 );
+        ValidateCost(stats, "totalCost");
         if (!stats.ContainsKey("lastUsage") || stats["lastUsage"] is null)
             return;
         var usage =
@@ -379,6 +380,15 @@ public sealed class SessionAuthorityDocument
                         ),
                     $"Session authority stats.lastUsage.{field}"
                 );
+        ValidateCost(usage, "cost");
+    }
+
+    private static void ValidateCost(JsonObject value, string field)
+    {
+        if (!value.ContainsKey(field))
+            return;
+        if (value[field] is null || ReadFiniteNumber(value[field]!, field) < 0)
+            throw new InvalidDataException(field + " must be a finite nonnegative number.");
     }
 
     private static void ValidateQueue(JsonArray queue)

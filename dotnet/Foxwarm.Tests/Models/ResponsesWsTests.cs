@@ -26,21 +26,31 @@ public sealed class ResponsesWsTests
             }
         );
         await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
-        var service = new ResponsesWsChatService(
-            Options(peer.Uri),
-            transport,
-            ModelRequestScope.Canonical,
-            false,
-            "lineage"
-        );
-        var result = await service.ChatAsync(
-            "session",
-            [Message("user", "input")],
-            CancellationToken.None
-        );
+        var catalog = HostModels.Parse(new JsonObject
+        {
+            ["providers"] = new JsonObject
+            {
+                ["p"] = new JsonObject
+                {
+                    ["providerType"] = "openai-ws",
+                    ["baseUrl"] = peer.Uri.ToString(),
+                    ["models"] = new JsonArray(new JsonObject
+                    {
+                        ["id"] = "wire",
+                        ["tokenPricesPerMillion"] = new JsonObject { ["cached"] = 1, ["input"] = 2, ["output"] = 3 },
+                    }),
+                },
+            },
+        }, new JsonObject());
+        using var http = new HttpClient();
+        var requests = new ModelRequestOwner(http, Options(peer.Uri), new ModelRouting(), websockets: transport);
+        var result = await requests.RequestAsync("session", catalog, "p", null, "lineage", "turn",
+            [Message("user", "input")], (_, _) => Task.FromResult("prompt"), null, null, null, null,
+            CancellationToken.None, ModelRequestScope.Canonical);
         Assert.Null(result.AssistantMessage);
         Assert.Equal(13, result.Usage!["inputTokens"]!.GetValue<long>());
         Assert.Equal(2, result.Usage["outputTokens"]!.GetValue<long>());
+        Assert.Equal(.000032, SessionCatalog.Number(result.Usage["cost"])!.Value, 10);
         result.FinalizeHistory(null);
     }
 

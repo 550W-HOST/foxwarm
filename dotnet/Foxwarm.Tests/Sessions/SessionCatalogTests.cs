@@ -85,6 +85,46 @@ public sealed class SessionCatalogTests
     }
 
     [Fact]
+    public void Cost_projection_summaries_keep_fractional_known_zero_and_all_unknown_distinct_across_updates_and_deletion()
+    {
+        using var temp = new TempDirectory();
+        using var catalog = new SessionCatalog(temp.Path);
+        catalog.Initialize();
+        var root = Row("root", 0);
+        var unknown = Row("unknown", 1, "root");
+        var zero = Row("zero", 2, "root");
+        zero["stats"] = new JsonObject { ["totalCost"] = 0, ["lastUsage"] = new JsonObject { ["cost"] = 0 } };
+        var priced = Row("priced", 3, "root");
+        priced["stats"] = new JsonObject { ["totalCost"] = .125, ["lastUsage"] = new JsonObject { ["cost"] = .125 } };
+        catalog.Upsert([root, unknown]);
+        Assert.Null(catalog.Summary()["cost"]);
+        Assert.Null(catalog.Descendants("root", 10).Summary["cost"]);
+        var other = Row("other", 4, "root");
+        other["stats"] = new JsonObject { ["totalCost"] = .25 };
+        unknown["meta"]!["lastMessageTime"] = 5;
+        catalog.Upsert([zero, priced, other, unknown]);
+        Assert.Equal(.375, SessionCatalog.Number(catalog.Summary()["cost"]));
+        Assert.Equal(.375, SessionCatalog.Number(catalog.Descendants("root", 1).Summary["cost"]));
+        Assert.Equal(0, SessionCatalog.Number(catalog.Get("zero")?["stats"]?["lastUsage"]?["cost"]));
+        Assert.Null(catalog.Get("unknown")?["stats"]?["totalCost"]);
+        priced["stats"]!["totalCost"] = .375;
+        catalog.Upsert([priced]);
+        Assert.Equal(.625, SessionCatalog.Number(catalog.Summary()["cost"]));
+        Assert.Equal(.625, SessionCatalog.Number(catalog.Descendants("root", 1).Summary["cost"]));
+        catalog.RemoveForDeletion("priced");
+        Assert.Equal(.25, SessionCatalog.Number(catalog.Summary()["cost"]));
+        catalog.RemoveForDeletion("other");
+        Assert.Equal(0, SessionCatalog.Number(catalog.Summary()["cost"]));
+        catalog.RemoveForDeletion("zero");
+        Assert.Null(catalog.Summary()["cost"]);
+        Assert.Null(catalog.Descendants("root", 10).Summary["cost"]);
+        catalog.Dispose();
+        using var reopened = new SessionCatalog(temp.Path);
+        reopened.Initialize();
+        Assert.Null(reopened.Summary()["cost"]);
+    }
+
+    [Fact]
     public void Projection_excludes_bodies_and_bounds_wait_without_erasing_ambiguity_or_valid_raw_settings()
     {
         var raw = Row("one", 4);

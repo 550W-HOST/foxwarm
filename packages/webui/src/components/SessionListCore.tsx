@@ -45,6 +45,7 @@ export interface Session {
     cachedTokens: number
     inputTokens: number
     outputTokens: number
+    cost?: number
   }
 }
 

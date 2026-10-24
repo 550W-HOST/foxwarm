@@ -373,6 +373,10 @@ internal sealed class ModelRequestOwner(
                     requestStarted ??= Stopwatch.GetTimestamp();
                     result = await service.ChatAsync(sessionId, prepared, cancellationToken);
                     cancellationToken.ThrowIfCancellationRequested();
+                    result = result with
+                    {
+                        Usage = ModelUsageCost.Complete(leaf, result),
+                    };
                     var completedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     var duration = Stopwatch.GetElapsedTime(requestStarted.Value).TotalMilliseconds;
                     if (result.AssistantMessage is JsonObject message)

@@ -113,7 +113,8 @@ internal sealed partial class SessionManager
             SessionCatalog.WaitProjection(row["meta"]?["wait"]),
             T(row["childModelDefault"]),
             T(row["childEffortDefault"]),
-            SessionCatalog.Number(row["compactThresholdTokens"])
+            SessionCatalog.Number(row["compactThresholdTokens"]),
+            SessionCatalog.Number(row["stats"]?["totalCost"])
         );
     }
 
@@ -186,6 +187,8 @@ internal sealed partial class SessionManager
             ["_toolActive"] = owner.ToolActive,
             ["_compacting"] = owner.Compacting,
         };
+        if (meta.Cost is double cost)
+            projected["stats"]!["totalCost"] = cost;
         // Signature contains only list-visible bounded data, never messages or queue bodies.
         if (meta.Effort is null)
             projected.Remove("effort");
@@ -247,6 +250,7 @@ internal sealed partial class SessionManager
             var field in new[] { "totalCachedTokens", "totalInputTokens", "totalOutputTokens" }
         )
             signature[field] = SessionCatalog.Number(row["stats"]?[field]) ?? 0;
+        signature["totalCost"] = SessionCatalog.Number(row["stats"]?["totalCost"]);
         signature["runtimeState"] = row["_runtimeState"]?.DeepClone();
         signature["wait"] = SessionCatalog.WaitProjection(row["meta"]?["wait"]);
         return signature;

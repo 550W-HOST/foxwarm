@@ -563,3 +563,17 @@ test('shared and editor schemas accept narrow model defaults and reject invalid 
     }
   }
 })
+
+
+test('model pricing requires complete nonnegative rates at concrete leaves', () => {
+  const rates = { cached: 0, input: 0.25, output: 1.5 }
+  const leaf = tokenPricesPerMillion => ({ providers: { p: { models: [{ id: 'wire', tokenPricesPerMillion }] } } })
+  assert.equal(validateModelsSchema(leaf(rates)), true)
+  assert.equal(validateModelsSchema({ providers: { p: { tokenPricesPerMillion: rates } } }), true)
+  for (const invalid of [null, {}, { input: 1 }, { ...rates, output: -1 }, { ...rates, output: '1' }, { ...rates, output: null }, { ...rates, fee: 1 }]) {
+    assert.equal(validateModelsSchema(leaf(invalid)), false, JSON.stringify(invalid))
+  }
+  assert.equal(validateModelsSchema({ providers: { p: { models: ['wire'], tokenPricesPerMillion: rates } } }), false)
+  assert.equal(validateModelsSchema({ providers: { p: { models: [] }, route: { providerType: 'session-hash', targets: ['p'], tokenPricesPerMillion: rates } } }), false)
+  assert.equal(validateModelsSchema({ defaults: { tokenPricesPerMillion: rates }, providers: { p: {} } }), false)
+})

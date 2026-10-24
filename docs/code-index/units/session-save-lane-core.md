@@ -26,3 +26,5 @@ Notifications belong to the append, not a scan of later history. Settings/state 
 ## Tests
 
 `dotnet/Foxwarm.Tests/Sessions/CanonicalNotificationOwnershipTests.cs` checks the supported settings/queue and delayed ordinary-notice continuations plus cold-load non-replay. `dotnet/Foxwarm.Tests/Sessions/PersistentSessionTurnTests.cs`; `RetryInputSafePointTests.cs`; `SessionCwdCommitTests.cs`; `SessionPresentationTests.cs`.
+
+Canonical usage append also accumulates optional `stats.totalCost` from present `usage.cost` and clones the full `lastUsage` at the same staged/publication boundary as tokens. Missing cost leaves the recorded subtotal unchanged; see [D-model-usage-cost](../threads/model-request-and-streaming.md#d-model-usage-cost).

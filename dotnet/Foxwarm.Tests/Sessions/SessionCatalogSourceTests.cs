@@ -100,8 +100,21 @@ public sealed class SessionCatalogSourceTests
         Equal(
             expected["schema"],
             SourceCoreSchema(catalog.FilePath),
-            "current source core plus one approved wait index"
+            "current source core with additive wait and cost schema"
         );
+        var v2Root = Path.Combine(temp.Path, "v2");
+        Directory.CreateDirectory(Path.Combine(v2Root, "state"));
+        File.Copy(Path.Combine(temp.Path, "source-v2.sqlite"), Path.Combine(v2Root, "state", "catalog.sqlite"));
+        using (var v2 = new SessionCatalog(v2Root))
+        {
+            v2.Initialize();
+            Equal(expected["expected"], Snapshot(v2, rows), "source v2 upgrade queries");
+            Assert.Null(v2.Summary()["cost"]);
+            var priced = v2.Get("root")!;
+            priced["stats"] = new JsonObject { ["totalCost"] = .125 };
+            v2.Upsert([priced]);
+            Assert.Equal(.125, SessionCatalog.Number(v2.Summary()["cost"]));
+        }
         var oldRoot = Path.Combine(temp.Path, "old");
         Directory.CreateDirectory(Path.Combine(oldRoot, "state"));
         File.Copy(
@@ -114,7 +127,7 @@ public sealed class SessionCatalogSourceTests
         Equal(
             expected["upgradedSchema"],
             SourceCoreSchema(old.FilePath),
-            "source v1 upgrade core plus one approved wait index"
+            "source v1 upgrade core with additive wait and cost schema"
         );
         old.Dispose();
         using var again = new SessionCatalog(oldRoot);
@@ -291,6 +304,14 @@ public sealed class SessionCatalogSourceTests
             index["sql"]!.GetValue<string>()
         );
         all.Remove(index);
+        // Keep the Source core oracle while allowing the additive USD projection schema.
+        foreach (var trigger in all.OfType<JsonObject>().Where(row => row["name"]!.GetValue<string>().StartsWith("session_catalog_cost_", StringComparison.Ordinal)).ToArray())
+            all.Remove(trigger);
+        foreach (var table in all.OfType<JsonObject>().Where(row => row["type"]!.GetValue<string>() == "table"))
+            table["sql"] = table["sql"]!.GetValue<string>()
+                .Replace(",costrealnotnulldefault0", "", StringComparison.Ordinal)
+                .Replace(",cost_countintegernotnulldefault0", "", StringComparison.Ordinal)
+                .Replace(",costreal", "", StringComparison.Ordinal);
         return all;
     }
 

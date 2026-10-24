@@ -4,7 +4,8 @@ import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Activity, ArrowLeft, Bot, ChevronRight, CircleDot, Clock3, ExternalLink, FileText, FolderOpen, GitFork, Layers3, ListFilter, MemoryStick, MessageSquare, Network, Save, Search, Server, Shield, Trash2 } from 'lucide-react'
 import type { Session } from './SessionListCore'
-import UsageDetails, { formatUsageNumber as usageNumber } from './TokenUsageDetails'
+import { formatUsdCost } from '../usageCost'
+import UsageDetails, { formatUsageNumber as usageNumber, type TokenUsage } from './TokenUsageDetails'
 import AgentCreationMenu from './AgentCreationMenu'
 import { useNodeDirectory } from '../useNodeDirectory'
 import { makeFoxwarmPopupUrl } from '../popupWebUi'
@@ -113,20 +114,21 @@ function SummaryMetric({ label, value, detail, icon, active, onClick }: {
   return onClick ? <button type="button" onClick={onClick} className={classes}>{content}</button> : <div className={classes}>{content}</div>
 }
 
-type LoadedUsage = { cachedTokens: number; inputTokens: number; outputTokens: number; count: number }
+type LoadedUsage = TokenUsage & { count: number }
 
 function addLoadedUsage(total: LoadedUsage, session: Session) {
   if (!session.tokenUsage) return total
   total.cachedTokens += session.tokenUsage.cachedTokens || 0
   total.inputTokens += session.tokenUsage.inputTokens || 0
   total.outputTokens += session.tokenUsage.outputTokens || 0
+  if (session.tokenUsage.cost !== undefined) total.cost = (total.cost ?? 0) + session.tokenUsage.cost
   total.count += 1
   return total
 }
 
 const emptyLoadedUsage = (): LoadedUsage => ({ cachedTokens: 0, inputTokens: 0, outputTokens: 0, count: 0 })
 
-function UsagePie({ usage, loaded = false, global = false }: { usage?: { cachedTokens: number; inputTokens: number; outputTokens: number }; loaded?: boolean; global?: boolean }) {
+function UsagePie({ usage, loaded = false, global = false }: { usage?: TokenUsage; loaded?: boolean; global?: boolean }) {
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const popup = useRef<HTMLDivElement>(null)
@@ -404,6 +406,7 @@ function SessionInspector({ session, parent, children, childTotal, hasMoreChildr
             <InspectorField label="Messages" value={String(session.messageCount || 0)} />
             <InspectorField label="Updated" value={formatRelativeTime(session.lastMessageTime)} />
             <InspectorField label="Tokens" value={formatTokenCount(totalTokens)} />
+            {tokenUsage.cost !== undefined ? <InspectorField label="Recorded estimated cost" value={formatUsdCost(tokenUsage.cost)} /> : null}
             <InspectorField label="Cached" value={formatTokenCount(tokenUsage.cachedTokens)} />
             <InspectorField label="Input / output" value={`${formatTokenCount(tokenUsage.inputTokens)} / ${formatTokenCount(tokenUsage.outputTokens)}`} />
           </dl>
@@ -591,7 +594,7 @@ export default function ArchitectureView({
   const [childIds, setChildIds] = useState<Map<string, string[]>>(new Map())
   const [focusPathIds, setFocusPathIds] = useState<Set<string>>(new Set())
   const [agentCounts, setAgentCounts] = useState<Array<{ agent: string; count: number }>>([])
-  const [globalSummary, setGlobalSummary] = useState({ total: 0, busy: 0, queued: 0, managed: 0, cachedTokens: 0, inputTokens: 0, outputTokens: 0 })
+  const [globalSummary, setGlobalSummary] = useState<{ total: number; busy: number; queued: number; managed: number } & TokenUsage>({ total: 0, busy: 0, queued: 0, managed: 0, cachedTokens: 0, inputTokens: 0, outputTokens: 0 })
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<ArchitectureStatusFilter>('all')
   const [searchQuery, setSearchQuery] = useState('')
@@ -806,6 +809,7 @@ export default function ArchitectureView({
     totalCachedTokens: globalSummary.cachedTokens,
     totalInputTokens: globalSummary.inputTokens,
     totalOutputTokens: globalSummary.outputTokens,
+    cost: globalSummary.cost,
   }
 
   const visibleSessions = useMemo(
@@ -982,7 +986,7 @@ export default function ArchitectureView({
               </label>
             </div>
             <div className="ml-auto flex shrink-0 items-center">
-              <UsagePie global usage={{ cachedTokens: summary.totalCachedTokens, inputTokens: summary.totalInputTokens, outputTokens: summary.totalOutputTokens }} />
+              <UsagePie global usage={{ cachedTokens: summary.totalCachedTokens, inputTokens: summary.totalInputTokens, outputTokens: summary.totalOutputTokens, cost: summary.cost }} />
             </div>
           </div>
         </div> : null}

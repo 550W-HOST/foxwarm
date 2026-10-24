@@ -5,14 +5,19 @@ namespace Foxwarm.Tests;
 
 public sealed class SessionUsageTests
 {
-    private static JsonObject Usage(int cached, int input, int output) =>
-        new()
+    private static JsonObject Usage(int cached, int input, int output, double? cost = null)
+    {
+        var usage = new JsonObject
         {
             ["cachedTokens"] = cached,
             ["inputTokens"] = input,
             ["outputTokens"] = output,
             ["reasoningTokens"] = output,
         };
+        if (cost is double amount)
+            usage["cost"] = amount;
+        return usage;
+    }
 
     private sealed class UsageChat(params ChatResult[] results) : IChatService
     {
@@ -67,6 +72,33 @@ public sealed class SessionUsageTests
         );
     }
 
+    [Fact]
+    public async Task Known_zero_is_saved_and_missing_cost_does_not_reset_the_recorded_subtotal()
+    {
+        using var temp = new TempDirectory();
+        var store = new PersistentSessionAuthorityStore(temp.Path, "cost");
+        var registry = new SessionRegistry(store, new UsageChat(
+            new ChatResult(null, Usage(1, 2, 3)),
+            new ChatResult(null, Usage(1, 2, 3, 0)),
+            new ChatResult(null, Usage(1, 2, 3, .375)),
+            new ChatResult(null, Usage(1, 2, 3))
+        ));
+        registry.TriggerOverride = _ => Task.CompletedTask;
+        var entry = registry.Add("cost");
+        for (var turn = 0; turn < 4; turn++)
+        {
+            await registry.Ingress.EnqueueAsync("cost", QueueItem.UserText("next"));
+            await registry.Runner.ProcessQueueAsync("cost");
+            var stats = entry.Snapshot().AuthorityEnvelope["stats"]!;
+            Assert.Equal(turn == 0 ? null : turn == 1 ? 0d : .375, SessionCatalog.Number(stats["totalCost"]));
+            Assert.Equal(turn is 0 or 3 ? null : turn == 1 ? 0d : .375, SessionCatalog.Number(stats["lastUsage"]?["cost"]));
+        }
+        var saved = (await store.LoadAsync("cost"))!;
+        Assert.Equal(.375, SessionCatalog.Number(saved.AuthorityEnvelope["stats"]?["totalCost"]));
+        Assert.Null(saved.AuthorityEnvelope["stats"]?["lastUsage"]?["cost"]);
+        Assert.Equal(4, saved.History.Count); // User input only: no fabricated model rows.
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -98,7 +130,7 @@ public sealed class SessionUsageTests
         );
         var registry = new SessionRegistry(
             store,
-            new UsageChat(ChatResult.Text("Measured completion") with { Usage = Usage(10, 30, 5) })
+            new UsageChat(ChatResult.Text("Measured completion") with { Usage = Usage(10, 30, 5, .125) })
         );
         registry.TriggerOverride = _ => Task.CompletedTask;
         var entry = registry.Add("usage");
@@ -113,6 +145,8 @@ public sealed class SessionUsageTests
         }
         var hot = entry.Snapshot();
         var cold = (await store.LoadAsync("usage"))!;
+        Assert.Equal(postCommit ? .125 : (double?)null, SessionCatalog.Number(hot.AuthorityEnvelope["stats"]?["totalCost"]));
+        Assert.Equal(postCommit ? .125 : (double?)null, SessionCatalog.Number(cold.AuthorityEnvelope["stats"]?["totalCost"]));
         Assert.Equal(postCommit ? 2 : 1, hot.History.Count);
         Assert.Equal(hot.History.Count, store.Archive.ReadMessages().Count);
         Assert.Equal(

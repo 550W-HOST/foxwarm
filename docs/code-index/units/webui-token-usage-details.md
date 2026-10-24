@@ -1,6 +1,6 @@
 # Unit: webui-token-usage-details
 
-Files: packages/webui/src/components/TokenUsageDetails.tsx
+Files: packages/webui/src/components/TokenUsageDetails.tsx, packages/webui/src/usageCost.ts, packages/webui/test/usageCost.e2e.mjs
 Secondary files: packages/webui/src/components/ArchitectureView.tsx, packages/webui/src/components/WorkbenchStatusBar.tsx, packages/webui/test/workbenchPreview.e2e.mjs
 
 ## Purpose
@@ -9,7 +9,8 @@ Shared presentation of cumulative token usage for Architecture and status-bar po
 
 ## Key exports
 
-- `TokenUsage` — cached, uncached input, and output counters.
+- `TokenUsage` — cached, uncached input, output counters and optional saved USD `cost`.
+- `formatUsdCost` — readable saved USD estimates, preserving zero and showing tiny positive values below display precision.
 - `formatUsageNumber` — compact, one-decimal English numeric formatting.
 - `TokenUsageDetails` — total, semantic proportional bar, and optional detailed rows with percentages.
 
@@ -20,3 +21,5 @@ Shared presentation of cumulative token usage for Architecture and status-bar po
 - `loaded` labels an explicitly loaded-window aggregate; ordinary global or single-Session counters use Tokens. Missing data displays an unavailable value rather than an invented zero.
 - These lifetime counters are separate from one logical request's context occupancy or current compaction budget.
 - Accessible bar text and title include exact counts while the visible numbers stay compact.
+
+Optional cost displays as a recorded estimate separately from token totals, percentages and bars. Loaded-window aggregation includes only present costs; global and single-Session callers pass their existing scopes. Unknown costs do not become zero. The accounting contract is [D-model-usage-cost](../threads/model-request-and-streaming.md#d-model-usage-cost).

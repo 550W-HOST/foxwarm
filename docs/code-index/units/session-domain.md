@@ -20,6 +20,8 @@ Defines stable Session/Agent identity and message shapes used by owner/runtime, 
 
 These are value/domain boundaries, not persistence writers. JSON authority owns active history/queue/wait semantic instances; catalog owns Main identity/topology/presentation summaries. Agent memory selection can affect a prompt but does not mutate Session history until a turn save commits its canonical result.
 
+Session metadata, DTOs, status and bounded global/descendant summaries project optional recorded cost with presence-aware live overlays; the end-to-end contract is [D-model-usage-cost](../threads/model-request-and-streaming.md#d-model-usage-cost).
+
 ## Tool argument parsing
 
 `FunctionCallArguments.Parse` is the shared canonical boundary for Responses HTTP/WS, Chat Completions conversion, and Anthropic Messages. Null, direct objects, empty strings and JSON object strings retain their established meanings. Malformed strings, JSON strings containing nonobjects, and raw numeric/boolean/array values produce empty `args` plus `rawArgsText` and `argsParseError`; they do not reject valid siblings or enter whole-response provider retry. Direct malformed values use Source's diagnostic string projection, including array joining, without making those values executable arguments. Ordinary strings retain their exact text.

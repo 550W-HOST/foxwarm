@@ -47,7 +47,8 @@ internal sealed record SessionMetadata(
     JsonObject? Wait = null,
     string? ChildModel = null,
     string? ChildEffort = null,
-    double? CompactThreshold = null
+    double? CompactThreshold = null,
+    double? Cost = null
 );
 
 /// <summary>Session-semantic in-process API. Channels receive cloned projections, never mutable owners.</summary>
@@ -292,7 +293,8 @@ internal sealed partial class SessionOwner
                 SessionRuntimeState.WaitProjection(state.Meta),
                 Text(envelope["childModelDefault"]),
                 Text(envelope["childEffortDefault"]),
-                SessionWait.Number(envelope["compactThresholdTokens"])
+                SessionWait.Number(envelope["compactThresholdTokens"]),
+                SessionWait.Number(envelope["stats"]?["totalCost"])
             );
         });
         return MainMetadata?.Invoke(result) ?? result;

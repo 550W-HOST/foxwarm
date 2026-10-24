@@ -43,6 +43,31 @@ Attempt-start persistence is required before provider transport; failure to make
 
 Raw request/response/error/stream diagnostics remain a separate best-effort debugging surface with existing recent-file housekeeping, not a second journal. Their producer/redaction contract belongs to [raw diagnostics](../units/model-raw-diagnostics.md).
 
+## D-model-usage-cost
+
+[2026-10-25] Model-configured token prices and saved cost estimates use fixed USD. A concrete model may supply the complete optional `tokenPricesPerMillion: { cached, input, output }` block; each rate is a finite nonnegative USD price per million tokens. Named providers put it on individual model objects; a concrete provider without a model list may put it on its own leaf. Virtual routes and root defaults have no pricing inheritance. The supported Models YAML editor uses the shared schema and the ordinary validated configuration installation lane.
+
+For example, fictional rates for one named leaf are configured as:
+
+```yaml
+providers:
+  example:
+    providerType: openai-responses
+    models:
+      - id: example-model
+        tokenPricesPerMillion: { cached: 0.25, input: 1, output: 4 }
+```
+
+`ModelRequestOwner` settles the accepted completion from its captured concrete leaf, including aliases, failover and existing explicit-selection recapture. Ordinary configuration reload does not change an in-flight snapshot. `ModelUsageCost.Complete` promotes an owned copy of `ChatResult.Usage` or the Chat Completions assistant-metadata fallback, then adds optional numeric `cost = (cachedTokens * cached + inputTokens * input + outputTokens * output) / 1_000_000`. Counts retain protocol normalization: cached and uncached input do not overlap; full output already contains reasoning; Anthropic cache creation remains uncached input. Missing pricing, absent usage, unusable normalized counts or a non-finite computed result leave cost absent. Genuine zero remains `0`. Context estimation and token arithmetic are unchanged.
+
+The same saved `usage.cost` travels through the result, final assistant `__meta.usage`, successful journal result and `stats.lastUsage`. Completed commentary prefixes own no usage; the completion suffix owns full usage and cost once, including commentary-only empty suffixes and usage-only results without an assistant. Failed or interrupted prefixes do not acquire an inferred charge. Journal-write failure after generation retains the existing successful-result/no-provider-retry behavior.
+
+Normal canonical append adds known costs to optional `stats.totalCost` at the existing history/stats commit boundary. A missing cost leaves that subtotal unchanged; a later unpriced usage still replaces `lastUsage`. Clear retains cumulative stats; Fork inherits historical message costs but starts its own subtotal. Ordinary saves, compaction and history removal do not recount, subtract or reprice history. Compact, BTW, Setup and low-level/ToolScript requests keep their existing Session accounting scope: a computed request cost does not add new normal Session-stat writes. These are recorded estimates, not a vendor billing ledger; no backfill, per-tool fees, currency conversion or rate-history archive is implied.
+
+Authority validates optional saved cost fields. Catalog schema v3 projects nullable fractional cost, maintains a known-value count alongside its bounded global subtotal, and uses presence-aware descendant windows and live-owner corrections. DTO `tokenUsage.cost` and summary `cost` stay absent when all contributors are unpriced. WebUI request/group/Conversation details and cumulative usage popovers render saved USD estimates; partial recorded amounts never derive missing prices from current model settings. Tiny positive estimates display below the formatter's precision rather than as exact zero. `session status` and `/status` include known last-request and cumulative estimates through the shared status path.
+
+Evidence: `ModelUsageCostTests`, `SessionUsageTests`, `ResponsesPrefixCommitTests`, `ResponsesWsTests`, `ModelConfigurationFormTests`, `SessionCatalogTests`, `SessionCatalogSourceTests`, and `packages/webui/test/usageCost.e2e.mjs` cover configuration, concrete request capture, protocol normalization, completion ownership, persistence, bounded summaries and rendered consumers.
+
 ## Canonical units and tests
 
 - [Model configuration/routing](../units/model-configuration.md)
