@@ -75,7 +75,6 @@ export async function createHostFixture(name, options = {}) {
     browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', ...(options.chromeArgs || [])], userDataDir: join(root, 'browser') })
     page = await browser.newPage(); options.onPage?.(page); await page.goto(options.publicRoot || origin, { waitUntil: 'networkidle0' })
     await page.waitForSelector('input[type="password"]'); await page.type('input[type="password"]', credential); await page.click('button[type="submit"]')
-    await page.waitForFunction(() => !!window.foxwarmTest?.switchToSession)
     await waitForWebUiReady(page); return page
   }
   async function save(config) {
