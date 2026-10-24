@@ -24,7 +24,7 @@ This deliberately closes a reproduced pre-move-content exposure in the reference
 
 ## Fallback and failure limits
 
-When exact current-Session hybrid coverage is disabled/unready/backfilling or query failed, `ArchiveLexicalRecall` can supplement identifier search from bounded Archive reads. Limits are 16 lineage entries, 2000 substantive visible messages and 1000 blocks per branch, 64 branch candidates and 256 total candidates. Role/visibility filters apply before the message limit; late parent messages/blocks remain clipped by captured caps. Literal ranking/deduplication preserves Source behavior without scanning arbitrary Sessions.
+When exact current-Session persistent lexical search is unconfigured/unready/backfilling or query failed, `ArchiveLexicalRecall` can supplement identifier search from bounded Archive reads. Limits are 16 lineage entries, 2000 substantive visible messages and 1000 blocks per branch, 64 branch candidates and 256 total candidates. Role/visibility filters apply before the message limit; late parent messages/blocks remain clipped by captured caps. Literal ranking/deduplication preserves Source behavior without scanning arbitrary Sessions.
 
 If authoritative source is absent, legacy stored text can supply a bounded compatibility preview only after the same caller scope boundary. Warnings contain bounded source metadata and reason, never query or text. Logging failure does not break recall. Exact missing targets still do not create owners, databases, branch reservations or active history from Archive.
 

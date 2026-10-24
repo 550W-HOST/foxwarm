@@ -43,9 +43,6 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
     internal Action? BeforePromotionValidation { get; set; }
     internal Action? BeforeLifecycleMutation { get; set; }
     internal Func<Task>? Yield { get; set; }
-    internal Func<Task>? AfterCoveragePre { get; set; }
-    internal Func<Task>? AfterFtsQuery { get; set; }
-    internal Action? BeforeQuery { get; set; }
 
     internal VectorLexicalRuntime(
         string databaseRoot,
@@ -521,108 +518,33 @@ internal sealed partial class VectorLexicalRuntime : IAsyncDisposable
         };
     }
 
-    private sealed record Coverage(bool Complete, bool Exact, string Signature);
-
-    private Coverage CoverageSnapshot(VectorSearchOptions? options)
-    {
-        var exact =
-            options?.LineageSessions is { Count: > 0 } || options?.SessionIds is { Length: > 0 };
-        var entries = exact
-            ? options?.LineageSessions is { Count: > 0 } lineage
-                ? lineage.ToArray()
-                : options!.SessionIds!.Select(id => new ArchiveVectorScope(id)).ToArray()
-            : Archive("main")
-                .LocalVectorMaxima()
-                .Where(entry => options?.Agent is null || entry.Agent == options.Agent)
-                .Select(entry => new ArchiveVectorScope(entry.SessionId))
-                .ToArray();
-        var snapshots = entries
-            .Take(64)
-            .Select(entry =>
-            {
-                var stats = Archive(entry.SessionId).LocalVectorStats();
-                var requiredSeq = Math.Min(stats.MaxSeq, entry.MaxMessageSeq ?? stats.MaxSeq);
-                var requiredBlock = Math.Min(
-                    stats.MaxBlockId,
-                    entry.MaxBlockId ?? stats.MaxBlockId
-                );
-                var checkpoint = index!.Checkpoint(entry.SessionId);
-                var exists = !exact || Archive(entry.SessionId).HasReadOnlyIdentity();
-                return (
-                    Complete: exists
-                        && checkpoint.RawLastIndexedSeq >= requiredSeq
-                        && checkpoint.LastIndexedBlockId >= requiredBlock,
-                    Signature: new JsonArray(
-                        JsonValue.Create(entry.SessionId),
-                        entry.MaxMessageSeq,
-                        entry.MaxBlockId,
-                        requiredSeq,
-                        requiredBlock,
-                        exists
-                    )
-                );
-            })
-            .ToArray();
-        return new(
-            entries.Length <= 64 && snapshots.All(entry => entry.Complete),
-            exact,
-            exact
-                ? EcmaJson.Stringify(
-                    new JsonArray(snapshots.Select(entry => (JsonNode?)entry.Signature).ToArray())
-                )
-                : ""
-        );
-    }
-
-    internal async Task<VectorSearchResult> QueryAsync(
+    internal Task<VectorSearchResult> QueryAsync(
         string query,
         int limit,
         VectorSearchOptions? options
     )
     {
-        JsonObject Metadata(bool used = false, bool complete = false, string? error = null) =>
+        JsonObject Metadata(bool used = false, string? error = null) =>
             new()
             {
                 ["configured"] = config.HybridSearch,
                 ["ready"] = ready,
                 ["used"] = used,
-                ["coverageComplete"] = complete,
                 ["backfilling"] = backfilling,
                 ["errorCode"] = error,
             };
         if (!config.HybridSearch || !ready || index is null || rebuilding || stopping)
-            return new([], Metadata(error: lastError));
+            return Task.FromResult(new VectorSearchResult([], Metadata(error: lastError)));
         try
         {
-            BeforeQuery?.Invoke();
-            Coverage pre;
-            lock (lane)
-                pre = CoverageSnapshot(options);
-            var preBackfilling = backfilling;
-            if (AfterCoveragePre is not null)
-                await AfterCoveragePre();
             IReadOnlyList<JsonObject> hits;
             lock (lane)
-                hits = index!.Query(query, options, Math.Clamp(limit * 4, 20, 200));
-            if (AfterFtsQuery is not null)
-                await AfterFtsQuery();
-            Coverage post;
-            lock (lane)
-                post = pre.Exact ? CoverageSnapshot(options) : pre;
-            return new(
-                hits,
-                Metadata(
-                    hits.Count > 0,
-                    pre.Complete
-                        && post.Complete
-                        && !preBackfilling
-                        && (!pre.Exact || pre.Signature == post.Signature)
-                )
-            );
+                hits = index.Query(query, options, Math.Clamp(limit * 4, 20, 200));
+            return Task.FromResult(new VectorSearchResult(hits, Metadata(hits.Count > 0)));
         }
         catch
         {
-            return new([], Metadata(error: "LEXICAL_QUERY_FAILED"));
+            return Task.FromResult(new VectorSearchResult([], Metadata(error: "LEXICAL_QUERY_FAILED")));
         }
     }
 
