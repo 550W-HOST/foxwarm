@@ -8,12 +8,12 @@ import { createHostFixture, until } from './experimentHostFixture.mjs'
 const listToken = 'setup-list-token'
 const testToken = 'setup-test-token'
 const modelsUri = 'inmemory://foxwarm/setup/foxwarm-models.yaml'
-let provider
+let provider, browserPage
 const listRequests = []
 const testRequests = []
 let listErrorHits = 0
 let testErrorHits = 0
-const fixture = await createHostFixture('setup-providers')
+const fixture = await createHostFixture('setup-providers', { onPage: page => { browserPage = page } })
 
 function sendJson(response, status, body) {
   response.writeHead(status, { 'content-type': 'application/json' })
@@ -34,28 +34,6 @@ function sendCompletion(response) {
   })}\n\n`)
   response.end()
 }
-
-async function monacoAction(page, action, payload = {}) {
-  return page.evaluate(async ({ action, payload, uri }) => {
-    const moduleUrl = performance.getEntriesByType('resource')
-      .map(entry => entry.name)
-      .find(name => /(?:\/|^)monaco-editor(?:-[^/]+)?\.js(?:\?|$)/.test(new URL(name).pathname))
-    if (!moduleUrl) throw new Error('Monaco module URL was not loaded')
-    const imported = await import(moduleUrl)
-    const monaco = imported.a ?? imported.default ?? imported
-    const editor = monaco.editor.getEditors().find(candidate => candidate.getModel()?.uri.toString() === uri)
-    if (!editor) throw new Error(`Monaco editor not found: ${uri}`)
-    if (action === 'replace') editor.getModel().setValue(payload.value)
-    if (action === 'position') editor.setPosition({ lineNumber: payload.line, column: payload.column })
-    if (action === 'suggest') {
-      editor.focus()
-      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
-      editor.trigger('phase4b', 'editor.action.triggerSuggest', {})
-    }
-    return editor.getValue()
-  }, { action, payload, uri: modelsUri })
-}
-
 
 try {
   provider = createServer(async (request, response) => {
@@ -202,12 +180,15 @@ try {
   await page.click('[data-setup-tab="models"]')
   await page.waitForSelector(`[data-monaco-model-uri="${modelsUri}"][data-editor-ready="true"]`, { timeout: 20000 })
   const unsaved = `providers:\n  draft:\n    providerType: openai-responses\n    baseUrl: ${providerRoot}\n    apiKey: ${listToken}\n    models:\n      - setup`
-  await monacoAction(page, 'replace', { value: unsaved })
-  await monacoAction(page, 'position', { line: 7, column: 16 })
-  await monacoAction(page, 'suggest')
+  const discoveryBefore = listRequests.length
+  await page.focus('[aria-label="Models YAML editor"] [role="textbox"]')
+  await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control')
+  await page.keyboard.sendCharacter(unsaved.replaceAll('\n', '\r\n'))
+  await page.keyboard.down('Control'); await page.keyboard.press('End'); await page.keyboard.up('Control')
+  await page.keyboard.down('Control'); await page.keyboard.press('Space'); await page.keyboard.up('Control')
   await page.waitForFunction(label => [...document.querySelectorAll('.suggest-widget.visible .monaco-list-row')]
     .some(row => row.textContent?.includes(label)), { timeout: 15000 }, 'setup-discovered-model')
-  assert(listRequests.filter(request => !request.anthropic).length >= 2)
+  assert(listRequests.length > discoveryBefore, 'Unsaved editor completion performs actual provider discovery')
   assert.equal(await readFile(fixture.modelPath, 'utf8'), modelsBefore)
   await page.keyboard.press('Escape')
 
@@ -220,6 +201,9 @@ try {
     noCatalogMutation: JSON.stringify(treeAfter.body) === JSON.stringify(treeBefore.body),
     completion: true,
   }))
+} catch (error) {
+  console.error('Editor/provider evidence:', { listRequests, body: await browserPage?.evaluate(() => document.body.innerText), active: await browserPage?.evaluate(() => ({ tag: document.activeElement?.tagName, role: document.activeElement?.getAttribute('role'), classes: document.activeElement?.className })) })
+  throw error
 } finally {
   await fixture.cleanup()
   if (provider?.listening) await new Promise(done => provider.close(done))

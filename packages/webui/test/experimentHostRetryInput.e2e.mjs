@@ -68,7 +68,11 @@ try {
   await fixture.start(); const page = await fixture.openApp()
   for (const model of ['responses', 'completions', 'anthropic', 'ws']) {
     const id = await create('input-' + model, model), task = 'input-' + model
-    if (model === 'responses') { await page.evaluate(id => window.foxwarmTest.switchToSession(id), id); await page.type('[role="textbox"][aria-label="Message"]', 'RCASE:' + task); await page.click('button[aria-label="Send message"]') }
+    if (model === 'responses') {
+      await page.evaluate(id => window.foxwarmTest.switchToSession(id), id)
+      await page.waitForFunction(id => document.querySelector('[data-session-header-subtitle]')?.textContent.includes('session ' + id), {}, id)
+      await page.type('[role="textbox"][aria-label="Message"]', 'RCASE:' + task); await page.click('button[aria-label="Send message"]')
+    }
     else { await post(id, 'RCASE:seed-' + model); await done(id, 'seed-' + model, 0); await post(id, 'RCASE:' + task) }
     await until(() => held.has(task), 'held provider ' + task); const before = await authority(id), initialKey = before.promptCacheKey; if (model === 'responses') await until(async () => (await page.evaluate(() => document.body.innerText)).includes('UNCOMMITTED-STREAM-PROGRESS'), 'Original App actual HTTP stream progress')
     const file = await upload(); await post(id, 'QUEUED-A-' + model); await post(id, 'QUEUED-B-' + model, { uploadedFiles: [file] }); await post(id, 'QUEUED-C-' + model)
@@ -80,7 +84,8 @@ try {
     assert.equal(model === 'completions' ? attempts[1].body.reasoning_effort : model === 'anthropic' ? attempts[1].body.output_config.effort : attempts[1].body.reasoning.effort, 'high')
     if (model === 'ws') { assert(attempts[0].body.previous_response_id); assert(!attempts[1].body.previous_response_id); assert(wire.includes('DONE-seed-ws-0')) }
     const after = await authority(id); assert.equal(after.promptCacheKey, initialKey); assert.equal(after.queue.length, 0); assert(!JSON.stringify(after).includes(png.toString('base64')))
-    const rows = after.history.filter(row => row.role === 'user' && row.parts?.some(part => part.text?.startsWith('QUEUED-'))); assert.equal(rows.length, 3); assert.deepEqual(rows.map(row => row.parts.find(part => part.text?.startsWith('QUEUED-')).text), ['A', 'B', 'C'].map(tag => 'QUEUED-' + tag + '-' + model))
+    const queuedTexts = after.history.filter(row => row.role === 'user').map(row => row.parts.flatMap(part => (part.text || part.system || '').split('\n')).find(text => text.startsWith('QUEUED-'))).filter(Boolean)
+    assert.deepEqual(queuedTexts, ['A', 'B', 'C'].map(tag => 'QUEUED-' + tag + '-' + model))
   }
   const pair = await create('pair'), pairTask = 'pair-http'; await post(pair, 'RCASE:' + pairTask); await until(() => held.has(pairTask), 'error after actual pair'); await post(pair, 'QUEUED-AFTER-PAIR'); held.get(pairTask).fail(); await done(pair, pairTask, 2)
   const pairWire = records.find(row => row.task === pairTask && row.n === 2).full; const call = pairWire.findIndex(row => row.type === 'function_call' && row.call_id === 'paired-write'); assert(call >= 0); assert.equal(pairWire[call + 1].type, 'function_call_output'); assert.equal(pairWire[call + 1].call_id, 'paired-write'); assert.equal(JSON.stringify(pairWire).split('COMMITTED-COMMENTARY').length - 1, 1); assert.equal(await readFile(join(fixture.work, 'paired-once.txt'), 'utf8'), 'Exactly one real paired write.')
@@ -92,7 +97,7 @@ try {
     const count = records.filter(row => row.task === task && !row.planning).length; assert.equal(count, action === 'stop' ? 1 : 2); assert.equal((await authority(id)).queue.length, 0)
   }
   const compact = await create('compact'); for (let i = 0; i < 6; i++) { const task = 'seed-compact-' + i; await post(compact, 'RCASE:' + task + '\n' + ('Earlier ordered paragraph ' + i + ' ').repeat(450)); await done(compact, task, 0) }
-  const key = (await authority(compact)).promptCacheKey; await post(compact, 'RCASE:compact-only'); await until(() => held.has('compact-only'), 'foreground error held'); assert.equal((await fixture.api('POST', route(compact) + '/message', { text: '/compact' })).status, 202); await until(() => held.has('plan'), 'real background plan'); held.get('plan').valid(); await until(async () => (await authority(compact)).queue.some(row => row.type === 'compact-commit'), 'ready plan with zero ordinary queue'); held.get('compact-only').fail(); await done(compact, 'compact-only')
+  const key = (await authority(compact)).promptCacheKey; await post(compact, 'RCASE:compact-only'); await until(() => held.has('compact-only'), 'foreground error held'); assert.equal((await fixture.api('POST', route(compact) + '/message', { text: '/compact' })).status, 200); await until(() => held.has('plan'), 'real background plan'); held.get('plan').valid(); await until(async () => (await authority(compact)).queue.some(row => row.type === 'compact-commit'), 'ready plan with zero ordinary queue'); held.get('compact-only').fail(); await done(compact, 'compact-only')
   const compactWire = records.find(row => row.task === 'compact-only' && row.n === 1); assert(JSON.stringify(compactWire.full).includes('CTX-BLOCK')); const compactState = await authority(compact); assert.equal(compactState.promptCacheKey, key); assert.equal(compactState.queue.length, 0)
   await fixture.stop(); assert.deepEqual(errors, []); console.log(JSON.stringify({ originalApp: true, requests: records.length, fourTransports: true, finiteOrderedInputs: true, freshImages: true, capturedEffortCacheTurn: true, committedPairCommentary: true, acceptedWsPrefixThenFailure: true, stopRunQueuedDuringRealAppend: true, readyCompactNoOrdinaryQueue: true, home, hosts: fixture.hostPids }))
 } finally {

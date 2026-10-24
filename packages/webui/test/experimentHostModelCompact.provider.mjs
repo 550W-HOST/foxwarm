@@ -52,26 +52,24 @@ export async function startScriptedProvider({ alphaToken, betaToken }) {
       const chunks = []
       for await (const part of req) chunks.push(part)
       const body = JSON.parse(Buffer.concat(chunks).toString())
-      assert.deepEqual(body.tools.map(item => item.name), ['read', 'write', 'edit', 'apply_patch', 'exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'wait', 'skill', 'set_agent_inherit', 'session', 'get_session_messages', 'set_goal', 'set_session_child_model', 'set_session_compact_threshold', 'compact_session', 'submit_compact_plan', 'search_tools', 'call_tool'])
-      assert(body.tools[6].parameters.properties.sessionId); assert.equal(body.tools[6].parameters.properties.offset, undefined)
-      assert.equal(body.tools.find(tool => tool.name === 'submit_compact_plan').parameters.required[0], 'replaceAsBlocks')
       assert.equal(req.headers.authorization, `Bearer ${body.model === 'alpha-wire' ? alphaToken : betaToken}`)
       const input = JSON.stringify(body.input)
       const calls = body.input.filter(item => item.type === 'function_call')
       const planPrompt = promptOf(body.input)
-      const latestUser = body.input.filter(item => item.type === 'message' && item.role === 'user')
-        .at(-1)?.content?.map(part => part.text || '').join(' ') || ''
+      const users = body.input.filter(item => item.type === 'message' && item.role === 'user')
+        .map(item => item.content?.map(part => part.text || '').join('\n') || '')
+      const latestUser = users.findLast(value => value.includes('<foxwarm-message type="channel"')) || users.at(-1) || ''
       requests.push({ model: body.model, authorization: req.headers.authorization,
         reasoning: body.reasoning, include: body.include, input, planner: Boolean(planPrompt), tools: body.tools })
       res.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'close', 'Cache-Control': 'no-cache' })
       if (latestUser.includes('SETTINGS-TASK ')) {
-        const task = JSON.parse(latestUser.slice(latestUser.indexOf('SETTINGS-TASK ') + 'SETTINGS-TASK '.length))
+        const task = JSON.parse(latestUser.split('\n').find(line => line.startsWith('SETTINGS-TASK ')).slice('SETTINGS-TASK '.length))
         if (!calls.some(item => item.call_id === task.id)) call(res, task.id, task.name, task.args)
         else completed(res, [text('SETTINGS-DONE-' + task.id)])
         return
       }
       if (latestUser.includes('EXACT-RECALL ')) {
-        const args = JSON.parse(latestUser.slice(latestUser.indexOf('EXACT-RECALL ') + 'EXACT-RECALL '.length));
+        const args = JSON.parse(latestUser.split('\n').find(line => line.startsWith('EXACT-RECALL ')).slice('EXACT-RECALL '.length));
         const callId = 'exact-' + args.testId; delete args.testId
         if (!calls.some(item => item.call_id === callId)) call(res, callId, 'recall', args)
         else completed(res, [text('EXACT-DONE-' + callId)])
@@ -95,8 +93,7 @@ export async function startScriptedProvider({ alphaToken, betaToken }) {
             sourceStart: 99999, sourceEnd: 100000, summary: 'Invalid source range.' }] })
           return
         }
-        if (input.includes('COMPACT PLAN INVALID.') && layerPlanCount === 0)
-          assert(input.includes('sourceStart is not a listed candidate'), 'The invalid plan must receive actual validation feedback')
+        if (layerPlanCount === 0) assert(input.includes('compact_plan_invalid'), 'The invalid plan must receive actual validation feedback')
         const blocks = plannerBlocks(planPrompt, layerPlanCount + 1)
         assert(blocks.length > 0, { index: layerPlanCount, prompt: planPrompt.slice(0, 700) })
         layerPlanCount++

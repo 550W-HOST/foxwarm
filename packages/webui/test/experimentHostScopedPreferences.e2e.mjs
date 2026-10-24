@@ -34,10 +34,12 @@ const peer = createServer(async (request, response) => {
     for await (const chunk of request) raw += chunk
     const body = JSON.parse(raw)
     requests++
+    const followup = body.input.some(row => row.type === 'function_call_output' && row.call_id === 'scoped-send')
     const output = JSON.stringify(body.input).includes('SCOPED-PREFERENCES')
-      ? [message('SCOPED-COMMENTARY', 'commentary'), message('SCOPED-ORDINARY'), message('SCOPED-FINAL', 'final_answer'), {
+      ? followup ? [message('SCOPED-ORDINARY'), message('SCOPED-FINAL', 'final_answer')]
+        : [message('SCOPED-COMMENTARY', 'commentary'), {
         type: 'function_call', call_id: 'scoped-send', name: 'send_to_session',
-        arguments: JSON.stringify({ sessionId: 'target', message: 'SCOPED-DELIVERY', afterSend: 'finish' }),
+        arguments: JSON.stringify({ sessionId: 'target', message: 'SCOPED-DELIVERY', afterSend: 'continue' }),
       }]
       : [message('TARGET-REPLY')]
     response.writeHead(200, { 'content-type': 'text/event-stream' })
