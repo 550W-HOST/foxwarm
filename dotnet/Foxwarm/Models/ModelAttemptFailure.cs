@@ -197,8 +197,7 @@ internal sealed class ModelRequestException(
     string message,
     ModelRetryEvent final,
     ModelRequestScope scope = ModelRequestScope.LowLevel
-)
-    : Exception(message)
+) : Exception(message)
 {
     internal ModelRetryEvent Final { get; } = final;
     internal ModelRequestScope Scope { get; } = scope;

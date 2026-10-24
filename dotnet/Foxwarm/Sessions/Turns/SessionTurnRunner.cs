@@ -271,11 +271,13 @@ public sealed class SessionTurnRunner
                     // The current turn does not auto-retry a chat failure, but an HTTP host
                     // must be able to report its terminal outcome rather than imply success.
                     failed = error is Foxwarm.Models.ModelPreparationException;
-                    llmFailed = error is Foxwarm.Models.ModelRequestException
-                    {
-                        Scope: Foxwarm.Models.ModelRequestScope.Canonical,
-                        Final.Final: true,
-                    };
+                    llmFailed =
+                        error
+                            is Foxwarm.Models.ModelRequestException
+                            {
+                                Scope: Foxwarm.Models.ModelRequestScope.Canonical,
+                                Final.Final: true,
+                            };
                     entry.RecordBackgroundProcessorFailure(error);
                     // Retry-notice persistence is best-effort; an unrepresented model failure uses temporary presentation.
                     if (registry.OnTurnFailure is not null)

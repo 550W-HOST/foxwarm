@@ -12,17 +12,22 @@ public sealed partial class LlmFailureStateTests
     public async Task Cold_catalog_tools_controls_fork_and_clear_share_the_committed_outcome()
     {
         using var temp = new TempDirectory();
-        await using var peer = new ScriptedResponsesSequenceServer(3, async (index, stream, _) =>
-        {
-            await LoopbackResponsesServer.WriteResponseAsync(
-                stream,
-                index != 1 ? 400 : 200,
-                index != 1 ? "application/json" : "text/event-stream",
-                Encoding.UTF8.GetBytes(index != 1
-                    ? "{\"error\":{\"message\":\"owned terminal response\"}}"
-                    : "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"recovered\"}]}]}}\n\n")
-            );
-        });
+        await using var peer = new ScriptedResponsesSequenceServer(
+            3,
+            async (index, stream, _) =>
+            {
+                await LoopbackResponsesServer.WriteResponseAsync(
+                    stream,
+                    index != 1 ? 400 : 200,
+                    index != 1 ? "application/json" : "text/event-stream",
+                    Encoding.UTF8.GetBytes(
+                        index != 1
+                            ? "{\"error\":{\"message\":\"owned terminal response\"}}"
+                            : "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"recovered\"}]}]}}\n\n"
+                    )
+                );
+            }
+        );
         var data = Path.Combine(temp.Path, "data");
         var work = Path.Combine(temp.Path, "work");
         Directory.CreateDirectory(work);
@@ -53,18 +58,32 @@ public sealed partial class LlmFailureStateTests
         var owner2 = await manager.RequiredAsync(id);
         owner2.Registry.TriggerOverride = _ => Task.CompletedTask;
         Assert.Equal("llm-failed", State(owner2));
-        var status = await manager.ObserveAsync(owner2, "session", new JsonObject { ["action"] = "status" });
+        var status = await manager.ObserveAsync(
+            owner2,
+            "session",
+            new JsonObject { ["action"] = "status" }
+        );
         Assert.Contains("llm-failed", status.ToJsonString());
-        Assert.Equal("llm-failed", WebUiContract.History(owner2.Entry.Snapshot(), models, false, false, null, null, null)["session"]!["runtimeState"]!["state"]!.GetValue<string>());
+        Assert.Equal(
+            "llm-failed",
+            WebUiContract.History(owner2.Entry.Snapshot(), models, false, false, null, null, null)[
+                "session"
+            ]!["runtimeState"]!["state"]!.GetValue<string>()
+        );
 
         var router = new MessageRouter(runtime);
         var feedback = new List<SessionRuntimeEvent>();
         owner2.Changed += feedback.Add;
         async Task<string> Control(string command)
         {
-            var result = await router.HandleMessageAsync(new(id, "webui"), new(command, null, ControlRequestId: command));
+            var result = await router.HandleMessageAsync(
+                new(id, "webui"),
+                new(command, null, ControlRequestId: command)
+            );
             Assert.Equal(200, result.Status);
-            return feedback.Last(value => SessionWait.Text(value.Data?["type"]) == "session-control-feedback").Data!["feedback"]!["status"]!.GetValue<string>();
+            return feedback
+                .Last(value => SessionWait.Text(value.Data?["type"]) == "session-control-feedback")
+                .Data!["feedback"]!["status"]!.GetValue<string>();
         }
         Assert.Equal("noop", await Control("/stop"));
         Assert.Equal("noop", await Control("/dequeue"));
@@ -98,7 +117,10 @@ public sealed partial class LlmFailureStateTests
     [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(true, true)]
-    public async Task Stop_or_run_queued_during_terminal_notice_keeps_its_control_outcome(bool runQueued, bool duringFailurePresentation)
+    public async Task Stop_or_run_queued_during_terminal_notice_keeps_its_control_outcome(
+        bool runQueued,
+        bool duringFailurePresentation
+    )
     {
         using var fixture = new Provider(attempt => attempt == 1 ? Failure() : Success());
         var notice = Signal();
@@ -155,19 +177,29 @@ public sealed partial class LlmFailureStateTests
     public async Task Passive_input_waits_for_explicit_run_queued_and_failed_busy_claim_restores_failure()
     {
         var failClaim = false;
-        using var fixture = new Provider(attempt => attempt == 1 ? Failure() : Success(), (stage, _) =>
-        {
-            if (failClaim && stage == AtomicJsonWriteStage.BeforeRename)
-                throw new IOException("owned claim fault");
-        });
+        using var fixture = new Provider(
+            attempt => attempt == 1 ? Failure() : Success(),
+            (stage, _) =>
+            {
+                if (failClaim && stage == AtomicJsonWriteStage.BeforeRename)
+                    throw new IOException("owned claim fault");
+            }
+        );
         await fixture.Enqueue("first");
         await fixture.Run();
         failClaim = true;
-        await Assert.ThrowsAsync<IOException>(() => fixture.Owner.Registry.HostFor("s").TryClaimBusyAsync());
+        await Assert.ThrowsAsync<IOException>(() =>
+            fixture.Owner.Registry.HostFor("s").TryClaimBusyAsync()
+        );
         Assert.Equal("llm-failed", State(fixture.Owner));
         failClaim = false;
         await fixture.Owner.Entry.SaveLane.CommitInterSessionAsync(
-            new QueueItem(QueueItemType.Intersession, [new JsonObject { ["text"] = "passive" }], Trigger: false));
+            new QueueItem(
+                QueueItemType.Intersession,
+                [new JsonObject { ["text"] = "passive" }],
+                Trigger: false
+            )
+        );
         Assert.False(fixture.Owner.Registry.HasRunnableWork(fixture.Owner.Entry));
         Assert.Equal("llm-failed", State(fixture.Owner));
         Assert.Equal(1, fixture.Attempts);
@@ -178,6 +210,7 @@ public sealed partial class LlmFailureStateTests
         Assert.Equal(2, fixture.Attempts);
         Assert.Empty(fixture.Owner.Entry.Snapshot().Queue);
     }
+
     [Fact]
     public async Task Maintenance_only_processor_preserves_failure_and_input_arriving_at_its_safe_point_starts_a_new_run()
     {
@@ -207,5 +240,4 @@ public sealed partial class LlmFailureStateTests
         Assert.Equal("idle", State(fixture.Owner));
         Assert.Null((await fixture.Store.LoadAsync("s"))!.Meta["llmFailed"]);
     }
-
 }
