@@ -19,7 +19,8 @@ public sealed partial class McpNotificationTests
     // Observe that public diagnostic seam without adding an acknowledgement to the protocol.
     private sealed class NotificationHandling : IDisposable
     {
-        private readonly Channel<bool> completed = System.Threading.Channels.Channel.CreateUnbounded<bool>();
+        private readonly Channel<bool> completed =
+            System.Threading.Channels.Channel.CreateUnbounded<bool>();
         private readonly ActivityListener listener;
 
         internal NotificationHandling(params string[] methods)
@@ -33,7 +34,10 @@ public sealed partial class McpNotificationTests
                         : ActivitySamplingResult.None,
                 ActivityStopped = activity =>
                 {
-                    if (activity.Kind == ActivityKind.Server && methods.Contains(activity.OperationName))
+                    if (
+                        activity.Kind == ActivityKind.Server
+                        && methods.Contains(activity.OperationName)
+                    )
                         completed.Writer.TryWrite(true);
                 },
             };

@@ -16,7 +16,10 @@ public sealed partial class McpNotificationTests
         var id = result!["id"]!.GetValue<string>();
         // A peer send can finish before this client's separately scheduled handler runs.
         await peer.WaitAsync("get-ready");
-        using var handling = new NotificationHandling(Foxwarm.McpClient.SessionMessageMethod, "notifications/progress");
+        using var handling = new NotificationHandling(
+            Foxwarm.McpClient.SessionMessageMethod,
+            "notifications/progress"
+        );
         using var http = new HttpClient();
         async Task Notify(JsonObject args, string? method = null)
         {

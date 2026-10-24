@@ -9,7 +9,9 @@ public sealed partial class McpNotificationTests
     [Theory]
     [InlineData(60)]
     [InlineData(5)]
-    public async Task OAuth_same_grant_refresh_retains_reception_and_stream_credentials_but_disconnect_fences_the_named_server(int tokenLifetime)
+    public async Task OAuth_same_grant_refresh_retains_reception_and_stream_credentials_but_disconnect_fences_the_named_server(
+        int tokenLifetime
+    )
     {
         await using var peer = await McpOAuthPeer.StartAsync();
         await peer.SetAsync(new() { ["tokenLifetime"] = tokenLifetime });
@@ -24,8 +26,10 @@ public sealed partial class McpNotificationTests
         var original = McpOAuthPeer.Value(await f.CallAsync(f.First, "state"));
         // Ordinary POSTs can renew the grant independently of the still-open GET.
         // Select the credential that actually authenticated that physical stream.
-        var get = Assert.Single((await peer.StateAsync())["resourceHeaders"]!.AsArray()
-            .OfType<JsonObject>(), headers => headers["accept"]?.GetValue<string>() == "text/event-stream");
+        var get = Assert.Single(
+            (await peer.StateAsync())["resourceHeaders"]!.AsArray().OfType<JsonObject>(),
+            headers => headers["accept"]?.GetValue<string>() == "text/event-stream"
+        );
         var oldAccess = get["authorization"]!.GetValue<string>()["Bearer ".Length..];
         await peer.SetAsync(new() { ["force401"] = 1 });
         var refreshed = McpOAuthPeer.Value(await f.CallAsync(f.First, "state"));
