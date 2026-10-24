@@ -32,7 +32,8 @@ public sealed class VectorHistoryHttpScopeTests
             var parent = await seed.CreateNamedAsync("scope-a", "parent", null, null);
             await ForkClearLifecycleTests.AppendAsync(
                 parent,
-                Enumerable.Range(1, 10)
+                Enumerable
+                    .Range(1, 10)
                     .Select(index => VectorFixture.Message("dotnet violet parent context " + index))
                     .ToArray()
             );
@@ -48,7 +49,8 @@ public sealed class VectorHistoryHttpScopeTests
             );
             await ForkClearLifecycleTests.AppendAsync(
                 parent,
-                Enumerable.Range(11, 30)
+                Enumerable
+                    .Range(11, 30)
                     .Select(index => VectorFixture.Message("dotnet violet late parent " + index))
                     .ToArray()
             );
@@ -75,36 +77,57 @@ public sealed class VectorHistoryHttpScopeTests
         var path = "api/history/search?query=dotnet%20violet&limit=5" + scope;
         using var response = await admin.GetAsync(path);
         var body = await response.Content.ReadAsStringAsync();
-        Assert.True(response.StatusCode == HttpStatusCode.OK, $"{path}: {response.StatusCode} {body}");
+        Assert.True(
+            response.StatusCode == HttpStatusCode.OK,
+            $"{path}: {response.StatusCode} {body}"
+        );
         var result = JsonNode.Parse(body)!.AsObject();
         var sources = result["results"]!.AsArray().OfType<JsonObject>().ToArray();
         Assert.Equal(excludeOtherAgent ? 2 : 3, sources.Length);
         Assert.Equal("hybrid search", result["searchKind"]!.GetValue<string>());
         Assert.NotEmpty(f.Peer.Requests);
         Assert.Equal(
-            exact ? new[] { childId } : excludeOtherAgent ? new[] { parentId, childId }.Order().ToArray()
+            exact ? new[] { childId }
+                : excludeOtherAgent ? new[] { parentId, childId }.Order().ToArray()
                 : new[] { parentId, childId, otherId }.Order().ToArray(),
-            sources.Select(source => source["sessionId"]!.GetValue<string>()).Distinct().Order().ToArray()
+            sources
+                .Select(source => source["sessionId"]!.GetValue<string>())
+                .Distinct()
+                .Order()
+                .ToArray()
         );
-        Assert.Single(sources, source =>
-            source["sessionId"]!.GetValue<string>() == (exact ? childId : parentId)
-            && source["sourceRange"]!["startSeq"]!.GetValue<int>() == 1
+        Assert.Single(
+            sources,
+            source =>
+                source["sessionId"]!.GetValue<string>() == (exact ? childId : parentId)
+                && source["sourceRange"]!["startSeq"]!.GetValue<int>() == 1
         );
         foreach (var source in sources)
         {
             Assert.Equal("messages", source["kind"]!.GetValue<string>());
             var messages = source["messages"]!.AsArray();
             Assert.InRange(messages.Count, 1, 16);
-            Assert.Equal(messages[0]!["__meta"]!["seq"]!.GetValue<int>(), source["firstSeq"]!.GetValue<int>());
-            Assert.Equal(messages[^1]!["__meta"]!["seq"]!.GetValue<int>(), source["lastSeq"]!.GetValue<int>());
-            if (source["sourceRange"]!["startSeq"]!.GetValue<int>() == 1
-                && source["sessionId"]!.GetValue<string>() == (exact ? childId : parentId))
+            Assert.Equal(
+                messages[0]!["__meta"]!["seq"]!.GetValue<int>(),
+                source["firstSeq"]!.GetValue<int>()
+            );
+            Assert.Equal(
+                messages[^1]!["__meta"]!["seq"]!.GetValue<int>(),
+                source["lastSeq"]!.GetValue<int>()
+            );
+            if (
+                source["sourceRange"]!["startSeq"]!.GetValue<int>() == 1
+                && source["sessionId"]!.GetValue<string>() == (exact ? childId : parentId)
+            )
             {
                 Assert.Equal(exact ? childId : parentId, source["sessionId"]!.GetValue<string>());
                 Assert.Equal(exact ? 10 : 40, source["sourceRange"]!["endSeq"]!.GetValue<int>());
                 Assert.Contains("parent context", messages.ToJsonString());
                 Assert.DoesNotContain("child context", messages.ToJsonString());
-                Assert.Equal(source["firstSeq"]!.GetValue<int>() > 1, source["hasEarlier"]!.GetValue<bool>());
+                Assert.Equal(
+                    source["firstSeq"]!.GetValue<int>() > 1,
+                    source["hasEarlier"]!.GetValue<bool>()
+                );
                 Assert.True(source["hasLater"]!.GetValue<bool>());
             }
             else if (source["sessionId"]!.GetValue<string>() == childId)
@@ -117,7 +140,10 @@ public sealed class VectorHistoryHttpScopeTests
         }
         if (!excludeOtherAgent)
         {
-            var other = Assert.Single(sources, source => source["sessionId"]!.GetValue<string>() == otherId);
+            var other = Assert.Single(
+                sources,
+                source => source["sessionId"]!.GetValue<string>() == otherId
+            );
             Assert.Contains("other agent context", other["messages"]!.ToJsonString());
             Assert.False(other["hasEarlier"]!.GetValue<bool>());
             Assert.False(other["hasLater"]!.GetValue<bool>());
