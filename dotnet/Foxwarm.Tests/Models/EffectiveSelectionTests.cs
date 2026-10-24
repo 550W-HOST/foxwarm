@@ -184,6 +184,7 @@ public sealed class EffectiveSelectionTests
                 new JsonObject { ["model"] = "a/wire-a", ["effort"] = "low" },
                 false
             );
+            var firstFailureReleasedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             first.TrySetResult();
             var next = await peer.RequestAt(1).WaitAsync(TimeSpan.FromSeconds(8));
             Assert.Equal(
@@ -205,6 +206,9 @@ public sealed class EffectiveSelectionTests
                 owner.Entry.Snapshot().Meta["lastEffectiveRequest"]!["effort"]!.GetValue<string>()
             );
             Assert.Null(owner.Entry.LastBackgroundProcessorFailure);
+            var timing = owner.History().Last()["__meta"]!["llmRequestTiming"]!;
+            Assert.True(timing["durationMs"]!.GetValue<double>() >= 4900);
+            Assert.True(timing["startedAt"]!.GetValue<double>() >= firstFailureReleasedAt + 1900);
         }
         finally
         {
@@ -217,9 +221,22 @@ public sealed class EffectiveSelectionTests
     [Fact]
     public async Task Virtual_failover_notice_is_canonical_and_reaches_actual_next_provider_and_journal()
     {
+        const string tools =
+            "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"function_call\",\"call_id\":\"list-first\",\"name\":\"task\",\"arguments\":\"{\\\"action\\\":\\\"list\\\"}\"},{\"type\":\"function_call\",\"call_id\":\"list-second\",\"name\":\"task\",\"arguments\":\"{\\\"action\\\":\\\"list\\\"}\"}]}}\n\n";
         await using var peer = new ScriptedResponsesSequenceServer(
-            2,
-            async (index, stream, _) => await Reply(stream, index == 1)
+            4,
+            async (index, stream, _) =>
+            {
+                if (index == 1)
+                    await LoopbackResponsesServer.WriteResponseAsync(
+                        stream,
+                        200,
+                        "text/event-stream",
+                        Encoding.UTF8.GetBytes(tools)
+                    );
+                else
+                    await Reply(stream, index > 0);
+            }
         );
         using var temp = new TempDirectory();
         var options = new ResponsesClientOptions(peer.BaseUri, "wire", "a", "", "", 713);
@@ -229,7 +246,7 @@ public sealed class EffectiveSelectionTests
             options,
             Catalog(peer.BaseUri)
         );
-        await manager.LoadAsync();
+        await manager.LoadMainHostAsync();
         var owner = await manager.CreateNamedAsync("main", "failover", null, null);
         owner.Registry.TriggerOverride = _ => Task.CompletedTask;
         await owner.UpdateSettingsAsync(new JsonObject { ["model"] = "route" }, false);
@@ -246,6 +263,64 @@ public sealed class EffectiveSelectionTests
             "b/wire-b",
             owner.Entry.Snapshot().Meta["lastEffectiveRequest"]!["modelId"]!.GetValue<string>()
         );
+        var models = owner.History().Where(row =>
+            SessionWait.Text(row["role"]) == "model" && row["modelVisible"]?.GetValue<bool>() != false
+        ).ToArray();
+        Assert.Equal(2, models.Length);
+        var call = models[0];
+        var timing = call["__meta"]!["llmRequestTiming"]!.AsObject();
+        Assert.True(timing["durationMs"]!.GetValue<double>() >= 1900, timing.ToJsonString());
+        var tool = Assert.Single(owner.History(), row => SessionWait.Text(row["role"]) == "tool");
+        var responses = tool["parts"]!.AsArray().Select(part => part!["functionResponse"]!).ToArray();
+        Assert.All(responses, response => Assert.Null(response["response"]?["error"]));
+        Assert.Equal(
+            timing["durationMs"]!.GetValue<double>(),
+            responses[0]["previousLlmRequest"]!["durationMs"]!.GetValue<double>()
+        );
+        Assert.Null(responses[1]["previousLlmRequest"]);
+        var successId = call["__meta"]!["llmRequestId"]!.GetValue<string>();
+        var success = await manager.Journal.ReconstructAsync(successId);
+        var successAttempt = Assert.Single(success["attempts"]!.AsArray())!;
+        Assert.Equal(1, call["__meta"]!["llmAttempt"]!.GetValue<int>());
+        Assert.Equal("b/wire-b", successAttempt["start"]!["concreteModelId"]!.GetValue<string>());
+        Assert.True(
+            successAttempt["start"]!["startedAt"]!.GetValue<long>()
+                >= timing["startedAt"]!.GetValue<double>() + 1900
+        );
+        Assert.Equal("success", successAttempt["result"]!["outcome"]!.GetValue<string>());
+        Assert.True(JsonNode.DeepEquals(timing, successAttempt["result"]!["result"]!["previousLlmRequest"]));
+        Assert.Contains("session-settings-changed", success["messages"]!.ToJsonString());
+        var listed = await manager.Journal.ListAsync(owner.Id, "normal-turn", null, null, 10);
+        Assert.Equal(3, listed.Count);
+        var continuationId = models[1]["__meta"]!["llmRequestId"]!.GetValue<string>();
+        var failureId = listed.Single(row =>
+            SessionWait.Text(row!["requestId"]) is { } id && id != successId && id != continuationId
+        )!["requestId"]!.GetValue<string>();
+        var failed = await manager.Journal.ReconstructAsync(failureId);
+        var failedAttempt = Assert.Single(failed["attempts"]!.AsArray())!;
+        Assert.Equal("a/wire-a", failedAttempt["start"]!["concreteModelId"]!.GetValue<string>());
+        Assert.Equal("failure", failedAttempt["result"]!["outcome"]!.GetValue<string>());
+        Assert.Null(failedAttempt["result"]!["result"]);
+        // Tool continuation and a later turn each start their own timing interval.
+        Assert.NotEqual(successId, continuationId);
+        Assert.True(
+            models[1]["__meta"]!["llmRequestTiming"]!["startedAt"]!.GetValue<double>()
+                >= timing["completedAt"]!.GetValue<double>() - 1
+        );
+        await owner.Registry.Ingress.EnqueueAsync(owner.Id, QueueItem.UserText("next turn"));
+        await owner.Registry.Runner.ProcessQueueAsync(owner.Id);
+        Assert.Null(owner.Entry.LastBackgroundProcessorFailure);
+        var next = owner.History().Last();
+        Assert.NotEqual(continuationId, next["__meta"]!["llmRequestId"]!.GetValue<string>());
+        Assert.True(
+            next["__meta"]!["llmRequestTiming"]!["startedAt"]!.GetValue<double>()
+                >= models[1]["__meta"]!["llmRequestTiming"]!["completedAt"]!.GetValue<double>() - 1
+        );
+        var persisted = JsonNode.Parse(await File.ReadAllTextAsync(
+            Path.Combine(temp.Path, "data/state/sessions/failover.json")
+        ))!;
+        Assert.Contains(timing.ToJsonString(), persisted.ToJsonString());
+        Assert.Equal(4, peer.RequestCount);
         await manager.ShutdownAsync();
     }
 
