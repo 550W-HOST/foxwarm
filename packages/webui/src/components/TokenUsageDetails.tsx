@@ -1,11 +1,12 @@
+import { formatUsdCost } from '../usageCost'
 import { ArrowDownLeft, ArrowUpRight, Database, Layers3 } from 'lucide-react'
 
-export type TokenUsage = { cachedTokens: number; inputTokens: number; outputTokens: number }
+export type TokenUsage = { cachedTokens: number; inputTokens: number; outputTokens: number; cost?: number }
 
 export const formatUsageNumber = (value: number) => new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(value)
 
 export default function TokenUsageDetails({ usage, loaded = false, detailed = false }: {
-  usage?: { cachedTokens: number; inputTokens: number; outputTokens: number }
+  usage?: TokenUsage
   loaded?: boolean
   detailed?: boolean
 }) {
@@ -26,6 +27,10 @@ export default function TokenUsageDetails({ usage, loaded = false, detailed = fa
       <div role="img" aria-label={description} className="mt-2 flex h-1 overflow-hidden rounded-full bg-fw-border-muted">
         {total > 0 ? parts.filter(part => part.value > 0).map(part => <span key={part.label} className={part.color} style={{ width: `${part.value / total * 100}%` }} />) : null}
       </div>
+      {usage?.cost !== undefined ? <div className="mt-2 flex items-baseline justify-between gap-3 text-xs">
+        <span className="text-fw-text-muted">{loaded ? 'Loaded estimated cost' : 'Estimated cost'}</span>
+        <span className="font-medium tabular-nums text-fw-text-strong">{formatUsdCost(usage.cost)}</span>
+      </div> : null}
       {detailed && usage ? <div className="mt-3 space-y-2">
         {parts.map(part => <div key={part.label} className="flex min-w-0 items-center gap-2 text-xs tabular-nums">
           <part.icon className={`h-3 w-3 shrink-0 ${part.ink}`} aria-hidden="true" />

@@ -220,6 +220,7 @@ internal sealed partial class SessionCatalog
                 try
                 {
                     Execute(connection, CreateSchemaSql);
+                    Execute(connection, CostSchemaSql);
                     foreach (var row in rows)
                         Insert(connection, row.Projection);
                     NormalizeParents(connection);

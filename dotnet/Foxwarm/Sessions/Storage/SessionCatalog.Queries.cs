@@ -394,13 +394,15 @@ SELECT focus_id,session_id,depth FROM paths ORDER BY focus_id,depth DESC
         }
     }
 
-    internal JsonObject Summary()
+    internal JsonObject Summary() => Summary(out _);
+
+    internal JsonObject Summary(out long costCount)
     {
         lock (gate)
         {
             EnsureInitialized();
             var sql =
-                "SELECT session_count,busy_count,queued_count,managed_count,cached_tokens,input_tokens,output_tokens FROM catalog_count WHERE singleton=1";
+                "SELECT session_count,busy_count,queued_count,managed_count,cached_tokens,input_tokens,output_tokens,cost,cost_count FROM catalog_count WHERE singleton=1";
             using var command = Command(db!, sql);
             using var reader = command.ExecuteReader();
             reader.Read();
@@ -417,6 +419,9 @@ SELECT focus_id,session_id,depth FROM paths ORDER BY focus_id,depth DESC
             };
             for (var index = 0; index < keys.Length; index++)
                 result[keys[index]] = reader.GetInt64(index);
+            costCount = reader.GetInt64(8);
+            if (costCount > 0)
+                result["cost"] = reader.GetDouble(7);
             QueryObserved?.Invoke(sql, 1);
             return result;
         }
@@ -491,7 +496,10 @@ SELECT focus_id,session_id,depth FROM paths ORDER BY focus_id,depth DESC
     private const string DescendantCte =
         "WITH RECURSIVE subtree(session_id) AS (VALUES($p0) UNION SELECT child.session_id FROM session_catalog child JOIN subtree ON child.parent_session_id=subtree.session_id) ";
 
-    internal (JsonObject Summary, JsonObject[] Rows) Descendants(string id, int limit)
+    internal (JsonObject Summary, JsonObject[] Rows, long CostCount) Descendants(
+        string id,
+        int limit
+    )
     {
         lock (gate)
         {
@@ -501,9 +509,10 @@ SELECT focus_id,session_id,depth FROM paths ORDER BY focus_id,depth DESC
                 + $"""
 , descendants AS (SELECT c.*,count(*) OVER() total,sum(c.busy) OVER() busyTotal,
 sum(CASE WHEN c.queue_length>0 THEN 1 ELSE 0 END) OVER() queuedTotal,
-sum(c.cached_tokens) OVER() cachedTokens,sum(c.input_tokens) OVER() inputTokens,sum(c.output_tokens) OVER() outputTokens
+sum(c.cached_tokens) OVER() cachedTokens,sum(c.input_tokens) OVER() inputTokens,sum(c.output_tokens) OVER() outputTokens,
+sum(c.cost) OVER() costTotal,count(c.cost) OVER() costCount
 FROM session_catalog c JOIN subtree s ON s.session_id=c.session_id WHERE c.session_id<>$p0)
-SELECT {Columns},total,busyTotal,queuedTotal,cachedTokens,inputTokens,outputTokens FROM descendants ORDER BY recent_rank,session_id LIMIT $p1
+SELECT {Columns},total,busyTotal,queuedTotal,cachedTokens,inputTokens,outputTokens,costTotal,costCount FROM descendants ORDER BY recent_rank,session_id LIMIT $p1
 """;
             using var command = Command(db!, sql, id, limit);
             using var reader = command.ExecuteReader();
@@ -518,6 +527,7 @@ SELECT {Columns},total,busyTotal,queuedTotal,cachedTokens,inputTokens,outputToke
                 ["outputTokens"] = 0,
             };
             var keys = summary.Select(pair => pair.Key).ToArray();
+            long costCount = 0;
             while (reader.Read())
             {
                 var row = JsonNode.Parse(reader.GetString(0))!.AsObject();
@@ -527,9 +537,12 @@ SELECT {Columns},total,busyTotal,queuedTotal,cachedTokens,inputTokens,outputToke
                 rows.Add(row);
                 for (var index = 0; index < keys.Length; index++)
                     summary[keys[index]] = reader.GetInt64(index + 4);
+                costCount = reader.GetInt64(11);
+                if (costCount > 0)
+                    summary["cost"] = reader.GetDouble(10);
             }
             QueryObserved?.Invoke(sql, rows.Count);
-            return (summary, rows.ToArray());
+            return (summary, rows.ToArray(), costCount);
         }
     }
 

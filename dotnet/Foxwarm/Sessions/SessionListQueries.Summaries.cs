@@ -4,13 +4,23 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class SessionListQueries
 {
-    private static void AdjustSummary(JsonObject summary, JsonObject[] live, JsonObject[] persisted)
+    private static void AdjustSummary(
+        JsonObject summary,
+        JsonObject[] live,
+        JsonObject[] persisted,
+        long costCount
+    )
     {
         var byId = persisted.ToDictionary(Id, StringComparer.Ordinal);
         foreach (var row in live)
         {
             if (!byId.TryGetValue(Id(row), out var old))
                 continue;
+            var cost = SessionCatalog.Number(row["tokenUsage"]?["cost"]);
+            var oldCost = SessionCatalog.Number(old["stats"]?["totalCost"]);
+            costCount += (cost.HasValue ? 1 : 0) - (oldCost.HasValue ? 1 : 0);
+            summary["cost"] =
+                (SessionCatalog.Number(summary["cost"]) ?? 0) + ((cost ?? 0) - (oldCost ?? 0));
             void Add(string key, double difference) =>
                 summary[key] = (SessionCatalog.Number(summary[key]) ?? 0) + difference;
             Add(
@@ -37,6 +47,8 @@ internal sealed partial class SessionListQueries
                         - (SessionCatalog.Number(old["stats"]?[oldKey]) ?? 0)
                 );
         }
+        if (costCount == 0)
+            summary.Remove("cost");
     }
 
     private JsonObject[] Persisted(string[] ids) =>
@@ -44,10 +56,10 @@ internal sealed partial class SessionListQueries
 
     public JsonObject GlobalSummary()
     {
-        var summary = Catalog.Summary();
+        var summary = Catalog.Summary(out var costCount);
         var local = runtime.LocalProjections();
         var live = runtime.Projections(local.Select(Id).ToArray());
-        AdjustSummary(summary, live, Persisted(live.Select(Id).ToArray()));
+        AdjustSummary(summary, live, Persisted(live.Select(Id).ToArray()), costCount);
         return summary;
     }
 
@@ -79,7 +91,8 @@ internal sealed partial class SessionListQueries
         AdjustSummary(
             baseRows.Summary,
             projections.Where(row => descendants.Contains(Id(row))).ToArray(),
-            Persisted(descendants.ToArray())
+            Persisted(descendants.ToArray()),
+            baseRows.CostCount
         );
         var previewIds = baseRows.Rows.Select(Id).ToHashSet(StringComparer.Ordinal);
         var result = baseRows.Summary;

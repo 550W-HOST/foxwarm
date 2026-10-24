@@ -48,6 +48,7 @@ internal sealed record SessionMetadata(
     string? ChildModel = null,
     string? ChildEffort = null,
     double? CompactThreshold = null,
+    double? Cost = null,
     bool LlmFailed = false
 );
 
@@ -294,7 +295,8 @@ internal sealed partial class SessionOwner
                 Text(envelope["childModelDefault"]),
                 Text(envelope["childEffortDefault"]),
                 SessionWait.Number(envelope["compactThresholdTokens"]),
-                Flag(state.Meta["llmFailed"])
+                Cost: SessionWait.Number(envelope["stats"]?["totalCost"]),
+                LlmFailed: Flag(state.Meta["llmFailed"])
             );
         });
         return MainMetadata?.Invoke(result) ?? result;

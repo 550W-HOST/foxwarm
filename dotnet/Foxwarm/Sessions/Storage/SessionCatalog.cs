@@ -53,7 +53,12 @@ internal sealed partial class SessionCatalog : IDisposable
                 Execute(connection, MigrateV1Sql);
                 version = 2;
             }
-            if (version != 2)
+            if (version == 2)
+            {
+                Execute(connection, MigrateV2Sql);
+                version = 3;
+            }
+            if (version != 3)
                 throw new InvalidDataException(
                     $"Unsupported Session catalog schema version {version}."
                 );
@@ -390,6 +395,7 @@ internal sealed partial class SessionCatalog : IDisposable
             "cached_tokens",
             "input_tokens",
             "output_tokens",
+            "cost",
             "metadata_json",
         };
         var id = Text(row["id"])!;
@@ -414,6 +420,7 @@ internal sealed partial class SessionCatalog : IDisposable
             Number(row["stats"]?["totalCachedTokens"]) ?? 0,
             Number(row["stats"]?["totalInputTokens"]) ?? 0,
             Number(row["stats"]?["totalOutputTokens"]) ?? 0,
+            Number(row["stats"]?["totalCost"]),
             row.ToJsonString(),
         };
         Execute(

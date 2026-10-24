@@ -72,6 +72,7 @@ internal sealed partial class ModelConfiguration
                         "extraHeaders",
                         "webSearch",
                         "imageGeneration",
+                        "tokenPricesPerMillion",
                         "contextLimit",
                         "maxOutput",
                         "providerImageOutputFormat",
@@ -148,6 +149,7 @@ internal sealed partial class ModelConfiguration
                         .ToArray()
                 );
                 config.Remove("model");
+                config.Remove("tokenPricesPerMillion");
                 if (type != "openai-completions")
                     config.Remove("historyReasoningField");
             }

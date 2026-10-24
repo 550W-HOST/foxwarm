@@ -40,7 +40,7 @@ function clearBranchOwnership(current: CacheState): CacheState {
 export type BoundedGlobalSummary = {
   total: number
   busy: number
-  tokenUsage?: { cachedTokens: number; inputTokens: number; outputTokens: number }
+  tokenUsage?: { cachedTokens: number; inputTokens: number; outputTokens: number; cost?: number }
 }
 
 export interface BoundedSessionListController { sessions: Session[]; knownSessions: Session[]; mode: SessionListOrderMode; query: string
@@ -169,7 +169,7 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
     const payload = await fetchJson(`/session-list/search?${new URLSearchParams({ q: value, limit: '100' })}`); if (!isCurrentOwner(ownerEpoch) || generation !== searchGenerationRef.current) return false
     const next = { ...stateRef.current, searchIds: (payload.sessions || []).map((row: Session) => row.id), rows: new Map() }; publish(next, payload.sessions || [], startEpoch); return true
   }), [publish, isCurrentOwner])
-  const loadSummary = useCallback(async () => { if (!options.includeGlobalSummary) return true; if (!mountedRef.current) return false; const ownerEpoch = ownerEpochRef.current; const generation = ++summaryGenerationRef.current; const payload = await fetchJson('/session-list/architecture?limit=1&childLimit=1'); if (!isCurrentOwner(ownerEpoch) || generation !== summaryGenerationRef.current) return false; const summary = payload.summary || {}; const counts = [summary.cachedTokens, summary.inputTokens, summary.outputTokens]; const tokenUsage = counts.every(value => typeof value === 'number' && Number.isFinite(value) && value >= 0) ? { cachedTokens: counts[0], inputTokens: counts[1], outputTokens: counts[2] } : undefined; setGlobalSummary({ total: Number(summary.total || 0), busy: Number(summary.busy || 0), ...(tokenUsage ? { tokenUsage } : {}) }); return true }, [options.includeGlobalSummary, isCurrentOwner])
+  const loadSummary = useCallback(async () => { if (!options.includeGlobalSummary) return true; if (!mountedRef.current) return false; const ownerEpoch = ownerEpochRef.current; const generation = ++summaryGenerationRef.current; const payload = await fetchJson('/session-list/architecture?limit=1&childLimit=1'); if (!isCurrentOwner(ownerEpoch) || generation !== summaryGenerationRef.current) return false; const summary = payload.summary || {}; const counts = [summary.cachedTokens, summary.inputTokens, summary.outputTokens]; const tokenUsage = counts.every(value => typeof value === 'number' && Number.isFinite(value) && value >= 0) ? { cachedTokens: counts[0], inputTokens: counts[1], outputTokens: counts[2], ...(typeof summary.cost === 'number' && Number.isFinite(summary.cost) && summary.cost >= 0 ? { cost: summary.cost } : {}) } : undefined; setGlobalSummary({ total: Number(summary.total || 0), busy: Number(summary.busy || 0), ...(tokenUsage ? { tokenUsage } : {}) }); return true }, [options.includeGlobalSummary, isCurrentOwner])
 
   const refresh = useCallback(async () => {
     const ownerEpoch = ownerEpochRef.current; const current = stateRef.current

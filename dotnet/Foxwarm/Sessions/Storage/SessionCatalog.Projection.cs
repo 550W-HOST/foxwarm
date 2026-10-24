@@ -226,6 +226,7 @@ internal sealed partial class SessionCatalog
                 CheckNumber(stats[key], key);
                 Copy(stats, output, key);
             }
+            CopyCost(stats, output, "totalCost");
             if (stats.ContainsKey("lastUsage"))
             {
                 if (stats["lastUsage"] is null)
@@ -246,6 +247,7 @@ internal sealed partial class SessionCatalog
                         CheckNumber(usage[key], key);
                         Copy(usage, last, key);
                     }
+                    CopyCost(usage, last, "cost");
                     output["lastUsage"] = last;
                 }
                 else
@@ -254,6 +256,15 @@ internal sealed partial class SessionCatalog
             result["stats"] = output;
         }
         return result;
+    }
+
+    private static void CopyCost(JsonObject source, JsonObject target, string key)
+    {
+        if (!source.ContainsKey(key))
+            return;
+        if (Number(source[key]) is not double number || !double.IsFinite(number) || number < 0)
+            throw new InvalidDataException("Invalid catalog " + key + ".");
+        target[key] = number;
     }
 
     private static void CheckNumber(JsonNode? value, string key)

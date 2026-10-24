@@ -58,6 +58,8 @@ internal static class SessionPresentation
                 ["outputTokens"] = meta.OutputTokens,
             },
         };
+        if (meta.Cost is double cost)
+            result["tokenUsage"]!["cost"] = cost;
         var settings = new JsonObject
         {
             ["model"] = meta.Model,

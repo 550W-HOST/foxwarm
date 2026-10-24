@@ -19,6 +19,11 @@ internal sealed partial class HostModels
         var config = (JsonObject)provider.DeepClone();
         config["providerType"] = type;
         config["model"] = id;
+        var pricingScope = model ?? provider;
+        if (pricingScope.ContainsKey("tokenPricesPerMillion"))
+            config["tokenPricesPerMillion"] = ModelUsageCost.ValidatePrices(
+                pricingScope["tokenPricesPerMillion"]
+            );
         var family =
             type == "anthropic" ? "anthropic"
             : type is "openai" or "openai-responses" or "openai-ws" or "openai-completions"

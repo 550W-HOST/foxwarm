@@ -132,8 +132,21 @@ const modelDefaultProperties = {
   providerImageOutputFormat: { enum: ['webp', 'jpeg'], description: 'Format used for optimized input images: webp, or jpeg with PNG for transparent images.' },
 }
 
+const tokenPricesPerMillion = {
+  type: 'object',
+  required: ['cached', 'input', 'output'],
+  additionalProperties: false,
+  description: 'Estimated USD prices per million tokens. Set all three rates on each model; saved usage costs are not recalculated after prices change.',
+  properties: {
+    cached: { type: 'number', minimum: 0 },
+    input: { type: 'number', minimum: 0 },
+    output: { type: 'number', minimum: 0 },
+  },
+}
+
 const modelOverrideProperties = {
   ...modelDefaultProperties,
+  tokenPricesPerMillion,
   streamContentInactivityTimeoutMs: { type: 'integer', minimum: 1, maximum: 2147483647, default: 60000, description: 'Streaming output inactivity timeout in milliseconds. Model overrides provider; default 60000. First-output timeout and explicit caller deadline remain independent. Safety buffering uses at least 600000.' },
   effort: modelEffortConfig,
   historyReasoningField: {
@@ -188,6 +201,7 @@ const providerObjectEntry = {
       ],
     },
     ...modelDefaultProperties,
+    tokenPricesPerMillion,
     streamContentInactivityTimeoutMs: modelOverrideProperties.streamContentInactivityTimeoutMs,
     effort: modelEffortConfig,
     historyReasoningField: modelOverrideProperties.historyReasoningField,
@@ -209,7 +223,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'tokenPricesPerMillion', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -217,7 +231,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'tokenPricesPerMillion', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -237,6 +251,15 @@ const providerObjectEntry = {
           ],
         },
       },
+    },
+    {
+      if: {
+        anyOf: [
+          { required: ['models'], properties: { models: { type: 'array', minItems: 1 } } },
+          { required: ['model'], properties: { model: { anyOf: [{ type: 'array', minItems: 1 }, { type: 'string', minLength: 1 }] } } },
+        ],
+      },
+      then: { not: { required: ['tokenPricesPerMillion'] } },
     },
   ],
 }
