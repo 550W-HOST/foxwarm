@@ -26,6 +26,23 @@ internal sealed partial class SessionCatalog
         }
     }
 
+    internal string[] RecentWaitIds(long activityCutoff)
+    {
+        lock (gate)
+        {
+            EnsureInitialized();
+            const string sql =
+                "SELECT session_id FROM session_catalog WHERE recent_rank<=-$p0 AND json_type(metadata_json,'$.meta.wait.id')='text'";
+            using var command = Command(db!, sql, activityCutoff);
+            using var reader = command.ExecuteReader();
+            var ids = new List<string>();
+            while (reader.Read())
+                ids.Add(reader.GetString(0));
+            QueryObserved?.Invoke(sql, ids.Count);
+            return ids.ToArray();
+        }
+    }
+
     private static string[] OrderColumns(string mode, bool child = false) =>
         child
             ? mode == "default"

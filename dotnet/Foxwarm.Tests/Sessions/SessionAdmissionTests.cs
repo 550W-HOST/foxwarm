@@ -4,7 +4,7 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Tests;
 
-public sealed class SessionAdmissionTests
+public sealed partial class SessionAdmissionTests
 {
     private static ResponsesClientOptions Options =>
         new(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
@@ -213,9 +213,11 @@ public sealed class SessionAdmissionTests
         var recovered = await manager.RequiredAsync("busy");
         Assert.False(recovered.Metadata().Busy);
         Assert.False(recovered.Entry.Snapshot().Stopping);
-        Assert.Contains(
-            recovered.Entry.Snapshot().Queue,
-            item => item.Type == QueueItemType.Background
+        var resume = Assert.Single(recovered.Entry.Snapshot().Queue);
+        Assert.Equal(QueueItemType.Background, resume.Type);
+        Assert.Matches(
+            "^<foxwarm-system kind=\"event\" type=\"session-resumed\" hint=\"[^\"]+\" time=\"[^\"]+\" />$",
+            SessionWait.Text(Assert.Single(resume.Parts!)["system"])!
         );
         var recoveredJson = JsonNode.Parse(await File.ReadAllTextAsync(busy))!.AsObject();
         Assert.False(recoveredJson["busy"]!.GetValue<bool>());

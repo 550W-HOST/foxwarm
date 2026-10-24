@@ -177,7 +177,7 @@ internal static class SessionBoundary
         $"<foxwarm-message type=\"{Escape(type)}\" eventType=\"{Escape(type)}\" time=\"{LocalTime()}\" hint=\"{Escape(type)} session event\">\n{message}\n</foxwarm-message>";
 
     internal static string SystemEvent(string type, string hint) =>
-        $"<foxwarm-system hint=\"{Escape(hint)}\" time=\"{LocalTime()}\" type=\"{Escape(type)}\" kind=\"event\" />";
+        $"<foxwarm-system kind=\"event\" type=\"{Escape(type)}\" hint=\"{Escape(hint)}\" time=\"{LocalTime()}\" />";
 
     internal static string Identity(string parent, string current, bool inherited) =>
         $"<foxwarm-system kind=\"session-boundary\" event=\"{(inherited ? "history-inherited" : "new-child")}\" parentSessionId=\"{Escape(parent)}\" currentSessionId=\"{Escape(current)}\" time=\"{LocalTime()}\" />";

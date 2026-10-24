@@ -6,6 +6,8 @@ namespace Foxwarm.Sessions;
 internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
 {
     private const int MaxConcurrentWakes = 4;
+    internal const long MaxInactivityMilliseconds = 24 * 60 * 60 * 1000;
+
     private readonly object gate = new();
     private readonly CancellationTokenSource lifetime = new();
     private readonly Dictionary<string, CancellationTokenSource> scheduled = new(
@@ -21,6 +23,11 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
     private readonly HashSet<Task> tasks = [];
     private readonly Dictionary<string, HashSet<Task>> sessionTasks = new(StringComparer.Ordinal);
 
+    internal static long ActivityCutoff(long now) => now - MaxInactivityMilliseconds;
+
+    internal static bool Recent(double lastMessageTime, long now) =>
+        lastMessageTime >= ActivityCutoff(now);
+
     private static string[] Sources(JsonObject wait)
     {
         var all = SessionWait.Strings(wait["waitAll"]?["sessions"]);
@@ -32,8 +39,10 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
             .ToArray();
     }
 
-    private static bool Candidate(JsonObject? wait) =>
-        wait is not null
+    private static bool Candidate(SessionMetadata? metadata) =>
+        metadata is not null
+        && Recent(metadata.LastMessageTime, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+        && metadata.Wait is JsonObject wait
         && SessionWait.Number(wait["declarationVersion"]) == 1
         && wait["waitForInput"]?.GetValue<bool>() != true
         && !(SessionWait.Number(wait["timeoutSeconds"]) > 0)
@@ -71,7 +80,7 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
                         if (waiters.Count == 0)
                             reverse.Remove(dependency);
                     }
-            if (Candidate(wait))
+            if (Candidate(meta))
             {
                 var next = Sources(wait!);
                 dependencies[sessionId] = next;
@@ -101,8 +110,9 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
     {
         if (scheduled.Remove(id, out var prior))
             prior.Cancel();
-        var wait = manager.Find(id)?.WaitSnapshot() ?? manager.CatalogMetadata(id)?.Wait;
-        if (!manager.CanRunCallbacks(id) || !Candidate(wait))
+        var metadata = manager.Find(id)?.Metadata() ?? manager.CatalogMetadata(id);
+        var wait = metadata?.Wait;
+        if (!manager.CanRunCallbacks(id) || !Candidate(metadata))
             return;
         var expected = SessionWait.Text(wait!["id"])!;
         var stop = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
@@ -134,8 +144,9 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
     private void Diagnose(string id, string expected)
     {
         var owner = manager.Find(id);
-        var wait = owner?.WaitSnapshot() ?? manager.CatalogMetadata(id)?.Wait;
-        if (!Candidate(wait) || SessionWait.Text(wait!["id"]) != expected)
+        var metadata = owner?.Metadata() ?? manager.CatalogMetadata(id);
+        var wait = metadata?.Wait;
+        if (!Candidate(metadata) || SessionWait.Text(wait!["id"]) != expected)
             return;
         var visiting = new HashSet<string>(StringComparer.Ordinal);
         var memo = new Dictionary<string, bool>(StringComparer.Ordinal);
@@ -186,8 +197,9 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
         {
             if (!pending.Remove(id, out var wake))
                 continue;
-            var wait = manager.Find(id)?.WaitSnapshot() ?? manager.CatalogMetadata(id)?.Wait;
-            if (!Candidate(wait) || SessionWait.Text(wait!["id"]) != wake.WaitId)
+            var metadata = manager.Find(id)?.Metadata() ?? manager.CatalogMetadata(id);
+            var wait = metadata?.Wait;
+            if (!Candidate(metadata) || SessionWait.Text(wait!["id"]) != wake.WaitId)
                 continue;
             var settled = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously

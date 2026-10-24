@@ -401,7 +401,13 @@ internal sealed partial class SessionManager : IAsyncDisposable
             Console.WriteLine($"Session startup: loadedOwners={sessions.Count}.");
         servicesReady = true;
         foreach (var row in catalogRows)
-            WaitTransition(SessionCatalog.Text(row["id"])!);
+            waitTimeouts.Transition(SessionCatalog.Text(row["id"])!);
+        foreach (
+            var id in Catalog.RecentWaitIds(
+                WaitLiveness.ActivityCutoff(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+            )
+        )
+            waitLiveness.Transition(id);
         if (startMainServices)
             await StartMainServicesAsync();
         await executor.ReconcileNowAsync();
