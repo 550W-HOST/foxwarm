@@ -72,8 +72,9 @@ const model = createServer(async (request, response) => {
 })
 model.listen(0, '127.0.0.1'); await once(model, 'listening')
 await writeModelFixture(owned.data, { default: 'a', providers: { a: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:' + model.address().port, models: ['wire'], contextLimit: 20000 } } })
-const cert = join(owned.root, 'proxy.crt'), certKey = join(owned.root, 'proxy.key')
-execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', '-keyout', certKey, '-out', cert], { stdio: 'ignore' })
+const cert = join(owned.root, 'proxy.crt'), certKey = join(owned.root, 'proxy.key'), certConfig = join(owned.root, 'openssl.cnf')
+await writeFile(certConfig, '[req]\ndistinguished_name = subject\n[subject]\n')
+execFileSync('openssl', ['req', '-config', certConfig, '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost', '-keyout', certKey, '-out', cert], { stdio: 'ignore' })
 const prefix = '/published/main/'
 const proxy = createTlsServer({ key: await readFile(certKey), cert: await readFile(cert) }, (request, response) => {
   if (!request.url.startsWith(prefix)) { response.writeHead(404); response.end(); return }
