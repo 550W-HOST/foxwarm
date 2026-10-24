@@ -66,13 +66,14 @@ async function seed(id, metadata = {}, extra = {}, reserve = true) {
 }
 await seed('root', { aliases: ['root-alias'] })
 for (let index = 0; index < 1000; index++) await seed('cold-' + String(index).padStart(4, '0'), { parentSessionId: 'root', archived: index === 500, pinned: index === 700 })
-await seed('foreign-child', { parentSessionId: 'root', currentNode: 'unsupported-node' }, { currentNode: 'unsupported-node' })
+// Malformed placement exercises admission failure; valid offline Node IDs remain readable.
+await seed('foreign-child', { parentSessionId: 'root', currentNode: 'invalid node' }, { currentNode: 'invalid node' })
 for (const id of ['source', 'registry-target', 'isolated-target', 'command-target', 'live', 'background', 'reciprocal-a', 'reciprocal-b', 'exec-live', 'exec-finished', 'exec-bad', 'wait-sibling', 'late-save']) await seed(id, id === 'source' ? { aliases: ['source-alias'], pinned: true } : {})
 await seed('locked/main'); await seed('parent-model'); await seed('child-source', { parentSessionId: 'parent-model' })
 for (const root of ['00-ui-single', '00-ui-tree', 'tree', 'partial', 'bad-tree', 'queued-tree', 'partial-restart']) {
   await seed(root, { pinned: root.startsWith('00-') }); await seed(root + '-child', { parentSessionId: root, pinned: true }); await seed(root + '-grand', { parentSessionId: root + '-child', archived: true })
 }
-await seed('bad-tree-foreign', { parentSessionId: 'bad-tree', currentNode: 'other-node' }, { currentNode: 'other-node' })
+await seed('bad-tree-foreign', { parentSessionId: 'bad-tree', currentNode: 'invalid node' }, { currentNode: 'invalid node' })
 await seed('legacy-source', {}, {}, false); await seed('legacy-target', {}, {}, false)
 await seed('self-cycle', { parentSessionId: 'self-cycle' }); await seed('worker-target'); await seed('worker-orphan')
 const catalogModule = await import(pathToFileURL(resolve('lib/session/catalogStore.js')).href)
@@ -99,8 +100,8 @@ try {
   socket.on('message', raw => frames.push(JSON.parse(String(raw)))); await once(socket, 'open')
   socket.send(JSON.stringify({ type: 'set-subscriptions', revision: 1, sessionIds: [], sessionListIds: ['root', 'source', 'tree'], sessionListActive: true }))
   await until(() => frames.some(frame => frame.type === 'subscriptions-applied'), 'metadata-only initial subscriptions')
-  assert.deepEqual(await observations(), ['created main']); assert.equal(records.length, 0)
-  assert(audit()[2].some(row => row.session_id === 'main')); retainedBefore = audit()
+  assert.deepEqual(await observations(), []); assert.equal(records.length, 0)
+  assert(!audit()[2].some(row => row.session_id === 'main')); retainedBefore = audit()
   const cursor = (await fixture.api('GET', '/api/session-list/sidebar?limit=3&childLimit=2')).body.nextCursor
   const single = await remove('root-alias'); assert.deepEqual(single.deletedSessionIds, ['root']); assert.equal(single.detachedChildSessionIds.length, 1001)
   for (const [id, bytes] of coldBytes) { assert.equal(await readFile(fileFor(id), 'utf8'), bytes); assert.equal((await dto(id)).parentSessionId, null) }
@@ -108,7 +109,7 @@ try {
   assert.deepEqual(audit(), retainedBefore); assert.equal(await readFile(independent, 'utf8'), '{"status":"active","ownerSessionId":"root","relatedManagedSessions":["root"]}')
   await until(() => frames.some(frame => frame.type === 'session-list-delta' && frame.deletedIds?.includes('root')), 'real live deletion list event')
   assert.equal((await fixture.api('GET', '/api/session-list/sidebar?limit=3&childLimit=2&cursor=' + encodeURIComponent(cursor))).body.reset, true)
-  await remove('root', false, 404); assert.equal((await fixture.api('POST', '/api/sessions', { sessionId: 'root' })).status, 400)
+  await remove('root', false, 404); const reservedRoot = await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'root' }); assert.equal(reservedRoot.status, 409); assert.match(reservedRoot.body.error, /reserved/)
   const badBytes = await readFile(fileFor('bad-tree'), 'utf8'); await remove('bad-tree', true, 500); assert.equal(await readFile(fileFor('bad-tree'), 'utf8'), badBytes)
   await remove('self-cycle', true, 409); const tree = await remove('tree', true); assert.deepEqual(tree.deletedSessionIds, ['tree-grand', 'tree-child', 'tree'])
   const beforeBlocked = audit(); await writeFile(channelsFile, JSON.stringify({ channels: { 'discord:room': { sessionId: 'command-target' }, 'webui:chat': { sessionId: 'command-target' }, 'discord:alias': { sessionId: 'source-alias' } } }))
@@ -143,7 +144,7 @@ try {
   await until(async () => !(await dto('live')).busy, 'busy target foreground stopped'); assert(held.get('held-provider').closed); assert(await dto('live')); await remove('live')
   // A retained background planner is not canceled on foreground Stop/retry; final idle retirement drains it.
   for (let index = 0; index < 7; index++) await send('background', 'seed-' + index, ('ordered-context-' + index + '-').repeat(400))
-  await message('background', '/compact', 202); await until(() => held.has('plan'), 'actual background planner')
+  const compact = await message('background', '/compact', 200); assert.equal(compact.success, true); await until(() => held.has('plan'), 'actual background planner')
   await message('background', 'CASE:held-background'); await until(() => held.has('held-background'), 'foreground held alongside planner')
   await remove('background', false, 409); await until(async () => !(await dto('background')).busy, 'foreground drained without planner cancellation'); assert.equal(held.get('plan').closed, false)
   await remove('background'); await until(() => held.get('plan').closed, 'only final retirement cancels planner'); assert.equal(await dto('background'), null)
@@ -192,7 +193,10 @@ try {
   assert.notEqual((await fixture.api('POST', route('queued-tree') + '/fork', { suffix: 'late' })).status, 200)
   assert.notEqual((await fixture.api('POST', route('source') + '/move', { parentSessionId: 'queued-tree', updateOrder: false })).status, 200)
   await unlink(retirementHold); assert.equal((await deleting).status, 200); assert.equal(await dto('queued-tree'), null)
-  // A committed creation row joins the same exact slot; delete cannot race a later owner publication.
+  // Ordinary creation succeeds; a concurrent delete may reject the later sidebar
+  // ordering step after owner publication without permitting resurrection.
+  const ordinaryCreate = await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'ordinary-create-control' })
+  assert.equal(ordinaryCreate.status, 200); assert.equal(ordinaryCreate.body.success, true); await remove('ordinary-create-control')
   const createHold = marker('published-delete', 'creation-publication-hold'); await writeFile(createHold, 'hold')
   let creationFinished = false, deleteFinished = false
   const creating = fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'published-delete' }).then(reply => { creationFinished = true; return reply })
@@ -200,9 +204,12 @@ try {
   const createdDeletion = fixture.api('DELETE', route('published-delete'), {}).then(reply => { deleteFinished = true; return reply })
   const lateFork = fixture.api('POST', route('published-delete') + '/fork', { suffix: 'late' })
   await send('source', 'creation-unrelated'); assert.equal(creationFinished, false); assert.equal(deleteFinished, false)
-  await unlink(createHold); assert.equal((await creating).status, 200); assert.equal((await createdDeletion).status, 200); assert.notEqual((await lateFork).status, 200)
+  await unlink(createHold); const createDuringDelete = await creating
+  assert.equal(createDuringDelete.status, 400); assert.match(createDuringDelete.body.error, /published-delete.*being deleted/)
+  assert.equal((await createdDeletion).status, 200); assert.notEqual((await lateFork).status, 200)
   assert.equal(await dto('published-delete'), null); assert.equal(await access(fileFor('published-delete')).then(() => true, () => false), false)
   assert.equal((await fixture.api('GET', route('published-delete') + '/history')).status, 404)
+  assert.equal(await dto('published-delete_late'), null); assert.equal(await access(fileFor('published-delete_late')).then(() => true, () => false), false)
   // An accepted canonical publication drains ahead of target unlink; the late old save cannot resurrect it.
   const userHold = marker('late-save', 'canonical-hold-before-rename'); await writeFile(userHold, 'hold')
   await message('late-save', 'CASE:held-save'); await until(() => access(userHold + '.reached').then(() => true, () => false), 'actual canonical user rename held')
@@ -218,7 +225,12 @@ try {
   await writeFile(legacyHold, 'hold'); const legacyCommand = fixture.api('POST', route('legacy-source') + '/message', { text: '/session delete legacy-target' })
   await until(() => access(legacyHold + '.reached').then(() => true, () => false), 'read-old source command at actual unlink boundary')
   await rename(legacyTarget, legacyOriginal); await mkdir(legacyTarget); await unlink(legacyHold); const legacyPartial = await legacyCommand; assert.equal(legacyPartial.status, 500)
-  await remove('legacy-source'); const recreated = await fixture.api('POST', '/api/sessions', { sessionId: 'legacy-source' }); assert.equal(recreated.status, 200)
+  const priorSourceCache = (await saved('legacy-source')).promptCacheKey
+  await remove('legacy-source'); const recreated = await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'legacy-source' })
+  // The new owner commits before sidebar ordering encounters the retained target claim.
+  assert.equal(recreated.status, 400); assert.match(recreated.body.error, /legacy-target.*being deleted/)
+  assert.equal((await fixture.api('GET', route('legacy-source') + '/history')).status, 200)
+  assert.notEqual((await saved('legacy-source')).promptCacheKey, priorSourceCache)
   await rm(legacyTarget, { recursive: true }); await rename(legacyOriginal, legacyTarget); const legacyBytes = await readFile(legacyTarget, 'utf8')
   const refused = await message('legacy-source', '/session delete legacy-target', 200); assert.equal(refused.result.code, 'SESSION_DELETE_RETRY_MISMATCH'); assert.equal(await readFile(legacyTarget, 'utf8'), legacyBytes)
   // No in-memory continuation survives restart; dormant metadata remains available, exact missing authority fails.
@@ -255,7 +267,7 @@ try {
   await until(async () => (await saved('wait-sibling')).meta.wait && !(await dto('wait-sibling')).busy, 'actual persisted wait declaration')
   await fixture.stop(); const execAuthority = await readFile(fileFor('exec-bad'), 'utf8'); await unlink(fileFor('exec-bad')); await writeFile(join(fixture.work, 'exec-bad-release'), '')
   await until(() => access(badFolder.statusPath).then(() => true, () => false), 'bad recipient shell naturally finishes'); await sleep(2100)
-  const beforeFailure = records.length; await assert.rejects(fixture.start(), /missing|authority|Authority/); assert.equal(records.length, beforeFailure); assert((await execRecords()).some(record => record.id === badFolder.id))
+  const beforeFailure = records.length; await assert.rejects(fixture.start(), /InvalidDataException/); assert.equal(records.length, beforeFailure); assert((await execRecords()).some(record => record.id === badFolder.id))
   await writeFile(fileFor('exec-bad'), execAuthority); await fixture.start(); await until(() => counts.get('exec-bad') === 3 && counts.get('wait-sibling') === 2, 'only all-validated restart resumes deadline and exec delivery')
   await until(async () => !(await dto('exec-bad')).busy && !(await dto('wait-sibling')).busy, 'final resumed recipients idle')
   const executed = (await readFile(join(fixture.work, 'deletion-executions'), 'utf8')).trim().split('\n').sort(); assert.deepEqual(executed, ['exec-bad', 'exec-finished', 'exec-live'])
