@@ -3,6 +3,7 @@ import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { writeModelFixture } from './experimentModelFixture.mjs'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const providerToken = 'history-observation-provider-token'
 const parentId = 'history-observation-parent'
@@ -180,18 +181,21 @@ try {
 
   const page = await fixture.openApp()
   await page.setViewport({ width: 520, height: 800 })
-  await page.waitForSelector('button[title="Search history"]')
-  await page.click('button[title="Search history"]')
-  await page.waitForSelector('#history-search-query')
-  await page.type('#history-search-query', `sessionId=${parentId} msg#1-45`)
+  await page.waitForSelector('#mobile-tab-search')
+  await page.click('#mobile-tab-search')
+  await page.waitForSelector('[data-history-query-input]')
+  await page.type('[data-history-query-input]', `sessionId=${parentId} msg#1-45`)
   await page.click('button[type="submit"]')
   await page.waitForSelector('[data-history-search-results] [data-history-result]')
   assert((await page.$eval('[data-history-search-results]', node => node.textContent || '')).includes('Selected msg#1–45'))
   await page.click('[data-history-search-results] [data-history-page="later"]')
   await page.waitForFunction(() => (document.querySelector('[data-history-search-results]')?.textContent || '').includes('shown 1–40'))
   await page.reload({ waitUntil: 'domcontentloaded' })
-  await page.waitForSelector('#history-search-query')
-  await page.type('#history-search-query', `sessionId=${parentId} msg#1-45`)
+  await waitForWebUiReady(page)
+  await page.waitForSelector('#mobile-tab-search')
+  await page.click('#mobile-tab-search')
+  await page.waitForSelector('[data-history-query-input]')
+  await page.type('[data-history-query-input]', `sessionId=${parentId} msg#1-45`)
   await page.click('button[type="submit"]')
   await page.waitForSelector('[data-history-search-results] [data-history-result]')
   await page.evaluate(() => { location.hash = 'tab/chat:history-observation-moved' })
@@ -202,14 +206,14 @@ try {
   })
   await page.click('button[title="Session options"]')
   await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'debug info')?.click())
-  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'refresh'))
+  await page.waitForSelector('[data-json-inspector-dialog] [data-editor-ready="true"]')
   assert(debugResponse)
   assert.equal(debugResponse.status(), 200)
   const debugBody = await debugResponse.json()
   assert.equal(typeof debugBody.resolvedPath, 'string')
   assert.equal(debugBody.payload.contextFrontier, undefined)
   assert(Array.isArray(debugBody.payload.history))
-  assert((await page.evaluate(() => document.body.textContent || '')).includes('session file:'))
+  assert((await page.$eval('[data-json-inspector-dialog]', node => node.textContent || '')).includes('resolvedSessionFilePath'))
 
   console.log(JSON.stringify({ result: 'ok', childId, populatedWindow: true, selectedRangeContinuation: true, aliasWindow: true, tree: true, exactSearch: true, debugModal: true, semanticStatus: semantic.status }))
 } finally {

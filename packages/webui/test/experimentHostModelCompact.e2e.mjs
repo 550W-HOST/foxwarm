@@ -11,6 +11,7 @@ import { join, resolve } from 'node:path'
 import { once } from 'node:events'
 import puppeteer from 'puppeteer-core'
 import { startScriptedProvider } from './experimentHostModelCompact.provider.mjs'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const token = 'local-multimodel-test-api-token'
 const alphaToken = 'local-alpha-provider-secret'
@@ -129,14 +130,15 @@ try {
   await page.waitForSelector('#token')
   await page.type('#token', token)
   await page.click('button[type="submit"]')
+  await waitForWebUiReady(page)
   await page.waitForSelector('button[aria-label="New session"]')
   await page.click('button[aria-label="New session"]')
-  await page.waitForSelector('form[role="dialog"]')
-  await page.click('form[role="dialog"] button[type="submit"]')
-  await page.waitForSelector('form[role="dialog"]', { hidden: true })
+  await page.waitForSelector('[role="dialog"]')
+  await page.click('[role="dialog"] button[type="submit"]')
+  await page.waitForSelector('[role="dialog"]', { hidden: true })
   await page.waitForSelector('.foxwarm-chat-root')
   const switchId = decodeURIComponent(new URL(page.url()).hash).slice('#tab/chat:'.length)
-  assert.match(switchId, /^s_[a-f0-9]{32}$/)
+  assert.match(switchId, /^\d{4}_[a-z0-9]{0,5}$/)
   await send(hostPort, switchId, 'hold-switch')
   await until(() => provider.heldSwitch, 'held alpha request')
   await page.click('.foxwarm-model-selector-trigger')
@@ -181,7 +183,7 @@ try {
   assert.equal(heldRequest.model, 'alpha-wire')
   assert.equal(heldRequest.authorization, `Bearer ${alphaToken}`)
   await send(hostPort, switchId, 'after-switch')
-  await until(async () => (await history(hostPort, switchId)).messages.length === 4, 'beta next request')
+  await until(async () => !(await state(hostPort, switchId)).busy && (await history(hostPort, switchId)).messages.at(-1)?.parts.some(part => part.text === 'synthetic response'), 'beta next request')
   const betaRequest = provider.requests.find(item => item.input.includes('after-switch'))
   assert.equal(betaRequest.model, 'beta-wire')
   assert.equal(betaRequest.authorization, `Bearer ${betaToken}`)
@@ -243,19 +245,20 @@ try {
   await until(() => provider.heldSettings, 'held settings target')
   const heldAuthority = join(dataRoot, 'state', 'sessions', heldId + '.json')
   const heldSnapshot = JSON.parse(await readFile(heldAuthority, 'utf8')).persistentMemorySnapshot
-  await writeFile(join(faults, heldId + '.settings-before-rename'), '')
+  const heldFaultKey = 'id_' + Buffer.from(heldId).toString('base64url')
+  await writeFile(join(faults, heldFaultKey + '.settings-before-rename'), '')
   assert((await setting('held-before', 'set_session_child_model', { sessionId: heldId, model: 'gamma/gamma-wire' })).error)
   assert.equal((await view(heldId)).childModelDefault, null)
-  await writeFile(join(faults, heldId + '.settings-after-rename'), '')
+  await writeFile(join(faults, heldFaultKey + '.settings-after-rename'), '')
   assert((await setting('held-after', 'set_session_child_model', { sessionId: heldId, model: 'gamma/gamma-wire' })).error)
   assert.equal((await view(heldId)).childModelDefault, 'gamma/gamma-wire')
   await send(hostPort, heldId, 'later-ingress-preserved')
-  assert((await state(hostPort, heldId)).queueCount >= 1)
+  assert((await state(hostPort, heldId)).queueLength >= 1)
   await command(hostPort, heldId, '/stop')
   await until(async () => !(await state(hostPort, heldId)).busy, 'held setting Stop')
   assert.equal((await view(heldId)).childModelDefault, 'gamma/gamma-wire')
   assert.equal(JSON.parse(await readFile(heldAuthority, 'utf8')).persistentMemorySnapshot, heldSnapshot)
-  assert((await state(hostPort, heldId)).queueCount >= 1 || JSON.stringify((await history(hostPort, heldId)).messages).includes('later-ingress-preserved'))
+  assert((await state(hostPort, heldId)).queueLength >= 1 || JSON.stringify((await history(hostPort, heldId)).messages).includes('later-ingress-preserved'))
   // Clear primary effort when a model-only update changes its allowed set, and validate prospective child fallback.
   const primaryId = await create(hostPort)
   assert.equal((await json(hostPort, 'POST', `/api/sessions/${primaryId}/model`, { model: 'beta/beta-wire', effort: 'high' })).status, 200)
@@ -289,15 +292,15 @@ try {
     throw error
   }
   assert(provider.invalidSent, 'First planner request submitted an invalid range')
-  assert(provider.requests.some(item => item.planner && item.input.includes('COMPACT PLAN INVALID.')),
+  assert(provider.requests.some(item => item.planner && item.input.includes('compact_plan_invalid')),
     'Planner saw source-derived invalid-plan feedback and retried')
   await until(async () => !(await state(hostPort, layeredId)).busy, 'automatic compaction idle')
-  assert.equal((await command(hostPort, layeredId, '/compact')).status, 202)
+  assert.equal((await command(hostPort, layeredId, '/compact')).status, 200)
   await until(async () => provider.layerPlanCount >= 2 && (await history(hostPort, layeredId)).messages.filter(
     row => row.__meta?.contextBlock?.level === 1).length >= 6, 'manual second L1 plan', 40000)
   await until(async () => !(await state(hostPort, layeredId)).busy, 'manual L1 idle')
   const beforeL2 = await history(hostPort, layeredId)
-  assert.equal((await command(hostPort, layeredId, '/compact')).status, 202)
+  assert.equal((await command(hostPort, layeredId, '/compact')).status, 200)
   await until(async () => provider.layerPlanCount >= 3 && (await history(hostPort, layeredId)).messages.some(
     row => row.__meta?.contextBlock?.level === 2), 'manual L2 plan', 40000)
   await until(async () => !(await state(hostPort, layeredId)).busy, 'manual L2 idle')
@@ -364,7 +367,8 @@ try {
   assert((await exact('missing-session', { sessionId: 'missing-reader-owner', target: 'overview' })).includes('not found'))
   assert((await exact('missing-range', { sessionId: layeredId, target: 'msg#999999' })).includes('Available message log'))
   await exact('offset', { sessionId: layeredId, target: 'msg#19', offset: 0 }, true)
-  await exact('vector', { sessionId: layeredId, vector_query: '' }, true)
+  assert((await exact('empty-vector', { sessionId: layeredId, vector_query: '' })).includes('Available message log'))
+  await exact('vector-disabled', { sessionId: layeredId, vector_query: 'bounded synthetic lookup' }, true)
   await exact('old-syntax', { sessionId: layeredId, target: 'raw#19' }, true)
   await exact('zero', { sessionId: layeredId, target: 'msg#0' }, true)
   assert.deepEqual(sql('SELECT * FROM archive_messages WHERE session_id=? ORDER BY seq', [layeredId]), archiveBefore)
@@ -408,14 +412,14 @@ try {
       `stop seed ${i}`)
   }
   await until(async () => !(await state(hostPort, stopId)).busy, 'stop seed idle')
-  assert.equal((await command(hostPort, stopId, '/compact')).status, 202)
+  assert.equal((await command(hostPort, stopId, '/compact')).status, 200)
   await until(() => provider.heldStop, 'held planner')
   const beforeStop = await history(hostPort, stopId)
   await send(hostPort, stopId, 'queued-stop after planner cancellation')
   assert.equal((await history(hostPort, stopId)).queueLength, 1)
   const stopped = await command(hostPort, stopId, '/stop compact')
   assert.equal(stopped.status, 200)
-  assert.equal(stopped.body.stoppedCompact, true)
+  assert.equal(stopped.body.success, true)
   await until(() => provider.heldStopClosed, 'planner connection closed')
   await until(async () => (await history(hostPort, stopId)).messages.some(row => row.parts?.[0]?.text ===
     'queued input resumed after compact cancellation'), 'queued input processed after stop', 40000)

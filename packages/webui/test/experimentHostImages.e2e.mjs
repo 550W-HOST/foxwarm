@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { readFile, writeFile, mkdir, symlink, access } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, symlink, access, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import sharp from 'sharp'
 import { WebSocketServer } from 'ws'
@@ -14,7 +14,7 @@ const png = await sharp({ create: { width: 3, height: 2, channels: 4, background
 await writeFile(imagePath, png); await mkdir(join(fixture.work, 'memory'), { recursive: true }); await writeFile(join(fixture.work, 'memory/ONBOOT.md'), ' \n')
 await writeFile(join(fixture.data, 'state/mcp.json'), JSON.stringify({ servers: { image: { transport: 'stdio', command: process.execPath, args: [resolve(import.meta.dirname, 'experimentHostImages.peer.mjs'), fixture.root, imagePath], timeoutSeconds: 20, enable: true } } }))
 const route = id => '/api/sessions/' + encodeURIComponent(id), authority = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
-let releaseHold; const held = new Promise(resolve => { releaseHold = resolve })
+let releaseHold, stagingAlias; const held = new Promise(resolve => { releaseHold = resolve })
 const calls = key => [{ id: key + '-read', name: 'read', args: { filePath: imagePath } }, { id: key + '-sdk', name: 'call_tool', args: { toolId: 'mcp:image/image', args: { corrupt: key === 'corrupt', carrier: key === 'carrier' } } }]
 const responseCalls = key => calls(key).map(call => ({ type: 'function_call', call_id: call.id, name: call.name, arguments: JSON.stringify(call.args) }))
 const final = key => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'DONE-IMAGES-' + key }] }]
@@ -54,10 +54,17 @@ peer.listen(0, '127.0.0.1'); await once(peer, 'listening'); const base = 'http:/
 await writeModelFixture(fixture.data, { default: 'r', providers: { r: { providerType: 'openai-responses', baseUrl: base + '/r', models: ['wire'], contextLimit: 20000 }, c: { providerType: 'openai-completions', baseUrl: base + '/c', models: ['wire'], contextLimit: 20000 }, a: { providerType: 'anthropic', extraFields: { stream: false }, baseUrl: base + '/a', models: ['wire'], contextLimit: 20000 }, w: { providerType: 'openai-ws', baseUrl: base + '/w', models: ['wire'], contextLimit: 20000 } } })
 const headers = { authorization: 'Bearer synthetic-input-images-api' }
 async function upload(bytes, name = 'uploaded.png', mime = 'image/png') { const form = new FormData(); form.append('file', new Blob([bytes], { type: mime }), name); const response = await fetch(fixture.origin + '/api/upload', { method: 'POST', headers, body: form }); return { status: response.status, body: await response.json() } }
-async function done(id, key) { await until(async () => { const state = await authority(id); return !state.busy && state.history.some(row => row.parts?.some(part => part.text === 'DONE-IMAGES-' + key)) }, key) }
+async function done(id, key) {
+  try { await until(async () => { if (failures.length) throw new Error(failures.join('\n')); const state = await authority(id); return !state.busy && state.history.some(row => row.parts?.some(part => part.text === 'DONE-IMAGES-' + key)) }, key) }
+  catch (error) { console.error('Image turn evidence:', { key, state: await authority(id), records: records.map(row => ({ key: row.key, protocol: row.protocol })), failures, host: fixture.output }); throw error }
+}
 function imageRefs(state) { return state.history.flatMap(row => row.parts || []).filter(part => part.inlineDataRef) }
 try {
-  await fixture.start(); const page = await fixture.openApp(); page.on('framenavigated', () => {}); page.on('response', async response => { if (response.url().endsWith('/api/upload')) frames.push({ upload: await response.json() }) })
+  await fixture.start()
+  assert.equal((await fixture.api('POST', '/api/sessions', { sessionId: 'main' })).status, 200)
+  const page = await fixture.openApp(); page.on('framenavigated', () => {}); page.on('response', async response => { if (response.url().endsWith('/api/upload')) frames.push({ upload: await response.json() }) })
+  await page.evaluate(() => window.foxwarmTest.switchToSession('main'))
+  await page.waitForFunction(() => document.querySelector('[data-session-header-subtitle]')?.textContent.includes('session main'))
   const devtools = await page.createCDPSession(); await devtools.send('Network.enable'); devtools.on('Network.webSocketFrameReceived', frame => frames.push({ realtime: frame.response.payloadData }))
   await page.type('[role="textbox"][aria-label="Message"]', 'IMAGES:responses ')
   await page.$eval('#file-upload', (input, data) => { const transfer = new DataTransfer(); transfer.items.add(new File([Uint8Array.from(atob(data), char => char.charCodeAt(0))], 'original.png', { type: 'image/png' })); Object.defineProperty(input, 'files', { configurable: true, value: transfer.files }); input.dispatchEvent(new Event('change', { bubbles: true })) }, png.toString('base64'))
@@ -69,8 +76,8 @@ try {
   assert.equal((await fetch(fixture.origin + '/api/blobs/not-a-blob', { headers })).status, 400)
   assert.equal((await upload('generic file', 'document.txt', 'text/plain')).status, 200); assert.equal((await upload('generic file', 'document.txt', '')).status, 200)
   assert.equal((await fixture.api('POST', route('main') + '/message', { text: 'not sent', uploadedFiles: [{ path: imagePath, filename: 'host.png', mimeType: 'image/png' }] })).status, 400)
-  const staged = await upload(png); assert.equal(staged.status, 200); const outside = join(fixture.root, 'outside.png'); await writeFile(outside, png); const alias = join(fixture.data, 'state/webui-uploads/escape.png'); await symlink(outside, alias)
-  assert.equal((await fixture.api('POST', route('main') + '/message', { text: 'not sent', uploadedFiles: [{ path: alias, mimeType: 'image/png' }] })).status, 400)
+  const staged = await upload(png); assert.equal(staged.status, 200); const outside = join(fixture.root, 'outside.png'); await writeFile(outside, png); stagingAlias = staged.body.path + '.escape'; await symlink(outside, stagingAlias)
+  assert.equal((await fixture.api('POST', route('main') + '/message', { text: 'not sent', uploadedFiles: [{ path: stagingAlias, mimeType: 'image/png' }] })).status, 400)
   for (const [provider, key] of [['c', 'completions'], ['a', 'anthropic'], ['w', 'websocket']]) {
     const id = 'image-' + key; assert.equal((await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: id })).status, 200); assert.equal((await fixture.api('POST', route(id) + '/model', { model: provider })).status, 200)
     const item = key === 'completions' ? staged : await upload(png); assert.equal((await fixture.api('POST', route(id) + '/message', { text: 'IMAGES:' + key, uploadedFiles: [item.body] })).status, 202); await done(id, key)
@@ -100,4 +107,4 @@ try {
   const first = initial.history.find(row => row.parts?.some(part => part.inlineDataRef)); const archive = await fixture.api('GET', route('main') + '/archive/messages/' + first.__meta.seq); assert.equal(archive.status, 200); assert(!JSON.stringify(archive.body).includes(png.toString('base64'))); assert(archive.body.messageJson.includes('/blobs/'))
   const count = records.length; await fixture.stop(); await fixture.start(); await sleep(150); assert.equal(records.length, count); assert.deepEqual(Buffer.from(await (await fetch(blobUrl, { headers })).arrayBuffer()), png); await fixture.stop(); assert.deepEqual(failures, [])
   console.log(JSON.stringify({ root: fixture.root, home, hosts: fixture.hostPids, requests: records.length, originalComposer: true, nativeRead: true, officialSdkImages: true, protocols: [...new Set(records.map(record => record.protocol))], authenticatedBlob: true, stagingGuard: true, heic: true, referenceOnly: true, wsPrefix: true }))
-} finally { releaseHold(); await writeFile(join(fixture.root, 'image-proof.json'), JSON.stringify({ records, frames, failures, home, hosts: fixture.hostPids }, null, 2)).catch(() => {}); await fixture.cleanup(); for (const ws of sockets) ws.terminate(); wsServer.close(); await new Promise(done => peer.close(done)) }
+} finally { releaseHold(); if (stagingAlias) await rm(stagingAlias, { force: true }); await writeFile(join(fixture.root, 'image-proof.json'), JSON.stringify({ records, frames, failures, home, hosts: fixture.hostPids }, null, 2)).catch(() => {}); await fixture.cleanup(); for (const ws of sockets) ws.terminate(); wsServer.close(); await new Promise(done => peer.close(done)) }

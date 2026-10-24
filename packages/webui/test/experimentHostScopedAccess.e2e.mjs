@@ -73,7 +73,7 @@ const bob = (method, path, body) => api('synthetic-bob', method, path, body)
 async function install(next) {
   const raw = '# retained access candidate\r\n' + JSON.stringify(next, null, 2) + '\r\n'
   const result = await admin('POST', '/api/setup/config', { yaml: raw })
-  assert.equal(result.status, 200, JSON.stringify(result)); assert.deepEqual(result.body.applied, ['access.identities', 'access.surfaces.mcp']); assert.deepEqual(result.body.notApplied, ['channels']); assert(!result.body.restartRequired.some(value => value.startsWith('access')))
+  assert.equal(result.status, 200, JSON.stringify(result)); assert.deepEqual(result.body.applied, ['access.identities', 'access.surfaces.mcp', 'channels']); assert.deepEqual(result.body.notApplied, []); assert(!result.body.restartRequired.some(value => value.startsWith('access')))
   assert.equal(await readFile(join(host.data, 'state/config.yaml'), 'utf8'), raw); current = next
   return result
 }
@@ -185,7 +185,7 @@ try {
   assert.equal((await alice('POST', route(moved) + '/blobs/' + seed.unreferenced.blobId + '/download', { archiveSeq: '150' })).status, 403)
   assert.equal((await alice('GET', route(moved) + '/blobs/' + seed.image.blobId)).status, 200)
   const activeGrant = await alice('POST', route(moved) + '/blobs/' + seed.image.blobId + '/download', { filename: 'active.png' }); assert.equal(activeGrant.status, 200)
-  assert.equal((await admin('POST', route(moved) + '/message', { text: '/compact' })).status, 202)
+  assert.equal((await admin('POST', route(moved) + '/message', { text: '/compact' })).status, 200)
   await until(async () => !(await saved(moved)).busy && (await saved(moved)).history.some(row => row.__meta?.contextBlock), 'actual compacted authority')
   assert.equal((await alice('GET', route(moved) + '/blobs/' + seed.image.blobId)).status, 403)
   assert.equal((await alice('GET', route(moved) + '/blobs/' + seed.image.blobId + '?archiveSeq=150')).status, 200)
@@ -267,6 +267,8 @@ try {
   assert.deepEqual(browserErrors, []); assert.deepEqual(errors, [])
   await context.close()
   const administrator = await host.openApp()
+  await administrator.evaluate(() => window.foxwarmTest.switchToSession('chat'))
+  await administrator.waitForFunction(() => document.querySelector('[data-session-header-subtitle]')?.textContent.includes('session chat'))
   await administrator.waitForSelector('.foxwarm-model-selector-trigger')
   assert.equal(await administrator.$('[data-webui-role="webui"]'), null)
   await host.stop()
