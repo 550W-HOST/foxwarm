@@ -132,6 +132,8 @@ Implements the WebUI channel's HTTP, multiplexed realtime WebSocket, compatibili
 
 [2026-09-25] WebUI message responses omit `rawArgsText` from a real function-call part unless that call has `argsParseError`. Parse failures retain the raw text alongside structured args and the error. Apply this only when projecting WebUI transport messages, never to canonical Session history, archive/replay, provider requests, or arbitrary nested data fields.
 
+The managed implementation and its additional opaque-reasoning length contract are mapped in [WebUI message transport](./webui-message-transport.md). The retained TypeScript Chat projection does not perform that additional substitution.
+
 ### D-webui-sidebar-preview-cursor
 
 [2026-09-25] `/api/session-list/sidebar` omits `nextCursor` inside child previews at its final transport boundary. Root `nextCursor` and `/api/session-list/children` continuation cursors remain; internal child-preview queries and their other API consumers retain their DTOs.

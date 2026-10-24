@@ -13,7 +13,7 @@ Publishes authenticated Session/message/tool/task/list/presentation/terminal eve
 
 ## Contract and side effects
 
-Realtime is a notification/projection boundary, not Session authority. A stream delta or task event may arrive before a later durable JSON/catalog publication; revision barriers and bounded initialization buffering let the browser reconcile rather than treating every event as committed history. Subscriber failure is isolated from the owner/save lane.
+Realtime is a notification/projection boundary, not Session authority. Committed-message and queue-batch envelopes use [WebUI message transport](./webui-message-transport.md); transient argument cadence and flush ordering remain [exact-owner responsibilities](./session-turns.md#transient-presentation-and-failure-feedback). A stream delta or task event may arrive before a later durable JSON/catalog publication; revision barriers and bounded initialization buffering let the browser reconcile rather than treating every event as committed history. Subscriber failure is isolated from the owner/save lane.
 
 Scoped clients retain role-safe state/message projections and current exact/Agent bindings across initial snapshots and queued sends. Catalog/log subscriptions are rejected; affected credential/scope changes and stale canonical moves close only those connections. The [shared access unit](./dotnet-access-identities.md) owns the authority and revocation contract.
 

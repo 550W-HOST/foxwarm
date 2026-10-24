@@ -21,6 +21,10 @@ const hostedHandoffs = (values, recipient = { text: 'Search results are ready.',
   model([empty, recipient], 100 + values.length),
 ]
 const scenarios = {
+  projectedEncrypted: [model([{ providerMeta: { encryptedThinkingLength: 0 } }, { text: 'Projected reasoning remains present.' }], 201, 7)],
+  projectedRedacted: [model([{ providerMeta: { redactedThinkingLength: 19 } }, { text: 'Redacted reasoning remains present.' }], 202)],
+  legacyRedacted: [model([{ providerMeta: { redactedThinking: 'legacy opaque data' } }, { text: 'Legacy reasoning remains present.' }], 203, 0)],
+  projectedTail: [model([{ providerMeta: { encryptedThinkingLength: 0 } }], 204)],
   hostedUnknown: hostedHandoffs([undefined, undefined]),
   hostedMixed: hostedHandoffs([12, undefined]),
   hostedSummed: hostedHandoffs([12, 23]),
@@ -112,6 +116,16 @@ const state = id => page.$eval(`#${id}`, root => ({
   badges: [...root.querySelectorAll('[data-reasoning-handoff]')].map(el => ({ text: el.textContent, tool: !!el.closest('.foxwarm-tool-card'), assistant: !!el.closest('.foxwarm-assistant-message-card') })),
   tokens: [...root.querySelectorAll('[data-reasoning-tokens]')].map(el => el.textContent),
 }))
+
+test('projected and legacy opaque reasoning retain badges and empty cards without inventing token counts', async () => {
+  assert.deepEqual(await state('projectedEncrypted'), { cards: 0, badges: [{ text: '7 tokens', tool: false, assistant: true }], tokens: ['7 tokens'] })
+  assert.deepEqual((await state('projectedRedacted')).tokens, [])
+  assert.equal((await state('projectedRedacted')).badges.length, 1)
+  assert.deepEqual((await state('legacyRedacted')).tokens, ['0 tokens'])
+  assert.equal((await state('projectedTail')).cards, 1)
+  assert.deepEqual((await state('projectedTail')).tokens, [])
+  assert.equal(await page.$eval('#legacyRedacted', root => root.textContent.includes('legacy opaque data')), false)
+})
 
 test('empty reasoning moves to the next invocation once and coexists with duration and disclosure', async () => {
   assert.deepEqual(await state('tool'), { cards: 0, badges: [{ text: '42 tokens', tool: true, assistant: false }], tokens: ['42 tokens'] })

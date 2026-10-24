@@ -11,6 +11,9 @@ export const isReasoningPart = (part: MessagePart): boolean => (
   || (Array.isArray(part.providerMeta?.thinkingSummaries)
     && part.providerMeta.thinkingSummaries.every(summary => typeof summary === 'string'))
   || typeof part.providerMeta?.encryptedThinking === 'string'
+  || typeof part.providerMeta?.redactedThinking === 'string'
+  || typeof part.providerMeta?.encryptedThinkingLength === 'number'
+  || typeof part.providerMeta?.redactedThinkingLength === 'number'
 )
 
 export const getReasoningText = (part: MessagePart): string => (
