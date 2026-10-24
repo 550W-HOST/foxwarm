@@ -25,7 +25,13 @@ public sealed partial class SessionCommandEffectsTests
             ?? throw new InvalidOperationException("FOXWARM_TS_ROOT is required");
         var start = new ProcessStartInfo(
             "node",
-            Path.Combine(root, "dotnet", "session-command-effects-fixture-ts.mjs")
+            Path.Combine(
+                root,
+                "dotnet",
+                "Foxwarm.Tests",
+                "Fixtures",
+                "session-command-effects-fixture-ts.mjs"
+            )
         )
         {
             WorkingDirectory = root,

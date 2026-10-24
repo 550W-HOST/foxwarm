@@ -19,7 +19,13 @@ public sealed class LegacyWaitAuthorityTests
                 WorkingDirectory = repo,
                 ArgumentList =
                 {
-                    Path.Combine(repo, "dotnet", "legacy-wait-fixture-ts.mjs"),
+                    Path.Combine(
+                        repo,
+                        "dotnet",
+                        "Foxwarm.Tests",
+                        "Fixtures",
+                        "legacy-wait-fixture-ts.mjs"
+                    ),
                     mode,
                     root,
                 },

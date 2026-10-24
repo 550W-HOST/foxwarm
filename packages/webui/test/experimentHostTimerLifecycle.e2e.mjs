@@ -42,7 +42,7 @@ const timer = (id, sessionId, message, extra) => ({ id, sessionId, message, crea
 const catalogRow = id => ({ id, agent: 'main', busy: false, queueLength: 0, meta: { messageCount: 0, lastMessageTime: 0 } })
 async function seed(rows) {
   const module = await import(pathToFileURL(resolve('lib/session/catalogStore.js')).href), store = new module.SessionCatalogStore(join(fixture.data, 'state/catalog.sqlite')); try { store.replaceAll(rows.map(row => Object.fromEntries(Object.entries(row).filter(([, value]) => value !== null)))) } finally { store.close() }
-  const file = join(fixture.root, 'catalog-seed.json'); await writeFile(file, JSON.stringify(rows)); execFileSync('node', [resolve('dotnet/session-catalog-seed-ts.mjs'), fixture.data, file], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
+  const file = join(fixture.root, 'catalog-seed.json'); await writeFile(file, JSON.stringify(rows)); execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-catalog-seed-ts.mjs'), fixture.data, file], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
 }
 async function put(id, extra = {}) { await writeFile(join(fixture.data, 'state/sessions', id + '.json'), JSON.stringify({ sessionStateVersion: 1, id, agent: 'main', busy: false, history: [], queue: [], stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0 }, nextMessageSeq: 1, nextBlockId: 1, meta: { messageCount: 0, lastMessageTime: 0 }, promptCacheKey: randomUUID(), persistentMemorySnapshot: 'Existing dormant owner snapshot.', ...extra })) }
 try {

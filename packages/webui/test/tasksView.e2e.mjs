@@ -369,15 +369,19 @@ test('WebUI creates, comments, and changes task owners through user routes', asy
   assert.deepEqual(noStaleOwnerCreate.body, { title: 'Created without stale owner', notifySession: true })
   assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_tasks_last_owner_v1')), null)
   await page.click('[data-task-row="task-active"] button')
+  await page.waitForFunction(() => document.querySelector('[data-task-details] h4')?.textContent === 'active task')
   await page.waitForSelector('[data-task-details] textarea')
-  const comment = page.locator('[data-task-details] textarea')
-  await comment.fill('User comment')
+  const progress = 'n'.repeat(1998) + '😀'
+  await page.focus('[data-task-details] textarea')
+  await page.keyboard.sendCharacter(progress)
+  await page.keyboard.type('x')
+  assert.equal(await page.$eval('[data-task-details] textarea', input => input.value), progress, 'Comment input accepts 2,000 UTF-16 code units and prevents the next character')
   await page.click('[data-task-details] button[type="submit"]')
   await page.waitForFunction(() => !document.querySelector('[data-task-details] textarea') || document.querySelector('[data-task-details] textarea')?.value === '')
   const userComment = requests.filter(request => request.action === 'comment').at(-1)
   assert.deepEqual(userComment, {
     pathname: '/prefix/ui/api/tasks/task-active/comments', method: 'POST', action: 'comment',
-    body: { note: 'User comment', notifySession: true },
+    body: { note: progress, notifySession: true },
   })
   assert.equal(await page.$eval('[data-task-warning]', node => node.textContent), 'Comment saved, but the owner notification could not be delivered.')
   await page.click('[data-task-details] [data-session-selector-input]')

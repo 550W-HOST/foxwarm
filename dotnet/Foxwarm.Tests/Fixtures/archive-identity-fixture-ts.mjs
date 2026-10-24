@@ -9,7 +9,7 @@ const [mode, root] = process.argv.slice(2)
 if (!root || !['seed', 'verify'].includes(mode)) throw new Error('usage: archive-identity-fixture-ts.mjs seed|verify ROOT')
 process.env.FOXWARM_DATA_DIR = root
 process.env.FOXWARM_VECTOR_ENABLED = 'false'
-const repository = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '..')
+const repository = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '../../..')
 if (mode === 'seed') {
   await fs.mkdir(path.join(root, 'state'), { recursive: true })
   await fs.writeFile(path.join(root, 'state/models.yaml'), 'default: a\nproviders:\n  a:\n    providerType: openai-responses\n    baseUrl: http://127.0.0.1:1\n    apiKey: archive-fixture-not-a-key\n    models: [wire]\n')

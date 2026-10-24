@@ -52,7 +52,7 @@ execFileSync('node', ['--input-type=module', '-e', `
   await sessionCatalogStore.initialize(); sessionCatalogStore.close();
 `], { env: { ...process.env, FOXWARM_DATA_DIR: fixture.data }, stdio: 'pipe' })
 const seedRows = join(fixture.root, 'rows.json'); await writeFile(seedRows, JSON.stringify(rows))
-execFileSync('node', [resolve('dotnet/session-catalog-seed-ts.mjs'), fixture.data, seedRows], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
+execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-catalog-seed-ts.mjs'), fixture.data, seedRows], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
 const catalogPath = join(fixture.data, 'state/catalog.sqlite')
 function sql(statement, args = []) { const db = new DatabaseSync(catalogPath, { readOnly: true }); try { return db.prepare(statement).all(...args) } finally { db.close() } }
 function readAuthority(id) { return readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse) }

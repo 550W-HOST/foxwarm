@@ -873,7 +873,7 @@ public sealed class ResponsesClientTests
             "..",
             "..",
             "..",
-            "..",
+            "Fixtures",
             "session-persistence-fixture-ts.mjs"
         );
         helper = Path.GetFullPath(helper);

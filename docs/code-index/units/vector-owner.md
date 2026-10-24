@@ -2,7 +2,7 @@
 
 Files: `dotnet/Foxwarm/Vector/VectorService.cs`, `dotnet/Foxwarm/Vector/VectorWire.cs`, `dotnet/Foxwarm/Vector/VectorChild.cs`, `dotnet/Foxwarm/Sessions/SessionManager.Vector.cs`
 
-Secondary files: `dotnet/Foxwarm.Tests/Vector/VectorStartupTests.cs`, `dotnet/scripts/qualify-vector-startup.mjs`
+Secondary files: `dotnet/Foxwarm.Tests/Vector/VectorStartupTests.cs`, `dotnet/Foxwarm.Tests/scripts/qualify-vector-startup.mjs`
 
 ## Purpose
 

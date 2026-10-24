@@ -8,12 +8,12 @@
   <ItemGroup>
     <ProjectReference Include="../Foxwarm/Foxwarm.csproj" />
     <None
-      Include="../parity-corpus.json"
+      Include="../Foxwarm.Tests/Fixtures/parity-corpus.json"
       Link="parity-corpus.json"
       CopyToOutputDirectory="PreserveNewest"
     />
     <None
-      Include="../responses-stream-corpus.json"
+      Include="../Foxwarm.Tests/Fixtures/responses-stream-corpus.json"
       Link="responses-stream-corpus.json"
       CopyToOutputDirectory="PreserveNewest"
     />

@@ -25,4 +25,4 @@ A committed wait survives restart through active JSON; transient requesting-mode
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Sessions/SessionAdmissionTests.cs`; `PersistentSessionTurnTests.cs`; `PassiveTaskInputTests.cs`; `RetryNoticeTests.cs`; `WaitLivenessTests.cs`; `LegacyWaitAuthorityTests.cs` with actual Source fixture `dotnet/legacy-wait-fixture-ts.mjs`; `dotnet/Foxwarm.Tests/Timers/MainTimerToolsTests.cs`.
+`dotnet/Foxwarm.Tests/Sessions/SessionAdmissionTests.cs`; `PersistentSessionTurnTests.cs`; `PassiveTaskInputTests.cs`; `RetryNoticeTests.cs`; `WaitLivenessTests.cs`; `LegacyWaitAuthorityTests.cs` with actual Source fixture `dotnet/Foxwarm.Tests/Fixtures/legacy-wait-fixture-ts.mjs`; `dotnet/Foxwarm.Tests/Timers/MainTimerToolsTests.cs`.

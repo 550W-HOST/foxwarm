@@ -27,4 +27,6 @@ Unreadable, out-of-scope or corrupt ordinary-vision references still fail before
 
 `dotnet/Foxwarm.Tests/Models/GeneratedImageReplayAdmissionTests.cs` exercises normal generated output, canonical authority/Archive append, exact-concrete and alias replay, foreign Responses/Completions placeholder requests after owned blob deletion, originating-model no-send failure, and same-key protocol reconfiguration through the normal configuration owner against a loopback peer.
 
-`dotnet/Foxwarm.Tests/Images/ImageBlobStore*Tests.cs`; `ImageCodecTests.cs`; `ImagePipelineTests.cs`; `ImageIdentityGuidanceTests.cs`; `ImageLegacyLifecycleTests.cs`; `VisionInputParityTests.cs` and its actual Source oracle `dotnet/vision-input-fixture-ts.mjs` compare genuine over-byte/over-pixel images, descriptors, tool-result placement, serialization and canonical persistence.
+`dotnet/Foxwarm.Tests/Images/ImageBlobStore*Tests.cs`; `ImageCodecTests.cs`; `ImagePipelineTests.cs`; `ImageIdentityGuidanceTests.cs`; `ImageLegacyLifecycleTests.cs`; `VisionInputParityTests.cs` and its actual Source oracle `dotnet/Foxwarm.Tests/Fixtures/vision-input-fixture-ts.mjs` compare genuine over-byte/over-pixel images, descriptors, tool-result placement, serialization and canonical persistence.
+
+The optional decode-chain build and licensing prerequisites are documented in `docs/native-image-prerequisites.md`; the helper is `dotnet/scripts/build-image-decoder.sh`.

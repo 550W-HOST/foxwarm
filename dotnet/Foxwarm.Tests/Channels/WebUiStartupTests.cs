@@ -779,9 +779,10 @@ public sealed partial class WebUiStartupTests
         var assigned = await assign.Content.ReadFromJsonAsync<JsonObject>();
         Assert.Equal(ownerId, assigned!["task"]!["ownerSessionId"]!.GetValue<string>());
 
+        var progress = new string('n', 1998) + "😀";
         var comment = await h.Client.PostAsJsonAsync(
             $"/api/tasks/{taskId}/comments",
-            new { note = "user comment" }
+            new { note = progress }
         );
         Assert.Equal(HttpStatusCode.OK, comment.StatusCode);
         var details = await (
@@ -791,7 +792,21 @@ public sealed partial class WebUiStartupTests
             details!["notes"]!.AsArray(),
             note =>
                 note?["authorKind"]?.GetValue<string>() == "user"
-                && note["text"]?.GetValue<string>() == "user comment"
+                && note["text"]?.GetValue<string>() == progress
+        );
+
+        var rejected = await h.Client.PostAsJsonAsync(
+            $"/api/tasks/{taskId}/comments",
+            new { note = progress + "x", notifySession = true }
+        );
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+        var error = await rejected.Content.ReadFromJsonAsync<JsonObject>();
+        Assert.Equal("TASK_INVALID_ARGS", error!["code"]!.GetValue<string>());
+        Assert.True(
+            JsonNode.DeepEquals(
+                details,
+                await h.Client.GetFromJsonAsync<JsonObject>($"/api/tasks/{taskId}")
+            )
         );
 
         var release = await h.Client.PostAsJsonAsync(

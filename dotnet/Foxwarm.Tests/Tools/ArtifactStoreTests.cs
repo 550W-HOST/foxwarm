@@ -51,7 +51,9 @@ public sealed class ArtifactStoreTests
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        info.ArgumentList.Add(Path.Combine(root, "dotnet", "artifact-fixture-ts.mjs"));
+        info.ArgumentList.Add(
+            Path.Combine(root, "dotnet", "Foxwarm.Tests", "Fixtures", "artifact-fixture-ts.mjs")
+        );
         using var child = Process.Start(info)!;
         await child.StandardInput.WriteAsync(request.ToJsonString());
         child.StandardInput.Close();

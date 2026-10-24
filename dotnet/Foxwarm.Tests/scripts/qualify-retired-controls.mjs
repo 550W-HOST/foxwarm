@@ -4,8 +4,8 @@ import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { createHostFixture, until } from '../../packages/webui/test/experimentHostFixture.mjs'
-import { writeModelFixture } from '../../packages/webui/test/experimentModelFixture.mjs'
+import { createHostFixture, until } from '../../../packages/webui/test/experimentHostFixture.mjs'
+import { writeModelFixture } from '../../../packages/webui/test/experimentModelFixture.mjs'
 
 const source = process.argv.includes('--source')
 const options = { env: {}, ...(source ? { runtime: 'source' } : {}) }

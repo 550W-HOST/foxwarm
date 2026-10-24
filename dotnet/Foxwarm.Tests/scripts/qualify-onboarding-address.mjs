@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { createHostFixture } from '../../packages/webui/test/experimentHostFixture.mjs'
+import { createHostFixture } from '../../../packages/webui/test/experimentHostFixture.mjs'
 
 const results = { runtime: 'managed', checks: [], observations: [] }
 const fallbackUrl = 'https://browser.example/browser/'

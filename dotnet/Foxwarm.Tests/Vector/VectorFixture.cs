@@ -254,7 +254,13 @@ internal sealed class VectorFixture : IAsyncDisposable
         foreach (
             var arg in new[]
             {
-                Path.Combine(repository, "dotnet", "vector-fixture-source.mjs"),
+                Path.Combine(
+                    repository,
+                    "dotnet",
+                    "Foxwarm.Tests",
+                    "Fixtures",
+                    "vector-fixture-source.mjs"
+                ),
                 mode,
                 root,
                 input,

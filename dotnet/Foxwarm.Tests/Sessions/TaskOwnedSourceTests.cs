@@ -175,7 +175,13 @@ public sealed class TaskOwnedSourceTests
         foreach (
             var arg in new[]
             {
-                Path.Combine(repository, "dotnet", "task-policy-fixture-ts.mjs"),
+                Path.Combine(
+                    repository,
+                    "dotnet",
+                    "Foxwarm.Tests",
+                    "Fixtures",
+                    "task-policy-fixture-ts.mjs"
+                ),
                 temp.Path,
                 input,
                 output,

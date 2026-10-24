@@ -93,7 +93,7 @@ belong at `/app/packages/vscode-web/assets/extensions/redhat.vscode-yaml`.
 NuGet publish supplies Skia raster input support. Optional libheif 1.23.5 /
 libde265 1.1.3 are not installed; HEIC/HEIF input reports its local prerequisite
 error without provider I/O. PNG/JPEG and ordinary browser screenshots do not
-require HEIF. See [native image prerequisites](../dotnet/native-image-prerequisites.md).
+require HEIF. See [native image prerequisites](../docs/native-image-prerequisites.md).
 
 ## Qualification
 

@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 
 const [root, inputPath, outputPath] = process.argv.slice(2)
 if (!root || !inputPath || !outputPath) throw new Error('usage: session-catalog-fixture-ts.mjs ROOT INPUT OUTPUT')
-const repository = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '..')
+const repository = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '../../..')
 process.env.FOXWARM_DATA_DIR = root
 process.env.FOXWARM_VECTOR_ENABLED = 'false'
 const { SessionCatalogStore } = await import(pathToFileURL(path.join(repository, 'lib/session/catalogStore.js')).href)

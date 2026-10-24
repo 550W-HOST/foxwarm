@@ -5,11 +5,11 @@ from parity_compare import compare_case
 
 
 def main():
-    root = Path(__file__).parent
-    corpus_path = root / 'parity-corpus.json'
+    root = Path(__file__).resolve().parent
+    corpus_path = root.parent / 'Fixtures' / 'parity-corpus.json'
     corpus = json.loads(corpus_path.read_text())
     ts = json.loads(subprocess.check_output([sys.executable, str(root / 'run-ts-parity.py')], text=True))
-    cs = json.loads(subprocess.check_output([sys.argv[1] if len(sys.argv) > 1 else 'dotnet', 'run', '--project', str(root / 'Foxwarm.DevTools'), '--no-restore', '--', 'conditional-memory', str(corpus_path)], text=True, cwd=root.parent))
+    cs = json.loads(subprocess.check_output([sys.argv[1] if len(sys.argv) > 1 else 'dotnet', 'run', '--project', str(root.parents[1] / 'Foxwarm.DevTools'), '--no-restore', '--', 'conditional-memory', str(corpus_path)], text=True, cwd=root.parents[2]))
     if not (len(corpus) == len(ts) == len(cs)):
         raise SystemExit(f'count mismatch: corpus={len(corpus)} TS={len(ts)} C#={len(cs)}')
     counts = {'strict-semantic-json': 0, 'generated-json-semantic': 0, 'raw-text-exact': 0, 'native-diagnostic-compatible': 0}

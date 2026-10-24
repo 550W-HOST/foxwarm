@@ -5,8 +5,8 @@ import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { writeFile, readFile, readdir, stat, truncate, access } from 'node:fs/promises'
 import { join } from 'node:path'
-import testEnvironment from '../../scripts/test/test-process-env.cjs'
-import { createHostFixture, until, sleep } from '../../packages/webui/test/experimentHostFixture.mjs'
+import testEnvironment from '../../../scripts/test/test-process-env.cjs'
+import { createHostFixture, until, sleep } from '../../../packages/webui/test/experimentHostFixture.mjs'
 
 // Establish disposable runtime paths before any application imports or children.
 testEnvironment.initializeTestEnvironment()

@@ -6,7 +6,7 @@ import { once } from 'node:events'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import WebSocket from 'ws'
-import { createHostFixture, until } from '../../packages/webui/test/experimentHostFixture.mjs'
+import { createHostFixture, until } from '../../../packages/webui/test/experimentHostFixture.mjs'
 
 const source = process.argv.includes('--source')
 const results = []

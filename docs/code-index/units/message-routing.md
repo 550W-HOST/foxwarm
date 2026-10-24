@@ -20,7 +20,7 @@ The router returns `202` for accepted ordinary input with a non-durable-completi
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Sessions/SessionTurnTests.cs`; `SessionPresentationTests.cs`; `SessionDeletionTests.cs`; `SessionIdentityMoveTests.cs`; `DeferredInputTests.cs`; `dotnet/scripts/qualify-attempt-input.mjs` (actual HTTP ingress and delayed input).
+`dotnet/Foxwarm.Tests/Sessions/SessionTurnTests.cs`; `SessionPresentationTests.cs`; `SessionDeletionTests.cs`; `SessionIdentityMoveTests.cs`; `DeferredInputTests.cs`; `dotnet/Foxwarm.Tests/scripts/qualify-attempt-input.mjs` (actual HTTP ingress and delayed input).
 
 Scoped browser calls reach the ordinary message router only after text/command/upload validation. Their optional final live assertion passes through the exact owner and existing ingress/save lane immediately before hot admission. Administrator selected-Session commands and correlated controls retain their existing authority; see [shared access](./dotnet-access-identities.md).
 

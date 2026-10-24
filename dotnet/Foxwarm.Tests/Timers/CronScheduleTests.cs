@@ -35,7 +35,9 @@ public sealed class CronScheduleTests
             RedirectStandardError = true,
             UseShellExecute = false,
         };
-        start.ArgumentList.Add(Path.Combine(root, "dotnet", "cron-forward-fixture-ts.mjs"));
+        start.ArgumentList.Add(
+            Path.Combine(root, "dotnet", "Foxwarm.Tests", "Fixtures", "cron-forward-fixture-ts.mjs")
+        );
         start.ArgumentList.Add(output);
         using var process = Process.Start(start)!;
         var stdout = process.StandardOutput.ReadToEndAsync();
@@ -167,7 +169,13 @@ public sealed class CronScheduleTests
         foreach (
             var argument in new[]
             {
-                Path.Combine(root, "dotnet", "cron-forward-fixture-ts.mjs"),
+                Path.Combine(
+                    root,
+                    "dotnet",
+                    "Foxwarm.Tests",
+                    "Fixtures",
+                    "cron-forward-fixture-ts.mjs"
+                ),
                 "--dates",
                 inFile,
                 outFile,

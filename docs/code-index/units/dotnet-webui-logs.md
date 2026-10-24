@@ -1,7 +1,7 @@
 # Unit: Managed Main Logs and file diagnostics
 
 Files: `dotnet/Foxwarm/MainLog.cs`, `dotnet/Foxwarm.NodePrimitives/AppendLogFile.cs`, `dotnet/Foxwarm.NodePrimitives/OpenFileMetadata.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUiLogFile.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.Logs.cs`
-Secondary files: `dotnet/Foxwarm/MainHost.cs`, `dotnet/Foxwarm/Program.cs`, `dotnet/Foxwarm.Desktop/DesktopWindow.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUiRealtime.cs`, `dotnet/Foxwarm.Tests/Channels/WebUiLogsTests.cs`, `dotnet/Foxwarm.Tests/Channels/StartupDiagnosticsTests.cs`, `dotnet/Foxwarm.Tests/Channels/WebUiStartupTests.cs`, `dotnet/Foxwarm.Tests/Channels/WebUiRealtimeRevisionTests.cs`, `dotnet/webui-logs-fixture-ts.mjs`
+Secondary files: `dotnet/Foxwarm/MainHost.cs`, `dotnet/Foxwarm/Program.cs`, `dotnet/Foxwarm.Desktop/DesktopWindow.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUIChannel.cs`, `dotnet/Foxwarm/Channels/WebUi/WebUiRealtime.cs`, `dotnet/Foxwarm.Tests/Channels/WebUiLogsTests.cs`, `dotnet/Foxwarm.Tests/Channels/StartupDiagnosticsTests.cs`, `dotnet/Foxwarm.Tests/Channels/WebUiStartupTests.cs`, `dotnet/Foxwarm.Tests/Channels/WebUiRealtimeRevisionTests.cs`, `dotnet/Foxwarm.Tests/Fixtures/webui-logs-fixture-ts.mjs`
 
 ## Contract and original ownership
 

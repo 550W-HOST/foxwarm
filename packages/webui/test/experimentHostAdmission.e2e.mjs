@@ -52,7 +52,7 @@ await seed('lost-hint', { queue: [{ type: 'user', parts: [{ text: 'CASE:lost-hin
 const catalogModule = await import(pathToFileURL(resolve('lib/session/catalogStore.js')).href)
 const sourceCatalog = new catalogModule.SessionCatalogStore(join(state, 'catalog.sqlite')); sourceCatalog.initializeEmpty(); sourceCatalog.replaceAll(rows); sourceCatalog.close()
 const seedFile = join(fixture.root, 'seed-rows.json'); await writeFile(seedFile, JSON.stringify(rows))
-execFileSync('node', [resolve('dotnet/session-catalog-seed-ts.mjs'), fixture.data, seedFile], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
+execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-catalog-seed-ts.mjs'), fixture.data, seedFile], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
 const database = join(state, 'catalog.sqlite')
 function sql(statement, parameters = []) { const db = new DatabaseSync(database, { readOnly: true }); try { return db.prepare(statement).all(...parameters) } finally { db.close() } }
 function updateCatalog(id, patch) {

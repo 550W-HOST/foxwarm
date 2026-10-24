@@ -423,7 +423,7 @@ export default function TasksView({ onBack, onOpenSession: navigateToSession, mo
           {details.notesOmitted > 0 && <p className="mt-2 text-xs text-fw-text-muted">{details.notesOmitted} more notes</p>}
           <form onSubmit={submitComment} className="tasks-detail-section">
             <h4 className="mb-2 text-sm font-semibold">Comment</h4>
-            <textarea value={comment} onChange={event => setComment(event.target.value)} maxLength={1000} rows={4} placeholder="Add a comment" className="w-full rounded border border-fw-border bg-fw-canvas p-2 text-sm text-fw-text outline-none" disabled={commentSaving} />
+            <textarea value={comment} onChange={event => setComment(event.target.value)} maxLength={2000} rows={4} placeholder="Add a comment" className="w-full rounded border border-fw-border bg-fw-canvas p-2 text-sm text-fw-text outline-none" disabled={commentSaving} />
             <label className="mt-2 flex items-center gap-2 text-xs text-fw-text-muted"><input type="checkbox" checked={commentNotify} onChange={event => setCommentNotify(event.target.checked)} disabled={commentSaving} /> Notify current owner</label>
             {commentError && <p role="alert" className="mt-2 text-xs text-fw-danger">{commentError}</p>}
             <button type="submit" className={`${buttonClass} mt-3`} disabled={commentSaving || !comment.trim()}>{commentSaving ? 'Saving…' : 'Add comment'}</button>

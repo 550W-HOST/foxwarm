@@ -654,7 +654,13 @@ public sealed class SessionDeletionTests
         foreach (
             var arg in new[]
             {
-                Path.Combine(root, "dotnet", "session-delete-worker-fixture-ts.mjs"),
+                Path.Combine(
+                    root,
+                    "dotnet",
+                    "Foxwarm.Tests",
+                    "Fixtures",
+                    "session-delete-worker-fixture-ts.mjs"
+                ),
                 file,
                 mode,
             }

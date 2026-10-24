@@ -7,10 +7,10 @@ import { pathToFileURL } from 'node:url'
 const [mode, root] = process.argv.slice(2)
 if (!root || !['seed', 'inspect', 'matching', 'input'].includes(mode)) throw new Error('usage: legacy-wait-fixture-ts.mjs seed|inspect|matching|input ROOT')
 // Establish disposable runtime paths before importing application modules.
-const { isolatedApplicationEnv } = createRequire(import.meta.url)('../scripts/test/test-process-env.cjs')
+const { isolatedApplicationEnv } = createRequire(import.meta.url)('../../../scripts/test/test-process-env.cjs')
 Object.assign(process.env, isolatedApplicationEnv(root))
 process.env.FOXWARM_VECTOR_ENABLED = 'false'
-const repository = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '..')
+const repository = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '../../..')
 if (mode === 'seed') {
   await fs.mkdir(path.join(root, 'state'), { recursive: true })
   await fs.writeFile(path.join(root, 'state/models.yaml'), 'default: a\nproviders:\n  a:\n    providerType: openai-responses\n    baseUrl: http://127.0.0.1:1\n    apiKey: synthetic-not-a-key\n    models: [wire]\n')

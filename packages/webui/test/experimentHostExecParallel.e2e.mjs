@@ -46,7 +46,7 @@ await writeFile(join(fixture.data, 'state/sessions', percent + '.json'), JSON.st
 const catalog = new SessionCatalogStore(join(fixture.data, 'state/catalog.sqlite'))
 catalog.initializeEmpty(); catalog.replaceAll([{ id: percent, agent: 'main', model: 'local', currentNode: 'master', busy: false, queueLength: 0, meta: legacy.meta }]); catalog.close()
 const seed = join(fixture.root, 'legacy-seed.json'); await writeFile(seed, JSON.stringify([{ id: percent }]))
-execFileSync(process.execPath, ['dotnet/session-catalog-seed-ts.mjs', fixture.data, seed], { env: { ...process.env, FOXWARM_TS_ROOT: process.cwd() } })
+execFileSync(process.execPath, ['dotnet/Foxwarm.Tests/Fixtures/session-catalog-seed-ts.mjs', fixture.data, seed], { env: { ...process.env, FOXWARM_TS_ROOT: process.cwd() } })
 let stopped = true
 async function start() { await fixture.start(); stopped = false }
 async function create(name, agent = 'team') { const result = await fixture.api('POST', '/api/sessions', { agentId: agent, sessionId: name }); assert.equal(result.status, 200, JSON.stringify(result.body)); return result.body.sessionId }

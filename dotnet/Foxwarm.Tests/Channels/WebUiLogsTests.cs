@@ -81,7 +81,9 @@ public sealed class WebUiLogsTests
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        info.ArgumentList.Add(Path.Combine(root, "dotnet", "webui-logs-fixture-ts.mjs"));
+        info.ArgumentList.Add(
+            Path.Combine(root, "dotnet", "Foxwarm.Tests", "Fixtures", "webui-logs-fixture-ts.mjs")
+        );
         using var child = Process.Start(info)!;
         await child.StandardInput.WriteAsync(
             new JsonObject
