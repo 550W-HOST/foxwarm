@@ -163,8 +163,6 @@ internal sealed partial class SessionCatalog
                 last["conversationId"] = conversation;
             meta["lastChannel"] = last;
         }
-        if (Strings(inputMeta?["waitLivenessFingerprints"], 16, 128) is { } prints)
-            meta["waitLivenessFingerprints"] = prints;
         if (WaitProjection(inputMeta?["wait"]) is { } wait)
             meta["wait"] = wait;
         var result = new JsonObject

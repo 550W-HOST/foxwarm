@@ -306,9 +306,7 @@ public sealed partial class SessionSaveLane
 
     private static void PublishMeta(JsonObject target, JsonObject source)
     {
-        foreach (
-            var key in new[] { "wait", "waitLivenessFingerprints", "acceptedExternalEventIds" }
-        )
+        foreach (var key in new[] { "wait", "acceptedExternalEventIds" })
         {
             if (source.TryGetPropertyValue(key, out var value))
                 target[key] = value?.DeepClone();

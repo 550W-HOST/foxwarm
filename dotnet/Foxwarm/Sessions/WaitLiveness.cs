@@ -1,10 +1,8 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json.Nodes;
 
 namespace Foxwarm.Sessions;
 
-// Main-local port of waitLiveness.ts: an observed progress diagnostic, never task-completion detection.
+// Observed dependency progress diagnostic, never task-completion detection.
 internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
 {
     private const int MaxConcurrentWakes = 4;
@@ -15,10 +13,7 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
     );
     private readonly Dictionary<string, string[]> dependencies = new(StringComparer.Ordinal);
     private readonly Dictionary<string, HashSet<string>> reverse = new(StringComparer.Ordinal);
-    private readonly Dictionary<
-        string,
-        (string WaitId, string Fingerprint, string LegacyFingerprint, QueueItem Item)
-    > pending = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (string WaitId, QueueItem Item)> pending = new(StringComparer.Ordinal);
     private readonly Queue<string> order = new();
     private readonly Dictionary<string, TaskCompletionSource> active = new(StringComparer.Ordinal);
     private readonly HashSet<Task> tasks = [];
@@ -142,8 +137,6 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
             return;
         var visiting = new HashSet<string>(StringComparer.Ordinal);
         var memo = new Dictionary<string, bool>(StringComparer.Ordinal);
-        var observed = new List<string>();
-        var legacyObserved = new List<string>();
         bool Visit(string currentId, bool root = false)
         {
             if (memo.TryGetValue(currentId, out var known))
@@ -154,35 +147,6 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
             var metadata = current?.Metadata() ?? manager.CatalogMetadata(currentId);
             var state = current?.WaitSnapshot() ?? metadata?.Wait;
             var sources = state is null ? [] : Sources(state);
-            // Retain the original C# writer's observation only for reading its persisted receipts.
-            // New identities use Source's JSON.stringify field order, omissions and spelling.
-            var observation = new JsonObject
-            {
-                ["sessionId"] = currentId,
-                ["exists"] = metadata is not null,
-                ["state"] =
-                    metadata?.Busy == true ? "active"
-                    : state is not null ? "waiting"
-                    : "idle",
-                ["queueLength"] = metadata?.QueueLength ?? 0,
-                ["timeoutSeconds"] = state?["timeoutSeconds"]?.DeepClone(),
-                ["waitForInput"] = state?["waitForInput"]?.GetValue<bool>() == true,
-                ["waitExecIds"] = state?["waitExecIds"]?.DeepClone() ?? new JsonArray(),
-                ["dependencies"] = new JsonArray(
-                    sources.Select(source => (JsonNode?)JsonValue.Create(source)).ToArray()
-                ),
-            };
-            legacyObserved.Add(observation.ToJsonString());
-            if (metadata is null)
-                observation.Remove("state");
-            else
-                observation["state"] = (
-                    current?.RuntimeSnapshot(metadata)
-                    ?? SessionRuntimeState.Build(metadata, toolActive: false, compacting: false)
-                )["state"]!.DeepClone();
-            if (state?.ContainsKey("timeoutSeconds") != true)
-                observation.Remove("timeoutSeconds");
-            observed.Add(EcmaJson.Stringify(observation));
             var progress =
                 !root && (metadata?.Busy == true || metadata?.QueueLength > 0)
                 || SessionWait.Number(state?["timeoutSeconds"]) > 0
@@ -196,34 +160,10 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
         }
         if (Visit(id, root: true))
             return;
-        static string Fingerprint(List<string> rows)
-        {
-            rows.Sort(StringComparer.Ordinal);
-            return Convert
-                .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\n', rows))))[..24]
-                .ToLowerInvariant();
-        }
-        var fingerprint = Fingerprint(observed);
-        var legacyFingerprint = Fingerprint(legacyObserved);
-        var prior = owner is null
-            ? SessionWait.Strings(manager.Catalog.Get(id)?["meta"]?["waitLivenessFingerprints"])
-            : owner.Entry.WithState(state =>
-                SessionWait.Strings(state.Meta["waitLivenessFingerprints"])
-            );
-        if (
-            prior.Contains(fingerprint, StringComparer.Ordinal)
-            || prior.Contains(legacyFingerprint, StringComparer.Ordinal)
-        )
-            return;
         var item = SessionWait.Event(
             "wait-sources-quiescent",
             "The declared wait dependency Sessions currently show no queued, active, timed, exec-backed, input-backed, or transitively declared progress path after a short recheck. This is an observed potentially quiescent state, not proof of deadlock; explicit user or inter-session input may be needed.",
-            new JsonObject { ["fingerprint"] = fingerprint },
-            new JsonObject
-            {
-                ["waitLivenessFingerprint"] = fingerprint,
-                ["waitLivenessWaitId"] = expected,
-            }
+            fields: new JsonObject { ["waitLivenessWaitId"] = expected }
         );
         lock (gate)
         {
@@ -231,7 +171,7 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
                 return;
             if (!pending.ContainsKey(id))
                 order.Enqueue(id);
-            pending[id] = (expected, fingerprint, legacyFingerprint, item);
+            pending[id] = (expected, item);
             Pump();
         }
     }
@@ -257,19 +197,6 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
                 {
                     try
                     {
-                        // A cold projection may lag committed JSON. Check the original C# receipt
-                        // against the admitted authority too; ordinary Source receipts and stale wait
-                        // tokens remain checked by the save lane before delivery.
-                        var owner = await manager.GetExistingAsync(id);
-                        if (
-                            owner is null
-                            || owner.Entry.WithState(state =>
-                                SessionWait
-                                    .Strings(state.Meta["waitLivenessFingerprints"])
-                                    .Contains(wake.LegacyFingerprint, StringComparer.Ordinal)
-                            )
-                        )
-                            return;
                         await manager.AdmitWaitEventAsync(id, wake.Item);
                         while (!lifetime.IsCancellationRequested)
                         {
