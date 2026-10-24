@@ -52,7 +52,8 @@ public sealed partial class SqliteArchiveMessageStore
             ("created_at", "INTEGER", true, (string?)null, 0L),
             ("updated_at", "INTEGER", true, (string?)null, 0L),
         };
-        if (!actual.SequenceEqual(expected))
+        // Source projects these six columns by name and leaves retained extensions untouched.
+        if (!expected.All(actual.Contains))
             throw new InvalidDataException(
                 "archive_branches schema does not match the source branch schema."
             );
