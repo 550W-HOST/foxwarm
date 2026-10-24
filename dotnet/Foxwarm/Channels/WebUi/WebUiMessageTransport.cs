@@ -22,10 +22,15 @@ internal static class WebUiMessageTransport
 
     internal static void ProjectMessage(JsonObject message)
     {
-        if (message["providerMeta"] is JsonObject messageMeta
-            && messageMeta["providerSpecificFields"] is JsonObject fields)
+        if (
+            message["providerMeta"] is JsonObject messageMeta
+            && messageMeta["providerSpecificFields"] is JsonObject fields
+        )
             ReplaceWithLength(fields, "reasoning_signature", "reasoning_signature_length");
-        if (message["compaction"] is JsonObject compaction && compaction["planner"] is JsonObject planner)
+        if (
+            message["compaction"] is JsonObject compaction
+            && compaction["planner"] is JsonObject planner
+        )
             ProjectMessages(planner["messages"]);
         ProjectParts(message["parts"]);
     }
@@ -41,9 +46,11 @@ internal static class WebUiMessageTransport
             ReplaceWithLength(metadata, "encryptedThinking", "encryptedThinkingLength");
             ReplaceWithLength(metadata, "redactedThinking", "redactedThinkingLength");
             ReplaceWithLength(metadata, "signature", "signatureLength");
-            if (metadata["openaiResponses"] is JsonObject responses
+            if (
+                metadata["openaiResponses"] is JsonObject responses
                 && responses["outputItem"] is JsonObject item
-                && SessionWait.Text(item["type"]) == "reasoning")
+                && SessionWait.Text(item["type"]) == "reasoning"
+            )
                 ReplaceWithLength(item, "encrypted_content", "encryptedThinkingLength");
         }
     }

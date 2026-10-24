@@ -106,7 +106,11 @@ internal sealed partial class SessionOwner
             {
                 lock (draftGate)
                 {
-                    if (draft is not null && SessionWait.Text(message["__meta"]?["llmRequestId"]) == SessionWait.Text(draft["llmRequestId"]))
+                    if (
+                        draft is not null
+                        && SessionWait.Text(message["__meta"]?["llmRequestId"])
+                            == SessionWait.Text(draft["llmRequestId"])
+                    )
                         FlushDraftLocked();
                     Emit(SessionEventKind.MessageCommitted, message);
                     ClearCommittedDraft(message);

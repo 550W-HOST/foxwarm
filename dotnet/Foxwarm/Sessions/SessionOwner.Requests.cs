@@ -155,20 +155,32 @@ internal sealed partial class SessionOwner
         {
             if (draft is null)
                 return;
-            if (draft["committedThrough"]?.GetValue<int>() is int through && progress.Parts is not null)
+            if (
+                draft["committedThrough"]?.GetValue<int>() is int through
+                && progress.Parts is not null
+            )
                 progress = ProjectDraft(progress, through);
             latestDraftProgress = progress;
             draft["text"] = progress.Text;
             draft["reasoning"] = progress.Reasoning;
-            draft["toolCalls"] = new JsonArray(progress.ToolCalls.Select(call => (JsonNode?)new JsonObject
-            {
-                ["index"] = call.Index,
-                ["id"] = call.Id,
-                ["name"] = call.Name,
-                ["arguments"] = call.Arguments ?? "",
-            }).ToArray());
+            draft["toolCalls"] = new JsonArray(
+                progress
+                    .ToolCalls.Select(call =>
+                        (JsonNode?)
+                            new JsonObject
+                            {
+                                ["index"] = call.Index,
+                                ["id"] = call.Id,
+                                ["name"] = call.Name,
+                                ["arguments"] = call.Arguments ?? "",
+                            }
+                    )
+                    .ToArray()
+            );
             if (progress.Parts is not null)
-                draft["parts"] = new JsonArray(progress.Parts.Select(part => (JsonNode?)PartObject(part)).ToArray());
+                draft["parts"] = new JsonArray(
+                    progress.Parts.Select(part => (JsonNode?)PartObject(part)).ToArray()
+                );
             var delay = DraftInterval - draftClock.GetElapsedTime(lastDraftSent);
             if (delay <= TimeSpan.Zero)
                 NotifyDraftLocked(forceToolArgs: false);
@@ -182,142 +194,150 @@ internal sealed partial class SessionOwner
     {
         if (draft is null || emittedDraft is null || latestDraftProgress is not { } progress)
             return;
-        var toolArgsDue = forceToolArgs || draftClock.GetElapsedTime(lastToolArgsSent) >= ToolArgsInterval;
-            var previousText = emittedDraft!["text"]?.GetValue<string>() ?? "";
-            var previousReasoning = emittedDraft!["reasoning"]?.GetValue<string>() ?? "";
-            var hasParts = progress.Parts is not null || emittedDraft!["parts"] is JsonArray;
-            var previousParts = (emittedDraft!["parts"] as JsonArray ?? new JsonArray())
-                .OfType<JsonObject>()
-                .ToDictionary(PartKey);
-            var newCalls = new JsonArray();
-            var deltas = new JsonArray();
-            var newParts = new JsonArray();
-            var partDeltas = new JsonArray();
-            var oldCalls = (emittedDraft!["toolCalls"] as JsonArray ?? new JsonArray())
-                .OfType<JsonObject>()
-                .ToDictionary(item => item["index"]!.GetValue<int>());
-            foreach (var call in progress.ToolCalls)
+        var toolArgsDue =
+            forceToolArgs || draftClock.GetElapsedTime(lastToolArgsSent) >= ToolArgsInterval;
+        var previousText = emittedDraft!["text"]?.GetValue<string>() ?? "";
+        var previousReasoning = emittedDraft!["reasoning"]?.GetValue<string>() ?? "";
+        var hasParts = progress.Parts is not null || emittedDraft!["parts"] is JsonArray;
+        var previousParts = (emittedDraft!["parts"] as JsonArray ?? new JsonArray())
+            .OfType<JsonObject>()
+            .ToDictionary(PartKey);
+        var newCalls = new JsonArray();
+        var deltas = new JsonArray();
+        var newParts = new JsonArray();
+        var partDeltas = new JsonArray();
+        var oldCalls = (emittedDraft!["toolCalls"] as JsonArray ?? new JsonArray())
+            .OfType<JsonObject>()
+            .ToDictionary(item => item["index"]!.GetValue<int>());
+        foreach (var call in progress.ToolCalls)
+        {
+            oldCalls.TryGetValue(call.Index, out var old);
+            var oldArgs = old?["arguments"]?.GetValue<string>() ?? "";
+            var nextArgs = toolArgsDue ? call.Arguments ?? "" : oldArgs;
+            var oldId = old?["id"]?.GetValue<string>();
+            var oldName = old?["name"]?.GetValue<string>();
+            var entry = new JsonObject { ["index"] = call.Index, ["arguments"] = nextArgs };
+            if (call.Id is not null)
+                entry["id"] = call.Id;
+            if (call.Name is not null)
+                entry["name"] = call.Name;
+            newCalls.Add(entry);
+            if (old is null || oldArgs != nextArgs || oldId != call.Id || oldName != call.Name)
             {
-                oldCalls.TryGetValue(call.Index, out var old);
-                var oldArgs = old?["arguments"]?.GetValue<string>() ?? "";
-                var nextArgs = toolArgsDue ? call.Arguments ?? "" : oldArgs;
-                var oldId = old?["id"]?.GetValue<string>();
-                var oldName = old?["name"]?.GetValue<string>();
-                var entry = new JsonObject { ["index"] = call.Index, ["arguments"] = nextArgs };
+                var delta = new JsonObject { ["index"] = call.Index };
                 if (call.Id is not null)
-                    entry["id"] = call.Id;
+                    delta["id"] = call.Id;
                 if (call.Name is not null)
-                    entry["name"] = call.Name;
-                newCalls.Add(entry);
-                if (old is null || oldArgs != nextArgs || oldId != call.Id || oldName != call.Name)
-                {
-                    var delta = new JsonObject { ["index"] = call.Index };
-                    if (call.Id is not null)
-                        delta["id"] = call.Id;
-                    if (call.Name is not null)
-                        delta["name"] = call.Name;
-                    if (oldArgs != nextArgs)
-                        delta["argumentsDelta"] = new JsonObject
-                        {
-                            ["offset"] = nextArgs.StartsWith(oldArgs, StringComparison.Ordinal)
-                                ? oldArgs.Length
-                                : 0,
-                            ["text"] = nextArgs.StartsWith(oldArgs, StringComparison.Ordinal)
-                                ? nextArgs[oldArgs.Length..]
-                                : nextArgs,
-                        };
-                    deltas.Add(delta);
-                }
+                    delta["name"] = call.Name;
+                if (oldArgs != nextArgs)
+                    delta["argumentsDelta"] = new JsonObject
+                    {
+                        ["offset"] = nextArgs.StartsWith(oldArgs, StringComparison.Ordinal)
+                            ? oldArgs.Length
+                            : 0,
+                        ["text"] = nextArgs.StartsWith(oldArgs, StringComparison.Ordinal)
+                            ? nextArgs[oldArgs.Length..]
+                            : nextArgs,
+                    };
+                deltas.Add(delta);
             }
-            foreach (var part in progress.Parts ?? [])
-            {
-                var next = PartObject(part);
-                newParts.Add(next);
-                var key = PartKey(next);
-                previousParts.TryGetValue(key, out var old);
-                var oldText = old?["text"]?.GetValue<string>() ?? "";
-                var nextText = next["text"]?.GetValue<string>() ?? "";
-                var delta = new JsonObject
-                {
-                    ["outputIndex"] = part.OutputIndex,
-                    ["kind"] = part.Kind,
-                };
-                if (part.ContentIndex is not null)
-                    delta["contentIndex"] = part.ContentIndex;
-                if (part.SummaryIndex is not null)
-                    delta["summaryIndex"] = part.SummaryIndex;
-                if (part.Phase is not null && part.Phase != old?["phase"]?.GetValue<string>())
-                    delta["phase"] = part.Phase;
-                if (old is null)
-                    delta["added"] = true;
-                if (part.Status is not null && part.Status != old?["status"]?.GetValue<string>())
-                    delta["status"] = part.Status;
-                if (part.Text is not null && oldText != nextText)
-                    delta["textDelta"] = Delta(oldText, nextText);
-                if (
-                    old is null
-                    || delta.Count
-                        > 2
-                            + (part.ContentIndex is null ? 0 : 1)
-                            + (part.SummaryIndex is null ? 0 : 1)
-                )
-                    partDeltas.Add(delta);
-            }
-            var changed =
-                previousText != progress.Text
-                || previousReasoning != progress.Reasoning
-                || deltas.Count > 0
-                || partDeltas.Count > 0;
-            if (!changed)
-                return;
-            var textDelta =
-                previousText != progress.Text ? Delta(previousText, progress.Text) : null;
-            var reasoningDelta =
-                previousReasoning != progress.Reasoning
-                    ? Delta(previousReasoning, progress.Reasoning)
-                    : null;
-            var nextSequence = emittedDraft!["sequence"]!.GetValue<int>() + 1;
-            draft!["sequence"] = nextSequence;
-            emittedDraft!["sequence"] = nextSequence;
-            emittedDraft["text"] = progress.Text;
-            emittedDraft["reasoning"] = progress.Reasoning;
-            emittedDraft["toolCalls"] = newCalls;
-            if (hasParts)
-                emittedDraft["parts"] = newParts;
-            var update = new JsonObject
-            {
-                ["type"] = "model-stream-update",
-                ["streamVersion"] = 2,
-                ["streamId"] = emittedDraft!["streamId"]!.GetValue<string>(),
-                ["iteration"] = 1,
-                ["sequenceStart"] = nextSequence,
-                ["sequence"] = nextSequence,
-                ["startedAt"] = emittedDraft!["startedAt"]!.GetValue<long>(),
-                ["llmRequestId"] = emittedDraft!["llmRequestId"]!.GetValue<string>(),
-            };
-            if (textDelta is not null)
-                update["textDelta"] = textDelta;
-            if (reasoningDelta is not null)
-                update["reasoningDelta"] = reasoningDelta;
-            if (deltas.Count > 0)
-                update["toolCallDeltas"] = deltas;
-            if (partDeltas.Count > 0)
-                update["partDeltas"] = partDeltas;
-            lastDraftSent = draftClock.GetTimestamp();
-            if (deltas.OfType<JsonObject>().Any(delta => delta.ContainsKey("argumentsDelta")))
-                lastToolArgsSent = lastDraftSent;
-            Emit(SessionEventKind.ModelStream, update);
+        }
+        foreach (var part in progress.Parts ?? [])
+        {
+            var next = PartObject(part);
+            newParts.Add(next);
+            var key = PartKey(next);
+            previousParts.TryGetValue(key, out var old);
+            var oldText = old?["text"]?.GetValue<string>() ?? "";
+            var nextText = next["text"]?.GetValue<string>() ?? "";
+            var delta = new JsonObject { ["outputIndex"] = part.OutputIndex, ["kind"] = part.Kind };
+            if (part.ContentIndex is not null)
+                delta["contentIndex"] = part.ContentIndex;
+            if (part.SummaryIndex is not null)
+                delta["summaryIndex"] = part.SummaryIndex;
+            if (part.Phase is not null && part.Phase != old?["phase"]?.GetValue<string>())
+                delta["phase"] = part.Phase;
+            if (old is null)
+                delta["added"] = true;
+            if (part.Status is not null && part.Status != old?["status"]?.GetValue<string>())
+                delta["status"] = part.Status;
+            if (part.Text is not null && oldText != nextText)
+                delta["textDelta"] = Delta(oldText, nextText);
+            if (
+                old is null
+                || delta.Count
+                    > 2 + (part.ContentIndex is null ? 0 : 1) + (part.SummaryIndex is null ? 0 : 1)
+            )
+                partDeltas.Add(delta);
+        }
+        var changed =
+            previousText != progress.Text
+            || previousReasoning != progress.Reasoning
+            || deltas.Count > 0
+            || partDeltas.Count > 0;
+        if (!changed)
+            return;
+        var textDelta = previousText != progress.Text ? Delta(previousText, progress.Text) : null;
+        var reasoningDelta =
+            previousReasoning != progress.Reasoning
+                ? Delta(previousReasoning, progress.Reasoning)
+                : null;
+        var nextSequence = emittedDraft!["sequence"]!.GetValue<int>() + 1;
+        draft!["sequence"] = nextSequence;
+        emittedDraft!["sequence"] = nextSequence;
+        emittedDraft["text"] = progress.Text;
+        emittedDraft["reasoning"] = progress.Reasoning;
+        emittedDraft["toolCalls"] = newCalls;
+        if (hasParts)
+            emittedDraft["parts"] = newParts;
+        var update = new JsonObject
+        {
+            ["type"] = "model-stream-update",
+            ["streamVersion"] = 2,
+            ["streamId"] = emittedDraft!["streamId"]!.GetValue<string>(),
+            ["iteration"] = 1,
+            ["sequenceStart"] = nextSequence,
+            ["sequence"] = nextSequence,
+            ["startedAt"] = emittedDraft!["startedAt"]!.GetValue<long>(),
+            ["llmRequestId"] = emittedDraft!["llmRequestId"]!.GetValue<string>(),
+        };
+        if (textDelta is not null)
+            update["textDelta"] = textDelta;
+        if (reasoningDelta is not null)
+            update["reasoningDelta"] = reasoningDelta;
+        if (deltas.Count > 0)
+            update["toolCallDeltas"] = deltas;
+        if (partDeltas.Count > 0)
+            update["partDeltas"] = partDeltas;
+        lastDraftSent = draftClock.GetTimestamp();
+        if (deltas.OfType<JsonObject>().Any(delta => delta.ContainsKey("argumentsDelta")))
+            lastToolArgsSent = lastDraftSent;
+        Emit(SessionEventKind.ModelStream, update);
     }
 
     private void ScheduleToolArgsLocked()
     {
         if (draft is null || emittedDraft is null)
             return;
-        var sent = (emittedDraft["toolCalls"] as JsonArray ?? []).OfType<JsonObject>()
+        var sent = (emittedDraft["toolCalls"] as JsonArray ?? [])
+            .OfType<JsonObject>()
             .ToDictionary(call => call["index"]!.GetValue<int>());
-        if ((draft["toolCalls"] as JsonArray ?? []).OfType<JsonObject>().Any(call =>
-            (SessionWait.Text(call["arguments"]) ?? "") != (SessionWait.Text(sent.GetValueOrDefault(call["index"]!.GetValue<int>())?["arguments"]) ?? "")))
-            ScheduleDraftLocked(arguments: true, ToolArgsInterval - draftClock.GetElapsedTime(lastToolArgsSent));
+        if (
+            (draft["toolCalls"] as JsonArray ?? [])
+                .OfType<JsonObject>()
+                .Any(call =>
+                    (SessionWait.Text(call["arguments"]) ?? "")
+                    != (
+                        SessionWait.Text(
+                            sent.GetValueOrDefault(call["index"]!.GetValue<int>())?["arguments"]
+                        ) ?? ""
+                    )
+                )
+        )
+            ScheduleDraftLocked(
+                arguments: true,
+                ToolArgsInterval - draftClock.GetElapsedTime(lastToolArgsSent)
+            );
     }
 
     private void ScheduleDraftLocked(bool arguments, TimeSpan delay)
@@ -326,21 +346,33 @@ internal sealed partial class SessionOwner
             return;
         var expected = draft;
         ITimer timer = null!;
-        timer = draftClock.CreateTimer(_ =>
-        {
-            lock (draftGate)
+        timer = draftClock.CreateTimer(
+            _ =>
             {
-                if (!ReferenceEquals(draft, expected) || !ReferenceEquals(arguments ? toolArgsTimer : draftTimer, timer))
-                    return;
-                timer.Dispose();
-                if (arguments) toolArgsTimer = null;
-                else draftTimer = null;
-                NotifyDraftLocked(forceToolArgs: false);
-                ScheduleToolArgsLocked();
-            }
-        }, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-        if (arguments) toolArgsTimer = timer;
-        else draftTimer = timer;
+                lock (draftGate)
+                {
+                    if (
+                        !ReferenceEquals(draft, expected)
+                        || !ReferenceEquals(arguments ? toolArgsTimer : draftTimer, timer)
+                    )
+                        return;
+                    timer.Dispose();
+                    if (arguments)
+                        toolArgsTimer = null;
+                    else
+                        draftTimer = null;
+                    NotifyDraftLocked(forceToolArgs: false);
+                    ScheduleToolArgsLocked();
+                }
+            },
+            null,
+            Timeout.InfiniteTimeSpan,
+            Timeout.InfiniteTimeSpan
+        );
+        if (arguments)
+            toolArgsTimer = timer;
+        else
+            draftTimer = timer;
         timer.Change(delay > TimeSpan.Zero ? delay : TimeSpan.Zero, Timeout.InfiniteTimeSpan);
     }
 

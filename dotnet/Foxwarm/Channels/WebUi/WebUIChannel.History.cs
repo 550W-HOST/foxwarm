@@ -244,7 +244,9 @@ internal sealed partial class WebUIChannel
                         strict: false,
                         request.HttpContext.RequestAborted
                     );
-                var projectedMessage = record is null ? null : WebUiMessageTransport.Message(record.Message);
+                var projectedMessage = record is null
+                    ? null
+                    : WebUiMessageTransport.Message(record.Message);
                 return record is null
                     ? Results.NotFound(new { error = "Archived message not found" })
                     : Results.Ok(
@@ -414,7 +416,9 @@ internal sealed partial class WebUIChannel
                         agentName,
                         sessionId
                     );
-                    foreach (var source in (result["results"] as JsonArray ?? []).OfType<JsonObject>())
+                    foreach (
+                        var source in (result["results"] as JsonArray ?? []).OfType<JsonObject>()
+                    )
                         WebUiMessageTransport.ProjectMessages(source["messages"]);
                     return Results.Ok(result);
                 }
