@@ -555,7 +555,7 @@ internal sealed partial class SessionManager
                                 .Select(text => (JsonNode?)JsonValue.Create(text))
                                 .ToArray()
                         );
-                    state.AuthorityEnvelope["promptCacheKey"] = Guid.NewGuid().ToString("N");
+                    state.AuthorityEnvelope["promptCacheKey"] = Guid.NewGuid().ToString();
                 });
                 var branch = store.Archive.EnsureBranch();
                 try
