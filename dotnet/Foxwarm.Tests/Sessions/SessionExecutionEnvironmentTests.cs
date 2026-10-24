@@ -151,13 +151,18 @@ public sealed class SessionExecutionEnvironmentTests
             Options,
             HostModels.ForTest(Options)
         );
+        var reads = new List<string>();
+        manager.AdmissionReadObserved = reads.Add;
         await Assert.ThrowsAsync<InvalidDataException>(() => manager.LoadAsync());
         await Task.Delay(100);
+        Assert.Equal(new[] { "foreign" }, reads);
         Assert.Null(manager.Find("foreign"));
-        var owner = manager.Find("deadline")!;
-        Assert.Equal("original", owner.WaitSnapshot()!["id"]!.GetValue<string>());
-        Assert.Empty(owner.Entry.Snapshot().History);
-        Assert.Empty(owner.Entry.Snapshot().Queue);
+        Assert.Null(manager.Find("deadline"));
+        Assert.Empty(manager.Owners());
+        Assert.Equal(
+            "original",
+            manager.CatalogMetadata("deadline")!.Wait!["id"]!.GetValue<string>()
+        );
         Assert.Equal(raw.ToJsonString(), await File.ReadAllTextAsync(file));
     }
 

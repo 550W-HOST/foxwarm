@@ -28,6 +28,8 @@ The hidden Archive message and block tools retain an independent same-Agent read
 
 ## Policy selectors and authoritative facts
 
+Main path facts name physical destinations: home expansion is followed by real symlink resolution through the nearest existing ancestor before any missing suffix is appended. Path-policy expectations use filesystem evidence for a symlinked home rather than its lexical profile alias.
+
 Version-1 rules accept either legacy `match` or top-level selectors, never both. Omitted IDs become position-based `rule-N` diagnostics. Top-level Session/Node identity selectors use bounded literal `*` patterns; legacy `match.session`, scalar/argument matchers, ordered first-match evaluation and external-default-deny remain unchanged. Node selectors also accept caller-current or exact Provider IDs: native Main is `master`, authenticated native remotes are `authenticated-remote`. The matcher syntax does not create a Provider backend or widen native Node registration.
 
 `ToolAuthorizationNodeEffects.Resolve` registers actual Node effects separately from legacy `TargetNode` and exact caller `CurrentNode`. Node capabilities and file/image delivery contribute one endpoint; copy contributes both; concrete builtin Node select/inspect contributes its argument target. Unrelated Main/MCP tools, arbitrary `nodeId` arguments and the ToolScript VM/source placement do not acquire Node facts. Allow requires all actual endpoints; deny matches any. Unknown builtin endpoint selectors remain conditional in discovery without inventory enumeration. Session and inbound external MCP callers construct facts through their existing authority owners; external contexts never become internal/current-Node principals.

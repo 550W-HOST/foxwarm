@@ -66,11 +66,12 @@ public sealed class ToolAuthorizationPathTests
             "write",
             new JsonObject { ["filePath"] = "~/literal", ["createDirs"] = true }
         );
+        var home = new DirectoryInfo(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+        );
+        var physicalHome = home.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? home.FullName;
         Assert.Equal(
-            Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                "literal"
-            ),
+            Path.Combine(physicalHome, "literal"),
             Assert.Single(literal).Resolved
         );
         Assert.False(
