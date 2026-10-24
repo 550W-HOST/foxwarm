@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { mkdtemp, mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
@@ -59,6 +59,7 @@ try {
   provider.listen(0, '127.0.0.1'); await once(provider, 'listening')
   const providerPort = provider.address().port; const hostPort = await port()
   await mkdir(join(dataRoot, 'state'), { recursive: true })
+  await writeFile(join(dataRoot, 'state/tool-authorization.yaml'), "version: 1\ndefaultAction: allow\nrules:\n- id: forbid-other-native-paths\n  action: deny\n  match:\n    tool: {source: node, name: [read, write, edit, apply_patch]}\n    path: {anyNotWithin: '${agent.dir}'}\n")
   await writeFile(join(dataRoot, 'state/config.yaml'), `bot: {httpPort: ${hostPort}}\n`)
   await writeFile(join(dataRoot, 'state/token'), apiToken, { mode: 0o600 })
   async function startHost() {
@@ -139,7 +140,7 @@ PY`, timeout: 5 })
   const dir = await output('dirs'); assert(dir.includes('Showing items 1-50 of 56.') && !dir.includes('item50'))
   const next = await output('dirs', { startLine: 51 }); assert(next.includes('Showing items 51-56 of 56.') && next.includes('z-subdir/'))
   assert((await output('dirs', { startLine: 0, endLine: -1 })).includes('no items'))
-  assert((await invoke('read', { filePath: 'readlink' })).error); assert((await invoke('read', { filePath: 'fifo' })).error)
+  assert((await output('readlink')).includes('ORIGINAL')); assert((await invoke('read', { filePath: 'fifo' })).error)
   assert((await output(join(workRoot, 'mixed.txt'))).includes('File has 4 lines.'))
   function ref(result) { const id = /contentRef: "(write_[a-f0-9]+)"/.exec(result.error?.message || '')?.[1]; assert(id, JSON.stringify(result)); return id }
   const existingRef = ref(await invoke('write', { filePath: 'existing.txt', content: 'REPLACEMENT' }))

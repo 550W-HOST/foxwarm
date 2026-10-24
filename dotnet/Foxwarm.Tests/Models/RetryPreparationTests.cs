@@ -113,6 +113,7 @@ public sealed class RetryPreparationTests
         var catalog = Catalog(peer.BaseUri);
         var requests = new ModelRequestOwner(http, Defaults(peer.BaseUri), routing);
         var preparation = 0;
+        var preparedAt = 0L;
         var prompts = new List<string>();
         var notices = new List<ModelRetryEvent>();
         var result = await requests.RequestAsync(
@@ -145,12 +146,17 @@ public sealed class RetryPreparationTests
                 if (preparation == 1)
                     routing.Begin("route", Catalog(peer.BaseUri, true).Resolve("route"));
                 await Task.Yield();
+                preparedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 return new[] { User("seed"), User("prepared-" + preparation) };
             }
         );
         Assert.Equal(2, preparation);
         Assert.Equal(new[] { "a/wire", "a/wire", "b/wire" }, prompts);
         Assert.Equal("b/wire", result.AssistantMessage!["__meta"]!["modelId"]!.GetValue<string>());
+        Assert.True(
+            result.AssistantMessage["__meta"]!["llmRequestTiming"]!["startedAt"]!.GetValue<double>()
+                >= preparedAt - 1
+        );
         Assert.True(Stopwatch.GetElapsedTime(times[0], times[1]).TotalMilliseconds >= 1900);
         Assert.True(Stopwatch.GetElapsedTime(times[1], times[2]).TotalMilliseconds >= 4900);
         for (var index = 0; index < 3; index++)

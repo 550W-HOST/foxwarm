@@ -14,6 +14,7 @@ const history = async id => (await fixture.api('GET', route(id) + '/history')).b
 const authority = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
 const textOf = item => (item.content || []).map(part => part.text || '').join('')
 const inputText = input => input.filter(item => item.role === 'user').map(textOf).join('\n')
+const isInput = (row, text) => row.role === 'user' && row.parts?.some(part => part.text === text || part.system?.split('\n').includes(text))
 const final = text => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
 const tool = (id, name, args) => ({ type: 'function_call', id: 'output-' + id, call_id: id, name, arguments: JSON.stringify(args) })
 const replay = output => output.map(item => { const value = { ...item }; delete value.id; delete value.status; return value })
@@ -26,14 +27,14 @@ function record(body, full, kind, headers, complete) {
     value.ranges = [...input.matchAll(/^- M#(\d+)(?:-#(\d+))?\s/gm)].map(match => [Number(match[1]), Number(match[2] || match[1])])
     assert(value.ranges.length, 'genuine frozen candidates'); value.valid = () => complete([tool('valid-plan-' + (++plans), 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: value.ranges[0][0], sourceEnd: value.ranges.at(-1)[1], summary: 'Exact ordered prior dialogue and paired effects.' }] })])
     value.invalid = () => complete([tool('invalid-plan-' + (++plans), 'submit_compact_plan', { replaceAsBlocks: [{ level: 1, sourceKind: 'message', sourceStart: 999999, sourceEnd: 1000000, summary: 'Invalid range.' }] })])
-    if (input.includes('COMPACT PLAN INVALID.')) {
+    if (JSON.stringify(full).includes('compact_plan_invalid')) {
       if (mode === 'reload') { assert(!body.previous_response_id); assert.equal(headers['x-generation'], 'two') }
       else assert(body.previous_response_id, 'real background transient suffix')
       value.valid(); return value
     }
     held.set('plan', value); if (mode === 'immediate') value.valid(); return value
   }
-  if (scenario.startsWith('held-') && !input.includes('QUEUED-B')) { held.set(scenario, value); value.partial?.(); return value }
+  if (scenario.startsWith('held-') && !input.includes('QUEUED-B') && !(scenario === 'held-shutdown' && input.includes('type="session-resumed"'))) { held.set(scenario, value); value.partial?.(); return value }
   if (scenario === 'self-tool' && !full.some(item => item.type === 'function_call_output' && item.call_id === 'self-compact')) {
     complete([tool('self-compact', 'compact_session', { keepPercent: 0, summary: 'Summarize the older context only.' }), tool('held-exec', 'exec', { command: 'printf started > gate-started; while [ ! -f gate-release ]; do sleep 0.05; done; printf paired-finished', timeout: 15 })]); return value
   }
@@ -51,7 +52,7 @@ const peer = createServer(async (request, response) => {
     const complete = output => { response.write('data: ' + JSON.stringify({ type: 'response.completed', response: { id: 'http-' + (++responseSequence), status: 'completed', output, usage: { input_tokens: output.some(item => item.call_id === 'auto-read') ? 19000 : 40, output_tokens: 3 } } }) + '\n\n'); response.end() }
     value = record(body, body.input, 'http', request.headers, complete)
     value.partial = () => { response.write('data: ' + JSON.stringify({ type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', content: [] } }) + '\n\n'); response.write('data: ' + JSON.stringify({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'VISIBLE-FOREGROUND' }) + '\n\n') }
-    if (value.scenario.startsWith('held-') && !value.planning && !inputText(value.full).includes('QUEUED-B')) value.partial()
+    if (held.get(value.scenario) === value) value.partial()
     response.on('close', () => { value.closed = true })
   } catch (error) { errors.push(error.stack); response.destroy() }
 })
@@ -67,7 +68,7 @@ server.on('connection', (ws, request) => {
       const complete = output => { const id = 'ws-' + (++responseSequence); connection.states.set(id, [...full, ...replay(output)]); ws.send(JSON.stringify({ type: 'response.completed', response: { id, status: 'completed', output, usage: { input_tokens: output.some(item => item.call_id === 'auto-read') ? 19000 : 40, output_tokens: 3 } } }), { compress: true }) }
       const value = record(body, full, 'ws', request.headers, complete); value.connection = connection
       value.partial = () => { ws.send(JSON.stringify({ type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', content: [] } }), { compress: true }); ws.send(JSON.stringify({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'VISIBLE-FOREGROUND' }), { compress: true }) }
-      if (value.scenario.startsWith('held-') && !value.planning && !inputText(value.full).includes('QUEUED-B')) value.partial()
+      if (held.get(value.scenario) === value) value.partial()
     } catch (error) { errors.push(error.stack); ws.close(1011) }
   })
 })
@@ -81,9 +82,13 @@ async function send(id, scenario, text = '') {
 }
 async function seed(id, label) { for (let i = 0; i < 7; i++) await send(id, `seed-${label}-${i}`, ('ordered-' + label + '-' + i + '-').repeat(750)) }
 const command = (id, text) => fixture.api('POST', route(id) + '/message', { text })
+async function selectSession(page, id) {
+  await page.evaluate(value => window.foxwarmTest.switchToSession(value), id)
+  await page.waitForFunction(value => document.querySelector('[data-session-header-subtitle]')?.textContent.includes('session ' + value), {}, id)
+}
 try {
   await fixture.start(); const main = await create(); const page = await fixture.openApp(); await saveModelsInOriginalApp(page, yaml.dump(config()), fixture.modelPath)
-  await page.evaluate(id => window.foxwarmTest.switchToSession(id), main); await seed(main, 'paired')
+  await selectSession(page, main); await seed(main, 'paired')
   const originalArchive = fixture.sql('SELECT message_json FROM archive_messages WHERE session_id=? ORDER BY seq', [main]), cache = (await authority(main)).promptCacheKey
   await page.evaluate(() => window.foxwarmTest.sendMessage('CASE:self-tool'))
   await until(() => held.has('plan'), 'busy-self real handler background planner'); const planner = held.get('plan')
@@ -96,28 +101,28 @@ try {
   await command(main, 'QUEUED-B'); assert.deepEqual((await authority(main)).queue.map(item => item.type), ['user', 'compact-commit', 'user'])
   assert(!(await history(main)).messages.some(row => row.__meta?.contextBlock), 'no apply inside executing call/result')
   await writeFile(join(fixture.work, 'gate-release'), 'release'); await until(async () => !(await history(main)).session.busy, 'paired effect and ready-first next request')
-  const live = await history(main), a = live.messages.findIndex(row => row.parts?.some(part => part.text === 'QUEUED-A')), b = live.messages.findIndex(row => row.parts?.some(part => part.text === 'QUEUED-B')), paired = live.messages.findIndex(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'self-compact'))
+  const live = await history(main), a = live.messages.findIndex(row => isInput(row, 'QUEUED-A')), b = live.messages.findIndex(row => isInput(row, 'QUEUED-B')), paired = live.messages.findIndex(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'self-compact'))
   assert(live.messages.some(row => row.__meta?.contextBlock)); assert(a > paired && b === a + 1); assert(live.messages[paired - 1].parts.some(part => part.functionCall?.id === 'self-compact'))
   const next = records.filter(row => !row.planning && row.full.some(item => item.type === 'function_call_output' && item.call_id === 'self-compact'))
   assert.equal(next.length, 1); assert(inputText(next[0].full).includes('QUEUED-A')); assert(inputText(next[0].full).includes('QUEUED-B'))
   assert.equal((await authority(main)).promptCacheKey, cache); assert.equal((await authority(main)).queue.length, 0)
   assert.deepEqual(fixture.sql('SELECT message_json FROM archive_messages WHERE session_id=? ORDER BY seq LIMIT ?', [main, originalArchive.length]), originalArchive)
 
-  const stopped = await create(); await seed(stopped, 'stopped'); await page.evaluate(id => window.foxwarmTest.switchToSession(id), stopped)
+  const stopped = await create(); await seed(stopped, 'stopped'); await selectSession(page, stopped)
   await page.evaluate(() => window.foxwarmTest.sendMessage('CASE:held-foreground')); await until(() => held.has('held-foreground'), 'held genuine foreground'); await until(async () => (await page.evaluate(() => document.body.innerText)).includes('VISIBLE-FOREGROUND'), 'original draft')
-  held.delete('plan'); assert.equal((await command(stopped, '/compact')).status, 202); await until(() => held.has('plan'), 'independent busy manual planner'); const background = held.get('plan'), beforeStop = (await history(stopped)).messages
+  held.delete('plan'); assert.equal((await command(stopped, '/compact')).status, 200); await until(() => held.has('plan'), 'independent busy manual planner'); const background = held.get('plan'), beforeStop = (await history(stopped)).messages
   assert.equal(background.body.prompt_cache_key, sha(stopped + '--compact-plan')); assert.notEqual(background.connection.id, held.get('held-foreground').connection.id)
   const time = Date.now(); assert.equal((await fixture.api('POST', route(stopped) + '/stop')).status, 200); assert(Date.now() - time < 2500, 'Stop does not wait for held background')
   assert(!background.connection.closed); assert(!(await history(stopped)).session.busy)
-  assert.equal((await command(stopped, '/stop compact')).body.stoppedCompact, true); await until(() => background.connection.closed, 'compact-only provider cancellation'); assert.deepEqual((await history(stopped)).messages, beforeStop)
+  assert.equal((await command(stopped, '/stop compact')).body.success, true); await until(() => background.connection.closed, 'compact-only provider cancellation'); assert.deepEqual((await history(stopped)).messages, beforeStop)
   held.delete('plan'); const beforeControl = records.length; await command(stopped, '/compact'); await until(() => held.has('plan'), 'new idle background'); held.get('plan').valid()
   await until(async () => (await history(stopped)).messages.some(row => row.__meta?.contextBlock) && !(await history(stopped)).session.busy, 'control-only apply')
   assert.equal(records.slice(beforeControl).filter(row => !row.planning).length, 0)
 
   const synced = await create('sync'); await seed(synced, 'sync'); await command(synced, 'CASE:held-sync'); await until(() => held.has('held-sync'), 'held HTTP foreground')
-  const noDeferred = records.length; assert.equal((await command(synced, '/compact')).status, 409); assert(!(await authority(synced)).queue.some(item => item.type.includes('compact')))
+  const noDeferred = records.length; assert.equal((await command(synced, '/compact')).status, 200); assert(!(await authority(synced)).queue.some(item => item.type.includes('compact')))
   await fixture.api('POST', route(synced) + '/stop'); assert.equal(records.length, noDeferred)
-  held.delete('plan'); assert.equal((await command(synced, '/compact')).status, 202); await until(() => held.has('plan'), 'awaited actual HTTP planner'); const awaited = held.get('plan'), busy = await history(synced)
+  held.delete('plan'); assert.equal((await command(synced, '/compact')).status, 200); await until(() => held.has('plan'), 'awaited actual HTTP planner'); const awaited = held.get('plan'), busy = await history(synced)
   assert(busy.session.busy); assert.equal(awaited.body.cache, (await authority(synced)).promptCacheKey)
   assert.equal((await fixture.api('POST', route(synced) + '/stop')).body.stoppedCurrent, false); assert((await history(synced)).session.busy); assert(!(await authority(synced)).stopping)
   awaited.valid(); await until(async () => !(await history(synced)).session.busy && (await history(synced)).messages.some(row => row.__meta?.contextBlock), 'awaited owned release')
@@ -128,20 +133,20 @@ try {
   const rejectedCaller = await create(); await send(rejectedCaller, 'cross-tool'); assert.equal(records.filter(row => row.planning).length, crossBefore); assert((await history(rejectedCaller)).messages.some(row => row.parts?.some(part => part.functionResponse?.response?.error?.message?.includes('must be idle')))); await fixture.api('POST', route(target) + '/stop')
   const countBeforeMissing = (await fixture.api('GET', '/api/sessions')).body.sessions.length; await send(caller, 'missing-tool'); assert.equal((await fixture.api('GET', '/api/sessions')).body.sessions.length, countBeforeMissing)
 
-  const queued = await create(); await seed(queued, 'dequeue'); await page.evaluate(id => window.foxwarmTest.switchToSession(id), queued); await page.evaluate(() => window.foxwarmTest.sendMessage('CASE:held-dequeue'))
+  const queued = await create(); await seed(queued, 'dequeue'); await selectSession(page, queued); await page.evaluate(() => window.foxwarmTest.sendMessage('CASE:held-dequeue'))
   await until(() => held.has('held-dequeue'), 'dequeue active request'); held.delete('plan'); await command(queued, '/compact'); await until(() => held.has('plan'), 'dequeue planner')
   await command(queued, 'QUEUED-A'); held.get('plan').valid(); await until(async () => (await authority(queued)).queue.some(item => item.type === 'compact-commit'), 'dequeue ready signal'); await command(queued, 'QUEUED-B')
   await until(async () => (await page.evaluate(() => document.body.innerText)).includes('Run queued'), 'original Run queued affordance')
   await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.includes('Run queued'))?.click())
-  await until(async () => !(await history(queued)).session.busy && (await history(queued)).messages.some(row => row.parts?.some(part => part.text === 'QUEUED-B')), 'run queued actual request')
+  await until(async () => !(await history(queued)).session.busy && (await history(queued)).messages.some(row => isInput(row, 'QUEUED-B')), 'run queued actual request')
   assert(held.get('held-dequeue').connection.closed); assert((await history(queued)).messages.some(row => row.__meta?.contextBlock)); assert(!Object.hasOwn((await authority(queued)).meta, 'runQueuedAfterStop'))
 
   const passive = await create(); await seed(passive, 'passive'); await command(passive, 'CASE:held-passive'); await until(() => held.has('held-passive'), 'passive foreground')
   held.delete('plan'); await command(passive, '/compact'); await until(() => held.has('plan'), 'passive independent planner'); await command(passive, 'QUEUED-A'); held.get('plan').valid()
   await until(async () => (await authority(passive)).queue.some(item => item.type === 'compact-commit'), 'passive ready signal'); await command(passive, 'QUEUED-B'); const passiveCount = records.length
   await fixture.api('POST', route(passive) + '/stop'); await until(async () => !(await history(passive)).session.busy, 'passive stop finalizer')
-  const passiveRows = (await history(passive)).messages; assert(passiveRows.some(row => row.__meta?.contextBlock)); const passiveA = passiveRows.findIndex(row => row.parts?.some(part => part.text === 'QUEUED-A'))
-  assert.equal(passiveRows[passiveA + 1].parts[0].text, 'QUEUED-B'); assert.equal(records.length, passiveCount, 'passive Stop saves both inputs without new provider request')
+  const passiveRows = (await history(passive)).messages; assert(passiveRows.some(row => row.__meta?.contextBlock)); const passiveA = passiveRows.findIndex(row => isInput(row, 'QUEUED-A'))
+  assert(isInput(passiveRows[passiveA + 1], 'QUEUED-B')); assert.equal(records.length, passiveCount, 'passive Stop saves both inputs without new provider request')
 
   const captured = await create(); await seed(captured, 'captured'); await command(captured, 'CASE:held-captured'); await until(() => held.has('held-captured'), 'captured foreground')
   held.delete('plan'); await command(captured, '/compact'); await until(() => held.has('plan'), 'captured background admission'); const capturedPlan = held.get('plan'), capturedCount = records.filter(row => row.planning).length
@@ -153,7 +158,7 @@ try {
   const wsAwaited = await create(); await seed(wsAwaited, 'ws-awaited'); held.delete('plan'); await command(wsAwaited, '/compact'); await until(() => held.has('plan'), 'actual awaited WS operation')
   const awaitedWsPlan = held.get('plan'); assert.equal(awaitedWsPlan.body.prompt_cache_key, sha(wsAwaited)); assert.notEqual(awaitedWsPlan.body.prompt_cache_key, sha(wsAwaited + '--compact-plan')); assert((await history(wsAwaited)).session.busy)
   assert.equal((await fixture.api('POST', route(wsAwaited) + '/stop')).body.stoppedCurrent, false); assert(!awaitedWsPlan.connection.closed)
-  assert.equal((await command(wsAwaited, '/stop compact')).body.stoppedCompact, true); await until(() => awaitedWsPlan.connection.closed, 'awaited compact-only cancellation'); assert(!(await history(wsAwaited)).session.busy)
+  assert.equal((await command(wsAwaited, '/stop compact')).body.success, true); await until(() => awaitedWsPlan.connection.closed, 'awaited compact-only cancellation'); assert(!(await history(wsAwaited)).session.busy)
   await fixture.save(config())
 
   const autoBackground = await create(); await seed(autoBackground, 'auto-background'); held.delete('plan'); await send(autoBackground, 'auto-tool'); await until(() => held.has('plan'), 'real usage-triggered tool-loop background planner')
@@ -168,8 +173,18 @@ try {
 
   const shutdownSession = await create(); await seed(shutdownSession, 'shutdown'); await command(shutdownSession, 'CASE:held-shutdown'); await until(() => held.has('held-shutdown'), 'shutdown foreground')
   held.delete('plan'); await command(shutdownSession, '/compact'); await until(() => held.has('plan'), 'shutdown background'); const shutdownPlan = held.get('plan'), shutdownForeground = held.get('held-shutdown'), shutdownRows = (await history(shutdownSession)).messages
-  const beforeRestart = (await history(main)).messages, effects = await readFile(join(fixture.work, 'gate-started'), 'utf8'); await fixture.stop(); assert(shutdownPlan.connection.closed); assert(shutdownForeground.connection.closed); await fixture.start()
-  assert.deepEqual((await history(shutdownSession)).messages, shutdownRows); assert(!(await history(shutdownSession)).session.busy)
+  const beforeRestart = (await history(main)).messages, effects = await readFile(join(fixture.work, 'gate-started'), 'utf8')
+  const plansBeforeRestart = records.filter(row => row.planning).length
+  const foregroundBeforeRestart = records.filter(row => !row.planning && row.scenario === 'held-shutdown').length
+  await fixture.stop(); assert(shutdownPlan.connection.closed); assert(shutdownForeground.connection.closed)
+  assert((await authority(shutdownSession)).busy, 'shutdown preserves the interrupted foreground checkpoint')
+  await fixture.start()
+  await until(async () => !(await history(shutdownSession)).session.busy && (await history(shutdownSession)).messages.some(row => row.parts?.some(part => part.text === 'DONE-held-shutdown')), 'startup resumes the interrupted foreground')
+  const recoveredRows = (await history(shutdownSession)).messages
+  assert.deepEqual(recoveredRows.slice(0, shutdownRows.length), shutdownRows)
+  assert.equal(recoveredRows.filter(row => row.parts?.some(part => part.system?.includes('type="session-resumed"'))).length, 1)
+  assert.equal(records.filter(row => row.planning).length, plansBeforeRestart, 'transient background planner is not resumed')
+  assert.equal(records.filter(row => !row.planning && row.scenario === 'held-shutdown').length, foregroundBeforeRestart + 1)
   assert.deepEqual((await history(main)).messages, beforeRestart); assert.equal(await readFile(join(fixture.work, 'gate-started'), 'utf8'), effects)
   assert.deepEqual(errors, []); await fixture.stop()
   console.log(JSON.stringify({ success: true, requests: records.length, planningRequests: records.filter(row => row.planning).length, plans, connections: connections.length, hostPids: fixture.hostPids, root: fixture.root }))

@@ -21,6 +21,8 @@ This unit cannot reconstruct active history, authorize a Session mutation, or by
 
 ## Tests
 
+`packages/webui/test/experimentHostPresentation.e2e.mjs` drives zero-owner cold presentation commands, missing-authority versus offline-Node reads, immutable JSON/Archive controls, real SQLite rollback, original Sidebar/Architecture actions and catalog fields surviving a held semantic save and restart.
+
 `dotnet/Foxwarm.Tests/Sessions/SessionCatalogPublicationTests.cs`; `SessionIdentityMoveTests.cs`; `SessionDeletionTests.cs`; `SessionPresentationTests.cs`.
 
 `SetLastChannel` records external channel instance/type and conversation metadata in the catalog presentation lane. It does not copy that metadata into per-Session JSON authority; [external channels](./dotnet-external-channels.md) owns ingress and the retained best-channel readers.

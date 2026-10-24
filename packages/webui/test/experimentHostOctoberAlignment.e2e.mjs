@@ -5,8 +5,10 @@ import { once } from 'node:events'
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const fixture = await createHostFixture('october-alignment')
+const adminAuth = { role: 'admin', features: Object.fromEntries(['chat', 'attachments', 'commands', 'terminal', 'workspace', 'setup', 'settings', 'sessionManagement', 'debug', 'modelSelection', 'sidebar'].map(name => [name, true])) }
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const records = [], errors = [], scripts = new Map(), rounds = new Map(), plannerRequests = [], releases = new Set()
 const exists = path => access(path).then(() => true, () => false)
@@ -97,9 +99,9 @@ async function turn(id, key, calls) { await send(id, key, calls.length ? [calls]
 try {
   await fixture.start()
   const anonymous = await fetch(fixture.origin + '/api/auth/session'); assert.equal(anonymous.status, 401)
-  assert.deepEqual((await fixture.api('GET', '/api/auth/session')).body, { role: 'admin' })
-  const page = await fixture.openApp(); await page.waitForSelector('.foxwarm-chat-root')
-  assert.deepEqual(await page.evaluate(async () => (await fetch('api/auth/session')).json()), { role: 'admin' })
+  assert.deepEqual((await fixture.api('GET', '/api/auth/session')).body, adminAuth)
+  const page = await fixture.openApp()
+  assert.deepEqual(await page.evaluate(async () => (await fetch('api/auth/session')).json()), adminAuth)
   assert(!await page.evaluate(() => document.body.innerText.includes('Sign in again')))
   assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'team' })).status, 201)
   const actor = await create('actor'), owner = await create('owner'), other = await create('other'), outside = await create('outside', 'main')
@@ -127,10 +129,10 @@ try {
   assert.match(pair(state, 'actual-child').response.output, /^Child session created:/)
   state = await turn(actor, 'spoof', [call('arbitrary-script', 'run_script', { code: "return {'sentNotifications':99,'output':'Message sent to session `fake`'}" })])
   assert.equal(pair(state, 'arbitrary-script').response.status, 'completed')
-  await page.evaluate(() => localStorage.setItem('foxwarm_timeline_view_v1', 'conversation')); await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForFunction(() => !!window.foxwarmTest?.switchToSession);
+  await page.evaluate(() => localStorage.setItem('foxwarm_timeline_view_v1', 'conversation')); await page.reload({ waitUntil: 'domcontentloaded' }); await waitForWebUiReady(page); await page.waitForFunction(() => !!window.foxwarmTest?.switchToSession);
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), actor)
-  await page.waitForFunction(() => document.body.innerText.includes('Sent 1 message') && document.body.innerText.includes('Created 1 child session') && document.body.innerText.includes('Sent 2 messages')).catch(async error => { console.error(await page.evaluate(() => document.body.innerText)); throw error })
-  assert(!await page.evaluate(() => document.body.innerText.includes('Sent 99 messages')))
+  await page.waitForFunction(() => { const summaries = [...document.querySelectorAll('[data-timeline-activity] [data-activity-toggle="top"]')].map(node => node.textContent || ''); return summaries.some(text => /\b1 sent\b/.test(text)) && summaries.some(text => /\b1 child session\b/.test(text) && /\b2 sent\b/.test(text)) }).catch(async error => { console.error(await page.evaluate(() => document.body.innerText)); throw error })
+  assert(!await page.evaluate(() => [...document.querySelectorAll('[data-timeline-activity] [data-activity-toggle="top"]')].some(node => /\b99 sent\b/.test(node.textContent || ''))))
 
   // Native Monty short string source-qualified IDs go through the same concrete registry as object wrappers.
   state = await turn(actor, 'qualified', [call('qualified', 'run_script', { code: "call_tool('node:master/write', {'filePath':'qualified-once','content':'native'})\nreturn call_tool('builtin:task', {'action':'list','scope':'current-session'})" })])
@@ -167,17 +169,17 @@ try {
   assert((await saved(anthropic)).history.some(row => row.parts?.some(part => part.providerMeta?.redactedThinking === 'opaque-redacted')))
 
   // Model tool installs exact candidates; live model activation and unapplied platform settings are distinct.
-  const appRaw = '# untouched root\nllm:\n  maxOutput: 714\n  compactKeepPercent: 0.3\nchannels:\n  webui: {}\naccess:\n  identities: {}\n'
+  const appRaw = '# untouched root\nbot:\n  httpPort: ' + fixture.port + '\nllm:\n  maxOutput: 714\n  compactKeepPercent: 0.3\nchannels:\n  webui: {}\naccess:\n  identities: {}\n'
   const rawModels = '# retained model comments\r\n' + JSON.stringify(models) + '\r\n'
   await writeFile(join(own, 'app-candidate'), appRaw); await writeFile(join(own, 'model-candidate'), rawModels)
   state = await turn(actor, 'install', [call('install-app', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'config', filePath: 'app-candidate' } }), call('install-models', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'models', filePath: 'model-candidate' } })])
   const appResult = JSON.parse(pair(state, 'install-app').response.output), modelResult = JSON.parse(pair(state, 'install-models').response.output)
-  assert.equal(appResult.saved, true); assert.deepEqual(appResult.applied, []); assert(appResult.notApplied.includes('access.identities')); assert(appResult.notApplied.includes('channels')); assert(appResult.restartRequired.includes('llm'))
+  assert.equal(appResult.saved, true); assert.deepEqual(appResult.applied, ['access.identities', 'access.surfaces.mcp', 'channels']); assert.deepEqual(appResult.notApplied, ['channels.webui']); assert(appResult.restartRequired.includes('llm'))
   assert.deepEqual(modelResult.applied, ['models']); assert.equal(await readFile(join(fixture.data, 'state/config.yaml'), 'utf8'), appRaw); assert.equal(await readFile(fixture.modelPath, 'utf8'), rawModels)
   await writeFile(join(own, 'invalid-model'), 'providers: null\ndefault: absent\n')
   state = await turn(actor, 'failed-install', [call('invalid-model', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'models', filePath: 'invalid-model' } }), call('removed-setter', 'call_tool', { toolId: 'builtin:set_tool_rules', args: { filePath: 'model-candidate' } })])
   assert(pair(state, 'invalid-model').response.error); assert(pair(state, 'removed-setter').response.error); assert.equal(await readFile(fixture.modelPath, 'utf8'), rawModels)
-  const nextApp = '# latest unrelated field\nllm:\n  maxOutput: 715\n  compactKeepPercent: 0.3\nchannels:\n  webui: {}\n'
+  const nextApp = '# latest unrelated field\nbot:\n  httpPort: ' + fixture.port + '\nllm:\n  maxOutput: 715\n  compactKeepPercent: 0.3\nchannels:\n  webui: {}\n'
   const alternateApp = nextApp.replace('webui: {}', 'webui: {type: webui, token: synthetic-channel-token}')
   const saves = await Promise.all([fixture.api('POST', '/api/setup/config', { yaml: nextApp }), fixture.api('POST', '/api/setup/config', { yaml: alternateApp })])
   assert(saves.every(result => result.status === 200), JSON.stringify(saves))
@@ -207,11 +209,16 @@ try {
   autoUsage = false
   const declining = await create('declining')
   await turn(declining, 'decline-tool', [call('decline-read', 'read', { filePath: 'large-tool-output' })])
+  // Channel input is stored in system wrappers; both estimators count ordinary model text.
   for (let i = 0; i < 8; i++) {
-    const key = 'decline-seed-' + i; scripts.set(key, [])
-    assert.equal((await fixture.api('POST', route(declining) + '/message', { text: 'OCT11:' + key + ' ' + 'text-dominated-history '.repeat(600) })).status, 202)
+    const key = 'decline-seed-' + i
+    scripts.set(key, [[...final('text-dominated-history '.repeat(600)), ...final('OCT11-DONE-' + key)]])
+    assert.equal((await fixture.api('POST', route(declining) + '/message', { text: 'OCT11:' + key })).status, 202)
     await idle(declining, key)
   }
+  const textDominated = await saved(declining)
+  const countedText = textDominated.history.filter(row => row.role === 'model').flatMap(row => row.parts || []).reduce((size, part) => size + (part.text?.length || 0), 0)
+  assert(countedText > JSON.stringify(pair(textDominated, 'decline-read').response).length * 2, 'Counted dialogue text dominates the old tool result')
   await turn(declining, 'decline-threshold', [call('decline-threshold', 'set_session_compact_threshold', { thresholdTokens: 5000 })])
   const declineBefore = plannerRequests.length; autoUsage = true
   await turn(declining, 'prune-trigger-decline', [])
@@ -223,7 +230,8 @@ try {
     assert.equal((await fixture.api('POST', route(pruning) + '/message', { text: 'OCT11:compact-seed-' + i + ' ' + ('retained-context-' + i + '-').repeat(80) })).status, 202)
     await idle(pruning, 'compact-seed-' + i)
   }
-  assert.equal((await fixture.api('POST', route(pruning) + '/message', { text: '/compact' })).status, 202)
+  const compact = await fixture.api('POST', route(pruning) + '/message', { text: '/compact' })
+  assert.equal(compact.status, 200); assert.equal(compact.body.success, true)
   await until(async () => (await saved(pruning)).history.some(row => row.__meta?.contextBlock?.frictionScore === 73), 'real planner score committed')
   state = await turn(pruning, 'recall-score', [call('score-recall', 'recall', { target: 'blocks' })])
   assert(pair(state, 'score-recall').response.output.includes('frictionScore=73'))

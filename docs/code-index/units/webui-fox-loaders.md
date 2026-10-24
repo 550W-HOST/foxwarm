@@ -44,3 +44,5 @@ Fatal bootstrap recovery uses a compact 88px fox, centered heading/action row, a
 `foxLoaderPreview.e2e.mjs` covers keyboard opening, Escape dismissal and focus return, and pointer dismissal for the independent demo. `processingStatus.test.mjs` checks thinking/loading wiring without altering runtime action semantics.
 
 The production cases in `setupModels.e2e.mjs` verify real YAML worker markers and a blocked lazy worker import that still permits OOBE Models/Config editing and saving beneath the dismissible resource notice. The editor fallback contract remains owned by [WebUI editor](./webui-editor.md).
+
+The HTML boot fixture loads its actual Vite configuration with the supported runner loader, allowing the retained resource-failure and geometry scenarios to run with read-only installed dependencies.

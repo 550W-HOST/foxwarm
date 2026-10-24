@@ -442,6 +442,11 @@ test('Terminal disconnect puts a compact red reconnect action after PID and rest
     await page.waitForFunction(() => document.querySelector('[data-terminal-header]')?.textContent.includes('status ready'))
     assert.equal(await page.$('[data-terminal-header] [role="status"]'), null, 'connected terminals add no disconnect notice')
     const initialHeight = await page.$eval('[data-terminal-header]', header => header.getBoundingClientRect().height)
+    const initialSize = await page.evaluate(() => {
+      const socket = window.WebSocket.instances.find(socket => socket.url.includes('/terminals/stream'))
+      return socket.sent.filter(message => message.type === 'resize').at(-1)
+    })
+    assert.ok(initialSize?.cols > 0 && initialSize.rows > 0, 'the connected terminal reports its fitted wide grid')
     await page.evaluate(() => {
       window.__reconnectTextarea = document.querySelector('.xterm-helper-textarea')
       window.__disconnectedSocket = window.WebSocket.instances.find(socket => socket.url.includes('/terminals/stream'))
@@ -513,12 +518,22 @@ test('Terminal disconnect puts a compact red reconnect action after PID and rest
     await page.focus('.xterm-helper-textarea')
     await page.keyboard.type('x')
     assert.deepEqual(await page.evaluate(() => window.WebSocket.instances.filter(socket => socket.url.includes('/terminals/stream')).flatMap(socket => socket.sent.filter(message => message.type === 'input'))), [{ type: 'input', data: 'x' }], 'one key sends once after reconnect')
-    await page.evaluate(() => {
+    await page.waitForFunction(wideCols => {
       const current = window.WebSocket.instances.filter(socket => socket.url.includes('/terminals/stream')).at(-1)
+      return current.sent.some(message => message.type === 'resize' && message.cols > 0 && message.cols < wideCols)
+    }, {}, initialSize.cols)
+    const narrowSize = await page.evaluate(() => {
+      const current = window.WebSocket.instances.filter(socket => socket.url.includes('/terminals/stream')).at(-1)
+      const size = current.sent.filter(message => message.type === 'resize').at(-1)
       current.sent.length = 0
+      return size
     })
     await page.setViewport({ width: 1400, height: 900 })
-    await page.waitForFunction(() => window.WebSocket.instances.filter(socket => socket.url.includes('/terminals/stream')).at(-1).sent.some(message => message.type === 'resize' && message.cols > 80))
+    await page.waitForFunction(expected => {
+      const current = window.WebSocket.instances.filter(socket => socket.url.includes('/terminals/stream')).at(-1)
+      return current.sent.some(message => message.type === 'resize' && message.cols === expected.cols && message.rows === expected.rows)
+    }, {}, initialSize)
+    assert.ok(initialSize.cols > narrowSize.cols && initialSize.rows < narrowSize.rows, 'the restored wide pane recovers its fitted grid after the narrow reconnect')
     assert.ok(await page.$('[data-workbench-pane-drag-area="pane-main"]'), 'the existing pane drag area remains available')
     await workbenchScreenshot(page, 'terminal-reconnected-wide.png')
   } finally { await page.close() }

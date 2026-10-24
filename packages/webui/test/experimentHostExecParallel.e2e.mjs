@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
+import { execFileSync } from 'node:child_process'
 import { access, chmod, mkdir, readFile, readdir, writeFile, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
+import testEnvironment from '../../../scripts/test/test-process-env.cjs'
 
 const fixture = await createHostFixture('exec-parallel'), records = [], errors = [], scripts = new Map(), authorityHolds = new Map(), hostPids = fixture.hostPids, shellPids = [], releases = new Set()
+Object.assign(process.env, testEnvironment.isolatedApplicationEnv(fixture.data))
+const { SessionCatalogStore } = await import('../../../lib/session/catalogStore.js')
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const exists = path => access(path).then(() => true, () => false)
 const history = async id => (await fixture.api('GET', route(id) + '/history')).body
@@ -34,6 +38,15 @@ const peer = createServer(async (request, response) => {
 })
 peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
 await writeFile(fixture.modelPath, JSON.stringify({ default: 'local', providers: { local: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${peer.address().port}`, apiKey: 'synthetic-parallel-provider', models: ['wire'] } } }))
+// Persisted identities retain their old spelling; new-name validation is a separate caller.
+const percent = 'x%2Fy'
+await mkdir(join(fixture.data, 'state/sessions'), { recursive: true })
+const legacy = { sessionStateVersion: 1, id: percent, agent: 'main', model: 'local', currentNode: 'master', verbose: false, busy: false, history: [], queue: [], stats: {}, nextMessageSeq: 1, nextBlockId: 1, meta: { messageCount: 0, lastMessageTime: 0 }, promptCacheKey: 'retained-percent-identity', persistentMemorySnapshot: 'Retained fixture identity.' }
+await writeFile(join(fixture.data, 'state/sessions', percent + '.json'), JSON.stringify(legacy))
+const catalog = new SessionCatalogStore(join(fixture.data, 'state/catalog.sqlite'))
+catalog.initializeEmpty(); catalog.replaceAll([{ id: percent, agent: 'main', model: 'local', currentNode: 'master', busy: false, queueLength: 0, meta: legacy.meta }]); catalog.close()
+const seed = join(fixture.root, 'legacy-seed.json'); await writeFile(seed, JSON.stringify([{ id: percent }]))
+execFileSync(process.execPath, ['dotnet/session-catalog-seed-ts.mjs', fixture.data, seed], { env: { ...process.env, FOXWARM_TS_ROOT: process.cwd() } })
 let stopped = true
 async function start() { await fixture.start(); stopped = false }
 async function create(name, agent = 'team') { const result = await fixture.api('POST', '/api/sessions', { agentId: agent, sessionId: name }); assert.equal(result.status, 200, JSON.stringify(result.body)); return result.body.sessionId }
@@ -108,7 +121,9 @@ try {
   await send(deleting, 'deleting', [...deleteHeld.map(id => call(id, shell(id))), call('delete5', 'touch delete5-effect')]); await started(deleteHeld)
   assert.equal((await fixture.api('DELETE', route(deleting), {})).status, 409); await until(async () => !(await history(deleting)).session.busy, 'delete Stop retry settles exact owner'); assert.equal((await fixture.api('DELETE', route(deleting), {})).status, 200)
   for (const id of deleteHeld) await release(id); await until(async () => (await Promise.all(deleteHeld.map(id => exists(join(marks, 'done-' + id))))).every(Boolean), 'retired shells not killed'); assert(!await exists(join(fixture.data, 'state/sessions', deleting + '.json'))); assert(!await exists(join(own, 'delete5-effect')))
-  assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'x' })).status, 201); const percent = await create('x%2Fy', 'main'), slash = await create('y', 'x')
+  assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'x' })).status, 201)
+  assert.equal((await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'invalid%2Fleaf' })).status, 400)
+  const slash = await create('y', 'x')
   assert.equal((await fixture.api('DELETE', route(percent), {})).status, 200); assert(!await exists(join(fixture.data, 'state/sessions', percent + '.json'))); assert.equal((await fixture.api('GET', route(slash) + '/history')).status, 200); assert(await exists(join(fixture.data, 'state/sessions', slash + '.json')))
   assert.equal((await fixture.api('DELETE', route(slash), {})).status, 200)
   const shutting = await create('shutting'), shutdownHeld = ['shutdown1', 'shutdown2', 'shutdown3', 'shutdown4']

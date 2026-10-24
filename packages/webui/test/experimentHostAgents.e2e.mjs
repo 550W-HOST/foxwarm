@@ -10,6 +10,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-agents-e2e-'))
 const dataRoot = join(root, 'data'); const workRoot = join(dataRoot, 'agents', 'main')
@@ -22,7 +23,7 @@ const sleep = ms => new Promise(done => setTimeout(done, ms))
 let provider, host, browser, heldParent, releaseParent, heldChild, releaseChild, firstPid, parentId, betaId, childId, secondId, legacyId
 async function until(fn, label, ms = 20000) {
   const end = Date.now() + ms
-  while (Date.now() < end) { const result = await fn(); if (result) return result; await sleep(40) }
+  while (Date.now() < end) { if (errors.length) throw new Error(errors.join('\n')); const result = await fn(); if (result) return result; await sleep(40) }
   throw new Error(`Timed out waiting for ${label}; ${JSON.stringify({ errors, requests: requests.slice(-5), host: host?.output })}`)
 }
 async function port() {
@@ -40,14 +41,16 @@ const idFrom = body => {
   const content = body.input.filter(item => item.type === 'message').flatMap(item => item.content || []).map(item => item.text || '').join('\n')
   return /currentSessionId="([^"]+)"/.exec(content)?.[1]
 }
-const userFrom = body => body.input.filter(item => item.type === 'message' && item.role === 'user').at(-1)
-  ?.content?.map(item => item.text || '').join('\n') || ''
+const userFrom = body => body.input.filter(item => item.type === 'message' && item.role === 'user')
+  .map(item => item.content?.map(part => part.text || '').join('\n') || '')
+  .findLast(value => /^(?:LEGACY-|LITERAL-|ALPHA-|BETA-|CHILD-|UI-|MODEL-|GAMMA-|SNAPSHOT-)/m.test(value)) || ''
 try {
   await mkdir(dataRoot); await mkdir(workRoot, { recursive: true })
   await mkdir(join(dataRoot, 'agents'), { recursive: true })
   await mkdir(join(workRoot, 'memory'))
   await writeFile(join(dataRoot, 'agents', '00_SYSTEM.md'), 'FRAME-SHARED\n<foxwarm-if model-id="local-b/two">\nFRAME-B-ONLY\n</foxwarm-if>\n')
   await writeFile(join(workRoot, 'memory', 'MEMORY.md'), 'LEGACY-MAIN-MEMORY')
+  await writeFile(join(workRoot, 'memory', 'ONBOOT.md'), ' \n')
   const modelsFile = join(root, 'models.json')
   await writeFile(modelsFile, JSON.stringify({ default: 'local-a/one', providers: {
     'local-a': { providerType: 'openai', baseUrl: 'http://127.0.0.1:REPLACE', apiKeyEnv: 'LOCAL_A_SECRET',
@@ -61,9 +64,10 @@ try {
       const body = JSON.parse(Buffer.concat(chunks).toString())
       assert.equal(req.url, '/responses')
       assert.equal(req.headers.authorization, `Bearer ${providerToken}`)
-      assert.equal(body.tools.length, 24)
+      assert(body.tools.some(tool => tool.name === 'create_child_session'))
       const id = idFrom(body); const latest = userFrom(body)
       assert(id, 'Canonical Session identity must reach the actual provider request')
+      assert(latest, 'The fixture input is recovered independently of later control rows')
       const count = (counts.get(id) || 0) + 1; counts.set(id, count)
       const snapshot = body.instructions || ''
       assert(snapshot.includes('FRAME-SHARED'))
@@ -77,14 +81,14 @@ try {
         assert(snapshot.includes('agent_folder:') && snapshot.includes('/agents/gamma'))
         assert(!snapshot.includes('LEGACY-MAIN-MEMORY') && !snapshot.includes('BETA-V1'))
       } else assert(snapshot.includes('LEGACY-MAIN-MEMORY'))
-      requests.push({ id, latest: latest.slice(0, 110), model: body.model, instructions: snapshot })
+      requests.push({ id, latest, model: body.model, instructions: snapshot, cacheKey: body.prompt_cache_key })
       const previousCalls = body.input.filter(item => item.type === 'function_call')
       let output
       if (latest.includes('LEGACY-ROOT'))
         output = previousCalls.some(item => item.call_id === 'legacy-pwd') ? [text('LEGACY-DONE')] :
           [call('legacy-pwd', 'exec', { command: 'pwd', timeout: 2 })]
       else if (latest.includes('LEGACY-CHILD'))
-        output = previousCalls.some(item => item.call_id === 'legacy-child-pwd') ? [text('LEGACY-CHILD-DONE')] :
+        output = previousCalls.some(item => item.call_id === 'legacy-child-pwd') ? [text('LEGACY-CHILD-DONE'), text('[NO_ACTION]')] :
           [call('legacy-child-pwd', 'exec', { command: 'pwd', timeout: 2 })]
       else if (latest.includes('LITERAL-PERCENT')) output = [text('LITERAL-DONE')]
       else if (latest.includes('UI-CHAT')) output = [text('UI-CHAT-DONE')]
@@ -174,7 +178,8 @@ try {
     assert.equal(code, 0, host.output)
   }
   async function send(id, textValue) {
-    assert.equal((await request('POST', `/api/sessions/${encodeURIComponent(id)}/message`, { text: textValue })).status, 202)
+    const response = await request('POST', `/api/sessions/${encodeURIComponent(id)}/message`, { text: textValue })
+    assert.equal(response.status, 202, JSON.stringify(response.body))
   }
   async function history(id) {
     const response = await request('GET', `/api/sessions/${encodeURIComponent(id)}/history`)
@@ -183,7 +188,20 @@ try {
   async function finished(id, marker) {
     await until(async () => (await history(id)).some(row => row.parts?.some(part => part.text?.includes(marker))), marker)
   }
+  // Persisted legacy identities remain readable even though current creation uses ASCII names.
+  legacyId = 's_0123456789abcdef0123456789abcdef'
+  const issuedLegacyCache = '0123456789abcdef0123456789abcdef'
+  const literalId = 'literal%2Fname'
+  await mkdir(join(dataRoot, 'state', 'sessions'), { recursive: true })
+  const retainedEmpty = { sessionStateVersion: 1, persistentMemorySnapshot: '', history: [], queue: [], stats: {},
+    meta: { messageCount: 0, lastMessageTime: 0 }, busy: false, historyVersion: 0, lastAppliedMailboxId: 0, nextMessageSeq: 1 }
+  for (const id of [legacyId, literalId]) await writeFile(join(dataRoot, 'state', 'sessions', id + '.json'), JSON.stringify({ ...retainedEmpty, ...(id === legacyId ? { promptCacheKey: issuedLegacyCache } : {}) }))
+  await writeFile(join(dataRoot, 'state', 'sessions.json'), JSON.stringify({ sessions: Object.fromEntries([legacyId, literalId].map(id => [id, { id, agent: 'main', busy: false, queueLength: 0, meta: retainedEmpty.meta }])) }))
   host = await startHost(); firstPid = host.child.pid
+  assert.equal((await request('GET', '/api/sessions/main/state')).status, 404, 'cold startup does not invent Main')
+  assert.equal((await request('POST', '/api/sessions', { sessionId: 'main' })).status, 200)
+  const automatic = await request('POST', '/api/sessions')
+  assert.equal(automatic.status, 200); assert.match(automatic.body.sessionId, /^\d{4}_[0-9a-z]{0,5}$/)
   browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium', headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox'], userDataDir: join(root, 'browser') })
   const page = await browser.newPage()
@@ -197,7 +215,7 @@ try {
   })
   await page.goto(`http://127.0.0.1:${hostPort}/`, { waitUntil: 'load' })
   await page.waitForSelector('#token'); await page.type('#token', apiToken)
-  await page.click('button[type="submit"]'); await page.waitForSelector('button[aria-label="New session"]')
+  await page.click('button[type="submit"]'); await page.waitForSelector('button[aria-label="New session"]'); await waitForWebUiReady(page)
   async function browserCreateAgent(name, memoryText) {
     await page.click('button[aria-label="New session"]')
     await page.waitForSelector('button[aria-label="New agent"]')
@@ -219,10 +237,11 @@ try {
   await writeFile(join(dataRoot, 'agents', 'beta', 'memory', 'unknown.md'),
     '---\nunknown-header: preserved-as-ordinary-frontmatter\n---\nUNKNOWN-HEADER-VISIBLE\n')
   assert.deepEqual((await request('GET', '/api/agents')).body.agents.map(item => item.id), ['alpha', 'beta', 'main'])
-  assert.equal((await request('GET', '/api/sessions/main/state')).status, 200, 'Source startup owns a real Main lifetime')
-  const bootMain = JSON.parse(await readFile(join(dataRoot, 'state', 'sessions', 'main.json'), 'utf8')); assert.match(bootMain.promptCacheKey, /^[0-9a-f]{32}$/); assert(bootMain.persistentMemorySnapshot.includes('LEGACY-MAIN-MEMORY'))
-  legacyId = (await request('POST', '/api/sessions')).body.sessionId
-  assert(legacyId.startsWith('s_')); await send(legacyId, 'LEGACY-ROOT'); await finished(legacyId, 'LEGACY-DONE')
+  assert.equal((await request('GET', '/api/sessions/main/state')).status, 200, 'the fixture explicitly created its Main lifetime')
+  const bootMain = JSON.parse(await readFile(join(dataRoot, 'state', 'sessions', 'main.json'), 'utf8')); assert.match(bootMain.promptCacheKey, /^[0-9a-f-]{36}$/); assert(bootMain.persistentMemorySnapshot.includes('LEGACY-MAIN-MEMORY'))
+  assert.equal((await request('GET', `/api/sessions/${encodeURIComponent(legacyId)}/state`)).body.session.id, legacyId)
+  await send(legacyId, 'LEGACY-ROOT'); await finished(legacyId, 'LEGACY-DONE')
+  assert(requests.filter(item => item.id === legacyId).every(item => item.cacheKey === issuedLegacyCache))
   assert.match(valueOf(await history(legacyId), 'legacy-pwd').output, new RegExp(workRoot.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
   const legacyChild = (await request('POST', `/api/sessions/${encodeURIComponent(legacyId)}/children`,
     { suffix: 'legacykid', message: 'LEGACY-CHILD' })).body.sessionId
@@ -238,8 +257,8 @@ try {
   await send('gamma/main', 'GAMMA-WORK'); await finished('gamma/main', 'GAMMA-WORK-DONE')
   assert.equal(await readFile(join(dataRoot, 'agents', 'gamma', 'result.txt'), 'utf8'), 'GAMMA-OWNED')
   assert.match(valueOf(await history('gamma/main'), 'gamma-exec').output, /agents\/gamma/)
-  const literalId = 'literal%2Fname'
-  assert.equal((await request('POST', '/api/sessions', { agentId: 'main', sessionId: literalId })).body.sessionId, literalId)
+  assert.equal((await request('POST', '/api/sessions', { agentId: 'main', sessionId: 'new%2Fname' })).status, 400)
+  assert.equal((await request('GET', `/api/sessions/${encodeURIComponent(literalId)}/state`)).body.session.id, literalId)
   await send(literalId, 'LITERAL-PERCENT'); await finished(literalId, 'LITERAL-DONE')
   await send(parentId, 'ALPHA-DELEGATE')
   await until(() => heldParent && releaseParent && (counts.get(parentId) || 0) === 2, 'held parent provider')
@@ -255,7 +274,7 @@ try {
   await until(async () => (await history(childId)).some(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'report')),
     'child report and error batch')
   assert.equal((await request('GET', `/api/sessions/${encodeURIComponent(parentId)}/state`)).body.session.busy, true)
-  assert.equal((await request('GET', `/api/sessions/${encodeURIComponent(parentId)}/state`)).body.session.queueCount, 1)
+  assert.equal((await request('GET', `/api/sessions/${encodeURIComponent(parentId)}/state`)).body.session.queueLength, 1)
   assert.equal(counts.get(parentId), 2, 'parent must not start second processor while provider is held')
   const childRows = await history(childId)
   assert(childRows.some(row => row.parts?.some(part => part.functionCall?.id === 'child-error')))
@@ -330,7 +349,7 @@ try {
   await writeFile(join(dataRoot, 'state', 'experiment-faults', marker), 'fail exactly the owner memory snapshot rename')
   const beforeFault = requests.filter(item => item.id === secondId).length
   await send(secondId, 'SNAPSHOT-FAIL')
-  await until(async () => (await request('GET', `/api/sessions/${encodeURIComponent(secondId)}/state`)).body.session.failureCount > 0,
+  await until(async () => await readFile(join(dataRoot, 'state', 'experiment-faults', marker)).then(() => false, () => true) && !(await request('GET', `/api/sessions/${encodeURIComponent(secondId)}/state`)).body.session.busy,
     'observed strict memory save failure')
   assert.equal(requests.filter(item => item.id === secondId).length, beforeFault, 'no provider after failed strict snapshot save')
   assert.equal(JSON.parse(await readFile(join(dataRoot, 'state', 'sessions', 'alpha', secondId.split('/')[1] + '.json'), 'utf8'))
@@ -338,16 +357,17 @@ try {
   await send(secondId, 'SNAPSHOT-RECOVER'); await finished(secondId, 'SNAPSHOT-RECOVER-DONE')
   assert(requests.filter(item => item.id === secondId && item.latest.includes('SNAPSHOT-RECOVER')).at(-1)
     .instructions.includes('<foxwarm-current-model model-id="local-b/two" />'))
-  // Existing bare/{} legacy creation: a post-rename fault reports the committed ID
+  // Explicit legacy-shaped creation keeps the existing post-rename fault boundary:
   // and retains its live owner even though the final directory sync failed.
   const archiveRowsFor = id => Number(execFileSync('python3', ['-c',
     'import sqlite3,sys; db=sqlite3.connect(sys.argv[1]); print(db.execute("SELECT COUNT(*) FROM archive_messages WHERE session_id=?", (sys.argv[2],)).fetchone()[0])',
     join(dataRoot, 'state', 'archive-store.sqlite'), id], { encoding: 'utf8' }).trim())
   await writeFile(join(dataRoot, 'state', 'experiment-faults', 'legacy-create-after-rename'), 'one injected legacy create')
-  const partial = await request('POST', '/api/sessions', {})
+  const legacyFaultName = 's_11111111111111111111111111111111'
+  const partial = await request('POST', '/api/sessions', { sessionId: legacyFaultName })
   assert.equal(partial.status, 409, JSON.stringify(partial.body))
   const committedLegacyId = partial.body.sessionId
-  assert.match(committedLegacyId, /^s_[a-f0-9]{32}$/)
+  assert.equal(committedLegacyId, legacyFaultName)
   assert.equal(partial.body.committed, true)
   assert.equal((await request('GET', `/api/sessions/${committedLegacyId}/state`)).status, 200)
   assert.equal(JSON.parse(await readFile(join(dataRoot, 'state', 'sessions', committedLegacyId + '.json'), 'utf8')).history.length, 0)
@@ -424,6 +444,8 @@ try {
   assert.deepEqual((await request('GET', '/api/webui/settings')).body.settings, branding.body.settings)
   assert((await request('GET', '/api/agents')).body.agents.some(item => item.id === 'beta'))
   assert.equal((await request('GET', `/api/sessions/${encodeURIComponent(childId)}/state`)).body.session.parentSessionId, parentId)
+  for (const id of [legacyId, literalId]) assert.equal((await request('GET', `/api/sessions/${encodeURIComponent(id)}/state`)).body.session.id, id)
+  assert.equal(JSON.parse(await readFile(join(dataRoot, 'state', 'sessions', legacyId + '.json'), 'utf8')).promptCacheKey, issuedLegacyCache)
   assert((await readFile(join(dataRoot, 'state', 'sessions', 'beta', 'probe.json'), 'utf8')).includes('BETA-V3'))
   assert((await readFile(join(dataRoot, 'agents', 'beta', 'child-work.txt'), 'utf8')).includes('BETA-WORK'))
   const archive = execFileSync('python3', ['-c', `import json,sqlite3,sys; db=sqlite3.connect(sys.argv[1]); print(json.dumps(db.execute('SELECT session_id,agent,COUNT(*),MAX(seq) FROM archive_messages GROUP BY session_id,agent ORDER BY session_id').fetchall()))`, join(dataRoot, 'state', 'archive-store.sqlite')], { encoding: 'utf8' })

@@ -43,7 +43,8 @@ const peer = createServer(async (request, response) => {
     assert.equal(body.max_tokens, 911); assert.equal(body.model, 'wire'); assert(!('prompt_cache_key' in body))
     assert(body.tools.every(tool => tool.input_schema && !('parameters' in tool)))
     const texts = body.messages.filter(row => row.role === 'user').flatMap(row => typeof row.content === 'string' ? [row.content] : row.content.filter(block => block.type === 'text').map(block => block.text))
-    const key = texts.findLast(value => /^ANTH:/.test(value))?.slice(5), round = (rounds.get(key) || 0) + 1
+    const key = texts.map(value => /^ANTH:([a-z-]+)$/m.exec(value)?.[1]).findLast(Boolean), round = (rounds.get(key) || 0) + 1
+    assert(key, 'The current user marker is inside its canonical channel wrapper')
     rounds.set(key, round); records.push({ key, round, body }); response.on('close', () => closed.add(key + ':' + round))
     if (key === 'json') {
       assert.equal(body.stream, false); assert.deepEqual(body.cache_control, { type: 'ephemeral', ttl: '1h' })
@@ -120,6 +121,7 @@ try {
   await fixture.start(); assert.equal((await fixture.api('POST', '/api/agents', { agentId: 'team' })).status, 201)
   const actor = await create('stream'); const page = await fixture.openApp()
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), actor)
+  await page.waitForFunction(id => document.querySelector('[data-session-header-subtitle]')?.textContent.includes('session ' + id), {}, actor)
   await page.evaluate(() => window.foxwarmTest.sendMessage('ANTH:flow'))
   await until(() => holds.has('flow'), 'all blocks closed, terminal withheld')
   await until(async () => (await page.evaluate(() => document.body.innerText)).includes('Live streamed answer'), 'actual original App text progress')

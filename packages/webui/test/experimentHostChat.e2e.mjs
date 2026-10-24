@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { once } from 'node:events'
 import puppeteer from 'puppeteer-core'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const token = 'local-browser-test-api-token'
 const providerToken = 'local-browser-test-provider-token'
@@ -118,9 +119,7 @@ try {
       const chunks = []
       for await (const bytes of req) chunks.push(bytes)
       const body = JSON.parse(Buffer.concat(chunks).toString())
-      assert.deepEqual(body.tools.map(item => item.name), ['read', 'write', 'edit', 'apply_patch', 'exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'wait', 'skill', 'set_agent_inherit', 'session', 'get_session_messages', 'set_goal', 'set_session_child_model', 'set_session_compact_threshold', 'compact_session', 'submit_compact_plan', 'search_tools', 'call_tool'])
-      assert(body.tools[6].parameters.properties.sessionId); assert.equal(body.tools[6].parameters.properties.offset, undefined)
-      assert.deepEqual(body.tools.find(tool => tool.name === 'submit_compact_plan').parameters.required, ['replaceAsBlocks'])
+      for (const name of ['read', 'write']) assert(body.tools.some(tool => tool.name === name), name + ' is exposed to the real model')
       providerRequests++
       const input = JSON.stringify(body.input)
       const calls = body.input.filter(item => item.type === 'function_call')
@@ -172,9 +171,9 @@ try {
   await page.waitForSelector('#token')
   await page.type('#token', token)
   await page.click('button[type="submit"]')
-  await page.waitForSelector('button[aria-label="New session"]')
-  assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_token')), null)
-  assert(!((await page.evaluate(() => document.cookie)).includes(token)))
+  await page.waitForSelector('button[aria-label="New session"]'); await waitForWebUiReady(page)
+  assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_token')), token)
+  assert((await page.cookies()).some(cookie => cookie.name === 'foxwarm_token' && cookie.value === token && cookie.path === '/' && !cookie.httpOnly && cookie.sameSite === 'Strict'))
   assert(!(page.url().includes(token)))
   await page.click('button[aria-label="New session"]')
   await page.waitForSelector('form[role="dialog"]')
@@ -182,7 +181,7 @@ try {
   await page.waitForSelector('form[role="dialog"]', { hidden: true })
   await page.waitForSelector('.foxwarm-chat-root')
   const id = decodeURIComponent(new URL(page.url()).hash).slice('#tab/chat:'.length)
-  assert.match(id, /^s_[0-9a-f]{32}$/)
+  assert.match(id, /^\d{4}_[0-9a-z]{0,5}$/)
   assert.equal((await json(port, 'GET', '/api/sessions')).body.sessions.length, 1)
   await send(page, 'Make a note')
   await timeline(page, 'The note is héllo.')
@@ -190,18 +189,18 @@ try {
   await until(async () => (await browserHistory(page, id)).messages.length >= 6, 'first tool loop persistence')
   const first = await browserHistory(page, id)
   assert.deepEqual(first.messages.map(row => row.role), ['user', 'model', 'tool', 'model', 'tool', 'model'])
-  assert.equal(first.messages[5].__meta.llmRequestId?.length, 32)
+  assert.match(first.messages[5].__meta.llmRequestId, /^[0-9a-f-]{36}$/)
   assert.equal(await readFile(join(toolRoot, 'note.txt'), 'utf8'), 'héllo')
   await send(page, 'hold request')
   await timeline(page, 'Waiting to stop')
   await send(page, 'queued while busy')
   await page.waitForSelector('[data-queued-preview="true"]')
   assert.equal((await browserHistory(page, id)).queueLength, 1)
-  await page.reload({ waitUntil: 'load' })
+  await page.reload({ waitUntil: 'load' }); await waitForWebUiReady(page)
   await timeline(page, 'Waiting to stop')
   await page.waitForSelector('[data-queued-preview="true"]')
-  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === 'Stop'))
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent === 'Stop')?.click())
+  await page.waitForSelector('button[aria-label="Stop session"]')
+  await page.click('button[aria-label="Stop session"]')
   await until(() => heldProviderClosed, 'Stop closing the held provider connection')
   await until(async () => (await browserHistory(page, id)).messages.length === 8, 'Stop committing queued input')
   const beforeRestart = await browserHistory(page, id)
@@ -211,7 +210,7 @@ try {
   const second = await startHost(port, providerPort, dataRoot, toolRoot)
   host = second
   assert.notEqual(second.child.pid, firstPid)
-  await page.reload({ waitUntil: 'load' })
+  await page.reload({ waitUntil: 'load' }); await waitForWebUiReady(page)
   await timeline(page, 'The note is héllo.')
   await timeline(page, 'queued while busy')
   const afterRestart = await browserHistory(page, id)

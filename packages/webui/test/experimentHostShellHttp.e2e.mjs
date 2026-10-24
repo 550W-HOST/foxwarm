@@ -110,7 +110,8 @@ try {
   credential = { nodeId: 'shell-client', authToken: token }
   assert(created.body.command.includes(fixture.origin + prefix + '/node/run-shell.sh')); assert(created.body.command.includes('--host='))
   const bootstrap = await fetch(fixture.origin + prefix + '/node/run-shell.sh'); assert.equal(bootstrap.status, 200); assert.match(bootstrap.headers.get('content-type'), /shellscript/)
-  const script = await bootstrap.text(); assert.equal(script, (await readFile('templates/node/run-shell.sh', 'utf8')).replace('__FOXWARM_DEFAULT_BASE_URL__', fixture.origin + prefix))
+  // Downloaded defaults use the request origin; the authenticated command keeps its configured prefix.
+  const script = await bootstrap.text(); assert.equal(script, (await readFile('templates/node/run-shell.sh', 'utf8')).replace('__FOXWARM_DEFAULT_BASE_URL__', fixture.origin))
   const downloaded = join(fixture.root, 'run-shell.sh'); await writeFile(downloaded, script)
   // A real superseded WebSocket close must not remove the HTTP successor.
   const ws = new WebSocket(fixture.origin.replace('http', 'ws') + prefix + '/node_ws?id=shell-client&auth=' + token); sockets.push(ws); await once(ws, 'open')
