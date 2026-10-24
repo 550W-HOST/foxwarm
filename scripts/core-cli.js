@@ -1,7 +1,5 @@
 'use strict';
 
-const path = require('node:path');
-const os = require('node:os');
 const net = require('node:net');
 const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
@@ -11,27 +9,34 @@ const { coreExecutable } = require('./core-executable');
 // These operations never connect to Main or start an HTTP server or Session engine.
 async function runCoreCli(operation, input, options = {}) {
   const executable = coreExecutable();
-  const name = `foxwarm-cli-${randomUUID()}`;
-  const pipe = process.platform === 'win32' ? `\\\\.\\pipe\\${name}` : path.join(os.tmpdir(), name);
+  const windows = process.platform === 'win32';
+  const name = windows ? `foxwarm-cli-${randomUUID()}` : '3';
   let connection;
-  const lifetime = net.createServer(socket => {
-    connection = socket;
-    lifetime.close();
-    socket.on('error', () => {});
-  });
-  await new Promise((resolve, reject) => {
-    lifetime.once('error', reject);
-    lifetime.listen(pipe, resolve);
-  });
+  let lifetime;
+  if (windows) {
+    lifetime = net.createServer(socket => {
+      connection = socket;
+      lifetime.close();
+      socket.on('error', () => {});
+    });
+    await new Promise((resolve, reject) => {
+      lifetime.once('error', reject);
+      lifetime.listen(`\\\\.\\pipe\\${name}`, resolve);
+    });
+  }
   let child;
   try {
     child = spawn(executable.command, [
       ...executable.args, `--cli-${operation}`,
     ], {
-      env: { ...process.env,
-        FOXWARM_CLI_LIFETIME_PIPE: process.platform === 'win32' ? name : pipe },
-      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, FOXWARM_CLI_LIFETIME_PIPE: name },
+      // As with Main, Unix uses an inherited connection without a temporary path.
+      stdio: windows ? ['pipe', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe', 'pipe'],
     });
+    if (!windows) {
+      connection = child.stdio[3];
+      connection.on('error', () => {});
+    }
     const stdout = options.stdout || process.stdout;
     const stderr = options.stderr || process.stderr;
     child.stdout.on('data', chunk => stdout.write(chunk));
@@ -54,7 +59,7 @@ async function runCoreCli(operation, input, options = {}) {
     // A separate pipe stays open after prompt EOF. Even a hard frontend kill
     // closes it in the kernel, so the one-shot backend cannot outlive its caller.
     connection?.destroy();
-    if (lifetime.listening) lifetime.close();
+    if (lifetime?.listening) lifetime.close();
     if (child && child.exitCode === null && child.signalCode === null) child.kill();
   }
 }
