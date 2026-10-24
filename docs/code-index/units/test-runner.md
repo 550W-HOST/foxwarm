@@ -1,7 +1,7 @@
 # Unit: local-test-runner
 
 Files: scripts/test/run-tests.mjs, scripts/test/test-inventory.mjs, scripts/test/test-process-env.mjs, scripts/test/test-process-env.cjs, scripts/test/test-isolation.test.mjs, scripts/test/managed-preparation.test.mjs, scripts/test/prepare-browser.mjs, scripts/test/browser-preparation.test.mjs, src/testEnvironment.ts, .github/workflows/tests.yml, docs/testing.md
-Secondary files: package.json, README.md, packages/webui/test/webuiReadiness.mjs, packages/webui/test/backendIsolation.e2e.mjs, packages/webui/test/orderedResponsesDraft.e2e.mjs, packages/webui/test/authorizations.e2e.mjs, packages/shared/src/nodeTools.test.ts, packages/shared/src/nodeFileTransfer.test.ts, packages/cli-node/src/sessionEventAck.test.ts
+Secondary files: packages/webui/test/experimentHostFixture.mjs, packages/webui/test/experimentHostReadiness.e2e.mjs, package.json, README.md, packages/webui/test/webuiReadiness.mjs, packages/webui/test/backendIsolation.e2e.mjs, packages/webui/test/orderedResponsesDraft.e2e.mjs, packages/webui/test/authorizations.e2e.mjs, packages/shared/src/nodeTools.test.ts, packages/shared/src/nodeFileTransfer.test.ts, packages/cli-node/src/sessionEventAck.test.ts
 
 ## Purpose
 
@@ -41,3 +41,5 @@ The runner consumes managed solution tests, complete-publish/browser proof, comp
 ## Current managed application gap
 
 The required full-application Logs scenario remains enabled. Managed Main has no equivalent fixed-file history/time endpoint or realtime Logs topic yet; passing solution/reference/publish or image checks is not complete default App/CI qualification. The retained [WebUI Logs contract](./webui-logs.md) owns the follow-up surface, not a reason to filter its original application scenario.
+
+The owned native-host browser fixture observes its normal startup notification on either configured console stream before checking its own health route. Its App opener waits for the authenticated application controls and entry-splash release; a selected Chat is supplied by each scenario rather than assumed by the shared opener. The stderr host regression exercises the real managed entry.
