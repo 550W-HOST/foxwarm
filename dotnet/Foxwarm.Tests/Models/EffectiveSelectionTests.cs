@@ -263,15 +263,22 @@ public sealed class EffectiveSelectionTests
             "b/wire-b",
             owner.Entry.Snapshot().Meta["lastEffectiveRequest"]!["modelId"]!.GetValue<string>()
         );
-        var models = owner.History().Where(row =>
-            SessionWait.Text(row["role"]) == "model" && row["modelVisible"]?.GetValue<bool>() != false
-        ).ToArray();
+        var models = owner
+            .History()
+            .Where(row =>
+                SessionWait.Text(row["role"]) == "model"
+                && row["modelVisible"]?.GetValue<bool>() != false
+            )
+            .ToArray();
         Assert.Equal(2, models.Length);
         var call = models[0];
         var timing = call["__meta"]!["llmRequestTiming"]!.AsObject();
         Assert.True(timing["durationMs"]!.GetValue<double>() >= 1900, timing.ToJsonString());
         var tool = Assert.Single(owner.History(), row => SessionWait.Text(row["role"]) == "tool");
-        var responses = tool["parts"]!.AsArray().Select(part => part!["functionResponse"]!).ToArray();
+        var responses = tool["parts"]!
+            .AsArray()
+            .Select(part => part!["functionResponse"]!)
+            .ToArray();
         Assert.All(responses, response => Assert.Null(response["response"]?["error"]));
         Assert.Equal(
             timing["durationMs"]!.GetValue<double>(),
@@ -288,7 +295,9 @@ public sealed class EffectiveSelectionTests
                 >= timing["startedAt"]!.GetValue<double>() + 1900
         );
         Assert.Equal("success", successAttempt["result"]!["outcome"]!.GetValue<string>());
-        Assert.True(JsonNode.DeepEquals(timing, successAttempt["result"]!["result"]!["previousLlmRequest"]));
+        Assert.True(
+            JsonNode.DeepEquals(timing, successAttempt["result"]!["result"]!["previousLlmRequest"])
+        );
         Assert.Contains("session-settings-changed", success["messages"]!.ToJsonString());
         var listed = await manager.Journal.ListAsync(owner.Id, "normal-turn", null, null, 10);
         Assert.Equal(3, listed.Count);
@@ -316,9 +325,11 @@ public sealed class EffectiveSelectionTests
             next["__meta"]!["llmRequestTiming"]!["startedAt"]!.GetValue<double>()
                 >= models[1]["__meta"]!["llmRequestTiming"]!["completedAt"]!.GetValue<double>() - 1
         );
-        var persisted = JsonNode.Parse(await File.ReadAllTextAsync(
-            Path.Combine(temp.Path, "data/state/sessions/failover.json")
-        ))!;
+        var persisted = JsonNode.Parse(
+            await File.ReadAllTextAsync(
+                Path.Combine(temp.Path, "data/state/sessions/failover.json")
+            )
+        )!;
         Assert.Contains(timing.ToJsonString(), persisted.ToJsonString());
         Assert.Equal(4, peer.RequestCount);
         await manager.ShutdownAsync();
