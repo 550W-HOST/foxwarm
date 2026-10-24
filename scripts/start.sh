@@ -16,7 +16,7 @@ fi
 # Build first
 echo "Building foxwarm..."
 cd "$FOXWARM_DIR"
-npm run build-all || exit 1
+npm run build-all -- --stage-only || exit 1
 
 UNSET_ENV=""
 SET_ENV=""
@@ -43,6 +43,7 @@ PANE=$(tmux new-session -d -s "$SESSION" -n "$WINDOW_NAME" -c "$FOXWARM_DIR" -P 
 echo "Created new tmux session: $SESSION"
 
 # Start foxwarm
+"$NODE_BIN" scripts/build-source.js --promote || exit 1
 tmux send-keys -t "$PANE" -l "$START_CMD" || exit 1
 tmux send-keys -t "$PANE" Enter || exit 1
 

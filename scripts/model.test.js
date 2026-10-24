@@ -78,7 +78,7 @@ test('help/version/no-argument and usage paths do not load Core or configuration
 });
 
 test('real public model caller uses only Core, captured settings, one-shot requests and clean exits', async t => {
-  const assembly = path.join(__dirname, '../dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll');
+  const assembly = path.join(__dirname, '../runtime/current/Foxwarm.dll');
   if (!fs.existsSync(assembly)) { t.skip('requires npm run build'); return; }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-cli-'));
   const data = path.join(root, 'selected data');
@@ -176,7 +176,7 @@ test('real public model caller uses only Core, captured settings, one-shot reque
 });
 
 test('terminating the public frontend stops the one-shot provider process after prompt EOF', { timeout: 20000 }, async t => {
-  const assembly = path.join(__dirname, '../dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll');
+  const assembly = path.join(__dirname, '../runtime/current/Foxwarm.dll');
   if (!fs.existsSync(assembly)) { t.skip('requires npm run build'); return; }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'foxwarm-cli-lifetime-'));
   fs.mkdirSync(path.join(root, 'state'));

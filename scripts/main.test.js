@@ -12,7 +12,7 @@ const { spawn, spawnSync, execFileSync } = require('node:child_process');
 const { once } = require('node:events');
 
 const repository = path.resolve(__dirname, '..');
-const output = path.join(repository, 'dotnet/Foxwarm/bin/Debug/net10.0');
+const output = path.join(repository, 'runtime/current');
 const linux = { skip: process.platform !== 'linux' && 'Linux source-entry qualification' };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, message) {
@@ -39,9 +39,9 @@ function fixture(t, built = true) {
     fs.copyFileSync(path.join(__dirname, file), path.join(app, 'scripts', file));
   if (built) {
     assert(fs.existsSync(path.join(output, 'Foxwarm.dll')), 'Run npm run build before source-entry tests.');
-    const bin = path.join(app, 'dotnet/Foxwarm/bin/Debug');
+    const bin = path.join(app, 'runtime');
     fs.mkdirSync(bin, { recursive: true });
-    fs.symlinkSync(output, path.join(bin, 'net10.0'), 'dir');
+    fs.symlinkSync(output, path.join(bin, 'current'), 'dir');
   }
   const data = path.join(app, 'selected data');
   fs.mkdirSync(path.join(data, 'state'), { recursive: true });
@@ -331,14 +331,14 @@ function tmuxFixture(t) {
   const bin = path.join(f.root, 'bin');
   const socket = path.join(f.root, 'tmux.socket');
   fs.mkdirSync(bin);
-  for (const file of ['start.sh', 'restart.sh'])
+  for (const file of ['start.sh', 'restart.sh', 'build-source.js'])
     fs.copyFileSync(path.join(__dirname, file), path.join(f.app, 'scripts', file));
   const tmuxBin = execFileSync('bash', ['-c', 'command -v tmux'], { encoding: 'utf8' }).trim();
   // Only build acquisition is stubbed; the launcher and managed Main are real.
-  fs.writeFileSync(path.join(bin, 'npm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'npm'), '#!/bin/sh\nmkdir -p build\nln -s "$TEST_CORE_OUTPUT" build/core\n', { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\nexec "$TEST_TMUX_BIN" -S "$TEST_TMUX_SOCKET" -f /dev/null "$@"\n`, { mode: 0o755 });
   const env = { ...f.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-    TEST_TMUX_BIN: tmuxBin, TEST_TMUX_SOCKET: socket, TMUX: '',
+    TEST_TMUX_BIN: tmuxBin, TEST_TMUX_SOCKET: socket, TEST_CORE_OUTPUT: fs.realpathSync(output), TMUX: '',
     FOXWARM_NODE_BIN: process.execPath, FOXWARM_TMUX_SESSION: 'root-selection',
     FOXWARM_DATA_DIR: 'selected data',
     FOXWARM_SYNC_FILE_LOG: '0' };

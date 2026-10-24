@@ -47,6 +47,7 @@ fi
 `, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'npm'), '#!/bin/bash\nexit "${TEST_BUILD_STATUS:-0}"\n', { mode: 0o755 });
   fs.writeFileSync(env.FOXWARM_NODE_BIN, `#!/bin/bash
+[ "$1" = scripts/build-source.js ] && exit 0
 printf '%s\\n' "$TMUX_PANE" "$PWD" "$FOXWARM_DATA_DIR" "$@" > "$TEST_START_LOG/$TMUX_PANE"
 sleep 300
 `, { mode: 0o755 });
