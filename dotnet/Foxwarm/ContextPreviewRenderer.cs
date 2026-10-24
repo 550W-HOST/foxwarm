@@ -225,6 +225,7 @@ internal sealed partial class ContextPreviewRenderer
                 + source
                 + " "
                 + Text(record.Message["role"])
+                + Visibility(record.Message)
                 + ":",
             SourceIndex = record.Seq,
             ArchiveSession = ownerId ?? record.SessionId,

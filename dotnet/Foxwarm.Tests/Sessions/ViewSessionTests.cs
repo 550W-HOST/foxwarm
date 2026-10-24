@@ -174,8 +174,15 @@ public sealed class ViewSessionTests
         Assert.Contains("synthetic failure", full);
         Assert.DoesNotContain("hidden-id", full);
         var authored = Text("authored hidden-id remains");
+        authored["modelVisible"] = false;
         await ForkClearLifecycleTests.AppendAsync(f.First, authored);
         Assert.Contains("authored hidden-id remains", Output(await View(f)));
+        var archived = await ArchiveRecallTool.ExecuteAsync(
+            f.Manager,
+            f.First,
+            new JsonObject { ["target"] = "msg#5", ["previewLength"] = 2000 }
+        );
+        Assert.Contains("[non-context]", Output(archived));
         var filtered = Output(
             await View(f, new JsonObject { ["contentFilter"] = "hidden-id", ["before"] = 4 })
         );

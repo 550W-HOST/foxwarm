@@ -186,12 +186,7 @@ internal sealed partial class ContextPreviewRenderer
             : SessionWait.Number(meta?["seq"]) is { } seq ? "#" + EcmaNumber.Format(seq)
             : "unsequenced";
         var time = Time(SessionWait.Number(meta?["timestamp"]));
-        var visibility =
-            message["modelVisible"] is JsonValue flag
-            && flag.TryGetValue<bool>(out var value)
-            && !value
-                ? " [non-context]"
-                : "";
+        var visibility = Visibility(message);
         string? drill = null;
         if (
             sessionId is not null
@@ -222,6 +217,13 @@ internal sealed partial class ContextPreviewRenderer
             }
             : item;
     }
+
+    private static string Visibility(JsonObject message) =>
+        message["modelVisible"] is JsonValue flag
+        && flag.TryGetValue<bool>(out var visible)
+        && !visible
+            ? " [non-context]"
+            : "";
 
     internal static string Time(double? stamp) =>
         stamp is null
