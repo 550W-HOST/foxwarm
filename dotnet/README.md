@@ -64,7 +64,7 @@ Adjacent exact direct `exec` calls run in bounded segments of at most four. All 
 
 ## Settings and ordinary startup
 
-Build `dotnet/Foxwarm/Foxwarm.csproj` for backend-only work, or use the complete delivery build above. The application base is the installation/executable directory, not the shell cwd. Package launch supplies its known installation identity as internal entry metadata; direct DLL/apphost launch uses its executable directory. Resource templates/native helpers still come from the binary resource directory. No ancestor search adopts another installation's state. For source-checkout development, use an owned disposable data root and controlled local providers:
+For a complete source runtime, use `npm run build:delivery` followed by `node .`, as below. Backend-only compiler work can use `dotnet build dotnet/Foxwarm/Foxwarm.csproj`; `dotnet run --no-build` selects that separate developer output, not `runtime/current`. The application base is the installation/executable directory, not the shell cwd. Package launch supplies its known installation identity as internal entry metadata; direct DLL/apphost launch uses its executable directory. Resource templates/native helpers still come from the binary resource directory. No ancestor search adopts another installation's state. For source-checkout development, use an owned disposable data root and controlled local providers:
 
 ```sh
 export FOXWARM_DATA_DIR=/path/to/new/data
@@ -74,8 +74,8 @@ url: http://127.0.0.1:39091
 bot:
   httpPort: 39091
 YAML
-# Use build:delivery above for a complete original browser UI payload.
-dotnet run --no-build --project dotnet/Foxwarm/Foxwarm.csproj
+npm run build:delivery
+node .
 ```
 
 Ordinary startup requires neither an experiment tool root nor a disjoint workspace. Data selection is `FOXWARM_DATA_DIR`, installation `data_dir`, then application root. Data/pointer values trim whitespace, expand `~`/`~/`, and resolve relative to the application root. App YAML is always selected `state/config.yaml`, and models are selected `state/models.yaml`.

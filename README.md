@@ -12,8 +12,6 @@ To update an existing source installation, pull the intended revision and run `.
 
 This is a source-entry candidate, not a public release or live-installation cutover. The root Docker recipe and both Compose consumers also select managed Main; default tests run the managed suite alongside explicit TypeScript reference tests. The real-application harness runs managed Main, and CI includes an owned complete-publish proof. Main TUI is not implemented (`--tui` fails clearly); Session Worker hosting and managed ToolScript/controllers remain outside this candidate. Retained TypeScript source and other-platform Node clients remain available. See [build, publish and runtime prerequisites](dotnet/README.md#build-publish-and-public-cli) for the Linux x64 / Windows x64 boundary; macOS Main is not qualified.
 
-Managed WebUI Logs is not yet implemented. Its required original full-application scenario stays enabled and exposes the omission; this checkpoint does not have complete default App/CI qualification.
-
 ## What you can do
 
 - Work with agents in the WebUI, with chat, files, code, and terminals in one place.
