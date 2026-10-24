@@ -45,9 +45,11 @@ test('source installer diagnoses the selected managed SDK/runtime before checkou
     assert(!fs.existsSync(f.log), 'Prerequisite failure must precede checkout/build.');
   }
   fs.rmSync(path.join(f.bin, 'dotnet'));
-  const missing = f.run();
+  // Only the earlier prerequisite stubs are visible; system dotnet must be absent too.
+  const missing = f.run({ PATH: f.bin });
   assert.equal(missing.status, 1);
   assert.match(missing.stderr, /\.NET 10 SDK/);
+  assert(!fs.existsSync(f.log), 'Missing SDK must precede checkout/build.');
 });
 
 test('source installer retains branch, spaced paths, data pointer and OOBE with a compatible later SDK', unix, t => {
