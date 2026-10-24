@@ -80,7 +80,9 @@ try {
   assert.deepEqual(await observations(), []); assert.equal(requests.length, 0)
   for (const [id, bytes] of originals) assert.equal(await readFile(join(sessions, id + '.json'), 'utf8'), bytes, id + ' byte-identical')
   assert.deepEqual(retained(), initialRetained); assert.deepEqual(await readFile(join(state, 'archive-store.sqlite')), archiveBytes)
-  assert.equal((await fixture.api('GET', route('foreign') + '/history')).status, 500); assert.equal((await fixture.api('GET', route('missing') + '/history')).status, 500)
+  const foreignHistory = await fixture.api('GET', route('foreign') + '/history')
+  assert.equal(foreignHistory.status, 200); assert.equal(foreignHistory.body.session.currentNode, 'unsupported-node')
+  assert.equal((await fixture.api('GET', route('missing') + '/history')).status, 500)
   const beforeFault = sql('SELECT metadata_json,parent_session_id,sidebar_order FROM session_catalog ORDER BY session_id'), revision = (await fixture.api('GET', '/api/session-list/sidebar?limit=3')).body.presentationRevision
   blocker = new DatabaseSync(database); blocker.exec('BEGIN IMMEDIATE')
   await action('root', 'archive', { includeDescendants: true }, 500); await action('ui-child', 'move', { parentSessionId: 'target' }, 500)
@@ -96,10 +98,11 @@ try {
   // Real Sidebar context menu and original pin/archive endpoints.
   await page.waitForSelector('[data-session-id="root"]'); await page.click('[data-session-id="root"]', { button: 'right' })
   await page.waitForFunction(() => [...document.querySelectorAll('button')].some(node => node.textContent.trim() === 'Pin to top')); await page.evaluate(() => [...document.querySelectorAll('button')].find(node => node.textContent.trim() === 'Pin to top').click()); await until(async () => (await dto('root')).pinned, 'Sidebar pin committed')
-  await page.waitForFunction(() => document.querySelector('[data-session-id="root"] button[aria-pressed="true"]')); await page.click('[data-session-id="root"]', { button: 'right' }); await page.waitForFunction(() => [...document.querySelectorAll('button')].some(node => node.textContent.trim() === 'Archive' && !node.disabled)); await page.evaluate(() => [...document.querySelectorAll('button')].find(node => node.textContent.trim() === 'Archive').click())
+  await page.waitForFunction(() => document.querySelector('[data-session-section="pinned"] [data-session-id="root"]')); await page.click('[data-session-id="root"]', { button: 'right' }); await page.waitForFunction(() => [...document.querySelectorAll('button')].some(node => node.textContent.trim() === 'Archive' && !node.disabled)); await page.evaluate(() => [...document.querySelectorAll('button')].find(node => node.textContent.trim() === 'Archive').click())
   await page.waitForFunction(() => [...document.querySelectorAll('button')].some(node => node.textContent.trim() === 'Archive session')); await page.evaluate(() => { const modal = [...document.querySelectorAll('button')].find(node => node.textContent.trim() === 'Archive session').parentElement.parentElement; modal.querySelector('input[type=checkbox]').click() }); await page.waitForFunction(() => [...document.querySelectorAll('button')].some(node => /^Archive \d+ sessions$/.test(node.textContent.trim()))); await page.evaluate(() => [...document.querySelectorAll('button')].find(node => /^Archive \d+ sessions$/.test(node.textContent.trim())).click()); await until(async () => (await dto('root')).archived, 'Sidebar explicit recursive archive committed')
   await action('root', 'archive', { archived: false }); await action('root', 'pin', { pinned: false }); await action('ui-child', 'archive', { archived: false })
   await action('target', 'archive', { archived: false }); await page.evaluate(() => window.foxwarmTest.switchToSession('ui-child'))
+  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.innerText.includes('session ui-child'))
   await page.evaluate(() => { location.hash = 'architecture' }); await page.waitForSelector('.foxwarm-architecture-surface-tab'); await page.waitForSelector('[data-session-id="ui-child"]')
   await page.click('button[aria-label^="Session list mode"]'); await page.waitForFunction(() => document.querySelector('button[aria-label^="Session list mode"]')?.getAttribute('aria-label') === 'Session list mode: Time')
   await sleep(500)
@@ -113,7 +116,7 @@ try {
     await page.mouse.move(current.x, current.y, { steps: attempt ? 2 : 12 }); if (attempt < 2) await sleep(100)
   }
   await page.mouse.up()
-  await until(async () => (await dto('ui-child')).parentSessionId === 'target', 'actual Architecture parent drag')
+  await until(async () => (await dto('ui-child')).parentSessionId === 'target', 'actual Sidebar parent drag with Architecture mounted')
   await page.evaluate(() => { location.hash = 'chat' })
   socket.send(JSON.stringify({ type: 'set-subscriptions', revision: 2, sessionIds: ['live'], sessionListIds: ['live'], sessionListActive: true })); await until(() => frames.some(frame => frame.type === 'subscriptions-applied' && frame.revision === 2), 'real warm subscription')
   assert.equal((await fixture.api('POST', route('live') + '/message', { text: 'CASE:held-provider' })).status, 202); await until(() => held.has('held-provider'), 'real held provider')
