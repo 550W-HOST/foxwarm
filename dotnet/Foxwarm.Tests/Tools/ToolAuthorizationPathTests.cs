@@ -69,11 +69,9 @@ public sealed class ToolAuthorizationPathTests
         var home = new DirectoryInfo(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
         );
-        var physicalHome = home.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? home.FullName;
-        Assert.Equal(
-            Path.Combine(physicalHome, "literal"),
-            Assert.Single(literal).Resolved
-        );
+        var physicalHome =
+            home.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? home.FullName;
+        Assert.Equal(Path.Combine(physicalHome, "literal"), Assert.Single(literal).Resolved);
         Assert.False(
             ToolAuthorizationEvaluation
                 .Evaluate(Policy("${agent.dir}/~"), request with { Paths = literal })
