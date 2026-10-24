@@ -48,7 +48,7 @@ await writeFile(host.modelPath, JSON.stringify(models))
 await mkdir(join(host.work, 'memory'), { recursive: true }); await writeFile(join(host.work, 'memory/ONBOOT.md'), ' \n')
 const png = await sharp({ create: { width: 3, height: 2, channels: 4, background: { r: 20, g: 110, b: 180, alpha: 1 } } }).png().toBuffer()
 await writeFile(join(host.work, 'report.png'), png); await writeFile(join(host.work, 'notes.pdf'), 'original notes bytes'); await writeFile(join(host.work, 'other.txt'), 'not for this reply')
-const seedOutput = execFileSync(process.execPath, [resolve('dotnet/continuous-history-fixture-ts.mjs'), host.data, join(host.work, 'report.png')], { encoding: 'utf8', env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') } })
+const seedOutput = execFileSync(process.execPath, [resolve('dotnet/Foxwarm.Tests/Fixtures/continuous-history-fixture-ts.mjs'), host.data, join(host.work, 'report.png')], { encoding: 'utf8', env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') } })
 const seed = JSON.parse(seedOutput.split('\n').find(line => line.startsWith('CONTINUOUS_FIXTURE:')).slice('CONTINUOUS_FIXTURE:'.length))
 const saved = async id => JSON.parse(await readFile(join(host.data, 'state/sessions', id + '.json'), 'utf8'))
 async function done(id, final) { return until(async () => { const value = await saved(id); return !value.busy && value.history.some(row => row.parts?.some(part => part.text === final)) && value }, final) }

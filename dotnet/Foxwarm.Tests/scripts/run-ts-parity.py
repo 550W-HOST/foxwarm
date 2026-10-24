@@ -2,10 +2,10 @@
 import json, os, subprocess, sys
 from pathlib import Path
 
-root = Path(__file__).parent
+root = Path(__file__).resolve().parent
 tsx = os.environ.get('FOXWARM_TSX', 'npx')
 if tsx == 'npx':
-    command = ['npx', '--yes', 'tsx@4.19.2', str(root / 'parity-ts.ts')]
+    command = ['npx', '--yes', 'tsx@4.19.2', str(root.parent / 'Fixtures' / 'parity-ts.ts')]
 else:
-    command = [tsx, str(root / 'parity-ts.ts')]
+    command = [tsx, str(root.parent / 'Fixtures' / 'parity-ts.ts')]
 print(subprocess.check_output(command, text=True), end='')

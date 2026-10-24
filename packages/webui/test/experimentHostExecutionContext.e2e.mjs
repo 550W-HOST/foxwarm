@@ -59,7 +59,7 @@ const catalog = new SessionCatalogStore(join(state, 'catalog.sqlite'))
 catalog.initializeEmpty(); catalog.replaceAll(rows); catalog.close()
 function seedBranches(name, rows) {
   const seed = join(fixture.root, name + '.json')
-  return writeFile(seed, JSON.stringify(rows)).then(() => execFileSync(process.execPath, [join(repo, 'dotnet/session-catalog-seed-ts.mjs'), fixture.data, seed], { env: { ...process.env, FOXWARM_TS_ROOT: repo } }))
+  return writeFile(seed, JSON.stringify(rows)).then(() => execFileSync(process.execPath, [join(repo, 'dotnet/Foxwarm.Tests/Fixtures/session-catalog-seed-ts.mjs'), fixture.data, seed], { env: { ...process.env, FOXWARM_TS_ROOT: repo } }))
 }
 await seedBranches('seed', rows)
 const exists = path => access(path).then(() => true, () => false)

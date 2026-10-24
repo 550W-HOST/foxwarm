@@ -1,6 +1,6 @@
 # Local tests
 
-The retained local test baseline uses Node.js 24, npm, Python 3, and one Chromium executable. Managed tests require a net10.0-capable .NET SDK and ASP.NET Core 10 runtime, Python 3 for fresh pinned Monty acquisition and Linux native-build prerequisites. The full managed suite also exercises the optional pinned HEIC decoder: build it into an owned directory using `dotnet/build-image-decoder.sh` and supply `prefix/lib` through `LD_LIBRARY_PATH`. CI does this in runner-temporary storage; the ordinary production image does not require or include that optional codec. Install and build both the backend packages and WebUI before running the suites:
+The retained local test baseline uses Node.js 24, npm, Python 3, and one Chromium executable. Managed tests require a net10.0-capable .NET SDK and ASP.NET Core 10 runtime, Python 3 for fresh pinned Monty acquisition and Linux native-build prerequisites. The full managed suite also exercises the optional pinned HEIC decoder: build it into an owned directory using `dotnet/scripts/build-image-decoder.sh` and supply `prefix/lib` through `LD_LIBRARY_PATH`. CI does this in runner-temporary storage; the ordinary production image does not require or include that optional codec. Install and build both the backend packages and WebUI before running the suites:
 
 ```bash
 npm ci

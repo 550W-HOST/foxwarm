@@ -91,7 +91,7 @@ public sealed class HandoffConfirmationTests
                 WorkingDirectory = repo,
                 ArgumentList =
                 {
-                    Path.Combine(repo, "dotnet", "handoff-confirmation-fixture-ts.mjs"),
+                    Path.Combine(repo, "dotnet", "Foxwarm.Tests", "Fixtures", "handoff-confirmation-fixture-ts.mjs"),
                 },
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,

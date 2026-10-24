@@ -18,7 +18,7 @@ public sealed class ArchiveSchemaCompatibilityTests
                 WorkingDirectory = repo,
                 ArgumentList =
                 {
-                    Path.Combine(repo, "dotnet", "archive-schema-fixture-ts.mjs"),
+                    Path.Combine(repo, "dotnet", "Foxwarm.Tests", "Fixtures", "archive-schema-fixture-ts.mjs"),
                     mode,
                     root,
                     retained ? "retained" : "current",

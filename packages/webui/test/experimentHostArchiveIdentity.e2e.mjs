@@ -28,7 +28,7 @@ const models = { default: 'a', providers: { a: { providerType: 'openai-responses
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 async function create(name) {
   const fixture = await createHostFixture(name); fixtures.push(fixture)
-  const stdout = execFileSync('node', [resolve('dotnet/archive-identity-fixture-ts.mjs'), 'seed', fixture.data], { encoding: 'utf8', env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') } })
+  const stdout = execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/archive-identity-fixture-ts.mjs'), 'seed', fixture.data], { encoding: 'utf8', env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') } })
   fixture.source = JSON.parse(stdout.split('\n').find(line => line.startsWith('ARCHIVE_FIXTURE:')).slice('ARCHIVE_FIXTURE:'.length))
   await writeFile(fixture.modelPath, JSON.stringify(models)); await mkdir(join(fixture.work, 'memory'), { recursive: true }); await writeFile(join(fixture.work, 'memory', 'ONBOOT.md'), ' \n')
   return fixture

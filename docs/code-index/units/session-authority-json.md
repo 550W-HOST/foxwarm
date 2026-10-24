@@ -28,4 +28,4 @@ Callers: `PersistentSessionAuthorityStore` builds the authority envelope; `Sessi
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Storage/PersistencePrimitiveTests.cs`; `dotnet/Foxwarm.Tests/Memory/MessageJsonTests.cs`; `dotnet/Foxwarm.Tests/Sessions/PersistentSessionTurnTests.cs`; `LegacyBlockAuthorityTests.cs` with the actual Source fixture `dotnet/legacy-block-fixture-ts.mjs`.
+`dotnet/Foxwarm.Tests/Storage/PersistencePrimitiveTests.cs`; `dotnet/Foxwarm.Tests/Memory/MessageJsonTests.cs`; `dotnet/Foxwarm.Tests/Sessions/PersistentSessionTurnTests.cs`; `LegacyBlockAuthorityTests.cs` with the actual Source fixture `dotnet/Foxwarm.Tests/Fixtures/legacy-block-fixture-ts.mjs`.

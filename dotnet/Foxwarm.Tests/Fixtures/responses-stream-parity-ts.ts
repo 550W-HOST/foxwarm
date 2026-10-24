@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { PassThrough } from 'node:stream';
-import { collectOpenAIResponsesStream } from '../src/llmProviders/openai';
+import { collectOpenAIResponsesStream } from '../../../src/llmProviders/openai';
 
 type Case = { name: string; events: any[]; chunks: string[]; byteChunks?: string[] };
 const corpus = JSON.parse(readFileSync(new URL('./responses-stream-corpus.json', import.meta.url), 'utf8')) as Case[];

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
-import { isModelVisibleMessage } from '../src/session/messageVisibility';
-import { buildCurrentModelSnapshot, filterConditionalMemorySource, readCurrentModelSnapshotId } from '../src/conditionalMemory';
-import { parseFunctionCallArgs, stringifyFunctionCallArgs } from '../src/toolCallArgs';
+import { isModelVisibleMessage } from '../../../src/session/messageVisibility';
+import { buildCurrentModelSnapshot, filterConditionalMemorySource, readCurrentModelSnapshotId } from '../../../src/conditionalMemory';
+import { parseFunctionCallArgs, stringifyFunctionCallArgs } from '../../../src/toolCallArgs';
 
 type Case = { op: string; source?: string; modelId?: string; body?: string; snapshot?: string; message?: string; args?: Record<string, unknown>; rawArgsText?: string; argsParseError?: string; rawInput?: unknown };
 const corpus = JSON.parse(readFileSync(new URL('./parity-corpus.json', import.meta.url), 'utf8')) as Case[];

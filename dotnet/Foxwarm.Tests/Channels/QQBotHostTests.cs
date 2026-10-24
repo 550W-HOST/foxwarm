@@ -143,7 +143,7 @@ public sealed class QQBotHostTests
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
-            start.ArgumentList.Add(Path.Combine(root, "dotnet", "qqbot-browser.mjs"));
+            start.ArgumentList.Add(Path.Combine(root, "dotnet", "Foxwarm.Tests", "Fixtures", "qqbot-browser.mjs"));
             foreach (var arg in new[] { settings.Address.BaseUrl, settings.Token, id })
                 start.ArgumentList.Add(arg);
             using var browser = Process.Start(start)!;

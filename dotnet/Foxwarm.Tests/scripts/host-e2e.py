@@ -199,7 +199,7 @@ def cleanup_process(process):
 def main():
     sdk = os.environ['DOTNET_ROOT']
     dotnet = str(pathlib.Path(sdk) / 'dotnet')
-    dll = pathlib.Path(__file__).resolve().parent / 'Foxwarm/bin/Debug/net10.0/Foxwarm.dll'
+    dll = pathlib.Path(__file__).resolve().parents[2] / 'Foxwarm/bin/Debug/net10.0/Foxwarm.dll'
     assert dll.is_file(), 'Build the host solution before running this driver.'
     base = pathlib.Path(tempfile.mkdtemp(prefix='foxwarm-dotnet-host-e2e-'))
     data = base / 'data'

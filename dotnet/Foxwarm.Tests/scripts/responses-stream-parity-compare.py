@@ -7,11 +7,11 @@ from pathlib import Path
 
 from parity_compare import strict_equal
 
-root = Path(__file__).parent
-corpus = json.loads((root / 'responses-stream-corpus.json').read_text())
+root = Path(__file__).resolve().parent
+corpus = json.loads((root.parent / 'Fixtures' / 'responses-stream-corpus.json').read_text())
 ts = json.loads(subprocess.check_output([sys.executable, str(root / 'run-responses-stream-ts.py')], text=True))
 dotnet = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith('--') else 'dotnet'
-cs = json.loads(subprocess.check_output([dotnet, 'run', '--project', str(root / 'Foxwarm.DevTools'), '--no-restore', '--', 'responses-stream', str(root / 'responses-stream-corpus.json')], text=True, cwd=root.parent))
+cs = json.loads(subprocess.check_output([dotnet, 'run', '--project', str(root.parents[1] / 'Foxwarm.DevTools'), '--no-restore', '--', 'responses-stream', str(root.parent / 'Fixtures' / 'responses-stream-corpus.json')], text=True, cwd=root.parents[2]))
 if not (len(corpus) == len(ts) == len(cs)):
     raise SystemExit(f'count mismatch: corpus={len(corpus)} TS={len(ts)} C#={len(cs)}')
 

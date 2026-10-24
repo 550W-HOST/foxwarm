@@ -9,7 +9,7 @@ process.env.FOXWARM_DATA_DIR = root
 process.env.FOXWARM_NO_CONSOLE_LOG = '1'
 process.env.FOXWARM_SYNC_FILE_LOG = '1'
 process.env.FOXWARM_VECTOR_ENABLED = 'false'
-const repository = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '..')
+const repository = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '../../..')
 const load = name => import(pathToFileURL(path.join(repository, 'lib', name)).href)
 await fs.mkdir(path.join(root, 'state'), { recursive: true })
 await fs.writeFile(path.join(root, 'state/config.yaml'), 'dbWorkers: false\nvector:\n  enabled: false\nbot:\n  enableWebUI: false\n  enableTrigger: false\n')

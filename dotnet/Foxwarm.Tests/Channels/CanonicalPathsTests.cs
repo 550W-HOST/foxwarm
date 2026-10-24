@@ -22,7 +22,7 @@ internal static class CanonicalSourceFixture
                 WorkingDirectory = repository,
                 ArgumentList =
                 {
-                    Path.Combine(repository, "dotnet", "canonical-entry-fixture-ts.mjs"),
+                    Path.Combine(repository, "dotnet", "Foxwarm.Tests", "Fixtures", "canonical-entry-fixture-ts.mjs"),
                 },
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,

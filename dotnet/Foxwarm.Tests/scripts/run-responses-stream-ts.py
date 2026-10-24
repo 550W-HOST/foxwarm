@@ -7,15 +7,15 @@ import sys
 import tempfile
 from pathlib import Path
 
-root = Path(__file__).parent
+root = Path(__file__).resolve().parent
 env = os.environ.copy()
 env['FOXWARM_NO_CONSOLE_LOG'] = '1'
 env['FOXWARM_SYNC_FILE_LOG'] = '1'
 with tempfile.TemporaryDirectory(prefix='foxwarm-responses-oracle-') as data_dir:
     env['FOXWARM_DATA_DIR'] = data_dir
     tsx = env.get('FOXWARM_TSX')
-    cmd = [tsx, str(root / 'responses-stream-parity-ts.ts')] if tsx else ['npx', '--yes', 'tsx@4.19.2', str(root / 'responses-stream-parity-ts.ts')]
-    proc = subprocess.Popen(cmd, cwd=root.parent, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+    cmd = [tsx, str(root.parent / 'Fixtures' / 'responses-stream-parity-ts.ts')] if tsx else ['npx', '--yes', 'tsx@4.19.2', str(root.parent / 'Fixtures' / 'responses-stream-parity-ts.ts')]
+    proc = subprocess.Popen(cmd, cwd=root.parents[2], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
     try:
         stdout, stderr = proc.communicate(timeout=30)
     except subprocess.TimeoutExpired:

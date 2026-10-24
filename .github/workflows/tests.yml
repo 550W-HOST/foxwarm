@@ -49,7 +49,7 @@ jobs:
           npm run build
           npm run build:reference
       - name: Prepare optional HEIF test prerequisite
-        run: bash dotnet/build-image-decoder.sh "$RUNNER_TEMP/heif-test"
+        run: bash dotnet/scripts/build-image-decoder.sh "$RUNNER_TEMP/heif-test"
       - name: Run core and package tests
         env:
           LD_LIBRARY_PATH: ${{ runner.temp }}/heif-test/prefix/lib

@@ -67,7 +67,7 @@ public sealed class SessionCatalogSourceTests
         foreach (
             var arg in new[]
             {
-                Path.Combine(repository, "dotnet", "session-catalog-fixture-ts.mjs"),
+                Path.Combine(repository, "dotnet", "Foxwarm.Tests", "Fixtures", "session-catalog-fixture-ts.mjs"),
                 temp.Path,
                 input,
                 output,

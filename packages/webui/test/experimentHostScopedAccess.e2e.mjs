@@ -52,7 +52,7 @@ await mkdir(join(host.work, 'memory'), { recursive: true }); await writeFile(joi
 const png = await sharp({ create: { width: 3, height: 2, channels: 4, background: { r: 20, g: 110, b: 180, alpha: 1 } } }).png().toBuffer()
 await writeFile(join(host.work, 'reference.png'), png)
 await writeFile(join(host.work, 'unreferenced.png'), await sharp({ create: { width: 2, height: 3, channels: 4, background: { r: 180, g: 20, b: 110, alpha: 1 } } }).png().toBuffer())
-const seeded = execFileSync(process.execPath, [resolve('dotnet/continuous-history-fixture-ts.mjs'), host.data, join(host.work, 'reference.png'), join(host.work, 'unreferenced.png')], { encoding: 'utf8', env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') } })
+const seeded = execFileSync(process.execPath, [resolve('dotnet/Foxwarm.Tests/Fixtures/continuous-history-fixture-ts.mjs'), host.data, join(host.work, 'reference.png'), join(host.work, 'unreferenced.png')], { encoding: 'utf8', env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') } })
 const seed = JSON.parse(seeded.split('\n').find(line => line.startsWith('CONTINUOUS_FIXTURE:')).slice('CONTINUOUS_FIXTURE:'.length))
 const config = (token = aliceToken, extra = {}) => ({
   url: host.origin + '/nested/app', bot: { httpPort: host.port }, llm: { maxOutput: 713, compactKeepPercent: 0.3 }, channels: { webui: {} },

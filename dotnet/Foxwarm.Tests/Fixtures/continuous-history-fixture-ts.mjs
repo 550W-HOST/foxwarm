@@ -6,7 +6,7 @@ const [root, imagePath] = process.argv.slice(2)
 if (!root || !imagePath) throw new Error('usage: continuous-history-fixture-ts.mjs DATA IMAGE')
 process.env.FOXWARM_DATA_DIR = root
 process.env.FOXWARM_VECTOR_ENABLED = 'false'
-const repository = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '..')
+const repository = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '../../..')
 const load = relative => import(pathToFileURL(path.join(repository, 'lib', relative)).href)
 const sm = await load('sessionManager.js')
 const { putImageBlob } = await load('imageBlobs.js')

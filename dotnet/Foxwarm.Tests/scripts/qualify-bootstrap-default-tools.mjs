@@ -5,7 +5,7 @@ import { createServer, request } from 'node:http'
 import { once } from 'node:events'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { createHostFixture, until } from '../../packages/webui/test/experimentHostFixture.mjs'
+import { createHostFixture, until } from '../../../packages/webui/test/experimentHostFixture.mjs'
 
 const source = process.argv.includes('--source')
 const hidden = ['set_session_child_model', 'set_session_compact_threshold', 'refresh_session_snapshot', 'compact_session', 'create_agent', 'create_session', 'set_agent_inherit']

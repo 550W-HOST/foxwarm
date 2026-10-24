@@ -37,7 +37,7 @@ public sealed partial class CommandAdministrationTests
             ?? throw new InvalidOperationException("FOXWARM_TS_ROOT is required");
         var start = new ProcessStartInfo(
             "node",
-            Path.Combine(root, "dotnet", "command-administration-fixture-ts.mjs")
+            Path.Combine(root, "dotnet", "Foxwarm.Tests", "Fixtures", "command-administration-fixture-ts.mjs")
         )
         {
             WorkingDirectory = root,

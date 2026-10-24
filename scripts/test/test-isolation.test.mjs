@@ -199,7 +199,7 @@ test('Source lifecycle fixture ignores caller configuration under direct race an
     ['race', raceRoot, configPath], ['seed', coldRoot, ''], ['reopen', coldRoot, configPath],
   ]) {
     const result = await execFileAsync(process.execPath,
-      ['dotnet/lifecycle-transition-fixture-ts.mjs', mode, dataRoot], {
+      ['dotnet/Foxwarm.Tests/Fixtures/lifecycle-transition-fixture-ts.mjs', mode, dataRoot], {
         cwd: repo, env: { ...env, FOXWARM_CONFIG_PATH: preferredOverride }, timeout: 15_000,
       })
     const line = result.stdout.split('\n').find(line => line.startsWith('LIFECYCLE_FIXTURE:'))

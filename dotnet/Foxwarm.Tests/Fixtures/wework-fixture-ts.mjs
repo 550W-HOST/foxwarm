@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path';
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-wework-source-'));
 await mkdir(join(root, 'state'));
 await writeFile(join(root, 'state/config.yaml'), '{}');
-const { isolatedApplicationEnv } = await import('../scripts/test/test-process-env.cjs');
+const { isolatedApplicationEnv } = await import('../../../scripts/test/test-process-env.cjs');
 Object.assign(process.env, isolatedApplicationEnv(root));
 const require = createRequire(import.meta.url);
 const { WeWorkWebhookChannel } = require(resolve(process.env.FOXWARM_TS_ROOT || '.', 'lib/channels/weworkChannel.js'));

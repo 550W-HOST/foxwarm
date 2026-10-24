@@ -431,7 +431,7 @@ public sealed partial class ToolAuthorizationSourceTests
         foreach (
             var arg in new[]
             {
-                Path.Combine(sourceRoot, "dotnet", "tool-authorization-fixture-ts.mjs"),
+                Path.Combine(sourceRoot, "dotnet", "Foxwarm.Tests", "Fixtures", "tool-authorization-fixture-ts.mjs"),
                 temp.Path,
                 input,
                 output,
@@ -597,7 +597,7 @@ public sealed partial class ToolAuthorizationSourceTests
         foreach (
             var arg in new[]
             {
-                Path.Combine(repository, "dotnet", "tool-authorization-fixture-ts.mjs"),
+                Path.Combine(repository, "dotnet", "Foxwarm.Tests", "Fixtures", "tool-authorization-fixture-ts.mjs"),
                 temp.Path,
                 input,
                 output,

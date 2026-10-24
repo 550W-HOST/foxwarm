@@ -26,7 +26,7 @@ public sealed class CommittedArchiveIdentityTests
                 WorkingDirectory = repo,
                 ArgumentList =
                 {
-                    Path.Combine(repo, "dotnet", "archive-identity-fixture-ts.mjs"),
+                    Path.Combine(repo, "dotnet", "Foxwarm.Tests", "Fixtures", "archive-identity-fixture-ts.mjs"),
                     mode,
                     root,
                 },

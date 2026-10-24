@@ -22,7 +22,7 @@ public sealed class VisionInputParityTests
         foreach (
             var argument in new[]
             {
-                Path.Combine(root, "dotnet", "vision-input-fixture-ts.mjs"),
+                Path.Combine(root, "dotnet", "Foxwarm.Tests", "Fixtures", "vision-input-fixture-ts.mjs"),
                 temp.Path,
                 output,
             }

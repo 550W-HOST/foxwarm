@@ -1,6 +1,6 @@
 # Main input-image prerequisites
 
-This document covers the .NET host's image-input prerequisites, not image generation or cropping. The original WebUI composer uploads images; native `read` and recognized official MCP SDK image content enter the same durable blob lifecycle. Provider preparation hydrates a clone for Responses HTTP/WS, Chat Completions or Anthropic-compatible Messages. Connected export, generic delivery and external Node consumers are documented in [the host README](README.md) and [external Node file consumers](../docs/code-index/units/external-node-files.md).
+This document covers the .NET host's image-input prerequisites, not image generation or cropping. The original WebUI composer uploads images; native `read` and recognized official MCP SDK image content enter the same durable blob lifecycle. Provider preparation hydrates a clone for Responses HTTP/WS, Chat Completions or Anthropic-compatible Messages. Connected export, generic delivery and external Node consumers are documented in [the image contract](code-index/units/images.md) and [external Node file consumers](code-index/units/external-node-files.md).
 
 ## Raster input
 
@@ -17,7 +17,7 @@ For pixel decoding, the adapter changes only the context's `max_image_size_pixel
 To reproduce the qualified decode-only build, use a caller-owned directory and installed C/C++ compiler, CMake, pkg-config, curl, tar and sha256sum:
 
 ```sh
-bash dotnet/build-image-decoder.sh "$PWD/.temp/image-decoder"
+bash dotnet/scripts/build-image-decoder.sh "$PWD/.temp/image-decoder"
 LD_LIBRARY_PATH="$PWD/.temp/image-decoder/prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm
 ```
 
@@ -41,4 +41,4 @@ New canonical history, queued parts and immutable Archive rows contain verified 
 
 New identity move intent is version 2 and retains legacy Session image directories. Version 1 recovery keeps its original directional artifact behavior. Already completed old moves with missing legacy paths are not repaired or reconstructed. Other identity, JSON, Archive and fork-cap contracts remain unchanged.
 
-See the canonical [Main input-images contract](../docs/code-index/units/images.md) for staging authorization, safe browser transport, provider-only hydration, call association, request-local deduplication and remaining non-goals.
+See the canonical [Main input-images contract](code-index/units/images.md) for staging authorization, safe browser transport, provider-only hydration, call association, request-local deduplication and remaining non-goals.

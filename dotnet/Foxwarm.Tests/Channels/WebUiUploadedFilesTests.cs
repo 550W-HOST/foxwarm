@@ -374,7 +374,7 @@ public sealed class WebUiUploadedFilesTests
         foreach (
             var arg in new[]
             {
-                Path.Combine(root, "dotnet", "channel-files-fixture-ts.mjs"),
+                Path.Combine(root, "dotnet", "Foxwarm.Tests", "Fixtures", "channel-files-fixture-ts.mjs"),
                 Path.Combine(f.Temp.Path, "source"),
                 inFile,
                 output,

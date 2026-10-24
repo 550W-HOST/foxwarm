@@ -7,7 +7,7 @@ const [mode, root, resultPath, inputPath, requestedSessionId] = process.argv.sli
 if (!mode || !root || !resultPath) {
   throw new Error('usage: session-persistence-fixture-ts.mjs MODE ROOT RESULT [INPUT]')
 }
-const foxwarmRoot = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '..')
+const foxwarmRoot = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '../../..')
 process.env.FOXWARM_DATA_DIR = root
 process.env.FOXWARM_VECTOR_ENABLED = 'false'
 const importFromFoxwarm = relative => import(pathToFileURL(path.join(foxwarmRoot, 'lib', relative)).href)

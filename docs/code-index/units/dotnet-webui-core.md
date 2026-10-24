@@ -46,4 +46,4 @@ The original Conversation projection is merged from the retained frontend rather
 
 `experimentHostSessionCreation.e2e.mjs` drives the built original new-Session/new-Agent dialogs against a disposable normal host, verifies main and Agent-scoped automatic IDs, explicit leaf identity, fresh persisted defaults, root-first ordering and reload. It does not replace existing standalone frontend acceptance or qualify live external channels.
 
-`dotnet/scripts/qualify-http-compatibility.mjs` drives the unchanged public Multica bin against disposable Main and a synthetic Responses peer, captures real success/error tool commits, queued runtime state and failure presentation, and checks the existing WebSocket handshake.
+`dotnet/Foxwarm.Tests/scripts/qualify-http-compatibility.mjs` drives the unchanged public Multica bin against disposable Main and a synthetic Responses peer, captures real success/error tool commits, queued runtime state and failure presentation, and checks the existing WebSocket handshake.

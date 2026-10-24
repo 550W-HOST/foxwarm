@@ -5,7 +5,7 @@ import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { createHostFixture, until, sleep } from '../../packages/webui/test/experimentHostFixture.mjs'
+import { createHostFixture, until, sleep } from '../../../packages/webui/test/experimentHostFixture.mjs'
 
 const f = await createHostFixture('shutdown-recovery', { stopTimeout: 18000 })
 const requests = [], failures = [], rounds = new Map(), gates = new Map()

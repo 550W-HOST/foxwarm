@@ -9,8 +9,8 @@ from pathlib import Path
 
 from parity_compare import strict_equal
 
-root = Path(__file__).parent
-corpus = root / 'responses-request-corpus.json'
+root = Path(__file__).resolve().parent
+corpus = root.parent / 'Fixtures' / 'responses-request-corpus.json'
 dotnet = sys.argv[1] if len(sys.argv) > 1 else 'dotnet'
 
 def run_json(cmd, *, cwd=None, env=None):
@@ -45,12 +45,12 @@ env['FOXWARM_SYNC_FILE_LOG'] = '1'
 with tempfile.TemporaryDirectory(prefix='foxwarm-responses-request-oracle-') as data_dir:
     env['FOXWARM_DATA_DIR'] = data_dir
     ts = run_json(
-        ['node', str(root / 'responses-request-parity-ts.mjs'), str(corpus)],
+        ['node', str(root.parent / 'Fixtures' / 'responses-request-parity-ts.mjs'), str(corpus)],
         env=env,
     )
 cs = run_json(
-    [dotnet, 'run', '--project', str(root / 'Foxwarm.DevTools'), '--no-build', '--no-restore', '--', 'responses-request', str(corpus)],
-    cwd=root.parent,
+    [dotnet, 'run', '--project', str(root.parents[1] / 'Foxwarm.DevTools'), '--no-build', '--no-restore', '--', 'responses-request', str(corpus)],
+    cwd=root.parents[2],
 )
 if len(ts) != len(cs):
     raise SystemExit(f'count mismatch: TS={len(ts)} C#={len(cs)}')

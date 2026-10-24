@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { WebSocket } from 'ws'
-import { createHostFixture, until } from '../../packages/webui/test/experimentHostFixture.mjs'
+import { createHostFixture, until } from '../../../packages/webui/test/experimentHostFixture.mjs'
 
 const observe = process.argv.includes('--observe')
 const source = process.argv.includes('--source')

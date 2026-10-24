@@ -31,7 +31,7 @@ public sealed partial class SessionCreationParityTests
                 WorkingDirectory = repository,
                 ArgumentList =
                 {
-                    Path.Combine(repository, "dotnet", "session-creation-fixture-ts.mjs"),
+                    Path.Combine(repository, "dotnet", "Foxwarm.Tests", "Fixtures", "session-creation-fixture-ts.mjs"),
                 },
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,

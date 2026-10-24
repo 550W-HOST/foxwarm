@@ -10,9 +10,9 @@ if (!root || !['seed', 'verify'].includes(mode) || !['current', 'retained'].incl
   throw new Error('usage: archive-schema-fixture-ts.mjs seed|verify ROOT current|retained')
 }
 // Bind owned paths before importing application modules, including in direct runs.
-const { isolatedApplicationEnv } = createRequire(import.meta.url)('../scripts/test/test-process-env.cjs')
+const { isolatedApplicationEnv } = createRequire(import.meta.url)('../../../scripts/test/test-process-env.cjs')
 Object.assign(process.env, isolatedApplicationEnv(root))
-const repository = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '..')
+const repository = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '../../..')
 const archive = await import(pathToFileURL(path.join(repository, 'lib/session/archiveStore.js')).href)
 const databasePath = path.join(root, 'state/archive-store.sqlite')
 const raw = (sessionId, seq) => ({ v: 1, kind: 'message', sessionId, agent: 'main', seq,

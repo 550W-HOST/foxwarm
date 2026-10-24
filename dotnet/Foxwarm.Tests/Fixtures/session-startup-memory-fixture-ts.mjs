@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 
 const [mode, root] = process.argv.slice(2)
 if (!root || !['seed', 'inspect'].includes(mode)) throw new Error('usage: session-startup-memory-fixture-ts.mjs seed|inspect OWNED_ROOT')
-const { isolatedApplicationEnv } = createRequire(import.meta.url)('../scripts/test/test-process-env.cjs')
+const { isolatedApplicationEnv } = createRequire(import.meta.url)('../../../scripts/test/test-process-env.cjs')
 Object.assign(process.env, isolatedApplicationEnv(root))
 process.env.FOXWARM_VECTOR_ENABLED = 'false'
 await fs.mkdir(path.join(root, 'state'), { recursive: true })
@@ -14,7 +14,7 @@ if (mode === 'seed') {
   await fs.writeFile(path.join(root, 'state/config.yaml'), 'dbWorkers: false\nsessionWorkers: false\nvector:\n  enabled: false\n')
   await fs.writeFile(path.join(root, 'state/models.yaml'), 'default: a/wire\nproviders:\n  a:\n    providerType: openai-responses\n    baseUrl: http://127.0.0.1:1\n    apiKey: synthetic-not-a-key\n    models: [wire]\n')
 }
-const repository = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '..')
+const repository = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '../../..')
 const app = file => import(pathToFileURL(path.join(repository, 'lib', file + '.js')).href)
 const sm = await app('sessionManager')
 const { isSessionCatalogStub } = await app('sessionRuntimeState')
