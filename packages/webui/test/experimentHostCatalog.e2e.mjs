@@ -11,6 +11,9 @@ import { writeModelFixture } from './experimentModelFixture.mjs'
 
 const fixture = await createHostFixture('catalog-app'), route = id => '/api/sessions/' + encodeURIComponent(id)
 const requests = [], held = new Map(), errors = [], frames = []
+// Failed persistence is presented as a temporary typed notice, not a second durable append.
+const failureNotice = (frame, id) => frame.type === 'message' && frame.sessionId === id
+  && frame.message?.__meta?.temporary === true && frame.message?.__meta?.sessionNotice?.source === 'session'
 let socket, lock
 const peer = createServer(async (request, response) => {
   try {
@@ -42,6 +45,12 @@ await seed('pin-child', 400, { parentSessionId: 'root', pinned: true }); await s
 await seed('ordered', 1, { sidebarOrder: 1 }); for (const id of ['\ue000', '𐐀', '😀', 'İ', 'ΟΣ']) await seed(id, 50)
 for (let index = 0; index < 300; index++) await seed('fan-' + String(index).padStart(3, '0'), 300 - index, { parentSessionId: 'root' })
 const legacy = JSON.stringify({ sessions: Object.fromEntries(rows.map(row => [row.id, row])) }); await writeFile(join(fixture.data, 'state/sessions.json'), legacy)
+// Produce the supported catalog-first state through Source's real migration.
+// Ambiguous presentation aliases are valid catalog data, not committed Archive moves.
+execFileSync('node', ['--input-type=module', '-e', `
+  const { sessionCatalogStore } = await import(${JSON.stringify(new URL('../../../lib/session/catalogStore.js', import.meta.url).href)});
+  await sessionCatalogStore.initialize(); sessionCatalogStore.close();
+`], { env: { ...process.env, FOXWARM_DATA_DIR: fixture.data }, stdio: 'pipe' })
 const seedRows = join(fixture.root, 'rows.json'); await writeFile(seedRows, JSON.stringify(rows))
 execFileSync('node', [resolve('dotnet/session-catalog-seed-ts.mjs'), fixture.data, seedRows], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
 const catalogPath = join(fixture.data, 'state/catalog.sqlite')
@@ -113,10 +122,10 @@ try {
   const providerBefore = requests.length, failedStart = frames.length;
   const appendHold = join(fixture.data, 'state/experiment-faults', 'id_' + Buffer.from('ordered').toString('base64url') + '.canonical-hold-before-rename'); await mkdir(join(fixture.data, 'state/experiment-faults'), { recursive: true }); await writeFile(appendHold, 'hold');
   await message('ordered', 'CASE:no-provider'); await until(async () => await readFile(appendHold + '.reached', 'utf8').catch(() => '') === 'reached', 'actual canonical user publication barrier'); beginLock(); await unlink(appendHold);
-  await until(() => frames.slice(failedStart).some(frame => frame.type === 'processing-error' && frame.sessionId === 'ordered'), 'actual pre-provider failure settled', 130000);
+  await until(() => frames.slice(failedStart).some(frame => failureNotice(frame, 'ordered')), 'actual pre-provider failure settled', 130000);
   assert.equal(requests.length, providerBefore); assert((await readAuthority('ordered')).history.some(row => JSON.stringify(row).includes('CASE:no-provider'))); releaseLock(); await idle('ordered')
   await message('root', 'CASE:held-effect'); await until(() => held.has('held-effect'), 'actual held effect result'); beginLock()
-  const effectFailureStart = frames.length; held.get('held-effect').complete([{ type: 'function_call', call_id: 'effect', name: 'exec', arguments: JSON.stringify({ command: 'printf unsafe > forbidden-effect', timeout: 1 }) }]); await until(() => frames.slice(effectFailureStart).some(frame => frame.type === 'processing-error' && frame.sessionId === 'root'), 'actual assistant projection failure settled', 130000); await idle('root')
+  const effectFailureStart = frames.length; held.get('held-effect').complete([{ type: 'function_call', call_id: 'effect', name: 'exec', arguments: JSON.stringify({ command: 'printf unsafe > forbidden-effect', timeout: 1 }) }]); await until(() => frames.slice(effectFailureStart).some(frame => failureNotice(frame, 'root')), 'actual assistant projection failure settled', 130000); await idle('root')
   await assert.rejects(access(join(fixture.work, 'forbidden-effect'))); assert((await readAuthority('root')).history.some(row => row.parts?.some(part => part.functionCall?.id === 'effect'))); releaseLock()
   const beforeRestart = (await fixture.api('GET', '/api/session-list/sidebar?limit=3')).body.nextCursor; socket.close(); await once(socket, 'close'); socket = null
   await fixture.stop(); await fixture.start()

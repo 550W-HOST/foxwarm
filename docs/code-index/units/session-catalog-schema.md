@@ -23,3 +23,5 @@ The catalog is a query projection. It may carry Main-only presentation metadata 
 ## Tests
 
 `dotnet/Foxwarm.Tests/Sessions/SessionCatalogMigrationTests.cs`; `SessionCatalogSourceTests.cs`; `SessionCatalogPublicationTests.cs`; `dotnet/Foxwarm.Tests/Storage/TypeScriptFixtureTests.cs`.
+
+`packages/webui/test/experimentHostCatalog.e2e.mjs` uses the actual Source catalog migration before Archive branch seeding. Its ambiguous presentation aliases, Unicode identities and parent cycles qualify the catalog-first persisted boundary without presenting those aliases as committed pre-catalog Archive moves. The real Main/browser scenarios retain bounded list queries, publication failures, pre-effect ordering and missing cold authority admission.

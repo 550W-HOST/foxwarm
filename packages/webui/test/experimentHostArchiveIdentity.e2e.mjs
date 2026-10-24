@@ -18,7 +18,7 @@ const peer = createServer(async (request, response) => {
     const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
     const output = body.input.at(-1)?.type === 'function_call_output'
       ? [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'DONE-ARCHIVE-IDENTITY' }] }]
-      : [call('agent', 'create_agent', { agentName: 'archive-target', createMainSession: false }), call('old', 'create_session', { agentName: 'main', sessionName: 'archive_old' }), call('middle', 'create_session', { agentName: 'main', sessionName: 'archive_middle' }),
+      : [call('agent', 'create_agent', { agentName: 'archive-proof', createMainSession: false }), call('old', 'create_session', { agentName: 'main', sessionName: 'archive_old' }), call('middle', 'create_session', { agentName: 'main', sessionName: 'archive_middle' }),
         call('current', 'create_session', { agentName: 'archive-target', sessionName: 'current' }), call('allowed', 'write', { filePath: 'archive-proof.txt', content: 'Committed compatibility retains ordinary paired effects.' })]
     response.writeHead(200, { 'content-type': 'text/event-stream' }); response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { id: 'archive-' + requests.length, output, usage: { input_tokens: 20, output_tokens: 4 } } }) + '\n\n')
   } catch (error) { failures.push(error.stack); if (!response.destroyed) { response.writeHead(500); response.end() } }
@@ -47,10 +47,11 @@ try {
   await unlink(ledger)
   const before = fixture.sql('SELECT session_id,agent,seq,timestamp,role,message_json FROM archive_messages ORDER BY session_id,seq')
   await fixture.start(); await fixture.openApp()
-  assert.deepEqual(await trace(fixture), ['created main']); assert.equal((await fixture.api('GET', '/api/session-list/architecture')).status, 200)
+  assert.deepEqual(await trace(fixture), []); assert.equal((await fixture.api('GET', '/api/session-list/architecture')).status, 200)
   const mappings = fixture.sql('SELECT session_id,canonical_session_id FROM archive_session_id_reservations'); assert(mappings.some(([id, target]) => id === 'unique-cold' && target === 'cold-0')); assert(!mappings.some(([id]) => id === 'ambiguous'))
   for (let index = 0; index < cold.length; index += 100) assert.equal((await fixture.api('POST', '/api/session-list/by-id', { ids: cold.slice(index, index + 100).map(value => value.id) })).status, 200)
-  assert.deepEqual(await trace(fixture), ['created main']); assert.equal(requests.length, 0)
+  assert.deepEqual(await trace(fixture), []); assert.equal(requests.length, 0)
+  assert.equal((await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'main' })).status, 200)
   assert.equal((await fixture.api('POST', route('main') + '/message', { text: 'ARC-TASK:reserved-identities' })).status, 202)
   await until(async () => { const history = await fixture.api('GET', route('main') + '/history'); return history.body.messages?.some(value => value.parts?.some(part => part.text === 'DONE-ARCHIVE-IDENTITY')) }, 'full actual provider pairs')
   const saved = JSON.parse(await readFile(join(fixture.data, 'state/sessions/main.json'), 'utf8')), results = saved.history.flatMap(value => value.parts || []).filter(value => value.functionResponse).map(value => value.functionResponse)

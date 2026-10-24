@@ -5,12 +5,12 @@ import { createHostFixture, until } from './experimentHostFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const fixture = await createHostFixture('app-config')
-const initialRaw = (origin, prefix = '/preview') => `# preserve this comment\nurl: ${origin}${prefix}\nbot:\n  enableWebUI: true\n  customBotField: retained\nllm:\n  maxOutput: 713\n  compactKeepPercent: 0.3\n  compactThresholdPercent: 0.85\nnodeProviders:\n  retained:\n    type: executable\n    command: /bin/echo\n  docker:\n    type: docker-worktree\n    command: /bin/echo\n    image: alpine:3\n    allowedWorktreeRoots:\n      - /tmp\n    networkModes:\n      - none\n    stateDir: /tmp/foxwarm-state\n    memory: 2g\n    cpus: 2\n    pidsLimit: 256\n    tmpfsSize: 256m\nvector: false\naccess:\n  identities: {}\nchannels:\n  webui:\n    type: webui\n    enabled: true\n  weixin:\n    type: weixin\n    enabled: true\n    token: saved-token\n    customChannelField: keep-me\n  mystery:\n    type: future-chat\n    enabled: true\n`
+const initialRaw = (origin, port, prefix = '/preview') => `# preserve this comment\nurl: ${origin}${prefix}\nbot:\n  httpPort: ${port}\n  enableWebUI: true\n  customBotField: retained\nllm:\n  maxOutput: 713\n  compactKeepPercent: 0.3\n  compactThresholdPercent: 0.85\nnodeProviders:\n  retained:\n    type: executable\n    command: /bin/echo\nvector: false\naccess:\n  identities: {}\nchannels:\n  webui:\n    type: webui\n    enabled: true\n  weixin:\n    type: weixin\n    enabled: false\n    token: saved-token\n    customChannelField: keep-me\n  mystery:\n    type: future-chat\n    enabled: true\n`
 
 let page
 let browser
 try {
-  const raw = initialRaw(fixture.origin)
+  const raw = initialRaw(fixture.origin, fixture.port)
   await writeFile(`${fixture.data}/state/config.yaml`, raw)
   await fixture.start()
   const api = (path, method = 'GET', body) => fetch(`${fixture.origin}/preview${path}`, {
@@ -22,16 +22,17 @@ try {
   const statusBefore = await api('/api/setup/status')
   assert.equal(statusBefore.status, 200, JSON.stringify(statusBefore))
   assert.equal(statusBefore.body.config.rawYaml, raw)
-  assert.equal(statusBefore.body.capabilities.managedChannels, false)
+  assert.equal(statusBefore.body.capabilities.managedChannels, true)
   assert.equal(statusBefore.body.channels.find(channel => channel.channelId === 'webui').running, true)
-  for (const id of ['weixin', 'mystery']) {
-    const channel = statusBefore.body.channels.find(item => item.channelId === id)
-    assert.equal(channel.running, false)
-    assert.equal(channel.managed, false)
-    assert.match(channel.lastError, /External chat channels are unavailable/)
-  }
+  const weixin = statusBefore.body.channels.find(channel => channel.channelId === 'weixin')
+  assert.equal(weixin.running, false); assert.equal(weixin.managed, true); assert.equal(weixin.enabled, false)
+  assert.equal(weixin.configured, true)
+  const mystery = statusBefore.body.channels.find(channel => channel.channelId === 'mystery')
+  assert.equal(mystery.running, false); assert.equal(mystery.managed, false)
+  assert.match(mystery.lastError, /Adapter is not implemented/)
 
   const invalids = [
+    raw.replace('type: executable', 'type: docker-worktree'),
     raw.replace('compactKeepPercent: 0.3', 'compactKeepPercent: 2'),
     raw.replace('command: /bin/echo', 'command: null'),
     raw.replace('command: /bin/echo', 'timeoutSeconds: null\n    command: /bin/echo'),
@@ -53,7 +54,7 @@ try {
   assert.equal(conflictRows.length, 1)
   assert.equal(conflictRows[0].type, 'webui')
   assert.equal(conflictRows[0].running, true)
-  assert.match(conflictRows[0].lastError, /already used by WebUI/)
+  assert.equal(conflictRows[0].managed, false)
   assert.equal(conflictStatus.body.channels.some(channel => channel.channelId === 'main-webui'), false)
   const conflictRestore = await api('/api/setup/config', 'POST', { yaml: raw })
   assert.equal(conflictRestore.status, 200, JSON.stringify(conflictRestore))
@@ -70,10 +71,10 @@ try {
   assert.equal(saved.status, 200, JSON.stringify(saved))
   assert.equal(saved.body.saved, true)
   assert.equal(saved.body.target, 'config')
-  assert.deepEqual(saved.body.applied, ['access.identities'])
-  assert.deepEqual(saved.body.notApplied, ['channels'])
+  assert.deepEqual(saved.body.applied, ['access.identities', 'access.surfaces.mcp', 'channels'])
+  assert.deepEqual(saved.body.notApplied, ['channels.mystery'])
   assert(saved.body.restartRequired.includes('bot'))
-  assert.equal(saved.body.reload.available, false)
+  assert.equal(saved.body.reload.available, true)
   assert.deepEqual(saved.body.reload.started, [])
   assert.deepEqual(saved.body.reload.stopped, [])
   assert.equal(await readFile(`${fixture.data}/state/config.yaml`, 'utf8'), savedRaw)
@@ -88,15 +89,15 @@ try {
   await page.waitForSelector('input[type="password"]')
   await page.type('input[type="password"]', fixture.token)
   await page.click('button[type="submit"]')
-  await page.waitForSelector('.foxwarm-chat-root')
+  await page.waitForFunction(() => !!window.foxwarmTest?.switchToSession)
   await waitForWebUiReady(page)
   await page.evaluate(() => { location.hash = 'setup' })
   await page.waitForSelector('#setup-tab-config')
   await page.click('#setup-tab-config')
   const editor = '[aria-label="Application config YAML editor"] [role="textbox"]'
   await page.waitForSelector(editor, { visible: true })
-  assert.match(await page.evaluate(() => document.body.innerText), /External chat channels are unavailable on this server\./)
-  assert.equal(await page.$eval('body', body => body.innerText.includes('Start Weixin login')), false)
+  assert.equal(await page.$eval('body', body => body.innerText.includes('External chat channels are unavailable on this server.')), false)
+  assert.equal(await page.$eval('body', body => body.innerText.includes('Start Weixin login')), true)
   const uiRaw = channelRaw.replace('customChannelField: keep-me', 'customChannelField: ui-edited')
   await page.focus(editor)
   await page.keyboard.down('Control'); await page.keyboard.press('A'); await page.keyboard.up('Control')
@@ -146,7 +147,7 @@ try {
   })
   console.log(JSON.stringify({
     result: 'ok', rawPreserved: true, invalidUnchanged: true,
-    unavailableChannels: true, uiSave: true, originalSetupFeedback,
+    managedChannelsAvailable: true, disabledConfiguredChannel: true, unknownAdapterReported: true, uiSave: true, originalSetupFeedback,
     configOutcome: outcome(saved.body), restartPrefix: true,
   }))
 } finally {
