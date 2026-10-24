@@ -94,7 +94,7 @@ test('real public model caller uses only Core, captured settings, one-shot reque
     NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require=${preload}`,
   };
   const requests = [];
-  let timeoutAttempt = 0;
+  const timeoutAttempts = [];
   const server = http.createServer((request, response) => {
     let raw = '';
     request.setEncoding('utf8'); request.on('data', chunk => { raw += chunk; });
@@ -108,7 +108,15 @@ test('real public model caller uses only Core, captured settings, one-shot reque
       }
       if (!Array.isArray(body.input)) { response.writeHead(400); response.end('{"error":"unexpected fixture request"}'); return; }
       const prompt = JSON.stringify(body.input);
-      if (prompt.includes('timeout-probe') && timeoutAttempt++ === 0) return;
+      if (prompt.includes('timeout-probe')) {
+        const attempt = { started: performance.now(), disconnected: false };
+        timeoutAttempts.push(attempt);
+        if (timeoutAttempts.length === 1) {
+          response.once('close', () => { attempt.disconnected = true; });
+          return; // Never complete: the caller must abort this attempt before retrying.
+        }
+        attempt.previousDisconnected = timeoutAttempts[0].disconnected;
+      }
       if (prompt.includes('fatal-probe')) { response.writeHead(400); response.end('{"error":"synthetic invalid request"}'); return; }
       completed(response, prompt.includes('empty-probe') ? '' : prompt.includes('unicode-response') ? '回覆😀' : 'route-ok');
     });
@@ -149,9 +157,15 @@ test('real public model caller uses only Core, captured settings, one-shot reque
   assert.equal((await invoke(['model', '-m', 'missing', '-p', 'x'], env)).code, 2);
   assert.equal((await invoke(['model'], env)).code, 2);
   const beforeTimeout = requests.length;
-  const timed = await invoke(['model', '-p', 'timeout-probe', '-t', '.1'], env);
+  // The bound tests a deliberately held request, not sub-100ms cold transport/JIT speed.
+  const timed = await invoke(['model', '-p', 'timeout-probe', '-t', '1'], env);
   assert.equal(timed.code, 0, timed.stderr);
-  assert.equal(requests.length, beforeTimeout + 2); // Per-attempt bound, normal owner retry.
+  assert.equal(timed.stdout, 'route-ok\n');
+  assert.equal(requests.length, beforeTimeout + 2); // One cancelled attempt, one successful retry.
+  assert.equal(timeoutAttempts.length, 2);
+  assert.equal(timeoutAttempts[0].disconnected, true);
+  assert.equal(timeoutAttempts[1].previousDisconnected, true, 'Retry follows cancellation of the held attempt.');
+  t.diagnostic(`Timeout probe: retry reached the peer after ${Math.round(timeoutAttempts[1].started - timeoutAttempts[0].started)} ms.`);
   const empty = await invoke(['model', '-p', 'empty-probe'], env);
   assert.equal(empty.code, 1);
   assert.equal(empty.stdout, '');

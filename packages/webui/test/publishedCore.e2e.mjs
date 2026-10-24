@@ -20,6 +20,7 @@ await mkdir(join(data, 'state'), { recursive: true }); await mkdir(cwd)
 const listener = socketServer(); listener.listen(0, '127.0.0.1'); await once(listener, 'listening')
 const port = listener.address().port; await new Promise(done => listener.close(done))
 const origin = `http://127.0.0.1:${port}`
+const listening = `Main HTTP listening: http://0.0.0.0:${port}`
 // The pointer belongs to this owned installation, not the unrelated shell cwd.
 await writeFile(join(payload, 'data_dir'), data)
 await writeFile(join(data, 'state/config.yaml'), `bot:\n  httpPort: ${port}\nvector:\n  enabled: false\n`)
@@ -66,7 +67,7 @@ async function api(method, route, body) {
   return { status: response.status, body: await response.json().catch(() => ({})) }
 }
 try {
-  await until(() => { assert.equal(child.exitCode, null, output); return output.includes('Main HTTP listening: ' + origin) }, 'published Core listening')
+  await until(() => { assert.equal(child.exitCode, null, output); assert.equal(child.signalCode, null, output); return output.split(/\r?\n/).includes(listening) }, 'published Core listening')
   token = (await readFile(join(data, 'state/token'), 'utf8')).trim()
   assert.equal((await api('GET', '/health')).body.status, 'ready')
   assert.deepEqual((await api('GET', '/api/sessions')).body.sessions, [])
@@ -164,7 +165,7 @@ try {
   const [code, signal] = await exited
   assert.deepEqual({ code, signal }, { code: 0, signal: null }, output)
   startHost()
-  await until(() => { assert.equal(child.exitCode, null, output); return output.includes('Main HTTP listening: ' + origin) }, 'restarted published Core listening')
+  await until(() => { assert.equal(child.exitCode, null, output); assert.equal(child.signalCode, null, output); return output.split(/\r?\n/).includes(listening) }, 'restarted published Core listening')
   assert.equal((await readFile(join(data, 'state/token'), 'utf8')).trim(), token)
   assert.match(JSON.stringify((await api('GET', '/api/sessions/' + encodeURIComponent(id) + '/history')).body), /PACKAGED-NATIVE-DONE/)
   assert.equal(await readFile(join(data, 'agents/main/packaged-native-effect.txt'), 'utf8'), 'native packaged worker')
@@ -174,6 +175,9 @@ try {
   const [restartCode, restartSignal] = await stopped
   assert.deepEqual({ code: restartCode, signal: restartSignal }, { code: 0, signal: null }, output)
   console.log(JSON.stringify({ published: true, collectedReactCompiler: true, originalArtifactRun: true, mainBrowserImage: true, restartPreserved: true, browserLogin: true, noModelSetup: true, implicitSessions: 0, nodeArchive: true, extensionBundles: 4, nativeToolScript: true, globalSkillResource: true, vectorDisabledLazy: true, requests: requests.length }))
+} catch (error) {
+  console.error('Published Core output:\n' + output)
+  throw error
 } finally {
   await browser?.close().catch(() => {})
   if (child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL'); await once(child, 'exit').catch(() => {}) }

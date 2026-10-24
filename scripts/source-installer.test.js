@@ -13,6 +13,8 @@ function fixture(t) {
   fs.mkdirSync(bin);
   fs.mkdirSync(path.join(app, '.git'), { recursive: true });
   const log = path.join(root, 'commands');
+  // Keep the selected test Node when the isolated PATH excludes setup-node's bin.
+  fs.symlinkSync(process.execPath, path.join(bin, 'node'));
   const env = { ...process.env, PATH: `${bin}:/usr/bin:/bin`, FOXWARM_DIR: app,
     FOXWARM_DATA_DIR: data, FOXWARM_BRANCH: 'candidate', FOXWARM_TMUX_SESSION: 'installer-fixture', INSTALL_LOG: log };
   function stub(name, content) { fs.writeFileSync(path.join(bin, name), '#!/bin/bash\n' + content + '\n', { mode: 0o755 }); }
