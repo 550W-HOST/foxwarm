@@ -4,6 +4,13 @@ Read this file from the target revision when planning an upgrade. Apply only
 changes relevant to that installation; changing source does not authorize a
 user-data migration or replacement of customized configuration.
 
+## Source build and restart
+
+For a public source checkout, follow [Source Updates](SOURCE-UPDATES.md). Check
+the C# prerequisites before building, preserve the installation/data roots, and
+confirm a running replacement separately from a successful build. Retain older
+runtime outputs while their independent exec helpers still need them.
+
 ## Framework prompt
 
 The bundled template and live prompt are separate files:
@@ -26,8 +33,10 @@ loaded again as ordinary Agent memory.
 
 Review release notes, changed templates, and migrations for the target revision.
 Distinguish a required format migration from an optional new setting or changed
-default. Resolve the actual data root and any configuration-path override before
-editing a live file.
+default. Resolve the actual data root before editing a live file. Main reads
+`<data-root>/state/config.yaml` and `<data-root>/state/models.yaml`; retired generic
+configuration-filename environment overrides do not redirect these files. The
+separate MCP configuration retains `MCP_CONFIG_PATH` / `paths.mcpConfigPath`.
 
 For a persisted-format change, identify whether the previous runtime can still
 read newly written data. Retain a verified restore set before applying a change

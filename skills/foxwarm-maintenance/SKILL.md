@@ -1,13 +1,14 @@
 ---
 name: foxwarm-maintenance
-description: "Foxwarm-specific data layout, backup and restore boundaries, and upgrade checks. Use when assessing an installation's storage or changes to persisted data."
+description: "Foxwarm source updates and restarts, data layout, backup and restore boundaries, and upgrade checks. Use when updating a source installation or assessing changes to its storage and persisted data."
 ---
 
 # Foxwarm Maintenance
 
-This skill covers installation details that are specific to Foxwarm. Use an
-installation's own runbook for service control, deployment, backup destinations,
-and retention. Inspect its actual configuration rather than assuming a process
+This skill covers installation details that are specific to Foxwarm. For the
+public source checkout, use the source-update procedure below. Use an
+installation's own runbook for custom deployment, backup destinations and
+retention. Inspect its actual configuration rather than assuming a process
 manager, repository layout, or remote.
 
 ## Data layout and ownership
@@ -24,8 +25,11 @@ working directory. A shell's environment may differ from the running service.
 - `<data-root>/state/` contains configuration, credentials, Session authority,
   databases, blobs, and logs. `<data-root>/agents/` contains user-owned Agent
   files and the live framework prompt.
-- `<program-repo>/skills/` contains bundled skills; `templates/` supplies initial
-  defaults, not replacements for initialized user data.
+- `<program-repo>/skills/` supplies global skills unless `paths.skillsDir`
+  selects another directory. Source builds also copy skills into their payload
+  for standalone publication. Templates and native resources come from the
+  running binary's resource directory; templates initialize defaults and do not
+  replace initialized user data.
 - `state/` and `agents/` may be separate repositories or worktrees. A source
   commit, pull, or push does not necessarily include either one. Inspect each
   repository boundary before updating or backing up; do not sweep user data into
@@ -52,12 +56,17 @@ Restore to new paths and verify before any authorized replacement of live data.
 
 ## Upgrades and runtime changes
 
+Read [Source Updates](references/SOURCE-UPDATES.md) for first C# prerequisites,
+the public pull/build/restart sequence, generated output ownership and old-output
+retention for independent exec helpers. Build staging under `build/` is separate
+from runnable outputs under `runtime/`, even on the first startup.
+
 Read [Post-Upgrade Checks](references/POST-UPGRADE.md) from the target revision
 when planning an upgrade. Source, initialized configuration, and Agent memory
 have separate ownership; an update must not silently replace the latter two.
 
 Use the installation's existing launch configuration, including its data root
 and environment. A source update, successful build, and running replacement are
-separate facts. Report which happened. Static frontend updates alone do not
-require restarting the backend; assess the whole pending change, not only its
-latest commit.
+separate facts. Report which happened. Confirm the intended runtime payload and
+data root after restart. Source edits alone do not update resources already
+collected into a running payload, such as the WebUI and native helpers.

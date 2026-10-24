@@ -37,3 +37,7 @@ __pycache__/
 
 # Sandbox runtime incremental compiler cache (runtime artifacts remain tracked)
 /packages/sandbox-node-runtime/dist/.tsbuildinfo
+
+# Source build staging and retained runnable outputs
+/build/
+/runtime/
