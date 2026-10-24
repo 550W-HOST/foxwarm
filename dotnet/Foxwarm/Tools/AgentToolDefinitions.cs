@@ -108,7 +108,9 @@ internal static class AgentToolDefinitions
                         "current-agent",
                         "all"
                     ),
-                    ["note"] = String("Short progress note to append when updating a task."),
+                    ["note"] = String(
+                        "Progress note to append when updating a task, up to 2,000 characters."
+                    ),
                     ["result"] = String(
                         "Completion summary for a completed task. For long description or result text, use ToolScript to compose the operation so you do not regenerate duplicate content."
                     ),

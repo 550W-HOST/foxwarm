@@ -1137,7 +1137,7 @@ internal sealed class TaskStore : IDisposable
         Limit(args, "description", 20000);
         Limit(args, "result", 20000);
         Limit(args, "reason", 1000);
-        Limit(args, "note", 1000);
+        Limit(args, "note", 2000);
         Limit(args, "taskId", 128);
         Limit(args, "parentTaskId", 128);
         if (args.ContainsKey("status"))
@@ -1258,7 +1258,7 @@ internal sealed class TaskStore : IDisposable
         Limit(args, "title", 200);
         Limit(args, "description", 20000);
         Limit(args, "taskId", 128);
-        Limit(args, "note", 1000);
+        Limit(args, "note", 2000);
         if (action == "create" && string.IsNullOrWhiteSpace(Text(args["title"])))
             throw new TaskError("TASK_INVALID_ARGS", "task create requires a non-empty title.");
         if (action != "create" && string.IsNullOrWhiteSpace(Text(args["taskId"])))
