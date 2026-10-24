@@ -55,12 +55,18 @@ internal sealed class ArchiveContextReader(SqliteArchiveMessageStore archive)
         var text = SessionWait.Text(block.ToMessage()["parts"]?[0]?["text"]) ?? block.Summary;
         return new(
             $"[CTX B#{block.Id}{ContextPreviewRenderer.Time(block.CreatedAt)}] "
-                + (ownerId is not null && ownerId != block.SessionId
-                    ? "[inherited: " + block.SessionId + "]" : "[local]"),
+                + (
+                    ownerId is not null && ownerId != block.SessionId
+                        ? "[inherited: " + block.SessionId + "]"
+                        : "[local]"
+                ),
             text,
             text,
             null,
-            DrillDown: ContextPreviewRenderer.ArchiveDrill(ownerId ?? block.SessionId, $"B#{block.Id}")
+            DrillDown: ContextPreviewRenderer.ArchiveDrill(
+                ownerId ?? block.SessionId,
+                $"B#{block.Id}"
+            )
         );
     }
 

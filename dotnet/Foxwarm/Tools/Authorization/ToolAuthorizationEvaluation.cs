@@ -82,7 +82,8 @@ internal static class ToolAuthorizationEvaluation
         // dispatch alias, and MCP/Node tools with the same name retain their identities.
         bool Name(JsonNode? selector) =>
             Scalar(selector, AuthorizationFact.Of(name))
-            || source == "builtin" && name == "view_session"
+            || source == "builtin"
+                && name == "view_session"
                 && Scalar(selector, AuthorizationFact.Of("get_session_messages"));
         if (matcher is JsonObject map)
             return Optional(map, "source", AuthorizationFact.Of(source))

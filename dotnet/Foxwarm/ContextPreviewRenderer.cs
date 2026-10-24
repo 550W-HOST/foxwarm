@@ -22,10 +22,16 @@ internal sealed partial class ContextPreviewRenderer
         parts = new HashSet<string>(["text", "tools", "images"], StringComparer.Ordinal);
         if (options.ContainsKey("parts"))
         {
-            if (options["parts"] is not JsonArray values
-                || values.Any(value => SessionWait.Text(value) is not ("text" or "tools" or "images")))
+            if (
+                options["parts"] is not JsonArray values
+                || values.Any(value =>
+                    SessionWait.Text(value) is not ("text" or "tools" or "images")
+                )
+            )
                 throw new InvalidDataException("parts must be an array of text, tools, or images.");
-            parts = values.Select(value => SessionWait.Text(value)!).ToHashSet(StringComparer.Ordinal);
+            parts = values
+                .Select(value => SessionWait.Text(value)!)
+                .ToHashSet(StringComparer.Ordinal);
         }
         var requested = SessionWait.Number(options["previewLength"]);
         if (options["previewLength"] is not null && requested is null)
@@ -148,10 +154,15 @@ internal sealed partial class ContextPreviewRenderer
         {
             if (!truncated && !folded)
                 return "";
-            return "[" + (truncated ? "Truncated preview. " : "Tool content folded. ")
+            return "["
+                + (truncated ? "Truncated preview. " : "Tool content folded. ")
                 + (toolMatch ? "Matched in omitted tool call/result content. " : "")
-                + (item.DrillDown is { Length: > 0 } drill ? "Archive original: " + drill
-                    : "Narrow the range or increase previewLength/toolDetail.") + "]";
+                + (
+                    item.DrillDown is { Length: > 0 } drill
+                        ? "Archive original: " + drill
+                        : "Narrow the range or increase previewLength/toolDetail."
+                )
+                + "]";
         }
         var note = Notice(false);
         var usable = max - prefix.Length - (note.Length > 0 ? note.Length + 1 : 0);
@@ -164,7 +175,9 @@ internal sealed partial class ContextPreviewRenderer
         // Never cut a recovery call or present a budget excerpt as the full body.
         if (usable < Math.Min(20, item.Body.Length))
             return null;
-        var body = truncated ? (Active ? Snippet(item.Body, usable) : Clip(item.Body, usable)) : item.Body;
+        var body = truncated
+            ? (Active ? Snippet(item.Body, usable) : Clip(item.Body, usable))
+            : item.Body;
         return prefix + body + (note.Length > 0 ? "\n" + note : "");
     }
 
@@ -176,7 +189,9 @@ internal sealed partial class ContextPreviewRenderer
         IReadOnlyList<JsonObject> messages
     )
     {
-        var items = messages.Select((message, index) => Item(message, (int)start + index, sessionId)).ToArray();
+        var items = messages
+            .Select((message, index) => Item(message, (int)start + index, sessionId))
+            .ToArray();
         return RenderItems(
             items,
             runtime,
@@ -199,16 +214,23 @@ internal sealed partial class ContextPreviewRenderer
     internal PreviewItem ArchivedMessage(ArchiveMessageRecord record, string? ownerId = null)
     {
         var item = Item(record.Message, sessionId: ownerId ?? record.SessionId);
-        var source = ownerId is not null && ownerId != record.SessionId
-            ? "[inherited: " + record.SessionId + "]" : "[local]";
+        var source =
+            ownerId is not null && ownerId != record.SessionId
+                ? "[inherited: " + record.SessionId + "]"
+                : "[local]";
         return item with
         {
-            Heading = $"[#{record.Seq}{Time(record.Timestamp)}] "
-                + source + " " + Text(record.Message["role"]) + ":",
+            Heading =
+                $"[#{record.Seq}{Time(record.Timestamp)}] "
+                + source
+                + " "
+                + Text(record.Message["role"])
+                + ":",
             SourceIndex = record.Seq,
             ArchiveSession = ownerId ?? record.SessionId,
-            Sequence = record.Seq, EndSequence = record.Seq,
-            DrillDown = ArchiveDrill(ownerId ?? record.SessionId, "msg#" + record.Seq)
+            Sequence = record.Seq,
+            EndSequence = record.Seq,
+            DrillDown = ArchiveDrill(ownerId ?? record.SessionId, "msg#" + record.Seq),
         };
     }
 
@@ -221,16 +243,20 @@ internal sealed partial class ContextPreviewRenderer
         older["before"] = page.Begin;
         older["count"] = page.Count;
         older["historyVersion"] = page.HistoryVersion;
-        var navigation = page.Begin > 0 && page.Count > 0
-            ? "Older: view_session(" + EcmaJson.Stringify(older) + ")"
-            : "No older eligible page.";
-        return RenderItems(items,
+        var navigation =
+            page.Begin > 0 && page.Count > 0
+                ? "Older: view_session(" + EcmaJson.Stringify(older) + ")"
+                : "No older eligible page.";
+        return RenderItems(
+            items,
             $"Session `{sessionId}` · active indices [{page.Begin},{page.End}) of {page.Total}; historyVersion:{page.HistoryVersion}.\n"
                 + SessionStatus.Runtime(page.Runtime),
             matched => $"{matched} matches from {items.Length} selected eligible source records.",
-            page.Count == 0 ? "Header only." : items.Length == 0 ? "No eligible content in this range."
+            page.Count == 0 ? "Header only."
+                : items.Length == 0 ? "No eligible content in this range."
                 : "No selected records matched these page filters; older history was not searched.",
-            [navigation]);
+            [navigation]
+        );
     }
 
     internal string RenderItems(
@@ -308,15 +334,22 @@ internal sealed partial class ContextPreviewRenderer
             foreach (var notice in priority)
             {
                 var remaining = available - used - titleReserve;
-                var action = notice.Contains("recall(", StringComparison.Ordinal)
+                var action =
+                    notice.Contains("recall(", StringComparison.Ordinal)
                     || notice.Contains("view_session(", StringComparison.Ordinal);
                 if (action && notice.Length + 1 > remaining)
-                    Append("[Navigation exceeds this preview budget; rerun with previewLength:20000 or shorter page filters.]", remaining);
+                    Append(
+                        "[Navigation exceeds this preview budget; rerun with previewLength:20000 or shorter page filters.]",
+                        remaining
+                    );
                 else
                     Append(notice, Math.Max(0, action ? remaining : Math.Min(560, remaining)));
             }
             var medium = string.Join('\n', notices);
-            Append(medium, Math.Min(medium.Length + 1, Math.Max(0, available - used - titleReserve)));
+            Append(
+                medium,
+                Math.Min(medium.Length + 1, Math.Max(0, available - used - titleReserve))
+            );
             Append(title, Math.Max(0, available - used));
             return string.Join('\n', sections);
         }
@@ -331,11 +364,20 @@ internal sealed partial class ContextPreviewRenderer
         {
             var first = rows[0];
             var last = rows[^1];
-            var drill = first.ArchiveSession is { } session && first.Sequence is { } seq
-                && last.EndSequence is { } end && rows.All(row => row.ArchiveSession == session && row.Sequence is not null)
-                ? ArchiveDrill(session, $"msg#{Math.Min(seq, end)}-{Math.Max(seq, end)}") : first.DrillDown;
+            var drill =
+                first.ArchiveSession is { } session
+                && first.Sequence is { } seq
+                && last.EndSequence is { } end
+                && rows.All(row => row.ArchiveSession == session && row.Sequence is not null)
+                    ? ArchiveDrill(session, $"msg#{Math.Min(seq, end)}-{Math.Max(seq, end)}")
+                    : first.DrillDown;
             return $"[{rows.Length} item(s) not displayed: previewLength budget {budget}. "
-                + (drill is { Length: > 0 } ? "Omitted Archive original(s): " + drill : "Narrow the range or raise previewLength.") + "]";
+                + (
+                    drill is { Length: > 0 }
+                        ? "Omitted Archive original(s): " + drill
+                        : "Narrow the range or raise previewLength."
+                )
+                + "]";
         }
         var omitted = 0;
         for (var index = 0; index < matched.Length; index++)

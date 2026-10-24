@@ -88,16 +88,56 @@ internal static class ObservationToolDefinitions
                 new JsonObject
                 {
                     ["sessionId"] = Field("string", "Session to read."),
-                    ["start"] = Field("number", "Active-history index to read forward from. Negative values count from the end. Omit start and before to read the newest page; do not combine them."),
-                    ["before"] = Field("number", "Exclusive active-history index to read backward from. Use the value returned for the older page; do not combine with start."),
-                    ["count"] = Field("number", "Maximum visible source records to select after applying parts. Defaults to 10; 0 returns only the header and execution state. Text filters can leave fewer matches."),
-                    ["historyVersion"] = Field("number", "History version returned by an earlier view. Supply with start or before to detect a structurally changed range."),
-                    ["parts"] = new JsonObject { ["type"] = "array", ["description"] = "Content to show: text, tools, or images. Defaults to all three. Hiding tools preserves commentary in mixed messages; text and images belonging to tool results stay with tools.", ["items"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray("text", "tools", "images") } },
-                    ["previewLength"] = Field("number", "Total character budget for the response. Omit or use 0 for the default; other values are bounded to 1,000–20,000."),
-                    ["contentFilter"] = Field("string", "Keep selected records containing this literal text, ignoring case. Searches the included content of the selected page, not the entire history."),
-                    ["includeRegex"] = Field("string", "Keep selected records whose included content matches this regular expression, ignoring case."),
-                    ["excludeRegex"] = Field("string", "Exclude selected records whose included content matches this regular expression, ignoring case."),
-                    ["toolDetail"] = Field("string", "Tool display detail: names (default) groups names and counts; snippets adds short argument/result excerpts; full expands them within the response budget.", "names", "snippets", "full"),
+                    ["start"] = Field(
+                        "number",
+                        "Active-history index to read forward from. Negative values count from the end. Omit start and before to read the newest page; do not combine them."
+                    ),
+                    ["before"] = Field(
+                        "number",
+                        "Exclusive active-history index to read backward from. Use the value returned for the older page; do not combine with start."
+                    ),
+                    ["count"] = Field(
+                        "number",
+                        "Maximum visible source records to select after applying parts. Defaults to 10; 0 returns only the header and execution state. Text filters can leave fewer matches."
+                    ),
+                    ["historyVersion"] = Field(
+                        "number",
+                        "History version returned by an earlier view. Supply with start or before to detect a structurally changed range."
+                    ),
+                    ["parts"] = new JsonObject
+                    {
+                        ["type"] = "array",
+                        ["description"] =
+                            "Content to show: text, tools, or images. Defaults to all three. Hiding tools preserves commentary in mixed messages; text and images belonging to tool results stay with tools.",
+                        ["items"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["enum"] = new JsonArray("text", "tools", "images"),
+                        },
+                    },
+                    ["previewLength"] = Field(
+                        "number",
+                        "Total character budget for the response. Omit or use 0 for the default; other values are bounded to 1,000–20,000."
+                    ),
+                    ["contentFilter"] = Field(
+                        "string",
+                        "Keep selected records containing this literal text, ignoring case. Searches the included content of the selected page, not the entire history."
+                    ),
+                    ["includeRegex"] = Field(
+                        "string",
+                        "Keep selected records whose included content matches this regular expression, ignoring case."
+                    ),
+                    ["excludeRegex"] = Field(
+                        "string",
+                        "Exclude selected records whose included content matches this regular expression, ignoring case."
+                    ),
+                    ["toolDetail"] = Field(
+                        "string",
+                        "Tool display detail: names (default) groups names and counts; snippets adds short argument/result excerpts; full expands them within the response budget.",
+                        "names",
+                        "snippets",
+                        "full"
+                    ),
                 },
                 "sessionId"
             ),

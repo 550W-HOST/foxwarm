@@ -29,11 +29,7 @@ public sealed class ContextPreviewFilterTests
             ["previewLength"] = 1000,
             [name] = pattern,
         };
-        var result = await fixture.Manager.ObserveAsync(
-            fixture.First,
-            "view_session",
-            args
-        );
+        var result = await fixture.Manager.ObserveAsync(fixture.First, "view_session", args);
         var output = result["output"]!.GetValue<string>();
         Assert.True(output.Length <= 1000);
         Assert.Contains("1 matches from 2 selected", output);

@@ -183,11 +183,18 @@ internal static class ArchiveRecallTool
                 throw new InvalidDataException("sessionId must be a string.");
             var literalMode = args.ContainsKey("text_query");
             if (literalMode && (args.ContainsKey("target") || args.ContainsKey("vector_query")))
-                throw new InvalidDataException("text_query cannot be combined with target or vector_query.");
+                throw new InvalidDataException(
+                    "text_query cannot be combined with target or vector_query."
+                );
             if (!literalMode && args.ContainsKey("beforeSeq"))
                 throw new InvalidDataException("beforeSeq requires text_query.");
-            if (literalMode && (SessionWait.Text(args["text_query"]) is not string textQuery
-                || ContextPreviewRenderer.NormalizeSearch(textQuery).Length == 0))
+            if (
+                literalMode
+                && (
+                    SessionWait.Text(args["text_query"]) is not string textQuery
+                    || ContextPreviewRenderer.NormalizeSearch(textQuery).Length == 0
+                )
+            )
                 throw new InvalidDataException("text_query must be a nonempty literal string.");
             var id = SessionGoal.Trim(SessionWait.Text(args["sessionId"]) ?? source.Id);
             if (id.Length == 0)
@@ -239,16 +246,33 @@ internal static class ArchiveRecallTool
                 var existing = manager.AuthorizationTarget(id);
                 if (existing is null)
                     return Output($"Session `{id}` not found.");
-                await manager.AuthorizeToolAsync(source, new("recall", "builtin", "recall", args), null, cancellationToken);
+                await manager.AuthorizeToolAsync(
+                    source,
+                    new("recall", "builtin", "recall", args),
+                    null,
+                    cancellationToken
+                );
                 var archive = manager.ArchiveReader(existing.Id);
                 if (archive.CanonicalSessionId != existing.Id)
-                    throw new InvalidOperationException("Archive identity changed; retry the lookup.");
+                    throw new InvalidOperationException(
+                        "Archive identity changed; retry the lookup."
+                    );
                 var result = Literal(archive, existing.Id, args, cancellationToken);
-                await manager.AuthorizeToolAsync(source, new("recall", "builtin", "recall", args), null, cancellationToken);
+                await manager.AuthorizeToolAsync(
+                    source,
+                    new("recall", "builtin", "recall", args),
+                    null,
+                    cancellationToken
+                );
                 var current = manager.AuthorizationTarget(id);
-                if (current?.Id != existing.Id || current.Agent != existing.Agent
-                    || archive.CanonicalSessionId != existing.Id)
-                    throw new InvalidOperationException("Archive identity changed; retry the lookup.");
+                if (
+                    current?.Id != existing.Id
+                    || current.Agent != existing.Agent
+                    || archive.CanonicalSessionId != existing.Id
+                )
+                    throw new InvalidOperationException(
+                        "Archive identity changed; retry the lookup."
+                    );
                 return result;
             }
             var owner = await manager.GetExistingAsync(id, cancellationToken);
@@ -418,16 +442,25 @@ internal static class ArchiveRecallTool
         }
     }
 
-    private static JsonObject Literal(SqliteArchiveMessageStore archive, string id, JsonObject args, CancellationToken token)
+    private static JsonObject Literal(
+        SqliteArchiveMessageStore archive,
+        string id,
+        JsonObject args,
+        CancellationToken token
+    )
     {
         var query = ContextPreviewRenderer.NormalizeSearch(SessionWait.Text(args["text_query"])!);
         var limit = Foxwarm.Vector.VectorRecall.Limit(args["limit"]);
         long? before = null;
         if (args.ContainsKey("beforeSeq"))
         {
-            if (SessionWait.Number(args["beforeSeq"]) is not { } number
-                || !double.IsFinite(number) || number != Math.Truncate(number)
-                || number < 1 || number > 9007199254740991L)
+            if (
+                SessionWait.Number(args["beforeSeq"]) is not { } number
+                || !double.IsFinite(number)
+                || number != Math.Truncate(number)
+                || number < 1
+                || number > 9007199254740991L
+            )
                 throw new InvalidDataException("beforeSeq must be a positive safe integer.");
             before = (long)number;
         }
@@ -451,25 +484,40 @@ internal static class ArchiveRecallTool
             oldest = record.Seq;
             scanned++;
             var item = renderer.ArchivedMessage(record, id);
-            if (!ContextPreviewRenderer.NormalizeSearch(item.Search).Contains(query, StringComparison.OrdinalIgnoreCase))
+            if (
+                !ContextPreviewRenderer
+                    .NormalizeSearch(item.Search)
+                    .Contains(query, StringComparison.OrdinalIgnoreCase)
+            )
                 continue;
             hits.Add(item);
             if (hits.Count == limit)
                 break;
         }
-        var remaining = oldest is { } last && archive.ReadEffectiveMessagesPage(null, last - 1, 1).Count > 0;
+        var remaining =
+            oldest is { } last && archive.ReadEffectiveMessagesPage(null, last - 1, 1).Count > 0;
         var next = (JsonObject)args.DeepClone();
         next["sessionId"] = id;
         next["beforeSeq"] = oldest;
-        var continuation = remaining ? "Older literal search: recall(" + EcmaJson.Stringify(next) + ")"
+        var continuation = remaining
+            ? "Older literal search: recall(" + EcmaJson.Stringify(next) + ")"
             : "No older messages remain in this Session's accessible Archive range.";
-        var extent = scanned == 0 ? "No messages examined in the requested range."
-            : $"Examined {scanned} archived messages at seq #{oldest}–#{newest} (newest first).";
-        return Output(renderer.RenderItems(hits,
-            $"Literal Archive lookup in Session `{id}`. {extent}",
-            matched => $"{matched} displayed match(es) from {hits.Count} literal hit(s) in this bounded range.",
-            hits.Count == 0 ? "No literal matches in the examined range." : "Literal hits were excluded by the result filters.",
-            [continuation]));
+        var extent =
+            scanned == 0
+                ? "No messages examined in the requested range."
+                : $"Examined {scanned} archived messages at seq #{oldest}–#{newest} (newest first).";
+        return Output(
+            renderer.RenderItems(
+                hits,
+                $"Literal Archive lookup in Session `{id}`. {extent}",
+                matched =>
+                    $"{matched} displayed match(es) from {hits.Count} literal hit(s) in this bounded range.",
+                hits.Count == 0
+                    ? "No literal matches in the examined range."
+                    : "Literal hits were excluded by the result filters.",
+                [continuation]
+            )
+        );
     }
 
     private static JsonObject Output(string text) => new() { ["output"] = text };

@@ -285,7 +285,10 @@ internal static class VectorRecall
                                 .Where(text => !string.IsNullOrEmpty(text))
                         ),
                         window.Notices,
-                        DrillDown: ContextPreviewRenderer.ArchiveDrill(readId, $"msg#{window.FirstSeq}-{window.LastSeq}")
+                        DrillDown: ContextPreviewRenderer.ArchiveDrill(
+                            readId,
+                            $"msg#{window.FirstSeq}-{window.LastSeq}"
+                        )
                     );
                     source = new()
                     {

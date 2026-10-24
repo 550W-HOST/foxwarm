@@ -4,8 +4,14 @@ using Foxwarm.Models;
 namespace Foxwarm.Sessions;
 
 internal sealed record SessionViewPage(
-    int Begin, int End, int Total, int Count, long HistoryVersion,
-    JsonObject Runtime, (int Index, JsonObject Message)[] Messages, bool Stale = false
+    int Begin,
+    int End,
+    int Total,
+    int Count,
+    long HistoryVersion,
+    JsonObject Runtime,
+    (int Index, JsonObject Message)[] Messages,
+    bool Stale = false
 );
 
 internal sealed partial class SessionOwner
@@ -18,9 +24,16 @@ internal sealed partial class SessionOwner
             {
                 if (!args.ContainsKey(name))
                     return null;
-                if (SessionWait.Number(args[name]) is not { } value || !double.IsFinite(value)
-                    || value != Math.Truncate(value) || value < min || value > max)
-                    throw new InvalidDataException(name + " must be an integer in [" + min + "," + max + "].");
+                if (
+                    SessionWait.Number(args[name]) is not { } value
+                    || !double.IsFinite(value)
+                    || value != Math.Truncate(value)
+                    || value < min
+                    || value > max
+                )
+                    throw new InvalidDataException(
+                        name + " must be an integer in [" + min + "," + max + "]."
+                    );
                 return (int)value;
             }
             var start = Integer(args, "start", int.MinValue, int.MaxValue);
@@ -30,16 +43,32 @@ internal sealed partial class SessionOwner
                 throw new InvalidDataException("start and before cannot be combined.");
             if (args.ContainsKey("historyVersion"))
             {
-                if (SessionWait.Number(args["historyVersion"]) is not { } version
-                    || !double.IsFinite(version) || version < 0 || version > 9007199254740991L
-                    || version != Math.Truncate(version))
-                    throw new InvalidDataException("historyVersion must be a nonnegative safe integer.");
+                if (
+                    SessionWait.Number(args["historyVersion"]) is not { } version
+                    || !double.IsFinite(version)
+                    || version < 0
+                    || version > 9007199254740991L
+                    || version != Math.Truncate(version)
+                )
+                    throw new InvalidDataException(
+                        "historyVersion must be a nonnegative safe integer."
+                    );
                 if ((start.HasValue || before.HasValue) && version != state.HistoryVersion)
-                    return new SessionViewPage(0, 0, total, count, state.HistoryVersion,
-                        RuntimeSnapshot(Metadata()), [], Stale: true);
+                    return new SessionViewPage(
+                        0,
+                        0,
+                        total,
+                        count,
+                        state.HistoryVersion,
+                        RuntimeSnapshot(Metadata()),
+                        [],
+                        Stale: true
+                    );
             }
             var forward = start.HasValue;
-            var boundary = forward ? (int)Math.Clamp(start!.Value < 0 ? (long)total + start.Value : start.Value, 0, total)
+            var boundary = forward
+                ? (int)
+                    Math.Clamp(start!.Value < 0 ? (long)total + start.Value : start.Value, 0, total)
                 : Math.Min(before ?? total, total);
             var index = forward ? boundary : boundary - 1;
             var begin = boundary;
@@ -56,8 +85,15 @@ internal sealed partial class SessionOwner
             }
             if (!forward)
                 rows.Reverse();
-            return new SessionViewPage(begin, end, total, count, state.HistoryVersion,
-                RuntimeSnapshot(Metadata()), rows.ToArray());
+            return new SessionViewPage(
+                begin,
+                end,
+                total,
+                count,
+                state.HistoryVersion,
+                RuntimeSnapshot(Metadata()),
+                rows.ToArray()
+            );
         });
 
     internal (int Estimate, JsonObject? Usage, long? Threshold, int Images) ContextSummary() =>
@@ -172,11 +208,14 @@ internal sealed partial class SessionManager
             var renderer = new ContextPreviewRenderer(args);
             var page = target.ViewPage(args, renderer);
             if (page.Stale)
-                return new JsonObject {
+                return new JsonObject
+                {
                     ["error"] = "stale_history_boundary",
                     ["historyVersion"] = page.HistoryVersion,
-                    ["output"] = "The active range changed structurally. Read a fresh page: view_session("
-                        + EcmaJson.Stringify(new JsonObject { ["sessionId"] = targetId }) + ")"
+                    ["output"] =
+                        "The active range changed structurally. Read a fresh page: view_session("
+                        + EcmaJson.Stringify(new JsonObject { ["sessionId"] = targetId })
+                        + ")",
                 };
             return Output(renderer.RenderLive(targetId, page, args));
         }

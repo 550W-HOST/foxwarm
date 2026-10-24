@@ -553,13 +553,7 @@ public sealed partial class ToolAuthorizationEffectsTests
         Assert.Single(manager.Owners());
         Assert.Equal(
             "tool_authorization_denied",
-            Error(
-                await Call(
-                    execution.Tools,
-                    "view_session",
-                    Obj("""{"sessionId":"opaque"}""")
-                )
-            )
+            Error(await Call(execution.Tools, "view_session", Obj("""{"sessionId":"opaque"}""")))
         );
         Assert.DoesNotContain(
             manager.ModelDefinitions(owner),
