@@ -186,11 +186,17 @@ public sealed class InboundMcpTests
         using var healthyDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         Assert.Equal(
             5,
-            (await client.ListToolsAsync(new ListToolsRequestParams(), healthyDeadline.Token)).Tools.Count
+            (await client.ListToolsAsync(new ListToolsRequestParams(), healthyDeadline.Token))
+                .Tools
+                .Count
         );
         Assert.Contains(
             "id",
-            Text(await InboundMcpFixture.ConcreteAsync(client, "mcp:peer/probe").WaitAsync(healthyDeadline.Token))
+            Text(
+                await InboundMcpFixture
+                    .ConcreteAsync(client, "mcp:peer/probe")
+                    .WaitAsync(healthyDeadline.Token)
+            )
         );
         var events = await peer.EventsAsync();
         Assert.Single(events, row => row["kind"]!.GetValue<string>() == "initialize");
