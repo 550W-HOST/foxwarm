@@ -41,7 +41,14 @@ async function move(id, target) { const response = await owned.api('POST', route
 async function hasFinal(id, text) { return (await owned.api('GET', route(id) + '/history')).body.messages?.some(row => row.parts?.some(part => part.text === text)) }
 try {
   await owned.start(); const page = await owned.openApp(); await create('busy'); assert.equal((await owned.api('POST', '/api/agents', { agentId: 'destination' })).status, 201)
-  await page.evaluate(() => window.foxwarmTest.switchToSession('busy')); await page.evaluate(() => window.foxwarmTest.sendMessage('EFFECT-CASE:busy'))
+  const selected = page.waitForResponse(response => new URL(response.url()).pathname === route('busy') + '/history' && response.request().method() === 'GET')
+  await page.evaluate(() => window.foxwarmTest.switchToSession('busy'))
+  assert.equal((await selected).status(), 200)
+  await page.waitForSelector('[role="textbox"][aria-label="Message"]')
+  await page.type('[role="textbox"][aria-label="Message"]', 'EFFECT-CASE:busy')
+  const admitted = page.waitForResponse(response => new URL(response.url()).pathname === route('busy') + '/message' && response.request().method() === 'POST')
+  await page.click('button[aria-label="Send message"]')
+  assert.equal((await admitted).status(), 202)
   await until(async () => (await readFile(join(owned.work, 'segment-launches'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).length === 4, 'four real held sibling shells')
   assert.equal((await authority('busy')).busy, true); const before = await authority('busy')
   await move('busy', 'destination/moved'); assert.equal((await authority('destination/moved')).busy, true); assert.equal((await authority('destination/moved')).promptCacheKey, before.promptCacheKey)

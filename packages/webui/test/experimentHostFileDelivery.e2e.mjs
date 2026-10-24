@@ -1,4 +1,4 @@
-// Original tool-row downloads and real owned-image export through every current Main protocol.
+// Original receipt-backed reply downloads and owned-image export through every Main protocol.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
@@ -44,16 +44,32 @@ async function upload() { const form = new FormData(); form.append('file', new B
 async function done(id, key) { await until(async () => { const value = await authority(id); return !value.busy && value.history.some(row => row.parts?.some(part => part.text === 'DONE-FILES-' + key)) }, key) }
 async function download(path) { return fetch(fixture.origin + '/download?' + new URLSearchParams({ path }), { headers }) }
 try {
-  await fixture.start(); const page = await fixture.openApp(); assert.equal((await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'target' })).status, 200)
+  await fixture.start()
+  assert.equal((await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'main' })).status, 200)
+  const page = await fixture.openApp()
+  await page.evaluate(() => window.foxwarmTest.switchToSession('main'))
+  await page.waitForSelector('[role="textbox"][aria-label="Message"]')
+  assert.equal((await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'target' })).status, 200)
   const targetBefore = await readFile(join(fixture.data, 'state/sessions/target.json'), 'utf8')
   await page.type('[role="textbox"][aria-label="Message"]', 'FILES:write'); await page.click('button[aria-label="Send message"]'); await done('main', 'write')
   const saved = await authority('main'), results = saved.history.flatMap(row => row.parts || []).filter(part => part.functionResponse).map(part => part.functionResponse); assert.equal(results.length, 5); assert(results.find(row => row.tool_use_id === 'bad-node').response.error); assert.equal(await readFile(join(fixture.data, 'state/sessions/target.json'), 'utf8'), targetBefore)
+  const delivered = id => results.find(row => row.tool_use_id === id).response
+  assert.equal(delivered('send-written').fileDelivery.targetId, 'main')
+  assert.equal(delivered('send-shell').fileDelivery.targetId, 'webui:target')
+  assert(!delivered('bad-node').fileDelivery)
   await until(async () => (await page.evaluate(() => document.body.innerText)).includes('DONE-FILES-write'), 'original completed tool rows')
   const downloads = join(fixture.root, 'downloads'); await mkdir(downloads); const cdp = await page.createCDPSession(); await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloads })
-  const buttons = await page.$$('button[title^="Download "]'); assert.equal(buttons.length, 2, 'Failed/nonmaster call does not guess a download from args'); await buttons[0].click(); await until(async () => (await readdir(downloads)).some(name => !name.endsWith('.crdownload')), 'real authenticated original-row browser download'); assert.equal(await readFile(join(downloads, 'written.txt'), 'utf8'), 'Written bytes.\n')
+  await page.waitForSelector('[data-reply-files] [aria-label="Download written.txt"]')
+  assert.equal(await page.$$eval('[data-reply-files] [data-delivery-id]', files => files.length), 1, 'Only a successful local-target receipt belongs to this reply')
+  assert.equal(await page.$('[data-reply-files] [aria-label="Download shell.txt"]'), null)
+  await page.click('[data-reply-files] [aria-label="Download written.txt"]')
+  await until(async () => (await readdir(downloads)).includes('written.txt'), 'real authenticated receipt-backed browser download'); assert.equal(await readFile(join(downloads, 'written.txt'), 'utf8'), 'Written bytes.\n')
   const outside = join(fixture.root, 'human-outside-work.txt'); await writeFile(outside, 'Human host authority.'); await symlink(outside, join(fixture.root, 'human-link'))
   for (const path of [outside, join(fixture.root, 'human-link')]) { const response = await download(path); assert.equal(response.status, 200); assert.equal(response.headers.get('content-type'), 'application/octet-stream'); assert.equal(response.headers.get('x-content-type-options'), 'nosniff'); assert(response.headers.get('content-disposition').includes('attachment')); assert.equal(await response.text(), 'Human host authority.') }
-  assert.equal((await fetch(fixture.origin + '/download?' + new URLSearchParams({ path: outside }))).status, 401); assert.equal((await fetch(fixture.origin + '/download?' + new URLSearchParams({ path: outside }), { headers: { ...headers, origin: 'http://not-the-host.invalid' } })).status, 403)
+  assert.equal((await fetch(fixture.origin + '/download?' + new URLSearchParams({ path: outside }))).status, 401)
+  const foreignOrigin = { origin: 'http://not-the-host.invalid' }
+  assert.equal((await fetch(fixture.origin + '/download?' + new URLSearchParams({ path: outside }), { headers: foreignOrigin })).status, 401)
+  assert.equal(await (await fetch(fixture.origin + '/download?' + new URLSearchParams({ path: outside }), { headers: { ...headers, ...foreignOrigin } })).text(), 'Human host authority.')
   assert.equal((await download('relative')).status, 400); assert.equal((await download(join(fixture.root, 'absent'))).status, 404)
   await writeFile(outside, 'Changed after readiness.'); assert.equal(await (await download(outside)).text(), 'Changed after readiness.'); await rm(outside); assert.equal((await download(outside)).status, 404)
   // Normal command ingress creates a real persisted attachment without admitting the cold target.
