@@ -83,6 +83,45 @@ if (mode === 'recipes') {
   const destination = await facade.search('violet', 5, false, { agent: 'destination' })
   await facade.shutdown()
   output = { sourceId, callerId, moved, before, after, destination, implicit, explicit }
+} else if (mode === 'retained-alias') {
+  const archive = await load('session/archiveStore.js')
+  await archive.initArchiveStore()
+  await archive.writeArchiveMessages(input.records)
+  await archive.writeArchiveBlocks(input.blocks)
+  await archive.commitSessionIdRename(input.oldSessionId, input.sessionId)
+  const { DatabaseSync } = await import('node:sqlite')
+  const database = new DatabaseSync(path.join(root, 'state', 'archive-store.sqlite'))
+  // Persisted compatibility shape produced by f8ad3997's legacy importer:
+  // pre-SQLite moves renamed log paths without rewriting payload IDs. Bootstrap
+  // created the current branch but inserted the old payload identity verbatim.
+  // Later migration imports canonical rows/reservations and retains those rows.
+  database.prepare(`INSERT INTO archive_messages
+    SELECT ?,agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id=?`).run(input.oldSessionId, input.sessionId)
+  database.prepare(`INSERT INTO archive_blocks
+    (session_id,agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,
+      raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,friction_score,created_at)
+    SELECT ?,agent,id,level,source_kind,source_start,source_end,source_block_ids_json,raw_start_seq,raw_end_seq,
+      raw_start_timestamp,raw_end_timestamp,summary,memory_facts_json,friction_score,created_at
+    FROM archive_blocks WHERE session_id=?`).run(input.oldSessionId, input.sessionId)
+  output = {
+    maxima: await archive.listLocalArchiveSessionMaxima(),
+    candidates: await archive.listSessionsNeedingVectorBackfill(),
+    canonical: archive.resolveArchiveSessionIdReadOnly(input.oldSessionId),
+    physicalMessages: database.prepare('SELECT session_id,seq FROM archive_messages ORDER BY session_id,seq').all(),
+    physicalBlocks: database.prepare('SELECT session_id,id FROM archive_blocks ORDER BY session_id,id').all(),
+  }
+  database.close()
+  if (input.runSource) {
+    await vector.init()
+    await vector.waitForStartupArchiveVectorBackfill()
+    await archive.writeArchiveMessages([input.append])
+    await vector.indexSessionArchive(input.sessionId, input.append.seq, input.blocks.at(-1).id)
+    await vector.shutdown()
+    const index = lexical.ArchiveSearchIndex.open(path.join(root, 'state', 'db', 'archive-search.sqlite'))
+    output.oldCheckpoint = index.getCheckpoint(input.oldSessionId)
+    output.currentCheckpoint = index.getCheckpoint(input.sessionId)
+    index.close()
+  }
 } else if (mode === 'storage-create' || mode === 'storage-return') {
   const archive = await load('session/archiveStore.js')
   await archive.initArchiveStore()

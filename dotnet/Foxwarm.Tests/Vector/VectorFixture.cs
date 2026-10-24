@@ -102,10 +102,13 @@ internal sealed class VectorFixture : IAsyncDisposable
     {
         var message = Message(text, role);
         message["__meta"] = new JsonObject { ["seq"] = seq, ["timestamp"] = seq * 1000 };
-        Archive(id)
-            .WriteMessages([
-                ArchiveMessageRecord.Create(id, id.Split('/')[0], seq, seq * 1000, message),
-            ]);
+        var archive = Archive(id);
+        // Match Session creation and Source writes: current sources have a branch.
+        if (archive.ReadBranch() is null)
+            archive.EnsureBranch();
+        archive.WriteMessages([
+            ArchiveMessageRecord.Create(id, id.Split('/')[0], seq, seq * 1000, message),
+        ]);
     }
 
     internal ArchiveBlockRecord Block(

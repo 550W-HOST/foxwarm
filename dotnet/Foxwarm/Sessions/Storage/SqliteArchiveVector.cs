@@ -115,14 +115,14 @@ public sealed partial class SqliteArchiveMessageStore
         using var connection = OpenExistingReadOnly();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            WITH ids AS (SELECT session_id FROM archive_messages UNION SELECT session_id FROM archive_blocks UNION SELECT session_id FROM archive_branches)
-            SELECT i.session_id,
-              coalesce((SELECT agent FROM archive_messages m WHERE m.session_id=i.session_id ORDER BY seq DESC LIMIT 1),
-                       (SELECT agent FROM archive_blocks b WHERE b.session_id=i.session_id ORDER BY id DESC LIMIT 1),'main'),
-              coalesce((SELECT max(seq) FROM archive_messages m WHERE m.session_id=i.session_id),0),
-              coalesce((SELECT max(id) FROM archive_blocks b WHERE b.session_id=i.session_id),0),
-              (SELECT parent_session_id FROM archive_branches b WHERE b.session_id=i.session_id)
-            FROM ids i ORDER BY i.session_id
+            WITH message_max AS (SELECT session_id, MAX(agent) AS agent, MAX(seq) AS max_seq FROM archive_messages GROUP BY session_id),
+            block_max AS (SELECT session_id, MAX(agent) AS agent, MAX(id) AS max_id FROM archive_blocks GROUP BY session_id)
+            SELECT b.session_id, COALESCE(m.agent, bl.agent, 'main'),
+              COALESCE(m.max_seq, 0), COALESCE(bl.max_id, 0), b.parent_session_id
+            FROM archive_branches b
+            LEFT JOIN message_max m ON m.session_id = b.session_id
+            LEFT JOIN block_max bl ON bl.session_id = b.session_id
+            ORDER BY b.session_id
             """;
         using var rows = command.ExecuteReader();
         var result = new List<ArchiveVectorMaxima>();

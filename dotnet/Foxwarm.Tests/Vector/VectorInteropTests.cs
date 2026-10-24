@@ -27,6 +27,104 @@ public sealed class VectorInteropTests
         };
 
     [Fact]
+    public async Task Startup_matches_Source_for_retained_alias_rows_and_drains_later_canonical_work()
+    {
+        await using var f = await VectorFixture.CreateAsync();
+        const string id = "main/retained-current";
+        const string oldId = "main/retained-old";
+        var input = new JsonObject
+        {
+            ["config"] = new JsonObject
+            {
+                ["vector"] = new JsonObject
+                {
+                    ["baseUrl"] = f.Peer.BaseUrl,
+                    ["lexicalIndex"] = true,
+                    ["hybridSearch"] = true,
+                },
+                ["dbWorkers"] = false,
+                ["vectorMaintenance"] = false,
+            },
+            ["sessionId"] = id,
+            ["oldSessionId"] = oldId,
+            ["records"] = new JsonArray(Record(id, 1, "violet retained moved message")),
+            ["blocks"] = JsonSerializer.SerializeToNode(new[] { f.Block(id) }, VectorWire.Json),
+            ["append"] = Record(id, 2, "violet later legitimate queued work"),
+            ["runSource"] = true,
+        };
+        var inputPath = Path.Combine(f.Temp.Path, "retained-input.json");
+        await File.WriteAllTextAsync(inputPath, EcmaJson.Stringify(input));
+        var source = await VectorFixture.SourceAsync(
+            "retained-alias",
+            Path.Combine(f.Temp.Path, "source"),
+            inputPath,
+            Path.Combine(f.Temp.Path, "source-result.json")
+        );
+        Assert.Equal(id, source["canonical"]!.GetValue<string>());
+        Assert.Equal(id, Assert.Single(source["maxima"]!.AsArray())!["sessionId"]!.GetValue<string>());
+        Assert.Equal(id, Assert.Single(source["candidates"]!.AsArray())!["sessionId"]!.GetValue<string>());
+        Assert.Equal(2, source["physicalMessages"]!.AsArray().Count);
+        Assert.Equal(2, source["physicalBlocks"]!.AsArray().Count);
+        Assert.Equal(0, source["oldCheckpoint"]!["rawLastIndexedSeq"]!.GetValue<long>());
+        Assert.Equal(0, source["oldCheckpoint"]!["lastIndexedBlockId"]!.GetValue<long>());
+        Assert.Equal(2, source["currentCheckpoint"]!["rawLastIndexedSeq"]!.GetValue<long>());
+        Assert.Equal(1, source["currentCheckpoint"]!["lastIndexedBlockId"]!.GetValue<long>());
+
+        input["runSource"] = false;
+        await File.WriteAllTextAsync(inputPath, EcmaJson.Stringify(input));
+        await VectorFixture.SourceAsync(
+            "retained-alias", f.Data, inputPath, Path.Combine(f.Temp.Path, "managed-seed.json")
+        );
+        Assert.Equal(id, f.Archive(oldId).CanonicalSessionId);
+        Assert.Equal(id, Assert.Single(f.Archive(oldId).ReadMessages()).SessionId);
+        await using (var runtime = new VectorRuntime(f.Data, f.Configuration(lexical: true)))
+        {
+            await runtime.StartAsync();
+            await runtime.WaitForStartupAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            // Before the repair, dense startup forces the physical-only old ID,
+            // and successful identity-mismatch exits requeue it forever.
+            await runtime.Lexical.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(id, Assert.Single(f.Archive().LocalVectorMaxima()).SessionId);
+            f.Append(id, 2, "violet later legitimate queued work");
+            Assert.Equal(2, await runtime.ForceAsync(id, 2, 1));
+            await runtime.Lexical.WaitForIdleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            var hits = await runtime.Lexical.QueryAsync("legitimate", 5, new(SessionIds: [id]));
+            Assert.Single(hits.Hits);
+        }
+        using var index = ArchiveSearchIndex.Open(Path.Combine(f.Dense, "archive-search.sqlite"));
+        Assert.Equal(0, index.Checkpoint(oldId).RawLastIndexedSeq);
+        Assert.Equal(0, index.Checkpoint(oldId).LastIndexedBlockId);
+        Assert.Equal(2, index.Checkpoint(id).RawLastIndexedSeq);
+        Assert.Equal(1, index.Checkpoint(id).LastIndexedBlockId);
+        Assert.Equal(0, f.Archive(oldId).VectorCheckpoint().RawLastIndexedSeq);
+
+        // The same retained Source data reopens through the supervised owner.
+        await using (var child = new VectorService(f.Data, f.Configuration(child: true, lexical: true)))
+        {
+            await child.StartAsync();
+            await child.WaitForStartupAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            f.Append(id, 3, "violet child later queued work");
+            Assert.Equal(3, await child.ForceAsync(id, 3, 1));
+            await child.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        Assert.Equal(3, index.Checkpoint(id).RawLastIndexedSeq);
+        Assert.Equal(0, index.Checkpoint(oldId).RawLastIndexedSeq);
+        using var archiveDb = new Microsoft.Data.Sqlite.SqliteConnection(
+            new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+            {
+                DataSource = f.Database,
+                Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString()
+        );
+        archiveDb.Open();
+        using var count = archiveDb.CreateCommand();
+        count.CommandText = "SELECT (SELECT count(*) FROM archive_messages WHERE session_id=$s) + (SELECT count(*) FROM archive_blocks WHERE session_id=$s)";
+        count.Parameters.AddWithValue("$s", oldId);
+        Assert.Equal(2L, count.ExecuteScalar());
+    }
+
+    [Fact]
     public async Task Real_Source_to_CSharp_to_Source_indexing_preserves_Archive_progress_Lance_rows_and_lineage_clipping()
     {
         await using var f = await VectorFixture.CreateAsync();
