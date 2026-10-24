@@ -166,6 +166,14 @@ internal sealed partial class SessionManager
     {
         if (!Accepting)
             return;
+        if (
+            SessionWait.Text(item.OpenFields?["waitLivenessWaitId"]) is not null
+            && !WaitLiveness.Recent(
+                (Find(sessionId)?.Metadata() ?? CatalogMetadata(sessionId))?.LastMessageTime ?? 0,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            )
+        )
+            return;
         var owner = await GetExistingAsync(sessionId);
         if (owner is null)
             return;

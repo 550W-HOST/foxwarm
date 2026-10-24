@@ -65,7 +65,17 @@ internal static class SessionWait
     {
         var wait = Current(meta);
         var diagnosticWaitId = Text(item.OpenFields?["waitLivenessWaitId"]);
-        if (diagnosticWaitId is not null && (wait is null || diagnosticWaitId != Text(wait["id"])))
+        if (
+            diagnosticWaitId is not null
+            && (
+                wait is null
+                || diagnosticWaitId != Text(wait["id"])
+                || !WaitLiveness.Recent(
+                    Number(meta["lastMessageTime"]) ?? 0,
+                    DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                )
+            )
+        )
             return [];
         var timeoutId = Text(item.OpenFields?["waitTimeoutId"]);
         if (wait is null)

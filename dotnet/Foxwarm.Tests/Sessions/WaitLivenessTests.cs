@@ -8,7 +8,7 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Tests;
 
-public sealed class WaitLivenessTests
+public sealed partial class WaitLivenessTests
 {
     private static SessionManager Manager(string root, Peer peer) =>
         new(
@@ -336,6 +336,8 @@ public sealed class WaitLivenessTests
                     owner.Entry.Snapshot().Queue[0].OpenFields?["waitLivenessFingerprint"]
                 )
             );
+            // The activity cutoff controls fresh admission, not committed queue recovery.
+            await SetActivity(owner, 1);
         }
         for (var opening = 0; opening < 2; opening++)
         {
@@ -381,8 +383,12 @@ public sealed class WaitLivenessTests
         }
     }
 
-    [Fact]
-    public async Task Four_active_diagnostic_owners_bound_admission_and_settlement_releases_a_pending_waiter()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Four_active_diagnostic_owners_bound_admission_and_recheck_pending_activity(
+        bool agePending
+    )
     {
         using var temp = new TempDirectory();
         await using var peer = new Peer();
@@ -410,9 +416,15 @@ public sealed class WaitLivenessTests
             await Task.Delay(800);
             Assert.Equal(4, peer.Requests.Count);
             Assert.Equal(4, waiters.Count(owner => owner.Metadata().Busy));
-            Assert.Single(waiters, owner => owner.WaitSnapshot() is not null);
+            var pending = Assert.Single(waiters, owner => owner.WaitSnapshot() is not null);
+            if (agePending)
+            {
+                pending.Entry.WithState(state => state.Meta["lastMessageTime"] = 1);
+                await pending.Entry.SaveLane.SaveStrictAsync();
+            }
             releases[0].TrySetResult();
-            await Until(() => peer.Requests.Count == 5);
+            if (!agePending)
+                await Until(() => peer.Requests.Count == 5);
         }
         finally
         {
@@ -420,9 +432,9 @@ public sealed class WaitLivenessTests
                 release.TrySetResult();
         }
         await Settle(manager);
-        Assert.Equal(5, peer.Requests.Count);
+        Assert.Equal(agePending ? 4 : 5, peer.Requests.Count);
         Assert.All(peer.Requests, Diagnostic);
-        Assert.All(waiters, owner => Assert.Null(owner.WaitSnapshot()));
+        Assert.Equal(agePending ? 1 : 0, waiters.Count(owner => owner.WaitSnapshot() is not null));
     }
 
     [Fact]
