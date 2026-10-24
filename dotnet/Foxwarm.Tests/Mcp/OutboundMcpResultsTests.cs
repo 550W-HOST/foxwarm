@@ -268,6 +268,54 @@ public sealed class OutboundMcpResultsTests
         );
     }
 
+    [Fact]
+    public async Task Actual_failed_MCP_turn_keeps_protocol_and_root_errors_in_summary_and_full_inspection()
+    {
+        using var temp = new TempDirectory();
+        await using var peer = await OutboundSdkPeer.StartAsync(temp.Path);
+        await using var f = await OutboundMcpFixture.CreateAsync();
+        await f.ConfigureAsync(peer.Url + "/mcp");
+        await TurnAsync(
+            f,
+            [("result", "error"), ("result", "business-error-fields"), ("fail", "unused")]
+        );
+        var responses = ToolResponses(f.First);
+        var protocol = responses[0]["response"]!.AsObject();
+        Assert.True(protocol["isError"]!.GetValue<bool>());
+        Assert.Empty(protocol["content"]!.AsArray());
+        Assert.Equal(1, protocol["structuredContent"]!["a"]!.GetValue<int>());
+        Assert.True(responses[1]["response"]!["nested"]!["isError"]!.GetValue<bool>());
+        Assert.NotNull(responses[1]["response"]!["nested"]!["error"]);
+        var rootError = responses[2]["response"]!["error"]!;
+        Assert.NotNull(rootError);
+        var history = f.First.History();
+        var args = new JsonObject
+        {
+            ["sessionId"] = f.First.Id,
+            ["parts"] = new JsonArray("tools"),
+            ["previewLength"] = 20000,
+        };
+        var names = await f.Tools(f.Second)
+            .ExecuteAsync(
+                new JsonObject { ["name"] = "view_session", ["args"] = args.DeepClone() },
+                default
+            );
+        var summary = names!["output"]!.GetValue<string>();
+        Assert.Contains("call_tool ×3", summary);
+        Assert.Contains("2 error(s)", summary);
+
+        args["toolDetail"] = "full";
+        var full = await f.Tools(f.Second)
+            .ExecuteAsync(new JsonObject { ["name"] = "view_session", ["args"] = args }, default);
+        var detail = full!["output"]!.GetValue<string>();
+        Assert.Contains("ERROR: " + EcmaJson.Stringify(protocol), detail);
+        Assert.Contains("ERROR: " + EcmaJson.Stringify(rootError), detail);
+        Assert.Contains("[tool:call_tool] business control", detail);
+        var current = f.First.History();
+        Assert.Equal(history.Count, current.Count);
+        Assert.True(history.Zip(current).All(pair => JsonNode.DeepEquals(pair.First, pair.Second)));
+    }
+
     private static JsonObject[] ToolResponses(SessionOwner owner) =>
         owner
             .History()

@@ -25,6 +25,7 @@ function result(kind) {
   const structured = { b: [2, null], a: 1 };
   switch (kind) {
     case 'object': return { content: [text({ output: 'business', nested: [1] })] };
+    case 'business-error-fields': return { content: [text({ output: 'business control', nested: { isError: true, error: 'business detail' } })] };
     case 'array': return { content: [text([1, { n: null }, false])] };
     case 'text': return { content: [text('hello')] };
     case 'primitive-text': return { content: [text('false')] };

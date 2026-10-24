@@ -62,6 +62,8 @@ internal sealed class OutboundMcpFixture : IAsyncDisposable
             f.First.Registry.TriggerOverride = _ => Task.CompletedTask;
             f.Second.Registry.TriggerOverride = _ => Task.CompletedTask;
             var definitions = WorkspaceTools.Definitions();
+            foreach (var definition in ObservationToolDefinitions.Definitions())
+                definitions.Add(definition?.DeepClone());
             foreach (var definition in UnifiedToolDefinitions.All())
                 definitions.Add(definition?.DeepClone());
             foreach (var definition in ToolScriptToolDefinitions.Definitions())

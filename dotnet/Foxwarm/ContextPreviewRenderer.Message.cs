@@ -33,6 +33,9 @@ internal sealed partial class ContextPreviewRenderer
         SessionWait.Text(call["rawArgsText"])
         ?? (call["args"] is null ? "{}" : EcmaJson.Stringify(call["args"]!));
 
+    private static bool McpError(JsonObject? value) =>
+        value?["isError"] is JsonValue flag && flag.TryGetValue<bool>(out var error) && error;
+
     private static string Response(JsonObject response)
     {
         response = (JsonObject)Foxwarm.Images.ImageTransport.Project(response)!;
@@ -40,6 +43,8 @@ internal sealed partial class ContextPreviewRenderer
             return Unknown(response["response"]);
         if (value["error"] is not null)
             return "ERROR: " + Unknown(value["error"]);
+        if (McpError(value))
+            return "ERROR: " + Unknown(value);
         if (value["output"] is not null)
             return Unknown(value["output"]);
         if (value["content"] is not null)
@@ -167,6 +172,7 @@ internal sealed partial class ContextPreviewRenderer
                         SessionWait.Text(response["tool_use_id"]),
                         true,
                         (response["response"] as JsonObject)?["error"] is not null
+                            || McpError(response["response"] as JsonObject)
                     )
                 );
                 tool.Add(name + "\n" + content);
