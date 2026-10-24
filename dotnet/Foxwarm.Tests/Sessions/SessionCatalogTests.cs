@@ -138,34 +138,48 @@ public sealed class SessionCatalogTests
     [Theory]
     [InlineData(.1, .2)]
     [InlineData(.7, .1)]
-    public void Removing_paid_rows_resets_known_zero_subtotals_without_rounding_saved_costs(double first, double second)
+    public void Removing_paid_rows_resets_known_zero_subtotals_without_rounding_saved_costs(
+        double first,
+        double second
+    )
     {
         using var temp = new TempDirectory();
         using var catalog = new SessionCatalog(temp.Path);
         catalog.Initialize();
         JsonObject PricedRow(string id, double rate)
         {
-            var model = HostModels.Parse(new JsonObject
-            {
-                ["providers"] = new JsonObject
-                {
-                    ["p"] = new JsonObject
+            var model = HostModels
+                .Parse(
+                    new JsonObject
                     {
-                        ["tokenPricesPerMillion"] = new JsonObject
+                        ["providers"] = new JsonObject
                         {
-                            ["cached"] = 0,
-                            ["input"] = rate,
-                            ["output"] = 0,
+                            ["p"] = new JsonObject
+                            {
+                                ["tokenPricesPerMillion"] = new JsonObject
+                                {
+                                    ["cached"] = 0,
+                                    ["input"] = rate,
+                                    ["output"] = 0,
+                                },
+                            },
                         },
                     },
-                },
-            }, new JsonObject()).Resolve("p");
-            var usage = ModelUsageCost.Complete(model, new ChatResult(null, new JsonObject
-            {
-                ["cachedTokens"] = 0,
-                ["inputTokens"] = 1_000_000,
-                ["outputTokens"] = 0,
-            }))!;
+                    new JsonObject()
+                )
+                .Resolve("p");
+            var usage = ModelUsageCost.Complete(
+                model,
+                new ChatResult(
+                    null,
+                    new JsonObject
+                    {
+                        ["cachedTokens"] = 0,
+                        ["inputTokens"] = 1_000_000,
+                        ["outputTokens"] = 0,
+                    }
+                )
+            )!;
             var row = Row(id, 1, "root");
             row["stats"] = new JsonObject
             {
@@ -188,7 +202,10 @@ public sealed class SessionCatalogTests
         using var reopened = new SessionCatalog(temp.Path);
         reopened.Initialize();
         Assert.Equal(0, SessionCatalog.Number(reopened.Summary()["cost"]));
-        Assert.Equal(0, SessionCatalog.Number(reopened.Get("zero")?["stats"]?["lastUsage"]?["cost"]));
+        Assert.Equal(
+            0,
+            SessionCatalog.Number(reopened.Get("zero")?["stats"]?["lastUsage"]?["cost"])
+        );
         var tiny = PricedRow("tiny", 1e-20);
         reopened.Upsert([tiny]);
         Assert.Equal(1e-20, SessionCatalog.Number(reopened.Summary()["cost"]));

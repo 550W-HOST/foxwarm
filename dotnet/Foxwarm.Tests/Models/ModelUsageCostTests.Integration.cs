@@ -10,7 +10,9 @@ public sealed partial class ModelUsageCostTests
     [Fact]
     public async Task Priced_usage_and_failure_survive_cold_projection_then_recover_fork_and_clear_independently()
     {
-        var recovering = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var recovering = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var peer = new ScriptedResponsesSequenceServer(
             4,
@@ -27,17 +29,20 @@ public sealed partial class ModelUsageCostTests
                     failed ? 400 : 200,
                     failed ? "application/json" : "text/event-stream",
                     Encoding.UTF8.GetBytes(
-                        failed ? "{\"error\":{\"message\":\"owned terminal failure\"}}" : Body("openai-responses")
+                        failed
+                            ? "{\"error\":{\"message\":\"owned terminal failure\"}}"
+                            : Body("openai-responses")
                     )
                 );
             }
         );
         using var temp = new TempDirectory();
-        var config = new ModelConfiguration(HostPaths.ForDataRoot(temp.Path, environment: _ => null));
-        await config.SaveAsync(new JsonObject
-        {
-            ["yaml"] = Document(peer.BaseUri, "openai-responses").ToJsonString(),
-        });
+        var config = new ModelConfiguration(
+            HostPaths.ForDataRoot(temp.Path, environment: _ => null)
+        );
+        await config.SaveAsync(
+            new JsonObject { ["yaml"] = Document(peer.BaseUri, "openai-responses").ToJsonString() }
+        );
         var models = new HostModels(config);
         var options = new ResponsesClientOptions(peer.BaseUri, "wire", "priced/wire", "", "", 713);
         var workspace = Path.Combine(temp.Path, "work");
@@ -47,7 +52,8 @@ public sealed partial class ModelUsageCostTests
             await owner.Registry.Ingress.EnqueueAsync(owner.Id, QueueItem.UserText("next"));
             await owner.StartProcessing().WaitAsync(TimeSpan.FromSeconds(20));
         }
-        static void AssertCost(JsonNode? amount) => Assert.Equal(.000027, SessionCatalog.Number(amount)!.Value, 10);
+        static void AssertCost(JsonNode? amount) =>
+            Assert.Equal(.000027, SessionCatalog.Number(amount)!.Value, 10);
 
         await using (var first = new SessionManager(temp.Path, workspace, options, models))
         {
@@ -62,7 +68,9 @@ public sealed partial class ModelUsageCostTests
             Assert.True(owner.Metadata().LlmFailed);
             AssertCost(JsonValue.Create(owner.Metadata().Cost));
             Assert.Equal("llm-failed", owner.RuntimeSnapshot()["state"]!.GetValue<string>());
-            Assert.True(JsonNode.DeepEquals(paidStats, owner.Entry.Snapshot().AuthorityEnvelope["stats"]));
+            Assert.True(
+                JsonNode.DeepEquals(paidStats, owner.Entry.Snapshot().AuthorityEnvelope["stats"])
+            );
             var saved = (await new PersistentSessionAuthorityStore(temp.Path, id).LoadAsync(id))!;
             Assert.True(saved.Meta["llmFailed"]!.GetValue<bool>());
             AssertCost(saved.AuthorityEnvelope["stats"]?["totalCost"]);
@@ -72,7 +80,8 @@ public sealed partial class ModelUsageCostTests
         await manager.LoadAsync();
         Assert.Empty(manager.Owners());
         var runtime = new SessionRuntime(manager);
-        runtime.SemanticOwnerLookupObserved = _ => throw new InvalidOperationException("Cold projection attempted owner lookup.");
+        runtime.SemanticOwnerLookupObserved = _ =>
+            throw new InvalidOperationException("Cold projection attempted owner lookup.");
         var queries = new SessionListQueries(runtime);
         var cold = queries.Projection(id)!;
         Assert.Equal("llm-failed", cold["runtimeState"]!["state"]!.GetValue<string>());
@@ -90,10 +99,12 @@ public sealed partial class ModelUsageCostTests
         Assert.Contains(fork.History(), row => row["__meta"]?["usage"]?["cost"] is not null);
         AssertCost(queries.GlobalSummary()["cost"]);
 
-        await config.SaveAsync(new JsonObject
-        {
-            ["yaml"] = Document(peer.BaseUri, "openai-responses", 0).ToJsonString(),
-        });
+        await config.SaveAsync(
+            new JsonObject
+            {
+                ["yaml"] = Document(peer.BaseUri, "openai-responses", 0).ToJsonString(),
+            }
+        );
         var recovery = Run(reloaded);
         try
         {
@@ -109,7 +120,12 @@ public sealed partial class ModelUsageCostTests
         }
         Assert.Equal("idle", reloaded.RuntimeSnapshot()["state"]!.GetValue<string>());
         AssertCost(reloaded.Entry.Snapshot().AuthorityEnvelope["stats"]?["totalCost"]);
-        Assert.Equal(0, SessionCatalog.Number(reloaded.Entry.Snapshot().AuthorityEnvelope["stats"]?["lastUsage"]?["cost"]));
+        Assert.Equal(
+            0,
+            SessionCatalog.Number(
+                reloaded.Entry.Snapshot().AuthorityEnvelope["stats"]?["lastUsage"]?["cost"]
+            )
+        );
         await Run(reloaded);
         Assert.True(reloaded.Metadata().LlmFailed);
         await manager.ClearAsync(reloaded);
@@ -118,7 +134,9 @@ public sealed partial class ModelUsageCostTests
         var cleared = manager.Catalog.Get(id)!;
         Assert.Null(cleared["meta"]?["llmFailed"]);
         AssertCost(cleared["stats"]?["totalCost"]);
-        var clearedSaved = (await new PersistentSessionAuthorityStore(temp.Path, id).LoadAsync(id))!;
+        var clearedSaved = (
+            await new PersistentSessionAuthorityStore(temp.Path, id).LoadAsync(id)
+        )!;
         Assert.Null(clearedSaved.Meta["llmFailed"]);
         AssertCost(clearedSaved.AuthorityEnvelope["stats"]?["totalCost"]);
         Assert.Equal(4, peer.RequestCount);
