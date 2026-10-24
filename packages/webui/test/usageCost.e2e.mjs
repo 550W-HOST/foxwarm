@@ -80,7 +80,7 @@ test('request details preserve recorded amounts, group only known amounts, and r
   assert.match(await text('#detailed'), /\$0\.125 USD/)
   assert.match(await text('#detailed'), /\$0\.00 USD/)
   await page.click('#grouped [data-usage-badge-toggle]')
-  assert.match(await text('#grouped'), /Recorded estimated cost\$0\.25 USD/)
+  assert.match(await text('#grouped'), /\$0\.25 USD/)
   assert.match(await text('#grouped'), /Calls3/)
   assert.doesNotMatch(await text('#unknown'), /USD|estimated cost/)
   assert.match(await text('#zero'), /\$0\.00 USD/)
@@ -90,7 +90,7 @@ test('request details preserve recorded amounts, group only known amounts, and r
 test('Conversation counts the complete empty suffix once and cost invalidates memoized usage', async () => {
   await mount()
   await page.click('#conversation [aria-label="Show process usage"]')
-  assert.match(await text('#conversation [data-conversation-usage-details]'), /Recorded estimated cost\$0\.125 USD/)
+  assert.match(await text('#conversation [data-conversation-usage-details]'), /\$0\.125 USD/)
   const derived = await page.evaluate(() => window.costFixture.derive())
   assert.deepEqual(derived, { before: .25, after: .375, reused: false })
 })

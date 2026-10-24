@@ -406,7 +406,7 @@ function SessionInspector({ session, parent, children, childTotal, hasMoreChildr
             <InspectorField label="Messages" value={String(session.messageCount || 0)} />
             <InspectorField label="Updated" value={formatRelativeTime(session.lastMessageTime)} />
             <InspectorField label="Tokens" value={formatTokenCount(totalTokens)} />
-            {tokenUsage.cost !== undefined ? <InspectorField label="Recorded estimated cost" value={formatUsdCost(tokenUsage.cost)} /> : null}
+            {tokenUsage.cost !== undefined ? <InspectorField label="Estimated cost" value={formatUsdCost(tokenUsage.cost)} /> : null}
             <InspectorField label="Cached" value={formatTokenCount(tokenUsage.cachedTokens)} />
             <InspectorField label="Input / output" value={`${formatTokenCount(tokenUsage.inputTokens)} / ${formatTokenCount(tokenUsage.outputTokens)}`} />
           </dl>

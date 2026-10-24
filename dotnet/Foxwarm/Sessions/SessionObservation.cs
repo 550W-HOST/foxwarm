@@ -384,7 +384,7 @@ internal sealed partial class SessionManager
                 + $"- messages: {meta.MessageCount}\n- token estimate: ~{summary.Estimate} / {leaf?.ContextLimit ?? catalog.PresentationContextLimit}\n- images: {summary.Images}\n- last usage: {usageText}\n- last message: {SessionStatus.Date(meta.LastMessageTime)}\n- auto-compact threshold: ~{dto["effectiveCompactThresholdTokens"]} tokens ({(summary.Threshold is > 0 ? "override" : "model default")})\n"
                 + (
                     meta.Cost is double totalCost
-                        ? $"- recorded estimated cost: {ModelUsageCost.FormatUsd(totalCost)}\n"
+                        ? $"- total estimated cost: {ModelUsageCost.FormatUsd(totalCost)}\n"
                         : ""
                 )
                 + $"- child model: raw={meta.ChildModel ?? "follow current"}, effective={dto["effectiveChildModelKey"]}; child effort: raw={meta.ChildEffort ?? "unset"}, effective={dto["effectiveChildEffort"]}\n"

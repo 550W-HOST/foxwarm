@@ -5,7 +5,7 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Tests;
 
-public sealed class ModelUsageCostTests
+public sealed partial class ModelUsageCostTests
 {
     private static JsonObject Prices(double factor = 1) =>
         new()
@@ -161,7 +161,7 @@ public sealed class ModelUsageCostTests
         );
         Assert.Contains("estimated cost=< $0.0001 USD", status["output"]!.GetValue<string>());
         Assert.Contains(
-            "recorded estimated cost: < $0.0001 USD",
+            "total estimated cost: < $0.0001 USD",
             status["output"]!.GetValue<string>()
         );
         var journals = await manager.Journal.ListAsync(owner.Id, null, null, null, 10);

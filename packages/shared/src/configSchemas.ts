@@ -136,7 +136,7 @@ const tokenPricesPerMillion = {
   type: 'object',
   required: ['cached', 'input', 'output'],
   additionalProperties: false,
-  description: 'Estimated USD prices per million normalized tokens. Set all three rates on each model; saved usage costs are not recalculated after prices change.',
+  description: 'Estimated USD prices per million tokens. Set all three rates on each model; saved usage costs are not recalculated after prices change.',
   properties: {
     cached: { type: 'number', minimum: 0 },
     input: { type: 'number', minimum: 0 },

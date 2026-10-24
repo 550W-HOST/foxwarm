@@ -257,7 +257,7 @@ const ModelUsageBadge = memo(function ModelUsageBadge({ usage, isMobile, callCou
           <ModelUsageRow label="Cached" value={usage.cachedTokens} tone="normal" />
           <ModelUsageRow label="Input" value={usage.inputTokens} tone={usage.inputTokens > 30000 ? 'warning' : 'normal'} />
           <ModelUsageRow label="Output" value={usage.outputTokens} tone={usage.outputTokens > 3000 ? 'warning' : 'normal'} />
-          {usage.cost !== undefined ? <ModelUsageTextRow label="Recorded estimated cost" value={formatUsdCost(usage.cost)} /> : null}
+          {usage.cost !== undefined ? <ModelUsageTextRow label="Estimated cost" value={formatUsdCost(usage.cost)} /> : null}
           <ModelUsageTextRow label="API" value={formatDurationSummary(attribution.apiDurationsMs)} />
           <ModelUsageTextRow label="Time" value={formatUsageTimes(attribution.timestamps)} />
           <ModelUsageTextRow label="Model" value={formatUsageModels(attribution.models)} />
@@ -1207,7 +1207,7 @@ const ConversationUsage = memo(function ConversationUsage({ badge, pendingReques
     ['Cached', usage.cachedTokens.toLocaleString()],
     ['Input', usage.inputTokens.toLocaleString()],
     ['Output', usage.outputTokens.toLocaleString()],
-    ...(usage.cost !== undefined ? [['Recorded estimated cost', formatUsdCost(usage.cost)]] : []),
+    ...(usage.cost !== undefined ? [['Estimated cost', formatUsdCost(usage.cost)]] : []),
     ['Cache share', input ? `${(usage.cachedTokens / input * 100).toFixed(1)}%` : 'unavailable'],
     ['API time', formatDurationSummary(attribution.apiDurationsMs)],
     ['Time range', formatUsageTimes(attribution.timestamps)],

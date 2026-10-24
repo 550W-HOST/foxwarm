@@ -28,7 +28,7 @@ export default function TokenUsageDetails({ usage, loaded = false, detailed = fa
         {total > 0 ? parts.filter(part => part.value > 0).map(part => <span key={part.label} className={part.color} style={{ width: `${part.value / total * 100}%` }} />) : null}
       </div>
       {usage?.cost !== undefined ? <div className="mt-2 flex items-baseline justify-between gap-3 text-xs">
-        <span className="text-fw-text-muted">{loaded ? 'Loaded recorded estimate' : 'Recorded estimated cost'}</span>
+        <span className="text-fw-text-muted">{loaded ? 'Loaded estimated cost' : 'Estimated cost'}</span>
         <span className="font-medium tabular-nums text-fw-text-strong">{formatUsdCost(usage.cost)}</span>
       </div> : null}
       {detailed && usage ? <div className="mt-3 space-y-2">
