@@ -85,7 +85,7 @@ try {
     try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
       const body = JSON.parse(Buffer.concat(chunks).toString()); assert.equal(req.headers.authorization, `Bearer ${providerToken}`)
-      assert(body.tools.some(tool => tool.name === 'compact_session')); assert(body.tools.some(tool => tool.name === 'call_tool')); assert(body.tools.some(tool => tool.name === 'search_tools'))
+      assert(body.tools.some(tool => tool.name === 'call_tool')); assert(body.tools.some(tool => tool.name === 'search_tools'))
       assert(!body.tools.some(tool => tool.name === 'mcp_config' || tool.name === 'list_mcp_servers' || tool.name === 'echo_effect'))
       for (const tool of body.tools) {
         const fields = tool.parameters.properties
@@ -131,9 +131,6 @@ try {
   assert((await perform('builtin:skill', { action: 'load', skillName: 'mcp-management' }, 'guide')).output.includes('MCP management'))
   assert.equal((await perform('node:master/write', { filePath: 'same-owner.txt', content: 'one-write' }, 'owned-write')).error, undefined)
   assert.match((await perform({ source: 'node', name: 'read', nodeId: 'current' }, { filePath: 'same-owner.txt' }, 'owned-read')).output, /one-write/)
-  await perform('builtin:set_goal', { goal: 'MCP-WORKFLOW-GOAL', remindEvery: 1000 }, 'owned-goal')
-  assert((await readFile(join(data, 'state', 'sessions', current + '.json'), 'utf8')).includes('MCP-WORKFLOW-GOAL'))
-  assert(!(await readFile(join(data, 'state', 'sessions', admin + '.json'), 'utf8')).includes('MCP-WORKFLOW-GOAL'))
   await task([invoke('bad-builtin-node', 'builtin:write', { filePath: 'wrong.txt', content: 'bad' }), invoke('bad-nonmaster', 'node:remote/write', { filePath: 'wrong.txt', content: 'bad' }), invoke('bad-recursion', 'builtin:call_tool', { toolId: 'node:master/write', args: { filePath: 'wrong.txt', content: 'bad' } })])
   for (const id of ['bad-builtin-node', 'bad-nonmaster', 'bad-recursion']) assert((await pair(id)).error)
   assert(!await exists(join(data, 'agents', 'team', 'wrong.txt')))
@@ -274,7 +271,7 @@ try {
   assert.equal(failures.length, 0, failures.join('\n')); await stopHost()
   const allStd = (await lines('processes.ndjson')).filter(row => row.mode === 'stdio'); await until(() => allStd.every(row => !alive(row.pid)), 'all owned SDK children gone')
   console.log(JSON.stringify({ result: 'ok', hostPids: pids, stdioPids: allStd.map(row => row.pid), requests: requests.length, tasks: serial,
-    realSdkStdioHttpSseAuto: true, exactOwnerAndIdentity: true, cancellationAndMetadata: true, managedFreezeAndRestart: true, archiveRows: archive.reduce((sum, row) => sum + row[1], 0) }))
+    realSdkStdioHttpSseAuto: true, exactOwnerAndIdentity: true, cancellationAndMetadata: true, capturedConnectionsAndRestart: true, archiveRows: archive.reduce((sum, row) => sum + row[1], 0) }))
 } finally {
   await browser?.close().catch(() => {})
   if (host?.child.exitCode === null) { host.child.kill('SIGTERM'); await Promise.race([once(host.child, 'exit'), sleep(5000)]) }

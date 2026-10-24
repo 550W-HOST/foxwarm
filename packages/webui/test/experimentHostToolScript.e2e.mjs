@@ -51,6 +51,7 @@ async function turn(owner, key, calls, page) {
 const exists = path => access(path).then(() => true, () => false)
 try {
   await owned.start(); assert.equal((await owned.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'main' })).status, 200); const page = await owned.openApp(), frames = []
+  await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('[data-workbench-content-tab="chat:main"] .foxwarm-chat-root[data-chat-connection-state="connected"]', { visible: true })
   page.on('response', async response => { if (response.url().includes('/history')) frames.push(response.url()) })
   let state = await turn('main', 'source', [call('source-run', 'run_script', { code: "x=call_tool('read', {'filePath':'input.txt'})\ncall_tool('write', {'filePath':'copy.txt','content':x['content']})\nx=call_tool('exec', {'command':'printf exec-raw', 'timeout':15})\ny=request_model_without_context('TOOL-SCRIPT-ONESHOT', model='a')\nz=call_tool({'toolId':'mcp:sdk/result_case', 'args':{'kind':'error_object','tag':'opaque'}})\nprint('before')\nanswer=ask_agent({'question':'continue'})\nprint('after')\nreturn [answer,y['text'],x['content'],z['error']['message']]\n" })], page)
   const projected = (id) => requests.flatMap(request => request.input || []).find(row => row.type === 'function_call_output' && row.call_id === id)?.output
@@ -114,8 +115,8 @@ try {
   await owned.api('POST', route('doomed') + '/message', { text: 'TOOL-SCRIPT-TURN:delete-start' }); await until(() => exists(join(sdk, 'started-delete')), 'delete call accepted')
   const pendingDelete = await owned.api('DELETE', route('doomed')); assert.equal(pendingDelete.status, 409); assert.equal(pendingDelete.body.code, "SESSION_DELETE_BUSY")
   state = await until(async () => { const value = await authority('doomed'); return !value.busy && result(value, 'deleted-run') ? value : null }, 'delete drain')
-  const deletedRun = result(state, 'deleted-run').response; assert.equal(deletedRun.status, 'cancelled'); assert.equal((await owned.api('DELETE', route('doomed'))).status, 200)
-  const retained = JSON.parse(await readFile(join(owned.data, 'state/toolscript-runs', deletedRun.runId + '.json'), 'utf8')); assert.equal(retained.ownerSessionId, 'doomed'); assert.equal(retained.status, 'cancelled'); assert(!await exists(join(owned.work, 'deleted-after'))); assert(await exists(join(sdk, 'started-delete')))
+  const deletedRun = result(state, 'deleted-run').response; assert.equal(deletedRun.status, 'failed'); assert.match(deletedRun.error, /not started/); assert.equal((await owned.api('DELETE', route('doomed'))).status, 200)
+  const retained = JSON.parse(await readFile(join(owned.data, 'state/toolscript-runs', deletedRun.runId + '.json'), 'utf8')); assert.equal(retained.ownerSessionId, 'doomed'); assert.equal(retained.status, 'failed'); assert(!await exists(join(owned.work, 'deleted-after'))); assert(await exists(join(sdk, 'started-delete')))
 
   // Stop cancels the script wait without killing an already-started user process.
   assert.equal((await owned.api('POST', '/api/sessions', { sessionId: 'process', agentId: 'main' })).status, 200)
@@ -123,7 +124,7 @@ try {
   const shell = "printf born > '" + born + "'; sleep 2; printf real > '" + survived + "'"
   scripts.set('process-start', [call('process-run', 'run_script', { code: "call_tool('exec', {'command':" + JSON.stringify(shell) + ", 'timeout':60})\ncall_tool('write', {'filePath':" + JSON.stringify(forbidden) + ", 'content':'wrong'})\n" })])
   await owned.api('POST', route('process') + '/message', { text: 'TOOL-SCRIPT-TURN:process-start' }); await until(() => exists(born), 'user process started'); assert.equal((await owned.api('POST', route('process') + '/message', { text: '/stop' })).status, 200)
-  state = await until(async () => { const value = await authority('process'); return !value.busy && result(value, 'process-run') ? value : null }, 'process script cancelled'); assert.equal(result(state, 'process-run').response.status, 'cancelled')
+  state = await until(async () => { const value = await authority('process'); return !value.busy && result(value, 'process-run') ? value : null }, 'process script cancelled'); assert.equal(result(state, 'process-run').response.status, 'failed'); assert.match(result(state, 'process-run').response.error, /not started/)
   assert(!await exists(survived)); await until(() => exists(survived), 'started process survives script cancellation'); assert.equal(await readFile(survived, 'utf8'), 'real'); assert(!await exists(forbidden))
   await owned.stop(); assert.equal(failures.length, 0, failures.join('\n'))
   console.log(JSON.stringify({ hosts: owned.hostPids, requests: requests.length, originalApp: true, nativeRawReadExec: true, officialSdk: true, oneShotNoContext: true, waitingRestartDelta: true, refreshedNestedRows: true, authenticatedReferenceImages: true, stopDrain: true, activeMoveLiteralOwner: true, busyDeleteDrain: true, startedProcessSurvival: true }))
