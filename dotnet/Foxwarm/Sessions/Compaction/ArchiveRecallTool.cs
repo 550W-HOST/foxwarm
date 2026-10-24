@@ -511,7 +511,7 @@ internal static class ArchiveRecallTool
                 hits,
                 $"Literal Archive lookup in Session `{id}`. {extent}",
                 matched =>
-                    $"{matched} displayed match(es) from {hits.Count} literal hit(s) in this bounded range.",
+                    $"{matched} matching source record(s) from {hits.Count} literal hit(s) in this bounded range.",
                 hits.Count == 0
                     ? "No literal matches in the examined range."
                     : "Literal hits were excluded by the result filters.",

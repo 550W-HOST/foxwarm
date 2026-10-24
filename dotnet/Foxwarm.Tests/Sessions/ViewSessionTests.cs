@@ -144,6 +144,44 @@ public sealed class ViewSessionTests
     }
 
     [Fact]
+    public async Task Large_requested_pages_keep_record_counts_navigation_and_output_budget_without_a_product_cap()
+    {
+        await using var f = await MainToolScriptTests.Fixture.Create();
+        await ForkClearLifecycleTests.AppendAsync(
+            f.Owner,
+            Enumerable.Range(1, 250).Select(n => Text("source record " + n)).ToArray()
+        );
+        var args = new JsonObject
+        {
+            ["sessionId"] = f.Owner.Id,
+            ["count"] = 200,
+            ["parts"] = new JsonArray("text"),
+            ["previewLength"] = 1000,
+        };
+        var page = Output(await f.Call("view_session", args));
+        Assert.True(page.Length <= 1000);
+        Assert.Contains("200 matches from 200 selected eligible source records", page);
+        Assert.Contains("[50,250) of 250", page);
+        var olderLine = page.Split('\n').Single(line => line.StartsWith("Older: "));
+        var older = JsonNode.Parse(olderLine["Older: view_session(".Length..^1])!.AsObject();
+        Assert.Equal(200, older["count"]!.GetValue<int>());
+        Assert.Equal(50, older["before"]!.GetValue<int>());
+        Assert.Equal("text", older["parts"]![0]!.GetValue<string>());
+        Assert.NotNull(older["historyVersion"]);
+        var previous = Output(await f.Call("view_session", older));
+        Assert.True(previous.Length <= 1000);
+        Assert.Contains("50 matches from 50 selected eligible source records", previous);
+        Assert.Contains("[0,50) of 250", previous);
+
+        args["count"] = 9007199254740991L;
+        var entire = Output(await f.Call("view_session", args));
+        Assert.True(entire.Length <= 1000);
+        Assert.Contains("250 matches from 250 selected eligible source records", entire);
+        Assert.Contains("[0,250) of 250", entire);
+        Assert.DoesNotContain("Older: view_session(", entire);
+    }
+
+    [Fact]
     public async Task Names_group_logical_calls_once_errors_and_partial_results_without_generated_ids()
     {
         await using var f = await OutboundMcpFixture.CreateAsync();

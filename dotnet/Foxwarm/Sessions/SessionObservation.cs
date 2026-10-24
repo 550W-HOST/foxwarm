@@ -7,7 +7,7 @@ internal sealed record SessionViewPage(
     int Begin,
     int End,
     int Total,
-    int Count,
+    long Count,
     long HistoryVersion,
     JsonObject Runtime,
     (int Index, JsonObject Message)[] Messages,
@@ -38,7 +38,16 @@ internal sealed partial class SessionOwner
             }
             var start = Integer(args, "start", int.MinValue, int.MaxValue);
             var before = Integer(args, "before", 0, int.MaxValue);
-            var count = Integer(args, "count", 0, 100) ?? 10;
+            var requestedCount = args.ContainsKey("count") ? SessionWait.Number(args["count"]) : 10;
+            if (
+                requestedCount is not { } countValue
+                || !double.IsFinite(countValue)
+                || countValue < 0
+                || countValue > 9007199254740991L
+                || countValue != Math.Truncate(countValue)
+            )
+                throw new InvalidDataException("count must be a nonnegative safe integer.");
+            var count = (long)countValue;
             if (start.HasValue && before.HasValue)
                 throw new InvalidDataException("start and before cannot be combined.");
             if (args.ContainsKey("historyVersion"))
