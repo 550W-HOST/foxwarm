@@ -93,7 +93,10 @@ function chunks(values, size) {
 function managedGroup() {
   return {
     name: 'managed',
-    steps: [directStep('dotnet', 'dotnet', ['test', 'dotnet/Foxwarm.sln', '--logger', 'console;verbosity=minimal'], 1_200_000)],
+    steps: [
+      { ...directStep('restore', 'dotnet', ['restore', 'dotnet/Foxwarm.sln'], 600_000), prepareDependencies: true },
+      directStep('dotnet', 'dotnet', ['test', 'dotnet/Foxwarm.sln', '--no-restore', '--logger', 'console;verbosity=minimal'], 1_200_000),
+    ],
     env: { FOXWARM_TS_ROOT: repoRoot },
   }
 }
@@ -251,7 +254,9 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 async function runStep(group, step, log) {
   console.log(`\n[test:${group.name}] ${step.name}`)
   log.write(`\n[test:${group.name}] ${step.name}\n`)
-  const env = { ...baseEnv, ...(group.env || {}), ...(step.env || {}) }
+  // Dependency acquisition keeps the caller's SDK/feed/proxy settings. Test execution
+  // always receives owned application paths, cleared credentials and closed proxies.
+  const env = { ...(step.prepareDependencies ? process.env : baseEnv), ...(group.env || {}), ...(step.env || {}) }
   return await new Promise(resolve => {
     const child = spawn(step.command, step.args, { cwd: repoRoot, env, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] })
     activeChild = child
@@ -302,7 +307,7 @@ for (const group of groups) {
         const result = await runStep(group, step, log)
         summary.push({ order: stepIndex, group: group.name, step: step.name, ...result })
         if (result.code !== 0) groupCode = result.code
-        if (interrupted) break
+        if (interrupted || (step.prepareDependencies && result.code !== 0)) break
       }
     } finally {
       await new Promise(resolve => log.end(resolve))
