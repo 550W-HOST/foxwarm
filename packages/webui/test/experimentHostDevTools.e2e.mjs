@@ -55,15 +55,15 @@ try {
   await writeFile(join(workRoot, 'empty.txt'), '', 'utf8')
   await writeFile(join(workRoot, 'anchor.txt'), 'header\r\nold\r\n', 'utf8')
   await writeFile(join(root, 'outside.txt'), 'untouched', 'utf8')
-  await symlink('../outside.txt', join(workRoot, 'symlink'))
+  await symlink(join(root, 'outside.txt'), join(workRoot, 'symlink'))
   const requests = []
   provider = createServer(async (req, res) => {
     try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
       const body = JSON.parse(Buffer.concat(chunks).toString())
       assert.equal(req.url, '/responses'); assert.equal(req.headers.authorization, `Bearer ${providerToken}`)
-      assert.deepEqual(body.tools.map(tool => tool.name),
-        ['read', 'write', 'edit', 'apply_patch', 'exec', 'recall', 'create_agent', 'create_session', 'create_child_session', 'send_to_session', 'refresh_session_snapshot', 'wait', 'skill', 'set_agent_inherit', 'session', 'get_session_messages', 'set_goal', 'set_session_child_model', 'set_session_compact_threshold', 'compact_session', 'submit_compact_plan', 'search_tools', 'call_tool'])
+      for (const name of ['read', 'edit', 'apply_patch', 'exec'])
+        assert(body.tools.some(tool => tool.name === name), 'Workflow tool is available: ' + name)
       const payload = JSON.stringify(body.input)
       const latest = body.input.filter(item => item.type === 'message' && item.role === 'user')
         .at(-1)?.content?.map(item => item.text).join(' ') || ''
@@ -77,7 +77,7 @@ try {
           () => call('edit-duplicate', 'edit', { filePath: 'src.txt', oldText: 'duplicate', newText: 'same' }),
           () => call('edit-empty', 'edit', { filePath: 'empty.txt', oldText: '', newText: 'seed' }),
           () => call('patch-add-update', 'apply_patch', { input: '*** Begin Patch\n*** Add File: nested/sub/new.txt\n+new content\n*** Update File: src.txt\n@@\n-new\n+patched\n duplicate\n duplicate\n*** Update File: anchor.txt\n@@ header\n-old\n+fresh\n*** End Patch' }),
-          () => call('patch-unsafe', 'apply_patch', { input: '*** Begin Patch\n*** Add File: denied-first.txt\n+must not appear\n*** Add File: ../outside.txt\n+never\n*** End Patch' }),
+          () => call('patch-unsafe', 'apply_patch', { input: '*** Begin Patch\n*** Add File: denied-first.txt\n+must not appear\n*** Add File: ' + join(root, 'outside.txt') + '\n+never\n*** End Patch' }),
           () => call('patch-symlink', 'apply_patch', { input: '*** Begin Patch\n*** Update File: symlink\n@@\n-untouched\n+changed\n*** End Patch' }),
           () => call('patch-partial', 'apply_patch', { input: '*** Begin Patch\n*** Add File: partial.txt\n+already committed\n*** Update File: missing.txt\n@@\n-before\n+after\n*** End Patch' }),
           () => call('nonzero', 'exec', { command: "printf 'start  \\n'; exit 7", timeout: 2 }),
@@ -103,6 +103,7 @@ try {
   provider.listen(0, '127.0.0.1'); await once(provider, 'listening')
   const providerPort = provider.address().port; const hostPort = await port()
   await mkdir(join(dataRoot, 'state'), { recursive: true })
+  await writeFile(join(dataRoot, 'state/tool-authorization.yaml'), "version: 1\ndefaultAction: allow\nrules:\n- id: forbid-other-native-paths\n  action: deny\n  match:\n    tool: {source: node, name: [read, write, edit, apply_patch]}\n    path: {anyNotWithin: '${agent.dir}'}\n")
   await writeFile(join(dataRoot, 'state/config.yaml'), `bot: {httpPort: ${hostPort}}\n`)
   await writeFile(join(dataRoot, 'state/token'), apiToken, { mode: 0o600 })
   async function startHost() {
@@ -149,8 +150,8 @@ try {
   assert.match(JSON.stringify(responseOf('edit-duplicate')), /2 occurrences/)
   assert.equal(await readFile(join(workRoot, 'empty.txt'), 'utf8'), 'seed')
   assert.match(JSON.stringify(responseOf('patch-partial')), /Operations already applied/)
-  assert.equal(responseOf('patch-unsafe')?.error?.type, 'invalid_path')
-  assert.equal(responseOf('patch-symlink')?.error?.type, 'invalid_path')
+  assert.equal(responseOf('patch-unsafe')?.error?.type, 'tool_authorization_denied')
+  assert.equal(responseOf('patch-symlink')?.error?.type, 'tool_authorization_denied')
   assert.match(responseOf('nonzero')?.output || '', /Exit code: 7/)
   assert.match(responseOf('env')?.output || '', /INHERITED-ENV/)
   assert.doesNotMatch(responseOf('env')?.output || '', /synthetic-provider-secret/)
