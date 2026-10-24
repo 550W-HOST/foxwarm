@@ -230,7 +230,8 @@ internal sealed class ModelRequestOwner(
                         baseHistory = updated;
                         history = baseHistory.WithContext(retainedContext);
                         interaction = diagnostics?.Begin(journalIteration);
-                        requestStarted = null;
+                        // An adoption notice refreshes journal input, but the same
+                        // response still includes elapsed retries and failover.
                         journalRequestId = null;
                         journalAttempt = 0;
                     }
