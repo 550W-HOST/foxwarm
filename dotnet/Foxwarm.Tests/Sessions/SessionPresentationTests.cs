@@ -158,7 +158,13 @@ public sealed class SessionPresentationTests
         foreach (
             var arg in new[]
             {
-                Path.Combine(repository, "dotnet", "Foxwarm.Tests", "Fixtures", "session-presentation-fixture-ts.mjs"),
+                Path.Combine(
+                    repository,
+                    "dotnet",
+                    "Foxwarm.Tests",
+                    "Fixtures",
+                    "session-presentation-fixture-ts.mjs"
+                ),
                 input,
                 output,
             }

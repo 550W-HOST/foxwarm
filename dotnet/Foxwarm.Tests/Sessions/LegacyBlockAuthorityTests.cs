@@ -21,7 +21,13 @@ public sealed class LegacyBlockAuthorityTests
                 WorkingDirectory = repo,
                 ArgumentList =
                 {
-                    Path.Combine(repo, "dotnet", "Foxwarm.Tests", "Fixtures", "legacy-block-fixture-ts.mjs"),
+                    Path.Combine(
+                        repo,
+                        "dotnet",
+                        "Foxwarm.Tests",
+                        "Fixtures",
+                        "legacy-block-fixture-ts.mjs"
+                    ),
                     mode,
                     root,
                 },

@@ -23,7 +23,13 @@ public sealed class SessionStartupMemoryTests(ITestOutputHelper output)
                 WorkingDirectory = repository,
                 ArgumentList =
                 {
-                    Path.Combine(repository, "dotnet", "Foxwarm.Tests", "Fixtures", "session-startup-memory-fixture-ts.mjs"),
+                    Path.Combine(
+                        repository,
+                        "dotnet",
+                        "Foxwarm.Tests",
+                        "Fixtures",
+                        "session-startup-memory-fixture-ts.mjs"
+                    ),
                     mode,
                     root,
                 },

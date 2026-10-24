@@ -350,7 +350,10 @@ public sealed partial class CliArchiveMigrationTests
             RedirectStandardError = true,
             ArgumentList =
             {
-                Path.Combine(Repository, "dotnet/Foxwarm.Tests/Fixtures/cli-archive-fixture-ts.mjs"),
+                Path.Combine(
+                    Repository,
+                    "dotnet/Foxwarm.Tests/Fixtures/cli-archive-fixture-ts.mjs"
+                ),
                 mode,
                 root,
             },

@@ -342,7 +342,13 @@ internal static class TypeScriptOracle
     {
         var repositoryRoot = FindRepositoryRoot();
         var oracleRoot = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT") ?? repositoryRoot;
-        var helper = Path.Combine(repositoryRoot, "dotnet", "Foxwarm.Tests", "Fixtures", "session-persistence-fixture-ts.mjs");
+        var helper = Path.Combine(
+            repositoryRoot,
+            "dotnet",
+            "Foxwarm.Tests",
+            "Fixtures",
+            "session-persistence-fixture-ts.mjs"
+        );
         var info = new ProcessStartInfo("node")
         {
             WorkingDirectory = repositoryRoot,
@@ -390,7 +396,13 @@ internal static class TypeScriptOracle
         {
             if (
                 File.Exists(
-                    Path.Combine(current.FullName, "dotnet", "Foxwarm.Tests", "Fixtures", "session-persistence-fixture-ts.mjs")
+                    Path.Combine(
+                        current.FullName,
+                        "dotnet",
+                        "Foxwarm.Tests",
+                        "Fixtures",
+                        "session-persistence-fixture-ts.mjs"
+                    )
                 ) && File.Exists(Path.Combine(current.FullName, "lib", "session", "archive.js"))
             )
                 return current.FullName;

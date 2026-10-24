@@ -47,7 +47,16 @@ public sealed class SessionBootstrapTests
             new ProcessStartInfo("node")
             {
                 WorkingDirectory = repo,
-                ArgumentList = { Path.Combine(repo, "dotnet", "Foxwarm.Tests", "Fixtures", "onboot-fixture-ts.mjs") },
+                ArgumentList =
+                {
+                    Path.Combine(
+                        repo,
+                        "dotnet",
+                        "Foxwarm.Tests",
+                        "Fixtures",
+                        "onboot-fixture-ts.mjs"
+                    ),
+                },
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,

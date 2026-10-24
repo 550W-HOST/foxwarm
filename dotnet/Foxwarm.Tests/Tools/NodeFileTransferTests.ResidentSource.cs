@@ -57,7 +57,15 @@ public sealed partial class NodeFileTransferTests
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        info.ArgumentList.Add(Path.Combine(root, "dotnet", "Foxwarm.Tests", "Fixtures", "resident-source-fixture-ts.mjs"));
+        info.ArgumentList.Add(
+            Path.Combine(
+                root,
+                "dotnet",
+                "Foxwarm.Tests",
+                "Fixtures",
+                "resident-source-fixture-ts.mjs"
+            )
+        );
         info.Environment["FOXWARM_DATA_DIR"] = f.Data;
         info.Environment["FOXWARM_AGENTS_DIR"] = Path.Combine(f.Data, "agents");
         using var child = Process.Start(info)!;
