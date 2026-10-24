@@ -148,10 +148,11 @@ internal sealed partial class VectorRuntime : IAsyncDisposable
         if (!response.IsSuccessStatusCode)
             throw new HttpRequestException(
                 $"Embedding request failed ({(int)response.StatusCode}): "
-                    + (
+                    + SafeClip(
                         body?["error"] is JsonObject error
                             ? Text(error["message"])
-                            : body?["error"]?.ToJsonString() ?? bodyText
+                            : body?["error"]?.ToJsonString() ?? bodyText,
+                        500
                     )
             );
         if (

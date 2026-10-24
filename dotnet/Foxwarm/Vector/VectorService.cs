@@ -365,10 +365,23 @@ internal sealed class VectorService : IAsyncDisposable
                     "Vector owner request capacity is full."
                 );
             var id = Interlocked.Increment(ref requestId);
-            var call = VectorWire.DispatchAsync(local!, method, input);
+            var call = LocalCallAsync(method, input);
             localCalls[id] = call;
             _ = RemoveLocalAsync(id, call);
             return call;
+        }
+    }
+
+    private async Task<JsonNode?> LocalCallAsync(string method, JsonObject input)
+    {
+        try
+        {
+            return await VectorWire.DispatchAsync(local!, method, input);
+        }
+        catch (Exception error) when (error is not OperationCanceledException and not VectorUnavailableException)
+        {
+            // Match the child owner's operation-error boundary without swallowing caller cancellation.
+            throw new VectorUnavailableException("VECTOR_OPERATION_FAILED", error.Message);
         }
     }
 

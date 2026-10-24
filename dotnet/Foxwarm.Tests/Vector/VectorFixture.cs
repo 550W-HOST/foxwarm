@@ -22,6 +22,7 @@ internal sealed class VectorEmbeddingPeer : IAsyncDisposable
     internal readonly ConcurrentQueue<(string Path, string Model, string Input)> Requests = new();
     internal Func<string, Task>? BeforeResponse { get; set; }
     internal bool Fail { get; set; }
+    internal string FailureMessage { get; set; } = "synthetic embeddings failure";
     internal string BaseUrl => app.Urls.Single() + "/v1";
 
     private VectorEmbeddingPeer(WebApplication app) => this.app = app;
@@ -46,7 +47,7 @@ internal sealed class VectorEmbeddingPeer : IAsyncDisposable
                     await peer.BeforeResponse(input);
                 if (peer.Fail)
                     return Results.Json(
-                        new { error = new { message = "synthetic embeddings failure" } },
+                        new { error = new { message = peer.FailureMessage } },
                         statusCode: 503
                     );
                 var vector = Embedding(input);

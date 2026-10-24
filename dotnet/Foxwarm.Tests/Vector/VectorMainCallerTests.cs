@@ -184,9 +184,11 @@ public sealed class VectorMainCallerTests
             release.TrySetResult();
             if (failTarget)
             {
-                await Assert.ThrowsAsync<HttpRequestException>(() =>
+                var error = await Assert.ThrowsAsync<VectorUnavailableException>(() =>
                     forced.WaitAsync(TimeSpan.FromSeconds(10))
                 );
+                Assert.Equal("VECTOR_OPERATION_FAILED", error.Code);
+                Assert.False(error.Retryable);
                 Assert.Equal(1, owner.Archive.VectorCheckpoint().RawLastIndexedSeq);
                 Assert.Equal(
                     0,

@@ -116,10 +116,19 @@ internal sealed partial class ContextPreviewRenderer
             + (end < text.Length ? "…" : "");
     }
 
-    private bool Matches(string text) =>
-        (literal is null || text.Contains(literal, StringComparison.OrdinalIgnoreCase))
-        && (include is null || include.IsMatch(text))
-        && (exclude is null || !exclude.IsMatch(text));
+    private static string NormalizeSearch(string text) =>
+        SessionGoal.Trim(text.Replace("\r\n", "\n", StringComparison.Ordinal));
+
+    private static string SearchText(PreviewItem item) =>
+        NormalizeSearch(item.Search.Length == 0 ? item.Body : item.Search);
+
+    private bool Matches(string text)
+    {
+        var search = NormalizeSearch(text);
+        return (literal is null || search.Contains(literal, StringComparison.OrdinalIgnoreCase))
+            && (include is null || include.IsMatch(search))
+            && (exclude is null || !exclude.IsMatch(search));
+    }
 
     private string RenderItem(PreviewItem item, int max)
     {
@@ -230,17 +239,17 @@ internal sealed partial class ContextPreviewRenderer
         }
         if (literal is not null)
             Filter(
-                item => item.Search.Contains(literal, StringComparison.OrdinalIgnoreCase),
+                item => SearchText(item).Contains(literal, StringComparison.OrdinalIgnoreCase),
                 "[filter] contentFilter excluded {count} item(s) because the literal case-insensitive content filter did not match."
             );
         if (include is not null)
             Filter(
-                item => include.IsMatch(item.Search),
+                item => include.IsMatch(SearchText(item)),
                 "[filter] includeRegex excluded {count} additional item(s) that remained after earlier filter stages."
             );
         if (exclude is not null)
             Filter(
-                item => !exclude.IsMatch(item.Search),
+                item => !exclude.IsMatch(SearchText(item)),
                 "[filter] excludeRegex excluded {count} additional item(s) that remained after earlier filter stages."
             );
         var matched = (maxItems is { } maximum ? selected.Take(maximum) : selected).ToArray();
