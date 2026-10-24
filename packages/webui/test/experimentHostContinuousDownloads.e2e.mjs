@@ -7,6 +7,7 @@ import { mkdir, readFile, writeFile, readdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import sharp from 'sharp'
 import { createHostFixture, until } from './experimentHostFixture.mjs'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
 
 const options = { env: {} }, host = await createHostFixture('continuous-downloads', options)
 options.cwd = host.root
@@ -59,7 +60,8 @@ try {
   assert.equal((await host.api('GET', route('continuous-alias') + '/history/continuous')).body.lastSeq, 241)
   const fork = (await host.api('GET', route(seed.child) + '/history/continuous')).body
   assert.equal(fork.lastSeq, 242); assert(!JSON.stringify(fork.messages).includes('MUST-NOT-LEAK'))
-  assert.equal((await host.api('POST', route(seed.parent) + '/message', { text: '/compact' })).status, 202)
+  const compact = await host.api('POST', route(seed.parent) + '/message', { text: '/compact' })
+  assert.equal(compact.status, 200); assert.equal(compact.body.success, true)
   await until(async () => (await saved(seed.parent)).history.some(row => row.__meta?.contextBlock) && !(await saved(seed.parent)).busy, 'real compacted authority')
   const active = (await host.api('GET', route(seed.parent) + '/history')).body
   assert(active.messages.length < 100, 'compaction reduced active context, not original Archive')
@@ -73,6 +75,7 @@ try {
   })
   await page.evaluate(() => { localStorage.setItem('foxwarm_timeline_view_v1', 'conversation') })
   await page.reload({ waitUntil: 'domcontentloaded' })
+  await waitForWebUiReady(page)
   await page.waitForFunction(() => window.foxwarmTest?.switchToSession)
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), seed.parent)
   await page.waitForSelector('[data-continuous-history]')
@@ -92,10 +95,15 @@ try {
   await page.waitForFunction(() => document.body.innerText.includes('LIVE-ORIGINAL-REPLY') || !!document.querySelector('[data-continuous-history]'))
   const client = await page.createCDPSession(); await client.send('Network.enable')
   await client.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+  // Chromium keeps established WebSockets during HTTP network emulation. Use the
+  // real page suspension listener to disconnect the retained App owner as well.
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })))
+  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.dataset.chatConnectionState === 'disconnected')
   assert.equal((await host.api('POST', route(seed.parent) + '/message', { text: 'RECONNECT-APPEND' })).status, 202)
   await until(async () => (await saved(seed.parent)).history.filter(row => row.parts?.some(part => part.text === 'LIVE-ORIGINAL-REPLY')).length === 2, 'offline live append committed')
   const reads = pages.length
   await client.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 })
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })))
   await until(() => pages.length > reads, 'reconnected bounded Archive page')
   assert(pages.slice(reads).every(value => value.body.messages.length <= 100))
   // Switch away and back through the App's mounted Chat owner and restore its saved reading window.

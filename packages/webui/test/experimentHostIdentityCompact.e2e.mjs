@@ -48,7 +48,7 @@ try {
   for (const kind of ['planning', 'ready', 'awaited']) {
     const id = 'compact-' + kind; await seed(id, kind === 'awaited' ? 'sync' : undefined); held.delete('plan')
     if (kind !== 'awaited') { await command(id, 'IDENTITY-COMPACT:held-' + kind); await until(() => held.has('held-' + kind), 'real held busy foreground') }
-    assert.equal((await command(id, '/compact')).status, 202); await until(() => held.has('plan'), 'real manual planner')
+    const compact = await command(id, '/compact'); assert.equal(compact.status, 200); assert.equal(compact.body.success, true); await until(() => held.has('plan'), 'real manual planner')
     const plan = held.get('plan'), before = await authority(id)
     if (kind === 'ready') { plan.release(); await until(async () => (await authority(id)).queue.some(item => item.type === 'compact-commit'), 'ready wake saved behind real foreground') }
     const target = await moved(id); assert.equal((await authority(target)).promptCacheKey, before.promptCacheKey)

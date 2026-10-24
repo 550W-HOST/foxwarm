@@ -106,7 +106,9 @@ try {
   peer = await createMcpOAuthFixture(); peer.state.browserConsent = true
   const reserve = httpServer(); reserve.listen(0, '127.0.0.1'); await once(reserve, 'listening'); port = reserve.address().port
   await new Promise(done => reserve.close(done))
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost',
+  const certConfig = join(root, 'openssl.cnf')
+  await writeFile(certConfig, '[req]\ndistinguished_name = subject\n[subject]\n')
+  execFileSync('openssl', ['req', '-config', certConfig, '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=localhost',
     '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1', '-keyout', join(root, 'key.pem'), '-out', join(root, 'cert.pem')], { stdio: 'ignore' })
   const cert = await readFile(join(root, 'cert.pem'))
   proxy = httpsServer({ key: await readFile(join(root, 'key.pem')), cert }, (req, res) => {
