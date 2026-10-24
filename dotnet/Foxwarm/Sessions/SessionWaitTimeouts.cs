@@ -19,7 +19,8 @@ internal sealed class SessionWaitTimeouts(SessionManager manager) : IAsyncDispos
     {
         if (!manager.CanRunCallbacks(sessionId))
             return;
-        var wait = manager.Find(sessionId)?.WaitSnapshot() ?? manager.CatalogMetadata(sessionId)?.Wait;
+        var wait =
+            manager.Find(sessionId)?.WaitSnapshot() ?? manager.CatalogMetadata(sessionId)?.Wait;
         var id = SessionWait.Text(wait?["id"]);
         var seconds = SessionWait.Number(wait?["timeoutSeconds"]);
         lock (gate)

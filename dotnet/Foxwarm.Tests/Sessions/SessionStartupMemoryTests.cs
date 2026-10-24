@@ -14,22 +14,36 @@ public sealed class SessionStartupMemoryTests(ITestOutputHelper output)
 {
     private static async Task<JsonObject> Source(string mode, string root)
     {
-        var repository = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
+        var repository =
+            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
             ?? throw new InvalidOperationException("Owned Source fixture root is required.");
-        using var process = Process.Start(new ProcessStartInfo("node")
-        {
-            WorkingDirectory = repository,
-            ArgumentList = { Path.Combine(repository, "dotnet", "session-startup-memory-fixture-ts.mjs"), mode, root },
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        })!;
+        using var process = Process.Start(
+            new ProcessStartInfo("node")
+            {
+                WorkingDirectory = repository,
+                ArgumentList =
+                {
+                    Path.Combine(repository, "dotnet", "session-startup-memory-fixture-ts.mjs"),
+                    mode,
+                    root,
+                },
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            }
+        )!;
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
         var text = await stdout;
         Assert.True(process.ExitCode == 0, text + await stderr);
         const string prefix = "SESSION_STARTUP_FIXTURE:";
-        return JsonNode.Parse(text.Split('\n').Single(line => line.StartsWith(prefix, StringComparison.Ordinal))[prefix.Length..])!.AsObject();
+        return JsonNode
+            .Parse(
+                text.Split('\n').Single(line => line.StartsWith(prefix, StringComparison.Ordinal))[
+                    prefix.Length..
+                ]
+            )!
+            .AsObject();
     }
 
     [Fact]
@@ -50,7 +64,12 @@ public sealed class SessionStartupMemoryTests(ITestOutputHelper output)
         await using var peer = new Peer();
         for (var opening = 0; opening < 2; opening++)
         {
-            await using var manager = new SessionManager(data, Path.Combine(temp.Path, "work"), peer.Options, HostModels.ForTest(peer.Options));
+            await using var manager = new SessionManager(
+                data,
+                Path.Combine(temp.Path, "work"),
+                peer.Options,
+                HostModels.ForTest(peer.Options)
+            );
             var reads = new ConcurrentBag<string>();
             manager.AdmissionReadObserved = reads.Add;
             await manager.LoadMainHostAsync();
@@ -60,19 +79,30 @@ public sealed class SessionStartupMemoryTests(ITestOutputHelper output)
             Assert.NotNull(view.Projection("legacy-0"));
             Assert.Equal(440, manager.Catalog.List().Length);
             Assert.Equal(440, manager.Catalog.Count());
-            output.WriteLine($"Opening {opening}: catalog=440, wait-only=438, authority reads={reads.Count}, owners={manager.Owners().Count()}, provider requests={peer.Requests.Count}.");
+            output.WriteLine(
+                $"Opening {opening}: catalog=440, wait-only=438, authority reads={reads.Count}, owners={manager.Owners().Count()}, provider requests={peer.Requests.Count}."
+            );
             foreach (var id in SessionWait.Strings(source["coldIds"]))
             {
                 Assert.NotNull(manager.CatalogMetadata(id)!.Wait);
                 Assert.Null(manager.Find(id));
             }
-            Assert.Equal(opening == 0 ? new[] { "busy", "queued" } : [], reads.Order(StringComparer.Ordinal));
+            Assert.Equal(
+                opening == 0 ? new[] { "busy", "queued" } : [],
+                reads.Order(StringComparer.Ordinal)
+            );
             Assert.Equal(opening == 0 ? 2 : 0, manager.Owners().Count());
             Assert.Equal(2, peer.Requests.Count);
             if (opening == 0)
             {
-                Assert.Contains("session-resumed", manager.Find("busy")!.History()[1].ToJsonString());
-                Assert.Contains("Synthetic pending work.", manager.Find("queued")!.History()[1].ToJsonString());
+                Assert.Contains(
+                    "session-resumed",
+                    manager.Find("busy")!.History()[1].ToJsonString()
+                );
+                Assert.Contains(
+                    "Synthetic pending work.",
+                    manager.Find("queued")!.History()[1].ToJsonString()
+                );
             }
         }
     }
@@ -98,39 +128,70 @@ public sealed class SessionStartupMemoryTests(ITestOutputHelper output)
         var data = Path.Combine(temp.Path, "data");
         var work = Path.Combine(temp.Path, "work");
         await using var peer = new Peer();
-        await using (var seed = new SessionManager(data, work, peer.Options, HostModels.ForTest(peer.Options)))
+        await using (
+            var seed = new SessionManager(
+                data,
+                work,
+                peer.Options,
+                HostModels.ForTest(peer.Options)
+            )
+        )
         {
             await seed.LoadAsync();
             foreach (var id in new[] { "timed", "ordinary", "event" })
             {
                 var owner = await seed.CreateNamedAsync("main", id, null, null);
-                await seed.DeclareWaitAsync(owner, id == "timed"
-                    ? new JsonObject { ["wakeIfNoActivityAfterSeconds"] = 3 }
-                    : new JsonObject { ["waitForInput"] = true });
+                await seed.DeclareWaitAsync(
+                    owner,
+                    id == "timed"
+                        ? new JsonObject { ["wakeIfNoActivityAfterSeconds"] = 3 }
+                        : new JsonObject { ["waitForInput"] = true }
+                );
             }
         }
-        await File.WriteAllTextAsync(Path.Combine(data, "state", "timers.json"), new JsonObject
-        {
-            ["timers"] = new JsonArray(new JsonObject
+        await File.WriteAllTextAsync(
+            Path.Combine(data, "state", "timers.json"),
+            new JsonObject
             {
-                ["id"] = "owned-once", ["sessionId"] = "ordinary", ["message"] = "Synthetic ordinary timer",
-                ["createdAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                ["at"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 3000,
-            }),
-        }.ToJsonString());
-        await using var manager = new SessionManager(data, work, peer.Options, HostModels.ForTest(peer.Options));
+                ["timers"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["id"] = "owned-once",
+                        ["sessionId"] = "ordinary",
+                        ["message"] = "Synthetic ordinary timer",
+                        ["createdAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        ["at"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 3000,
+                    }
+                ),
+            }.ToJsonString()
+        );
+        await using var manager = new SessionManager(
+            data,
+            work,
+            peer.Options,
+            HostModels.ForTest(peer.Options)
+        );
         await manager.LoadMainHostAsync();
         Assert.Empty(manager.Owners());
-        await manager.AdmitWaitEventAsync("event", SessionWait.Event("synthetic-event", "Synthetic direct event"));
+        await manager.AdmitWaitEventAsync(
+            "event",
+            SessionWait.Event("synthetic-event", "Synthetic direct event")
+        );
         Assert.Null(manager.Find("timed"));
         Assert.Null(manager.Find("ordinary"));
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         while (peer.Requests.Count != 3)
             await Task.Delay(20, deadline.Token);
         await Settle(manager);
-        Assert.Equal(new[] { "event", "ordinary", "timed" }, manager.Owners().Select(owner => owner.Id).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            new[] { "event", "ordinary", "timed" },
+            manager.Owners().Select(owner => owner.Id).Order(StringComparer.Ordinal)
+        );
         Assert.Contains("wait-timeout", manager.Find("timed")!.History()[0].ToJsonString());
-        Assert.Contains("Synthetic ordinary timer", manager.Find("ordinary")!.History()[0].ToJsonString());
+        Assert.Contains(
+            "Synthetic ordinary timer",
+            manager.Find("ordinary")!.History()[0].ToJsonString()
+        );
         Assert.All(manager.Owners(), owner => Assert.Null(owner.WaitSnapshot()));
     }
 
@@ -146,18 +207,35 @@ public sealed class SessionStartupMemoryTests(ITestOutputHelper output)
         await using var peer = new Peer();
         try
         {
-            await using (var seed = new SessionManager(data, work, peer.Options, HostModels.ForTest(peer.Options)))
+            await using (
+                var seed = new SessionManager(
+                    data,
+                    work,
+                    peer.Options,
+                    HostModels.ForTest(peer.Options)
+                )
+            )
             {
                 await seed.LoadAsync();
                 var owner = await seed.CreateNamedAsync("main", "exec-owner", null, null);
-                var result = await owner.Executor.ExecuteAsync(owner.Id, new JsonObject
-                {
-                    ["command"] = $"while [ ! -f '{release}' ]; do sleep .05; done; printf completed",
-                    ["timeout"] = 1,
-                }, default);
+                var result = await owner.Executor.ExecuteAsync(
+                    owner.Id,
+                    new JsonObject
+                    {
+                        ["command"] =
+                            $"while [ ! -f '{release}' ]; do sleep .05; done; printf completed",
+                        ["timeout"] = 1,
+                    },
+                    default
+                );
                 Assert.Contains("Switched to background", result["output"]!.GetValue<string>());
             }
-            await using var manager = new SessionManager(data, work, peer.Options, HostModels.ForTest(peer.Options));
+            await using var manager = new SessionManager(
+                data,
+                work,
+                peer.Options,
+                HostModels.ForTest(peer.Options)
+            );
             Assert.Empty(manager.Catalog.RestartIds());
             await manager.LoadMainHostAsync();
             var recovered = Assert.Single(manager.Owners());
@@ -214,14 +292,25 @@ public sealed class SessionStartupMemoryTests(ITestOutputHelper output)
                 while (!stop.IsCancellationRequested)
                 {
                     var context = await listener.GetContextAsync().WaitAsync(stop.Token);
-                    Requests.Enqueue(await new StreamReader(context.Request.InputStream).ReadToEndAsync());
-                    var payload = """{"type":"response.completed","response":{"id":"synthetic-startup","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Synthetic work received."}]}],"usage":{"input_tokens":10,"output_tokens":3}}}""";
+                    Requests.Enqueue(
+                        await new StreamReader(context.Request.InputStream).ReadToEndAsync()
+                    );
+                    var payload =
+                        """{"type":"response.completed","response":{"id":"synthetic-startup","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Synthetic work received."}]}],"usage":{"input_tokens":10,"output_tokens":3}}}""";
                     context.Response.ContentType = "text/event-stream";
-                    await context.Response.OutputStream.WriteAsync(Encoding.UTF8.GetBytes("data: " + payload + "\n\n"));
+                    await context.Response.OutputStream.WriteAsync(
+                        Encoding.UTF8.GetBytes("data: " + payload + "\n\n")
+                    );
                     context.Response.Close();
                 }
             }
-            catch (Exception error) when (stop.IsCancellationRequested && error is OperationCanceledException or HttpListenerException or ObjectDisposedException) { }
+            catch (Exception error)
+                when (stop.IsCancellationRequested
+                    && error
+                        is OperationCanceledException
+                            or HttpListenerException
+                            or ObjectDisposedException
+                ) { }
         }
 
         public async ValueTask DisposeAsync()

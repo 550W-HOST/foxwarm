@@ -317,7 +317,10 @@ public sealed class SessionAdmissionTests
         Assert.Equal(new[] { "broken" }, reads);
         Assert.Null(manager.Find("deadline"));
         Assert.Equal(raw.ToJsonString(), await File.ReadAllTextAsync(file));
-        Assert.Equal("original", manager.CatalogMetadata("deadline")!.Wait!["id"]!.GetValue<string>());
+        Assert.Equal(
+            "original",
+            manager.CatalogMetadata("deadline")!.Wait!["id"]!.GetValue<string>()
+        );
     }
 
     [Fact]

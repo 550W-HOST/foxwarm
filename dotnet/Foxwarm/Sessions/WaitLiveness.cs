@@ -207,9 +207,13 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
         var legacyFingerprint = Fingerprint(legacyObserved);
         var prior = owner is null
             ? SessionWait.Strings(manager.Catalog.Get(id)?["meta"]?["waitLivenessFingerprints"])
-            : owner.Entry.WithState(state => SessionWait.Strings(state.Meta["waitLivenessFingerprints"]));
-        if (prior.Contains(fingerprint, StringComparer.Ordinal)
-            || prior.Contains(legacyFingerprint, StringComparer.Ordinal))
+            : owner.Entry.WithState(state =>
+                SessionWait.Strings(state.Meta["waitLivenessFingerprints"])
+            );
+        if (
+            prior.Contains(fingerprint, StringComparer.Ordinal)
+            || prior.Contains(legacyFingerprint, StringComparer.Ordinal)
+        )
             return;
         var item = SessionWait.Event(
             "wait-sources-quiescent",
@@ -257,9 +261,14 @@ internal sealed class WaitLiveness(SessionManager manager) : IAsyncDisposable
                         // against the admitted authority too; ordinary Source receipts and stale wait
                         // tokens remain checked by the save lane before delivery.
                         var owner = await manager.GetExistingAsync(id);
-                        if (owner is null || owner.Entry.WithState(state =>
-                            SessionWait.Strings(state.Meta["waitLivenessFingerprints"])
-                                .Contains(wake.LegacyFingerprint, StringComparer.Ordinal)))
+                        if (
+                            owner is null
+                            || owner.Entry.WithState(state =>
+                                SessionWait
+                                    .Strings(state.Meta["waitLivenessFingerprints"])
+                                    .Contains(wake.LegacyFingerprint, StringComparer.Ordinal)
+                            )
+                        )
                             return;
                         await manager.AdmitWaitEventAsync(id, wake.Item);
                         while (!lifetime.IsCancellationRequested)

@@ -426,7 +426,10 @@ public sealed class WaitLivenessSourceTests
         var oracle = await Source(Path.Combine(temp.Path, "oracle"), "idle");
         await using var peer = new Peer();
         await using var manager = new SessionManager(
-            data, work, peer.Options, HostModels.ForTest(peer.Options)
+            data,
+            work,
+            peer.Options,
+            HostModels.ForTest(peer.Options)
         );
         var reads = new ConcurrentBag<string>();
         manager.AdmissionReadObserved = reads.Add;
