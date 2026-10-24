@@ -41,12 +41,25 @@ test('composer drafts serialize exact ordered text and pasted-text segments', ()
   assert.equal(getPlainComposerDraftText(makePlainComposerDraft('typed <pasted-text>x</pasted-text>')), 'typed <pasted-text>x</pasted-text>')
 })
 
-test('large plain-text paste threshold uses Unicode code points or twenty lines and rejects closing delimiter collisions', () => {
-  assert.equal(canConvertPasteToBlock('😀'.repeat(1999)), false)
-  assert.equal(canConvertPasteToBlock('😀'.repeat(2000)), true)
-  assert.equal(canConvertPasteToBlock(Array.from({ length: 19 }, () => 'line').join('\n')), false)
-  assert.equal(canConvertPasteToBlock(Array.from({ length: 20 }, () => 'line').join('\n')), true)
-  assert.equal(canConvertPasteToBlock(`${'x'.repeat(2000)}</pasted-text>`), false)
+test('plain-text paste converts at 1,000 Unicode code points or ten lines', () => {
+  assert.equal(canConvertPasteToBlock(''), false)
+  assert.equal(canConvertPasteToBlock('😀'.repeat(999)), false)
+  assert.equal(canConvertPasteToBlock('😀'.repeat(1000)), true)
+  assert.equal(canConvertPasteToBlock('x'.repeat(999)), false)
+  assert.equal(canConvertPasteToBlock('x'.repeat(1000)), true)
+  for (const newline of ['\n', '\r', '\r\n']) {
+    assert.equal(canConvertPasteToBlock(Array(9).fill('line').join(newline)), false)
+    assert.equal(canConvertPasteToBlock(Array(10).fill('line').join(newline)), true)
+    assert.equal(canConvertPasteToBlock(newline.repeat(8)), false)
+    assert.equal(canConvertPasteToBlock(newline.repeat(9)), true)
+  }
+  assert.equal(canConvertPasteToBlock('a\r\nb\rc\nd\r\ne\rf\ng\r\nh\ri'), false)
+  assert.equal(canConvertPasteToBlock('a\r\nb\rc\nd\r\ne\rf\ng\r\nh\ri\n'), true)
+})
+
+test('plain-text paste rejects closing delimiter collisions above either threshold', () => {
+  assert.equal(canConvertPasteToBlock(`${'x'.repeat(1000)}</pasted-text>`), false)
+  assert.equal(canConvertPasteToBlock(`${'\n'.repeat(9)}</pasted-text>`), false)
 })
 
 test('structured storage reads old plain strings and writes only the versioned segment shape', () => {

@@ -354,6 +354,40 @@ for (const spec of browsers) {
 }
 
 for (const spec of browsers) {
+  test(`${spec.name} converts each paste at 1,000 code points or ten lines and prioritizes clipboard files`, async () => withBrowser(spec, async page => {
+    const chipCount = () => page.$eval('[role="textbox"][aria-label="Message"]', node => node.querySelectorAll('[data-composer-pasted-text-id]').length)
+    await page.click('[role="textbox"][aria-label="Message"]')
+    const first = '😀'.repeat(999)
+    await page.evaluate(text => window.fixturePaste(text), first)
+    await page.evaluate(() => window.fixturePaste('x'))
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `${first}x`)
+    assert.equal(await chipCount(), 0, 'separate small pastes remain ordinary even when the total reaches 1,000 code points')
+
+    const characters = '😀'.repeat(1000)
+    await page.evaluate(text => { window.fixtureSelectAll(); window.fixturePaste(text) }, characters)
+    assert.equal(await chipCount(), 1)
+    assert.equal(await page.evaluate(() => window.fixtureDraft), `<pasted-text>${characters}</pasted-text>`)
+
+    for (const [text, converts] of [[Array(9).fill('line').join('\n'), false], ['\n'.repeat(9), true]]) {
+      await page.evaluate(text => { window.fixtureSelectAll(); window.fixturePaste(text) }, text)
+      assert.equal(await chipCount(), converts ? 1 : 0)
+      assert.equal(await page.evaluate(() => window.fixtureDraft), converts ? `<pasted-text>${text}</pasted-text>` : text)
+    }
+
+    await page.evaluate(() => {
+      window.fixtureSelectAll()
+      const data = new DataTransfer()
+      data.setData('text/plain', 'x'.repeat(1000))
+      data.items.add(new File(['image'], 'photo.png', { type: 'image/png' }))
+      data.items.add(new File(['file'], 'notes.txt', { type: 'text/plain' }))
+      const event = new Event('paste', { bubbles: true, cancelable: true })
+      Object.defineProperty(event, 'clipboardData', { value: data })
+      window.fixtureEditor().dispatchEvent(event)
+    })
+    assert.equal(await chipCount(), 0)
+    assert.equal(await page.evaluate(() => window.fixtureDraft), '<attachment-ref ref="attachment1" /><attachment-ref ref="attachment2" />')
+  }))
+
   test(`${spec.name} edits pasted-text blocks without resetting native text flow`, async () => withBrowser(spec, async page => {
     const editor = '[role="textbox"][aria-label="Message"]'
     await page.type(editor, 'before')
@@ -413,7 +447,7 @@ for (const spec of browsers) {
     await page.type(editor, 'typed <pasted-text>literal</pasted-text>')
     assert.equal(await page.$eval(editor, node => node.querySelectorAll('[data-composer-pasted-text-id]').length), 0)
     assert.equal(await page.evaluate(() => window.fixtureDraft), 'typed <pasted-text>literal</pasted-text>')
-    await page.evaluate(() => { window.fixtureSelectAll(); window.fixturePaste(`${'a'.repeat(2000)}</pasted-text>`) })
+    await page.evaluate(() => { window.fixtureSelectAll(); window.fixturePaste(`${'a'.repeat(1000)}</pasted-text>`) })
     assert.equal(await page.$eval(editor, node => node.querySelectorAll('[data-composer-pasted-text-id]').length), 0)
     await page.evaluate(() => { window.fixtureSelectAll(); window.fixturePaste('b'.repeat(2000)) })
     await page.click('.foxwarm-composer-pasted-text-chip')

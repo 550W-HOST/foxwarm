@@ -57,7 +57,7 @@ export function canConvertPasteToBlock(text: string): boolean {
   if (text.includes(PASTED_TEXT_CLOSE)) return false
   const characterCount = Array.from(text).length
   const lineCount = text.length === 0 ? 0 : text.split(/\r\n|\r|\n/).length
-  return characterCount >= 2000 || lineCount >= 20
+  return characterCount >= 1000 || lineCount >= 10
 }
 
 function isStructuredDraft(value: unknown): value is ComposerDraft {
