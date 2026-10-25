@@ -242,8 +242,7 @@ try {
         const url = new URL(response.url())
         return response.request().method() === 'PUT' && url.pathname === '/api/vscode-web/fs/write-file' && url.searchParams.get('nodeId') === 'master' && url.searchParams.get('path') === workspaceFile
       }, { timeout: 22000 })
-      await palette(code, 'Foxwarm: Open Foxwarm data folder')
-      const workspaceResponse = await workspaceWritten
+      const [workspaceResponse] = await Promise.all([workspaceWritten, palette(code, 'Foxwarm: Open Foxwarm data folder')])
       assert.equal(workspaceResponse.status(), 200, await workspaceResponse.text())
       assert.equal((await workspaceResponse.json()).success, true)
       const roots = (await fixture.api('GET', '/api/vscode-web/fs/workspace-roots')).body; assert.equal(roots.roots.data.nodeId, 'master')
