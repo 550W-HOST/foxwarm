@@ -3,12 +3,144 @@ using System.Net;
 using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Foxwarm.Models;
 
 namespace Foxwarm.Tests;
 
 public sealed class StartupDiagnosticsTests
 {
+    [Theory]
+    [InlineData("normal")]
+    [InlineData("stderr")]
+    [InlineData("failed-file")]
+    public async Task Main_capture_completes_mixed_console_writers_and_flushes_owned_records(
+        string mode
+    )
+    {
+        if (mode == "failed-file" && !OperatingSystem.IsLinux())
+            return;
+        using var temp = new TempDirectory();
+        var state = Path.Combine(temp.Path, "state");
+        Directory.CreateDirectory(state);
+        await File.WriteAllTextAsync(Path.Combine(state, "config.yaml"), "vector: false\n");
+        var logPath = Path.Combine(state, "logs", "foxwarm.log");
+        if (mode == "failed-file")
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+            File.CreateSymbolicLink(logPath, "/dev/full");
+        }
+        var start = new ProcessStartInfo(
+            Path.Combine(Environment.GetEnvironmentVariable("DOTNET_ROOT")!, "dotnet")
+        )
+        {
+            WorkingDirectory = temp.Path,
+            ArgumentList =
+            {
+                Path.Combine(AppContext.BaseDirectory, "Foxwarm.DevTools.dll"),
+                "mainlog-fixture",
+                temp.Path,
+                mode,
+            },
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (
+            var key in start
+                .Environment.Keys.Where(key =>
+                    key.StartsWith("FOXWARM_", StringComparison.Ordinal)
+                    || key is "CONFIG_PATH" or "MCP_CONFIG_PATH" or "ASPNETCORE_URLS"
+                )
+                .ToArray()
+        )
+            start.Environment.Remove(key);
+        start.Environment["FOXWARM_DATA_DIR"] = temp.Path;
+        if (mode == "stderr")
+            start.Environment["FOXWARM_LOG_STDERR"] = "1";
+        using var process = Process.Start(start)!;
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        try
+        {
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Equal(0, process.ExitCode);
+            var output = (await stdout).Replace("\r\n", "\n");
+            var errors = (await stderr).Replace("\r\n", "\n");
+            var ordinary = Enumerable
+                .Range(0, 10000)
+                .Select(index => "ordinary startup " + index);
+            var diagnostics = Enumerable
+                .Range(0, 10000)
+                .SelectMany(index => new[]
+                {
+                    "timer diagnostic " + index,
+                    "   at supported delivery",
+                });
+            if (mode == "stderr")
+                Assert.Empty(output);
+            else
+                Assert.Equal(
+                    string.Join('\n', ordinary) + "\npartial stdoutretained stdout\n",
+                    output
+                );
+            if (mode == "failed-file")
+            {
+                Assert.Contains("Main file logging failed:", errors);
+                Assert.Equal(
+                    Enumerable.Range(0, 10000).Select(index => "timer diagnostic " + index).Order(),
+                    Regex.Matches(errors, @"timer diagnostic \d+").Select(match => match.Value).Order()
+                );
+                Assert.Equal(10000, Regex.Matches(errors, "   at supported delivery").Count);
+                Assert.Contains("partial stderr", errors);
+                Assert.EndsWith("retained stderr\n", errors);
+                return;
+            }
+            var tail =
+                mode == "stderr"
+                    ? "partial stdoutpartial stderrretained stdout\nretained stderr\n"
+                    : "partial stderrretained stderr\n";
+            Assert.EndsWith(tail, errors);
+            const string consoleMessage = @"ordinary startup \d+|timer diagnostic \d+|   at supported delivery";
+            var prefix = errors[..^tail.Length];
+            Assert.Equal(
+                (mode == "stderr" ? ordinary.Concat(diagnostics) : diagnostics).Order(),
+                Regex.Matches(prefix, consoleMessage).Select(match => match.Value).Order()
+            );
+            Assert.Equal(
+                new string('\n', mode == "stderr" ? 30000 : 20000),
+                Regex.Replace(prefix, consoleMessage, "")
+            );
+            Assert.Equal(
+                "30000",
+                await File.ReadAllTextAsync(Path.Combine(temp.Path, "completed-records"))
+            );
+            var records = File.ReadLines(logPath)
+                .Select(line => line[(line.IndexOf("] ", StringComparison.Ordinal) + 2)..])
+                .ToArray();
+            Assert.Equal(
+                ordinary
+                    .Select(line => "INFO: " + line)
+                    .Concat(diagnostics.Select(line => "ERROR: " + line))
+                    .Order(),
+                records[..^2].Order()
+            );
+            Assert.Equal(
+                new[] { "INFO: partial stdout", "ERROR: partial stderr" },
+                records[^2..]
+            );
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill();
+                await process.WaitForExitAsync();
+            }
+            await stdout;
+            await stderr;
+        }
+    }
+
     [Theory]
     [InlineData("occupied-http")]
     [InlineData("catalog")]
