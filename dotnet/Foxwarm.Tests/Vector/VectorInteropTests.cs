@@ -137,7 +137,7 @@ public sealed class VectorInteropTests
     }
 
     [Fact]
-    public async Task Real_Source_to_CSharp_to_Source_indexing_preserves_Archive_progress_Lance_rows_and_lineage_clipping()
+    public async Task Real_Source_index_rebuild_and_managed_cold_reopen_preserve_Archive_progress_Lance_rows_and_lineage_clipping()
     {
         await using var f = await VectorFixture.CreateAsync();
         const string id = "main/interop";
@@ -210,36 +210,33 @@ public sealed class VectorInteropTests
             Assert.Contains(clipped.Hits, hit => VectorRuntime.Integer(hit["end_seq"]) == 2);
             await runtime.Lexical.WaitForIdleAsync();
         }
-        input["append"] = Record(id, 4, "violet Source fourth");
-        input["options"] = new JsonObject
+        Assert.Equal(3, archive.VectorCheckpoint().RawLastIndexedSeq);
+        Assert.Equal(1, archive.VectorCheckpoint().LastIndexedBlockId);
+        var fourth = Record(id, 4, "violet managed fourth");
+        archive.WriteMessages([
+            ArchiveMessageRecord.Create(id, "main", 4, 4000, fourth["message"]!.AsObject()),
+        ]);
+        await using (var restarted = new VectorRuntime(root, VectorConfiguration.Capture(config)))
         {
-            ["lineageSessions"] = new JsonArray(
-                new JsonObject
-                {
-                    ["sessionId"] = id,
-                    ["maxMessageSeq"] = 2,
-                    ["maxBlockId"] = 0,
-                }
-            ),
-        };
-        await File.WriteAllTextAsync(inputPath, EcmaJson.Stringify(input));
-        var returned = await VectorFixture.SourceAsync(
-            "storage-return",
-            root,
-            inputPath,
-            Path.Combine(f.Temp.Path, "source-returned.json")
-        );
-        Assert.Equal(3, returned["checkpoint"]!["rawLastIndexedSeq"]!.GetValue<long>());
-        Assert.Equal(1, returned["checkpoint"]!["lastIndexedBlockId"]!.GetValue<long>());
-        Assert.Equal(3, returned["rows"]!.AsArray().Count);
-        Assert.Contains(
-            returned["rows"]!.AsArray(),
-            row => row!["id"]!.GetValue<string>() == id + ":1-4:0"
-        );
-        Assert.All(
-            returned["hits"]!.AsArray(),
-            hit => Assert.DoesNotContain("fourth", hit!.ToJsonString())
-        );
+            await restarted.StartAsync();
+            await restarted.WaitForStartupAsync();
+            var clipped = await restarted.SearchAsync(
+                "violet", 10, new(LineageSessions: [new(id, 2, 0)])
+            );
+            Assert.All(clipped.Hits, hit =>
+            {
+                Assert.DoesNotContain("CSharp third", hit.ToJsonString());
+                Assert.DoesNotContain("managed fourth", hit.ToJsonString());
+            });
+            Assert.Contains(clipped.Hits, hit => VectorRuntime.Integer(hit["end_seq"]) == 2);
+        }
+        using (var table = new VectorTable())
+        {
+            await table.OpenAsync(Path.Combine(root, "state", "db"));
+            var rows = await table.SearchAsync(VectorEmbeddingPeer.Embedding("violet"), null, 10);
+            Assert.Equal(3, rows.Count);
+            Assert.Contains(rows, row => row["id"]!.GetValue<string>() == id + ":1-4:0");
+        }
         Assert.Equal(4, archive.VectorCheckpoint().RawLastIndexedSeq);
         using var reopened = ArchiveSearchIndex.Open(
             Path.Combine(root, "state", "db", "archive-search.sqlite")

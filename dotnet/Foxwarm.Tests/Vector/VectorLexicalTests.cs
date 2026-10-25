@@ -6,10 +6,10 @@ using Microsoft.Data.Sqlite;
 namespace Foxwarm.Tests;
 
 [Collection("Vector native")]
-public sealed class VectorLexicalTests
+public sealed partial class VectorLexicalTests
 {
     [Fact]
-    public void Fts_documents_and_checkpoint_roll_back_together_and_reopen_with_the_Source_schema()
+    public void Fts_documents_and_checkpoint_roll_back_together_and_reopen_with_the_current_schema()
     {
         using var temp = new TempDirectory();
         var path = Path.Combine(temp.Path, "fts.sqlite");

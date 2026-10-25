@@ -33,4 +33,4 @@ The pinned Linux x64 assets require glibc 2.39; the package has no Linux-musl or
 
 ## Tests
 
-`VectorRecipeTests`, `VectorStorageTests`, `VectorInteropTests`, `VectorCompactionTests`, and `VectorMaintenanceTests` use controlled loopback embeddings, actual native tables, actual committed Archive, and frozen TypeScript comparisons. The interop fixture crosses Source → C# → Source, including progress, schema, Lance rows and fork caps. No live provider, Agent or data root is required.
+`VectorRecipeTests`, `VectorStorageTests`, `VectorInteropTests`, `VectorCompactionTests`, and `VectorMaintenanceTests` use controlled loopback embeddings, actual native tables, actual committed Archive, and frozen TypeScript comparisons. The interop fixture retains Source-produced inputs and checks managed indexing/cold reopen, including progress, schema, Lance rows and fork caps. Legacy lexical normalizers rebuild through the existing derived-index lifecycle; returning current normalized output to retired Source is not a compatibility requirement. No live provider, Agent or data root is required.

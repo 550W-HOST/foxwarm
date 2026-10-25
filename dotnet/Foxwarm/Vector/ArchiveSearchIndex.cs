@@ -166,7 +166,7 @@ internal sealed class ArchiveSearchIndex : IDisposable
                     var (key, value) in new[]
                     {
                         ("schema_version", "1"),
-                        ("normalizer_version", "1"),
+                        ("normalizer_version", "2"),
                         ("build_generation", Guid.NewGuid().ToString()),
                     }
                 )
@@ -185,7 +185,7 @@ internal sealed class ArchiveSearchIndex : IDisposable
             ) != "1"
             || Convert.ToString(
                 Scalar("SELECT value FROM archive_search_metadata WHERE key='normalizer_version'")
-            ) != "1"
+            ) != "2"
         )
             throw new ArchiveSearchRebuildRequiredException("Archive search DB requires rebuild.");
         RequireObject(

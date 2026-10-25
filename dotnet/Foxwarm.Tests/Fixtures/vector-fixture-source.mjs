@@ -122,18 +122,12 @@ if (mode === 'recipes') {
     output.currentCheckpoint = index.getCheckpoint(input.sessionId)
     index.close()
   }
-} else if (mode === 'storage-create' || mode === 'storage-return') {
+} else if (mode === 'storage-create') {
   const archive = await load('session/archiveStore.js')
   await archive.initArchiveStore()
-  if (mode === 'storage-create') {
-    for (const branch of input.branches || []) await archive.ensureSessionBranch(branch.sessionId, branch)
-    await archive.writeArchiveMessages(input.records)
-    if (input.blocks?.length) await archive.writeArchiveBlocks(input.blocks)
-  } else {
-    const checkpoint = archive.getVectorCheckpointSync(input.sessionId)
-    if (input.append) await archive.writeArchiveMessages([input.append])
-    output = { checkpoint }
-  }
+  for (const branch of input.branches || []) await archive.ensureSessionBranch(branch.sessionId, branch)
+  await archive.writeArchiveMessages(input.records)
+  if (input.blocks?.length) await archive.writeArchiveBlocks(input.blocks)
   await vector.init()
   await vector.waitForStartupArchiveVectorBackfill()
   if (input.facts) await vector.indexMemoryFactsFromCompaction(input.facts)
