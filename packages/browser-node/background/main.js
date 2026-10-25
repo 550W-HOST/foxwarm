@@ -123,17 +123,15 @@ chrome.runtime.onStartup.addListener(() => {
   void resume();
 });
 void resume();
-function tabChanged(tabId) {
-  ws.cancelCalls(
-    (entry) => entry.tabId === tabId && entry.tool !== 'navigate' && entry.tool !== 'close_tab',
-  );
+function tabChanged(tabId, expectedEffect) {
+  ws.cancelCalls((entry) => entry.tabId === tabId && entry.tool !== expectedEffect);
   permissions.cancelConfirmations((entry) => entry.tabId === tabId);
   cdp.invalidate(tabId);
   chrome.runtime.sendMessage({ type: 'sharing_changed' }).catch(() => {});
 }
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (change.url || change.status === 'loading') {
-    tabChanged(tabId);
+    tabChanged(tabId, 'navigate');
     void permissions
       .resolvePermission(tabId)
       .then((level) => {
@@ -142,7 +140,7 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
       .catch(() => {});
   }
 });
-chrome.tabs.onDetached.addListener(tabChanged);
+chrome.tabs.onDetached.addListener((tabId) => tabChanged(tabId));
 chrome.tabs.onAttached.addListener((tabId) => {
   tabChanged(tabId);
   void permissions
@@ -153,7 +151,7 @@ chrome.tabs.onAttached.addListener((tabId) => {
     .catch(() => {});
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
-  tabChanged(tabId);
+  tabChanged(tabId, 'close_tab');
   void storage.removeTabPermission(tabId);
   void cdp.detach(tabId);
 });

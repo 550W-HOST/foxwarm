@@ -516,6 +516,7 @@ try {
   const navigated = await invoke('navigate', { tabId: redTab.id, url: origin + '/navigated' });
   assert(navigated.pageId, JSON.stringify(navigated));
   assert((await invoke('scroll', { tabId: redTab.id, deltaY: 50 })).scrolled);
+  assert((await invoke('close_tab', { tabId: opened.tabId })).closed);
   if (process.env.DISPLAY) {
     // OS keyboard input stays in the person's foreground tab during background fill.
     await blue.bringToFront();
