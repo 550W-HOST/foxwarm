@@ -263,6 +263,8 @@ public sealed partial class LocalSessionTurnHost
                             )
                         )
                     );
+                    if (tools is SessionToolExecutor batchTools)
+                        batchTools.BeginBatch(appended[^1]);
                     var toolParts = await ExecuteToolBatchAsync(
                             ToolCallControls.Plan(
                                 calls,
@@ -302,7 +304,7 @@ public sealed partial class LocalSessionTurnHost
                             ["durationMs"] = duration,
                         };
                     var toolMessage = new JsonObject { ["role"] = "tool", ["parts"] = toolParts };
-                    await AppendHistoryMessageStrictAsync(toolMessage).ConfigureAwait(false);
+                    var canonicalTools = await AppendHistoryMessageStrictAsync(toolMessage).ConfigureAwait(false);
                     entry.StructuredProgress?.Invoke(
                         new(
                             "tool-calls-finish",
@@ -324,7 +326,7 @@ public sealed partial class LocalSessionTurnHost
                     var stopping = entry.WithState(state => state.Stopping);
                     var ending = tools is ITurnToolControl turnControl
                         ? await turnControl
-                            .CompleteBatchAsync(toolMessage, stopping)
+                            .CompleteBatchAsync(canonicalTools[^1], stopping)
                             .ConfigureAwait(false)
                         : TurnBatchEnding.Continue;
                     if (stopping)
@@ -334,6 +336,7 @@ public sealed partial class LocalSessionTurnHost
                         {
                             Terminal = true,
                             Suspended = ending == TurnBatchEnding.Suspended,
+                            ContextCompacted = tools is SessionToolExecutor compactTools && compactTools.BatchCompacted,
                         };
                     AssertCanContinue();
                     await ContinueAfterResultAsync(result, registered.Token).ConfigureAwait(false);
@@ -342,7 +345,15 @@ public sealed partial class LocalSessionTurnHost
                 }
                 finally
                 {
-                    result.FinalizeHistory(null, entry.RecordBestEffortFailure);
+                    try
+                    {
+                        if (tools is SessionToolExecutor batchTools)
+                            await batchTools.EndBatchAsync().ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        result.FinalizeHistory(null, entry.RecordBestEffortFailure);
+                    }
                 }
             }
             throw new ToolLoopLimitException(maxToolIterations);
@@ -652,6 +663,7 @@ public sealed partial class LocalSessionTurnHost
                 meta["timestamp"] = clock();
             message["__meta"] = meta;
             meta["seq"] = nextSeq++;
+            InputWrapperMetadata.StampSequence(message);
             canonicalMessages.Add(message);
         }
 

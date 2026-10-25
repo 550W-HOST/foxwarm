@@ -56,7 +56,8 @@ internal sealed record CompactCandidates(
     int EligibleRawTokens,
     int RequiredRawTokens,
     string? RawSkipped,
-    IReadOnlyList<BlockPolicy> BlockPolicies
+    IReadOnlyList<BlockPolicy> BlockPolicies,
+    bool InContext = false
 )
 {
     public IReadOnlyList<IReadOnlyList<CompactCandidate>> Segments()
@@ -109,10 +110,11 @@ internal static class CompactCandidateBuilder
 
     public static CompactCandidates Build(
         IReadOnlyList<JsonObject> history,
-        double keepPercent = .3
+        double keepPercent = .3,
+        bool inContext = false
     )
     {
-        var split = Split(history, keepPercent);
+        var split = inContext ? history.Count : Split(history, keepPercent);
         var older = history.Take(split).ToArray();
         var seqCounts = new Dictionary<long, int>();
         var blockCounts = new Dictionary<long, int>();
@@ -154,8 +156,8 @@ internal static class CompactCandidateBuilder
                     )
                 )
             );
-            var candidateCount = tokens < 3000 ? 0 : (int)Math.Floor(blocks.Length * .4);
-            var minimum = tokens >= 5000 ? (int)Math.Ceiling(blocks.Length * .2) : 0;
+            var candidateCount = inContext ? blocks.Length : tokens < 3000 ? 0 : (int)Math.Floor(blocks.Length * .4);
+            var minimum = !inContext && tokens >= 5000 ? (int)Math.Ceiling(blocks.Length * .2) : 0;
             prelim[level] = (
                 blocks.Length,
                 tokens,
@@ -360,7 +362,7 @@ internal static class CompactCandidateBuilder
             index = endIndex;
         }
         var rawTokens = entries.Where(item => item.Kind == "message").Sum(item => item.Tokens);
-        var eligible = rawTokens > 2000;
+        var eligible = inContext || rawTokens > 2000;
         if (!eligible)
             entries.RemoveAll(item => item.Kind == "message");
         var policies = new List<BlockPolicy>();
@@ -382,7 +384,7 @@ internal static class CompactCandidateBuilder
                     policy.Minimum,
                     feasible,
                     Math.Min(policy.Minimum, feasible),
-                    policy.Tokens < 3000 ? "below the 3000-token block eligibility threshold"
+                    !inContext && policy.Tokens < 3000 ? "below the 3000-token block eligibility threshold"
                         : policy.Candidate == 0
                             ? "the strict oldest-candidate window is empty at this level size"
                         : policy.Minimum > 0 && feasible == 0
@@ -400,12 +402,13 @@ internal static class CompactCandidateBuilder
             entries,
             preserved,
             eligible ? rawTokens : 0,
-            eligible ? (int)Math.Ceiling(rawTokens * .2) : 0,
+            eligible && !inContext ? (int)Math.Ceiling(rawTokens * .2) : 0,
             eligible ? null
                 : rawTokens > 0
                     ? $"~{rawTokens} raw-message tokens do not exceed the 2000-token eligibility threshold"
                 : "no eligible model-visible raw message candidates",
-            policies
+            policies,
+            inContext
         );
     }
 

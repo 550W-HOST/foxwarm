@@ -32,6 +32,17 @@ internal static class ConcreteRequestHistory
             )
                 source = null;
             var message = copyMessages ? (JsonObject)original.DeepClone() : original;
+            if (SessionWait.Text(message["role"]) == "tool")
+            {
+                var seq = CompactCandidateBuilder.Number(message["__meta"]?["seq"]);
+                foreach (var part in (message["parts"] as JsonArray ?? []).OfType<JsonObject>())
+                    if (part["functionResponse"] is JsonObject response)
+                    {
+                        response.Remove("contextSeq");
+                        if (seq is > 0)
+                            response["contextSeq"] = seq.Value;
+                    }
+            }
             message.Remove("__meta");
             ProjectDisplayMetadata(message);
             if (source is null || source == destinationModelId)

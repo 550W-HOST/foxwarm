@@ -12,6 +12,8 @@ internal sealed partial class SessionToolExecutor(
 ) : ITurnToolExecutor, ITurnToolControl
 {
     private int finishPending;
+    private long? foregroundBatch;
+    internal bool BatchCompacted { get; private set; }
     private int policyUnavailable;
     private readonly List<TurnToolReceipt> turnReceipts = [];
     public bool PolicyUnavailable => Volatile.Read(ref policyUnavailable) != 0;
@@ -219,6 +221,42 @@ internal sealed partial class SessionToolExecutor(
         }
     }
 
+    internal void BeginBatch(JsonObject canonicalAssistant)
+    {
+        foregroundBatch = CompactCandidateBuilder.Number(canonicalAssistant["__meta"]?["seq"]);
+        BatchCompacted = false;
+    }
+
+    internal async Task EndBatchAsync()
+    {
+        var sequence = foregroundBatch;
+        foregroundBatch = null;
+        if (sequence is long seq)
+            await hosted.Compactor.DiscardUnpairedInContextAsync(seq);
+    }
+
+    private JsonObject SubmitCompactPlan(JsonObject args)
+    {
+        if (args["inContext"] is not JsonValue value || !value.TryGetValue<bool>(out var enabled))
+        {
+            if (args.ContainsKey("inContext"))
+                return UnsupportedTurnToolExecutor.ToolError("compact_plan_invalid", "inContext must be a boolean.");
+            return UnsupportedTurnToolExecutor.ToolError("unknown_tool", "submit_compact_plan is available only to the dedicated compactor.");
+        }
+        if (!enabled)
+            return UnsupportedTurnToolExecutor.ToolError("unknown_tool", "submit_compact_plan is available only to the dedicated compactor.");
+        if (unattended || Programmatic || foregroundBatch is not long seq || CurrentCallId.Length == 0)
+            return UnsupportedTurnToolExecutor.ToolError("compact_plan_invalid", "In-context submission requires an ordinary foreground tool batch; nested ToolScript and unattended calls are not supported.");
+        try
+        {
+            return hosted.Compactor.SubmitInContext(args, seq, CurrentCallId);
+        }
+        catch (CompactPlanInvalidException error)
+        {
+            return UnsupportedTurnToolExecutor.ToolError("compact_plan_invalid", error.Message);
+        }
+    }
+
     public void BeginTurn()
     {
         hosted.BeginLogicalTurn();
@@ -260,9 +298,13 @@ internal sealed partial class SessionToolExecutor(
         if (!stopping && handoff && hosted.WaitSnapshot() is null)
             await sessions.StartHandoffWaitAsync(hosted, handoffTargets);
         handoffTargets.Clear();
-        return finish ? TurnBatchEnding.Finished
+        var ending = finish ? TurnBatchEnding.Finished
             : !stopping && (handoff || explicitStop && !errors) ? TurnBatchEnding.Suspended
             : TurnBatchEnding.Continue;
+        if (foregroundBatch is not null && hosted.Compactor.PairInContextSubmission(toolMessage)
+            && ending != TurnBatchEnding.Continue && !stopping)
+            BatchCompacted = await hosted.Compactor.SafePointAsync() == true;
+        return ending;
     }
 
     public async Task<JsonNode?> ExecuteAsync(
@@ -782,13 +824,8 @@ internal sealed partial class SessionToolExecutor(
         handlers["stop_session"] = (owner, args, token) =>
             ArchiveControlTools.StopAsync(owner.Manager, owner.Hosted, args, token);
         handlers["wait"] = (owner, args, _) => owner.ExecuteWaitAsync(args);
-        handlers["submit_compact_plan"] = (_, _, _) =>
-            Task.FromResult(
-                UnsupportedTurnToolExecutor.ToolError(
-                    "unknown_tool",
-                    "submit_compact_plan is available only to the dedicated compactor."
-                )
-            );
+        handlers["submit_compact_plan"] = (owner, args, _) =>
+            Task.FromResult(owner.SubmitCompactPlan(args));
         handlers["task"] = (owner, args, token) => owner.ExecuteTaskAsync(args, token);
         foreach (
             var name in new[]

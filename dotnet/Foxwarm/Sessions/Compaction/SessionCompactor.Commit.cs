@@ -72,7 +72,8 @@ internal sealed partial class SessionCompactor
             AppendRetained(
                 original.History.Skip(cursor).Take(op.HistoryStart - cursor),
                 plan.Remove,
-                history
+                history,
+                candidates.InContext
             );
             history.Add(HistoryMessage.FromJson(record.ToMessage()));
             foreach (
@@ -91,10 +92,18 @@ internal sealed partial class SessionCompactor
         AppendRetained(
             original.History.Skip(cursor).Take(candidates.Split - cursor),
             plan.Remove,
-            history
+            history,
+            candidates.InContext
         );
         history.AddRange(live.History.Skip(candidates.Split));
         history.RemoveAll(record => CompactCandidateBuilder.Completion(record.ToJson()));
+        var consumed = original.History.Take(candidates.Split);
+        if (candidates.InContext)
+            consumed = consumed.Where((row, index) =>
+                !(row.Sequence is long kept && plan.Preserve.Contains(kept))
+                && (row.Sequence is long removed && plan.Remove.Contains(removed)
+                    || plan.Operations.Any(op => index >= op.HistoryStart && index <= op.HistoryEnd))
+            );
         var completion = new JsonObject
         {
             ["role"] = "user",
@@ -104,13 +113,14 @@ internal sealed partial class SessionCompactor
                     ["system"] = CompletionMarker(
                         live.Id,
                         SessionWait.Text(live.AuthorityEnvelope["parentSessionId"]),
-                        CompactedSkillNames(original.History.Take(candidates.Split)),
+                        CompactedSkillNames(consumed),
                         now
                     ),
                 }
             ),
             ["__meta"] = new JsonObject { ["seq"] = live.NextMessageSeq, ["timestamp"] = now },
         };
+        InputWrapperMetadata.StampSequence(completion);
         if (plan.Planner is not null)
             completion["compaction"] = new JsonObject { ["planner"] = plan.Planner.ToJson() };
         history.Add(HistoryMessage.FromJson(completion));
@@ -150,13 +160,14 @@ internal sealed partial class SessionCompactor
     private static void AppendRetained(
         IEnumerable<HistoryMessage> source,
         IReadOnlySet<long> removed,
-        List<HistoryMessage> output
+        List<HistoryMessage> output,
+        bool retainDisplayOnly
     )
     {
         foreach (var record in source)
         {
             var row = record.ToJson();
-            if (!CompactCandidateBuilder.Visible(row) || CompactCandidateBuilder.Completion(row))
+            if (!retainDisplayOnly && !CompactCandidateBuilder.Visible(row) || CompactCandidateBuilder.Completion(row))
                 continue;
             var seq = record.Sequence;
             if (

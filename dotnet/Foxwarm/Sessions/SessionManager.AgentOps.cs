@@ -294,6 +294,7 @@ internal sealed partial class SessionManager
                                 ["seq"] = state.NextMessageSeq,
                             },
                         };
+                        InputWrapperMetadata.StampSequence(message);
                         var snapshot = state.Snapshot();
                         var meta = (JsonObject)snapshot.Meta.DeepClone();
                         meta["messageCount"] = snapshot.History.Count + 1;

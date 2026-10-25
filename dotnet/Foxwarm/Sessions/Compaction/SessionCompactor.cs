@@ -56,6 +56,7 @@ internal sealed partial class SessionCompactor
             Ready,
             OwnsProcessor;
         internal int Finished;
+        internal InContextSubmission? Submission;
         internal CompactCandidates? Candidates;
         internal CompactPlan? Plan;
         internal string? CacheKey;
@@ -105,7 +106,8 @@ internal sealed partial class SessionCompactor
         get
         {
             lock (gate)
-                return active is { Background: true, Ready: true, Applying: false } run
+                return active is { Ready: true, Applying: false } run
+                    && (run.Background || run.Submission is not null)
                     && !run.Cancellation.IsCancellationRequested;
         }
     }
@@ -312,6 +314,8 @@ internal sealed partial class SessionCompactor
 
     public async Task<bool> AutoAfterTurnAsync(ChatResult result)
     {
+        if (result.ContextCompacted)
+            return true;
         var total = UsageTotal(result);
         if (total <= 0)
             return false;
@@ -596,7 +600,8 @@ internal sealed partial class SessionCompactor
         {
             run = active;
             if (
-                run is not { Background: true, Ready: true, Applying: false }
+                run is not { Ready: true, Applying: false }
+                || !(run.Background || run.Submission is not null)
                 || run.Cancellation.IsCancellationRequested
             )
                 return null;
