@@ -49,6 +49,7 @@ const methods = [
   { id: 'interactive', label: 'Interactive CLI', detail: 'Open the CLI with local tool approvals and chat.' },
   { id: 'shell', label: 'Shell', detail: 'Use POSIX sh and curl for commands only.' },
   { id: 'docker', label: 'Docker', detail: 'Run the CLI Node in a container.' },
+  { id: 'browser', label: 'Browser', detail: 'Share existing Chrome or Chromium tabs and windows.' },
   { id: 'windows', label: 'Windows', detail: 'Download and run the PowerShell launcher.' },
 ]
 
@@ -64,7 +65,7 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
   const [commands, setCommands] = useState<Commands>({})
   const [tokenMode, setTokenMode] = useState(false)
   const [created, setCreated] = useState<CreatedNode | null>(null)
-  const direct = method === 'shell' || tokenMode
+  const direct = method !== 'browser' && (method === 'shell' || tokenMode)
   const address = direct && created ? created.baseUrl : baseUrl
   const name = direct && created ? created.nodeId : nodeId
   const [install, setInstall] = useState(false)
@@ -72,6 +73,7 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
+  const [browserSetup, setBrowserSetup] = useState<{ baseUrl: string; pairingToken: string } | null>(null)
   const [approving, setApproving] = useState<string | null>(null)
   const [approvalError, setApprovalError] = useState('')
   const [approvalNotice, setApprovalNotice] = useState('')
@@ -96,7 +98,7 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
     const escape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') closeRef.current()
       if (event.key !== 'Tab') return
-      const controls = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)') || [])]
+      const controls = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), a[href]') || [])]
       const first = controls[0]; const last = controls[controls.length - 1]
       if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
@@ -141,6 +143,12 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
       if (mounted.current) { setApprovalError(failure instanceof Error ? failure.message : 'Could not approve this request.'); await pending.refresh() }
     } finally { if (mounted.current) setApproving(null) }
   }
+  const loadBrowserSetup = async () => {
+    setBusy(true); setError('');
+    try { const payload = await post('browser', { baseUrl }); if (mounted.current) setBrowserSetup(payload) }
+    catch (failure) { if (mounted.current) setError(failure instanceof Error ? failure.message : 'Could not load Browser setup.') }
+    finally { if (mounted.current) setBusy(false) }
+  }
   const commandKey = method === 'bareMetal' && install ? 'bareMetalInstall' : method === 'docker' && compose ? 'manualCompose' : method
   const command = (direct ? created?.commands[commandKey] : commands[commandKey]) || ''
   const fieldClass = 'mt-1 w-full rounded-lg border border-fw-border bg-fw-canvas px-3 py-2 text-sm text-fw-text-strong outline-none focus:border-fw-accent-border'
@@ -148,9 +156,22 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3" onClick={event => { if (event.target === event.currentTarget) close() }}>
       <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="node-onboarding-title" className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-fw-border bg-fw-surface p-5 text-fw-text shadow-xl">
-        <div className="flex items-center justify-between gap-3"><div><h2 id="node-onboarding-title" className="text-lg font-semibold text-fw-text-strong">New nodes</h2><p className="mt-1 text-sm text-fw-text-muted">Choose a setup method, then run the command on your new Node.</p></div><button type="button" aria-label="Close New nodes" onClick={close} className="rounded-lg p-2 hover:bg-fw-hover"><X className="h-5 w-5" /></button></div>
+        <div className="flex items-center justify-between gap-3"><div><h2 id="node-onboarding-title" className="text-lg font-semibold text-fw-text-strong">New nodes</h2><p className="mt-1 text-sm text-fw-text-muted">Choose how to connect a new Node.</p></div><button type="button" aria-label="Close New nodes" onClick={close} className="rounded-lg p-2 hover:bg-fw-hover"><X className="h-5 w-5" /></button></div>
         <div className="mt-4 flex flex-wrap gap-2">{methods.map(item => <button key={item.id} type="button" disabled={busy} aria-pressed={method === item.id} onClick={() => { setMethod(item.id); setCopied(false); setError('') }} className={`rounded-lg border px-3 py-2 text-sm ${method === item.id ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent' : 'border-fw-border hover:bg-fw-hover'}`}>{item.label}</button>)}</div>
         <p className="mt-2 text-xs text-fw-text-muted">{methods.find(item => item.id === method)?.detail}</p>
+        {method === 'browser' ? <div className="mt-4 space-y-3 text-sm">
+          <ol className="list-decimal space-y-2 pl-5">
+            <li><a className="text-fw-accent underline" href={`${API_BASE_PATH.slice(0, -4)}/node/browser-extension.zip`} download>Download Browser Node</a> and extract the ZIP.</li>
+            <li>Open Chrome or Chromium extensions, enable Developer mode, choose Load unpacked, and select the extracted folder.</li>
+            <li>Open the extension, enter the Main address and pairing token below, then Connect. Approve the request in Pending approvals.</li>
+            <li>Share a tab or window with Ask or Auto in the extension. New tabs are Off unless a shared window or site rule includes them.</li>
+          </ol>
+          <p>Page operations show Chrome’s debugging banner. Cancel or the extension’s Stop button stops Browser Node. Sharing is controlled by the extension; debugger permission is not isolated by window. Avoid editing the same tab at the same time as an Agent.</p>
+          <label className="block text-xs font-medium">Main address<input aria-label="Browser Main address" disabled={busy} value={baseUrl} onChange={event => { setBaseUrl(event.target.value); setBrowserSetup(null) }} className={fieldClass} /></label>
+          <button type="button" disabled={busy || !baseUrl} onClick={() => void loadBrowserSetup()} className="rounded-lg border border-fw-border px-3 py-2">Show pairing details</button>
+          {browserSetup ? <div className="space-y-2 rounded-lg border border-fw-border p-3"><p className="break-all">{browserSetup.baseUrl}</p><label className="block text-xs">Pairing token<input aria-label="Browser pairing token" type="password" readOnly value={browserSetup.pairingToken} className={fieldClass} /></label><button type="button" onClick={() => void navigator.clipboard.writeText(browserSetup.pairingToken).catch(() => setError('Copy failed. Select the token and copy it manually.'))}>Copy pairing token</button><p className="text-xs text-fw-text-muted">Keep this token private. The extension download contains no credentials.</p></div> : null}
+        </div> : null}
+        {method !== 'browser' ? <>
         {method !== 'shell' ? <fieldset disabled={busy} className="mt-3 flex flex-wrap gap-4 text-sm"><legend className="mb-1 text-xs font-medium">Authentication</legend>{[{ value: false, label: 'Pairing approval' }, { value: true, label: 'Pre-created token' }].map(mode => <label key={mode.label} className="flex items-center gap-2"><input type="radio" name="node-authentication" checked={tokenMode === mode.value} onChange={() => { setTokenMode(mode.value); setCopied(false); setError('') }} />{mode.label}</label>)}</fieldset> : null}
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <label className="text-xs font-medium">Reachable address<input aria-label="Reachable address" disabled={busy || (direct && !!created)} value={address} onChange={event => { setBaseUrl(event.target.value); setCommands({}); setCopied(false) }} className={fieldClass} /></label>
@@ -167,6 +188,7 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
         {error ? <p role="alert" className="mt-3 text-sm text-fw-danger">{error}</p> : null}
         {command ? <div className="mt-4 rounded-xl border border-fw-border bg-fw-canvas"><div className="flex items-center justify-between gap-2 border-b border-fw-border px-3 py-2"><span className="text-xs text-fw-text-muted">Run on the new Node</span><button type="button" onClick={() => { void navigator.clipboard.writeText(command).then(() => { if (mounted.current) setCopied(true) }).catch(() => { if (mounted.current) setError('Copy failed. Select the command and copy it manually.') }) }} className="inline-flex items-center gap-1.5 text-xs font-medium text-fw-accent">{copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}{copied ? 'Copied' : 'Copy command'}</button></div><pre data-node-command className="overflow-x-auto whitespace-pre-wrap break-all p-3 text-xs leading-5"><code>{command}</code></pre></div> : null}
         <p className="mt-2 text-xs text-fw-text-muted">Keep setup commands private. They contain credentials.</p>
+        </> : error ? <p role="alert" className="mt-3 text-sm text-fw-danger">{error}</p> : null}
         <div className="mt-5 border-t border-fw-border pt-4"><div className="flex items-center justify-between"><h3 className="text-sm font-semibold text-fw-text-strong">Pending approvals{pending.total ? ` (${pending.total})` : ''}</h3><button type="button" onClick={() => { setApprovalError(''); setApprovalNotice(''); void pending.refresh() }} aria-label="Refresh pending approvals" className="rounded-lg p-2 hover:bg-fw-hover"><RefreshCw className="h-4 w-4" /></button></div>
           <p className="mt-1 text-xs text-fw-text-muted">Approve only requests from Nodes you recognize.</p>
           {pending.error || approvalError ? <p role="alert" className="mt-2 text-sm text-fw-danger">{approvalError || pending.error}</p> : null}

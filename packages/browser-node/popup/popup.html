@@ -22,12 +22,12 @@
       <h2>Connection</h2>
       <div id="connection-form">
         <div class="form-group">
-          <label for="host-input">Master URL</label>
+          <label for="host-input">Main address</label>
           <input type="text" id="host-input" placeholder="http://localhost:3001" spellcheck="false">
         </div>
         <div class="form-group">
           <label for="token-input">Pairing Token</label>
-          <input type="text" id="token-input" placeholder="Enter pairing token" spellcheck="false">
+          <input type="password" id="token-input" placeholder="Enter pairing token" spellcheck="false">
         </div>
         <div class="form-group">
           <label for="name-input">Node Name</label>
@@ -35,14 +35,14 @@
         </div>
         <div class="button-row">
           <button id="connect-btn" class="btn btn-primary">Connect</button>
-          <button id="disconnect-btn" class="btn btn-secondary" style="display:none">Disconnect</button>
-          <button id="reset-btn" class="btn btn-danger" style="display:none" title="Clear stored credentials and disconnect">Reset</button>
+          <button id="disconnect-btn" class="btn btn-secondary" style="display:none">Stop</button>
+          <button id="reset-btn" class="btn btn-danger" style="display:none" title="Clear stored credentials and disconnect">Forget pairing</button>
         </div>
       </div>
       <div id="pairing-info" class="info-box" style="display:none">
-        <div class="info-label">Approval command</div>
+        <div class="info-label">Pending approval</div>
         <div id="approval-command" class="approval-command"></div>
-        <div class="info-hint">Approve this node on the Foxwarm master</div>
+        <div class="info-hint">Approve this request in Foxwarm Nodes</div>
       </div>
       <div id="registered-info" class="info-box info-success" style="display:none">
         <div class="info-label">Connected as</div>
@@ -52,17 +52,10 @@
 
     <!-- Permissions Panel -->
     <section id="permissions-panel" class="panel">
-      <h2>Permissions</h2>
+      <h2>Sharing</h2>
 
-      <div class="form-group">
-        <label>Default for new tabs</label>
-        <div class="permission-toggle" id="default-permission">
-          <button class="perm-btn" data-level="off">Off</button>
-          <button class="perm-btn" data-level="ask">Ask</button>
-          <button class="perm-btn" data-level="auto">Auto</button>
-        </div>
-      </div>
-
+      <p>New tabs are Off. Share a tab or a whole window with Ask or Auto. Tab rules override sites, then windows. Clear a tab rule to inherit.</p>
+      <p>Chrome shows a debugging banner during page operations. Cancel stops Browser Node. Human and Agent edits in the same tab may compete.</p>
       <!-- Domain rules -->
       <div class="subsection">
         <h3>Domain Rules</h3>
@@ -80,7 +73,7 @@
 
       <!-- Open tabs -->
       <div class="subsection">
-        <h3>Open Tabs</h3>
+        <h3>Windows and tabs</h3>
         <div id="tabs-list" class="tabs-list"></div>
       </div>
     </section>

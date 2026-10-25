@@ -245,7 +245,7 @@ internal sealed partial class NodeConnectionHub
                             calls.TryGetValue(callId, out var pendingCall)
                             && ReferenceEquals(pendingCall, call)
                         )
-                            _ = CancelExecWaitAsync(connection, callId);
+                            _ = CancelToolCallAsync(connection, callId);
                     })
                     : default;
             var value = await result.Task.WaitAsync(deadline.Token);
@@ -278,6 +278,9 @@ internal sealed partial class NodeConnectionHub
         }
         finally
         {
+            if (claim is null && attemptedSend && deadline.IsCancellationRequested
+                && connection.Capabilities["features"]?["toolCallCancellation"]?.GetValue<bool>() == true)
+                await CancelToolCallAsync(connection, callId);
             dispatchAdmission?.Dispose();
             lock (gate)
             {
@@ -290,7 +293,7 @@ internal sealed partial class NodeConnectionHub
         }
     }
 
-    private static async Task CancelExecWaitAsync(Connection connection, string callId)
+    private static async Task CancelToolCallAsync(Connection connection, string callId)
     {
         try
         {

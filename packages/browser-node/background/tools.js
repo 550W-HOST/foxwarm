@@ -1,516 +1,419 @@
-/**
- * Tool implementations for the browser extension node
- */
+import { resolvePermission, windowPermission, requestConfirmation } from './permissions.js';
+import * as cdp from './cdp.js';
 
-import { resolvePermission, isTabVisible, requestConfirmation } from './permissions.js';
-import { buildBrowserScreenshotResult } from './toolResults.js';
-
-/**
- * Check permission and optionally request confirmation.
- * Returns true if allowed, throws if denied.
- */
-async function checkPermission(toolName, args, tabId) {
-  if (tabId == null) return; // Tools without a tab target (e.g. browser_open_tab) skip check
-
-  let tab;
-  try {
-    tab = await chrome.tabs.get(tabId);
-  } catch {
-    throw new Error(`Tab ${tabId} not found`);
-  }
-
-  const level = await resolvePermission(tabId, tab.url);
-
-  if (level === 'off') {
-    throw new Error(`Permission denied: tab ${tabId} is set to "off"`);
-  }
-
-  if (level === 'ask') {
-    const approved = await requestConfirmation(toolName, args, tabId);
-    if (!approved) {
-      throw new Error('Tool call rejected by user or timed out waiting for confirmation');
-    }
-  }
-  // 'auto' — proceed
-}
-
-/**
- * Inject content script into a tab and execute a function.
- * Returns the result from the injected function.
- */
-async function injectAndRun(tabId, func, args = []) {
-  const results = await chrome.scripting.executeScript({
-    target: { tabId },
-    func,
-    args,
+const lanes = new Map();
+function ordered(key, run, signal) {
+  const previous = lanes.get(key) || Promise.resolve();
+  const next = previous.catch(() => {}).then(run);
+  lanes.set(key, next);
+  next
+    .finally(() => {
+      if (lanes.get(key) === next) lanes.delete(key);
+    })
+    .catch(() => {});
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason || new Error('Browser call canceled.'));
+    signal.addEventListener('abort', abort, { once: true });
+    next.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+    if (signal.aborted) abort();
   });
-  if (!results || results.length === 0) {
-    throw new Error('Content script injection returned no results');
-  }
-  if (results[0].error) {
-    throw new Error(results[0].error.message || 'Content script error');
-  }
-  return results[0].result;
 }
-
-// ─── Tool: browser_list_tabs ───
-
-export async function browser_list_tabs() {
-  const allTabs = await chrome.tabs.query({});
-  const visibleTabs = [];
-
-  for (const tab of allTabs) {
-    if (await isTabVisible(tab.id, tab.url)) {
-      visibleTabs.push({
-        tabId: tab.id,
-        title: tab.title || '',
-        url: tab.url || '',
-        active: tab.active,
-        windowId: tab.windowId,
-      });
-    }
-  }
-
-  return { tabs: visibleTabs, count: visibleTabs.length };
+const pause = (ms, signal) =>
+  new Promise((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', abort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', abort, { once: true });
+  });
+function httpUrl(url) {
+  const parsed = new URL(url);
+  if (!['http:', 'https:'].includes(parsed.protocol))
+    throw new Error('Only HTTP and HTTPS pages are supported.');
+  return parsed.href;
 }
-
-// ─── Tool: browser_get_tab_content ───
-
-export async function browser_get_tab_content(args) {
-  const { tabId, format = 'accessibility' } = args;
-  await checkPermission('browser_get_tab_content', args, tabId);
-
-  if (format === 'accessibility') {
-    return await injectAndRun(tabId, getAccessibilityTree);
-  } else if (format === 'html') {
-    return await injectAndRun(tabId, () => {
-      return { html: document.documentElement.outerHTML.slice(0, 500000) };
-    });
-  } else if (format === 'text') {
-    return await injectAndRun(tabId, () => {
-      return { text: document.body.innerText.slice(0, 200000) };
-    });
-  } else {
-    throw new Error(`Unknown format: ${format}. Use "accessibility", "html", or "text".`);
-  }
+function targetArgs(args, required = false) {
+  if (args.ref && args.selector) throw new Error('Choose ref or selector, not both.');
+  if (required && !args.ref && !args.selector) throw new Error('Supply ref or selector.');
 }
-
-/**
- * Accessibility tree extractor — runs in the content script context.
- * Extracts interactive and landmark elements with their roles, text, and bounding boxes.
- */
-function getAccessibilityTree() {
-  const INTERACTIVE_ROLES = new Set([
-    'link', 'button', 'textbox', 'checkbox', 'radio', 'combobox', 'listbox',
-    'menuitem', 'tab', 'switch', 'slider', 'spinbutton', 'searchbox',
-    'option', 'menuitemcheckbox', 'menuitemradio',
-  ]);
-
-  const INTERACTIVE_TAGS = new Set([
-    'A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'DETAILS', 'SUMMARY',
-  ]);
-
-  const LANDMARK_ROLES = new Set([
-    'banner', 'navigation', 'main', 'complementary', 'contentinfo',
-    'search', 'form', 'region',
-  ]);
-
-  const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'SVG', 'PATH']);
-
-  const elements = [];
-  let nodeIndex = 0;
-
-  function getRole(el) {
-    const explicit = el.getAttribute('role');
-    if (explicit) return explicit;
-
-    const tag = el.tagName;
-    if (tag === 'A' && el.hasAttribute('href')) return 'link';
-    if (tag === 'BUTTON') return 'button';
-    if (tag === 'INPUT') {
-      const type = (el.type || 'text').toLowerCase();
-      if (type === 'checkbox') return 'checkbox';
-      if (type === 'radio') return 'radio';
-      if (type === 'submit' || type === 'button' || type === 'reset') return 'button';
-      if (type === 'search') return 'searchbox';
-      if (type === 'range') return 'slider';
-      if (type === 'number') return 'spinbutton';
-      return 'textbox';
-    }
-    if (tag === 'SELECT') return 'combobox';
-    if (tag === 'TEXTAREA') return 'textbox';
-    if (tag === 'NAV') return 'navigation';
-    if (tag === 'MAIN') return 'main';
-    if (tag === 'HEADER') return 'banner';
-    if (tag === 'FOOTER') return 'contentinfo';
-    if (tag === 'ASIDE') return 'complementary';
-    if (tag === 'FORM') return 'form';
-    if (tag === 'SUMMARY') return 'button';
-    return null;
+function validateArgs(name, args) {
+  if (name !== 'list_tabs' && name !== 'open_tab' && !Number.isInteger(args.tabId))
+    throw new Error('Supply a browser tab ID.');
+  if (['fill', 'select_option', 'click', 'scroll', 'press_key'].includes(name))
+    targetArgs(args, ['fill', 'select_option'].includes(name));
+  if (name === 'fill' && (typeof args.text !== 'string' || args.text.length > 100000))
+    throw new Error('Supply at most 100000 characters.');
+  if (
+    name === 'select_option' &&
+    (!Array.isArray(args.values) || !args.values.every((value) => typeof value === 'string'))
+  )
+    throw new Error('Supply option values.');
+  if (name === 'execute_js' && (typeof args.code !== 'string' || args.code.length > 100000))
+    throw new Error('Supply JavaScript of at most 100000 characters.');
+  if (
+    name === 'scroll' &&
+    [args.deltaX ?? 0, args.deltaY ?? 0].some((value) => !Number.isFinite(value))
+  )
+    throw new Error('Supply finite scroll distances.');
+  if (name === 'click' && !!(args.ref || args.selector) === (args.x != null || args.y != null))
+    throw new Error('Choose an element or screenshot coordinates.');
+  if (
+    name === 'get_tab_content' &&
+    !['snapshot', 'text', 'html'].includes(args.format || 'snapshot')
+  )
+    throw new Error('Choose snapshot, text, or html.');
+  if (name === 'wait_for') {
+    if (!['element', 'text', 'url'].includes(args.condition))
+      throw new Error('Choose element, text, or url condition.');
+    if (
+      args.condition === 'element' &&
+      (typeof args.selector !== 'string' ||
+        !['visible', 'hidden', 'attached'].includes(args.state || 'visible'))
+    )
+      throw new Error('Supply a selector and supported element state.');
+    if (
+      (args.condition === 'text' && typeof args.text !== 'string') ||
+      (args.condition === 'url' && typeof args.url !== 'string')
+    )
+      throw new Error('Supply the expected condition value.');
+    if (
+      args.timeoutMs !== undefined &&
+      (!Number.isFinite(args.timeoutMs) || args.timeoutMs < 1 || args.timeoutMs > 60000)
+    )
+      throw new Error('Timeout must be between 1 and 60000 milliseconds.');
   }
-
-  function getLabel(el) {
-    // aria-label
-    const ariaLabel = el.getAttribute('aria-label');
-    if (ariaLabel) return ariaLabel.trim();
-
-    // aria-labelledby
-    const labelledBy = el.getAttribute('aria-labelledby');
-    if (labelledBy) {
-      const parts = labelledBy.split(/\s+/).map(id => {
-        const ref = document.getElementById(id);
-        return ref ? ref.textContent.trim() : '';
-      }).filter(Boolean);
-      if (parts.length) return parts.join(' ');
+  if (name === 'navigate' || name === 'open_tab') args.url = httpUrl(args.url);
+}
+export async function executeTool(name, args, context) {
+  validateArgs(name, args);
+  const { signal } = context;
+  const checkActive = () => {
+    signal.throwIfAborted();
+    if (Date.now() >= context.deadline) throw new Error('Browser call deadline expired.');
+  };
+  checkActive();
+  if (name === 'list_tabs') {
+    const tabs = [];
+    for (const tab of await chrome.tabs.query({})) {
+      const sharing = await resolvePermission(tab.id);
+      if (sharing !== 'off')
+        tabs.push({
+          tabId: tab.id,
+          windowId: tab.windowId,
+          title: tab.title || '',
+          url: tab.url,
+          sharing,
+          windowSharing: await windowPermission(tab.windowId),
+        });
     }
-
-    // <label for="...">
-    if (el.id) {
-      const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-      if (label) return label.textContent.trim();
-    }
-
-    // title, alt, placeholder
-    if (el.title) return el.title.trim();
-    if (el.alt) return el.alt.trim();
-    if (el.placeholder) return el.placeholder.trim();
-
-    // innerText (short)
-    const text = el.innerText || el.textContent || '';
-    const trimmed = text.trim();
-    return trimmed.length > 200 ? trimmed.slice(0, 200) + '…' : trimmed;
+    checkActive();
+    // Re-resolve immediately before releasing metadata after asynchronous enumeration.
+    return {
+      tabs: (
+        await Promise.all(
+          tabs.map(async (tab) => ((await resolvePermission(tab.tabId)) !== 'off' ? tab : null)),
+        )
+      ).filter(Boolean),
+    };
   }
-
-  function walk(node) {
-    if (node.nodeType !== Node.ELEMENT_NODE) return;
-    if (SKIP_TAGS.has(node.tagName)) return;
-
-    const style = window.getComputedStyle(node);
-    if (style.display === 'none' || style.visibility === 'hidden') return;
-
-    const role = getRole(node);
-    const isInteractive = role && (INTERACTIVE_ROLES.has(role) || INTERACTIVE_TAGS.has(node.tagName));
-    const isLandmark = role && LANDMARK_ROLES.has(role);
-
-    if (isInteractive || isLandmark) {
-      const rect = node.getBoundingClientRect();
-      const entry = {
-        index: nodeIndex++,
-        role,
-        tag: node.tagName.toLowerCase(),
-        label: getLabel(node),
-        bbox: rect.width > 0 && rect.height > 0 ? {
-          x: Math.round(rect.x),
-          y: Math.round(rect.y),
-          width: Math.round(rect.width),
-          height: Math.round(rect.height),
-        } : null,
+  // Capture the actual document before the operation waits behind another call.
+  const admissionTab = name === 'open_tab' ? null : await chrome.tabs.get(args.tabId);
+  const admissionDocument = admissionTab
+    ? await chrome.webNavigation.getFrame({ tabId: args.tabId, frameId: 0 })
+    : null;
+  const validateAdmission = async () => {
+    checkActive();
+    if (!admissionTab) return;
+    const current = await chrome.tabs.get(args.tabId);
+    const document = await chrome.webNavigation.getFrame({ tabId: args.tabId, frameId: 0 });
+    if (
+      !document ||
+      document.documentId !== admissionDocument?.documentId ||
+      document.url !== admissionDocument?.url ||
+      current.windowId !== admissionTab.windowId ||
+      (await resolvePermission(args.tabId)) === 'off'
+    )
+      throw new Error('Page or sharing changed while the call was waiting.');
+  };
+  await validateAdmission();
+  return ordered(
+    name === 'open_tab' ? `window:${args.windowId}` : args.tabId,
+    async () => {
+      checkActive();
+      if (name === 'open_tab') {
+        if (!Number.isInteger(args.windowId)) throw new Error('Supply a shared window ID.');
+        const validate = async () => {
+          checkActive();
+          if ((await windowPermission(args.windowId)) === 'off')
+            throw new Error('Window is not shared.');
+        };
+        await validate();
+        if ((await windowPermission(args.windowId)) === 'ask') {
+          if (
+            !(await requestConfirmation(
+              { ...context, toolName: name, args, windowId: args.windowId, url: args.url },
+              validate,
+              signal,
+              context.deadline - Date.now(),
+            ))
+          )
+            throw new Error('Request denied, canceled, or expired.');
+        }
+        await validate();
+        const tab = await chrome.tabs.create({
+          windowId: args.windowId,
+          url: args.url,
+          active: false,
+        });
+        checkActive();
+        const sharing = await resolvePermission(tab.id);
+        return {
+          tabId: tab.id,
+          windowId: tab.windowId,
+          sharing,
+          ...(sharing !== 'off' ? { url: tab.url || args.url, title: tab.title || '' } : {}),
+        };
+      }
+      await validateAdmission();
+      const tab = await chrome.tabs.get(args.tabId);
+      if ((await resolvePermission(tab.id)) === 'off') throw new Error('Tab is not shared.');
+      const expected = await cdp.page(tab.id, signal);
+      const validate = async () => {
+        await validateAdmission();
+        const current = await chrome.tabs.get(tab.id);
+        if (current.windowId !== tab.windowId || (await resolvePermission(tab.id)) === 'off')
+          throw new Error('Sharing changed.');
+        await cdp.assertPage(tab.id, expected, signal);
       };
-
-      // Extra attributes for form elements
-      if (node.tagName === 'INPUT' || node.tagName === 'TEXTAREA') {
-        entry.value = node.value || '';
-        entry.type = node.type || 'text';
-        if (node.disabled) entry.disabled = true;
-        if (node.readOnly) entry.readOnly = true;
+      if (args.ref && !args.ref.startsWith(expected.pageId + '/'))
+        throw new Error('Element reference is stale. Read a fresh snapshot.');
+      if ((await resolvePermission(tab.id)) === 'ask') {
+        const preview = name === 'fill' ? { ...args, text: '[hidden]' } : args;
+        const approved = await requestConfirmation(
+          {
+            ...context,
+            toolName: name,
+            args: preview,
+            tabId: tab.id,
+            windowId: tab.windowId,
+            title: tab.title,
+            url: tab.url,
+          },
+          validate,
+          signal,
+          context.deadline - Date.now(),
+        );
+        if (!approved) throw new Error('Request denied, canceled, or expired.');
       }
-      if (node.tagName === 'SELECT') {
-        entry.value = node.value || '';
-        entry.options = Array.from(node.options).slice(0, 50).map(o => ({
-          value: o.value,
-          text: o.text,
-          selected: o.selected,
-        }));
-      }
-      if (node.tagName === 'A') {
-        entry.href = node.href || '';
-      }
-      if (node.checked !== undefined) {
-        entry.checked = node.checked;
-      }
-
-      // Generate a unique selector for this element
-      if (node.id) {
-        entry.selector = `#${CSS.escape(node.id)}`;
-      } else {
-        // Build a reasonably unique CSS path
-        const parts = [];
-        let current = node;
-        for (let depth = 0; depth < 5 && current && current !== document.body; depth++) {
-          let seg = current.tagName.toLowerCase();
-          if (current.id) {
-            seg = `#${CSS.escape(current.id)}`;
-            parts.unshift(seg);
+      await validate();
+      let result;
+      if (name === 'get_tab_content')
+        result = await cdp.content(tab.id, expected, args.format || 'snapshot', signal);
+      else if (name === 'screenshot') result = await cdp.screenshot(tab.id, expected, signal);
+      else if (name === 'close_tab') {
+        await chrome.tabs.remove(tab.id);
+        checkActive();
+        return { closed: true, tabId: tab.id };
+      } else if (name === 'wait_for') {
+        const end = Math.min(context.deadline, Date.now() + (args.timeoutMs || 10000));
+        while (true) {
+          await validate();
+          if (await cdp.action(tab.id, expected, name, args, signal)) {
+            result = { matched: true };
             break;
           }
-          if (current.className && typeof current.className === 'string') {
-            const cls = current.className.trim().split(/\s+/).slice(0, 2).map(c => `.${CSS.escape(c)}`).join('');
-            seg += cls;
+          if (Date.now() >= end) {
+            result = { matched: false, reason: 'timeout' };
+            break;
           }
-          parts.unshift(seg);
-          current = current.parentElement;
+          await pause(Math.min(100, end - Date.now()), signal);
         }
-        entry.selector = parts.join(' > ');
-      }
-
-      elements.push(entry);
-    }
-
-    for (const child of node.children) {
-      walk(child);
-    }
-  }
-
-  walk(document.body);
-
-  return {
-    title: document.title,
-    url: location.href,
-    elementCount: elements.length,
-    elements,
-  };
-}
-
-// ─── Tool: browser_screenshot ───
-
-export async function browser_screenshot(args) {
-  const { tabId } = args;
-  await checkPermission('browser_screenshot', args, tabId);
-
-  // We need to make the tab active to capture it
-  const tab = await chrome.tabs.get(tabId);
-  const wasActive = tab.active;
-
-  if (!wasActive) {
-    await chrome.tabs.update(tabId, { active: true });
-    // Small delay to let the tab render
-    await new Promise(r => setTimeout(r, 300));
-  }
-
-  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
-    format: 'png',
-  });
-
-  // Restore previous active tab if we switched
-  if (!wasActive) {
-    // Find the previously active tab in the same window
-    const windowTabs = await chrome.tabs.query({ windowId: tab.windowId, active: true });
-    // The tab we activated is now active, try to restore
-    // Actually, we can't easily restore — just leave it. The agent activated it.
-  }
-
-  // Return as base64 (strip data:image/png;base64, prefix)
-  const base64 = dataUrl.replace(/^data:image\/png;base64,/, '');
-  return buildBrowserScreenshotResult(base64, {
-    tabId,
-    url: tab.url,
-    title: tab.title,
-  });
-}
-
-// ─── Tool: browser_click ───
-
-export async function browser_click(args) {
-  const { tabId, selector, x, y } = args;
-  await checkPermission('browser_click', args, tabId);
-
-  if (selector) {
-    return await injectAndRun(tabId, (sel) => {
-      const el = document.querySelector(sel);
-      if (!el) throw new Error(`Element not found: ${sel}`);
-      el.scrollIntoView({ block: 'center', behavior: 'instant' });
-      el.click();
-      const rect = el.getBoundingClientRect();
-      return {
-        clicked: true,
-        selector: sel,
-        tag: el.tagName.toLowerCase(),
-        text: (el.innerText || '').slice(0, 100),
-        position: { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) },
-      };
-    }, [selector]);
-  } else if (x != null && y != null) {
-    return await injectAndRun(tabId, (cx, cy) => {
-      const el = document.elementFromPoint(cx, cy);
-      if (!el) throw new Error(`No element at coordinates (${cx}, ${cy})`);
-      el.click();
-      return {
-        clicked: true,
-        coordinates: { x: cx, y: cy },
-        tag: el.tagName.toLowerCase(),
-        text: (el.innerText || '').slice(0, 100),
-      };
-    }, [x, y]);
-  } else {
-    throw new Error('Either "selector" or "x"+"y" coordinates are required');
-  }
-}
-
-// ─── Tool: browser_execute_js ───
-
-export async function browser_execute_js(args) {
-  const { tabId, code } = args;
-  await checkPermission('browser_execute_js', args, tabId);
-
-  // Execute in the MAIN world so the code has access to the page's JS context
-  const results = await chrome.scripting.executeScript({
-    target: { tabId },
-    world: 'MAIN',
-    func: (jsCode) => {
-      try {
-        const result = (0, eval)(jsCode);
-        if (result === undefined) return { result: 'undefined' };
-        if (result === null) return { result: null };
-        if (typeof result === 'function') return { result: '[Function]' };
-        try {
-          return { result: JSON.parse(JSON.stringify(result)) };
-        } catch {
-          return { result: String(result) };
+      } else result = await cdp.action(tab.id, expected, name, args, signal);
+      if (name === 'navigate') {
+        // Navigation may intentionally leave the shared origin; release no unshared metadata.
+        checkActive();
+        const sharing = await resolvePermission(tab.id);
+        if (sharing === 'off') {
+          await cdp.detach(tab.id);
+          return { tabId: tab.id, sharing };
         }
-      } catch (e) {
-        return { error: e.message || String(e) };
+        const current = await cdp.page(tab.id, signal);
+        checkActive();
+        return { tabId: tab.id, pageId: current.pageId, url: current.url, sharing };
       }
+      await validate();
+      return { ...result, tabId: tab.id };
     },
-    args: [code],
-  });
-
-  if (!results || results.length === 0) {
-    throw new Error('Script execution returned no results');
-  }
-
-  const result = results[0].result;
-  if (result && result.error) {
-    throw new Error(`JS execution error: ${result.error}`);
-  }
-  return result;
+    signal,
+  );
 }
 
-// ─── Tool: browser_open_tab ───
-
-export async function browser_open_tab(args) {
-  const { url, active = true } = args;
-
-  // No tab-level permission check needed for opening a new tab,
-  // but we could check domain permission for the target URL
-  const tab = await chrome.tabs.create({ url, active });
-
-  return {
-    tabId: tab.id,
-    url: tab.url || url,
-    title: tab.title || '',
-    windowId: tab.windowId,
-  };
-}
-
-// ─── Tool: browser_close_tab ───
-
-export async function browser_close_tab(args) {
-  const { tabId } = args;
-  await checkPermission('browser_close_tab', args, tabId);
-
-  const tab = await chrome.tabs.get(tabId);
-  await chrome.tabs.remove(tabId);
-
-  return {
-    closed: true,
-    tabId,
-    url: tab.url,
-    title: tab.title,
-  };
-}
-
-// ─── Tool registry ───
-
-export const TOOL_HANDLERS = {
-  browser_list_tabs,
-  browser_get_tab_content,
-  browser_screenshot,
-  browser_click,
-  browser_execute_js,
-  browser_open_tab,
-  browser_close_tab,
+// Tool definitions exposed by this Browser Node.
+const descriptions = {
+  list_tabs:
+    'List shared browser tabs with their titles, URLs, window IDs, and effective sharing modes.',
+  get_tab_content:
+    'Read a shared browser tab as a DOM snapshot, visible text, or HTML. Snapshots include element references for subsequent actions; password values are omitted.',
+  screenshot:
+    'Capture the visible page viewport of a shared browser tab without activating it. Returns an image and its page and viewport information.',
+  click:
+    'Click an element in a shared browser tab using a snapshot reference, a unique CSS selector, or viewport coordinates from a screenshot.',
+  fill: 'Replace text in an editable element in a shared browser tab. Use a snapshot reference or a unique CSS selector.',
+  select_option:
+    'Select options in a native HTML select element by value. Use a snapshot reference or a unique CSS selector.',
+  scroll:
+    'Scroll a shared browser page or a specified scrollable element by a distance in CSS pixels.',
+  navigate:
+    'Navigate a shared browser tab to an HTTP or HTTPS URL and report its resulting page identity and sharing status.',
+  wait_for:
+    'Wait for a page condition in a shared browser tab, within a bounded timeout. Returns when the condition is met or reports why waiting ended.',
+  press_key: 'Send a supported editing key to a shared browser page or a specified element.',
+  execute_js:
+    "Evaluate JavaScript in a shared browser tab's page context and return a bounded result. Promises are awaited, and the tab's Ask or Auto sharing mode applies.",
+  open_tab:
+    'Open an HTTP or HTTPS URL in a shared browser window without activating the new tab. The new tab follows the window and site sharing rules.',
+  close_tab: 'Close a shared browser tab. Closing the last tab also closes its window.',
 };
-
-export const TOOL_DEFINITIONS = [
-  {
-    name: 'browser_list_tabs',
-    description: 'List all visible browser tabs (title, URL, tab ID). Only tabs the user has granted permission for are shown.',
-    parameters: { type: 'object', properties: {} },
-  },
-  {
-    name: 'browser_get_tab_content',
-    description: 'Get page content from a browser tab. Returns an accessibility tree of interactive elements by default, or raw HTML/text.',
-    parameters: {
-      type: 'object',
-      properties: {
-        tabId: { type: 'number', description: 'Tab ID from browser_list_tabs' },
-        format: {
-          type: 'string',
-          enum: ['accessibility', 'html', 'text'],
-          description: 'Output format. "accessibility" (default) returns interactive elements with roles/labels/selectors. "html" returns raw HTML. "text" returns visible text.',
-        },
-      },
-      required: ['tabId'],
+const field = (type, description, rest = {}) => ({ type, description, ...rest });
+const tabId = field('integer', 'Browser tab ID returned by list_tabs or open_tab.');
+const target = {
+  ref: field('string', 'Element reference from the latest DOM snapshot of this page.'),
+  selector: field(
+    'string',
+    'CSS selector that must match exactly one element in the current page.',
+  ),
+};
+const url = field('string', 'HTTP or HTTPS URL to open.');
+const schemas = {
+  list_tabs: [{}, []],
+  get_tab_content: [
+    {
+      tabId,
+      format: field(
+        'string',
+        'Content format: snapshot returns DOM elements and action references, text returns visible text, and html returns bounded HTML. Defaults to snapshot.',
+        { enum: ['snapshot', 'text', 'html'] },
+      ),
     },
-  },
-  {
-    name: 'browser_screenshot',
-    description: 'Take a screenshot of a browser tab. Returns base64-encoded PNG. The tab will be activated if not already visible.',
-    parameters: {
-      type: 'object',
-      properties: {
-        tabId: { type: 'number', description: 'Tab ID' },
-      },
-      required: ['tabId'],
+    ['tabId'],
+  ],
+  screenshot: [{ tabId }, ['tabId']],
+  click: [
+    {
+      tabId,
+      ...target,
+      x: field(
+        'number',
+        "Horizontal position in viewport CSS pixels from the screenshot's viewport information.",
+      ),
+      y: field(
+        'number',
+        "Vertical position in viewport CSS pixels from the screenshot's viewport information.",
+      ),
+      pageId: field(
+        'string',
+        'Page identity returned by screenshot. Required when clicking by coordinates.',
+      ),
     },
-  },
-  {
-    name: 'browser_click',
-    description: 'Click an element on a page. Use a CSS selector (from browser_get_tab_content) or x/y coordinates (from browser_screenshot).',
-    parameters: {
-      type: 'object',
-      properties: {
-        tabId: { type: 'number', description: 'Tab ID' },
-        selector: { type: 'string', description: 'CSS selector of the element to click' },
-        x: { type: 'number', description: 'X coordinate to click (alternative to selector)' },
-        y: { type: 'number', description: 'Y coordinate to click (alternative to selector)' },
-      },
-      required: ['tabId'],
+    ['tabId'],
+  ],
+  fill: [
+    {
+      tabId,
+      ...target,
+      text: field('string', "Text that replaces the element's current contents."),
     },
-  },
-  {
-    name: 'browser_execute_js',
-    description: 'Execute JavaScript code in a browser tab and return the result.',
-    parameters: {
-      type: 'object',
-      properties: {
-        tabId: { type: 'number', description: 'Tab ID' },
-        code: { type: 'string', description: 'JavaScript code to execute' },
-      },
-      required: ['tabId', 'code'],
+    ['tabId', 'text'],
+  ],
+  select_option: [
+    {
+      tabId,
+      ...target,
+      values: field(
+        'array',
+        'Option values to select. Supply one value for a single-select element.',
+        { items: { type: 'string' } },
+      ),
     },
-  },
-  {
-    name: 'browser_open_tab',
-    description: 'Open a new browser tab with the given URL. Returns the new tab ID.',
-    parameters: {
-      type: 'object',
-      properties: {
-        url: { type: 'string', description: 'URL to open' },
-        active: { type: 'boolean', description: 'Whether to make the tab active (default: true)' },
-      },
-      required: ['url'],
+    ['tabId', 'values'],
+  ],
+  scroll: [
+    {
+      tabId,
+      ...target,
+      deltaX: field(
+        'number',
+        'Horizontal scroll distance in CSS pixels; positive values scroll right. Defaults to 0.',
+      ),
+      deltaY: field(
+        'number',
+        'Vertical scroll distance in CSS pixels; positive values scroll down. Defaults to 0.',
+      ),
     },
-  },
-  {
-    name: 'browser_close_tab',
-    description: 'Close a browser tab by its tab ID.',
-    parameters: {
-      type: 'object',
-      properties: {
-        tabId: { type: 'number', description: 'Tab ID to close' },
-      },
-      required: ['tabId'],
+    ['tabId'],
+  ],
+  navigate: [{ tabId, url }, ['tabId', 'url']],
+  wait_for: [
+    {
+      tabId,
+      condition: field('string', 'Page condition to wait for.', {
+        enum: ['element', 'text', 'url'],
+      }),
+      state: field('string', 'Required element state.', {
+        enum: ['visible', 'hidden', 'attached'],
+      }),
+      selector: field('string', 'CSS selector identifying the element to observe.'),
+      text: field('string', 'Visible text that must appear on the page.'),
+      url: field('string', 'Expected page URL.'),
+      timeoutMs: field(
+        'number',
+        'Maximum time to wait in milliseconds, bounded by the remaining tool-call time.',
+        { minimum: 1, maximum: 60000 },
+      ),
     },
-  },
-];
+    ['tabId', 'condition'],
+  ],
+  press_key: [
+    {
+      tabId,
+      ...target,
+      key: field('string', 'Editing key to send, selected from the supported values.', {
+        enum: [
+          'Enter',
+          'Tab',
+          'Escape',
+          'Backspace',
+          'Delete',
+          'ArrowLeft',
+          'ArrowUp',
+          'ArrowRight',
+          'ArrowDown',
+          'Home',
+          'End',
+        ],
+      }),
+    },
+    ['tabId', 'key'],
+  ],
+  execute_js: [
+    {
+      tabId,
+      code: field('string', 'JavaScript expression or code to evaluate in the page context.'),
+    },
+    ['tabId', 'code'],
+  ],
+  open_tab: [
+    { windowId: field('integer', 'Shared browser window ID returned by list_tabs.'), url },
+    ['windowId', 'url'],
+  ],
+  close_tab: [{ tabId }, ['tabId']],
+};
+export const TOOL_DEFINITIONS = Object.entries(schemas).map(([name, [properties, required]]) => ({
+  name,
+  description: descriptions[name],
+  parameters: { type: 'object', properties, required, additionalProperties: false },
+}));

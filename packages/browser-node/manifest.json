@@ -2,17 +2,18 @@
   "manifest_version": 3,
   "name": "Foxwarm Browser Node",
   "version": "1.0.0",
-  "description": "Connect your browser to Foxwarm as a remote node — let AI agents browse, screenshot, and interact with web pages.",
+  "description": "Connect your browser to Foxwarm as a remote node \u2014 let AI agents browse, screenshot, and interact with web pages.",
   "permissions": [
     "tabs",
-    "activeTab",
-    "scripting",
+    "debugger",
     "storage",
     "notifications",
-    "alarms"
+    "alarms",
+    "webNavigation"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "http://*/*",
+    "https://*/*"
   ],
   "background": {
     "service_worker": "background/main.js",
@@ -30,5 +31,6 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  }
+  },
+  "minimum_chrome_version": "120"
 }
