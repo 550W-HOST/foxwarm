@@ -54,7 +54,7 @@ proxy.on('connection', (downstream, request) => {
     source.on('error', () => {})
   }
 })
-let cli, cliOutput = '', modelRound = 0, page
+let cli, cliOutput = '', modelRound = 0, page, masterWorkspaceWrite
 const model = createServer(async (request, response) => {
   try {
     let raw = ''; for await (const chunk of request) raw += chunk
@@ -237,15 +237,25 @@ try {
       const commitFrame = await until(async () => { for (const frame of page.frames()) { try { if ((await frame.evaluate(() => document.body.innerText)).includes('remote rename and binary') && (await frame.evaluate(() => document.body.innerText)).includes('Changed files')) return frame } catch {} } }, 'official SCM immutable commit webview', 45000)
       await (await commitFrame.$('button.file:not([disabled])')).click(); code = await codeFrame(); await code.waitForSelector('.monaco-diff-editor', { timeout: 30000 })
       assert(wire.some(row => row.type === 'node_service_request' && row.service === 'vscode-git' && row.operation === 'content' && row.args.ref))
+      const workspaceFile = join(fixture.data, 'state/vscode-web/foxwarm.code-workspace')
+      const workspaceWritten = page.waitForResponse(response => {
+        const url = new URL(response.url())
+        return response.request().method() === 'PUT' && url.pathname === '/api/vscode-web/fs/write-file' && url.searchParams.get('nodeId') === 'master' && url.searchParams.get('path') === workspaceFile
+      }, { timeout: 22000 })
       await palette(code, 'Foxwarm: Open Foxwarm data folder')
+      const workspaceResponse = await workspaceWritten
+      assert.equal(workspaceResponse.status(), 200, await workspaceResponse.text())
+      assert.equal((await workspaceResponse.json()).success, true)
       const roots = (await fixture.api('GET', '/api/vscode-web/fs/workspace-roots')).body; assert.equal(roots.roots.data.nodeId, 'master')
-      await until(async () => JSON.parse(await readFile(join(fixture.data, 'state/vscode-web/foxwarm.code-workspace'), 'utf8')).folders.some(folder => folder.uri ? folder.uri.startsWith('foxwarm://node+master') && decodeURIComponent(new URL(folder.uri).pathname) === fixture.data : typeof folder.path === 'string' && resolve(fixture.data, 'state/vscode-web', folder.path) === fixture.data), 'authoritative Master data command from remote workspace')
+      const workspace = JSON.parse(await readFile(workspaceFile, 'utf8'))
+      assert(workspace.folders.some(folder => folder.uri ? folder.uri.startsWith('foxwarm://node+master') && decodeURIComponent(new URL(folder.uri).pathname) === fixture.data : typeof folder.path === 'string' && resolve(fixture.data, 'state/vscode-web', folder.path) === fixture.data), 'authoritative Master data command from remote workspace')
+      masterWorkspaceWrite = { method: workspaceResponse.request().method(), url: workspaceResponse.url(), status: workspaceResponse.status(), workspace }
     }
     await fixture.api('DELETE', '/api/terminals/' + encodeURIComponent(codeTerminal.id))
   }
   for (const row of wire.filter(row => row.type === 'node_service_request' || row.type === 'node_service_command')) { assert.equal(row.sessionId, undefined); assert.equal(row.agentName, undefined) }
   assert.deepEqual(errors, [])
-  console.log(JSON.stringify({ result: 'passed', cli: process.env.FOXWARM_CLI_EXECUTABLE ? 'configured-native-capable' : 'source', mainRuntime: normalRuntime || 'experiment', originalWebUi: true, officialWorkbench: hasCode, realRemoteFs: true, fiftyMiB: true, readOnlyGitV2: true, twoBrowserAttachments: true, remotePtyPid: remote.pid, actualResize: '37x91', detachDoesNotKill: true, explicitCloseKills: true, connectionRediscovery: true, hostRestartRediscovery: true, wrongConnectionEventsRejected: true, helperSingleOwner: true, pendingHelperDetachRejected: true, helperOriginalExtension: hasCode, serviceRequests: wire.filter(row => row.type === 'node_service_request').length, serviceCommands: wire.filter(row => row.type === 'node_service_command').length, serviceEvents: wire.filter(row => row.type === 'node_service_event').length, limits: hasCode ? [] : ['Official Code assets not configured; API and original WebUI qualified.'] }))
+  console.log(JSON.stringify({ result: 'passed', cli: process.env.FOXWARM_CLI_EXECUTABLE ? 'configured-native-capable' : 'source', mainRuntime: normalRuntime || 'experiment', originalWebUi: true, officialWorkbench: hasCode, masterWorkspaceWrite, realRemoteFs: true, fiftyMiB: true, readOnlyGitV2: true, twoBrowserAttachments: true, remotePtyPid: remote.pid, actualResize: '37x91', detachDoesNotKill: true, explicitCloseKills: true, connectionRediscovery: true, hostRestartRediscovery: true, wrongConnectionEventsRejected: true, helperSingleOwner: true, pendingHelperDetachRejected: true, helperOriginalExtension: hasCode, serviceRequests: wire.filter(row => row.type === 'node_service_request').length, serviceCommands: wire.filter(row => row.type === 'node_service_command').length, serviceEvents: wire.filter(row => row.type === 'node_service_event').length, limits: hasCode ? [] : ['Official Code assets not configured; API and original WebUI qualified.'] }))
 } catch (error) {
   if (page) { await page.screenshot({ path: join(fixture.root, 'failure.png') }).catch(() => {}); await writeFile(join(fixture.root, 'browser-state.json'), JSON.stringify(await Promise.all(page.frames().map(async frame => ({ url: frame.url(), text: await frame.evaluate(() => document.body.innerText).catch(() => '') }))), null, 2)).catch(() => {}) }
   console.error(JSON.stringify({ errors, browser: wire.filter(row => row.browserRequest || row.browserError) })); console.error(cliOutput); console.error(fixture.output); throw error
