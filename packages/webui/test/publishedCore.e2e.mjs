@@ -132,10 +132,11 @@ try {
   const id = created.body.sessionId
   assert(id, JSON.stringify(created))
   assert.equal((await api('POST', '/api/sessions/' + encodeURIComponent(id) + '/message', { text: 'Run the owned delivery qualification.' })).status, 202)
+  // Cover the full scripted turn, including cold browser startup and artifact preparation.
   await until(async () => {
     qualificationHistory = (await api('GET', '/api/sessions/' + encodeURIComponent(id) + '/history')).body
     return JSON.stringify(qualificationHistory).includes('PACKAGED-NATIVE-DONE')
-  }, 'packaged native/browser/image/artifact turn')
+  }, 'packaged native/browser/image/artifact turn', 60_000)
   assert.equal(requests.length, 5)
   assert.match(JSON.stringify(requests[2].input), /Tab opened: tab1/)
   assert.match(JSON.stringify(requests[3].input), /input_image/)
