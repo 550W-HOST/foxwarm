@@ -2,8 +2,7 @@ using System.Text.Json.Nodes;
 
 namespace Foxwarm.Sessions;
 
-// Model-facing schema and sentences are copied from current Testing
-// src/session/compactPlan.ts and src/session/history.ts, not edited as experiment copy.
+// Ordinary requests and dedicated planning expose the same tool definition.
 internal static partial class CompactPrompt
 {
     public static JsonObject ToolDefinition() =>
@@ -13,7 +12,7 @@ internal static partial class CompactPrompt
                 {
                   "type":"function",
                   "name":"submit_compact_plan",
-                  "description":"Submit a plan to summarize older context into blocks and, where needed, remove previously preserved messages from active context. Use only the candidate ranges supplied in the compaction prompt. Supply direct plan fields or argsFilePath, not both. Items not covered by the plan remain unchanged.",
+                  "description":"Submit a plan to summarize older context into blocks and, where needed, remove previously preserved messages from active context. For a dedicated compaction request, use its supplied candidate ranges. Supply direct plan fields or argsFilePath, not both. Items not covered by the plan remain unchanged.",
                   "parameters":{
                     "type":"object",
                     "properties":{

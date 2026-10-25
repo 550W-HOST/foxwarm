@@ -16,6 +16,8 @@ SessionOwner active JSON/history + AgentMemory selection
 - **Durable boundary:** `SqliteArchiveMessageStore`, `SqliteArchiveBlocks`, and branch/reservation stores write immutable message/block/lineage records. `LinuxAtomicJsonFile` publishes the replacement active JSON history. Archive is not a rebuild source for missing active JSON.
 - **Consumers:** next-turn `ConcreteRequestHistory`/`SessionChatService`, `ArchiveContextReader`, `ArchiveRecallTool`, WebUI history/context views, and bounded prompt-preview endpoints.
 
+The skill-guided opt-in ordinary submission path, its relaxed selection policy and canonical-pair admission contract are owned by [deliberate in-context submission](../units/session-compaction.md#deliberate-in-context-submission). It shares the current managed owner and strict commit engine; automatic planning remains the default.
+
 ## Active history versus immutable Archive
 
 Per-Session JSON/history is the only active source used to construct the next live prompt. Compaction may replace or prune that active history and queue-related prompt state. It does not delete/rewrite immutable Archive rows, and Archive readers do not rebuild a missing JSON authority. `ArchiveContextReader` applies cumulative branch/fork caps so parent rows beyond the child fork point cannot leak into effective context.

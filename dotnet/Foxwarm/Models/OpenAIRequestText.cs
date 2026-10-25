@@ -278,21 +278,25 @@ internal static class OpenAIRequestText
 
     internal static string? PreviousRequest(JsonObject response)
     {
+        var attrs = new Dictionary<string, string?> { ["kind"] = "tool-response" };
         if (
-            response["previousLlmRequest"] is not JsonObject timing
-            || timing["time"] is not JsonValue text
-            || !text.TryGetValue<string>(out var time)
-            || Foxwarm.Sessions.SessionWait.Number(timing["durationMs"]) is not double duration
-            || !double.IsFinite(duration)
+            Foxwarm.Sessions.CompactCandidateBuilder.Number(response["contextSeq"])
+            is > 0
+                and var seq
         )
-            return null;
-        return Tag(
-            new()
-            {
-                ["kind"] = "time",
-                ["time"] = time,
-                ["prevLLMReqTime"] = FixedSeconds(duration) + "s",
-            }
-        );
+            attrs["seq"] = seq.ToString(CultureInfo.InvariantCulture);
+        if (
+            response["previousLlmRequest"] is JsonObject timing
+            && timing["time"] is JsonValue text
+            && text.TryGetValue<string>(out var time)
+            && Foxwarm.Sessions.SessionWait.Number(timing["durationMs"]) is double duration
+            && double.IsFinite(duration)
+        )
+        {
+            attrs["kind"] = "time";
+            attrs["time"] = time;
+            attrs["prevLLMReqTime"] = FixedSeconds(duration) + "s";
+        }
+        return attrs.Count > 1 ? Tag(attrs) : null;
     }
 }

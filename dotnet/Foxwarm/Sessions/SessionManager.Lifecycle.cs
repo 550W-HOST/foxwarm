@@ -331,6 +331,7 @@ internal sealed partial class SessionManager
                         ["seq"] = next++,
                         ["timestamp"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     };
+                    InputWrapperMetadata.StampSequence(copy);
                     return copy;
                 })
                 .ToArray();
