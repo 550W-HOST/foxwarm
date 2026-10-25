@@ -53,7 +53,12 @@ function classify(file) {
   if (!testLike.test(file)) return null
   if (file === 'packages/webui/test/publishedCore.e2e.mjs') return 'managed-delivery'
   if (/^(?:lib|packages\/[^/]+\/dist)\/.*\.test\.js$/.test(file)) return 'generated-test-artifact'
-  if (/^src\/.*\.test\.ts$/.test(file)) return 'backend'
+  // These tests execute resources/helpers still shipped by managed Main. Other
+  // Source tests exercise the retired Main, even when their subject is a Node.
+  if (['src/nodes/runSh.test.ts', 'src/nodes/runPs1.test.ts'].includes(file)) return 'node-bootstrap'
+  if (file === 'src/artifacts/runtimeHelpers.test.ts') return 'runtime-helpers'
+  if (/^src\/.*\.test\.ts$/.test(file)) return 'reference-backend'
+  if (file === 'scripts/test/reference-isolation.test.mjs') return 'reference-isolation'
   if (/^packages\/shared\/src\/.*\.test\.ts$/.test(file)) return 'shared'
   if (/^packages\/cli-node\/src\/.*\.test\.ts$/.test(file)) return 'cli-node'
   if (/^packages\/browser-node\/test\/.*\.test\.mjs$/.test(file)) return 'browser-node'
@@ -98,7 +103,8 @@ export function compiledPath(file) {
 }
 
 export const routineUnitGroups = [
-  'backend',
+  'node-bootstrap',
+  'runtime-helpers',
   'shared',
   'cli-node',
   'browser-node',
@@ -109,7 +115,11 @@ export const routineUnitGroups = [
   'python',
 ]
 
+export const referenceGroups = ['reference-backend', 'reference-isolation']
+
 export const deferredGroups = {
+  'reference-backend': 'Retired TypeScript Main tests; explicit test:reference only.',
+  'reference-isolation': 'Nested retired Main test isolation regressions; explicit test:reference only.',
   'managed': 'Compiled and executed by dotnet test through test:managed or test:unit.',
   'managed-delivery': 'Complete owned publish and original App proof through test:published.',
   'generated-test-artifact': 'Covered through its classified source test.',

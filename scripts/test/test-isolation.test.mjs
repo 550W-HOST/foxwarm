@@ -9,42 +9,10 @@ import { once } from 'node:events'
 import { promisify } from 'node:util'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import { installation } from './test-installation-fixture.mjs'
+
 const execFileAsync = promisify(execFile)
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
-
-async function installation(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'fw-install-canary-'))
-  t.after(() => fs.rm(root, { recursive: true, force: true }))
-  // Copy code, not installation data. Real module-relative path resolution now
-  // points at this synthetic installation, including the data_dir fallback.
-  for (const dir of ['lib', 'scripts', 'templates', 'packages/shared/dist']) {
-    await fs.cp(path.join(repo, dir), path.join(root, dir), { recursive: true })
-  }
-  await fs.symlink(path.join(repo, 'node_modules'), path.join(root, 'node_modules'), 'dir')
-  const canaries = new Map()
-  for (const dir of [root, path.join(root, 'pointer-data'), path.join(root, 'inherited-data')]) {
-    for (const name of ['config.yaml', 'models.yaml']) {
-      const file = path.join(dir, 'state', name)
-      const text = `synthetic-installation-canary: ${name}\nproviders: invalid-do-not-consume\n`
-      await fs.mkdir(path.dirname(file), { recursive: true })
-      await fs.writeFile(file, text)
-      canaries.set(file, text)
-    }
-  }
-  await fs.writeFile(path.join(root, 'data_dir'), 'pointer-data\n')
-  const env = { ...process.env, NODE_OPTIONS: '', NODE_TEST_CONTEXT: undefined, FOXWARM_TEST_RUN_ROOT: '', FOXWARM_TEST_PROCESS_ROOT: '',
-    FOXWARM_DATA_DIR: path.join(root, 'inherited-data'),
-    FOXWARM_CONFIG_PATH: path.join(root, 'state/config.yaml'), CONFIG_PATH: path.join(root, 'pointer-data/state/config.yaml'),
-    MCP_CONFIG_PATH: path.join(root, 'state/config.yaml'), FOXWARM_AGENT_DIR: path.join(root, 'installation-agent'),
-    FOXWARM_AGENTS_DIR: path.join(root, 'installation-agents') }
-  return { root, env, async unchanged() {
-    for (const [file, text] of canaries) assert.equal(await fs.readFile(file, 'utf8'), text, file)
-    for (const dir of [root, path.join(root, 'pointer-data'), path.join(root, 'inherited-data')]) {
-      assert.deepEqual((await fs.readdir(path.join(dir, 'state'), { recursive: true })).sort(), ['config.yaml', 'models.yaml'],
-        'tests must not create logs or other state in a supplied installation')
-    }
-  } }
-}
 
 test('direct test processes keep a held upload spool private during concurrent initialization and cleanup', { timeout: 30_000 }, async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'fw-spool-canary-'))
@@ -97,43 +65,8 @@ test('direct test processes keep a held upload spool private during concurrent i
   assert.deepEqual(await ownerExit, [0, null])
 })
 
-test('direct backend tests isolate inherited and module-relative installation configuration before imports', { timeout: 180_000 }, async t => {
+test('Source helper imports isolate inherited and module-relative configuration before imports', { timeout: 60_000 }, async t => {
   const fixture = await installation(t)
-  // Run the actual formerly unsafe writers, including the former backup/restore
-  // tests. No repository runner or preload is involved in these entry points.
-  const directSelection = await execFileAsync(process.execPath,
-    ['--test', '--test-reporter=tap', 'lib/channels/webuiAccess.test.js', 'lib/configHotApply.test.js'], {
-      cwd: fixture.root, env: fixture.env, timeout: 60_000, maxBuffer: 8 * 1024 * 1024,
-    })
-  assert.match(directSelection.stdout, /# fail 0/)
-  assert.match(directSelection.stdout, /# tests [1-9]/)
-  t.diagnostic(`Two-file direct invocation:\n${directSelection.stdout}${directSelection.stderr}`)
-  await fixture.unchanged()
-  const files = ['lib/channels/webuiSetup.test.js', 'lib/configSectionSaves.test.js',
-    'lib/session/channels.test.js', 'lib/sessionEffectiveSelection.test.js']
-  const result = await execFileAsync(process.execPath, ['--test', '--test-reporter=tap', '--test-concurrency=2', ...files], {
-    cwd: fixture.root, env: fixture.env, timeout: 120_000, maxBuffer: 8 * 1024 * 1024,
-  })
-  assert.match(result.stdout, /# fail 0/);
-  assert.match(result.stdout, /# tests [1-9]/);
-  // node <file> is also supported.
-  await execFileAsync(process.execPath, ['lib/channels/webuiSetup.test.js'], {
-    cwd: fixture.root, env: { ...fixture.env, FOXWARM_CONFIG_PATH: '' }, timeout: 30_000,
-  })
-  await fixture.unchanged()
-  // The normal runner preload must also discard caller installation overrides.
-  await execFileAsync(process.execPath, ['--test', 'lib/channels/webuiSetup.test.js'], {
-    cwd: fixture.root, env: { ...fixture.env, FOXWARM_TEST_RUN_ROOT: path.join(fixture.root, 'run'),
-      NODE_OPTIONS: `--import=${pathToFileURL(path.join(fixture.root, 'scripts/test/test-process-env.mjs')).href}` }, timeout: 30_000,
-  })
-  const fallbackEnv = { ...fixture.env, FOXWARM_DATA_DIR: '', FOXWARM_CONFIG_PATH: '', CONFIG_PATH: '', MCP_CONFIG_PATH: '' }
-  for (const pointerPresent of [true, false]) {
-    if (!pointerPresent) await fs.rm(path.join(fixture.root, 'data_dir'))
-    await execFileAsync(process.execPath, ['lib/channels/webuiSetup.test.js'], {
-      cwd: fixture.root, env: fallbackEnv, timeout: 30_000,
-    })
-    await fixture.unchanged()
-  }
   // A normal child inherits the owned root; explicit fixture roots must not be
   // replaced by the runner preload when the application starts in a subprocess.
   const probe = `
@@ -162,6 +95,22 @@ test('direct backend tests isolate inherited and module-relative installation co
   `
   await execFileAsync(process.execPath, ['-e', probe], { cwd: fixture.root, env: fixture.env, timeout: 20_000 })
   await fixture.unchanged()
+  // Keep direct and preloaded fallback safety in the maintained lane while
+  // historical configuration-writer test execution lives in test:reference.
+  const fallbackEnv = { ...fixture.env, FOXWARM_DATA_DIR: '', FOXWARM_CONFIG_PATH: '', CONFIG_PATH: '', MCP_CONFIG_PATH: '' }
+  for (const pointerPresent of [true, false]) {
+    if (!pointerPresent) await fs.rm(path.join(fixture.root, 'data_dir'))
+    for (const preload of [false, true]) {
+      await execFileAsync(process.execPath, ['-e', probe], {
+        cwd: fixture.root, timeout: 20_000,
+        env: { ...fallbackEnv, ...(preload ? {
+          FOXWARM_TEST_RUN_ROOT: path.join(fixture.root, 'run'),
+          NODE_OPTIONS: `--import=${pathToFileURL(path.join(fixture.root, 'scripts/test/test-process-env.mjs')).href}`,
+        } : {}) },
+      })
+      await fixture.unchanged()
+    }
+  }
 })
 
 test('Source lifecycle fixture ignores caller configuration under direct race and cold-reopen entries', { timeout: 60_000 }, async t => {

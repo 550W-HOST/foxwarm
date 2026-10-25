@@ -1,6 +1,6 @@
 # Unit: Main-owned artifact publication
 
-Files: src/artifacts/tool.ts, src/artifacts/store.ts, src/artifacts/prepare.ts, src/artifacts/reactBuildWorker.ts, src/artifacts/reactCompiler.ts, src/artifacts/rasterMetadata.ts, src/artifacts/managedPrepare.ts, src/artifacts/routes.ts, src/artifacts/image.ts, src/artifacts/artifacts.test.ts, src/artifacts/artifactTools.test.ts
+Files: src/artifacts/tool.ts, src/artifacts/store.ts, src/artifacts/prepare.ts, src/artifacts/reactBuildWorker.ts, src/artifacts/reactCompiler.ts, src/artifacts/rasterMetadata.ts, src/artifacts/managedPrepare.ts, src/artifacts/routes.ts, src/artifacts/image.ts, src/artifacts/artifacts.test.ts, src/artifacts/runtimeHelpers.test.ts, src/artifacts/artifactTools.test.ts
 Secondary files: src/mainManagementToolService.ts, src/mainManagementTools.ts, src/tools.ts, src/tools/definitions.ts, src/tools/placement.ts, src/channels/webuiChannel.ts
 
 ## Purpose
@@ -24,4 +24,4 @@ Publication runs through the existing Main-management RPC facade, including Sess
 
 ## Verification
 
-`artifacts.test.ts` covers schemas, source imports, no execution, old snapshot preservation, concurrent revisions, ownership and HTTP scope. `artifactTools.test.ts` verifies direct/unified/ToolScript dispatch, the reverse-source fence and remote source CWD capture. The primitive ingestion regression uses honest 8 MiB manifest and 16 MiB image sources, read accounting, a growing source, denied read policy and a 193-character qualified Node ID. Tests use temporary data roots, never the live state store. The React compiler requires backend and WebUI dependencies to be installed.
+`runtimeHelpers.test.ts` keeps shared schema validation, direct compiler import restrictions/no execution, and raster metadata checks in maintained tests because these helpers ship with managed Main. `artifacts.test.ts` retains historical Source store revisions, concurrent publication, ownership and HTTP scope under the explicit reference runner. `artifactTools.test.ts` verifies direct/unified/ToolScript dispatch, the reverse-source fence and remote source CWD capture. The primitive ingestion regression uses honest 8 MiB manifest and 16 MiB image sources, read accounting, a growing source, denied read policy and a 193-character qualified Node ID. Tests use temporary data roots, never the live state store. The React compiler requires backend and WebUI dependencies to be installed.
