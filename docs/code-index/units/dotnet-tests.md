@@ -16,6 +16,8 @@ Use the test namespace/directory matching the owning module, then follow the pro
 
 `FunctionArgumentErrorTests` exercises the shared [argument-error boundary](./session-domain.md#tool-argument-parsing) through normal Session owners and loopback Responses HTTP/WS and Messages peers, including one real sibling channel effect, ordered canonical/Archive pairs and safe error replay in the next physical request. Direct Chat Completions converter/serializer and legitimate object/null/empty-input controls retain the existing transport scope.
 
+`WebUiStartupTests` observes generated-token contents after its owned listener is ready, then checks the token format, private permissions, authenticated health/shutdown and opaque-token preservation across restart. File existence alone does not establish completed startup.
+
 ## Contract boundary
 
 Compatibility tests retain TypeScript-to-managed migration and useful source algorithm/protocol comparisons. Current managed installation data does not need to reopen under the retired TypeScript Main (2026-10-25). Legacy block and wait tests qualify managed save, cold reopen and subsequent lifecycle behavior; wait-transition expectations are obtained from original Source data before managed migration. Tests establish source behavior for the checked revision, not release acceptance or root launcher migration. Documentation-only validation intentionally does not run this project or restart the runtime.
