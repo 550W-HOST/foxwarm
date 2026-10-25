@@ -1,6 +1,6 @@
 import * as storage from './storage.js';
 import { executeTool, TOOL_DEFINITIONS } from './tools.js';
-import { cancelConfirmations } from './permissions.js';
+import { cancelConfirmations, resolvePermission } from './permissions.js';
 import * as cdp from './cdp.js';
 import { NODE_PROTOCOL, resolveMasterNodeProtocol } from './nodeProtocol.js';
 
@@ -26,6 +26,12 @@ function cancelWork() {
 export function cancelCalls(predicate) {
   for (const entry of activeCalls.values())
     if (predicate(entry)) entry.controller.abort(new Error('Page or sharing changed.'));
+}
+export function isNavigating(tabId) {
+  return [...activeCalls.values()].some(
+    (entry) =>
+      entry.tabId === tabId && entry.effect === 'navigation' && !entry.controller.signal.aborted,
+  );
 }
 export async function disconnect() {
   generation++;
@@ -62,12 +68,12 @@ async function toolCall(socket, message) {
   const controller = new AbortController();
   const timeout = Math.min(62000, Math.max(1, Number(message.timeoutMs) || 62000));
   const deadline = Date.now() + timeout;
-  activeCalls.set(message.callId, {
+  const invocation = {
     controller,
     tabId: message.args?.tabId,
     windowId: message.args?.windowId,
-    tool: message.tool,
-  });
+  };
+  activeCalls.set(message.callId, invocation);
   const timer = setTimeout(
     () => controller.abort(new Error('Browser call deadline expired.')),
     timeout,
@@ -80,23 +86,38 @@ async function toolCall(socket, message) {
       deadline,
       sessionId: message.sessionId,
       agentName: message.agentName,
+      beginEffect: (effect) => {
+        controller.signal.throwIfAborted();
+        invocation.effect = effect;
+      },
     });
     controller.signal.throwIfAborted();
     if (ws === socket && socket.readyState === WebSocket.OPEN)
       socket.send(JSON.stringify({ type: 'tool_call_response', callId: message.callId, result }));
   } catch (error) {
     // Errors do not contain argument previews or entered values.
+    const detail = error.message || 'Browser call canceled.';
     if (ws === socket && socket.readyState === WebSocket.OPEN)
       socket.send(
         JSON.stringify({
           type: 'tool_call_error',
           callId: message.callId,
-          error: error.message || 'Browser call canceled.',
+          error: invocation.effect
+            ? detail + ' The requested page effect may have occurred; it was not retried.'
+            : detail,
         }),
       );
   } finally {
     clearTimeout(timer);
     activeCalls.delete(message.callId);
+    if (invocation.effect === 'navigation') {
+      try {
+        if ((await resolvePermission(invocation.tabId)) === 'off')
+          await cdp.detach(invocation.tabId);
+      } catch {
+        /* Tab may have closed. */
+      }
+    }
   }
 }
 export async function connect() {

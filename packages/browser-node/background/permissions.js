@@ -1,12 +1,10 @@
 import * as storage from './storage.js';
 
 export const eligible = (url) => /^https?:\/\//i.test(url || '');
-export async function resolvePermission(tabId) {
-  const tab = await chrome.tabs.get(tabId);
+export function permissionForTab(tab, perms) {
   if (!eligible(tab.url)) return 'off';
-  const perms = await storage.getPermissions();
   const url = new URL(tab.url),
-    direct = perms.tabs[tabId];
+    direct = perms.tabs[tab.id];
   if (direct && (direct.level === 'off' || direct.origin === url.origin)) return direct.level;
   const parts = url.hostname.split('.');
   for (let i = 0; i < Math.max(1, parts.length - 1); i++) {
@@ -14,6 +12,10 @@ export async function resolvePermission(tabId) {
     if (rule) return rule;
   }
   return perms.windows[tab.windowId] || 'off';
+}
+export async function resolvePermission(tabId) {
+  const perms = await storage.getPermissions();
+  return permissionForTab(await chrome.tabs.get(tabId), perms);
 }
 export async function windowPermission(windowId) {
   await chrome.windows.get(windowId);

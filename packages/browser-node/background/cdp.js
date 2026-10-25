@@ -158,7 +158,7 @@ export async function screenshot(tabId, expected, signal) {
     },
   });
 }
-export async function action(tabId, expected, tool, args, signal) {
+export async function action(tabId, expected, tool, args, signal, beginNavigation = () => {}) {
   if (tool === 'execute_js') {
     await assertPage(tabId, expected, signal);
     const response = await command(
@@ -232,6 +232,7 @@ export async function action(tabId, expected, tool, args, signal) {
       point = { x: args.x, y: args.y };
     }
     await assertPage(tabId, expected, signal);
+    beginNavigation();
     await command(
       tabId,
       'Input.dispatchMouseEvent',
@@ -279,6 +280,7 @@ export async function action(tabId, expected, tool, args, signal) {
     const key = keys[args.key];
     if (!key) throw new Error('Unsupported editing key.');
     await assertPage(tabId, expected, signal);
+    beginNavigation();
     await command(
       tabId,
       'Input.dispatchKeyEvent',
@@ -301,6 +303,7 @@ export async function action(tabId, expected, tool, args, signal) {
   }
   if (tool === 'navigate') {
     await assertPage(tabId, expected, signal);
+    beginNavigation();
     const response = await command(tabId, 'Page.navigate', { url: args.url }, signal);
     if (response.errorText) throw new Error('Navigation failed: ' + response.errorText);
     while (true) {

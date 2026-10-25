@@ -27,6 +27,20 @@ test('sharing derives window membership and browser-session origin grants; Ask e
     permissions = await import('../background/permissions.js');
   try {
     assert.equal(await permissions.resolvePermission(1), 'off');
+    const privateObservation = {
+      id: 1,
+      windowId: 20,
+      url: 'https://private.invalid/account?secret=synthetic',
+    };
+    const policy = { tabs: {}, sites: { 'example.org': 'auto' }, windows: { 10: 'auto' } };
+    assert.equal(permissions.permissionForTab(privateObservation, policy), 'off');
+    assert.equal(permissions.permissionForTab(tabs.get(1), policy), 'auto');
+    // The metadata's observed window, not its later membership, owns the grant.
+    assert.equal(
+      permissions.permissionForTab({ ...privateObservation, windowId: 10 }, policy),
+      'auto',
+    );
+    assert.equal(permissions.permissionForTab(privateObservation, policy), 'off');
     await storage.setWindowPermission(10, 'auto');
     assert.equal(await permissions.resolvePermission(1), 'auto');
     await storage.setDomainPermission('example.org', 'ask');

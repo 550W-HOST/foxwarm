@@ -1,4 +1,10 @@
-import { resolvePermission, windowPermission, requestConfirmation } from './permissions.js';
+import {
+  permissionForTab,
+  resolvePermission,
+  windowPermission,
+  requestConfirmation,
+} from './permissions.js';
+import * as storage from './storage.js';
 import * as cdp from './cdp.js';
 
 const lanes = new Map();
@@ -97,27 +103,27 @@ export async function executeTool(name, args, context) {
   };
   checkActive();
   if (name === 'list_tabs') {
-    const tabs = [];
-    for (const tab of await chrome.tabs.query({})) {
-      const sharing = await resolvePermission(tab.id);
-      if (sharing !== 'off')
-        tabs.push({
-          tabId: tab.id,
-          windowId: tab.windowId,
-          title: tab.title || '',
-          url: tab.url,
-          sharing,
-          windowSharing: await windowPermission(tab.windowId),
-        });
-    }
+    const perms = await storage.getPermissions();
+    // This is the final asynchronous observation. Authorize exactly the Tab data
+    // being released, never an earlier query object against an ID's later page.
+    const observed = await chrome.tabs.query({});
     checkActive();
-    // Re-resolve immediately before releasing metadata after asynchronous enumeration.
     return {
-      tabs: (
-        await Promise.all(
-          tabs.map(async (tab) => ((await resolvePermission(tab.tabId)) !== 'off' ? tab : null)),
-        )
-      ).filter(Boolean),
+      tabs: observed.flatMap((tab) => {
+        const sharing = permissionForTab(tab, perms);
+        return sharing === 'off'
+          ? []
+          : [
+              {
+                tabId: tab.id,
+                windowId: tab.windowId,
+                title: tab.title || '',
+                url: tab.url,
+                sharing,
+                windowSharing: perms.windows[tab.windowId] || 'off',
+              },
+            ];
+      }),
     };
   }
   // Capture the actual document before the operation waits behind another call.
@@ -210,11 +216,18 @@ export async function executeTool(name, args, context) {
         if (!approved) throw new Error('Request denied, canceled, or expired.');
       }
       await validate();
+      let navigationEffect = false;
+      const beginNavigation = () => {
+        checkActive();
+        navigationEffect = true;
+        context.beginEffect?.('navigation');
+      };
       let result;
       if (name === 'get_tab_content')
         result = await cdp.content(tab.id, expected, args.format || 'snapshot', signal);
       else if (name === 'screenshot') result = await cdp.screenshot(tab.id, expected, signal);
       else if (name === 'close_tab') {
+        context.beginEffect?.('close');
         await chrome.tabs.remove(tab.id);
         checkActive();
         return { closed: true, tabId: tab.id };
@@ -232,18 +245,42 @@ export async function executeTool(name, args, context) {
           }
           await pause(Math.min(100, end - Date.now()), signal);
         }
-      } else result = await cdp.action(tab.id, expected, name, args, signal);
+      } else result = await cdp.action(tab.id, expected, name, args, signal, beginNavigation);
       if (name === 'navigate') {
         // Navigation may intentionally leave the shared origin; release no unshared metadata.
         checkActive();
-        const sharing = await resolvePermission(tab.id);
+        if ((await resolvePermission(tab.id)) === 'off') {
+          await cdp.detach(tab.id);
+          return { tabId: tab.id, sharing: 'off' };
+        }
+        const currentPage = await cdp.page(tab.id, signal);
+        const perms = await storage.getPermissions();
+        const currentTab = await chrome.tabs.get(tab.id);
+        checkActive();
+        if (currentTab.windowId !== tab.windowId)
+          throw new Error('Tab moved during navigation; its outcome may have occurred.');
+        const sharing = permissionForTab(currentTab, perms);
         if (sharing === 'off') {
           await cdp.detach(tab.id);
           return { tabId: tab.id, sharing };
         }
-        const current = await cdp.page(tab.id, signal);
+        if (currentTab.url !== currentPage.url)
+          throw new Error(
+            'Navigation completed, but the page changed before its identity could be reported.',
+          );
+        return { tabId: tab.id, pageId: currentPage.pageId, url: currentTab.url, sharing };
+      }
+      if (navigationEffect) {
         checkActive();
-        return { tabId: tab.id, pageId: current.pageId, url: current.url, sharing };
+        const current = await chrome.tabs.get(tab.id);
+        if (current.windowId !== tab.windowId)
+          throw new Error('Tab moved during the page action; its outcome may have occurred.');
+        // Successful native input has already been accepted. Its boolean outcome
+        // contains no old-document data; following a link must not fail because
+        // the intended navigation committed between asynchronous observations.
+        const sharing = await resolvePermission(tab.id);
+        checkActive();
+        return { ...result, tabId: tab.id, sharing };
       }
       await validate();
       return { ...result, tabId: tab.id };
@@ -262,7 +299,7 @@ const descriptions = {
     'Capture the visible page viewport of a shared browser tab without activating it. Returns an image and its page and viewport information.',
   click:
     'Click an element in a shared browser tab using a snapshot reference, a unique CSS selector, or viewport coordinates from a screenshot.',
-  fill: 'Replace text in an editable element in a shared browser tab. Use a snapshot reference or a unique CSS selector.',
+  fill: "Replace text in a shared browser tab's text, search, email, URL, telephone, password, or number input, textarea, or contenteditable element. Use a snapshot reference or a unique CSS selector.",
   select_option:
     'Select options in a native HTML select element by value. Use a snapshot reference or a unique CSS selector.',
   scroll:

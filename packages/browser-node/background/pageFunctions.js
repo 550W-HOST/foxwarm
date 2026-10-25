@@ -49,13 +49,11 @@ export function readPage(format, snapshotId) {
       entry.readOnly = el.readOnly;
     }
     if (el instanceof HTMLSelectElement)
-      entry.options = [...el.options]
-        .slice(0, 50)
-        .map((option) => ({
-          value: clean(option.value),
-          text: clean(option.text),
-          selected: option.selected,
-        }));
+      entry.options = [...el.options].slice(0, 50).map((option) => ({
+        value: clean(option.value),
+        text: clean(option.text),
+        selected: option.selected,
+      }));
     if (el instanceof HTMLAnchorElement) entry.href = clean(el.href);
     if (['checkbox', 'radio'].includes(el.type)) entry.checked = el.checked;
     elements.push(entry);
@@ -99,6 +97,12 @@ export function elementAction(args, operation) {
       !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el.isContentEditable)
     )
       throw new Error('Element is not editable.');
+    if (
+      operation === 'fill' &&
+      el instanceof HTMLInputElement &&
+      !['text', 'search', 'email', 'url', 'tel', 'password', 'number'].includes(el.type)
+    )
+      throw new Error('This input type does not support text replacement.');
     el.focus({ preventScroll: true });
     if (document.activeElement !== el) throw new Error('Element could not be focused.');
     if (operation === 'fill') {

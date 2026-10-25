@@ -69,7 +69,7 @@ const peer = createServer(async (request, response) => {
   response.setHeader('content-type', 'text/html');
   const color = request.url === '/blue' ? 'blue' : 'red';
   response.end(
-    `<html><head><title>Owned ${request.url}</title></head><body style="background:${color};min-height:2000px"><h1>Owned ${request.url}</h1><input id="field"><input id="password" type="password" value="SYNTHETIC-SECRET"><section><button>First</button><button>Second</button></section><select id="choice"><option value="a">A</option><option value="b">B</option></select><textarea id="area"></textarea></body></html>`,
+    `<html><head><title>Owned ${request.url}</title></head><body style="background:${color};min-height:2000px"><h1>Owned ${request.url}</h1><input id="field"><input id="search" type="search"><input id="email" type="email"><input id="url" type="url"><input id="tel" type="tel"><input id="number" type="number"><input id="date" type="date" value="2026-01-01"><div id="edit" contenteditable>old</div><a id="link" href="/linked">Next page</a><a id="off-link" href="${origin.replace('127.0.0.1', 'localhost')}/off">Leave sharing</a><input id="password" type="password" value="SYNTHETIC-SECRET"><section><button>First</button><button>Second</button></section><select id="choice"><option value="a">A</option><option value="b">B</option></select><textarea id="area"></textarea></body></html>`,
   );
 });
 peer.listen(0, '127.0.0.1');
@@ -240,6 +240,50 @@ try {
   const redTab = local.find((tab) => tab.url.endsWith('/red')),
     blueTab = local.find((tab) => tab.url.endsWith('/blue'));
   assert.deepEqual((await invoke('list_tabs')).tabs, []);
+  // Normal tab observations must never pair a private old URL/title with a later grant.
+  await msg({ type: 'set_domain_permission', domain: '127.0.0.1', level: 'auto' });
+  const metadataTabs = await popup.evaluate(
+    async ({ origin, windowId }) => {
+      const fillers = await Promise.all(
+        Array.from({ length: 24 }, (_, i) =>
+          chrome.tabs.create({ windowId, url: origin + '/filler-' + i, active: false }),
+        ),
+      );
+      const target = await chrome.tabs.create({
+        windowId,
+        url: origin.replace('127.0.0.1', 'localhost') + '/private?account=SYNTHETIC-PRIVATE',
+        active: false,
+      });
+      return { fillers: fillers.map((tab) => tab.id), target: target.id };
+    },
+    { origin, windowId: redTab.windowId },
+  );
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await popup.evaluate(({ tabId, url }) => chrome.tabs.update(tabId, { url }), {
+      tabId: metadataTabs.target,
+      url:
+        origin.replace('127.0.0.1', 'localhost') + '/private?account=SYNTHETIC-PRIVATE-' + attempt,
+    });
+    await until(
+      async () =>
+        (await popup.evaluate((tabId) => chrome.tabs.get(tabId), metadataTabs.target)).status ===
+        'complete',
+      'private metadata fixture loaded',
+    );
+    const listing = invoke('list_tabs');
+    await sleep(5);
+    await popup.evaluate(({ tabId, url }) => chrome.tabs.update(tabId, { url }), {
+      tabId: metadataTabs.target,
+      url: origin + '/public',
+    });
+    assert(!JSON.stringify(await listing).includes('SYNTHETIC-PRIVATE'));
+  }
+  await msg({ type: 'remove_domain_permission', domain: '127.0.0.1' });
+  await popup.evaluate(
+    (ids) => chrome.tabs.remove(ids),
+    [...metadataTabs.fillers, metadataTabs.target],
+  );
+
   await msg({ type: 'set_tab_permission', tabId: redTab.id, level: 'auto' });
   // Exact explicit routing leaves Session's current execution Node unchanged.
   const dev = await fixture.api('POST', '/api/nodes/onboarding/create', {
@@ -300,6 +344,28 @@ try {
   assert((await invoke('click', { tabId: redTab.id, selector: 'button' })).error);
   assert((await invoke('fill', { tabId: redTab.id, selector: '#field', text: 'agent Ω' })).filled);
   assert.equal(await red.$eval('#field', (el) => el.value), 'agent Ω');
+  for (const [selector, text] of [
+    ['#search', 'query'],
+    ['#email', 'new@example.org'],
+    ['#url', 'https://example.org/'],
+    ['#tel', '+123456'],
+    ['#number', '456'],
+    ['#area', 'multiline'],
+    ['#edit', 'editable'],
+  ]) {
+    assert((await invoke('fill', { tabId: redTab.id, selector, text })).filled);
+    assert.equal(await red.$eval(selector, (el) => el.value ?? el.textContent), text);
+  }
+  await red.focus('#field');
+  const unsupportedDate = await invoke('fill', {
+    tabId: redTab.id,
+    selector: '#date',
+    text: '2026-05-06',
+  });
+  assert(unsupportedDate.error);
+  assert.equal(await red.$eval('#date', (el) => el.value), '2026-01-01');
+  assert.equal(await red.evaluate(() => document.activeElement.id), 'field');
+
   assert(
     (await invoke('select_option', { tabId: redTab.id, selector: '#choice', values: ['b'] }))
       .selected,
@@ -366,6 +432,27 @@ try {
   assert((await invoke('click', { tabId: redTab.id, ref: buttons[0].ref })).error);
   await red.reload();
   assert((await invoke('click', { tabId: redTab.id, x: 1, y: 1, pageId: shot.pageId })).error);
+
+  assert((await invoke('click', { tabId: redTab.id, selector: '#link' })).clicked);
+  await until(() => red.url().endsWith('/linked'), 'selector link navigation');
+  snapshot = await invoke('get_tab_content', { tabId: redTab.id });
+  const linkRef = snapshot.elements.find((el) => el.tag === 'a' && el.label === 'Next page').ref;
+  assert((await invoke('click', { tabId: redTab.id, ref: linkRef })).clicked);
+  assert((await invoke('click', { tabId: redTab.id, ref: linkRef })).error);
+  const leaving = await invoke('click', { tabId: redTab.id, selector: '#off-link' });
+  assert(leaving.clicked, JSON.stringify(leaving));
+  assert(!leaving.url && !leaving.title && !leaving.pageId);
+  await until(() => red.url().includes('/off'), 'link leaving direct origin sharing');
+  assert.equal((await msg({ type: 'resolve_permission', tabId: redTab.id })).level, 'off');
+  assert((await invoke('get_tab_content', { tabId: redTab.id })).error);
+  await red.goto(origin + '/red');
+  const leavingExplicitly = await invoke('navigate', {
+    tabId: redTab.id,
+    url: origin.replace('127.0.0.1', 'localhost') + '/off',
+  });
+  assert.equal(leavingExplicitly.sharing, 'off');
+  assert(!leavingExplicitly.url && !leavingExplicitly.pageId && !leavingExplicitly.title);
+  await red.goto(origin + '/red');
   await msg({ type: 'set_window_permission', windowId: redTab.windowId, level: 'auto' });
   await msg({ type: 'remove_tab_permission', tabId: redTab.id });
   const opened = await invoke('open_tab', { windowId: redTab.windowId, url: origin + '/new' });
@@ -614,6 +701,7 @@ try {
     'stale Ask navigation, revocation and move',
     'password omission and masked Ask/results',
     'Main Stop pending Ask and queued-call cancellation',
+    'metadata navigation race, selector/ref links and off-destination denial, bounded fill types',
     'actual host switch clears old credentials',
     'heartbeat, Stop and Forget past alarms',
   ];
