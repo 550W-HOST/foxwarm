@@ -268,7 +268,7 @@ const descriptions = {
   scroll:
     'Scroll a shared browser page or a specified scrollable element by a distance in CSS pixels.',
   navigate:
-    'Navigate a shared browser tab to an HTTP or HTTPS URL and report its resulting page identity and sharing status.',
+    'Navigate a shared browser tab to an HTTP or HTTPS URL and report its sharing status. Page identity and URL are returned while the destination remains shared.',
   wait_for:
     'Wait for a page condition in a shared browser tab, within a bounded timeout. Returns when the condition is met or reports why waiting ended.',
   press_key: 'Send a supported editing key to a shared browser page or a specified element.',

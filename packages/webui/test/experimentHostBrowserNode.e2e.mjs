@@ -10,6 +10,12 @@ import sharp from 'sharp';
 import yaml from 'js-yaml';
 import { createHostFixture, until, sleep } from './experimentHostFixture.mjs';
 
+const ownedXvfb = process.argv.slice(2).includes('--owned-xvfb');
+assert(
+  !ownedXvfb || process.env.DISPLAY,
+  '--owned-xvfb requires an explicitly owned Xvfb display.',
+);
+
 const fixture = await createHostFixture('browser-node', {
   ...(process.env.FOXWARM_PUBLISHED_CORE
     ? { corePath: join(process.env.FOXWARM_PUBLISHED_CORE, 'Foxwarm.dll') }
@@ -183,7 +189,7 @@ try {
   assert(!zip.includes(Buffer.from(setup.body.pairingToken)));
   browser = await puppeteer.launch({
     executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium',
-    headless: !process.env.DISPLAY,
+    headless: !ownedXvfb,
     ignoreDefaultArgs: ['--disable-infobars', '--enable-automation'],
     userDataDir: join(fixture.root, 'profile'),
     args: [
@@ -195,6 +201,7 @@ try {
     ],
   });
   evidence.browser = await browser.version();
+  evidence.mode = ownedXvfb ? 'owned-xvfb' : 'headless';
   const target = await browser.waitForTarget(
     (target) => target.type() === 'service_worker' && target.url().endsWith('/background/main.js'),
   );
@@ -517,7 +524,7 @@ try {
   assert(navigated.pageId, JSON.stringify(navigated));
   assert((await invoke('scroll', { tabId: redTab.id, deltaY: 50 })).scrolled);
   assert((await invoke('close_tab', { tabId: opened.tabId })).closed);
-  if (process.env.DISPLAY) {
+  if (ownedXvfb) {
     // OS keyboard input stays in the person's foreground tab during background fill.
     await blue.bringToFront();
     await blue.focus('#field');

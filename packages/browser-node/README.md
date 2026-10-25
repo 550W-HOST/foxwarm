@@ -1,6 +1,6 @@
 # Foxwarm Browser Node
 
-Use your existing logged-in Chrome or Chromium tabs from Foxwarm. You choose which tabs or windows to share; the Agent can read pages, fill forms and capture a background tab while you use another tab. Chrome 120 or newer is required. This unpacked Manifest V3 extension is not a Chrome Web Store or Firefox distribution.
+Use your existing logged-in Chrome or Chromium tabs from Foxwarm. You choose which tabs or windows to share; the Agent can read pages, fill forms and capture a background tab while you use another tab. The manifest requires Chrome 120 or newer; this version was qualified with Chrome 145 on Linux. This unpacked Manifest V3 extension is not a Chrome Web Store or Firefox distribution.
 
 ## Install and pair
 
@@ -34,7 +34,7 @@ Debugger permission is broad. Sharing is enforced by the extension, not a Chrome
 - Content formats are `snapshot` (default), `text` and `html`. Snapshots are bounded DOM summaries with opaque element refs, not the browser's native accessibility tree. Password values are omitted from ordinary content; fill approval previews and results do not echo entered text.
 - Element actions accept a ref from the latest snapshot or a CSS selector matching exactly one element. Navigation/detach and a new snapshot invalidate old refs; obtain a fresh snapshot rather than guessing a selector.
 - `screenshot` captures the target viewport without activating it. Coordinate `click` requires its `pageId` and viewport CSS-pixel coordinates.
-- `open_tab` requires a shared `windowId` and opens inactive. Site/window rules determine the new tab's sharing. `navigate` reports the resulting page identity and sharing; crossing an unshared origin does not disclose its content. `close_tab` can close a window when it removes its last tab.
+- `open_tab` requires a shared `windowId` and opens inactive. Site/window rules determine the new tab's sharing. `navigate` reports sharing status; page identity and URL are returned while the destination remains shared. `close_tab` can close a window when it removes its last tab.
 - `wait_for` has fixed element, visible-text and URL conditions and a bounded timeout. `execute_js` evaluates page-context JavaScript, awaits Promises and follows the same Ask/Auto rule. Explicit JavaScript can access sensitive page data; ordinary-content password omission is not a JavaScript sandbox.
 
 You can leave a development Node selected and use `search_tools` with this Browser Node's ID, followed by an explicit `call_tool` target such as `node:my-browser/get_tab_content`. Node and Session authorization still applies. These tools operate your shared browser; the separate `browse_*` tools launch a process-owned browser.
@@ -43,6 +43,12 @@ The first version targets ordinary top-document HTTP(S) pages. It does not provi
 
 ## Validation
 
-`node --test packages/browser-node/test/*.test.mjs` covers protocol validation, screenshot envelopes, connection/credential lifecycle, sharing precedence and confirmation expiry. The existing disposable C# host harness runs the actual packaged MV3 extension in `packages/webui/test/experimentHostBrowserNode.e2e.mjs`, including real model dispatch, background images in history, form operations, sharing races and Main Stop. With an owned 1280×900 Xvfb display it also exercises foreground OS typing and the actual Chrome debugging banner. No personal profile or installation state is used. The broader external-Node and original onboarding drivers retain their CLI and UI coverage.
+`node --test packages/browser-node/test/*.test.mjs` covers protocol validation, screenshot envelopes, connection/credential lifecycle, sharing precedence and confirmation expiry. The existing disposable C# host harness runs the actual packaged MV3 extension in `packages/webui/test/experimentHostBrowserNode.e2e.mjs`, including real model dispatch, background images in history, form operations, sharing races and Main Stop. Ordinary invocation is headless even when `DISPLAY` is inherited. The explicit `--owned-xvfb` test flag also exercises foreground OS typing and the actual Chrome debugging banner; use it only with a separately owned 1280×900 Xvfb display. No personal profile or installation state is used. The broader external-Node and original onboarding drivers retain their CLI and UI coverage.
+
+For the owned headed qualification (Linux with Xvfb), run:
+
+```sh
+xvfb-run -a -s '-screen 0 1280x900x24 -nolisten tcp' node packages/webui/test/experimentHostBrowserNode.e2e.mjs --owned-xvfb
+```
 
 The extension sends JSON ping every 25 seconds; the current C# Main replies with JSON pong. Alarms provide bounded reconnect wakeups and never override persisted Stop.

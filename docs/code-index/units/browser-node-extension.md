@@ -8,7 +8,7 @@ The plain-module Chrome MV3 extension supplies the cooperative shared-browser pr
 
 ## File responsibilities
 
-- `manifest.json`: Chrome 120+, tabs/debugger/webNavigation/storage/notifications/alarms, HTTP(S) connection origins, module worker and popup. No activeTab or scripting driver.
+- `manifest.json`: Chrome 120+ manifest minimum, qualified with Chrome 145 on Linux; tabs/debugger/webNavigation/storage/notifications/alarms, module worker and popup. No host grants, activeTab or scripting driver.
 - `storage.js`: serialized connection/site writes in local storage and live tab/window sharing in session storage. Main normalization preserves deployment paths. Credential installation checks current target and enabled intent.
 - `permissions.js`: one tab/site/window/Off resolver, transient Ask requests, full action previews, expiry/cancellation and async validation on Allow. Notifications only draw attention to the popup; closing one denies the pending request.
 - `main.js`: local popup dispatch, reconnect wakeups and tab/window lifecycle invalidation. Rule changes cancel affected calls/confirmations; losing sharing detaches its page.
@@ -27,14 +27,14 @@ Navigation waits for the requested document commit, then resolves sharing before
 
 ## Connection and packaging integration
 
-Pairing and authenticated registration retain the shared core Node protocol range 1–2 and omitted-protocol legacy response reader; this is shared transport compatibility, not old Browser configuration migration. Approved pairing discards the bootstrap token. JSON ping every 25 seconds is answered by current C# Main; reconnect alarms respect disabled intent. No self-port keepalive exists.
+Pairing and authenticated registration retain the shared core Node protocol range 1–2 and omitted-protocol legacy response reader; this is shared transport compatibility, not old Browser configuration migration. Approved pairing discards the bootstrap token. JSON ping every 25 seconds is answered by current C# Main; reconnect alarms respect disabled intent. No self-port keepalive exists. Main transport uses only a WebSocket; no cross-origin fetch/XHR or host-permission page driver remains. The packaged extension is qualified without broad HTTP/HTTPS host grants.
 
 The C# publish carries extension assets through `Delivery.targets`; `NodeBootstrap` assembles a credential-free ZIP from those runtime files. Authenticated `NodeRoutes` Browser setup returns the normalized Main address and private pairing token. Production `NodeOnboardingModal` exposes download, load-unpacked, pair/approve/share steps and the debugger banner. Deployment-relative URLs preserve non-root mounts. These C# and UI files remain owned by their existing units.
 
 ## Validation
 
 - `packages/browser-node/test/*.test.mjs`: shared protocol responses, current image envelope, target/Stop/Forget/late-pairing lifecycle, sharing precedence/session storage, stale/expired/canceled Ask.
-- `packages/webui/test/experimentHostBrowserNode.e2e.mjs`: existing disposable host fixture, published-runtime ZIP installed as the real MV3 extension, non-root setup, real model discovery/explicit routing/authorization, DOM refs, duplicate selectors, forms, strict CSP/Promise, target screenshots/image history, sharing/window membership, stale approvals and Main Stop, credential host switch, heartbeat and Stop/Forget past alarms. An owned 1280×900 Xvfb display also checks foreground OS typing and actual Chrome banner Cancel; `x11.py` is only that test's display driver.
+- `packages/webui/test/experimentHostBrowserNode.e2e.mjs`: existing disposable host fixture, published-runtime ZIP installed as the real MV3 extension, non-root setup, real model discovery/explicit routing/authorization, DOM refs, duplicate selectors, forms, strict CSP/Promise, target screenshots/image history, sharing/window membership, stale approvals and Main Stop, credential host switch, heartbeat and Stop/Forget past alarms. Ordinary entry is headless regardless of inherited `DISPLAY`. The explicit test-only `--owned-xvfb` flag, used with `xvfb-run -a -s '-screen 0 1280x900x24 -nolisten tcp'`, also checks foreground OS typing and actual Chrome banner Cancel; `x11.py` is only that owned-display test's driver.
 - `experimentHostExternalNodes.e2e.mjs`: retained broader official-client protocol/authorization/CLI qualification and current Browser tool names/sharing path.
 - `experimentHostNodeOnboarding.e2e.mjs`: original production App Browser choice, prefixed download and authenticated pairing details alongside existing CLI onboarding.
 
