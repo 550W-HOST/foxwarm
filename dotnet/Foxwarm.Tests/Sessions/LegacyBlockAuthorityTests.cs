@@ -10,7 +10,7 @@ namespace Foxwarm.Tests;
 
 public sealed class LegacyBlockAuthorityTests
 {
-    private static async Task<JsonObject> Source(string mode, string root)
+    private static async Task<JsonObject> Source(string root)
     {
         var repo =
             Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
@@ -28,7 +28,6 @@ public sealed class LegacyBlockAuthorityTests
                         "Fixtures",
                         "legacy-block-fixture-ts.mjs"
                     ),
-                    mode,
                     root,
                 },
                 RedirectStandardOutput = true,
@@ -57,7 +56,7 @@ public sealed class LegacyBlockAuthorityTests
         var data = Path.Combine(temp.Path, "data");
         var work = Path.Combine(temp.Path, "work");
         Directory.CreateDirectory(work);
-        var expected = await Source("seed", data);
+        var expected = await Source(data);
         var id = expected["childId"]!.GetValue<string>();
         var legacyMeta = expected["inheritedMeta"]!;
         await using var peer = new ScriptedResponsesSequenceServer(
@@ -228,8 +227,6 @@ public sealed class LegacyBlockAuthorityTests
                 new ArchiveContextReader(owner.AuthorityStore.Archive).Block(3)!.SourceBlockIds
             );
         }
-        var sourceReopened = await Source("verify", data);
-        Assert.True(JsonNode.DeepEquals(legacyMeta, sourceReopened["inheritedMeta"]));
     }
 
     [Fact]

@@ -18,7 +18,7 @@ Use the test namespace/directory matching the owning module, then follow the pro
 
 ## Contract boundary
 
-Tests establish source behavior for the checked revision, not release acceptance or root launcher migration. Documentation-only validation intentionally does not run this project or restart the runtime.
+Compatibility tests retain TypeScript-to-managed migration and useful source algorithm/protocol comparisons. Current managed installation data does not need to reopen under the retired TypeScript Main (2026-10-25). Legacy block and wait tests qualify managed save, cold reopen and subsequent lifecycle behavior; wait-transition expectations are obtained from original Source data before managed migration. Tests establish source behavior for the checked revision, not release acceptance or root launcher migration. Documentation-only validation intentionally does not run this project or restart the runtime.
 
 ## Fault coverage placement
 

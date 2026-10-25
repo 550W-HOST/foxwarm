@@ -272,7 +272,6 @@ public sealed class CommittedArchiveIdentityTests
         }
         Assert.Empty(manager.Owners());
         Assert.True(JsonNode.DeepEquals(before, AuditRows(database)));
-        await SourceFixture("verify", data);
     }
 
     [Fact]

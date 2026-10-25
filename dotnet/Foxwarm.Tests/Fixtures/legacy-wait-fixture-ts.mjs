@@ -5,7 +5,7 @@ import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 
 const [mode, root] = process.argv.slice(2)
-if (!root || !['seed', 'inspect', 'matching', 'input'].includes(mode)) throw new Error('usage: legacy-wait-fixture-ts.mjs seed|inspect|matching|input ROOT')
+if (!root || !['seed', 'matching', 'input'].includes(mode)) throw new Error('usage: legacy-wait-fixture-ts.mjs seed|matching|input ROOT')
 // Establish disposable runtime paths before importing application modules.
 const { isolatedApplicationEnv } = createRequire(import.meta.url)('../../../scripts/test/test-process-env.cjs')
 Object.assign(process.env, isolatedApplicationEnv(root))

@@ -19,6 +19,8 @@ The reference checkout also needs Git history: eight fixture producers read pinn
 - `../Foxwarm.DevTools/` implements managed probe commands. Its build copies `Fixtures/parity-corpus.json` and `Fixtures/responses-stream-corpus.json` under their existing output names so the commands also work without an explicit corpus argument.
 - `../scripts/` contains build/publish/source-generation helpers. Optional HEIC preparation is documented in [native image prerequisites](../../docs/native-image-prerequisites.md).
 
+Legacy Session/Archive producers qualify migration into managed Main. Save/reopen checks use the maintained implementation; returning current installation data to retired TypeScript Main is outside the [compatibility boundary](../../docs/code-index/units/dotnet-tests.md#contract-boundary). Source-only reopen and algorithm/protocol comparisons remain useful against original Source data.
+
 ## Differential checks
 
 Build the solution and reference first:

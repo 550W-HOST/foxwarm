@@ -119,7 +119,12 @@ try {
     await writeFile(join(sessions, id + '.json'), JSON.stringify(raw))
     bootRows.push({ id, agent: 'main', model: 'a', busy: false, queueLength: 1, meta: raw.meta, currentNode: node })
   }
-  const bootCatalog = new SessionCatalogStore(join(state, 'catalog.sqlite')); bootCatalog.upsertMany(bootRows); bootCatalog.close()
+  const bootSeed = join(fixture.root, 'boot-catalog.json')
+  await writeFile(bootSeed, JSON.stringify(bootRows))
+  execFileSync(join(process.env.DOTNET_ROOT, 'dotnet'), [
+    resolve('dotnet/Foxwarm.DevTools/bin/Debug/net10.0/Foxwarm.DevTools.dll'),
+    'catalog-fixture', 'upsert', fixture.data, bootSeed,
+  ], { stdio: 'pipe' })
   await seedBranches('boot-seed', bootRows)
   const bootBefore = await Promise.all(bootRows.map(row => readFile(join(sessions, row.id + '.json'), 'utf8'))), requestCount = requests.length
   await assert.rejects(() => fixture.start(), /InvalidDataException/)

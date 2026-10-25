@@ -31,18 +31,18 @@ async function fixture({ prepared = false, fail = '', incomplete = false } = {},
 }
 
 const unix = { skip: process.platform === 'win32' }
-test('browser preparation produces cold Code/Main/CLI resources and installs them before fixture execution', unix, async () => {
+test('browser preparation produces cold Code/Main/CLI/catalog fixture resources and installs them before fixture execution', unix, async () => {
   await fixture({}, async ({ root, result, calls }) => {
     assert.equal(result.status, 0, result.stderr)
-    assert.deepEqual(calls.map(call => call.name), ['npm', 'dotnet', 'dotnet'])
+    assert.deepEqual(calls.map(call => call.name), ['npm', 'dotnet', 'dotnet', 'dotnet'])
     assert.deepEqual(calls[0].args, ['run', 'build:code'])
-    for (const project of ['Foxwarm', 'Foxwarm.CliNode']) await fs.access(path.join(root, `dotnet/${project}/bin/Debug/net10.0/${project}.dll`))
+    for (const project of ['Foxwarm', 'Foxwarm.CliNode', 'Foxwarm.DevTools']) await fs.access(path.join(root, `dotnet/${project}/bin/Debug/net10.0/${project}.dll`))
     assert.equal(await fs.readFile(path.join(root, 'dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web', required[2]), 'utf8'), 'prepared ' + required[2])
   })
 })
 test('browser preparation reuses caller Code resources and fences failed managed preparation', unix, async () => {
   await fixture({ prepared: true }, async ({ root, result, calls }) => {
-    assert.equal(result.status, 0, result.stderr); assert.deepEqual(calls.map(call => call.name), ['dotnet', 'dotnet'])
+    assert.equal(result.status, 0, result.stderr); assert.deepEqual(calls.map(call => call.name), ['dotnet', 'dotnet', 'dotnet'])
     assert.equal(await fs.readFile(path.join(root, 'dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web', required[2]), 'utf8'), 'retained caller resource')
   })
   await fixture({ prepared: true, fail: 'dotnet' }, ({ result, calls }) => {

@@ -66,7 +66,7 @@ try {
   await fixture.start()
   assert.equal(await readFile(join(fixture.data, 'state/sessions.json.pre-catalog-sqlite-v1.bak'), 'utf8'), legacy)
   assert.equal(sql('SELECT session_count FROM catalog_count')[0].session_count, rows.length)
-  assert.equal(sql('PRAGMA user_version')[0].user_version, 2)
+  assert.equal(sql('PRAGMA user_version')[0].user_version, 3)
   assert.equal((await dto('root')).model, 'a', 'current JSON semantic model wins old catalog')
   assert.equal((await dto('root')).displayName, 'Source root'); assert.equal((await readAuthority('root')).displayName, 'old context copy')
   const lookup = await exact(['root-alias', 'shared', 'missing', 'retained-not-live', 'dangling', 'self'])

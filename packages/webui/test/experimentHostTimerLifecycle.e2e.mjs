@@ -6,7 +6,6 @@ import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile, access } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
 import { writeModelFixture } from './experimentModelFixture.mjs'
 const options = { env: {} }, fixture = await createHostFixture('timer-lifecycle', options), requests = [], failures = [], rounds = new Map(), held = new Map()
@@ -40,8 +39,14 @@ async function send(task, id = 'main') { assert.equal((await fixture.api('POST',
 const timer = (id, sessionId, message, extra) => ({ id, sessionId, message, createdAt: 1, ...extra })
 const catalogRow = id => ({ id, agent: 'main', busy: false, queueLength: 0, meta: { messageCount: 0, lastMessageTime: 0 } })
 async function seed(rows) {
-  const module = await import(pathToFileURL(resolve('lib/session/catalogStore.js')).href), store = new module.SessionCatalogStore(join(fixture.data, 'state/catalog.sqlite')); try { store.replaceAll(rows.map(row => Object.fromEntries(Object.entries(row).filter(([, value]) => value !== null)))) } finally { store.close() }
-  const file = join(fixture.root, 'catalog-seed.json'); await writeFile(file, JSON.stringify(rows)); execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-catalog-seed-ts.mjs'), fixture.data, file], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
+  const file = join(fixture.root, 'catalog-seed.json')
+  const projected = rows.map(row => Object.fromEntries(Object.entries(row).filter(([, value]) => value !== null)))
+  await writeFile(file, JSON.stringify(projected))
+  execFileSync(join(process.env.DOTNET_ROOT, 'dotnet'), [
+    resolve('dotnet/Foxwarm.DevTools/bin/Debug/net10.0/Foxwarm.DevTools.dll'),
+    'catalog-fixture', 'replace', fixture.data, file,
+  ], { stdio: 'pipe' })
+  execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-catalog-seed-ts.mjs'), fixture.data, file], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
 }
 async function put(id, extra = {}) { await writeFile(join(fixture.data, 'state/sessions', id + '.json'), JSON.stringify({ sessionStateVersion: 1, id, agent: 'main', busy: false, history: [], queue: [], stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0 }, nextMessageSeq: 1, nextBlockId: 1, meta: { messageCount: 0, lastMessageTime: 0 }, promptCacheKey: randomUUID(), persistentMemorySnapshot: 'Existing dormant owner snapshot.', ...extra })) }
 try {
@@ -65,7 +70,8 @@ try {
   assert((await rows()).some(row => row?.id === 'redundant')); assert((await rows()).some(row => row?.id === 'stale')); assert((await rows()).some(row => row?.id === 'malformed-internal')); assert((await rows()).some(row => row?.id === 'unknown-internal')); if (Date.now() < deadline - 150) { await sleep(Math.min(150, deadline - Date.now() - 150)); assert.equal(requests.filter(record => record.wait).length, waitRequests) }
   await completed('main', 'DONE-WAIT-TIMEOUT'); assert(!(await rows()).some(row => ['redundant', 'stale'].includes(row?.id))); const wake = requests.filter(record => record.wait).at(-1); assert(wake.at >= deadline - 20); assert.equal(requests.filter(record => record.wait).length, waitRequests + 1)
   // Ordinary clocks remain unarmed if any mandatory C2 owner fails startup validation.
-  const module = await import(pathToFileURL(resolve('lib/session/catalogStore.js')).href), catalog = new module.SessionCatalogStore(join(fixture.data, 'state/catalog.sqlite')); let savedCatalog; try { savedCatalog = catalog.list() } finally { catalog.close() }
+  const savedCatalog = (await fixture.api('GET', '/api/sessions')).body.sessions
+  await fixture.stop()
   await seed([...savedCatalog, { ...catalogRow('mandatory-busy'), busy: true }]); await put('mandatory-busy', { busy: true }); await writeFile(join(fixture.data, 'state/sessions/mandatory-busy.json'), '{broken'); const originalTimers = await readFile(timerPath); const blocked = JSON.parse(originalTimers); blocked.timers.push(timer('barrier', 'main', 'FIRE:forbidden', { at: 1 })); await writeFile(timerPath, JSON.stringify(blocked)); const barrierRequests = requests.length;
   await assert.rejects(() => fixture.start(), /authority|JSON|invalid|parse/i); assert.equal(requests.length, barrierRequests); assert((await rows()).some(row => row?.id === 'barrier')); await seed(savedCatalog); await writeFile(timerPath, originalTimers);
   assert.equal(failures.length, 0, failures.join('\n')); const proof = { requests: requests.length, thousandColdMetadata: true, mandatoryStartupBarrier: true, dueExactAdmission: true, onceFailureConsumed: true, cronFailureRetained: true, offlinePlacementPreserved: true, noDowntimeReplay: true, busyStopContinue: true, rawSnapshotCatalogDrift: true, canonicalOnlyWait: true, hostPids: fixture.hostPids, home, failures }; await writeFile(join(fixture.root, 'timer-lifecycle-proof.json'), JSON.stringify(proof, null, 2)); console.log(JSON.stringify(proof))

@@ -60,6 +60,10 @@ public sealed class LegacyWaitAuthorityTests
         var work = Path.Combine(temp.Path, "work");
         Directory.CreateDirectory(work);
         var expected = await Source("seed", data);
+        // Compare the original Source transition before the maintained host upgrades its catalog.
+        var sourceWake = await Source(wake, data);
+        Assert.Null(sourceWake["currentWait"]);
+        Assert.Equal("enqueue", SessionWait.Text(sourceWake["transition"]?["action"]));
         var id = expected["id"]!.GetValue<string>();
         var file = Path.Combine(data, "state", "sessions", id + ".json");
         var options = new ResponsesClientOptions(
@@ -88,11 +92,6 @@ public sealed class LegacyWaitAuthorityTests
                 )
             );
         }
-        var sourceReopened = await Source("inspect", data);
-        Assert.True(JsonNode.DeepEquals(expected["wait"], sourceReopened["wait"]));
-        var sourceWake = await Source(wake, data);
-        Assert.Null(sourceWake["currentWait"]);
-        Assert.Equal("enqueue", SessionWait.Text(sourceWake["transition"]?["action"]));
         JsonArray queued;
         await using (var manager = new SessionManager(data, work, options, models))
         {

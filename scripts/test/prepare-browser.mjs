@@ -34,7 +34,7 @@ try {
   }
   const missing = await missingAssets()
   if (missing.length) throw new Error(`Code preparation did not produce required browser assets:\n${missing.join('\n')}`)
-  for (const project of ['Foxwarm', 'Foxwarm.CliNode']) {
+  for (const project of ['Foxwarm', 'Foxwarm.CliNode', 'Foxwarm.DevTools']) {
     const args = ['build', `dotnet/${project}/${project}.csproj`, '-c', 'Debug']
     if (project === 'Foxwarm') args.push('-p:FoxwarmDelivery=true')
     run('dotnet', args)

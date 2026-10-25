@@ -4,18 +4,16 @@ import path from 'node:path'
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 
-const [mode, root] = process.argv.slice(2)
-if (!root || !['seed', 'verify'].includes(mode)) throw new Error('usage: legacy-block-fixture-ts.mjs seed|verify ROOT')
+const [root] = process.argv.slice(2)
+if (!root) throw new Error('usage: legacy-block-fixture-ts.mjs ROOT')
 // Establish disposable runtime paths before importing any application module.
 const { isolatedApplicationEnv } = createRequire(import.meta.url)('../../../scripts/test/test-process-env.cjs')
 Object.assign(process.env, isolatedApplicationEnv(root))
 process.env.FOXWARM_VECTOR_ENABLED = 'false'
 const repository = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '../../..')
-if (mode === 'seed') {
-  await fs.mkdir(path.join(root, 'state'), { recursive: true })
-  await fs.writeFile(path.join(root, 'state/models.yaml'), 'default: a\nproviders:\n  a:\n    providerType: openai-responses\n    baseUrl: http://127.0.0.1:1\n    apiKey: synthetic-not-a-key\n    models: [wire]\n')
-  await fs.writeFile(path.join(root, 'state/config.yaml'), 'dbWorkers: false\nvector:\n  enabled: false\n')
-}
+await fs.mkdir(path.join(root, 'state'), { recursive: true })
+await fs.writeFile(path.join(root, 'state/models.yaml'), 'default: a\nproviders:\n  a:\n    providerType: openai-responses\n    baseUrl: http://127.0.0.1:1\n    apiKey: synthetic-not-a-key\n    models: [wire]\n')
+await fs.writeFile(path.join(root, 'state/config.yaml'), 'dbWorkers: false\nvector:\n  enabled: false\n')
 const load = file => import(pathToFileURL(path.join(repository, 'lib', file)).href)
 const sm = await load('sessionManager.js')
 const archive = await load('session/archiveStore.js')
@@ -24,7 +22,7 @@ const history = await load('session/history.js')
 await sm.loadSessions()
 const parentId = 'origin'
 const childId = 'origin_legacy'
-if (mode === 'seed') {
+{
   const parent = (await sm.createEmptySession(parentId)).session
   for (let i = 1; i <= 4; i++) await sm.appendSessionMessage(parent, {
     role: 'user', parts: [{ text: 'Original source message ' + i }], __meta: { timestamp: i * 1000 },
