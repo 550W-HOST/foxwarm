@@ -10,14 +10,17 @@ internal static class CatalogFixtureCommand
         if (args.Length != 3 || args[0] is not ("upsert" or "replace"))
             throw new ArgumentException("Usage: catalog-fixture <upsert|replace> ROOT ROWS_JSON");
 
-        var rows = JsonNode.Parse(await File.ReadAllTextAsync(args[2]))!.AsArray()
+        var rows = JsonNode
+            .Parse(await File.ReadAllTextAsync(args[2]))!
+            .AsArray()
             .Select(row => row!.AsObject())
             .ToArray();
         using var catalog = new SessionCatalog(args[1]);
         catalog.Initialize();
         if (args[0] == "replace")
         {
-            var ids = rows.Select(row => row["id"]!.GetValue<string>()).ToHashSet(StringComparer.Ordinal);
+            var ids = rows.Select(row => row["id"]!.GetValue<string>())
+                .ToHashSet(StringComparer.Ordinal);
             foreach (var existing in catalog.List())
             {
                 var id = existing["id"]!.GetValue<string>();
