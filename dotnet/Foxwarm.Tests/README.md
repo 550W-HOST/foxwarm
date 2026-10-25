@@ -9,6 +9,8 @@ npm run test:managed
 
 For a focused managed check, use `FOXWARM_TS_ROOT="$PWD" dotnet test dotnet/Foxwarm.Tests/Foxwarm.Tests.csproj --filter FullyQualifiedName~TestClass`. Tests use owned temporary data; `FOXWARM_TS_ROOT` identifies the built reference checkout, not an installation data root. See the [test contract map](../../docs/code-index/units/dotnet-tests.md) for subsystem navigation.
 
+The reference checkout also needs Git history: eight fixture producers read pinned ancestor revisions with `git show` (session creation, task policy, tool authorization, onboot, command administration, canonical entry, handoff confirmation and session command effects). Use a full-history clone, or run `git fetch --unshallow` in an existing shallow clone before these comparisons. The Core CI checkout uses `fetch-depth: 0`. Building the current reference supplies shared packages and retained runtime readers; it does not supply historical Git objects. Missing revisions fail the comparisons.
+
 ## Source assets and consumers
 
 - Feature directories contain xUnit tests and feature-local fixtures such as MCP peers, Python exec peers and ToolScript JSON. Their project copy rules remain local to those consumers.

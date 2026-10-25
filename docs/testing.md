@@ -79,6 +79,8 @@ Other Source Node tests exercise the old Main registry, transports, command gene
 
 `build:reference` stays in all three CI jobs because managed oracle/migration fixtures, WebUI fixture producers and the App Archive seed still import compiled Source. It is separate from directly executing the retired unit suite. The old implementation and test sources remain available; this cleanup does not migrate their assertions or change managed historical-oracle, readback or comparator contracts.
 
+Managed frozen-source comparisons additionally require the pinned ancestor commits in the reference checkout's Git history. Core CI checks out full history; see [managed source prerequisites](../dotnet/Foxwarm.Tests/README.md) for shallow-clone preparation. The build prerequisite remains necessary alongside those historical objects.
+
 ## Separately owned tests
 
 `npm run test:inventory` keeps tests outside the routine local groups visible:
