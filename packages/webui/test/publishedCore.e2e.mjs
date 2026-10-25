@@ -4,7 +4,7 @@ import { createServer } from 'node:http'
 import { createServer as socketServer } from 'node:net'
 import { spawn, execFileSync } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtemp, mkdir, readFile, writeFile, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, writeFile, readdir, stat, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
@@ -27,7 +27,7 @@ await writeFile(join(data, 'state/config.yaml'), `bot:\n  httpPort: ${port}\nvec
 const env = { ...process.env }
 for (const key of Object.keys(env)) if (key.startsWith('FOXWARM_') || ['CONFIG_PATH', 'MCP_CONFIG_PATH', 'ASPNETCORE_URLS'].includes(key)) delete env[key]
 env.NODE_OPTIONS = ''
-let child, output = '', browser, token, browserErrors = []
+let child, output = '', browser, token, qualificationHistory, lastProviderReply, mainBrowserReached = false, browserErrors = []
 function startHost() {
   output = ''
   child = spawn(dotnet, [join(payload, 'Foxwarm.dll')], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -38,6 +38,7 @@ const requests = []
 const peer = createServer(async (request, response) => {
   try {
     if (request.method === 'GET' && request.url === '/browser-fixture') {
+      mainBrowserReached = true
       response.writeHead(200, { 'content-type': 'text/html' })
       response.end('<!doctype html><title>Packaged browser</title><h1>Published Main browser fixture</h1>')
       return
@@ -57,6 +58,7 @@ const peer = createServer(async (request, response) => {
       : requests.length === 4
       ? [{ type: 'function_call', call_id: 'packaged-react-artifact', name: 'artifact', arguments: JSON.stringify({ action: 'publish', filePath: join(payload, 'skills/react-artifacts/examples/sorting.json') }) }]
       : [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'PACKAGED-NATIVE-DONE' }] }]
+    lastProviderReply = outputRows[0].name || outputRows[0].type
     response.writeHead(200, { 'content-type': 'text/event-stream' })
     response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { id: 'published-' + requests.length, output: outputRows, usage: { input_tokens: 20, output_tokens: 4 } } }) + '\n\n')
   } catch (error) { browserErrors.push(error.stack); response.destroy() }
@@ -130,7 +132,10 @@ try {
   const id = created.body.sessionId
   assert(id, JSON.stringify(created))
   assert.equal((await api('POST', '/api/sessions/' + encodeURIComponent(id) + '/message', { text: 'Run the owned delivery qualification.' })).status, 202)
-  await until(async () => JSON.stringify((await api('GET', '/api/sessions/' + encodeURIComponent(id) + '/history')).body).includes('PACKAGED-NATIVE-DONE'), 'ordinary packaged native ToolScript')
+  await until(async () => {
+    qualificationHistory = (await api('GET', '/api/sessions/' + encodeURIComponent(id) + '/history')).body
+    return JSON.stringify(qualificationHistory).includes('PACKAGED-NATIVE-DONE')
+  }, 'packaged native/browser/image/artifact turn')
   assert.equal(requests.length, 5)
   assert.match(JSON.stringify(requests[2].input), /Tab opened: tab1/)
   assert.match(JSON.stringify(requests[3].input), /input_image/)
@@ -177,6 +182,50 @@ try {
   console.log(JSON.stringify({ published: true, collectedReactCompiler: true, originalArtifactRun: true, mainBrowserImage: true, restartPreserved: true, browserLogin: true, noModelSetup: true, implicitSessions: 0, nodeArchive: true, extensionBundles: 4, nativeToolScript: true, globalSkillResource: true, vectorDisabledLazy: true, requests: requests.length }))
 } catch (error) {
   console.error('Published Core output:\n' + output)
+  // Main's launch policy is independent of the browser used to drive the App.
+  const mainBrowserExecutable = { path: '/usr/bin/chromium' }
+  mainBrowserExecutable.present = await stat(mainBrowserExecutable.path).then(() => true, () => false)
+  if (mainBrowserExecutable.present) {
+    try {
+      mainBrowserExecutable.version = execFileSync(mainBrowserExecutable.path, ['--version'], {
+        env, encoding: 'utf8', timeout: 2000, maxBuffer: 8192, stdio: 'pipe',
+      }).trim()
+    } catch (versionError) {
+      mainBrowserExecutable.versionError = String(versionError.stderr || versionError.message).trim().slice(0, 1000)
+    }
+  }
+  const messages = qualificationHistory?.messages || []
+  const responses = messages.flatMap(row => row.parts || []).map(part => part.functionResponse).filter(Boolean)
+  const toolState = response => {
+    if (!response) return undefined
+    const result = response.response
+    const failure = result?.error
+    return {
+      id: response.tool_use_id, name: response.name, status: result?.status || (failure ? 'error' : 'completed'),
+      ...(failure ? { error: { type: failure.type, message: String(failure.message || failure).slice(0, 1500) } } : {}),
+    }
+  }
+  const lastCall = messages.flatMap(row => row.parts || []).findLast(part => part.functionCall)?.functionCall
+  const lastNotice = messages.findLast(row => row.__meta?.sessionNotice || row.__meta?.retry?.final)
+  console.error('Published qualification diagnostics:\n' + JSON.stringify({
+    providerRequests: requests.length, lastProviderReply, mainBrowserReached, mainBrowserExecutable,
+    session: qualificationHistory?.session && {
+      busy: qualificationHistory.session.busy,
+      runtimeState: {
+        state: qualificationHistory.session.runtimeState?.state,
+        activePhase: qualificationHistory.session.runtimeState?.active?.phase,
+        stopping: qualificationHistory.session.runtimeState?.stopping,
+      },
+    },
+    lastCall: lastCall && { id: lastCall.id, name: lastCall.name },
+    lastTool: toolState(responses.at(-1)),
+    lastToolFailure: toolState(responses.findLast(response => response.response?.error || response.response?.status === 'failed')),
+    lastNotice: lastNotice && {
+      type: lastNotice.__meta.noticeType,
+      text: lastNotice.parts?.map(part => part.text || '').join('').slice(0, 1500),
+    },
+    browserErrors: browserErrors.slice(-3).map(value => String(value).slice(0, 1500)),
+  }, null, 2))
   throw error
 } finally {
   await browser?.close().catch(() => {})

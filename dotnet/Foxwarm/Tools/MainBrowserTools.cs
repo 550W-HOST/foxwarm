@@ -7,8 +7,11 @@ using PuppeteerSharp;
 namespace Foxwarm.Tools;
 
 // Main process state, shared across authorized Sessions. Image identities belong to the turn host.
-internal sealed class MainBrowserTools : IAsyncDisposable
+internal sealed class MainBrowserTools(Func<LaunchOptions, Task<IBrowser>>? launcher = null)
+    : IAsyncDisposable
 {
+    private readonly Func<LaunchOptions, Task<IBrowser>> launchBrowser =
+        launcher ?? (options => Puppeteer.LaunchAsync(options));
     private IBrowser? browser;
     private readonly SemaphoreSlim launch = new(1, 1);
     private readonly object gate = new();
@@ -29,7 +32,7 @@ internal sealed class MainBrowserTools : IAsyncDisposable
         {
             if (browser is null)
             {
-                browser = await Puppeteer.LaunchAsync(
+                browser = await launchBrowser(
                     new LaunchOptions
                     {
                         ExecutablePath = "/usr/bin/chromium",
@@ -77,7 +80,7 @@ internal sealed class MainBrowserTools : IAsyncDisposable
         {
             return await ExecuteCore(tool, args);
         }
-        catch (PuppeteerException error)
+        catch (Exception error) when (error is PuppeteerException or ProcessException)
         {
             // SDK failures enter the existing local tool-error path, not the Main fatal path.
             throw new InvalidOperationException(error.Message, error);
