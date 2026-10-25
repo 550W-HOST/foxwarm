@@ -14,6 +14,8 @@ Turns derived dense/lexical candidates into scoped source families, then reloads
 
 `VectorRecall.SearchAsync` reloads raw ranges and blocks from immutable Archive. Modern facts resolve their block, never silently widen into raw text when that block is absent. Raw selection respects tool-call/response atomicity, meaningful/fallback anchors, normal seven-message windows, a hard sixteen-message cap and positive-filter omission notices attached to their source item. Only groups surviving final filters and the requested result limit contribute those notices; query-level notices remain separate. The renderer collects priority notices before warnings/filter/selection notices and the title, following the Source limits. Administrator source reload scans bounded pages with bounded neighbors; it does not transfer a whole raw source range merely to choose a display window.
 
+`VectorRawScore` is a small readonly value record used in generic score arrays and nullable anchor tuples. It has no identity or resource lifetime; selection retains the existing score, substantive/text-length and index tie-breaks.
+
 `SearchVectorHistoryAsync` serves the real authenticated administrator `/api/history/search` route with source ranges, bounded messages/blocks, earlier/later metadata and image externalization. Omitted or empty Session filters select global or Agent scope and reload each hit from its own Archive identity. Only a nonempty exact Session filter supplies a resolved read identity, preserving canonical aliases and captured fork lineage/caps. Scoped WebUI identities remain forbidden from that global endpoint. Disabled/unavailable Vector is 503; actual search failures are not an empty-success response.
 
 ## Canonical scope after alias resolution

@@ -26,13 +26,12 @@ internal sealed record LogWindow(
     bool Missing
 )
 {
-    internal JsonObject Json() =>
-        JsonSerializer
-            .SerializeToNode(
-                this,
-                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }
-            )!
-            .AsObject();
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
+
+    internal JsonObject Json() => JsonSerializer.SerializeToNode(this, JsonOptions)!.AsObject();
 }
 
 // Source webuiLogs.ts: bounded byte windows, observed open-file lifetimes and a

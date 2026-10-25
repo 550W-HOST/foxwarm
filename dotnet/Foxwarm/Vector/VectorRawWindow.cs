@@ -14,7 +14,12 @@ internal sealed record VectorRawSelection(
     IReadOnlyList<string> Notices
 );
 
-internal sealed record VectorRawScore(int Index, int Score, bool Substantive, int TextLength);
+internal readonly record struct VectorRawScore(
+    int Index,
+    int Score,
+    bool Substantive,
+    int TextLength
+);
 
 internal static class VectorRawWindow
 {
