@@ -48,11 +48,7 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                 FileOptions.Asynchronous
             );
             await JsonSerializer
-                .SerializeAsync(
-                    file,
-                    value,
-                    new JsonSerializerOptions { WriteIndented = true }
-                )
+                .SerializeAsync(file, value, new JsonSerializerOptions { WriteIndented = true })
                 .ConfigureAwait(false);
         }
         finally
