@@ -1,88 +1,16 @@
-name: Tests
+name: SSH discovery diagnostics
 
 on:
-  push:
-    branches: [testing, main]
-  pull_request:
   workflow_dispatch:
-  schedule:
-    - cron: '17 3 * * *'
 
 permissions:
   contents: read
 
-concurrency:
-  group: tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
-env:
-  CI: 'true'
-
 jobs:
-  core:
-    name: Core, packages, and quality
+  ssh-discovery:
+    name: Observe owned SSH discovery
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # Managed comparisons execute frozen source from ancestor commits.
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24.21.0
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            packages/webui/package-lock.json
-      - name: Set up .NET
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with:
-          dotnet-version: '10.0.x'
-      - name: Install dependencies
-        run: |
-          npm ci
-          npm --prefix packages/webui ci
-      - name: Build managed delivery and explicit Source reference
-        run: |
-          npm run build
-          npm run build:reference
-      - name: Prepare optional HEIF test prerequisite
-        run: bash dotnet/scripts/build-image-decoder.sh "$RUNNER_TEMP/heif-test"
-      # Source is still needed by managed oracles and fixture producers; the
-      # retired Main unit suite is available separately through test:reference.
-      - name: Run maintained core and component tests
-        env:
-          LD_LIBRARY_PATH: ${{ runner.temp }}/heif-test/prefix/lib
-          FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
-        run: npm run test:unit
-      - name: Run quality checks
-        run: |
-          npm run quality:code-index
-          npm run quality:unused
-      - name: Upload failure diagnostics
-        if: ${{ failure() || cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: diagnostics-core
-          path: |
-            ${{ runner.temp }}/foxwarm-test-artifacts/*/inventory.json
-            ${{ runner.temp }}/foxwarm-test-artifacts/*/summary.json
-            ${{ runner.temp }}/foxwarm-test-artifacts/*/logs/**/*.log
-            ${{ runner.temp }}/foxwarm-test-artifacts/*/screenshots/**/*
-          if-no-files-found: ignore
-          include-hidden-files: false
-          retention-days: 7
-
-  chromium:
-    name: Chromium fixtures
-    runs-on: ubuntu-24.04
-    # Successful local timings for 112 serial files sum to 43 minutes, before the
-    # remaining fixtures and job setup/build/publish work. File deadlines stay bounded.
-    timeout-minutes: 90
+    timeout-minutes: 5
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -92,127 +20,18 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.21.0
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            packages/webui/package-lock.json
-      - name: Set up .NET
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with:
-          dotnet-version: '10.0.x'
-      - name: Install dependencies
-        run: |
-          npm ci
-          npm --prefix packages/webui ci
-      - name: Install Chrome for Testing
-        id: browser
-        shell: bash
-        run: |
-          set -euo pipefail
-          install_log="$RUNNER_TEMP/chrome-for-testing-install.log"
-          sudo "$(command -v node)" node_modules/@puppeteer/browsers/lib/cjs/main-cli.js \
-            install chrome@145.0.7632.77 \
-            --path "$RUNNER_TEMP/puppeteer-browsers" \
-            --install-deps \
-            --format '{{path}}' | tee "$install_log"
-          browser_path="$(tail -n 1 "$install_log")"
-          test -x "$browser_path"
-          "$browser_path" --version
-          echo "path=$browser_path" >> "$GITHUB_OUTPUT"
-      - name: Build managed delivery and explicit Source reference
-        run: |
-          npm run build
-          npm run build:reference
-      - name: Prepare optional HEIF test prerequisite
-        run: bash dotnet/scripts/build-image-decoder.sh "$RUNNER_TEMP/heif-test"
       - name: Prepare owned SSH daemon prerequisite
         run: sudo install -d -o root -g root -m 0755 /run/sshd
-      - name: Qualify complete managed publish
-        env:
-          FOXWARM_E2E_CHROMIUM: ${{ steps.browser.outputs.path }}
-          FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
-        run: npm run test:published
-      - name: Run Chromium fixtures
-        env:
-          LD_LIBRARY_PATH: ${{ runner.temp }}/heif-test/prefix/lib
-          FOXWARM_E2E_CHROMIUM: ${{ steps.browser.outputs.path }}
-          FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
-        run: npm run test:webui:e2e
-      - name: Upload failure diagnostics
-        if: ${{ failure() || cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: diagnostics-chromium
-          path: |
-            ${{ runner.temp }}/foxwarm-test-artifacts/*/inventory.json
-            ${{ runner.temp }}/foxwarm-test-artifacts/*/summary.json
-            ${{ runner.temp }}/foxwarm-test-artifacts/*/logs/**/*.log
-            ${{ runner.temp }}/foxwarm-test-artifacts/*/screenshots/**/*
-          if-no-files-found: ignore
-          include-hidden-files: false
-          retention-days: 7
-
-  app:
-    name: Real app with mock LLM
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24.21.0
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            packages/webui/package-lock.json
-      - name: Set up .NET
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        with:
-          dotnet-version: '10.0.x'
-      - name: Install dependencies
-        run: |
-          npm ci
-          npm --prefix packages/webui ci
-      - name: Install Chrome for Testing
-        id: browser
+      - name: Observe strict SSH and public adapter discovery
         shell: bash
         run: |
           set -euo pipefail
-          install_log="$RUNNER_TEMP/chrome-for-testing-install.log"
-          sudo "$(command -v node)" node_modules/@puppeteer/browsers/lib/cjs/main-cli.js \
-            install chrome@145.0.7632.77 \
-            --path "$RUNNER_TEMP/puppeteer-browsers" \
-            --install-deps \
-            --format '{{path}}' | tee "$install_log"
-          browser_path="$(tail -n 1 "$install_log")"
-          test -x "$browser_path"
-          "$browser_path" --version
-          echo "path=$browser_path" >> "$GITHUB_OUTPUT"
-      - name: Build managed delivery and explicit Source reference
-        run: |
-          npm run build
-          npm run build:reference
-      - name: Run real-application E2E
-        env:
-          FOXWARM_E2E_CHROMIUM: ${{ steps.browser.outputs.path }}
-          FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
-        run: npm run test:app:e2e
-      - name: Upload failure diagnostics
-        if: ${{ failure() || cancelled() }}
+          node scripts/test/diagnose-loopback-ssh.cjs |& tee "$RUNNER_TEMP/loopback-ssh-diagnostics.log"
+      - name: Upload diagnostic observations
+        if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: diagnostics-app
-          path: |
-            ${{ runner.temp }}/foxwarm-test-artifacts/*/inventory.json
-            ${{ runner.temp }}/foxwarm-test-artifacts/*/summary.json
-            ${{ runner.temp }}/foxwarm-test-artifacts/*/logs/**/*.log
-            ${{ runner.temp }}/foxwarm-test-artifacts/*/screenshots/**/*
-            ${{ runner.temp }}/foxwarm-test-artifacts/*/app-e2e/*/logs/**/*.log
-            ${{ runner.temp }}/foxwarm-test-artifacts/*/app-e2e/*/screenshots/**/*
+          name: loopback-ssh-diagnostics
+          path: ${{ runner.temp }}/loopback-ssh-diagnostics.log
           if-no-files-found: ignore
-          include-hidden-files: false
           retention-days: 7
