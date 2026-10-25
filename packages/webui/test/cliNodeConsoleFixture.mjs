@@ -15,8 +15,9 @@ export async function consoleClient(cwd, args, { source = false, command, enviro
     : [executable || join(process.env.DOTNET_ROOT, 'dotnet'), ...(executable ? [] : [resolve('dotnet/Foxwarm.CliNode/bin/Debug/net10.0/Foxwarm.CliNode.dll')]), '--interactive', ...args])
   if (stdoutFile || stdinFile) invocation = ['/bin/sh', '-c', 'exec \"$@\"' + (stdoutFile ? ' > \"$CLI_STDOUT_FILE\"' : '') + (stdinFile ? ' < \"$CLI_STDIN_FILE\"' : ''), 'redirected-console', ...invocation]
   const before = join(cwd, 'terminal-before'), after = join(cwd, 'terminal-after'), pidFile = join(cwd, 'console-pid')
+  // Ink defers dynamic frames until exit in CI; these Source clients need live terminal rendering.
   const terminal = pty.spawn('/bin/sh', ['-c', 'stty -g > "$1"; shift; /bin/sh -c \'echo $$ > "$CLI_PID_FILE"; exec "$@"\' cli "$@"; result=$?; stty -g > "$CLI_AFTER_FILE"; printf "\\nCLI-RETURN:%s\\n" "$result"; exit "$result"', 'console-fixture', before, ...invocation], {
-    cwd, cols, rows, env: { ...isolatedApplicationEnv(join(cwd, 'data')), TERM: 'xterm-256color', FOXWARM_AGENTS_DIR: join(cwd, 'agents'), CLI_PID_FILE: pidFile, CLI_AFTER_FILE: after, CLI_STDOUT_FILE: stdoutFile || '', CLI_STDIN_FILE: stdinFile || '', ...environment },
+    cwd, cols, rows, env: { ...isolatedApplicationEnv(join(cwd, 'data')), TERM: 'xterm-256color', FOXWARM_AGENTS_DIR: join(cwd, 'agents'), CLI_PID_FILE: pidFile, CLI_AFTER_FILE: after, CLI_STDOUT_FILE: stdoutFile || '', CLI_STDIN_FILE: stdinFile || '', ...(source ? { CI: 'false' } : {}), ...environment },
   })
   let output = '', exit
   const exited = new Promise(done => terminal.onExit(value => { exit = value; done(value) }))

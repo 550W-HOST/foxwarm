@@ -71,4 +71,6 @@ Plan operations may carry an integer `frictionScore` from 0 through 100. Missing
 
 `ContextPreviewFilterTests` exercises the real message observation handler and exact Archive recall with CRLF literal/include/exclude filters, unchanged canonical text and bounded output, plus folded tool-result match notices.
 
+`packages/webui/test/experimentHostModelCompact.e2e.mjs` checks reversed exact-range normalization through actual model recall: selected source sequence order, tool name/arguments and result content remain visible in the bounded full preview. Structured Archive records separately verify provider call/response identity; exact inspection leaves source Archive rows, blocks and active authority unchanged.
+
 `ContextPreviewRenderer.Commands` supplies the active-offset, per-message bounded `/messages` presentation used by [public command administration](./dotnet-command-administration.md), separately from recall page budgets and Archive seqs.
