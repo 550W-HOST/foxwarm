@@ -39,9 +39,19 @@ internal sealed class ModelInteractionDiagnostics(string dataRoot)
                 catch (IOException) { }
                 catch (UnauthorizedAccessException) { }
             }
-            await File.WriteAllTextAsync(
-                    path,
-                    value.ToJsonString(new JsonSerializerOptions { WriteIndented = true })
+            await using var file = new FileStream(
+                path,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.Read,
+                4096,
+                FileOptions.Asynchronous
+            );
+            await JsonSerializer
+                .SerializeAsync(
+                    file,
+                    value,
+                    new JsonSerializerOptions { WriteIndented = true }
                 )
                 .ConfigureAwait(false);
         }

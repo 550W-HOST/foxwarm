@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
@@ -60,6 +61,81 @@ public sealed class ModelInteractionDiagnosticsTests
     private static string Sse(JsonObject frame) => "data: " + frame.ToJsonString() + "\n\n";
 
     private static string Recent(string root) => Path.Combine(root, "state", "logs", "recent");
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Diagnostic_files_match_the_indented_UTF8_representation_for_large_escaped_payloads_and_retries(
+        bool retry
+    )
+    {
+        using var temp = new TempDirectory();
+        var uri = new Uri("http://unused.invalid");
+        var model = HostModels.Parse(Catalog(uri), new JsonObject()).Resolve("a/m");
+        var interaction = new ModelInteractionDiagnostics(temp.Path).Begin();
+        var attempt = interaction.StartAttempt(model, Options(uri), 1);
+        var payload = JsonNode.Parse(
+            "{\"numbers\":[1e+03,-0,1.2300],\"values\":[true,false,null,{}]}"
+        )!;
+        payload["escaped \"key\""] = string.Concat(
+            Enumerable.Repeat("line\r\n\t\"\\ <>& café 中文 🦊\u0000", 32768)
+        );
+        var indented = new JsonSerializerOptions { WriteIndented = true };
+        await attempt.PreparedAsync(payload);
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(payload.ToJsonString(indented)),
+            await File.ReadAllBytesAsync(
+                Assert.Single(Directory.GetFiles(Recent(temp.Path), "*_req.json"))
+            )
+        );
+
+        JsonArray? failures = null;
+        if (retry)
+        {
+            attempt.Response("503 Busy", new JsonObject(), payload);
+            await attempt.FinishedAsync(new InvalidOperationException("retry evidence"));
+            failures = new JsonArray(
+                new JsonObject
+                {
+                    ["status"] = "503 Busy",
+                    ["headers"] = new JsonObject(),
+                    ["body"] = payload.DeepClone(),
+                    ["attempt"] = 1,
+                    ["modelId"] = "a/m",
+                    ["error"] = "retry evidence",
+                    ["name"] = nameof(InvalidOperationException),
+                }
+            );
+            Assert.Equal(
+                Encoding.UTF8.GetBytes(
+                    new JsonObject { ["attempts"] = failures.DeepClone() }.ToJsonString(indented)
+                ),
+                await File.ReadAllBytesAsync(
+                    Assert.Single(Directory.GetFiles(Recent(temp.Path), "*_res.json"))
+                )
+            );
+            attempt = interaction.StartAttempt(model, Options(uri), 2);
+            await attempt.PreparedAsync(payload);
+        }
+
+        var headers = new JsonObject { ["X-Wire"] = "retained" };
+        attempt.Response("200 OK", headers, payload);
+        await attempt.FinishedAsync(null);
+        var expected = new JsonObject
+        {
+            ["status"] = "200 OK",
+            ["headers"] = headers.DeepClone(),
+            ["body"] = payload.DeepClone(),
+        };
+        if (failures is not null)
+            expected["attempts"] = failures;
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(expected.ToJsonString(indented)),
+            await File.ReadAllBytesAsync(
+                Assert.Single(Directory.GetFiles(Recent(temp.Path), "*_res.json"))
+            )
+        );
+    }
 
     [Fact]
     public async Task Ordinary_manager_producer_keeps_wire_payload_headers_and_raw_stream_using_captured_credentials_after_live_config_change()
@@ -254,10 +330,12 @@ public sealed class ModelInteractionDiagnosticsTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
     public async Task Diagnostic_write_failures_never_resend_or_hide_a_successful_provider_result(
-        bool afterRequest
+        bool afterRequest,
+        bool blockResponseFile
     )
     {
         using var temp = new TempDirectory();
@@ -269,8 +347,20 @@ public sealed class ModelInteractionDiagnosticsTests
             {
                 if (afterRequest)
                 {
-                    Directory.Delete(Recent(temp.Path), true);
-                    File.WriteAllText(Recent(temp.Path), "owned response blocker");
+                    if (blockResponseFile)
+                    {
+                        var requestPath = Assert.Single(
+                            Directory.GetFiles(Recent(temp.Path), "*_req.json")
+                        );
+                        Directory.CreateDirectory(
+                            requestPath.Replace("_req.json", "_res.json", StringComparison.Ordinal)
+                        );
+                    }
+                    else
+                    {
+                        Directory.Delete(Recent(temp.Path), true);
+                        File.WriteAllText(Recent(temp.Path), "owned response blocker");
+                    }
                 }
                 await LoopbackResponsesServer.WriteResponseAsync(
                     stream,
