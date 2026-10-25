@@ -30,6 +30,7 @@ test('cold source install prepares upstream headers before npm ci and stops on p
   await writeFile(path.join(source, 'build', 'npm', 'preinstall.ts'), `
     const fs = require('node:fs')
     fs.appendFileSync(process.env.FIXTURE_EVENTS, 'headers\\n')
+    if (process.env.npm_command !== 'ci') process.exit(31)
     process.exit(process.env.FIXTURE_FAIL_HEADERS === '1' ? 29 : 0)
   `)
   const bin = path.join(temp, 'bin')
@@ -51,6 +52,7 @@ test('cold source install prepares upstream headers before npm ci and stops on p
       env: {
         ...process.env,
         PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+        npm_command: 'run-script',
         FIXTURE_EVENTS: events,
         FIXTURE_FAIL_HEADERS: failHeaders ? '1' : '0',
       },

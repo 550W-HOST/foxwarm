@@ -11,7 +11,7 @@ Cross-module contract: [Code integration](../threads/code-integration.md).
 
 ## Asset preparation
 
-- `npm run build:code` builds the pinned MIT Code - OSS source in the dedicated Node 24 Docker builder and publishes required ignored assets.
+- `npm run build:code` builds the pinned MIT Code - OSS source in the dedicated Node 24.18.0 Docker builder, matching the pinned upstream `.nvmrc` minimum, and publishes required ignored assets.
 - `build:code:local` is the explicit host-native alternative for an environment with matching Node/native prerequisites.
 - Before an uncached dependency install, both build paths run upstream `build/npm/preinstall.ts` explicitly, matching upstream CI. This installs and overlays Electron headers before `npm ci` compiles native addons; npm's root preinstall lifecycle runs after dependency installation. Header preparation failure stops the build before `npm ci` or the ready-cache marker.
 - The current Code - OSS pin is stable `1.141.0` at commit `2a59476c9bfcb90b3ddc372c36762471b7dfad1c`; the version file remains the source of truth for the builder.

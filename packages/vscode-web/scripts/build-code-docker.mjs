@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const packageRoot = path.resolve(scriptDir, '..')
 const repoRoot = path.resolve(packageRoot, '../..')
-const builderImage = 'foxwarm-code-oss-builder:node-24.17.0'
+const builderImage = 'foxwarm-code-oss-builder:node-24.18.0'
 const dockerfile = path.join(packageRoot, 'Dockerfile.code-oss')
 
 function works(command, prefixArgs = []) {
