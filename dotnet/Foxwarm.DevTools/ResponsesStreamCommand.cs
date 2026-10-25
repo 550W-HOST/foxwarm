@@ -102,13 +102,24 @@ internal static class ResponsesStreamCommand
             var observation = new JsonObject
             {
                 ["progress"] = new JsonArray(
-                    progress.Select(snapshot => (JsonNode)new JsonObject
-                    {
-                        ["reasoning"] = snapshot.Reasoning,
-                        ["text"] = snapshot.Text,
-                        ["toolCalls"] = JsonSerializer.SerializeToNode(snapshot.ToolCalls, jsonOptions),
-                        ["parts"] = JsonSerializer.SerializeToNode(snapshot.Parts, partOptions),
-                    }).ToArray()
+                    progress
+                        .Select(snapshot =>
+                            (JsonNode)
+                                new JsonObject
+                                {
+                                    ["reasoning"] = snapshot.Reasoning,
+                                    ["text"] = snapshot.Text,
+                                    ["toolCalls"] = JsonSerializer.SerializeToNode(
+                                        snapshot.ToolCalls,
+                                        jsonOptions
+                                    ),
+                                    ["parts"] = JsonSerializer.SerializeToNode(
+                                        snapshot.Parts,
+                                        partOptions
+                                    ),
+                                }
+                        )
+                        .ToArray()
                 ),
                 ["meaningfulCount"] = meaningful,
                 ["safety"] = new JsonArray(safety.Select(x => x.DeepClone()).ToArray()),
