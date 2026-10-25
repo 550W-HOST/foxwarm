@@ -39,7 +39,7 @@ public sealed class ResponsesWsTests
                             new JsonObject
                             {
                                 ["id"] = "wire",
-                                ["tokenPricesPerMillion"] = new JsonObject
+                                ["pricing"] = new JsonObject
                                 {
                                     ["cached"] = 1,
                                     ["input"] = 2,

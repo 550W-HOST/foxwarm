@@ -471,7 +471,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex min-h-0 w-full flex-1 flex-col">
-          {loading && <div className="rounded-xl border border-fw-border bg-fw-surface p-4 text-sm text-fw-text dark:border-fw-border-muted dark:text-fw-text">Loading setup status…</div>}
+          {loading && !status && <div className="rounded-xl border border-fw-border bg-fw-surface p-4 text-sm text-fw-text dark:border-fw-border-muted dark:text-fw-text">Loading setup status…</div>}
           {error && <div className="mt-4 rounded-xl border border-fw-danger-border bg-fw-danger-surface p-4 text-sm text-fw-danger dark:border-fw-danger-border/60 dark:bg-fw-danger-surface-strong/30 dark:text-fw-danger">{error}</div>}
 
           <div className="foxwarm-setup-body flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -548,45 +548,49 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
             </section>
 
             <section ref={modelsSectionRef} id="setup-panel-models" role="tabpanel" aria-labelledby="setup-tab-models" data-setup-section="models" hidden={activeTab !== 'models'} className={`${activeTab === 'models' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto scroll-mt-4 p-4 md:p-5`}>
-              <div className="shrink-0">
-                <h2 className="text-base font-semibold text-fw-text-strong">Model settings</h2>
-                <p className="mt-1 text-sm text-fw-text">Configure model providers, routing, and your default model in YAML.</p>
-              </div>
+              <div className="foxwarm-setup-editor-section">
+                <div className="shrink-0">
+                  <h2 className="text-base font-semibold text-fw-text-strong">Model settings</h2>
+                  <p className="mt-1 text-sm text-fw-text">Configure model providers, routing, and your default model in YAML.</p>
+                </div>
 
-              <div className="mt-4 min-h-72 flex-1" onKeyDownCapture={(event) => handleEditorSaveShortcut(event, 'models')}>
-                <SimpleCodeEditor
-                  value={rawModelsYaml}
-                  onChange={updateModelsYaml}
-                  language="yaml"
-                  height="100%"
-                  modelUri={MODELS_YAML_MODEL_URI}
-                  focusRequest={modelsEditorFocusRequest}
-                  ariaLabel="Models YAML editor"
-                />
-              </div>
+                <div className="mt-4 min-h-72 flex-1" onKeyDownCapture={(event) => handleEditorSaveShortcut(event, 'models')}>
+                  <SimpleCodeEditor
+                    value={rawModelsYaml}
+                    onChange={updateModelsYaml}
+                    language="yaml"
+                    height="100%"
+                    modelUri={MODELS_YAML_MODEL_URI}
+                    focusRequest={modelsEditorFocusRequest}
+                    ariaLabel="Models YAML editor"
+                  />
+                </div>
 
-              <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">
-                <button disabled={savingModels} onClick={() => void saveModels()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{savingModels ? 'Saving…' : 'Save models'}</button>
-                <SaveFeedback section="models" result={modelsSaveResult} />
-                {forced && !canLeave && <span className="text-sm text-fw-warning dark:text-fw-warning">Save a valid model configuration to continue.</span>}
+                <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">
+                  <button disabled={savingModels} onClick={() => void saveModels()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{savingModels ? 'Saving…' : 'Save models'}</button>
+                  <SaveFeedback section="models" result={modelsSaveResult} />
+                  {forced && !canLeave && <span className="text-sm text-fw-warning dark:text-fw-warning">Save a valid model configuration to continue.</span>}
+                </div>
               </div>
             </section>
 
             <section id="setup-panel-config" role="tabpanel" aria-labelledby="setup-tab-config" data-setup-section="config" hidden={activeTab !== 'config'} className={`${activeTab === 'config' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto p-4 md:p-5`}>
-              <div className="shrink-0">
-                <h2 className="text-base font-semibold text-fw-text-strong">App and channel settings</h2>
-                <p className="mt-1 text-sm text-fw-text">Manage Foxwarm and channel settings in YAML.</p>
-              </div>
+              <div className="foxwarm-setup-editor-section">
+                <div className="shrink-0">
+                  <h2 className="text-base font-semibold text-fw-text-strong">App and channel settings</h2>
+                  <p className="mt-1 text-sm text-fw-text">Manage Foxwarm and channel settings in YAML.</p>
+                </div>
 
-              <div className="mt-4 min-h-72 flex-1" onKeyDownCapture={(event) => handleEditorSaveShortcut(event, 'config')}>
-                <SimpleCodeEditor value={configYaml} onChange={updateConfigYaml} language="yaml" height="100%" modelUri={APP_CONFIG_YAML_MODEL_URI} ariaLabel="Application config YAML editor" />
-              </div>
-              <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">
-                <button disabled={savingConfig} onClick={() => void saveConfig()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{savingConfig ? 'Saving…' : 'Save config'}</button>
-                <SaveFeedback section="config" result={configSaveResult} />
+                <div className="mt-4 min-h-72 flex-1" onKeyDownCapture={(event) => handleEditorSaveShortcut(event, 'config')}>
+                  <SimpleCodeEditor value={configYaml} onChange={updateConfigYaml} language="yaml" height="100%" modelUri={APP_CONFIG_YAML_MODEL_URI} ariaLabel="Application config YAML editor" />
+                </div>
+                <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">
+                  <button disabled={savingConfig} onClick={() => void saveConfig()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{savingConfig ? 'Saving…' : 'Save config'}</button>
+                  <SaveFeedback section="config" result={configSaveResult} />
+                </div>
               </div>
               {channelRows.length > 0 && (
-                <div className="mt-4 overflow-hidden rounded-lg border border-fw-border-muted">
+                <div className="mt-4 shrink-0 overflow-hidden rounded-lg border border-fw-border-muted">
                   {channelRows.map((channel) => (
                     <div key={channel.channelId} className="border-t border-fw-border-muted px-3 py-2 text-sm first:border-t-0 dark:border-fw-border-muted">
                       <div className="flex flex-wrap items-center gap-2">
@@ -602,11 +606,11 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
               )}
 
               {status?.capabilities?.managedChannels === false && (
-                <p className="mt-6 border-t border-fw-border pt-5 text-sm text-fw-text dark:border-fw-border-muted">
+                <p className="mt-6 shrink-0 border-t border-fw-border pt-5 text-sm text-fw-text dark:border-fw-border-muted">
                   {status.capabilities.externalChannelMessage || 'External chat channels are unavailable on this server.'}
                 </p>
               )}
-              {status?.capabilities?.managedChannels !== false && <div data-setup-config-last="weixin" className="mt-6 border-t border-fw-border pt-5 dark:border-fw-border-muted">
+              {status?.capabilities?.managedChannels !== false && <div data-setup-config-last="weixin" className="mt-6 shrink-0 border-t border-fw-border pt-5 dark:border-fw-border-muted">
                 <h3 className="font-medium text-fw-text-strong">Weixin login</h3>
                 <p className="mt-1 text-sm text-fw-text">Connect Weixin by scanning a QR code.</p>
                 <div className="mt-4 flex flex-wrap items-center gap-2">

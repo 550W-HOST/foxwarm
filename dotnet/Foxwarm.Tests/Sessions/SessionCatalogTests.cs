@@ -156,7 +156,7 @@ public sealed class SessionCatalogTests
                         {
                             ["p"] = new JsonObject
                             {
-                                ["tokenPricesPerMillion"] = new JsonObject
+                                ["pricing"] = new JsonObject
                                 {
                                     ["cached"] = 0,
                                     ["input"] = rate,

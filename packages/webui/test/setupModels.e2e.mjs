@@ -3,7 +3,7 @@ import test, { after, before } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -194,13 +194,15 @@ async function attachRequestMocks(targetPage, options = {}) {
       return
     }
     if (url.pathname.endsWith('/api/setup/status')) {
-      void respondJson(request, {
+      const payload = {
         ...statusPayload,
         oobe: mockOobe,
         models: { ...statusPayload.models, exists: !mockOobe, rawYaml: mockModelsRawYaml },
         config: { ...statusPayload.config, rawYaml: mockConfigRawYaml },
         channels: options.channels ?? statusPayload.channels,
-      })
+      }
+      if (options.heldSetupStatuses) options.heldSetupStatuses.push({ request, payload })
+      else void respondJson(request, payload)
       return
     }
     if (url.pathname.endsWith('/api/models')) {
@@ -859,6 +861,171 @@ test('Config tab status reflects enabled channel health and ignores disabled cha
   }
 })
 
+async function setupGeometry(targetPage, tab) {
+  return targetPage.$eval(`[data-setup-section="${tab}"]`, panel => {
+    const rect = element => {
+      const box = element.getBoundingClientRect()
+      return { top: box.top, bottom: box.bottom, height: box.height, width: box.width }
+    }
+    return {
+      panel: rect(panel),
+      editor: rect(panel.querySelector('[data-monaco-model-uri]')),
+      save: rect(panel.querySelector('button')),
+      scrollTop: panel.scrollTop,
+      scrollHeight: panel.scrollHeight,
+      clientHeight: panel.clientHeight,
+      loading: document.body.textContent.includes('Loading setup status…'),
+    }
+  })
+}
+
+async function recordSetupEvidence(targetPage, name, data) {
+  const directory = process.env.FOXWARM_SETUP_ARTIFACT_DIR
+  if (!directory) return
+  await mkdir(directory, { recursive: true })
+  await writeFile(path.join(directory, `${name}.json`), JSON.stringify(data, null, 2))
+  await targetPage.screenshot({ path: path.join(directory, `${name}.png`) })
+}
+
+test('Setup later modules do not reduce editor height in the normal workbench pane', async () => {
+  const layoutPage = await browser.newPage()
+  await layoutPage.setViewport({ width: 1280, height: 900 })
+  await attachRequestMocks(layoutPage, { channels: Array.from({ length: 6 }, (_, index) => ({
+    channelId: `channel-${index}`, type: 'telegram', running: true, configured: true, enabled: true,
+  })) })
+  try {
+    await layoutPage.goto(`${productionBaseUrl}/#tab/system%3Asetup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(layoutPage)
+    const geometry = {}
+    for (const tab of ['models', 'config']) {
+      await layoutPage.click(`[data-setup-tab="${tab}"]`)
+      await layoutPage.waitForSelector(`[data-setup-section="${tab}"] [data-editor-ready="true"]`)
+      await layoutPage.$eval(`[data-setup-section="${tab}"]`, panel => { panel.scrollTop = 0 })
+      geometry[tab] = await setupGeometry(layoutPage, tab)
+      await recordSetupEvidence(layoutPage, `layout-${tab}`, geometry[tab])
+    }
+    assert.ok(Math.abs(geometry.models.editor.height - geometry.config.editor.height) <= 1, JSON.stringify(geometry))
+    assert.ok(geometry.config.editor.height > 450, 'Config uses the pane rather than its editor minimum')
+    const spaceAfterSave = geometry.config.panel.bottom - geometry.config.save.bottom
+    assert.ok(spaceAfterSave >= 0 && spaceAfterSave < geometry.config.save.height,
+      'the initial pane budget ends after the visible Save row')
+    assert.ok(geometry.config.scrollHeight > geometry.config.clientHeight, 'later modules remain in the panel scroller')
+    await layoutPage.$eval('[data-setup-config-last="weixin"]', element => element.scrollIntoView({ block: 'end' }))
+    assert.equal(await layoutPage.$eval('button::-p-text(Start Weixin login)', button => {
+      const rect = button.getBoundingClientRect()
+      return rect.top >= 0 && rect.bottom <= innerHeight
+    }), true)
+    assert.equal(await layoutPage.evaluate(() => document.documentElement.scrollHeight <= innerHeight), true)
+  } finally { await layoutPage.close() }
+})
+
+test('Setup fallback keeps the pane budget and one scroller in a narrow short split pane', async () => {
+  const context = await browser.createBrowserContext()
+  const smallPage = await context.newPage()
+  await smallPage.setViewport({ width: 1280, height: 560 })
+  await smallPage.evaluateOnNewDocument(() => {
+    const chat = { id: 'chat:small-setup', type: 'chat', sessionId: 'small-setup', title: 'Chat' }
+    const setup = { id: 'system:setup', type: 'setup', title: 'Setup' }
+    localStorage.setItem('foxwarm_workbench_state_v4', JSON.stringify({ state: {
+      version: 4,
+      tabsById: { [chat.id]: chat, [setup.id]: setup },
+      root: { id: 'small-split', kind: 'split', direction: 'row', sizes: [50, 50], children: [
+        { id: 'pane-chat', kind: 'pane', tabIds: [chat.id], activeTabId: chat.id },
+        { id: 'pane-setup', kind: 'pane', tabIds: [setup.id], activeTabId: setup.id },
+      ] },
+      focusedPaneId: 'pane-setup',
+    }, version: 1 }))
+  })
+  await attachRequestMocks(smallPage, { blockYamlWorkerImport: true })
+  try {
+    await smallPage.goto(`${productionBaseUrl}/#tab/system%3Asetup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(smallPage)
+    const geometry = {}
+    for (const tab of ['models', 'config']) {
+      await smallPage.click(`[data-setup-tab="${tab}"]`)
+      await smallPage.waitForSelector(`[data-setup-section="${tab}"] [data-editor-fallback="true"] textarea`)
+      await smallPage.$eval(`[data-setup-section="${tab}"]`, panel => { panel.scrollTop = 0 })
+      geometry[tab] = await setupGeometry(smallPage, tab)
+      assert.ok(geometry[tab].editor.width < 600, 'this is a narrow pane inside a desktop viewport')
+      assert.equal(geometry[tab].editor.height, 288, 'the small-window editor minimum survives')
+      await smallPage.$eval(`[data-setup-section="${tab}"] button`, button => button.scrollIntoView({ block: 'nearest' }))
+      assert.equal(await smallPage.$eval(`[data-setup-section="${tab}"] button`, button => {
+        const box = button.getBoundingClientRect()
+        const panel = button.closest('[role="tabpanel"]').getBoundingClientRect()
+        return box.top >= panel.top && box.bottom <= panel.bottom
+      }), true)
+    }
+    await smallPage.$eval('[data-setup-config-last="weixin"]', element => element.scrollIntoView({ block: 'end' }))
+    await recordSetupEvidence(smallPage, 'small-split-fallback', geometry)
+    assert.equal(await smallPage.evaluate(() => document.documentElement.scrollHeight <= innerHeight), true)
+    assert.equal(await smallPage.$$eval('[data-editor-fallback="true"]', editors => editors.length), 2,
+      'both editor instances remain mounted when switching tabs')
+    assert.equal(await smallPage.$eval('[role="tablist"][aria-label="Setup sections"]', tabs => tabs.getAttribute('aria-orientation')), 'horizontal')
+  } finally { await context.close() }
+})
+
+test('Setup saves keep editor geometry stable while saving and refreshing status in both tabs', async () => {
+  const savePage = await browser.newPage()
+  await savePage.setViewport({ width: 1280, height: 900 })
+  const options = { heldModelsSaves: [], heldConfigSaves: [] }
+  await attachRequestMocks(savePage, options)
+  const results = {}
+  try {
+    await savePage.goto(`${productionBaseUrl}/#tab/system%3Asetup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(savePage)
+    for (const tab of ['models', 'config']) {
+      await savePage.click(`[data-setup-tab="${tab}"]`)
+      await savePage.waitForSelector(`[data-setup-section="${tab}"] [data-editor-ready="true"]`)
+      // Real editor input followed by the section-owned keyboard Save path.
+      await savePage.click(`[data-setup-section="${tab}"] .view-lines`)
+      await savePage.keyboard.down('Control')
+      await savePage.keyboard.press('Home')
+      await savePage.keyboard.up('Control')
+      await savePage.keyboard.type('# save geometry\n')
+      const before = await setupGeometry(savePage, tab)
+      options.heldSetupStatuses = []
+      await pressSaveShortcut(savePage, 'Control')
+      const saves = tab === 'models' ? options.heldModelsSaves : options.heldConfigSaves
+      await waitForItems(saves, 1)
+      const pending = await setupGeometry(savePage, tab)
+      await respondJson(saves[0].request, { success: true })
+      await waitForItems(options.heldSetupStatuses, 1)
+      const refreshing = await setupGeometry(savePage, tab)
+      await recordSetupEvidence(savePage, `save-${tab}-refreshing`, { before, pending, refreshing })
+      // Release the ordinary status response with the submitted document.
+      const heldStatuses = options.heldSetupStatuses
+      delete options.heldSetupStatuses
+      for (const held of heldStatuses) {
+        held.payload[tab === 'models' ? 'models' : 'config'].rawYaml = saves[0].body.yaml
+        await respondJson(held.request, held.payload)
+      }
+      await savePage.waitForFunction(section => !document.querySelector(`[data-setup-section="${section}"] button`).disabled, {}, tab)
+      const completed = await setupGeometry(savePage, tab)
+      results[tab] = { before, pending, refreshing, completed }
+    }
+    await recordSetupEvidence(savePage, 'save-completed', results)
+    for (const [tab, phases] of Object.entries(results)) {
+      for (const [name, geometry] of Object.entries(phases)) {
+        assert.equal(geometry.loading, false, `${tab} ${name}: no page-top loading notice`)
+        assert.ok(Math.abs(geometry.editor.top - phases.before.editor.top) <= 1, `${tab} ${name}: editor top`)
+        assert.ok(Math.abs(geometry.editor.height - phases.before.editor.height) <= 1, `${tab} ${name}: editor height`)
+        assert.equal(geometry.scrollTop, phases.before.scrollTop, `${tab} ${name}: panel scroll position`)
+      }
+    }
+    options.heldSetupStatuses = []
+    options.heldConfigSaves.length = 0
+    await savePage.click('button::-p-text(Save config)')
+    await waitForItems(options.heldConfigSaves, 1)
+    await respondJson(options.heldConfigSaves[0].request, { success: true })
+    await waitForItems(options.heldSetupStatuses, 1)
+    const failedStatuses = options.heldSetupStatuses
+    delete options.heldSetupStatuses
+    for (const held of failedStatuses) await respondJson(held.request, { error: 'Setup status unavailable' }, 503)
+    await savePage.waitForFunction(() => document.body.textContent.includes('Setup status unavailable'))
+    assert.match(await savePage.$eval('[data-save-feedback="config"]', element => element.textContent), /Config saved/)
+  } finally { await savePage.close() }
+})
+
 test('Setup editors fill available desktop space and remain scroll-reachable on mobile', async () => {
   const measureEditor = (targetPage, tab) => targetPage.$eval(`[data-setup-section="${tab}"] [data-monaco-model-uri]`, (editor) => {
     const rect = editor.getBoundingClientRect()
@@ -1272,6 +1439,59 @@ test('local and schema completions replace the current punctuated YAML scalar', 
   } finally {
     await completionPage.close()
   }
+})
+
+test('production Models editor completes pricing and diagnoses rates at both concrete placements', async () => {
+  const pricingPage = await browser.newPage()
+  await pricingPage.setViewport({ width: 1280, height: 900 })
+  const modelsSaveRequests = []
+  await attachRequestMocks(pricingPage, { modelsSaveRequests })
+  const selector = '[data-setup-section="models"] [data-monaco-model-uri]'
+  const replaceYaml = async value => {
+    await pricingPage.click(`${selector} .view-lines`)
+    await pricingPage.keyboard.down('Control')
+    await pricingPage.keyboard.press('a')
+    await pricingPage.keyboard.up('Control')
+    await pricingPage.keyboard.sendCharacter(value.replaceAll('\n', '\r\n'))
+    await pricingPage.keyboard.press('Escape')
+  }
+  const markerCount = expected => pricingPage.waitForFunction((selector, count) =>
+    Number(document.querySelector(selector)?.getAttribute('data-marker-count')) === count, { timeout: 15_000 }, selector, expected)
+  try {
+    await pricingPage.goto(`${productionBaseUrl}/#tab/system%3Asetup`, { waitUntil: 'networkidle2' })
+    await waitForWebUiReady(pricingPage)
+    await pricingPage.click('[data-setup-tab="models"]')
+    await pricingPage.waitForFunction(selector => document.querySelector(selector)?.dataset.editorReady === 'true'
+      && Number(document.querySelector(selector)?.dataset.markerCount) > 0, {}, selector)
+    for (const placement of ['model', 'provider']) {
+      const prefix = 'providers:\n  local:\n    providerType: openai-responses\n'
+        + (placement === 'model' ? '    models:\n      - id: wire\n        ' : '    ')
+      // Trigger schema completion from real editor input, then accept the suggested object.
+      await replaceYaml(prefix + 'pric')
+      await triggerAndAcceptVisibleSuggestion(pricingPage, 'pricing')
+      await recordSetupEvidence(pricingPage, `pricing-${placement}-completion`, { placement })
+      await pricingPage.keyboard.press('Escape')
+      const valid = prefix + 'pricing: { cached: 0.25, input: 1, output: 4 }\n'
+      await replaceYaml(valid)
+      await markerCount(0)
+      await pressSaveShortcut(pricingPage, 'Control')
+      await pricingPage.waitForSelector('[data-save-feedback="models"][role="status"]')
+      assert.deepEqual(modelsSaveRequests.at(-1), { yaml: valid })
+      await replaceYaml(valid.replace('output: 4', 'output: -1'))
+      await pricingPage.waitForFunction(selector => Number(document.querySelector(selector)?.dataset.markerCount) > 0, {}, selector)
+      await recordSetupEvidence(pricingPage, `pricing-${placement}-negative-rate`, { placement, invalid: 'output: -1' })
+      await replaceYaml(valid)
+      await markerCount(0)
+      await replaceYaml(valid.replace(', output: 4', ''))
+      await pricingPage.waitForFunction(selector => Number(document.querySelector(selector)?.dataset.markerCount) > 0, {}, selector)
+      await replaceYaml(valid)
+      await markerCount(0)
+    }
+    assert.equal(modelsSaveRequests.length, 2)
+  } catch (error) {
+    await recordSetupEvidence(pricingPage, 'pricing-failure', { body: await pricingPage.$eval('body', element => element.innerText) })
+    throw error
+  } finally { await pricingPage.close() }
 })
 
 test('provider model completions request only at the active model-id list and preserve unsaved connection context', async () => {

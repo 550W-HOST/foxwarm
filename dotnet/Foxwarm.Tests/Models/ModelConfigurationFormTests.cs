@@ -147,7 +147,7 @@ public sealed class ModelConfigurationFormTests
                         {
                             ["id"] = "wire-b",
                             ["maxOutput"] = 123,
-                            ["tokenPricesPerMillion"] = new JsonObject
+                            ["pricing"] = new JsonObject
                             {
                                 ["cached"] = 0,
                                 ["input"] = .25,
@@ -256,7 +256,7 @@ public sealed class ModelConfigurationFormTests
         Assert.Equal(123, configuration.Capture().Resolve(null).MaxOutput);
         Assert.Equal(
             .25,
-            configuration.Capture().Resolve(null).Configuration["tokenPricesPerMillion"]![
+            configuration.Capture().Resolve(null).Configuration["pricing"]![
                 "input"
             ]!.GetValue<double>()
         );

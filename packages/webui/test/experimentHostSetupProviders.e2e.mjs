@@ -3,7 +3,7 @@ import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { readFile } from 'node:fs/promises'
 import { writeModelFixture } from './experimentModelFixture.mjs'
-import { createHostFixture, until } from './experimentHostFixture.mjs'
+import { createHostFixture, until, saveModelsInOriginalApp } from './experimentHostFixture.mjs'
 
 const listToken = 'setup-list-token'
 const testToken = 'setup-test-token'
@@ -25,6 +25,7 @@ function sendCompletion(response) {
   response.write(`data: ${JSON.stringify({
     type: 'response.completed',
     response: {
+      usage: { input_tokens: 10, input_tokens_details: { cached_tokens: 8 }, output_tokens: 5 },
       output: [{
         type: 'message',
         role: 'assistant',
@@ -77,7 +78,7 @@ try {
       let raw = ''
       for await (const chunk of request) raw += chunk
       const body = JSON.parse(raw)
-      assert.equal(body.model, 'other-model')
+      assert.ok(['other-model', 'priced-model'].includes(body.model))
       testRequests.push(body)
       return sendCompletion(response)
     }
@@ -192,14 +193,34 @@ try {
   assert.equal(await readFile(fixture.modelPath, 'utf8'), modelsBefore)
   await page.keyboard.press('Escape')
 
+  // The ordinary built App submits raw pricing YAML to the real authenticated route.
+  const pricedYaml = `# user-authored pricing\ndefault: priced/priced-model\nproviders:\n  priced:\n    providerType: openai-responses\n    baseUrl: ${providerRoot}\n    apiKey: ${testToken}\n    models:\n      - id: priced-model\n        pricing: { cached: 1, input: 2, output: 3 }\n`
+  await saveModelsInOriginalApp(page, pricedYaml, fixture.modelPath)
+  const setupStatus = await fixture.api('GET', '/api/setup/status')
+  assert.equal(setupStatus.body.models.rawYaml, pricedYaml)
+  const created = await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'setup-pricing' })
+  assert.equal(created.status, 200, JSON.stringify(created))
+  const sessionId = created.body.sessionId
+  const triggered = await fixture.api('POST', '/trigger', { sessionId, text: 'exercise saved pricing' })
+  assert.equal(triggered.status, 200, JSON.stringify(triggered))
+  const history = await until(async () => {
+    const response = await fixture.api('GET', `/api/sessions/${encodeURIComponent(sessionId)}/history`)
+    return response.body.messages?.find(message => message.__meta?.usage?.cost !== undefined) && response.body
+  }, 'saved pricing recorded on a normal request')
+  const pricedMessage = history.messages.find(message => message.__meta?.usage?.cost !== undefined)
+  assert.ok(Math.abs(pricedMessage.__meta.usage.cost - 0.000027) < 1e-12)
+  assert.equal(testRequests.at(-1).model, 'priced-model')
+
   console.log(JSON.stringify({
     result: 'ok',
     listedModels: listed.body.models,
     anthropicList: true,
     oneShotText: tested.body.text,
-    noConfigMutation: modelsAfter === modelsBefore,
-    noCatalogMutation: JSON.stringify(treeAfter.body) === JSON.stringify(treeBefore.body),
+    discoveryDidNotMutateConfig: modelsAfter === modelsBefore,
+    discoveryDidNotMutateCatalog: JSON.stringify(treeAfter.body) === JSON.stringify(treeBefore.body),
     completion: true,
+    originalAppPricingSave: true,
+    recordedCost: pricedMessage.__meta.usage.cost,
   }))
 } catch (error) {
   console.error('Editor/provider evidence:', { listRequests, body: await browserPage?.evaluate(() => document.body.innerText), active: await browserPage?.evaluate(() => ({ tag: document.activeElement?.tagName, role: document.activeElement?.getAttribute('role'), classes: document.activeElement?.className })) })

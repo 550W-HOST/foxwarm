@@ -2225,6 +2225,14 @@ html .foxwarm-composer-attachment-chip[data-composer-block-selected] {
 /* Setup uses section navigation directly within the workbench surface. */
 .foxwarm-setup-root { container: foxwarm-setup / inline-size; }
 .foxwarm-setup-body > [role="tabpanel"] { min-width: 0; }
+/* Only the editor and its own heading/actions share the pane-height budget. */
+.foxwarm-setup-editor-section {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  height: 100%;
+  min-height: min-content;
+}
 @container foxwarm-setup (min-width: 700px) {
   .foxwarm-setup-body { flex-direction: row; }
   .foxwarm-setup-navigation {

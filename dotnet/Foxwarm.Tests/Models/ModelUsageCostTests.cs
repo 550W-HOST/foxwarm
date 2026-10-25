@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
@@ -34,7 +36,7 @@ public sealed partial class ModelUsageCostTests
                         new JsonObject
                         {
                             ["id"] = "wire",
-                            ["tokenPricesPerMillion"] = Prices(factor),
+                            ["pricing"] = Prices(factor),
                         }
                     ),
                 },
@@ -52,6 +54,63 @@ public sealed partial class ModelUsageCostTests
             _ =>
                 "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}],\"usage\":{\"input_tokens\":10,\"input_tokens_details\":{\"cached_tokens\":8},\"output_tokens\":5,\"output_tokens_details\":{\"reasoning_tokens\":3}}}}\n\n",
         };
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Raw_Setup_pricing_save_records_cost_on_the_next_normal_request(bool providerLeaf)
+    {
+        await using var peer = new ScriptedResponsesSequenceServer(
+            1,
+            (_, stream, _) => LoopbackResponsesServer.WriteResponseAsync(
+                stream, 200, "text/event-stream", Encoding.UTF8.GetBytes(Body("openai-responses")))
+        );
+        using var temp = new TempDirectory();
+        var configuration = new ModelConfiguration(HostPaths.ForDataRoot(temp.Path, environment: _ => null));
+        var settings = (await HttpServerSettings.CaptureAsync(configuration, temp.Path)) with
+        {
+            Port = 0,
+            BindAddress = "127.0.0.1",
+            Address = new("http://127.0.0.1", "", "/", false),
+        };
+        await using var host = await MainHost.CreateAsync([], configuration, settings);
+        await host.StartAsync();
+        using var client = new HttpClient
+        {
+            BaseAddress = new Uri(host.App.Urls.Single()),
+            Timeout = TimeSpan.FromSeconds(20),
+        };
+        client.DefaultRequestHeaders.Authorization = new("Bearer", settings.Token);
+        var leaf = providerLeaf
+            ? "    pricing: { cached: 1, input: 2, output: 3 }\n"
+            : "    models:\n      - id: wire\n        pricing: { cached: 1, input: 2, output: 3 }\n";
+        var raw = "# user-authored prices\ndefault: priced\nproviders:\n  priced:\n    providerType: openai-responses\n    baseUrl: " + peer.BaseUri + "\n" + leaf;
+        var saved = await client.PostAsJsonAsync("/api/setup/models", new { yaml = raw });
+        Assert.Equal(HttpStatusCode.OK, saved.StatusCode);
+        Assert.Equal(raw, await File.ReadAllTextAsync(configuration.ActivePath));
+        Assert.Equal(2, configuration.Capture().Resolve("priced").Configuration["pricing"]!["input"]!.GetValue<double>());
+        var status = (await client.GetFromJsonAsync<JsonObject>("/api/setup/status"))!;
+        Assert.Equal(raw, status["models"]!["rawYaml"]!.GetValue<string>());
+        var created = await client.PostAsJsonAsync("/api/sessions", new { agentId = "main", sessionId = "setup-pricing" });
+        Assert.True(created.IsSuccessStatusCode);
+        var sessionId = (await created.Content.ReadFromJsonAsync<JsonObject>())!["sessionId"]!.GetValue<string>();
+        var triggered = await client.PostAsJsonAsync("/trigger", new { text = "exercise saved pricing", sessionId });
+        Assert.True(triggered.IsSuccessStatusCode, await triggered.Content.ReadAsStringAsync());
+        // Observe the normal HTTP consumer, not an internal accounting shortcut.
+        JsonObject? history = null;
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        do
+        {
+            history = await client.GetFromJsonAsync<JsonObject>("/api/sessions/" + Uri.EscapeDataString(sessionId) + "/history");
+            if (history?["messages"]!.AsArray().Any(row => row?["__meta"]?["usage"]?["cost"] is not null) == true)
+                break;
+            await Task.Delay(25);
+        } while (DateTime.UtcNow < deadline);
+        var model = Assert.Single(history!["messages"]!.AsArray(), row => row?["role"]?.ToString() == "model");
+        Assert.Equal(.000027, model!["__meta"]!["usage"]!["cost"]!.GetValue<double>(), 10);
+        var persisted = await new PersistentSessionAuthorityStore(temp.Path, sessionId).LoadAsync(sessionId);
+        Assert.Equal(.000027, persisted!.AuthorityEnvelope["stats"]!["totalCost"]!.GetValue<double>(), 10);
+    }
 
     [Theory]
     [InlineData("openai-responses")]
@@ -295,7 +354,7 @@ public sealed partial class ModelUsageCostTests
         var doc = Document(peer.BaseUri, "openai-responses");
         var providers = doc["providers"]!.AsObject();
         providers["other"] = providers["priced"]!.DeepClone();
-        providers["other"]!["models"]![0]!["tokenPricesPerMillion"] = Prices(10);
+        providers["other"]!["models"]![0]!["pricing"] = Prices(10);
         providers["alias"] = new JsonObject
         {
             ["providerType"] = "failover",
@@ -372,7 +431,7 @@ public sealed partial class ModelUsageCostTests
         var document = Document(new Uri("http://127.0.0.1:1"), "openai-responses");
         await config.SaveAsync(new JsonObject { ["yaml"] = document.ToJsonString() });
         var before = await File.ReadAllTextAsync(config.ActivePath);
-        document["providers"]!["priced"]!["models"]![0]!["tokenPricesPerMillion"] = JsonNode.Parse(
+        document["providers"]!["priced"]!["models"]![0]!["pricing"] = JsonNode.Parse(
             raw
         );
         await Assert.ThrowsAsync<InvalidDataException>(() =>
@@ -382,7 +441,7 @@ public sealed partial class ModelUsageCostTests
         Assert.Equal(
             1,
             SessionCatalog.Number(
-                config.Capture().Resolve("priced").Configuration["tokenPricesPerMillion"]?["cached"]
+                config.Capture().Resolve("priced").Configuration["pricing"]?["cached"]
             )
         );
     }
@@ -395,16 +454,16 @@ public sealed partial class ModelUsageCostTests
     {
         var doc = Document(new Uri("http://127.0.0.1:1"), "openai-responses");
         if (scope == "defaults")
-            doc["defaults"] = new JsonObject { ["tokenPricesPerMillion"] = Prices() };
+            doc["defaults"] = new JsonObject { ["pricing"] = Prices() };
         else if (scope == "virtual")
             doc["providers"]!["alias"] = new JsonObject
             {
                 ["providerType"] = "session-hash",
                 ["targets"] = new JsonArray("priced"),
-                ["tokenPricesPerMillion"] = Prices(),
+                ["pricing"] = Prices(),
             };
         else
-            doc["providers"]!["priced"]!["tokenPricesPerMillion"] = Prices();
+            doc["providers"]!["priced"]!["pricing"] = Prices();
         Assert.Throws<InvalidDataException>(() => HostModels.Parse(doc, new JsonObject()));
     }
 
@@ -416,7 +475,7 @@ public sealed partial class ModelUsageCostTests
             {
                 ["providers"] = new JsonObject
                 {
-                    ["free"] = new JsonObject { ["tokenPricesPerMillion"] = Prices(0) },
+                    ["free"] = new JsonObject { ["pricing"] = Prices(0) },
                     ["legacy"] = new JsonObject(),
                 },
             },

@@ -659,7 +659,7 @@ public sealed class ResponsesPrefixCommitTests
                                     new JsonObject
                                     {
                                         ["id"] = "m",
-                                        ["tokenPricesPerMillion"] = new JsonObject
+                                        ["pricing"] = new JsonObject
                                         {
                                             ["cached"] = 1,
                                             ["input"] = 2,

@@ -10,16 +10,16 @@ internal static class ModelUsageCost
     {
         if (node is not JsonObject prices)
             throw new InvalidDataException(
-                "tokenPricesPerMillion must be a complete cached/input/output object."
+                "pricing must be a complete cached/input/output object."
             );
         foreach (var key in new[] { "cached", "input", "output" })
             if (Nonnegative(prices[key]) is null)
                 throw new InvalidDataException(
-                    "tokenPricesPerMillion." + key + " must be a finite nonnegative number."
+                    "pricing." + key + " must be a finite nonnegative number."
                 );
         if (prices.Any(pair => pair.Key is not ("cached" or "input" or "output")))
             throw new InvalidDataException(
-                "tokenPricesPerMillion only accepts cached, input and output."
+                "pricing only accepts cached, input and output."
             );
         return (JsonObject)prices.DeepClone();
     }
@@ -31,7 +31,7 @@ internal static class ModelUsageCost
             return null;
         var usage = (JsonObject)source.DeepClone();
         usage.Remove("cost");
-        if (model.Configuration["tokenPricesPerMillion"] is not JsonObject prices)
+        if (model.Configuration["pricing"] is not JsonObject prices)
             return usage;
         var cost = 0d;
         foreach (

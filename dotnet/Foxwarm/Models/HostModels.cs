@@ -191,9 +191,9 @@ internal sealed partial class HostModels
                 : throw new InvalidDataException(
                     "Provider models must be a string or array of IDs/model objects."
                 );
-            if (members.Length > 0 && provider.ContainsKey("tokenPricesPerMillion"))
+            if (members.Length > 0 && provider.ContainsKey("pricing"))
                 throw new InvalidDataException(
-                    "tokenPricesPerMillion belongs on individual model objects, or a concrete provider without models."
+                    "pricing belongs on individual model objects, or a concrete provider without models."
                 );
             if (members.Length == 0)
             {
@@ -236,7 +236,7 @@ internal sealed partial class HostModels
                     "requestCompression",
                     "extraFields",
                     "extraHeaders",
-                    "tokenPricesPerMillion",
+                    "pricing",
                     "contextLimit",
                     "maxOutput",
                     "providerImageOutputFormat",

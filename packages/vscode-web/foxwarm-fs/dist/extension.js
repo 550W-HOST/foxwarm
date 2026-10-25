@@ -532,20 +532,20 @@ var modelDefaultProperties = {
   maxOutput: { ...positiveInteger, description: "Maximum output tokens requested from the provider. Provider-specific extraFields may override this value." },
   providerImageOutputFormat: { enum: ["webp", "jpeg"], description: "Format used for optimized input images: webp, or jpeg with PNG for transparent images." }
 };
-var tokenPricesPerMillion = {
+var pricing = {
   type: "object",
   required: ["cached", "input", "output"],
   additionalProperties: false,
-  description: "Estimated USD prices per million tokens. Set all three rates on each model; saved usage costs are not recalculated after prices change.",
+  description: "Estimated USD prices per million tokens. Set all three rates on each model object, or on a concrete provider with no models. Saved usage costs are not recalculated after prices change.",
   properties: {
-    cached: { type: "number", minimum: 0 },
-    input: { type: "number", minimum: 0 },
-    output: { type: "number", minimum: 0 }
+    cached: { type: "number", minimum: 0, description: "USD per million cached input tokens." },
+    input: { type: "number", minimum: 0, description: "USD per million uncached input tokens." },
+    output: { type: "number", minimum: 0, description: "USD per million output tokens, including reasoning." }
   }
 };
 var modelOverrideProperties = {
   ...modelDefaultProperties,
-  tokenPricesPerMillion,
+  pricing,
   streamContentInactivityTimeoutMs: { type: "integer", minimum: 1, maximum: 2147483647, default: 6e4, description: "Streaming output inactivity timeout in milliseconds. Model overrides provider; default 60000. First-output timeout and explicit caller deadline remain independent. Safety buffering uses at least 600000." },
   effort: modelEffortConfig,
   historyReasoningField: {
@@ -597,7 +597,7 @@ var providerObjectEntry = {
       ]
     },
     ...modelDefaultProperties,
-    tokenPricesPerMillion,
+    pricing,
     streamContentInactivityTimeoutMs: modelOverrideProperties.streamContentInactivityTimeoutMs,
     effort: modelEffortConfig,
     historyReasoningField: modelOverrideProperties.historyReasoningField,
@@ -619,7 +619,7 @@ var providerObjectEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "tokenPricesPerMillion", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
       }
     },
     {
@@ -627,7 +627,7 @@ var providerObjectEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "tokenPricesPerMillion", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError"].map((field) => ({ required: [field] })) }
       }
     },
     {
@@ -655,7 +655,7 @@ var providerObjectEntry = {
           { required: ["model"], properties: { model: { anyOf: [{ type: "array", minItems: 1 }, { type: "string", minLength: 1 }] } } }
         ]
       },
-      then: { not: { required: ["tokenPricesPerMillion"] } }
+      then: { not: { required: ["pricing"] } }
     }
   ]
 };

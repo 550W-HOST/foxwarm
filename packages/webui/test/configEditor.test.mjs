@@ -253,13 +253,6 @@ test('Monaco stays on the worker-compatible pinned release used by the real-work
   assert.equal(packageJson.version, '0.54.0')
 })
 
-test('Setup lets both YAML editors fill their flex-owned panel space', async () => {
-  const setupSource = await readFile(path.join(webuiRoot, 'src/components/SetupView.tsx'), 'utf8')
-  assert.doesNotMatch(setupSource, /SETUP_EDITOR_HEIGHT|calc\(min\(600px, 80vh\)\)/)
-  assert.equal((setupSource.match(/height="100%"/g) || []).length, 2)
-  assert.equal((setupSource.match(/mt-4 min-h-72 flex-1/g) || []).length, 2)
-})
-
 test('models schema lists only known provider types and documents legacy readers', () => {
   const providerEntry = schemas.MODELS_CONFIG_SCHEMA.properties.providers.additionalProperties
   const provider = providerEntry.oneOf.find((entry) => entry.type === 'object')
@@ -567,13 +560,13 @@ test('shared and editor schemas accept narrow model defaults and reject invalid 
 
 test('model pricing requires complete nonnegative rates at concrete leaves', () => {
   const rates = { cached: 0, input: 0.25, output: 1.5 }
-  const leaf = tokenPricesPerMillion => ({ providers: { p: { models: [{ id: 'wire', tokenPricesPerMillion }] } } })
+  const leaf = pricing => ({ providers: { p: { models: [{ id: 'wire', pricing }] } } })
   assert.equal(validateModelsSchema(leaf(rates)), true)
-  assert.equal(validateModelsSchema({ providers: { p: { tokenPricesPerMillion: rates } } }), true)
+  assert.equal(validateModelsSchema({ providers: { p: { pricing: rates } } }), true)
   for (const invalid of [null, {}, { input: 1 }, { ...rates, output: -1 }, { ...rates, output: '1' }, { ...rates, output: null }, { ...rates, fee: 1 }]) {
     assert.equal(validateModelsSchema(leaf(invalid)), false, JSON.stringify(invalid))
   }
-  assert.equal(validateModelsSchema({ providers: { p: { models: ['wire'], tokenPricesPerMillion: rates } } }), false)
-  assert.equal(validateModelsSchema({ providers: { p: { models: [] }, route: { providerType: 'session-hash', targets: ['p'], tokenPricesPerMillion: rates } } }), false)
-  assert.equal(validateModelsSchema({ defaults: { tokenPricesPerMillion: rates }, providers: { p: {} } }), false)
+  assert.equal(validateModelsSchema({ providers: { p: { models: ['wire'], pricing: rates } } }), false)
+  assert.equal(validateModelsSchema({ providers: { p: { models: [] }, route: { providerType: 'session-hash', targets: ['p'], pricing: rates } } }), false)
+  assert.equal(validateModelsSchema({ defaults: { pricing: rates }, providers: { p: {} } }), false)
 })

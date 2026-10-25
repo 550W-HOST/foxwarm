@@ -20,9 +20,9 @@ internal sealed partial class HostModels
         config["providerType"] = type;
         config["model"] = id;
         var pricingScope = model ?? provider;
-        if (pricingScope.ContainsKey("tokenPricesPerMillion"))
-            config["tokenPricesPerMillion"] = ModelUsageCost.ValidatePrices(
-                pricingScope["tokenPricesPerMillion"]
+        if (pricingScope.ContainsKey("pricing"))
+            config["pricing"] = ModelUsageCost.ValidatePrices(
+                pricingScope["pricing"]
             );
         var family =
             type == "anthropic" ? "anthropic"

@@ -45,7 +45,7 @@ Raw request/response/error/stream diagnostics remain a separate best-effort debu
 
 ## D-model-usage-cost
 
-[2026-10-25] Model-configured token prices and saved cost estimates use fixed USD. A concrete model may supply the complete optional `tokenPricesPerMillion: { cached, input, output }` block; each rate is a finite nonnegative USD price per million tokens. Named providers put it on individual model objects; a concrete provider without a model list may put it on its own leaf. Virtual routes and root defaults have no pricing inheritance. The supported Models YAML editor uses the shared schema and the ordinary validated configuration installation lane.
+[2026-10-25] Model-configured token prices and saved cost estimates use fixed USD. A concrete model may supply the complete optional `pricing: { cached, input, output }` block; each rate is a finite nonnegative USD price per million tokens. Named providers put it on individual model objects; a concrete provider without a model list may put it on its own leaf. Virtual routes and root defaults have no pricing inheritance. The supported Models YAML editor uses the shared schema and the ordinary validated configuration installation lane.
 
 For example, fictional rates for one named leaf are configured as:
 
@@ -55,7 +55,7 @@ providers:
     providerType: openai-responses
     models:
       - id: example-model
-        tokenPricesPerMillion: { cached: 0.25, input: 1, output: 4 }
+        pricing: { cached: 0.25, input: 1, output: 4 }
 ```
 
 `ModelRequestOwner` settles the accepted completion from its captured concrete leaf, including aliases, failover and existing explicit-selection recapture. Ordinary configuration reload does not change an in-flight snapshot. `ModelUsageCost.Complete` promotes an owned copy of `ChatResult.Usage` or the Chat Completions assistant-metadata fallback, then adds optional numeric `cost = (cachedTokens * cached + inputTokens * input + outputTokens * output) / 1_000_000`. Counts retain protocol normalization: cached and uncached input do not overlap; full output already contains reasoning; Anthropic cache creation remains uncached input. Missing pricing, absent usage, unusable normalized counts or a non-finite computed result leave cost absent. Genuine zero remains `0`. Context estimation and token arithmetic are unchanged.
