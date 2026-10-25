@@ -278,8 +278,13 @@ internal sealed partial class NodeConnectionHub
         }
         finally
         {
-            if (claim is null && attemptedSend && deadline.IsCancellationRequested
-                && connection.Capabilities["features"]?["toolCallCancellation"]?.GetValue<bool>() == true)
+            if (
+                claim is null
+                && attemptedSend
+                && deadline.IsCancellationRequested
+                && connection.Capabilities["features"]?["toolCallCancellation"]?.GetValue<bool>()
+                    == true
+            )
                 await CancelToolCallAsync(connection, callId);
             dispatchAdmission?.Dispose();
             lock (gate)

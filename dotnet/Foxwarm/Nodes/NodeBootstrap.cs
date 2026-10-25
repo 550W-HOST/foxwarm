@@ -231,13 +231,19 @@ internal sealed class NodeBootstrap(
                     return;
                 }
                 context.Response.ContentType = "application/zip";
-                context.Response.Headers.ContentDisposition = "attachment; filename=foxwarm-browser-node.zip";
+                context.Response.Headers.ContentDisposition =
+                    "attachment; filename=foxwarm-browser-node.zip";
                 using var buffer = new MemoryStream();
                 using (var archive = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
                 {
-                    foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+                    foreach (
+                        var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+                    )
                     {
-                        var entry = archive.CreateEntry(Path.GetRelativePath(root, path).Replace('\\', '/'), CompressionLevel.Fastest);
+                        var entry = archive.CreateEntry(
+                            Path.GetRelativePath(root, path).Replace('\\', '/'),
+                            CompressionLevel.Fastest
+                        );
                         await using var output = entry.Open();
                         await using var input = File.OpenRead(path);
                         await input.CopyToAsync(output, context.RequestAborted);
