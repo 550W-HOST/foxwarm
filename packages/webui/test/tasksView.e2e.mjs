@@ -368,6 +368,8 @@ test('WebUI creates, comments, and changes task owners through user routes', asy
   const noStaleOwnerCreate = requests.filter(request => request.action === 'create').at(-1)
   assert.deepEqual(noStaleOwnerCreate.body, { title: 'Created without stale owner', notifySession: true })
   assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_tasks_last_owner_v1')), null)
+  await waitLoaded()
+  await page.waitForSelector('[data-task-row="task-active"]')
   await page.click('[data-task-row="task-active"] button')
   await page.waitForFunction(() => document.querySelector('[data-task-details] h4')?.textContent === 'active task')
   await page.waitForSelector('[data-task-details] textarea')

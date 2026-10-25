@@ -114,8 +114,15 @@ try {
   scripts.set('delete-start', [call('deleted-run', 'run_script', { code: "call_tool({'toolId':'mcp:sdk/hold_effect','args':{'tag':'delete'}})\ncall_tool('write', {'filePath':" + JSON.stringify(join(owned.work, 'deleted-after')) + ", 'content':'wrong'})\n" })])
   await owned.api('POST', route('doomed') + '/message', { text: 'TOOL-SCRIPT-TURN:delete-start' }); await until(() => exists(join(sdk, 'started-delete')), 'delete call accepted')
   const pendingDelete = await owned.api('DELETE', route('doomed')); assert.equal(pendingDelete.status, 409); assert.equal(pendingDelete.body.code, "SESSION_DELETE_BUSY")
-  state = await until(async () => { const value = await authority('doomed'); return !value.busy && result(value, 'deleted-run') ? value : null }, 'delete drain')
-  const deletedRun = result(state, 'deleted-run').response; assert.equal(deletedRun.status, 'failed'); assert.match(deletedRun.error, /not started/); assert.equal((await owned.api('DELETE', route('doomed'))).status, 200)
+  state = await until(async () => {
+    const value = await authority('doomed')
+    if (value.busy || !result(value, 'deleted-run')) return null
+    const deleted = await owned.api('DELETE', route('doomed'))
+    if (deleted.status === 409 && deleted.body.code === 'SESSION_DELETE_BUSY') return null
+    assert.equal(deleted.status, 200, JSON.stringify(deleted))
+    return value
+  }, 'delete drain')
+  const deletedRun = result(state, 'deleted-run').response; assert.equal(deletedRun.status, 'failed'); assert.match(deletedRun.error, /not started/)
   const retained = JSON.parse(await readFile(join(owned.data, 'state/toolscript-runs', deletedRun.runId + '.json'), 'utf8')); assert.equal(retained.ownerSessionId, 'doomed'); assert.equal(retained.status, 'failed'); assert(!await exists(join(owned.work, 'deleted-after'))); assert(await exists(join(sdk, 'started-delete')))
 
   // Stop cancels the script wait without killing an already-started user process.
