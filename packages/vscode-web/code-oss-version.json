@@ -2,5 +2,5 @@
   "repository": "https://github.com/microsoft/vscode.git",
   "commit": "2a59476c9bfcb90b3ddc372c36762471b7dfad1c",
   "version": "1.141.0",
-  "nodeVersion": "24.17.0"
+  "nodeVersion": "24.18.0"
 }
