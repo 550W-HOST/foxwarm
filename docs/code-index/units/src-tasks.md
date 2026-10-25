@@ -49,7 +49,7 @@ Exact tool description:
 | Parameter | Exact model-facing description |
 |-----------|--------------------------------|
 | `action` | Task operation to perform. |
-| `title` | Task title. Required when action is create. |
+| `title` | Task title. Required for create; optional for update. Up to 200 characters. |
 | `description` | Problem or scope description for a new task, or replacement description when updating. Any Session may update the description of an open or active task, subject to tool permissions. For long description or result text, use ToolScript to compose the operation so you do not regenerate duplicate content. |
 | `parentTaskId` | Existing parent task ID for a simple child task. Set only when creating. |
 | `taskId` | Existing task ID. Required for get, claim, update, complete, and cancel. |
@@ -63,7 +63,7 @@ Exact tool description:
 
 ### Actions
 
-[Task actor/owner rights](../behaviors/collaboration-and-tasks.md#who-is-acting-on-a-task) and [notification outcomes](../behaviors/collaboration-and-tasks.md#when-does-a-task-change-notify-or-start-a-session) are the behavior owners. Store validation is action-specific and transactional: unsupported keys/types/actions fail before effect; a mixed status update checks authority before any description/note write. Model-facing terminal mutations reject with current status/owner in the error. Authenticated user comments use their separate append-only path, including on terminal Tasks; they do not reopen them.
+[Task actor/owner rights](../behaviors/collaboration-and-tasks.md#who-is-acting-on-a-task) and [notification outcomes](../behaviors/collaboration-and-tasks.md#when-does-a-task-change-notify-or-start-a-session) are the behavior owners. Store validation is action-specific and transactional: unsupported keys/types/actions fail before effect; a mixed status update checks authority before any title/description/note write. Model-facing terminal mutations reject with current status/owner in the error. Authenticated user comments use their separate append-only path, including on terminal Tasks; they do not reopen them.
 
 - Creation validates an existing parent and resolves an optional owner through the real catalog. Self-owned creation, fresh claim, changed assignment and transition to active seed/reset the existing fixed-30 progress checkpoint. Same-owner claim is idempotent.
 - List filters status/scope before its bounded query/count; get returns bounded immediate children and chronological recent notes. Canonical aliases are compared without broad store scans.
@@ -90,7 +90,7 @@ Authenticated WebUI create/comment/assign routes inject a user actor, never a se
 
 - GET `/api/tasks?status=&limit=` returns bounded global summaries/counts, with limit 1–50 and optional catalog-resolved creator/owner Agent metadata. GET `/api/tasks/:id` returns bounded detail.
 - POST `/api/tasks`, `/:id/comments`, and `/:id/assign` use user-authored create, note and ownership operations. Comment notification is opt-in; create/assign service defaults remain distinct. Terminal comments append notes without a status mutation.
-- POST `/:id/claim`, `/complete`, `/cancel` and PATCH `/api/tasks/:id` retain the Session-targeted action. PATCH supports description/note/open-or-active status.
+- POST `/:id/claim`, `/complete`, `/cancel` and PATCH `/api/tasks/:id` retain the Session-targeted action. The maintained managed PATCH path supports title/description/note/open-or-active status; [Task service and timer scheduler](tasks-timers.md) locates its C# implementation.
 
 Bodies cannot override route action/taskId or provide arbitrary creator identity. Errors use stable codes and HTTP 400/403/404/409; unexpected failures return a safe generic 500 without internal paths.
 

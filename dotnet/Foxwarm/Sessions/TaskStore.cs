@@ -704,6 +704,8 @@ internal sealed class TaskStore : IDisposable
                     Update(
                         db,
                         taskId,
+                        "title",
+                        Text(args["title"]) ?? Text(task["title"]),
                         "description",
                         Text(args["description"]) ?? Text(task["description"]),
                         "status",
@@ -1159,8 +1161,11 @@ internal sealed class TaskStore : IDisposable
             throw new TaskError("TASK_INVALID_ARGS", "parentTaskId must be non-empty.");
         if (args.ContainsKey("note") && string.IsNullOrWhiteSpace(Text(args["note"])))
             throw new TaskError("TASK_INVALID_ARGS", "note must be non-empty.");
-        if (action == "create" && string.IsNullOrWhiteSpace(Text(args["title"])))
-            throw new TaskError("TASK_INVALID_ARGS", "task create requires a non-empty title.");
+        if (
+            (action == "create" || args.ContainsKey("title"))
+            && string.IsNullOrWhiteSpace(Text(args["title"]))
+        )
+            throw new TaskError("TASK_INVALID_ARGS", $"task {action} requires a non-empty title.");
         if (
             action is not "create" and not "list"
             && string.IsNullOrWhiteSpace(Text(args["taskId"]))
@@ -1190,13 +1195,14 @@ internal sealed class TaskStore : IDisposable
             throw new TaskError("TASK_INVALID_ARGS", "notifySession must be a boolean.");
         if (
             action == "update"
+            && !args.ContainsKey("title")
             && !args.ContainsKey("description")
             && !args.ContainsKey("note")
             && !args.ContainsKey("status")
         )
             throw new TaskError(
                 "TASK_INVALID_ARGS",
-                "task update requires description, note, or status."
+                "task update requires title, description, note, or status."
             );
         if (httpLimit is not null && (httpLimit < 1 || httpLimit > 50))
             throw new TaskError("TASK_INVALID_ARGS", "limit must be an integer from 1 to 50.");
@@ -1214,7 +1220,7 @@ internal sealed class TaskStore : IDisposable
             "list" => key is "status" or "scope",
             "get" or "claim" => key is "taskId",
             "assign" => key is "taskId" or "ownerSessionId" or "notifySession",
-            "update" => key is "taskId" or "description" or "note" or "status" or "notifySession",
+            "update" => key is "taskId" or "title" or "description" or "note" or "status" or "notifySession",
             "complete" => key is "taskId" or "result",
             "cancel" => key is "taskId" or "reason",
             _ => false,

@@ -166,7 +166,7 @@ public sealed class TaskStoreTests
     }
 
     [Fact]
-    public void NonOwnerSessionMayUpdateDescriptionAndNoteButNotStatus()
+    public void NonOwnerSessionMayUpdateTitleDescriptionAndNoteButNotStatus()
     {
         using var temp = new TempDirectory();
         using var store = new TaskStore(temp.Path, id => id, _ => []);
@@ -202,6 +202,7 @@ public sealed class TaskStoreTests
             {
                 ["action"] = "update",
                 ["taskId"] = id,
+                ["title"] = "shared title",
                 ["description"] = "shared scope",
             };
             if (note)
@@ -209,12 +210,17 @@ public sealed class TaskStoreTests
             store.Execute(change, "observer");
         }
         using (var reopened = new TaskStore(temp.Path, value => value, _ => []))
+        {
+            var reopenedTask = reopened
+                .Execute(new JsonObject { ["action"] = "get", ["taskId"] = id }, "observer")
+                .Payload["task"]!;
+            Assert.Equal("shared title", reopenedTask["title"]!.GetValue<string>());
             Assert.Equal(
                 "shared scope",
-                reopened
-                    .Execute(new JsonObject { ["action"] = "get", ["taskId"] = id }, "observer")
-                    .Payload["task"]!["description"]!.GetValue<string>()
+                reopenedTask["description"]!.GetValue<string>()
             );
+        }
+        var beforeRejected = store.Execute(new JsonObject { ["action"] = "get", ["taskId"] = id }, null).Payload;
         foreach (var status in new JsonNode?[] { JsonValue.Create("active"), null })
             Assert.Throws<TaskError>(() =>
                 store.Execute(
@@ -222,12 +228,16 @@ public sealed class TaskStoreTests
                     {
                         ["action"] = "update",
                         ["taskId"] = id,
+                        ["title"] = "not permitted",
                         ["description"] = "not permitted",
+                        ["note"] = "not permitted",
                         ["status"] = status,
                     },
                     "observer"
                 )
             );
+        Assert.True(JsonNode.DeepEquals(beforeRejected, store.Execute(new JsonObject { ["action"] = "get", ["taskId"] = id }, null).Payload));
+        store.Execute(new JsonObject { ["action"] = "update", ["taskId"] = id, ["title"] = "owner title", ["status"] = "open" }, "owner");
         store.Execute(new JsonObject { ["action"] = "complete", ["taskId"] = id }, "owner");
         Assert.Throws<TaskError>(() =>
             store.Execute(
@@ -235,11 +245,52 @@ public sealed class TaskStoreTests
                 {
                     ["action"] = "update",
                     ["taskId"] = id,
+                    ["title"] = "terminal",
                     ["description"] = "terminal",
                 },
                 "observer"
             )
         );
+    }
+
+    [Fact]
+    public void TitleOnlyUpdatePersistsAcrossProjectionsAndRejectsInvalidChangesAtomically()
+    {
+        using var temp = new TempDirectory();
+        string id;
+        var title = new string('t', 198) + "😀";
+        using (var store = new TaskStore(temp.Path, value => value, _ => []))
+        {
+            var parent = store.Execute(new JsonObject { ["action"] = "create", ["title"] = "parent" }, "creator").Payload["task"]!["id"]!.GetValue<string>();
+            var created = store.Execute(new JsonObject { ["action"] = "create", ["title"] = "original", ["parentTaskId"] = parent, ["ownerSessionId"] = "owner" }, "owner");
+            id = created.Payload["task"]!["id"]!.GetValue<string>();
+            store.AttachChild(id, "owner");
+            var updated = store.Execute(new JsonObject { ["action"] = "update", ["taskId"] = id, ["title"] = title, ["notifySession"] = true }, "observer");
+            Assert.Null(updated.CommentOwner);
+            Assert.Null(updated.Assignment);
+            var task = updated.Payload["task"]!;
+            Assert.Equal(title, task["title"]!.GetValue<string>());
+            Assert.Equal(parent, task["parentTaskId"]!.GetValue<string>());
+            Assert.Equal("owner", task["createdBySessionId"]!.GetValue<string>());
+            Assert.Equal("owner", task["ownerSessionId"]!.GetValue<string>());
+            Assert.Equal("owner", task["attachedSessionId"]!.GetValue<string>());
+            Assert.Equal(title, store.Execute(new JsonObject { ["action"] = "list" }, "owner").Payload["tasks"]!.AsArray().Single(row => row!["id"]!.GetValue<string>() == id)!["title"]!.GetValue<string>());
+            Assert.Equal(title, Assert.Single(store.Execute(new JsonObject { ["action"] = "get", ["taskId"] = parent }, null).Payload["children"]!.AsArray())!["title"]!.GetValue<string>());
+            Assert.Equal(title, Assert.Single(store.TaskContext("owner", [], true, [id])["tasks"]!.AsArray())!["title"]!.GetValue<string>());
+            var beforeRejected = store.Execute(new JsonObject { ["action"] = "get", ["taskId"] = id }, null).Payload;
+            foreach (var invalid in new JsonNode?[] { null, JsonValue.Create(""), JsonValue.Create(" \t"), JsonValue.Create(title + "x"), JsonValue.Create(1), JsonValue.Create(false), new JsonObject(), new JsonArray() })
+            {
+                var error = Assert.Throws<TaskError>(() => store.Execute(new JsonObject { ["action"] = "update", ["taskId"] = id, ["title"] = invalid, ["description"] = "must not persist", ["note"] = "must not append" }, "observer"));
+                Assert.Equal("TASK_INVALID_ARGS", error.Code);
+                Assert.True(JsonNode.DeepEquals(beforeRejected, store.Execute(new JsonObject { ["action"] = "get", ["taskId"] = id }, null).Payload));
+            }
+        }
+        using var reopened = new TaskStore(temp.Path, value => value, _ => []);
+        Assert.Equal(title, reopened.Execute(new JsonObject { ["action"] = "get", ["taskId"] = id }, null).Payload["task"]!["title"]!.GetValue<string>());
+        reopened.Execute(new JsonObject { ["action"] = "cancel", ["taskId"] = id }, "owner");
+        var terminal = Assert.Throws<TaskError>(() => reopened.Execute(new JsonObject { ["action"] = "update", ["taskId"] = id, ["title"] = "cannot rename" }, "owner"));
+        Assert.Equal("TASK_TERMINAL", terminal.Code);
+        Assert.Equal(title, reopened.Execute(new JsonObject { ["action"] = "get", ["taskId"] = id }, null).Payload["task"]!["title"]!.GetValue<string>());
     }
 
     [Fact]

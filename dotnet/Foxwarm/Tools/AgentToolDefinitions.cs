@@ -84,7 +84,7 @@ internal static class AgentToolDefinitions
                         "complete",
                         "cancel"
                     ),
-                    ["title"] = String("Task title. Required when action is create."),
+                    ["title"] = String("Task title. Required for create; optional for update. Up to 200 characters."),
                     ["description"] = String(
                         "Problem or scope description for a new task, or replacement description when updating. Any Session may update the description of an open or active task, subject to tool permissions. For long description or result text, use ToolScript to compose the operation so you do not regenerate duplicate content."
                     ),

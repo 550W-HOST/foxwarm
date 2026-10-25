@@ -6,6 +6,62 @@ namespace Foxwarm.Tests;
 
 public sealed class TaskNotificationConcurrencyTests
 {
+    [Fact]
+    public async Task Title_updates_are_silent_and_an_opted_in_note_uses_the_replaced_title()
+    {
+        using var temp = new TempDirectory();
+        await using var manager = Manager(temp.Path);
+        await manager.LoadAsync();
+        var actor = await manager.CreateNamedAsync("main", "actor", null, null);
+        var owner = await manager.CreateNamedAsync("main", "owner", null, null);
+        var created = await manager.Tasks.ExecuteAsync(
+            new JsonObject
+            {
+                ["action"] = "create",
+                ["title"] = "original title",
+                ["ownerSessionId"] = owner.Id,
+            },
+            actor.Id
+        );
+        var id = Text(created.Payload["task"]!["id"]);
+        var authority = owner.Entry.Snapshot().AuthorityEnvelope.DeepClone();
+        foreach (var withDescription in new[] { false, true })
+        {
+            var args = new JsonObject
+            {
+                ["action"] = "update",
+                ["taskId"] = id,
+                ["title"] = "silent title",
+                ["notifySession"] = true,
+            };
+            if (withDescription)
+                args["description"] = "shared scope";
+            var updated = await manager.Tasks.ExecuteAsync(args, actor.Id);
+            Assert.Equal(0, updated.Payload["sentNotifications"]!.GetValue<int>());
+            Assert.Empty(owner.Entry.Snapshot().Queue);
+            Assert.Empty(owner.Entry.Snapshot().History);
+            Assert.True(JsonNode.DeepEquals(authority, owner.Entry.Snapshot().AuthorityEnvelope));
+        }
+        var noted = await manager.Tasks.ExecuteAsync(
+            new JsonObject
+            {
+                ["action"] = "update",
+                ["taskId"] = id,
+                ["title"] = "notified title",
+                ["note"] = "Please inspect the revised scope.",
+                ["notifySession"] = true,
+            },
+            actor.Id
+        );
+        Assert.Equal(1, noted.Payload["sentNotifications"]!.GetValue<int>());
+        var notice = Assert.Single(owner.Entry.Snapshot().Queue);
+        Assert.True(notice.Trigger);
+        var text = SessionWait.Text(Assert.Single(notice.Parts!)["system"]);
+        Assert.Contains("notified title", text);
+        Assert.Contains("Please inspect the revised scope.", text);
+        await manager.ShutdownAsync();
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

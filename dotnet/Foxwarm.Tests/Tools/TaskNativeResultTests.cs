@@ -92,6 +92,24 @@ public sealed class TaskNativeResultTests
             "active",
             f.Owner.Id
         );
+        Receipt(
+            await Call(
+                new JsonObject
+                {
+                    ["action"] = "update",
+                    ["taskId"] = id,
+                    ["title"] = "renamed task",
+                    ["notifySession"] = true,
+                }
+            ),
+            id,
+            "active",
+            f.Owner.Id
+        );
+        Assert.Equal(
+            "renamed task",
+            SessionWait.Text((await Call(new JsonObject { ["action"] = "get", ["taskId"] = id }))["task"]?["title"])
+        );
         var progress = new string('n', 1998) + "😀";
         Receipt(
             await Call(
@@ -99,6 +117,7 @@ public sealed class TaskNativeResultTests
                 {
                     ["action"] = "update",
                     ["taskId"] = id,
+                    ["title"] = "revised task",
                     ["description"] = "revised scope",
                     ["note"] = progress,
                 }
@@ -124,10 +143,12 @@ public sealed class TaskNativeResultTests
         var listed = await Call(new JsonObject { ["action"] = "list" });
         Assert.Null(listed["output"]);
         Assert.Equal(id, Assert.Single(listed["tasks"]!.AsArray())!["id"]!.GetValue<string>());
+        Assert.Equal("revised task", SessionWait.Text(Assert.Single(listed["tasks"]!.AsArray())?["title"]));
         var detail = await Call(new JsonObject { ["action"] = "get", ["taskId"] = id });
         Assert.Null(detail["output"]);
         Assert.Equal(f.Owner.Id, SessionWait.Text(detail["task"]?["createdBySessionId"]));
         Assert.Equal("revised scope", SessionWait.Text(detail["task"]?["description"]));
+        Assert.Equal("revised task", SessionWait.Text(detail["task"]?["title"]));
         Assert.Contains(
             detail["notes"]!.AsArray(),
             note => SessionWait.Text(note?["text"]) == progress
