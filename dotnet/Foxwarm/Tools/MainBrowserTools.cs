@@ -7,7 +7,8 @@ using PuppeteerSharp;
 namespace Foxwarm.Tools;
 
 // Main process state, shared across authorized Sessions. Image identities belong to the turn host.
-internal sealed class MainBrowserTools(Func<LaunchOptions, Task<IBrowser>>? launcher = null) : IAsyncDisposable
+internal sealed class MainBrowserTools(Func<LaunchOptions, Task<IBrowser>>? launcher = null)
+    : IAsyncDisposable
 {
     private readonly Func<LaunchOptions, Task<IBrowser>> launchBrowser =
         launcher ?? (options => Puppeteer.LaunchAsync(options));
