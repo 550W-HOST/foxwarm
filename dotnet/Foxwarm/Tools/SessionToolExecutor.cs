@@ -240,13 +240,30 @@ internal sealed partial class SessionToolExecutor(
         if (args["inContext"] is not JsonValue value || !value.TryGetValue<bool>(out var enabled))
         {
             if (args.ContainsKey("inContext"))
-                return UnsupportedTurnToolExecutor.ToolError("compact_plan_invalid", "inContext must be a boolean.");
-            return UnsupportedTurnToolExecutor.ToolError("unknown_tool", "submit_compact_plan is available only to the dedicated compactor.");
+                return UnsupportedTurnToolExecutor.ToolError(
+                    "compact_plan_invalid",
+                    "inContext must be a boolean."
+                );
+            return UnsupportedTurnToolExecutor.ToolError(
+                "unknown_tool",
+                "submit_compact_plan is available only to the dedicated compactor."
+            );
         }
         if (!enabled)
-            return UnsupportedTurnToolExecutor.ToolError("unknown_tool", "submit_compact_plan is available only to the dedicated compactor.");
-        if (unattended || Programmatic || foregroundBatch is not long seq || CurrentCallId.Length == 0)
-            return UnsupportedTurnToolExecutor.ToolError("compact_plan_invalid", "In-context submission requires an ordinary foreground tool batch; nested ToolScript and unattended calls are not supported.");
+            return UnsupportedTurnToolExecutor.ToolError(
+                "unknown_tool",
+                "submit_compact_plan is available only to the dedicated compactor."
+            );
+        if (
+            unattended
+            || Programmatic
+            || foregroundBatch is not long seq
+            || CurrentCallId.Length == 0
+        )
+            return UnsupportedTurnToolExecutor.ToolError(
+                "compact_plan_invalid",
+                "In-context submission requires an ordinary foreground tool batch; nested ToolScript and unattended calls are not supported."
+            );
         try
         {
             return hosted.Compactor.SubmitInContext(args, seq, CurrentCallId);
@@ -298,11 +315,16 @@ internal sealed partial class SessionToolExecutor(
         if (!stopping && handoff && hosted.WaitSnapshot() is null)
             await sessions.StartHandoffWaitAsync(hosted, handoffTargets);
         handoffTargets.Clear();
-        var ending = finish ? TurnBatchEnding.Finished
+        var ending =
+            finish ? TurnBatchEnding.Finished
             : !stopping && (handoff || explicitStop && !errors) ? TurnBatchEnding.Suspended
             : TurnBatchEnding.Continue;
-        if (foregroundBatch is not null && hosted.Compactor.PairInContextSubmission(toolMessage)
-            && ending != TurnBatchEnding.Continue && !stopping)
+        if (
+            foregroundBatch is not null
+            && hosted.Compactor.PairInContextSubmission(toolMessage)
+            && ending != TurnBatchEnding.Continue
+            && !stopping
+        )
             BatchCompacted = await hosted.Compactor.SafePointAsync() == true;
         return ending;
     }

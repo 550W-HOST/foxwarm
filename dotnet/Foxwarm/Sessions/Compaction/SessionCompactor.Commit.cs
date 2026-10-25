@@ -99,10 +99,15 @@ internal sealed partial class SessionCompactor
         history.RemoveAll(record => CompactCandidateBuilder.Completion(record.ToJson()));
         var consumed = original.History.Take(candidates.Split);
         if (candidates.InContext)
-            consumed = consumed.Where((row, index) =>
-                !(row.Sequence is long kept && plan.Preserve.Contains(kept))
-                && (row.Sequence is long removed && plan.Remove.Contains(removed)
-                    || plan.Operations.Any(op => index >= op.HistoryStart && index <= op.HistoryEnd))
+            consumed = consumed.Where(
+                (row, index) =>
+                    !(row.Sequence is long kept && plan.Preserve.Contains(kept))
+                    && (
+                        row.Sequence is long removed && plan.Remove.Contains(removed)
+                        || plan.Operations.Any(op =>
+                            index >= op.HistoryStart && index <= op.HistoryEnd
+                        )
+                    )
             );
         var completion = new JsonObject
         {
@@ -167,7 +172,10 @@ internal sealed partial class SessionCompactor
         foreach (var record in source)
         {
             var row = record.ToJson();
-            if (!retainDisplayOnly && !CompactCandidateBuilder.Visible(row) || CompactCandidateBuilder.Completion(row))
+            if (
+                !retainDisplayOnly && !CompactCandidateBuilder.Visible(row)
+                || CompactCandidateBuilder.Completion(row)
+            )
                 continue;
             var seq = record.Sequence;
             if (

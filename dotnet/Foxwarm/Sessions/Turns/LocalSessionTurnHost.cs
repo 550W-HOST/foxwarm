@@ -304,7 +304,8 @@ public sealed partial class LocalSessionTurnHost
                             ["durationMs"] = duration,
                         };
                     var toolMessage = new JsonObject { ["role"] = "tool", ["parts"] = toolParts };
-                    var canonicalTools = await AppendHistoryMessageStrictAsync(toolMessage).ConfigureAwait(false);
+                    var canonicalTools = await AppendHistoryMessageStrictAsync(toolMessage)
+                        .ConfigureAwait(false);
                     entry.StructuredProgress?.Invoke(
                         new(
                             "tool-calls-finish",
@@ -336,7 +337,9 @@ public sealed partial class LocalSessionTurnHost
                         {
                             Terminal = true,
                             Suspended = ending == TurnBatchEnding.Suspended,
-                            ContextCompacted = tools is SessionToolExecutor compactTools && compactTools.BatchCompacted,
+                            ContextCompacted =
+                                tools is SessionToolExecutor compactTools
+                                && compactTools.BatchCompacted,
                         };
                     AssertCanContinue();
                     await ContinueAfterResultAsync(result, registered.Token).ConfigureAwait(false);

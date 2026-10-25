@@ -35,7 +35,8 @@ internal sealed partial class SessionCompactor
             inContext: true
         );
         var plan = CompactPlanValidator.Validate(args, candidates);
-        var run = Begin(snapshot, models.Capture(), 0, background: false, standalone: false)
+        var run =
+            Begin(snapshot, models.Capture(), 0, background: false, standalone: false)
             ?? throw new InvalidOperationException("A compaction operation is already pending.");
         run.Submission = new InContextSubmission(assistantSeq, callId);
         run.Candidates = candidates;
@@ -50,7 +51,8 @@ internal sealed partial class SessionCompactor
             ["accepted"] = true,
             ["applied"] = false,
             ["operationId"] = run.OperationId,
-            ["output"] = "Plan accepted for application after this complete tool batch is recorded. Acceptance does not mean it applied; cancellation or changed history can prevent application. Inspect the resulting active history and compaction boundary.",
+            ["output"] =
+                "Plan accepted for application after this complete tool batch is recorded. Acceptance does not mean it applied; cancellation or changed history can prevent application. Inspect the resulting active history and compaction boundary.",
         };
     }
 
@@ -64,12 +66,14 @@ internal sealed partial class SessionCompactor
                 || CompactCandidateBuilder.Number(canonicalToolMessage["__meta"]?["seq"])
                     is not long responseSeq
                 || responseSeq <= submission.AssistantSeq
-                || (canonicalToolMessage["parts"] as JsonArray)?.OfType<JsonObject>().Any(part =>
-                    part["functionResponse"] is JsonObject response
-                    && SessionWait.Text(response["tool_use_id"]) == submission.CallId
-                    && response["response"]?["accepted"]?.ToJsonString() == "true"
-                    && SessionWait.Text(response["response"]?["operationId"]) == run.OperationId
-                ) != true
+                || (canonicalToolMessage["parts"] as JsonArray)
+                    ?.OfType<JsonObject>()
+                    .Any(part =>
+                        part["functionResponse"] is JsonObject response
+                        && SessionWait.Text(response["tool_use_id"]) == submission.CallId
+                        && response["response"]?["accepted"]?.ToJsonString() == "true"
+                        && SessionWait.Text(response["response"]?["operationId"]) == run.OperationId
+                    ) != true
             )
                 return false;
             run.Ready = true;

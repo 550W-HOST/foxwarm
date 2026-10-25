@@ -23,22 +23,29 @@ public sealed partial class InContextCompactTests
         new()
         {
             ["inContext"] = true,
-            ["replaceAsBlocks"] = new JsonArray(new JsonObject
-            {
-                ["level"] = 1,
-                ["sourceKind"] = "message",
-                ["sourceStart"] = start,
-                ["sourceEnd"] = end ?? start,
-                ["summary"] = "Selected work is complete.",
-            }),
+            ["replaceAsBlocks"] = new JsonArray(
+                new JsonObject
+                {
+                    ["level"] = 1,
+                    ["sourceKind"] = "message",
+                    ["sourceStart"] = start,
+                    ["sourceEnd"] = end ?? start,
+                    ["summary"] = "Selected work is complete.",
+                }
+            ),
         };
 
     private static JsonArray Final() =>
-        new(new JsonObject
-        {
-            ["type"] = "message", ["role"] = "assistant",
-            ["content"] = new JsonArray(new JsonObject { ["type"] = "output_text", ["text"] = "Done." }),
-        });
+        new(
+            new JsonObject
+            {
+                ["type"] = "message",
+                ["role"] = "assistant",
+                ["content"] = new JsonArray(
+                    new JsonObject { ["type"] = "output_text", ["text"] = "Done." }
+                ),
+            }
+        );
 
     private sealed class Fixture : IAsyncDisposable
     {
@@ -55,42 +62,68 @@ public sealed partial class InContextCompactTests
         private Fixture(int requests, Func<Fixture, int, JsonObject, Task<JsonArray>> reply)
         {
             Directory.CreateDirectory(Work);
-            Peer = new ScriptedResponsesSequenceServer(requests, async (index, stream, captured) =>
-            {
-                var request = JsonNode.Parse(captured.Body)!.AsObject();
-                Requests.Add(request);
-                var output = await reply(this, index, request);
-                var payload = new JsonObject
+            Peer = new ScriptedResponsesSequenceServer(
+                requests,
+                async (index, stream, captured) =>
                 {
-                    ["type"] = "response.completed",
-                    ["response"] = new JsonObject
+                    var request = JsonNode.Parse(captured.Body)!.AsObject();
+                    Requests.Add(request);
+                    var output = await reply(this, index, request);
+                    var payload = new JsonObject
                     {
-                        ["id"] = "in-context-" + index, ["output"] = output,
-                        ["usage"] = new JsonObject { ["input_tokens"] = InputTokens, ["output_tokens"] = 10 },
-                    },
-                };
-                await LoopbackResponsesServer.WriteResponseAsync(stream, 200, "text/event-stream",
-                    Encoding.UTF8.GetBytes("data: " + payload.ToJsonString() + "\n\n"));
-            });
+                        ["type"] = "response.completed",
+                        ["response"] = new JsonObject
+                        {
+                            ["id"] = "in-context-" + index,
+                            ["output"] = output,
+                            ["usage"] = new JsonObject
+                            {
+                                ["input_tokens"] = InputTokens,
+                                ["output_tokens"] = 10,
+                            },
+                        },
+                    };
+                    await LoopbackResponsesServer.WriteResponseAsync(
+                        stream,
+                        200,
+                        "text/event-stream",
+                        Encoding.UTF8.GetBytes("data: " + payload.ToJsonString() + "\n\n")
+                    );
+                }
+            );
             var options = new ResponsesClientOptions(Peer.BaseUri, "wire", "a/wire", "", "", 713);
-            var models = HostModels.Parse(new JsonObject
-            {
-                ["default"] = "a",
-                ["providers"] = new JsonObject
+            var models = HostModels.Parse(
+                new JsonObject
                 {
-                    ["a"] = new JsonObject
+                    ["default"] = "a",
+                    ["providers"] = new JsonObject
                     {
-                        ["providerType"] = "openai-responses", ["baseUrl"] = Peer.BaseUri.ToString(),
-                        ["models"] = new JsonArray("wire"), ["contextLimit"] = 20000, ["asyncCompact"] = false,
+                        ["a"] = new JsonObject
+                        {
+                            ["providerType"] = "openai-responses",
+                            ["baseUrl"] = Peer.BaseUri.ToString(),
+                            ["models"] = new JsonArray("wire"),
+                            ["contextLimit"] = 20000,
+                            ["asyncCompact"] = false,
+                        },
                     },
                 },
-            }, new JsonObject());
-            Manager = new SessionManager(Path.Combine(temp.Path, "data"), Work, options, models,
-                Path.Combine(temp.Path, "skills"), authorityStageHook: (id, stage) => AuthorityHook?.Invoke(id, stage));
+                new JsonObject()
+            );
+            Manager = new SessionManager(
+                Path.Combine(temp.Path, "data"),
+                Work,
+                options,
+                models,
+                Path.Combine(temp.Path, "skills"),
+                authorityStageHook: (id, stage) => AuthorityHook?.Invoke(id, stage)
+            );
         }
 
-        internal static async Task<Fixture> CreateAsync(int requests,
-            Func<Fixture, int, JsonObject, Task<JsonArray>> reply)
+        internal static async Task<Fixture> CreateAsync(
+            int requests,
+            Func<Fixture, int, JsonObject, Task<JsonArray>> reply
+        )
         {
             var fixture = new Fixture(requests, reply);
             await fixture.Manager.LoadMainHostAsync();
@@ -105,19 +138,27 @@ public sealed partial class InContextCompactTests
         internal async Task AppendAsync(JsonObject row)
         {
             await Owner.Registry.Ingress.EnqueueAsync(Owner.Id, QueueItem.Prebuilt(row));
-            await Owner.Registry.HostFor(Owner.Id).AppendQueuedInputsAsync(Owner.Entry.State.Queue.ToArray());
+            await Owner
+                .Registry.HostFor(Owner.Id)
+                .AppendQueuedInputsAsync(Owner.Entry.State.Queue.ToArray());
         }
 
         internal async Task RunAsync()
         {
-            await Owner.Registry.Ingress.EnqueueAsync(Owner.Id, QueueItem.UserText("Deliberate compact task."));
+            await Owner.Registry.Ingress.EnqueueAsync(
+                Owner.Id,
+                QueueItem.UserText("Deliberate compact task.")
+            );
             await Owner.StartProcessing().WaitAsync(TimeSpan.FromSeconds(15));
         }
 
-        internal JsonObject ToolResponse(string id) => Owner.History()
-            .SelectMany(row => row["parts"]!.AsArray().OfType<JsonObject>())
-            .Select(part => part["functionResponse"] as JsonObject)
-            .OfType<JsonObject>().Single(response => SessionWait.Text(response["tool_use_id"]) == id);
+        internal JsonObject ToolResponse(string id) =>
+            Owner
+                .History()
+                .SelectMany(row => row["parts"]!.AsArray().OfType<JsonObject>())
+                .Select(part => part["functionResponse"] as JsonObject)
+                .OfType<JsonObject>()
+                .Single(response => SessionWait.Text(response["tool_use_id"]) == id);
 
         public async ValueTask DisposeAsync()
         {

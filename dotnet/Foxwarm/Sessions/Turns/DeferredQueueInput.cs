@@ -30,5 +30,4 @@ internal static class DeferredQueueInput
         InputWrapperMetadata.SetAttribute(parts, "queueInputHint", Hint);
         return message;
     }
-
 }

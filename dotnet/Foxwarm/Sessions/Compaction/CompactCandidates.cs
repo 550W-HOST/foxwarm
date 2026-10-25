@@ -156,7 +156,10 @@ internal static class CompactCandidateBuilder
                     )
                 )
             );
-            var candidateCount = inContext ? blocks.Length : tokens < 3000 ? 0 : (int)Math.Floor(blocks.Length * .4);
+            var candidateCount =
+                inContext ? blocks.Length
+                : tokens < 3000 ? 0
+                : (int)Math.Floor(blocks.Length * .4);
             var minimum = !inContext && tokens >= 5000 ? (int)Math.Ceiling(blocks.Length * .2) : 0;
             prelim[level] = (
                 blocks.Length,
@@ -384,7 +387,8 @@ internal static class CompactCandidateBuilder
                     policy.Minimum,
                     feasible,
                     Math.Min(policy.Minimum, feasible),
-                    !inContext && policy.Tokens < 3000 ? "below the 3000-token block eligibility threshold"
+                    !inContext && policy.Tokens < 3000
+                            ? "below the 3000-token block eligibility threshold"
                         : policy.Candidate == 0
                             ? "the strict oldest-candidate window is empty at this level size"
                         : policy.Minimum > 0 && feasible == 0

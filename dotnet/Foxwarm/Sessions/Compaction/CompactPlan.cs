@@ -159,7 +159,12 @@ internal static class CompactPlanValidator
                 throw new CompactPlanInvalidException(
                     $"replaceAsBlocks[{blockIndex}] does not match a continuous candidate range in current older context."
                 );
-            if (!candidates.InContext && kind == "block" && endIndex == firstIndex && !first.Stranded)
+            if (
+                !candidates.InContext
+                && kind == "block"
+                && endIndex == firstIndex
+                && !first.Stranded
+            )
                 throw new CompactPlanInvalidException(
                     $"replaceAsBlocks[{blockIndex}] uses a single block source, which is allowed only for a stranded block immediately surrounded by higher-level blocks."
                 );

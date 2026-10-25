@@ -8,10 +8,13 @@ internal static class InputWrapperMetadata
 {
     internal static void StampSequence(JsonObject message)
     {
-        if (SessionWait.Text(message["role"]) != "user"
+        if (
+            SessionWait.Text(message["role"]) != "user"
             || !CompactCandidateBuilder.Visible(message)
-            || CompactCandidateBuilder.Number(message["__meta"]?["seq"]) is not long seq || seq <= 0
-            || message["parts"] is not JsonArray parts)
+            || CompactCandidateBuilder.Number(message["__meta"]?["seq"]) is not long seq
+            || seq <= 0
+            || message["parts"] is not JsonArray parts
+        )
             return;
         SetAttribute(parts, "seq", seq.ToString(CultureInfo.InvariantCulture));
     }
@@ -49,12 +52,18 @@ internal static class InputWrapperMetadata
             }
             if (tag is not ("message" or "system"))
                 return;
-            var head = Regex.Replace(opening.Value, "\\s+" + Regex.Escape(name) + "\\s*=\\s*\"[^\"]*\"", "");
+            var head = Regex.Replace(
+                opening.Value,
+                "\\s+" + Regex.Escape(name) + "\\s*=\\s*\"[^\"]*\"",
+                ""
+            );
             var end = Regex.Match(head, @"\s*/?\s*>$");
             var selfClosing = Regex.IsMatch(end.Value, @"/\s*>$");
             part["system"] =
                 head[..end.Index]
-                + " " + name + "=\""
+                + " "
+                + name
+                + "=\""
                 + LocalSessionTurnHost.EscapeFoxwarmAttribute(value)
                 + "\""
                 + (selfClosing ? " />" : ">")
