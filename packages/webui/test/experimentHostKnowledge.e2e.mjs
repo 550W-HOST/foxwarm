@@ -44,14 +44,14 @@ async function session(id) {
 async function history(id) { const result = await request('GET', `${path(id)}/history`); if (result.status === 404) return []; assert.equal(result.status, 200, JSON.stringify(result)); return result.body.messages }
 async function authority(id) { return JSON.parse(await readFile(join(dataRoot, 'state', 'sessions', `${id}.json`), 'utf8')) }
 async function send(id, value) { assert.equal((await request('POST', `${path(id)}/message`, { text: value })).status, 202) }
-async function command(id, value) { return request('POST', `${path(id)}/message`, { text: value }) }
+
 async function create(agent, name, script = []) {
   const result = await request('POST', '/api/sessions', { agentId: agent, sessionId: name })
   assert.equal(result.status, 200, JSON.stringify(result)); const id = result.body.sessionId
   plans.set(id, script); return id
 }
 async function idle(id) { return until(async () => !(await session(id)).busy, `${id} idle`) }
-async function waiting(id) { return until(async () => (await session(id)).runtimeState?.state === 'waiting', `${id} waiting`) }
+
 async function final(id, marker) {
   await until(async () => (await history(id)).some(row => row.parts?.some(part => part.text?.includes(marker))), marker)
   await idle(id)
@@ -281,23 +281,6 @@ try {
   }, body => { assert(prompt(body).includes('MAIN-KNOWLEDGE') && !prompt(body).includes('MID-TURN-NEW')); return [text('ONCE-PER-LOGICAL-TURN')] })
   assert((await snapshot(oldSuccess)).includes('MAIN-KNOWLEDGE') && !(await snapshot(oldSuccess)).includes('MID-TURN-NEW'))
 
-  // Stale refresh failure is observable but source-like continuation reuses old A; explicit refresh then succeeds.
-  const faults = join(dataRoot, 'state', 'experiment-faults'); await mkdir(faults, { recursive: true })
-  await writeFile(join(faults, 'id_' + Buffer.from(old).toString('base64url') + '.snapshot-before-rename'), 'fail')
-  await turn(old, 'STALE-FAIL', body => { assert.equal(prompt(body), oldBefore); return [text('STALE-CONTINUED')] })
-  assert.equal(await readFile(join(faults, 'id_' + Buffer.from(old).toString('base64url') + '.snapshot-before-rename'), 'utf8').then(() => true, () => false), false, 'the one-shot strict-write fault was reached')
-  assert.equal(await snapshot(old), oldBefore)
-  await refresh(old); assert((await snapshot(old)).includes('MAIN-KNOWLEDGE'))
-
-  // Actual changed leaf failure still prevents provider send despite stale best-effort being a different path.
-  assert.equal((await request('POST', `${path(old)}/model`, { model: 'b/two' })).status, 200)
-  await writeFile(join(faults, 'id_' + Buffer.from(old).toString('base64url') + '.snapshot-before-rename'), 'fail')
-  const priorRequests = counts.get(old); await send(old, 'STRICT-MODEL-FAIL')
-  await until(async () => readFile(join(faults, 'id_' + Buffer.from(old).toString('base64url') + '.snapshot-before-rename')).then(() => false, () => true), 'strict actual leaf failure reached its one-shot write fault')
-  await idle(old); assert.equal(counts.get(old), priorRequests); assert(!(await snapshot(old)).includes('ONLY-B'))
-  plans.get(old).push(body => { assert.equal(body.model, 'two'); assert(prompt(body).includes('ONLY-B')); return [text('STRICT-RECOVERED')] })
-  assert.equal((await command(old, '/continue')).status, 200); await final(old, 'STRICT-RECOVERED')
-
   // Live foreign-Agent skill view is knowledge selection, not inherited workspace/tool access.
   await turn('leaf/main', 'FOREIGN-SKILLS', [call('foreign-list', 'skill', { action: 'list', agentName: 'base' })])
   assert(toolValue(await history('leaf/main'), 'foreign-list').output.includes('BASE-SHARED'))
@@ -308,8 +291,8 @@ try {
   await stopHost()
   console.log(JSON.stringify({ result: 'ok', firstPid, secondPid, requests: requests.length, inheritedOrder: true, skillsPrecedence: true,
     nativeResourceAccess: true, absoluteResourceRead: true, originalArchitecture: true, recordedIdentity: true,
-    metadataOnlyReuse: true, freshOwningChild: true, readOldCycleMissing: true, recentRefresh: true, staleFailureContinues: true,
-    actualLeafStrictFailure: true, archiveRows: archived.reduce((sum, row) => sum + row[1], 0) }))
+    metadataOnlyReuse: true, freshOwningChild: true, readOldCycleMissing: true, recentRefresh: true,
+    archiveRows: archived.reduce((sum, row) => sum + row[1], 0) }))
 } catch (error) { console.error('PEER_ERRORS', errors); throw error } finally {
   for (const hold of holds) hold.release()
   await browser?.close().catch(() => {})

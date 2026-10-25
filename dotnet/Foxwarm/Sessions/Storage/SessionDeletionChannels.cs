@@ -4,7 +4,10 @@ using System.Text.Json.Nodes;
 namespace Foxwarm.Sessions;
 
 /// <summary>Persisted attachments only; no channel transport or invented binding from lastChannel.</summary>
-internal sealed class SessionDeletionChannels(string root)
+internal sealed class SessionDeletionChannels(
+    string root,
+    Action<string?, string>? beforeStage = null
+)
 {
     private readonly object gate = new();
     private JsonObject? pendingOrdinary;
@@ -312,25 +315,7 @@ internal sealed class SessionDeletionChannels(string root)
         Write(payload);
     }
 
-    private void Barrier(string? participant, string stage)
-    {
-        if (participant is null)
-            return;
-        var hold = Path.Combine(
-            root,
-            "state",
-            "experiment-faults",
-            SessionIdentity.ExecDirectorySegment(participant) + ".channels-" + stage + "-hold"
-        );
-        if (!File.Exists(hold))
-            return;
-        File.WriteAllText(hold + ".reached", "reached");
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (File.Exists(hold) && DateTime.UtcNow < deadline)
-            Thread.Sleep(2);
-        if (File.Exists(hold))
-            throw new TimeoutException("Experimental channel publication barrier expired.");
-    }
+    private void Barrier(string? participant, string stage) => beforeStage?.Invoke(participant, stage);
 
     private void Write(JsonObject payload)
     {

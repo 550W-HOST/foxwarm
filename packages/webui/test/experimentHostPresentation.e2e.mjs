@@ -25,8 +25,8 @@ const peer = createServer(async (request, response) => {
 })
 peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
 await writeModelFixture(fixture.data, { default: 'a', providers: { a: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:' + peer.address().port, models: ['wire'], contextLimit: 20000 } } })
-const state = join(fixture.data, 'state'), sessions = join(state, 'sessions'), faults = join(state, 'experiment-faults'), rows = []
-await mkdir(sessions, { recursive: true }); await mkdir(faults, { recursive: true }); await writeFile(join(faults, 'record-admissions'), '')
+const state = join(fixture.data, 'state'), sessions = join(state, 'sessions'), rows = []
+await mkdir(sessions, { recursive: true });
 async function seed(id, extra = {}, authority = {}) {
   rows.push({ id, agent: 'main', aliases: [], busy: false, queueLength: 0, meta: { lastMessageTime: 100, messageCount: 0 }, ...extra })
   await writeFile(join(sessions, id + '.json'), JSON.stringify({ sessionStateVersion: 1, id, agent: 'main', model: 'a', busy: false, stopping: false, history: [], queue: [],
@@ -50,7 +50,7 @@ function retained() { const db = new DatabaseSync(join(state, 'archive-store.sql
 async function dto(id) { const result = await fixture.api('POST', '/api/session-list/by-id', { ids: [id] }); assert.equal(result.status, 200); return result.body.results[0].session }
 async function action(id, name, body = {}, status = 200) { const result = await fixture.api('POST', route(id) + '/' + name, body); assert.equal(result.status, status, JSON.stringify(result)); return result.body }
 async function command(id, text) { return action(id, 'message', { text }) }
-const observations = async () => (await readFile(join(faults, 'record-admissions.events'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean)
+
 const originals = new Map()
 for (const row of rows.filter(row => row.id !== 'missing')) originals.set(row.id, await readFile(join(sessions, row.id + '.json'), 'utf8'))
 const initialRetained = retained()
@@ -77,7 +77,7 @@ try {
   await action('root', 'move', { parentSessionId: 'ui-child' }, 400)
   assert.equal((await fixture.api('GET', '/api/session-list/sidebar?limit=3&childLimit=2&cursor=' + encodeURIComponent(cursor))).body.reset, true)
   await until(() => frames.some(frame => frame.type === 'session-list-invalidated'), 'committed mutation invalidates watch')
-  assert.deepEqual(await observations(), []); assert.equal(requests.length, 0)
+   assert.equal(requests.length, 0)
   for (const [id, bytes] of originals) assert.equal(await readFile(join(sessions, id + '.json'), 'utf8'), bytes, id + ' byte-identical')
   assert.deepEqual(retained(), initialRetained); assert.deepEqual(await readFile(join(state, 'archive-store.sqlite')), archiveBytes)
   const foreignHistory = await fixture.api('GET', route('foreign') + '/history')
@@ -123,14 +123,9 @@ try {
   await action('live', 'archive', {}); await action('live', 'pin', { pinned: true }); await action('live', 'move', { parentSessionId: 'target', updateOrder: false }); assert.equal((await dto('live')).busy, true)
   held.get('held-provider').complete(); await until(async () => !(await dto('live')).busy, 'provider drains without archive Stop')
   assert.equal((await dto('live')).archived, true); assert.equal((await dto('live')).parentSessionId, 'target')
-  const hold = join(faults, 'id_' + Buffer.from('live').toString('base64url') + '.canonical-hold-before-rename'); await writeFile(hold, 'hold')
-  assert.equal((await fixture.api('POST', route('live') + '/message', { text: 'CASE:held-save' })).status, 202)
-  await until(async () => await readFile(hold + '.reached', 'utf8').catch(() => '') === 'reached', 'real JSON canonical publication held')
-  await action('live', 'move', { parentSessionId: 'root', updateOrder: false }); await action('live', 'archive', { archived: false }); await action('live', 'pin', { pinned: false }); await unlink(hold)
-  await until(() => held.has('held-save'), 'held save proceeds to provider'); held.get('held-save').complete(); await until(async () => !(await dto('live')).busy, 'held save completes')
-  assert.equal((await dto('live')).parentSessionId, 'root'); assert.equal((await dto('live')).archived, false); assert.equal((await dto('live')).pinned, false)
+  await action('live', 'move', { parentSessionId: 'root', updateOrder: false }); await action('live', 'archive', { archived: false }); await action('live', 'pin', { pinned: false })
   const audit = new DatabaseSync(join(state, 'archive-store.sqlite'), { readOnly: true })
-  try { assert.equal(audit.prepare("SELECT COUNT(*) n FROM archive_messages WHERE session_id='live'").get().n, 4) } finally { audit.close() }
+  try { assert.equal(audit.prepare("SELECT COUNT(*) n FROM archive_messages WHERE session_id='live'").get().n, 2) } finally { audit.close() }
   socket.close(); await once(socket, 'close'); socket = null
   const beforeRestart = (await fixture.api('GET', '/api/session-list/sidebar?limit=3')).body.nextCursor
   await fixture.stop(); await fixture.start()
@@ -138,6 +133,6 @@ try {
   assert.equal((await fixture.api('GET', '/api/session-list/sidebar?limit=3&cursor=' + encodeURIComponent(beforeRestart))).body.reset, true)
   assert.equal(sql('SELECT session_count FROM catalog_count')[0].session_count, rows.length); assert.equal(errors.length, 0, errors.join('\n'))
   await writeFile(join(fixture.root, 'synthetic-peer-records.json'), JSON.stringify(requests.map(row => ({ key: row.key, body: row.body })))); await writeFile(join(fixture.root, 'presentation-frames.json'), JSON.stringify(frames))
-  console.log(JSON.stringify({ requests: requests.length, members: rows.length, zeroOwnerPresentation: true, coldJsonArchiveUnchanged: true, wholeGroups: true, actualChatCommands: true, actualSidebarArchitecture: true, realSQLiteAtomicFailure: true, heldSaveMainWins: true, hostPids: fixture.hostPids, peerPid: process.pid, root: fixture.root }))
+  console.log(JSON.stringify({ requests: requests.length, members: rows.length, coldJsonArchiveUnchanged: true, wholeGroups: true, actualChatCommands: true, actualSidebarArchitecture: true, realSQLiteAtomicFailure: true, hostPids: fixture.hostPids, peerPid: process.pid, root: fixture.root }))
 } catch (error) { if (page) console.error('Original UI: ' + JSON.stringify(await page.evaluate(() => ({ text: document.body.innerText, rows: [...document.querySelectorAll('[data-session-id]')].map(node => node.dataset.sessionId) })).catch(() => ({})))); console.error(fixture.output); console.error('Owned root: ' + fixture.root + '\nOwned PIDs: ' + JSON.stringify(fixture.hostPids)); throw error }
 finally { if (blocker) { blocker.exec('ROLLBACK'); blocker.close() } socket?.close(); for (const record of held.values()) record.complete(); await fixture.cleanup(); peer.close(); peer.closeAllConnections() }

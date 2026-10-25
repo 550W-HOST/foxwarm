@@ -2,12 +2,12 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { execFileSync } from 'node:child_process'
-import { access, chmod, mkdir, readFile, readdir, writeFile, unlink } from 'node:fs/promises'
+import { access, chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
 import testEnvironment from '../../../scripts/test/test-process-env.cjs'
 
-const fixture = await createHostFixture('exec-parallel'), records = [], errors = [], scripts = new Map(), authorityHolds = new Map(), hostPids = fixture.hostPids, shellPids = [], releases = new Set()
+const fixture = await createHostFixture('exec-parallel'), records = [], errors = [], scripts = new Map(), hostPids = fixture.hostPids, shellPids = [], releases = new Set()
 Object.assign(process.env, testEnvironment.isolatedApplicationEnv(fixture.data))
 const { SessionCatalogStore } = await import('../../../lib/session/catalogStore.js')
 const route = id => '/api/sessions/' + encodeURIComponent(id)
@@ -33,7 +33,7 @@ const peer = createServer(async (request, response) => {
     const key = [...text.matchAll(/PAR-TASK:([a-z0-9-]+)/g)].at(-1)?.[1] || 'unknown', calls = scripts.get(key) || []
     const complete = !calls.length || body.input.some(item => item.type === 'function_call_output' && item.call_id === calls[0].call_id)
     const output = complete ? [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'DONE-' + key }] }] : calls
-    records.push({ key, body }); if (!complete && authorityHolds.has(key)) await writeFile(authorityHolds.get(key), 'hold'); response.writeHead(200, { 'content-type': 'text/event-stream' }); response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { id: 'response-' + records.length, status: 'completed', output, usage: { input_tokens: 30, output_tokens: 3 } } }) + '\n\n')
+    records.push({ key, body }); response.writeHead(200, { 'content-type': 'text/event-stream' }); response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { id: 'response-' + records.length, status: 'completed', output, usage: { input_tokens: 30, output_tokens: 3 } } }) + '\n\n')
   } catch (error) { errors.push(String(error)); response.writeHead(500); response.end(String(error)) }
 })
 peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
@@ -92,10 +92,7 @@ try {
   await send(ruled, 'ordinary-denied', [tool('install-ordinary-policy', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'tool-rules', filePath: 'deny-policy.yaml' } }), call('allowed-one', 'printf allowed-one'), call('ordinary-denied', 'touch ordinary-denied-effect'), call('allowed-two', 'printf allowed-two')]); await idle(ruled)
   assert.equal((await pair(ruled, 'ordinary-denied')).response.error.type, 'tool_authorization_denied'); assert(!(await pair(ruled, 'ordinary-denied')).executionTiming); assert(!await exists(join(own, 'ordinary-denied-effect'))); assert((await pair(ruled, 'allowed-two')).response.output.includes('allowed-two'))
   await writeFile(join(own, 'allow-policy.yaml'), 'version: 1\n'); await send(ruled, 'ordinary-repaired', [tool('install-allow-policy', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'tool-rules', filePath: 'allow-policy.yaml' } })]); await idle(ruled)
-  const denied = await create('denied'), policy = join(fixture.data, 'state/tool-authorization.yaml')
-  const sourceId = id => 'id_' + Buffer.from(id).toString('base64url'), faultDir = join(fixture.data, 'state/experiment-faults'); await mkdir(faultDir, { recursive: true })
-  const hold = join(faultDir, sourceId(denied) + '.canonical-hold-before-rename'); authorityHolds.set('held-authority', hold)
-  const delayed = send(denied, 'held-authority', [call('held-first', 'touch held-first-effect'), call('held-second', 'touch held-second-effect')]); await until(() => exists(hold + '.reached'), 'actual assistant authority publication held'); assert(records.some(record => record.key === 'held-authority')); assert(!(await history(denied)).messages.some(row => row.parts?.some(part => part.functionCall))); assert(!await exists(join(own, 'held-first-effect'))); assert(!await exists(join(own, 'held-second-effect'))); await unlink(hold); await delayed; await idle(denied)
+  const policy = join(fixture.data, 'state/tool-authorization.yaml')
   const loss = await create('loss'), held = ['loss1', 'loss2', 'loss3', 'loss4']
   await writeFile(policy, 'version: 1\n'); await send(loss, 'loss', [...held.map(id => call(id, shell(id))), call('loss5', 'touch loss5-effect'), call('loss6', 'touch loss6-effect'), tool('loss-preset', 'exec', { command: 'touch loss-preset-effect', __cancelTool: true }), tool('loss-later-file', 'write', { filePath: 'loss-file-effect', content: 'forbidden' })]); await started(held)
   await send(loss, 'retained'); await sleep(11000); await writeFile(policy, 'version: 1\nrules: null\n'); const beforeLoss = records.length

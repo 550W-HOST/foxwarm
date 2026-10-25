@@ -351,19 +351,6 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
     {
         if (BeforeStage is { } callback)
             await callback(owner, stage);
-        var marker = Path.Combine(
-            sessions.DataRoot,
-            "state",
-            "experiment-faults",
-            SessionIdentity.ExecDirectorySegment(owner.Id) + ".upload-" + stage + "-hold"
-        );
-        if (!File.Exists(marker))
-            return;
-        await File.WriteAllTextAsync(marker + ".reached", "reached");
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (File.Exists(marker) && DateTime.UtcNow < deadline)
-            await Task.Delay(2);
-        if (File.Exists(marker))
-            throw new IOException("Experimental attachment barrier expired.");
     }
+
 }

@@ -136,27 +136,6 @@ try {
   f.signalStop()
   assert.deepEqual(await f.waitForExit(), { code: 0, signal: null }, f.output)
 
-  // The existing canonical publication barrier is real owner work and ignores
-  // turn cancellation. It qualifies the host failure path without pretending
-  // that the atomic file tools support TypeScript's non-regular-file native write.
-  await f.start()
-  const blocked = await create('drain-failure')
-  const blockedProvider = gate('blocked-final')
-  restarted = false
-  await send(blocked, 'blocked-final'); await reached('blocked-final')
-  const faults = join(f.data, 'state/experiment-faults')
-  await mkdir(faults, { recursive: true })
-  const hold = join(faults, 'id_' + Buffer.from(blocked).toString('base64url') + '.canonical-hold-before-rename')
-  await writeFile(hold, 'owned qualification hold')
-  blockedProvider.release()
-  await until(async () => readFile(hold + '.reached', 'utf8').catch(() => false), 'accepted canonical owner held before rename')
-  await post('/admin/shutdown', undefined, 202)
-  assert.equal((await f.api('GET', '/health')).status, 200)
-  const forced = await f.waitForExit()
-  assert.notEqual(forced.code, 0)
-  assert(f.output.includes('Accepted Session owners did not settle during shutdown.'), f.output)
-  assert.equal((await saved(blocked)).busy, true)
-  console.log(JSON.stringify({ ownedHostStarts: f.hostPids.length, cancellationIgnoringCanonicalOwner: true, forcedMainOnlyExit: forced, noSuccessfulDrainClaim: true }))
 } finally {
   for (const value of gates.values()) value.release()
   if (await readFile(effect, 'utf8').catch(() => null))

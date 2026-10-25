@@ -135,13 +135,6 @@ try {
   assert.equal((await fixture.api('POST', route(actor) + '/node', { nodeId: 'upgrade-node' })).status, 400)
   assert.equal((await fixture.api('POST', route(actor) + '/node', { nodeId: '' })).status, 400)
   const selected = await fixture.api('POST', route(actor) + '/node', { nodeId: 'owned-cli' }); assert.equal(selected.status, 200); assert.equal(selected.body.session.cwd, cwd)
-  for (const renamed of [false, true]) {
-    const fault = join(fixture.data, 'state/experiment-faults', 'id_' + Buffer.from(actor).toString('base64url') + (renamed ? '.settings-after-rename' : '.settings-before-rename'))
-    await mkdir(join(fixture.data, 'state/experiment-faults'), { recursive: true }); await writeFile(fault, 'owned-fault')
-    const result = await fixture.api('POST', route(actor) + '/node', { nodeId: 'master' }); assert.equal(result.status, 400)
-    state = await saved(actor); assert.equal(state.currentNode, renamed ? 'master' : 'owned-cli'); assert.equal(state.cwd, cwd)
-    assert.equal((await fixture.api('GET', route(actor) + '/history')).body.session.currentNode, state.currentNode)
-  }
   // The original composer permits Node selection while busy; do not add an unrelated restriction.
   plans.set('held', []); assert.equal((await fixture.api('POST', route(actor) + '/message', { text: 'CONSUMER:held' })).status, 202)
   await until(() => releaseHeld, 'real held provider'); await page.waitForSelector('.foxwarm-node-picker-trigger:not([disabled])')

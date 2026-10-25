@@ -400,6 +400,62 @@ public sealed class WebUiAccessTests
     }
 
     [Fact]
+    public async Task Token_rotation_aborts_a_real_scoped_cold_history_request_without_revoking_another_identity()
+    {
+        using var temp = new TempDirectory();
+        var data = Path.Combine(temp.Path, "data");
+        Directory.CreateDirectory(Path.Combine(data, "state"));
+        var identities = "{alice: {token: synthetic-alice, surfaces: {webui: {sessions: [chat]}}}, bob: {token: synthetic-bob, surfaces: {webui: {sessions: [chat]}}}}";
+        await File.WriteAllTextAsync(Path.Combine(data, "state", "config.yaml"), App(identities).ToJsonString());
+        var config = new ModelConfiguration(data);
+        var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
+        await using (var seed = new SessionManager(data, Path.Combine(temp.Path, "work"), options, config.Models))
+        {
+            await seed.LoadAsync();
+            await seed.CreateNamedAsync("main", "chat", null, null);
+        }
+        await using var manager = new SessionManager(data, Path.Combine(temp.Path, "work"), options, config.Models);
+        await manager.LoadAsync();
+        Assert.Null(manager.Find("chat"));
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        manager.BeforeAdmissionRead = async (_, token) =>
+        {
+            reached.TrySetResult();
+            await release.Task.WaitAsync(token);
+        };
+        await using var terminals = new Foxwarm.Terminal.TerminalRegistry(data, default);
+        var server = new HttpServer([], 0, "synthetic-admin", null, manager, terminals, webUiEnabled: true);
+        var runtime = new SessionRuntime(manager);
+        new WebUIChannel(manager, runtime, new MessageRouter(runtime), terminals, server.Downloads).Register(server.App);
+        await using var app = server.App;
+        await app.StartAsync();
+        using var alice = new HttpClient { BaseAddress = new Uri(app.Urls.Single()), Timeout = TimeSpan.FromSeconds(5) };
+        using var bob = new HttpClient { BaseAddress = alice.BaseAddress };
+        alice.DefaultRequestHeaders.Authorization = new("Bearer", "synthetic-alice");
+        bob.DefaultRequestHeaders.Authorization = new("Bearer", "synthetic-bob");
+        var reading = alice.GetAsync("/api/sessions/chat/history");
+        try
+        {
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await config.SaveAppAsync(App(identities.Replace("synthetic-alice", "synthetic-new-alice")).ToJsonString());
+            await Assert.ThrowsAsync<HttpRequestException>(() => reading);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+        using var unrelated = await bob.GetAsync("/api/auth/session");
+        Assert.Equal(HttpStatusCode.OK, unrelated.StatusCode);
+        using var revoked = await alice.GetAsync("/api/auth/session");
+        Assert.Equal(HttpStatusCode.Unauthorized, revoked.StatusCode);
+        alice.DefaultRequestHeaders.Authorization = new("Bearer", "synthetic-new-alice");
+        using var current = await alice.GetAsync("/api/sessions/chat/history");
+        Assert.Equal(HttpStatusCode.OK, current.StatusCode);
+        Assert.Empty((await manager.RequiredAsync("chat")).Entry.Snapshot().Queue);
+    }
+
+    [Fact]
     public void Session_download_mac_keeps_independent_resource_lifetime_and_namespaces()
     {
         var signer = new WebUiDownloadSignatures("synthetic-admin", () => 100);

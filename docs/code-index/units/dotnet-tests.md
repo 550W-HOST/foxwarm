@@ -20,6 +20,12 @@ Use the test namespace/directory matching the owning module, then follow the pro
 
 Tests establish source behavior for the checked revision, not release acceptance or root launcher migration. Documentation-only validation intentionally does not run this project or restart the runtime.
 
+## Fault coverage placement
+
+Deterministic fault subcases belong at actual atomic/store/owner boundaries, using test-owned callbacks or SQLite triggers in owned roots. Normal runtime does not read marker files. `SessionCwdCommitTests`, `SessionNodeCommitTests`, `ForkClearLifecycleTests`, and the MCP/remote-exec/Shell admission tests preserve pre-rename versus committed-error consequences through the existing persistent store. `AgentSnapshotParityTests` distinguishes failed changed-leaf prompt publication from best-effort stale refresh. `WebUiAccessTests` uses actual HTTP cold history during credential rotation; `WebUiUploadedFilesTests` checks revocation before/after copy and reports only actual saved files. Normal App drivers retain successful workflows and real protocol/filesystem failures, without filesystem arming/acknowledgement code.
+
+Fixed identity crash/restart cases use the existing DevTools child harness. Launcher tests retain real signals, completed owner state, long temporary paths and independent exec lifetime. They do not combine launcher loss with a deliberately held canonical write. `SessionShutdownTests` separately verifies accepted append drain and cancellation-ignoring failed settlement; that split is not evidence of the omitted combined launcher/deadline scenario.
+
 ## Solution
 
 `dotnet/Foxwarm.sln` includes `Foxwarm.Tests` and `Foxwarm.DevTools`. Cross-runtime producers, controlled peers, SQL seeds and corpora belong to `dotnet/Foxwarm.Tests/Fixtures/`; differential/comparison and controlled-host entry points belong to `dotnet/Foxwarm.Tests/scripts/`. Feature-local test assets stay beside their consuming tests. DevTools links the conditional-memory and streaming corpora from that test-owned source directory, preserving their output filenames and default command lookup. Build/publish/source-generation helpers remain in `dotnet/scripts/`.

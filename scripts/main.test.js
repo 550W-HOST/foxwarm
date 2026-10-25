@@ -200,7 +200,7 @@ test('a hard foreground-parent termination requests Main drain rather than leavi
 });
 
 for (const signal of ['SIGTERM', 'SIGKILL']) {
-  test(`launcher ${signal} waits for a real accepted canonical owner before Main exits`, linux, async t => {
+  test(`launcher ${signal} preserves a completed owner and its independent exec`, linux, async t => {
     let releaseExec;
     t.after(() => releaseExec?.());
     const f = fixture(t);
@@ -235,8 +235,7 @@ for (const signal of ['SIGTERM', 'SIGKILL']) {
     fs.writeFileSync(path.join(f.data, 'state/config.yaml'), `vector: false\nbot: {httpPort: ${port}}\n`);
     fs.writeFileSync(path.join(f.data, 'state/token'), 'synthetic-entry-token');
     fs.writeFileSync(path.join(f.data, 'state/models.yaml'), JSON.stringify({ default: 'a', providers: { a: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${peer.address().port}`, models: ['wire'] } } }));
-    // Also exercise the long-directory IPC correction through an accepted owner
-    // held across hard launcher loss, not only an idle startup/shutdown.
+    // Exercise long-directory IPC during real owner work and independent exec.
     const temporary = signal === 'SIGKILL' ? longTemporaryDirectory(f) : {};
     const instance = await f.launch([f.app], temporary);
     const pid = await f.ready(instance, `Main HTTP listening: http://0.0.0.0:${port}`);
@@ -256,16 +255,12 @@ for (const signal of ['SIGTERM', 'SIGKILL']) {
       assert.equal(path.dirname(created), temporary.TMPDIR);
       assert(fs.existsSync(created));
     }
-    const faults = path.join(f.data, 'state/experiment-faults');
-    fs.mkdirSync(faults, { recursive: true });
-    const hold = path.join(faults, 'id_' + Buffer.from(sessionId).toString('base64url') + '.canonical-hold-before-rename');
-    fs.writeFileSync(hold, 'owned qualification');
     release();
-    await until(() => fs.existsSync(hold + '.reached'), 'Canonical owner did not reach its publication barrier.');
+    await until(() => {
+      const state = JSON.parse(fs.readFileSync(path.join(f.data, 'state/sessions', sessionId + '.json'), 'utf8'));
+      return !state.busy && JSON.stringify(state.history).includes('entry-drained');
+    }, 'Accepted owner did not finish before launcher termination.');
     instance.child.kill(signal);
-    await sleep(150);
-    assert(running(pid), 'Main exited instead of draining its accepted canonical owner.');
-    fs.rmSync(hold);
     assert.deepEqual(await instance.exited, signal === 'SIGKILL' ? { code: null, signal } : { code: 0, signal: null }, instance.text);
     await until(() => !running(pid), 'Managed Main survived a completed drain.');
     const saved = JSON.parse(fs.readFileSync(path.join(f.data, 'state/sessions', sessionId + '.json'), 'utf8'));

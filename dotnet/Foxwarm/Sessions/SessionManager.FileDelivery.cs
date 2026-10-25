@@ -240,20 +240,6 @@ internal sealed partial class SessionManager
     {
         if (BeforeFileStage is { } before)
             await before(owner.Id, stage);
-        var marker = Path.Combine(
-            root,
-            "state",
-            "experiment-faults",
-            SessionIdentity.ExecDirectorySegment(owner.Id) + ".file-" + stage + "-hold"
-        );
-        if (!File.Exists(marker))
-            return;
-        await File.WriteAllTextAsync(marker + ".reached", "reached");
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (File.Exists(marker) && DateTime.UtcNow < deadline)
-            await Task.Delay(2);
-        if (File.Exists(marker))
-            throw new TimeoutException("Experimental file barrier expired.");
     }
 
     internal async Task<JsonObject> ExportImageAsync(

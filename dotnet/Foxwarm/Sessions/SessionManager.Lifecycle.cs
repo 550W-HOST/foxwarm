@@ -296,20 +296,6 @@ internal sealed partial class SessionManager
         ArchiveBranch? branch
     )
     {
-        if (branch is not null)
-        {
-            var fault = Path.Combine(
-                root,
-                "state",
-                "experiment-faults",
-                SessionIdentity.ExecDirectorySegment(branch.SessionId) + ".create-cleanup-fail"
-            );
-            if (File.Exists(fault))
-            {
-                File.Delete(fault);
-                throw new IOException("Injected experimental branch cleanup failure.");
-            }
-        }
         try
         {
             await Vector.ResetAsync(store.SessionId);
@@ -370,30 +356,19 @@ internal sealed partial class SessionManager
         owner.Entry.InvokeCommitted(owner.Entry.Snapshot());
     }
 
-    private static readonly AsyncLocal<bool> ManualForkNoticeCommitScope = new();
-
     public async Task NotifyManualForkAsync(
         SessionOwner parent,
         SessionOwner child,
         string? initialMessage
     )
     {
-        var previous = ManualForkNoticeCommitScope.Value;
-        ManualForkNoticeCommitScope.Value = true;
-        try
-        {
-            var text = SessionBoundary.ManualForkNotice(parent.Id, child.Id, initialMessage);
-            if (parent.Entry.Snapshot().Busy)
-                await parent.Registry.Ingress.EnqueueAsync(
-                    parent.Id,
-                    new QueueItem(QueueItemType.User, [new JsonObject { ["system"] = text }])
-                );
-            else
-                await AppendOwnedRowsAsync(parent, [SystemRow(text)]);
-        }
-        finally
-        {
-            ManualForkNoticeCommitScope.Value = previous;
-        }
+        var text = SessionBoundary.ManualForkNotice(parent.Id, child.Id, initialMessage);
+        if (parent.Entry.Snapshot().Busy)
+            await parent.Registry.Ingress.EnqueueAsync(
+                parent.Id,
+                new QueueItem(QueueItemType.User, [new JsonObject { ["system"] = text }])
+            );
+        else
+            await AppendOwnedRowsAsync(parent, [SystemRow(text)]);
     }
 }

@@ -109,10 +109,8 @@ try {
   // A Main alias remains cold metadata and preserves its existing authority bytes.
   const alias = await create('onboot-alias', ' '), coldRows = Array.from({ length: 1000 }, (_, index) => row('cold-' + index))
   const existing = await put(alias, 'actual-main'); await seedCatalog(alias, [row('actual-main', { aliases: ['main'], meta: { messageCount: 0, lastMessageTime: 100 } }), ...coldRows], [row('main')])
-  await mkdir(join(alias.data, 'state', 'experiment-faults'), { recursive: true }); await writeFile(join(alias.data, 'state', 'experiment-faults', 'record-admissions'), 'record')
   await alias.start(); assert.deepEqual(await saved(alias, 'actual-main'), existing); await assert.rejects(access(join(alias.data, 'state', 'sessions', 'main.json')))
   for (let offset = 0; offset < coldRows.length; offset += 100) { const listed = await alias.api('POST', '/api/session-list/by-id', { ids: coldRows.slice(offset, offset + 100).map(value => value.id) }); assert.equal(listed.status, 200, JSON.stringify(listed)); assert.equal(listed.body.results.length, 100) }
-  await assert.rejects(readFile(join(alias.data, 'state', 'experiment-faults', 'record-admissions.events')), { code: 'ENOENT' })
   await alias.stop()
 
   // Only real mandatory busy catalog members reject before sibling effects.

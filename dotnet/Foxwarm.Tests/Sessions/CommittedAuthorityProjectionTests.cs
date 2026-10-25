@@ -47,12 +47,6 @@ public sealed class CommittedAuthorityProjectionTests
                 models: [wire]
             """
         );
-        var faults = Path.Combine(state, "experiment-faults");
-        Directory.CreateDirectory(faults);
-        await File.WriteAllTextAsync(
-            Path.Combine(faults, "legacy-create-after-rename"),
-            "one owned fault"
-        );
         string? id = null;
         string? cacheKey = null;
         for (var phase = 0; phase < 2; phase++)
@@ -61,9 +55,25 @@ public sealed class CommittedAuthorityProjectionTests
                 HostPaths.ForDataRoot(data, temp.Path, environment: _ => null)
             );
             var settings = await HttpServerSettings.CaptureDesktopAsync(data);
-            await using var host = await MainHost.CreateAsync([], configuration, settings);
-            await host.StartAsync();
-            using var client = new HttpClient { BaseAddress = new Uri(settings.Address.BaseUrl) };
+            var options = new ResponsesClientOptions(peer.Uri, "wire", "local/wire", "", "", 713);
+            var failCreation = phase == 0;
+            await using var manager = new SessionManager(
+                data, Path.Combine(data, "agents", "main"), options, configuration.Models,
+                authorityStageHook: (_, stage) =>
+                {
+                    if (!failCreation || stage != AtomicJsonWriteStage.AfterRenameBeforeDirectorySync)
+                        return;
+                    failCreation = false;
+                    throw new IOException("Owned committed creation failure.");
+                });
+            await manager.LoadMainHostAsync();
+            await using var terminals = new Foxwarm.Terminal.TerminalRegistry(data, default);
+            var server = new HttpServer([], 0, settings.Token, null, manager, terminals, webUiEnabled: true);
+            var runtime = new SessionRuntime(manager);
+            new Foxwarm.Channels.WebUi.WebUIChannel(manager, runtime, new MessageRouter(runtime), terminals, server.Downloads).Register(server.App);
+            await using var app = server.App;
+            await app.StartAsync();
+            using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
             client.DefaultRequestHeaders.Authorization = new("Bearer", settings.Token);
             if (phase == 0)
             {

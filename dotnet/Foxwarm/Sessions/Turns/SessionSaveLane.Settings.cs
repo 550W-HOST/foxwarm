@@ -5,8 +5,6 @@ namespace Foxwarm.Sessions;
 
 public sealed partial class SessionSaveLane
 {
-    private static readonly AsyncLocal<bool> SettingsCommitScope = new();
-    internal static bool IsSettingsCommit => SettingsCommitScope.Value;
 
     internal Task CommitSettingsAsync(JsonObject patch, HostModels models) =>
         EnqueueOperationAsync(async () =>
@@ -66,8 +64,6 @@ public sealed partial class SessionSaveLane
                         state.AuthorityEnvelope[key] = value.DeepClone();
             }
             var staged = await PrepareGoalOnlyAsync(prepared.Snapshot).ConfigureAwait(false);
-            var previous = SettingsCommitScope.Value;
-            SettingsCommitScope.Value = true;
             try
             {
                 await store.CommitAsync(staged, SaveKind.Strict);
@@ -78,10 +74,6 @@ public sealed partial class SessionSaveLane
                 PublishGoalOnly(staged);
                 entry.InvokeCommitted(entry.Snapshot());
                 throw;
-            }
-            finally
-            {
-                SettingsCommitScope.Value = previous;
             }
             entry.WithState(Publish);
             PublishGoalOnly(staged);

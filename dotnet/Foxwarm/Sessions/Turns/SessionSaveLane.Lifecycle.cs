@@ -4,8 +4,6 @@ namespace Foxwarm.Sessions;
 
 public sealed partial class SessionSaveLane
 {
-    private static readonly AsyncLocal<bool> ClearCommitScope = new();
-    internal static bool IsClearCommit => ClearCommitScope.Value;
 
     internal async Task<SessionSnapshot> CaptureForkAsync(Func<long> effectiveBlockHighWater)
     {
@@ -144,8 +142,6 @@ public sealed partial class SessionSaveLane
                 state.Meta.Remove("runQueuedAfterStop");
                 state.Meta.Remove("llmFailed");
             }
-            var previous = ClearCommitScope.Value;
-            ClearCommitScope.Value = true;
             try
             {
                 await store.CommitAsync(staged, SaveKind.Strict);
@@ -156,10 +152,6 @@ public sealed partial class SessionSaveLane
                 PublishGoalOnly(staged);
                 entry.InvokeCommitted(entry.Snapshot());
                 throw;
-            }
-            finally
-            {
-                ClearCommitScope.Value = previous;
             }
             entry.WithState(Publish);
             PublishGoalOnly(staged);

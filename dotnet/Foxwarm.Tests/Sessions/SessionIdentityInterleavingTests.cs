@@ -24,13 +24,6 @@ public sealed class SessionIdentityInterleavingTests
     private static TaskCompletionSource Signal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    private static async Task WaitFor(Func<bool> check)
-    {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (!check())
-            await Task.Delay(2, timeout.Token);
-    }
-
     [Fact]
     public async Task Concurrent_parent_updates_reconcile_hot_authority_with_catalog()
     {
@@ -60,23 +53,26 @@ public sealed class SessionIdentityInterleavingTests
     public async Task Ordered_accepted_canonical_save_precedes_move_and_later_save_uses_current_binding()
     {
         using var temp = new TempDirectory();
-        await using var manager = Manager(temp.Path);
+        var reached = Signal();
+        var release = Signal();
+        var hold = false;
+        await using var manager = new SessionManager(
+            Path.Combine(temp.Path, "data"), Path.Combine(temp.Path, "work"), Options, HostModels.ForTest(Options),
+            canonicalCommitBarrier: async (_, _, _) =>
+            {
+                if (!hold)
+                    return;
+                reached.TrySetResult();
+                await release.Task;
+            });
         await manager.LoadAsync();
         var owner = await manager.CreateNamedAsync("main", "old", null, null);
-        var marker = Path.Combine(
-            temp.Path,
-            "data",
-            "state",
-            "experiment-faults",
-            SessionIdentity.ExecDirectorySegment("old") + ".canonical-hold-before-rename"
-        );
-        Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
-        await File.WriteAllTextAsync(marker, "hold");
+        hold = true;
         var first = ForkClearLifecycleTests.AppendAsync(owner, Text("Accepted old-binding row"));
-        await WaitFor(() => File.Exists(marker + ".reached"));
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var move = manager.MoveIdentityAsync(owner, new JsonObject { ["newSessionId"] = "new" });
         Assert.False(move.IsCompleted);
-        File.Delete(marker);
+        release.TrySetResult();
         await first;
         await move;
         await ForkClearLifecycleTests.AppendAsync(owner, Text("New-binding row"));
@@ -151,42 +147,70 @@ public sealed class SessionIdentityInterleavingTests
         Assert.Equal("current-caller", source.Archive.ReadMessages().Single().SessionId);
     }
 
-    [Fact]
-    public async Task Shared_channel_authority_serializes_move_and_unrelated_real_deletion_without_lost_bindings()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Shared_channel_mutations_serialize_real_read_modify_write_without_lost_bindings(bool migration, bool twoDeletes)
     {
         using var temp = new TempDirectory();
-        await using var manager = Manager(temp.Path);
-        await manager.LoadAsync();
-        var owner = await manager.CreateNamedAsync("main", "old", null, null);
-        await manager.CreateNamedAsync("main", "remove", null, null);
-        var channels = Path.Combine(temp.Path, "data", "state", "channels.json");
+        var state = Path.Combine(temp.Path, "state");
+        Directory.CreateDirectory(state);
+        var channels = Path.Combine(state, "channels.json");
+        var bindings = new JsonObject
+        {
+            ["webui:first"] = new JsonObject { ["sessionId"] = "old", ["mode"] = "push-only" },
+            ["webui:remove"] = new JsonObject { ["sessionId"] = "remove" },
+            ["other:untouched"] = new JsonObject { ["sessionId"] = "foreign", ["custom"] = 42 },
+        };
         await File.WriteAllTextAsync(
-            channels,
-            "{\"channels\":{\"telegram:keep\":{\"sessionId\":\"old\",\"mode\":\"push-only\"},\"webui:remove\":{\"sessionId\":\"remove\"},\"other:untouched\":{\"sessionId\":\"foreign\",\"custom\":42}}}"
-        );
-        var hold = Path.Combine(
-            temp.Path,
-            "data",
-            "state",
-            "experiment-faults",
-            SessionIdentity.ExecDirectorySegment("old") + ".channels-identity-after-read-hold"
-        );
-        Directory.CreateDirectory(Path.GetDirectoryName(hold)!);
-        await File.WriteAllTextAsync(hold, "hold");
-        var move = Task.Run(() =>
-            manager.MoveIdentityAsync(owner, new JsonObject { ["newSessionId"] = "new" })
-        );
-        await WaitFor(() => File.Exists(hold + ".reached"));
-        var deletion = Task.Run(() => manager.DeleteAsync("remove"));
-        await Task.Delay(30);
-        Assert.False(deletion.IsCompleted);
-        File.Delete(hold);
-        await move;
-        await deletion;
+            migration ? Path.Combine(state, "sessions.json.pre-catalog-sqlite-v1.bak") : channels,
+            new JsonObject { [migration ? "channelAttachments" : "channels"] = bindings }.ToJsonString());
+        var reached = Signal();
+        var release = Signal();
+        var secondStarted = Signal();
+        var authority = new SessionDeletionChannels(temp.Path, (id, stage) =>
+        {
+            if (id != "old" || stage != (migration ? "migration-before-write" : twoDeletes ? "after-read" : "identity-after-read"))
+                return;
+            reached.TrySetResult();
+            release.Task.WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+        });
+        var first = Task.Run(() =>
+        {
+            if (twoDeletes)
+                authority.Detach("old");
+            else
+                authority.RewriteIdentity("old", "new");
+        });
+        try
+        {
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var second = Task.Run(() =>
+            {
+                secondStarted.TrySetResult();
+                authority.Detach("remove");
+            });
+            await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.Delay(30);
+            Assert.False(second.IsCompleted);
+            release.TrySetResult();
+            await Task.WhenAll(first, second);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await first;
+        }
         var actual = JsonNode.Parse(await File.ReadAllTextAsync(channels))!["channels"]!;
-        Assert.Equal("new", actual["telegram:keep"]!["sessionId"]!.GetValue<string>());
-        Assert.Equal("send-only", actual["telegram:keep"]!["mode"]!.GetValue<string>());
         Assert.Null(actual["webui:remove"]);
+        if (twoDeletes)
+            Assert.Null(actual["webui:first"]);
+        else
+        {
+            Assert.Equal("new", actual["webui:first"]!["sessionId"]!.GetValue<string>());
+            Assert.Equal("send-only", actual["webui:first"]!["mode"]!.GetValue<string>());
+        }
         Assert.Equal(42, actual["other:untouched"]!["custom"]!.GetValue<int>());
     }
 

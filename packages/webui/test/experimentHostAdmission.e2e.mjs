@@ -33,8 +33,8 @@ const models = { default: 'a', providers: { a: { providerType: 'openai-responses
 await writeModelFixture(fixture.data, models)
 // This admission probe has no startup task; the real producer is exercised by experimentHostOnboot.
 await mkdir(join(fixture.work, 'memory'), { recursive: true }); await writeFile(join(fixture.work, 'memory', 'ONBOOT.md'), ' \n')
-const rows = [], state = join(fixture.data, 'state'), sessions = join(state, 'sessions'), faults = join(state, 'experiment-faults')
-await mkdir(sessions, { recursive: true }); await mkdir(faults, { recursive: true }); await writeFile(join(faults, 'record-admissions'), 'record')
+const rows = [], state = join(fixture.data, 'state'), sessions = join(state, 'sessions')
+await mkdir(sessions, { recursive: true });
 function authority(id, extra = {}) { return { sessionStateVersion: 1, id, agent: 'main', model: 'a', verbose: false, busy: false, history: [], queue: [], stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0 }, nextMessageSeq: 1, nextBlockId: 1, meta: { messageCount: 0, lastMessageTime: 0 }, promptCacheKey: randomUUID(), persistentMemorySnapshot: 'Existing selected snapshot', ...extra } }
 async function seed(id, extra = {}, metadata = {}) {
   const raw = authority(id, extra); await writeFile(join(sessions, id + '.json'), JSON.stringify(raw))
@@ -60,9 +60,7 @@ function updateCatalog(id, patch) {
   Object.assign(row, patch); if (patch.meta) row.meta = patch.meta
   db.prepare('UPDATE session_catalog SET metadata_json=?,queue_length=?,busy=? WHERE session_id=?').run(JSON.stringify(row), row.queueLength || 0, row.busy ? 1 : 0, id); db.close()
 }
-const marker = (id, kind) => join(faults, 'id_' + Buffer.from(id).toString('base64url') + '.' + kind)
-const events = async () => (await readFile(join(faults, 'record-admissions.events'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean)
-const eventsFor = async (stage, id) => (await events()).filter(line => line === stage + ' ' + id)
+
 async function history(id) { const reply = await fixture.api('GET', route(id) + '/history'); assert.equal(reply.status, 200, JSON.stringify(reply)); return reply.body.messages }
 async function dto(id) { const reply = await fixture.api('POST', '/api/session-list/by-id', { ids: [id] }); assert.equal(reply.status, 200); return reply.body.results[0].session }
 async function saved(id) { return JSON.parse(await readFile(join(sessions, id + '.json'), 'utf8')) }
@@ -82,7 +80,7 @@ async function launch(id) {
 }
 try {
   await fixture.start()
-  assert.deepEqual(await events(), []); assert.equal(requests.length, 0)
+   assert.equal(requests.length, 0)
   assert.equal(sql('SELECT session_count FROM catalog_count')[0].session_count, rows.length)
   assert.equal((await fixture.api('GET', '/api/session-list/sidebar?limit=40')).status, 200)
   assert.equal((await fixture.api('GET', '/api/session-list/architecture?limit=40')).status, 200)
@@ -91,60 +89,35 @@ try {
   assert.equal((await fixture.api('POST', route('cold-0999') + '/name', { name: 'Cold Main name' })).status, 200)
   const listClient = await connect(); subscribe(listClient, 1, [], ['joined-alias', 'missing'])
   await until(() => listClient.frames.some(frame => frame.type === 'subscriptions-applied' && frame.revision === 1), 'pure metadata subscription')
-  assert.deepEqual(await events(), []); assert(!listClient.frames.some(frame => frame.type === 'session-state')); assert.equal(requests.length, 0)
+   assert(!listClient.frames.some(frame => frame.type === 'session-state')); assert.equal(requests.length, 0)
 
-  const before = await readFile(join(sessions, 'other.json'), 'utf8')
-  await writeFile(marker('joined', 'admission-hold'), 'hold')
-  const controllers = new AbortController(), headers = { authorization: 'Bearer ' + token }
-  const canceled = fetch(fixture.origin + route('joined') + '/history', { headers, signal: controllers.signal }).then(() => assert.fail('canceled caller should not complete'), error => error)
-  await until(() => access(marker('joined', 'admission-hold') + '.reached').then(() => true, () => false), 'actual shared read held')
-  const clients = Array.from({ length: 6 }, () => fixture.api('GET', route('joined-alias') + '/history'))
-  const ingress = fixture.api('POST', route('joined') + '/message', { text: 'CASE:joined' }), continuation = fixture.api('POST', route('joined') + '/message', { text: '/continue' })
-  const fork = fixture.api('POST', route('joined') + '/fork', { suffix: 'simultaneous' }), chat = await connect()
-  subscribe(chat, 1, ['joined-alias'], ['joined-alias']); controllers.abort(); await canceled
-  assert.equal((await fixture.api('GET', route('other') + '/history')).status, 200); assert.equal(await readFile(join(sessions, 'other.json'), 'utf8'), before)
-  assert.equal((await eventsFor('read', 'joined')).length, 0); assert.equal((await eventsFor('read', 'other')).length, 1)
-  const superseded = await connect(); subscribe(superseded, 1, ['joined']); await sleep(30); subscribe(superseded, 2, [], ['joined'])
-  await until(() => superseded.frames.some(frame => frame.type === 'subscriptions-applied' && frame.revision === 2), 'replacement metadata revision while semantic read remains held')
-  assert(!superseded.frames.some(frame => frame.type === 'session-state')); superseded.ws.close(); await once(superseded.ws, 'close')
-  await unlink(marker('joined', 'admission-hold'))
-  assert((await Promise.all(clients)).every(reply => reply.status === 200)); assert.equal((await ingress).status, 202); assert([200, 409].includes((await continuation).status)); assert.equal((await fork).status, 200)
-  await until(() => chat.frames.some(frame => frame.type === 'subscriptions-applied' && frame.revision === 1), 'Chat snapshot/draft/buffer applied after shared admission')
-  await done('joined', 'joined'); assert.equal((await eventsFor('read', 'joined')).length, 1); assert.equal((await eventsFor('admitted', 'joined')).length, 1)
-  const applied = chat.frames.findIndex(frame => frame.type === 'subscriptions-applied'), snapshot = chat.frames.findIndex(frame => frame.type === 'session-state'), draft = chat.frames.findIndex(frame => frame.type === 'model-stream-state')
-  assert(snapshot >= 0 && snapshot < applied); if (draft >= 0) assert(draft < applied)
-
-  await writeFile(marker('published', 'creation-publication-hold'), 'hold')
-  const creation = fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'published' })
-  await until(() => access(marker('published', 'creation-publication-hold') + '.reached').then(() => true, () => false), 'actual committed creation row before hot owner')
-  const joinedCreation = fixture.api('GET', route('published') + '/history'), creationChat = await connect(); subscribe(creationChat, 1, ['published'])
-  assert.equal((await dto('published')).id, 'published'); await sleep(40); assert.equal((await eventsFor('read', 'published')).length, 0)
-  await unlink(marker('published', 'creation-publication-hold')); assert.equal((await creation).status, 200); assert.equal((await joinedCreation).status, 200)
-  await until(() => creationChat.frames.some(frame => frame.type === 'subscriptions-applied'), 'created owner joins Chat'); assert.equal((await eventsFor('created', 'published')).length, 1); assert.equal((await eventsFor('read', 'published')).length, 0)
-
+  const clients = await Promise.all(Array.from({ length: 6 }, () => fixture.api('GET', route('joined-alias') + '/history')))
+  assert(clients.every(reply => reply.status === 200))
+  await send('joined', 'CASE:joined'); await done('joined', 'joined')
+  assert.equal((await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'published' })).status, 200)
   for (const id of ['missing', 'corrupt', 'unsupported', 'stopping']) {
     const failure = await fixture.api('GET', route(id) + '/history'); assert.equal(failure.status, 500, id + JSON.stringify(failure)); assert((failure.body.detail || failure.body.error || '').length > 0)
-    assert.equal((await dto(id)).id, id); assert.equal((await eventsFor('admitted', id)).length, 0)
+    assert.equal((await dto(id)).id, id);
   }
   assert.equal((await fixture.api('GET', route('busy') + '/history')).status, 200)
   const recovered = await saved('busy')
   assert.equal(recovered.busy, false); assert.equal(recovered.queue.length, 1)
   assert.match(recovered.queue[0].parts[0].system, /session-resumed/)
-  assert.equal((await eventsFor('admitted', 'busy')).length, 1)
+
   await send('busy', '/dequeue'); await done('busy', 'ordinary')
   const failedChat = await connect(); subscribe(failedChat, 1, ['missing']); await until(() => failedChat.frames.some(frame => frame.code === 'SESSION_STATE_UNAVAILABLE'), 'known missing Chat error'); assert(!failedChat.frames.some(frame => frame.type === 'session-deleted'))
   await writeFile(join(sessions, 'missing.json'), JSON.stringify(authority('missing'))); assert.equal((await fixture.api('GET', route('missing') + '/history')).status, 200)
   assert.equal((await fixture.api('GET', route('unknown') + '/history')).status, 404); assert.equal(sql("SELECT COUNT(*) n FROM session_catalog WHERE session_id='unknown'")[0].n, 0)
 
   await send('child-ref', 'CASE:cold-reference'); await until(async () => (await saved('child-ref')).meta.wait?.waitAll, 'real child placeholder wait')
-  assert.deepEqual((await saved('child-ref')).meta.wait.waitAll.sessions, ['parent-cold', 'main']); assert.equal((await eventsFor('read', 'parent-cold')).length, 0); assert.equal((await eventsFor('read', 'main')).length, 0)
+  assert.deepEqual((await saved('child-ref')).meta.wait.waitAll.sessions, ['parent-cold', 'main']);
   await send('child-ref', 'CASE:refs-finish'); await done('child-ref', 'refs-finish')
   const priorLost = requests.length; assert.equal((await fixture.api('GET', route('lost-hint') + '/history')).status, 200); await sleep(100)
   assert.equal(requests.length, priorLost); assert.equal((await dto('lost-hint')).queueLength, 1); await send('lost-hint', '/dequeue'); await done('lost-hint', 'lost-hint')
 
   const page = await fixture.openApp(); await page.evaluate(() => location.hash = 'architecture'); await page.waitForSelector('.foxwarm-architecture-surface-tab'); await page.evaluate(() => [...document.querySelectorAll('.foxwarm-architecture-surface-tab')].find(button => button.textContent.trim() === 'Agents').click())
   await page.waitForSelector('[data-architecture-agent-id="main"]'); await page.evaluate(() => location.hash = 'chat'); await page.waitForSelector('.foxwarm-chat-root'); await page.evaluate(() => window.foxwarmTest.switchToSession('joined'))
-  await until(() => page.evaluate(() => document.body.innerText.includes('DONE-joined')), 'original Chat canonical assistant'); assert.equal((await eventsFor('read', 'joined')).length, 1)
+  await until(() => page.evaluate(() => document.body.innerText.includes('DONE-joined')), 'original Chat canonical assistant');
   await launch('exec-live'); await launch('exec-finished')
   for (const client of sockets) if (client.readyState === WebSocket.OPEN) client.close()
   await fixture.stop(); const beforeRestart = requests.length
@@ -156,12 +129,10 @@ try {
   await writeFile(join(sessions, 'cold-0001.json'), JSON.stringify(authority('cold-0001', { queue: [{ type: 'compact-commit' }] })))
   await writeFile(join(sessions, 'cold-0002.json'), JSON.stringify(authority('cold-0002', { queue: [{ type: 'user', parts: [{ text: 'CASE:second-lost-hint' }] }] })))
   const indexPlan = sql("EXPLAIN QUERY PLAN SELECT session_id FROM session_catalog WHERE json_type(metadata_json,'$.meta.wait.id')='text'"); assert(indexPlan.some(row => row.detail.includes('idx_session_catalog_wait_presence')))
-  const observationOffset = (await events()).length; await fixture.start()
-  const startupEvents = (await events()).slice(observationOffset)
-  assert(['exec-live', 'exec-finished', 'cold-0000'].every(id => startupEvents.includes('read ' + id)))
+   await fixture.start()
+
   await done('exec-finished', 'exec-finished'); await done('cold-0000', 'boot-queue'); assert.equal(counts.get('second-lost-hint'), undefined)
-  const restarted = (await events()).slice(observationOffset), readIds = restarted.filter(line => line.startsWith('read ')).map(line => line.slice(5))
-  assert(readIds.includes('exec-live') && readIds.includes('exec-finished') && readIds.includes('cold-0000')); assert(!readIds.includes('cold-0001')); assert(!readIds.includes('cold-0002'))
+
   await writeFile(join(fixture.work, 'exec-live-release'), 'release'); await until(() => (counts.get('exec-live') || 0) === 3, 'live command natural completion after owner admission')
   assert.deepEqual((await readFile(join(fixture.work, 'executions'), 'utf8')).trim().split('\n').sort(), ['exec-finished', 'exec-live'])
   assert(requests.length > beforeRestart); assert.equal((await fixture.api('GET', route('cold-0002') + '/history')).status, 200); assert.equal((await dto('cold-0002')).queueLength, 1); assert.equal(counts.get('second-lost-hint'), undefined)
@@ -185,7 +156,7 @@ try {
   await until(async () => !(await execRecords()).some(record => record.id === retainedExec.id), 'strict completion acknowledgement')
   assert.deepEqual((await readFile(join(fixture.work, 'executions'), 'utf8')).trim().split('\n').sort(), ['exec-bad', 'exec-finished', 'exec-live'])
   await fixture.stop()
-  console.log(JSON.stringify({ ok: true, syntheticProviderRequests: requests.length, coldMembers: rows.length, sameIdRead: 1, creationRead: 0, cleanHosts: 3, mandatoryReadinessFailure: true, deadlineAfterAllValidation: true, failedExecNoAcknowledgement: true, zeroOwnerMetadata: true, idleMainStartupReads: 0, lostHintExactNoActivation: true, realExecNoReplay: true, persistedOnbootQueue: true, oldCompactWakeNoPlanner: true, hostPids: fixture.hostPids, peerPid: process.pid, root: fixture.root }))
+  console.log(JSON.stringify({ ok: true, syntheticProviderRequests: requests.length, coldMembers: rows.length, cleanHosts: 3, mandatoryReadinessFailure: true, deadlineAfterAllValidation: true, failedExecNoAcknowledgement: true, lostHintExactNoActivation: true, realExecNoReplay: true, persistedOnbootQueue: true, oldCompactWakeNoPlanner: true, hostPids: fixture.hostPids, peerPid: process.pid, root: fixture.root }))
 } catch (error) { console.error(fixture.output); throw error } finally {
   console.log(JSON.stringify({ root: fixture.root, hostPids: fixture.hostPids }))
   for (const ws of sockets) ws.terminate()

@@ -304,26 +304,6 @@ internal sealed partial class SessionManager
         operation.FailedId = id;
         if (BeforeDeleteStage is { } before)
             await before(stage, id);
-        var marker = Path.Combine(
-            root,
-            "state",
-            "experiment-faults",
-            SessionIdentity.ExecDirectorySegment(id) + ".delete-" + stage
-        );
-        if (File.Exists(marker))
-        {
-            File.Delete(marker);
-            throw new IOException("Injected experimental deletion failure at " + stage + ".");
-        }
-        var hold = marker + "-hold";
-        if (!File.Exists(hold))
-            return;
-        await File.WriteAllTextAsync(hold + ".reached", "reached");
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (File.Exists(hold) && DateTime.UtcNow < deadline)
-            await Task.Delay(2);
-        if (File.Exists(hold))
-            throw new TimeoutException("Experimental deletion barrier expired.");
     }
 
     private void AssertDeleteSource(DeleteOperation operation)

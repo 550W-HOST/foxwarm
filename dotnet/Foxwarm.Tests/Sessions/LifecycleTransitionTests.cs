@@ -153,7 +153,13 @@ public sealed class LifecycleTransitionTests
             var source = await manager.CreateNamedAsync("main", "source", null, null);
             await ForkClearLifecycleTests.AppendAsync(parent, Text("retained old audit"));
             await manager.SendAsync(source, parent.Id, "discarded accepted input", trigger: false);
-            fixture.Fault(parent.Id, "clear-after-rename");
+            fixture.WriteStage = (id, stage) =>
+            {
+                if (id != parent.Id || stage != AtomicJsonWriteStage.AfterRenameBeforeDirectorySync)
+                    return;
+                fixture.WriteStage = null;
+                throw new IOException("Owned committed clear failure.");
+            };
             await Assert.ThrowsAsync<AuthorityCommittedException>(() => manager.ClearAsync(parent));
             Assert.Empty(parent.Entry.Snapshot().Queue);
             Assert.Empty(parent.Entry.Snapshot().History);
@@ -233,17 +239,32 @@ public sealed class LifecycleTransitionTests
         await ForkClearLifecycleTests.AppendAsync(parent, Text("parent prefix"));
         var parentBytes = parent.Archive.ReadMessages().Single().MessageJson;
         var id = "parent_cut";
-        var hold = fixture.Fault(id, "canonical-hold-before-rename");
-        fixture.Fault(id, "create-before-rename");
+        var reached = Signal();
+        var release = Signal();
+        fixture.CanonicalStage = async (current, _, _) =>
+        {
+            if (current != id)
+                return;
+            reached.TrySetResult();
+            await release.Task;
+        };
+        fixture.WriteStage = (current, stage) =>
+        {
+            if (current == id && stage == AtomicJsonWriteStage.BeforeRename)
+            {
+                fixture.WriteStage = null;
+                throw new IOException("Owned fork precommit failure.");
+            }
+        };
         var creating = manager.ForkAsync(parent, "cut");
-        await WaitForFile(hold + ".reached");
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(10));
         try
         {
             await manager.MoveIdentityAsync(parent, new JsonObject { ["newSessionId"] = "moved" });
         }
         finally
         {
-            File.Delete(hold);
+            release.TrySetResult();
         }
         var error = await Record.ExceptionAsync(() => creating);
         Assert.Null(manager.Find(id));
@@ -260,17 +281,12 @@ public sealed class LifecycleTransitionTests
     private static TaskCompletionSource Signal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    private static async Task WaitForFile(string path)
-    {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        while (!File.Exists(path))
-            await Task.Delay(2, timeout.Token);
-    }
-
     private sealed class Fixture(Uri? endpoint = null) : IDisposable
     {
         private readonly TempDirectory temp = new();
         private string Data => Path.Combine(temp.Path, "data");
+        internal Action<string, AtomicJsonWriteStage>? WriteStage;
+        internal Func<string, int, CancellationToken, Task>? CanonicalStage;
 
         internal SessionManager Manager()
         {
@@ -286,7 +302,9 @@ public sealed class LifecycleTransitionTests
                 Data,
                 Path.Combine(temp.Path, "work"),
                 options,
-                HostModels.ForTest(options)
+                HostModels.ForTest(options),
+                authorityStageHook: (id, stage) => WriteStage?.Invoke(id, stage),
+                canonicalCommitBarrier: (id, commit, token) => CanonicalStage?.Invoke(id, commit, token) ?? Task.CompletedTask
             );
             manager.TopologyChanged += () =>
             {
@@ -294,19 +312,6 @@ public sealed class LifecycleTransitionTests
                     owner.Registry.TriggerOverride = _ => Task.CompletedTask;
             };
             return manager;
-        }
-
-        internal string Fault(string id, string suffix)
-        {
-            var path = Path.Combine(
-                Data,
-                "state",
-                "experiment-faults",
-                SessionIdentity.ExecDirectorySegment(id) + "." + suffix
-            );
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, "once");
-            return path;
         }
 
         public void Dispose() => temp.Dispose();

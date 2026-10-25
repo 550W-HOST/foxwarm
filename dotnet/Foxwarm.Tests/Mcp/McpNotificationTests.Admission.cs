@@ -34,16 +34,15 @@ public sealed partial class McpNotificationTests
         await Connect(f, peer);
         await Notifications(f, "start");
         var id = await context.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        var directory = Path.Combine(peer.Data, "state", "experiment-faults");
-        Directory.CreateDirectory(directory);
-        await File.WriteAllTextAsync(
-            Path.Combine(
-                directory,
-                SessionIdentity.ExecDirectorySegment(peer.Target.Id)
-                    + (committed ? ".wait-after-rename" : ".wait-before-rename")
-            ),
-            "fault"
-        );
+        peer.WriteStage = (id, stage) =>
+        {
+            if (id != peer.Target.Id || stage != (committed
+                ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
+                : AtomicJsonWriteStage.BeforeRename))
+                return;
+            peer.WriteStage = null;
+            throw new IOException("Owned strict admission write failure.");
+        };
         var failed = await f.CallAsync(
             f.First,
             "foxwarm_session",

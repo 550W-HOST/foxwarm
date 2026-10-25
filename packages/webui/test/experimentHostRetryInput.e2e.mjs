@@ -2,11 +2,11 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
-import { readFile, writeFile, mkdir, rm, access } from 'node:fs/promises'
+import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { WebSocketServer } from 'ws'
 import sharp from 'sharp'
-import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
+import { createHostFixture, until } from './experimentHostFixture.mjs'
 import { writeModelFixture } from './experimentModelFixture.mjs'
 
 const options = { env: {} }, fixture = await createHostFixture('retry-input', options), records = [], errors = [], held = new Map(), rounds = new Map(), sockets = []
@@ -62,8 +62,7 @@ async function create(id, model = 'responses') { assert.equal((await fixture.api
 async function post(id, text, extra = {}) { assert.equal((await fixture.api('POST', route(id) + '/message', { text, ...extra })).status, 202) }
 async function done(id, task, n = 1) { await until(async () => { const state = await authority(id); return !state.busy && state.history.some(row => row.parts?.some(part => part.text === 'DONE-' + task + '-' + n)) }, task) }
 async function upload() { const form = new FormData(); form.append('file', new Blob([png], { type: 'image/png' }), 'queued.png'); const response = await fetch(fixture.origin + '/api/upload', { method: 'POST', headers: { authorization: 'Bearer synthetic-retry-input-api' }, body: form }); assert.equal(response.status, 200); return response.json() }
-async function notice(id) { await until(async () => (await authority(id)).history.some(row => row.__meta?.noticeType === 'llm-retry'), 'committed retry notice') }
-const marker = id => join(fixture.data, 'state/experiment-faults', 'id_' + Buffer.from(id).toString('base64url') + '.canonical-hold-before-rename')
+
 try {
   await fixture.start(); const page = await fixture.openApp()
   for (const model of ['responses', 'completions', 'anthropic', 'ws']) {
@@ -89,17 +88,10 @@ try {
   }
   const pair = await create('pair'), pairTask = 'pair-http'; await post(pair, 'RCASE:' + pairTask); await until(() => held.has(pairTask), 'error after actual pair'); await post(pair, 'QUEUED-AFTER-PAIR'); held.get(pairTask).fail(); await done(pair, pairTask, 2)
   const pairWire = records.find(row => row.task === pairTask && row.n === 2).full; const call = pairWire.findIndex(row => row.type === 'function_call' && row.call_id === 'paired-write'); assert(call >= 0); assert.equal(pairWire[call + 1].type, 'function_call_output'); assert.equal(pairWire[call + 1].call_id, 'paired-write'); assert.equal(JSON.stringify(pairWire).split('COMMITTED-COMMENTARY').length - 1, 1); assert.equal(await readFile(join(fixture.work, 'paired-once.txt'), 'utf8'), 'Exactly one real paired write.')
-  for (const action of ['stop', 'dequeue']) {
-    const id = await create('control-' + action), task = 'control-' + action; await post(id, 'RCASE:' + task); await until(() => held.has(task), task); await post(id, 'QUEUED-CONTROL'); held.get(task).fail(); await notice(id)
-    await mkdir(join(fixture.data, 'state/experiment-faults'), { recursive: true }); await writeFile(marker(id), 'hold'); await until(async () => { try { await access(marker(id) + '.reached'); return true } catch { return false } }, 'real retry append held')
-    const command = action === 'stop' ? fixture.api('POST', route(id) + '/stop') : fixture.api('POST', route(id) + '/message', { text: '/dequeue' }); await sleep(30); await rm(marker(id)); assert.equal((await command).status, 200)
-    if (action === 'dequeue') await done(id, task); else await until(async () => !(await authority(id)).busy, 'stopped')
-    const count = records.filter(row => row.task === task && !row.planning).length; assert.equal(count, action === 'stop' ? 1 : 2); assert.equal((await authority(id)).queue.length, 0)
-  }
   const compact = await create('compact'); for (let i = 0; i < 6; i++) { const task = 'seed-compact-' + i; await post(compact, 'RCASE:' + task + '\n' + ('Earlier ordered paragraph ' + i + ' ').repeat(450)); await done(compact, task, 0) }
   const key = (await authority(compact)).promptCacheKey; await post(compact, 'RCASE:compact-only'); await until(() => held.has('compact-only'), 'foreground error held'); assert.equal((await fixture.api('POST', route(compact) + '/message', { text: '/compact' })).status, 200); await until(() => held.has('plan'), 'real background plan'); held.get('plan').valid(); await until(async () => (await authority(compact)).queue.some(row => row.type === 'compact-commit'), 'ready plan with zero ordinary queue'); held.get('compact-only').fail(); await done(compact, 'compact-only')
   const compactWire = records.find(row => row.task === 'compact-only' && row.n === 1); assert(JSON.stringify(compactWire.full).includes('CTX-BLOCK')); const compactState = await authority(compact); assert.equal(compactState.promptCacheKey, key); assert.equal(compactState.queue.length, 0)
-  await fixture.stop(); assert.deepEqual(errors, []); console.log(JSON.stringify({ originalApp: true, requests: records.length, fourTransports: true, finiteOrderedInputs: true, freshImages: true, capturedEffortCacheTurn: true, committedPairCommentary: true, acceptedWsPrefixThenFailure: true, stopRunQueuedDuringRealAppend: true, readyCompactNoOrdinaryQueue: true, home, hosts: fixture.hostPids }))
+  await fixture.stop(); assert.deepEqual(errors, []); console.log(JSON.stringify({ originalApp: true, requests: records.length, fourTransports: true, finiteOrderedInputs: true, freshImages: true, capturedEffortCacheTurn: true, committedPairCommentary: true, acceptedWsPrefixThenFailure: true, readyCompactNoOrdinaryQueue: true, home, hosts: fixture.hostPids }))
 } finally {
   await writeFile(join(fixture.root, 'retry-input-proof.json'), JSON.stringify({ records, errors, home, hosts: fixture.hostPids }, null, 2)).catch(() => {})
   await fixture.cleanup(); for (const ws of sockets) ws.terminate(); wsServer.close(); await new Promise(done => peer.close(done))

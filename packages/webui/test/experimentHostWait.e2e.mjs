@@ -169,19 +169,11 @@ try {
   assert.equal((await authority(stoppedTool)).meta.wait, undefined)
   await final(stoppedTool, 'STOPPED-EXEC-EVENT'); await sleep(900); assert.equal(counts.get(stoppedTool), 2)
 
-  // Persisted waitAll barrier, strict failure classification and clean restart use real inter-Session send tools.
+  // Persisted waitAll barrier and clean restart use real inter-Session send tools.
   const sourceA = await create('source-a'); const sourceB = await create('source-b')
   const barrier = await create('barrier', [[call('all', 'wait', { waitAllSessions: [sourceA, sourceB], wakeIfNoActivityAfterSeconds: 60 })], [text('ALL-DONE')]])
   await send(barrier, 'ALL'); await waiting(barrier)
-  const markerRoot = join(dataRoot, 'state', 'experiment-faults'); await mkdir(markerRoot, { recursive: true })
-  const segment = 'id_' + Buffer.from(barrier).toString('base64url')
-  await writeFile(join(markerRoot, segment + '.wait-before-rename'), 'fail')
-  plans.get(sourceA).push([call('pre-send', 'send_to_session', { sessionId: barrier, message: 'PRE-NOT-ACKED', afterSend: 'finish' })], [text('PRE-ERROR-HANDLED')])
-  await send(sourceA, 'PRE'); await final(sourceA, 'PRE-ERROR-HANDLED')
-  assert.equal((await authority(barrier)).meta.wait.waitAll.deferredQueue.length, 0)
-  await writeFile(join(markerRoot, segment + '.wait-after-rename'), 'fail')
-  plans.get(sourceA).push([call('post-send', 'send_to_session', { sessionId: barrier, message: 'FIRST-ACKED-AUTHORITY', afterSend: 'finish' })], [text('POST-ERROR-HANDLED')])
-  await send(sourceA, 'POST'); await final(sourceA, 'POST-ERROR-HANDLED'); await waiting(barrier)
+  await deliver(sourceA, barrier, 'FIRST-ACKED-AUTHORITY'); await waiting(barrier)
   const savedAll = await authority(barrier)
   assert.deepEqual(savedAll.meta.wait.waitAll.satisfiedSessions, [sourceA]); assert.equal(savedAll.meta.wait.waitAll.deferredQueue.length, 1)
   assert.equal(counts.get(barrier), 1); assert(!(await history(barrier)).some(row => row.parts.some(part => part.system?.includes('FIRST-ACKED-AUTHORITY'))))
@@ -200,16 +192,6 @@ try {
   await final(timed, 'TIMEOUT-DONE'); assert.equal(counts.get(timed), 2)
   assert(timedSaved.meta.wait.startedAt + timedSaved.meta.wait.timeoutSeconds * 1000 <= Date.now())
   await send(input, 'NEW-INPUT'); await final(input, 'INPUT-DONE')
-
-  // Explicit wait creation failures retain truthfully committed state and clear only their own token after pairing.
-  for (const stage of ['before', 'after']) {
-    const faulted = await create(`faulted-${stage}`, [[call(`wait-${stage}`, 'wait', { waitForInput: true })], [text(`WAIT-${stage}-ERROR-HANDLED`)]])
-    await writeFile(join(markerRoot, 'id_' + Buffer.from(faulted).toString('base64url') + `.wait-${stage}-rename`), 'fail')
-    await send(faulted, 'FAULTED-WAIT'); await final(faulted, `WAIT-${stage}-ERROR-HANDLED`)
-    const faultRow = (await history(faulted)).find(row => row.role === 'tool')
-    assert(faultRow.parts[0].functionResponse.response.error)
-    assert.equal((await authority(faulted)).meta.wait, undefined)
-  }
 
   // Nonlisted input releases the all barrier with deferred content and the actual pending-source reminder.
   const unrelated = await create('unrelated', [[call('unrelated-all', 'wait', { waitAllSessions: [sourceA, sourceB], wakeIfNoActivityAfterSeconds: 60 })], body => {

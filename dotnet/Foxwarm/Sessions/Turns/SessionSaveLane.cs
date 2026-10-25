@@ -8,8 +8,6 @@ namespace Foxwarm.Sessions;
 
 public sealed partial class SessionSaveLane
 {
-    private static readonly AsyncLocal<bool> SnapshotCommitScope = new();
-    internal static bool IsSnapshotCommit => SnapshotCommitScope.Value;
     private readonly SessionEntry entry;
     private readonly ISessionAuthorityStore store;
     private readonly Func<SessionSnapshot, Task<SessionSnapshot>>? migrateGoal;
@@ -178,8 +176,6 @@ public sealed partial class SessionSaveLane
             staged = await PrepareGoalOnlyAsync(staged).ConfigureAwait(false);
             void Publish(SessionState state) =>
                 state.AuthorityEnvelope["persistentMemorySnapshot"] = snapshot;
-            var previousScope = SnapshotCommitScope.Value;
-            SnapshotCommitScope.Value = true;
             try
             {
                 await store.CommitAsync(staged, SaveKind.Strict).ConfigureAwait(false);
@@ -190,10 +186,6 @@ public sealed partial class SessionSaveLane
                 PublishGoalOnly(staged);
                 entry.InvokeCommitted(entry.Snapshot());
                 throw;
-            }
-            finally
-            {
-                SnapshotCommitScope.Value = previousScope;
             }
             entry.WithState(Publish);
             PublishGoalOnly(staged);

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { execFileSync } from 'node:child_process'
-import { mkdir, readFile, writeFile, rename, access, unlink } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, rename, access } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { WebSocket } from 'ws'
@@ -119,11 +119,6 @@ try {
   assert.equal((await fixture.api('POST', route('ordered') + '/refresh-memory', {})).status, 200);
   socket.send(JSON.stringify({ type: 'set-subscriptions', revision: 2, sessionIds: ['ordered', 'root'], sessionListIds: ['root-alias'], sessionListActive: true }));
   await until(() => frames.some(frame => frame.type === 'subscriptions-applied' && frame.revision === 2), 'actual semantic fault subscriptions');
-  const providerBefore = requests.length, failedStart = frames.length;
-  const appendHold = join(fixture.data, 'state/experiment-faults', 'id_' + Buffer.from('ordered').toString('base64url') + '.canonical-hold-before-rename'); await mkdir(join(fixture.data, 'state/experiment-faults'), { recursive: true }); await writeFile(appendHold, 'hold');
-  await message('ordered', 'CASE:no-provider'); await until(async () => await readFile(appendHold + '.reached', 'utf8').catch(() => '') === 'reached', 'actual canonical user publication barrier'); beginLock(); await unlink(appendHold);
-  await until(() => frames.slice(failedStart).some(frame => failureNotice(frame, 'ordered')), 'actual pre-provider failure settled', 130000);
-  assert.equal(requests.length, providerBefore); assert((await readAuthority('ordered')).history.some(row => JSON.stringify(row).includes('CASE:no-provider'))); releaseLock(); await idle('ordered')
   await message('root', 'CASE:held-effect'); await until(() => held.has('held-effect'), 'actual held effect result'); beginLock()
   const effectFailureStart = frames.length; held.get('held-effect').complete([{ type: 'function_call', call_id: 'effect', name: 'exec', arguments: JSON.stringify({ command: 'printf unsafe > forbidden-effect', timeout: 1 }) }]); await until(() => frames.slice(effectFailureStart).some(frame => failureNotice(frame, 'root')), 'actual assistant projection failure settled', 130000); await idle('root')
   await assert.rejects(access(join(fixture.work, 'forbidden-effect'))); assert((await readAuthority('root')).history.some(row => row.parts?.some(part => part.functionCall?.id === 'effect'))); releaseLock()

@@ -249,6 +249,29 @@ public sealed partial class ProviderFileConsumerTests
         );
         Success(exported);
         Assert.Equal(bytes, await File.ReadAllBytesAsync(f.FilePath("images/export.png")));
+        f.Manager.BeforeFileStage = (_, stage) => stage == "after-write"
+            ? Task.FromException(new IOException("Owned post-export failure."))
+            : Task.CompletedTask;
+        JsonObject partial;
+        try
+        {
+            partial = await f.Call("image_write_to_file", new JsonObject
+            {
+                ["id"] = "provider-image", ["filePath"] = "images/partial.png", ["node"] = f.Node,
+            });
+        }
+        finally
+        {
+            f.Manager.BeforeFileStage = null;
+        }
+        Assert.Equal("image_export_partial", SessionWait.Text(partial["error"]?["type"]));
+        Assert.True(partial["fileWritten"]!.GetValue<bool>());
+        Assert.False(string.IsNullOrEmpty(SessionWait.Text(partial["fullPath"])));
+        Assert.Equal(bytes, await File.ReadAllBytesAsync(f.FilePath("images/partial.png")));
+        Assert.Single(await f.Requests(), call =>
+            SessionWait.Text(call["request"]?["operation"]) == "write"
+            && SessionWait.Text(call["request"]?["path"]) == "images/partial.png");
+        Assert.False(File.Exists(Path.Combine(f.Work, "images", "partial.png")));
         var read = await f.Call("read", Args("images/export.png"));
         Success(read);
         Assert.Equal("image/png", SessionWait.Text(read["mimeType"]));

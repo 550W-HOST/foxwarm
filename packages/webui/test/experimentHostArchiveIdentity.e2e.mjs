@@ -38,19 +38,19 @@ async function catalog(fixture, rows) {
   store.open(); store.replaceAll(rows); store.close()
 }
 const row = (id, extra = {}) => ({ id, agent: 'main', busy: false, queueLength: 0, model: 'a', meta: { messageCount: 0, lastMessageTime: 0 }, ...extra })
-const trace = async fixture => (await readFile(join(fixture.data, 'state/experiment-faults/record-admissions.events'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean)
+
 function mutate(fixture, sql) { const db = new DatabaseSync(join(fixture.data, 'state/archive-store.sqlite')); try { db.exec(sql) } finally { db.close() } }
 try {
   const fixture = await create('archive-identity-app'), ledger = join(fixture.data, 'state/session-id-reservations.jsonl')
   const cold = Array.from({ length: 1000 }, (_, index) => row('cold-' + index)); cold[0].aliases = ['unique-cold']; cold[1].aliases = ['ambiguous']; cold[2].aliases = ['ambiguous']
-  await catalog(fixture, cold); await mkdir(join(fixture.data, 'state/experiment-faults')); await writeFile(join(fixture.data, 'state/experiment-faults/record-admissions'), 'record')
+  await catalog(fixture, cold);
   await unlink(ledger)
   const before = fixture.sql('SELECT session_id,agent,seq,timestamp,role,message_json FROM archive_messages ORDER BY session_id,seq')
   await fixture.start(); await fixture.openApp()
-  assert.deepEqual(await trace(fixture), []); assert.equal((await fixture.api('GET', '/api/session-list/architecture')).status, 200)
+   assert.equal((await fixture.api('GET', '/api/session-list/architecture')).status, 200)
   const mappings = fixture.sql('SELECT session_id,canonical_session_id FROM archive_session_id_reservations'); assert(mappings.some(([id, target]) => id === 'unique-cold' && target === 'cold-0')); assert(!mappings.some(([id]) => id === 'ambiguous'))
   for (let index = 0; index < cold.length; index += 100) assert.equal((await fixture.api('POST', '/api/session-list/by-id', { ids: cold.slice(index, index + 100).map(value => value.id) })).status, 200)
-  assert.deepEqual(await trace(fixture), []); assert.equal(requests.length, 0)
+   assert.equal(requests.length, 0)
   assert.equal((await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'main' })).status, 200)
   assert.equal((await fixture.api('POST', route('main') + '/message', { text: 'ARC-TASK:reserved-identities' })).status, 202)
   await until(async () => { const history = await fixture.api('GET', route('main') + '/history'); return history.body.messages?.some(value => value.parts?.some(part => part.text === 'DONE-ARCHIVE-IDENTITY')) }, 'full actual provider pairs')
@@ -59,7 +59,7 @@ try {
   assert.equal(await readFile(join(fixture.work, 'archive-proof.txt'), 'utf8'), 'Committed compatibility retains ordinary paired effects.')
   for (const id of ['archive_old', 'archive_middle', 'archive-target/current']) await assert.rejects(access(join(fixture.data, 'state/sessions', id + '.json')))
   const original = fixture.sql("SELECT session_id,agent,seq,timestamp,role,message_json FROM archive_messages WHERE session_id<>'main' ORDER BY session_id,seq"); assert.deepEqual(original, before)
-  assert.deepEqual(await trace(fixture), ['created main']); await fixture.stop(); await fixture.start(); assert.equal(requests.length, 2); await fixture.stop()
+   await fixture.stop(); await fixture.start(); assert.equal(requests.length, 2); await fixture.stop()
 
   // Existing durable mappings remain independent authority, not presentation aliases.
   for (const failure of ['cycle', 'conflict', 'pending', 'lost-archive', 'lost-journal', 'archive-marker', 'journal-marker']) {

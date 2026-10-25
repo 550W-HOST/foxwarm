@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { execFileSync } from 'node:child_process'
-import { mkdir, readFile, writeFile, unlink, rename, rm, access } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, unlink, access } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
@@ -13,7 +13,7 @@ import { writeModelFixture } from './experimentModelFixture.mjs'
 
 const fixture = await createHostFixture('deletion-app'), route = id => '/api/sessions/' + encodeURIComponent(id)
 const records = [], errors = [], held = new Map(), frames = [], counts = new Map(), shells = []
-let socket, page, writer
+let socket, page
 const final = text => [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }]
 const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
 const peer = createServer(async (request, response) => {
@@ -36,10 +36,6 @@ const peer = createServer(async (request, response) => {
     if (key === 'source-child' && n === 0) { record.complete([call('delete-parent', 'call_tool', { source: 'builtin', name: 'delete_session', args: { sessionId: 'parent-model' } })]); return }
     if (key === 'self' && n === 0) { record.complete([call('self-delete', 'delete_session', { sessionId: 'source-alias' })]); return }
     if (key === 'isolated' && n === 0) { record.complete([call('isolated-delete', 'call_tool', { toolId: 'builtin:delete_session', args: { sessionId: 'isolated-target' } })]); return }
-    if (key.startsWith('reciprocal-') && n === 0) {
-      held.set(key, record); return
-    }
-    if (key === 'reciprocal-b' && n === 1) { held.set('paired-b', record); return }
     if (key === 'wait-sibling' && n === 0) { record.complete([call(key, 'wait', { wakeIfNoActivityAfterSeconds: 2 })]); return }
     if (key.startsWith('exec-') && n === 0) {
       record.complete([call(key, 'exec', { command: `printf '${key}\\n' >> deletion-executions; while [ ! -f ${key}-release ]; do sleep 0.05; done; printf '${key}-finished\\n'`, timeout: 1 })]); return
@@ -51,37 +47,34 @@ peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
 // This focused deletion probe owns no startup task; the producer is covered by experimentHostOnboot.
 await mkdir(join(fixture.work, 'memory'), { recursive: true }); await writeFile(join(fixture.work, 'memory', 'ONBOOT.md'), ' \n')
 await writeModelFixture(fixture.data, { default: 'a', providers: { a: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:' + peer.address().port, models: ['wire'], contextLimit: 20000, asyncCompact: true } } })
-const state = join(fixture.data, 'state'), sessions = join(state, 'sessions'), faults = join(state, 'experiment-faults'), rows = [], legacy = new Set()
-await mkdir(sessions, { recursive: true }); await mkdir(faults, { recursive: true }); await writeFile(join(faults, 'record-admissions'), '')
+const state = join(fixture.data, 'state'), sessions = join(state, 'sessions'), rows = []
+await mkdir(sessions, { recursive: true });
 await mkdir(join(fixture.data, 'agents', 'locked', 'memory'), { recursive: true })
 await writeFile(join(state, 'agents.json'), JSON.stringify({ locked: { isolated: true } }))
-async function seed(id, metadata = {}, extra = {}, reserve = true) {
+async function seed(id, metadata = {}, extra = {}) {
   const agent = id.includes('/') ? id.split('/')[0] : 'main'
   rows.push({ id, agent, aliases: [], busy: false, queueLength: 0, meta: { lastMessageTime: 100, messageCount: 0 }, ...metadata })
   const path = join(sessions, id + '.json'); await mkdir(join(path, '..'), { recursive: true })
   await writeFile(path, JSON.stringify({ sessionStateVersion: 1, id, agent, model: 'a', busy: false, stopping: false, history: [], queue: [],
     stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null }, meta: { lastMessageTime: 100, messageCount: 0 }, historyVersion: 0,
     lastAppliedMailboxId: 0, nextMessageSeq: 1, nextBlockId: 1, persistentMemorySnapshot: 'Existing selected snapshot', promptCacheKey: '00000000-0000-0000-0000-000000000001', ...extra }))
-  if (!reserve) legacy.add(id)
 }
 await seed('root', { aliases: ['root-alias'] })
 for (let index = 0; index < 1000; index++) await seed('cold-' + String(index).padStart(4, '0'), { parentSessionId: 'root', archived: index === 500, pinned: index === 700 })
 // Malformed placement exercises admission failure; valid offline Node IDs remain readable.
 await seed('foreign-child', { parentSessionId: 'root', currentNode: 'invalid node' }, { currentNode: 'invalid node' })
-for (const id of ['source', 'registry-target', 'isolated-target', 'command-target', 'live', 'background', 'reciprocal-a', 'reciprocal-b', 'exec-live', 'exec-finished', 'exec-bad', 'wait-sibling', 'late-save']) await seed(id, id === 'source' ? { aliases: ['source-alias'], pinned: true } : {})
+for (const id of ['source', 'registry-target', 'isolated-target', 'command-target', 'live', 'background', 'exec-live', 'exec-finished', 'exec-bad', 'wait-sibling']) await seed(id, id === 'source' ? { aliases: ['source-alias'], pinned: true } : {})
 await seed('locked/main'); await seed('parent-model'); await seed('child-source', { parentSessionId: 'parent-model' })
-for (const root of ['00-ui-single', '00-ui-tree', 'tree', 'partial', 'bad-tree', 'queued-tree', 'partial-restart']) {
+for (const root of ['00-ui-single', '00-ui-tree', 'tree', 'bad-tree']) {
   await seed(root, { pinned: root.startsWith('00-') }); await seed(root + '-child', { parentSessionId: root, pinned: true }); await seed(root + '-grand', { parentSessionId: root + '-child', archived: true })
 }
 await seed('bad-tree-foreign', { parentSessionId: 'bad-tree', currentNode: 'invalid node' }, { currentNode: 'invalid node' })
-await seed('legacy-source', {}, {}, false); await seed('legacy-target', {}, {}, false)
 await seed('self-cycle', { parentSessionId: 'self-cycle' }); await seed('worker-target'); await seed('worker-orphan')
 const catalogModule = await import(pathToFileURL(resolve('lib/session/catalogStore.js')).href)
 const catalog = new catalogModule.SessionCatalogStore(join(state, 'catalog.sqlite')); catalog.initializeEmpty(); catalog.replaceAll(rows); catalog.close()
-const seedFile = join(fixture.root, 'seed.json'); await writeFile(seedFile, JSON.stringify(rows.filter(row => !legacy.has(row.id))))
+const seedFile = join(fixture.root, 'seed.json'); await writeFile(seedFile, JSON.stringify(rows))
 execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-catalog-seed-ts.mjs'), fixture.data, seedFile], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
-const database = join(state, 'catalog.sqlite'), channelsFile = join(state, 'channels.json')
-function sql(text, args = []) { const db = new DatabaseSync(database, { readOnly: true }); try { return db.prepare(text).all(...args) } finally { db.close() } }
+const channelsFile = join(state, 'channels.json')
 function audit() { const db = new DatabaseSync(join(state, 'archive-store.sqlite'), { readOnly: true }); try { return ['archive_messages', 'archive_blocks', 'archive_branches'].map(table => db.prepare('SELECT * FROM ' + table + ' ORDER BY 1,2').all()) } finally { db.close() } }
 const saved = id => readFile(join(sessions, id + '.json'), 'utf8').then(JSON.parse)
 async function dto(id) { const reply = await fixture.api('POST', '/api/session-list/by-id', { ids: [id] }); assert.equal(reply.status, 200); return reply.body.results[0].session }
@@ -89,8 +82,8 @@ async function remove(id, recursive = false, status = 200) { const reply = await
 async function message(id, text, status = 202) { const reply = await fixture.api('POST', route(id) + '/message', { text }); assert.equal(reply.status, status, JSON.stringify(reply)); return reply.body }
 async function done(id, key) { await until(async () => { const current = await dto(id); return current && !current.busy && (await saved(id)).history.some(row => row.parts?.some(part => part.text === 'DONE-' + key)) }, 'completed ' + key) }
 async function send(id, key, extra = '') { await message(id, 'CASE:' + key + ' ' + extra); await done(id, key) }
-const fileFor = id => join(sessions, id + '.json'), marker = (id, suffix) => join(faults, 'id_' + Buffer.from(id).toString('base64url') + '.' + suffix)
-const observations = async () => (await readFile(join(faults, 'record-admissions.events'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean)
+const fileFor = id => join(sessions, id + '.json')
+
 const coldBytes = new Map(); for (const row of rows.filter(row => row.parentSessionId === 'root')) coldBytes.set(row.id, await readFile(fileFor(row.id), 'utf8'))
 let retainedBefore = audit(); const independent = join(state, 'toolscript-runs', 'retained-run.json')
 await mkdir(join(state, 'toolscript-runs'), { recursive: true }); await writeFile(independent, '{"status":"active","ownerSessionId":"root","relatedManagedSessions":["root"]}')
@@ -100,12 +93,12 @@ try {
   socket.on('message', raw => frames.push(JSON.parse(String(raw)))); await once(socket, 'open')
   socket.send(JSON.stringify({ type: 'set-subscriptions', revision: 1, sessionIds: [], sessionListIds: ['root', 'source', 'tree'], sessionListActive: true }))
   await until(() => frames.some(frame => frame.type === 'subscriptions-applied'), 'metadata-only initial subscriptions')
-  assert.deepEqual(await observations(), []); assert.equal(records.length, 0)
+  assert.equal(records.length, 0)
   assert(!audit()[2].some(row => row.session_id === 'main')); retainedBefore = audit()
   const cursor = (await fixture.api('GET', '/api/session-list/sidebar?limit=3&childLimit=2')).body.nextCursor
   const single = await remove('root-alias'); assert.deepEqual(single.deletedSessionIds, ['root']); assert.equal(single.detachedChildSessionIds.length, 1001)
   for (const [id, bytes] of coldBytes) { assert.equal(await readFile(fileFor(id), 'utf8'), bytes); assert.equal((await dto(id)).parentSessionId, null) }
-  assert.deepEqual((await observations()).filter(line => line.startsWith('read ')), ['read root']); assert.equal((await fixture.api('GET', route('foreign-child') + '/history')).status, 500)
+  assert.equal((await fixture.api('GET', route('foreign-child') + '/history')).status, 500)
   assert.deepEqual(audit(), retainedBefore); assert.equal(await readFile(independent, 'utf8'), '{"status":"active","ownerSessionId":"root","relatedManagedSessions":["root"]}')
   await until(() => frames.some(frame => frame.type === 'session-list-delta' && frame.deletedIds?.includes('root')), 'real live deletion list event')
   assert.equal((await fixture.api('GET', '/api/session-list/sidebar?limit=3&childLimit=2&cursor=' + encodeURIComponent(cursor))).body.reset, true)
@@ -148,28 +141,6 @@ try {
   await message('background', 'CASE:held-background'); await until(() => held.has('held-background'), 'foreground held alongside planner')
   await remove('background', false, 409); await until(async () => !(await dto('background')).busy, 'foreground drained without planner cancellation'); assert.equal(held.get('plan').closed, false)
   await remove('background'); await until(() => held.get('plan').closed, 'only final retirement cancels planner'); assert.equal(await dto('background'), null)
-  // Reciprocal real model calls: only the cross-delete admission conflicts; paired saves remain legal.
-  const reciprocalHold = marker('reciprocal-b', 'delete-prepare-hold'); await writeFile(reciprocalHold, 'hold')
-  await Promise.all([message('reciprocal-a', 'CASE:reciprocal-a'), message('reciprocal-b', 'CASE:reciprocal-b')])
-  await until(() => held.has('reciprocal-a') && held.has('reciprocal-b'), 'both actual model turns admitted')
-  held.get('reciprocal-a').complete([call('delete-b', 'call_tool', { toolId: 'builtin:delete_session', args: { sessionId: 'reciprocal-b' } })])
-  await until(() => access(reciprocalHold + '.reached').then(() => true, () => false), 'first model holds deletion preparation')
-  held.get('reciprocal-b').complete([call('delete-a', 'call_tool', { toolId: 'builtin:delete_session', args: { sessionId: 'reciprocal-a' } })])
-  await until(() => held.has('paired-b'), 'reciprocal conflict has actual paired result before next provider')
-  assert((await saved('reciprocal-b')).history.some(row => row.role === 'tool' && JSON.stringify(row).includes('SESSION_DELETE_CONFLICT')))
-  await unlink(reciprocalHold); await done('reciprocal-a', 'reciprocal-a'); await until(async () => !(await dto('reciprocal-b')).busy, 'stopped reciprocal target finishes paired turn')
-  assert(held.get('paired-b').closed); await remove('reciprocal-a'); await remove('reciprocal-b')
-  // Real SQLite writer failure after unlink is a truthful partial, never a fake rollback.
-  const partialRetained = audit(), hold = marker('partial', 'delete-catalog-hold'); await writeFile(hold, 'hold')
-  const partialRequest = fixture.api('DELETE', route('partial'), {})
-  await until(() => access(hold + '.reached').then(() => true, () => false), 'JSON unlinked before catalog removal')
-  assert.equal(await access(fileFor('partial')).then(() => true, () => false), false)
-  writer = new DatabaseSync(database); writer.exec('BEGIN IMMEDIATE'); await unlink(hold)
-  const partial = await partialRequest; assert.equal(partial.status, 500); assert.equal(partial.body.failedStage, 'catalog'); assert.deepEqual(partial.body.deletedSessionIds, [])
-  assert.deepEqual(partial.body.authorityRemovedSessionIds, ['partial']); assert.deepEqual(partial.body.detachedChildSessionIds, ['partial-child']); assert.deepEqual(partial.body.stillClaimedSessionIds, ['partial'])
-  assert(await dto('partial')); assert.equal((await fixture.api('GET', route('partial') + '/history')).status, 500)
-  writer.exec('ROLLBACK'); writer.close(); writer = null
-  const retry = await remove('partial'); assert.equal(retry.continuedSameHost, true); assert.equal(await dto('partial'), null); assert.deepEqual(audit(), partialRetained)
   // Real primary empty authority takes precedence over selected older migration evidence.
   await writeFile(channelsFile, JSON.stringify({ channels: {} })); await writeFile(join(state, 'sessions.json.pre-catalog-sqlite-v1.bak'), JSON.stringify({ channelAttachments: { 'discord:old': 'worker-target' } }))
   const workerFile = join(state, 'session-runtime.sqlite')
@@ -182,70 +153,6 @@ try {
   execFileSync('node', [resolve('dotnet/Foxwarm.Tests/Fixtures/session-delete-worker-fixture-ts.mjs'), workerFile, 'orphan', 'worker-orphan'], { env: { ...process.env, FOXWARM_TS_ROOT: resolve('.') }, stdio: 'pipe' })
   const orphan = await remove('worker-orphan'); assert.deepEqual(orphan.workerRowsRemovedSessionIds, [])
   db = new DatabaseSync(workerFile, { readOnly: true }); assert.equal(db.prepare("SELECT COUNT(*) n FROM session_worker_mailbox WHERE session_id='worker-orphan'").get().n, 1); assert(!db.prepare("SELECT * FROM session_worker_ownership WHERE session_id='worker-orphan'").get()); db.close()
-  // An exact cold read already accepted settles; all new mutation boundaries reject the claim.
-  const coldHold = marker('queued-tree', 'admission-hold'), retirementHold = marker('queued-tree', 'delete-retire-hold')
-  await writeFile(coldHold, 'hold'); const reading = fixture.api('GET', route('queued-tree') + '/history'); await until(() => access(coldHold + '.reached').then(() => true, () => false), 'real exact admission held')
-  await writeFile(retirementHold, 'hold'); const deleting = fixture.api('DELETE', route('queued-tree'), {})
-  await sleep(100); assert(await dto('queued-tree')); await unlink(coldHold); assert.equal((await reading).status, 200)
-  await until(() => access(retirementHold + '.reached').then(() => true, () => false), 'same owner admission joins deletion')
-  assert.equal((await fixture.api('POST', route('queued-tree') + '/message', { text: 'late mutation' })).status, 500)
-  assert.notEqual((await fixture.api('POST', route('queued-tree') + '/continue')).status, 200)
-  assert.notEqual((await fixture.api('POST', route('queued-tree') + '/fork', { suffix: 'late' })).status, 200)
-  assert.notEqual((await fixture.api('POST', route('source') + '/move', { parentSessionId: 'queued-tree', updateOrder: false })).status, 200)
-  await unlink(retirementHold); assert.equal((await deleting).status, 200); assert.equal(await dto('queued-tree'), null)
-  // Ordinary creation succeeds; a concurrent delete may reject the later sidebar
-  // ordering step after owner publication without permitting resurrection.
-  const ordinaryCreate = await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'ordinary-create-control' })
-  assert.equal(ordinaryCreate.status, 200); assert.equal(ordinaryCreate.body.success, true); await remove('ordinary-create-control')
-  const createHold = marker('published-delete', 'creation-publication-hold'); await writeFile(createHold, 'hold')
-  let creationFinished = false, deleteFinished = false
-  const creating = fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'published-delete' }).then(reply => { creationFinished = true; return reply })
-  await until(() => access(createHold + '.reached').then(() => true, () => false), 'actual creation authority and catalog before publication')
-  const createdDeletion = fixture.api('DELETE', route('published-delete'), {}).then(reply => { deleteFinished = true; return reply })
-  const lateFork = fixture.api('POST', route('published-delete') + '/fork', { suffix: 'late' })
-  await send('source', 'creation-unrelated'); assert.equal(creationFinished, false); assert.equal(deleteFinished, false)
-  await unlink(createHold); const createDuringDelete = await creating
-  assert.equal(createDuringDelete.status, 400); assert.match(createDuringDelete.body.error, /published-delete.*being deleted/)
-  assert.equal((await createdDeletion).status, 200); assert.notEqual((await lateFork).status, 200)
-  assert.equal(await dto('published-delete'), null); assert.equal(await access(fileFor('published-delete')).then(() => true, () => false), false)
-  assert.equal((await fixture.api('GET', route('published-delete') + '/history')).status, 404)
-  assert.equal(await dto('published-delete_late'), null); assert.equal(await access(fileFor('published-delete_late')).then(() => true, () => false), false)
-  // An accepted canonical publication drains ahead of target unlink; the late old save cannot resurrect it.
-  const userHold = marker('late-save', 'canonical-hold-before-rename'); await writeFile(userHold, 'hold')
-  await message('late-save', 'CASE:held-save'); await until(() => access(userHold + '.reached').then(() => true, () => false), 'actual canonical user rename held')
-  let savedDeletionFinished = false
-  const savedDeletion = fixture.api('DELETE', route('late-save'), {}).then(reply => { savedDeletionFinished = true; return reply })
-  await sleep(80); assert.equal(savedDeletionFinished, false); await access(fileFor('late-save')); await unlink(userHold)
-  const stoppedSave = await savedDeletion; assert.equal(stoppedSave.status, 409); await until(async () => !(await dto('late-save')).busy, 'accepted user write finishes before Stop')
-  assert((await saved('late-save')).history.some(row => row.role === 'user' && JSON.stringify(row).includes('CASE:held-save')))
-  await remove('late-save'); await sleep(100); assert.equal(await access(fileFor('late-save')).then(() => true, () => false), false); assert.equal(await dto('late-save'), null)
-
-  // A read-old command source has no Archive rows; replacing its lifetime cannot continue its predecessor operation.
-  const legacyTarget = fileFor('legacy-target'), legacyOriginal = legacyTarget + '.held', legacyHold = marker('legacy-target', 'delete-json-unlink-hold')
-  await writeFile(legacyHold, 'hold'); const legacyCommand = fixture.api('POST', route('legacy-source') + '/message', { text: '/session delete legacy-target' })
-  await until(() => access(legacyHold + '.reached').then(() => true, () => false), 'read-old source command at actual unlink boundary')
-  await rename(legacyTarget, legacyOriginal); await mkdir(legacyTarget); await unlink(legacyHold); const legacyPartial = await legacyCommand; assert.equal(legacyPartial.status, 500)
-  const priorSourceCache = (await saved('legacy-source')).promptCacheKey
-  await remove('legacy-source'); const recreated = await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'legacy-source' })
-  // The new owner commits before sidebar ordering encounters the retained target claim.
-  assert.equal(recreated.status, 400); assert.match(recreated.body.error, /legacy-target.*being deleted/)
-  assert.equal((await fixture.api('GET', route('legacy-source') + '/history')).status, 200)
-  assert.notEqual((await saved('legacy-source')).promptCacheKey, priorSourceCache)
-  await rm(legacyTarget, { recursive: true }); await rename(legacyOriginal, legacyTarget); const legacyBytes = await readFile(legacyTarget, 'utf8')
-  const refused = await message('legacy-source', '/session delete legacy-target', 200); assert.equal(refused.result.code, 'SESSION_DELETE_RETRY_MISMATCH'); assert.equal(await readFile(legacyTarget, 'utf8'), legacyBytes)
-  // No in-memory continuation survives restart; dormant metadata remains available, exact missing authority fails.
-  const restartBytes = await readFile(fileFor('partial-restart'), 'utf8'), restartHold = marker('partial-restart', 'delete-catalog-hold')
-  await writeFile(restartHold, 'hold'); const restartingDelete = fixture.api('DELETE', route('partial-restart'), {})
-  await until(() => access(restartHold + '.reached').then(() => true, () => false), 'actual durable partial before restart')
-  writer = new DatabaseSync(database); writer.exec('BEGIN IMMEDIATE'); await unlink(restartHold)
-  const restartPartial = await restartingDelete; assert.equal(restartPartial.status, 500); assert.equal(restartPartial.body.failedStage, 'catalog')
-  writer.exec('ROLLBACK'); writer.close(); writer = null; socket.close(); await fixture.stop()
-  const beforeDormantRestart = records.length; await fixture.start(); assert.equal(records.length, beforeDormantRestart); assert(await dto('partial-restart'))
-  assert.equal((await fixture.api('GET', route('partial-restart') + '/history')).status, 500)
-  const noResume = await fixture.api('DELETE', route('partial-restart'), {}); assert.equal(noResume.status, 500); assert.equal(noResume.body.continuedSameHost, undefined)
-  assert.equal(await access(fileFor('partial-restart')).then(() => true, () => false), false)
-  await writeFile(fileFor('partial-restart'), restartBytes); const repaired = await remove('partial-restart'); assert.equal(repaired.continuedSameHost, undefined)
-
   // Launched shell/output are preserved while only exact tracking/callback ownership retires.
   const execRecords = async () => JSON.parse(await readFile(join(state, 'running-exec.json'), 'utf8')).execs
   async function launch(id) {
@@ -279,7 +186,6 @@ try {
   await writeFile(join(fixture.root, 'owned-hosts.json'), JSON.stringify({ root: fixture.root, hostPids: fixture.hostPids, shellPids: shells })).catch(() => {})
   await writeFile(join(fixture.root, 'provider-records.json'), JSON.stringify(records.map(({ body, key, n, planning, closed }) => ({ body, key, n, planning, closed })))).catch(() => {})
   console.log('Owned deletion hosts: ' + JSON.stringify({ root: fixture.root, hostPids: fixture.hostPids, shellPids: shells }))
-  if (writer) { writer.exec('ROLLBACK'); writer.close() }
   for (const key of ['exec-live', 'exec-finished', 'exec-bad']) await writeFile(join(fixture.work, key + '-release'), '').catch(() => {})
   for (const record of held.values()) record.complete(final('cleanup'))
   peer.closeAllConnections?.(); await new Promise(done => peer.close(done)); socket?.terminate(); await fixture.cleanup()

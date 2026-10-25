@@ -22,6 +22,7 @@ internal sealed class InboundMcpFixture : IAsyncDisposable
     internal string Work => Path.Combine(Temp.Path, "work");
     internal ModelConfiguration Configuration = null!;
     internal SessionManager Manager = null!;
+    internal Action<string, AtomicJsonWriteStage>? WriteStage;
     internal SessionOwner Target = null!;
     internal TerminalRegistry Terminals = null!;
     internal HttpServer Server = null!;
@@ -92,7 +93,7 @@ internal sealed class InboundMcpFixture : IAsyncDisposable
                 "",
                 713
             );
-            f.Manager = new(f.Data, f.Work, options, f.Configuration.Models);
+            f.Manager = new(f.Data, f.Work, options, f.Configuration.Models, authorityStageHook: (id, stage) => f.WriteStage?.Invoke(id, stage));
             await f.Manager.LoadMainHostAsync();
             f.Target = await f.Manager.CreateNamedAsync("main", "target", null, null);
             f.Target.Registry.TriggerOverride = _ => Task.CompletedTask;

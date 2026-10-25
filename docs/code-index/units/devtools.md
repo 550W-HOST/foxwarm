@@ -16,6 +16,8 @@ Commands use the same source contracts but should not be treated as production c
 
 `ResponsesStreamCommand` observes typed cumulative progress with absent nullable part fields omitted; zero indices and empty text remain present. This projection applies only to progress-part DTOs, not provider-owned completion/unknown JSON or the comparator's field-presence checks. Part creation and event ordering remain observable, including a part whose text has not arrived.
 
+`SessionRestartCommand` has fixed identity-copy-before, identity-copy-after and identity-finishing checkpoints for actual child termination, plus identity-recover for normal startup over the retained journal. The checkpoint is selected before construction by the developer command; it writes its result and stays pending until its test parent terminates the child. These scenarios use the existing manager callback, not a Main runtime fault channel. Recovery checks run in fresh processes without installed callbacks.
+
 ## Tests
 
 Covered indirectly by model/journal/memory/session persistence tests. The command project is declared in `dotnet/Foxwarm.sln` and references `Foxwarm`.

@@ -354,6 +354,45 @@ public sealed class ProcessRestartTests
         }
     }
 
+    [Theory]
+    [InlineData("identity-copy-before", "rolling-back", "s")]
+    [InlineData("identity-copy-after", "rolling-back", "s")]
+    [InlineData("identity-finishing", "finishing", "copied/main")]
+    public async Task Actual_identity_copy_or_alias_crash_recovers_only_recorded_direction_and_preserves_sources(string mode, string phase, string expectedId)
+    {
+        using var temp = new TempDirectory();
+        var root = Path.Combine(temp.Path, "data");
+        var ready = Path.Combine(temp.Path, "ready.json");
+        using var child = StartRestartHarness(mode, root, ready, null, null);
+        try
+        {
+            var checkpoint = await WaitForResultAsync(ready, TimeSpan.FromSeconds(15));
+            Assert.Equal(phase, checkpoint["pending"]!["phase"]!.GetValue<string>());
+            child.Kill();
+            await child.WaitForExitAsync();
+            foreach (var run in new[] { "first", "second" })
+            {
+                var result = Path.Combine(temp.Path, run + ".json");
+                await RunHarnessAsync("identity-recover", root, result, temp.Path, null, null);
+                var recovered = JsonNode.Parse(await File.ReadAllTextAsync(result))!;
+                Assert.Equal(expectedId, recovered["id"]!.GetValue<string>());
+                Assert.Equal(1, recovered["historyCount"]!.GetValue<int>());
+                Assert.Equal(1, recovered["archiveCount"]!.GetValue<int>());
+                Assert.Equal("Copied memory survives crash: 雪", recovered["memory"]!.GetValue<string>());
+                Assert.False(recovered["pending"]!.GetValue<bool>());
+                Assert.Equal(expectedId == "copied/main", recovered["copiedAgent"]!.GetValue<bool>());
+            }
+        }
+        finally
+        {
+            if (!child.HasExited)
+            {
+                child.Kill();
+                await child.WaitForExitAsync();
+            }
+        }
+    }
+
     private static string CompletedSse(JsonArray output) =>
         $"data: {{\"type\":\"response.completed\",\"response\":{{\"output\":{output.ToJsonString()}}}}}\n\n";
 

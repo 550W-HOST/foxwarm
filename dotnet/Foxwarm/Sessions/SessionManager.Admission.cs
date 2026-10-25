@@ -151,9 +151,7 @@ internal sealed partial class SessionManager
             token.ThrowIfCancellationRequested();
             if (BeforeAdmissionRead is { } before)
                 await before(id, token);
-            await AdmissionBarrierAsync(id, token);
             AdmissionReadObserved?.Invoke(id);
-            ObserveAdmission("read", id);
             var row =
                 Catalog.Get(id)
                 ?? throw new InvalidDataException(
@@ -273,58 +271,6 @@ internal sealed partial class SessionManager
             Foxwarm.Nodes.NodeProviderRegistry.ValidateId(node);
     }
 
-    private readonly object admissionObservationGate = new();
-
-    private void ObserveAdmission(string stage, string id)
-    {
-        var marker = Path.Combine(root, "state", "experiment-faults", "record-admissions");
-        if (!File.Exists(marker))
-            return;
-        try
-        {
-            lock (admissionObservationGate)
-                File.AppendAllText(marker + ".events", stage + " " + id + "\n");
-        }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
-    }
-
-    private async Task AdmissionBarrierAsync(string id, CancellationToken token)
-    {
-        var marker = Path.Combine(
-            root,
-            "state",
-            "experiment-faults",
-            SessionIdentity.ExecDirectorySegment(id) + ".admission-hold"
-        );
-        if (!File.Exists(marker))
-            return;
-        await File.WriteAllTextAsync(marker + ".reached", "reached", token);
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (File.Exists(marker) && DateTime.UtcNow < deadline)
-            await Task.Delay(2, token);
-        if (File.Exists(marker))
-            throw new TimeoutException("Experimental admission barrier expired.");
-    }
-
-    private async Task CreationPublicationBarrierAsync(string id)
-    {
-        var marker = Path.Combine(
-            root,
-            "state",
-            "experiment-faults",
-            SessionIdentity.ExecDirectorySegment(id) + ".creation-publication-hold"
-        );
-        if (!File.Exists(marker))
-            return;
-        await File.WriteAllTextAsync(marker + ".reached", "reached");
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (File.Exists(marker) && DateTime.UtcNow < deadline)
-            await Task.Delay(2);
-        if (File.Exists(marker))
-            throw new TimeoutException("Experimental creation publication barrier expired.");
-    }
-
     private void PublishOwner(SessionOwner owner, IdentitySlot slot, bool acceptedTimer = false)
     {
         lock (lifecycle)
@@ -347,7 +293,6 @@ internal sealed partial class SessionManager
         }
         finally
         {
-            ObserveAdmission(slot.Creating ? "created" : "admitted", owner.Id);
             slot.Owner.TrySetResult(owner);
         }
     }

@@ -4,22 +4,16 @@ namespace Foxwarm.Sessions;
 
 public sealed partial class SessionSaveLane
 {
-    private static readonly AsyncLocal<bool> TimerQueueScope = new();
-    internal static bool IsTimerQueueWrite => TimerQueueScope.Value;
 
     internal Task<bool> AdmitTimerAsync(QueueItem item) =>
-        AdmitWithReceiptAsync(item, null, SaveKind.BestEffort, timer: true);
+        AdmitWithReceiptAsync(item, null, SaveKind.BestEffort);
 
     private readonly HashSet<string> uncertainExternalReceipts = new(StringComparer.Ordinal);
-    private static readonly AsyncLocal<bool> WaitCommitScope = new();
-    internal static bool IsWaitCommit => WaitCommitScope.Value;
 
     private async Task CommitWaitSnapshotAsync(SessionSnapshot staged, Action? beforeCommit = null)
     {
         staged = await PrepareGoalOnlyAsync(staged).ConfigureAwait(false);
         beforeCommit?.Invoke();
-        var previous = WaitCommitScope.Value;
-        WaitCommitScope.Value = true;
         try
         {
             await store.CommitAsync(staged, SaveKind.Strict);
@@ -28,10 +22,6 @@ public sealed partial class SessionSaveLane
         {
             PublishGoalOnly(staged);
             throw;
-        }
-        finally
-        {
-            WaitCommitScope.Value = previous;
         }
         PublishGoalOnly(staged);
     }
@@ -44,7 +34,6 @@ public sealed partial class SessionSaveLane
         QueueItem item,
         string? receipt,
         SaveKind kind = SaveKind.Strict,
-        bool timer = false,
         Action? beforeAdmission = null
     )
     {
@@ -132,8 +121,6 @@ public sealed partial class SessionSaveLane
             if (kind == SaveKind.BestEffort)
             {
                 entry.WithState(Publish); // Ordinary input stays hot even when its save attempt fails.
-                var priorTimerScope = TimerQueueScope.Value;
-                TimerQueueScope.Value = timer;
                 SessionSnapshot? persisted = null;
                 try
                 {
@@ -151,10 +138,6 @@ public sealed partial class SessionSaveLane
                 catch (Exception error)
                 {
                     entry.RecordBestEffortFailure(error);
-                }
-                finally
-                {
-                    TimerQueueScope.Value = priorTimerScope;
                 }
             }
             else

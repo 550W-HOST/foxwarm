@@ -323,6 +323,67 @@ public sealed class ForkClearLifecycleTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task Manual_parent_notice_failure_keeps_the_already_delivered_child_and_only_publishes_committed_notice(bool committed)
+    {
+        await using var fixture = new LifecycleFixture();
+        var parent = await fixture.Manager.CreateNamedAsync("main", "parent", null, null);
+        fixture.Manager.TopologyChanged += () =>
+        {
+            foreach (var owner in fixture.Manager.Owners())
+                owner.Registry.TriggerOverride = _ => Task.CompletedTask;
+        };
+        // Only parent writes fail; child creation and initial User admission use the actual command path.
+        fixture.FailNextWrite(parent.Id, committed);
+        await Assert.ThrowsAnyAsync<Exception>(() =>
+            new SessionRuntime(fixture.Manager).ForkCommandAsync(parent.Id, "copy", "Child task is retained."));
+        var child = await fixture.Manager.RequiredAsync("parent_copy");
+        Assert.Contains("Child task is retained.", Assert.Single(child.Entry.Snapshot().Queue).Parts!.Single().ToJsonString());
+        Assert.Equal(committed, parent.History().Any(row => row.ToJsonString().Contains("manual-fork-created", StringComparison.Ordinal)));
+        var persisted = JsonNode.Parse(await File.ReadAllTextAsync(parent.AuthorityStore.AuthorityPath))!;
+        Assert.Equal(committed, persisted["history"]!.AsArray().Any(row => row!.ToJsonString().Contains("manual-fork-created", StringComparison.Ordinal)));
+        Assert.NotNull(fixture.Manager.Catalog.Get(child.Id));
+    }
+
+    [Fact]
+    public async Task Accepted_clear_holds_later_input_until_commit_and_rejects_compaction_without_dropping_that_input()
+    {
+        await using var fixture = new LifecycleFixture();
+        var owner = await fixture.Manager.CreateNamedAsync("main", "held-clear", null, null);
+        await AppendAsync(owner, Text("Old committed history."));
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.WriteStage = (_, stage) =>
+        {
+            if (stage != AtomicJsonWriteStage.BeforeRename)
+                return;
+            fixture.WriteStage = null;
+            reached.TrySetResult();
+            release.Task.GetAwaiter().GetResult();
+        };
+        var clearing = fixture.Manager.ClearAsync(owner);
+        try
+        {
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var input = owner.Registry.Ingress.EnqueueAsync(owner.Id, QueueItem.UserText("Accepted after clear."));
+            Assert.False(input.IsCompleted);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => owner.Compactor.StartManualAsync());
+            release.TrySetResult();
+            await clearing;
+            await input;
+            Assert.Empty(owner.History());
+            Assert.Contains("Accepted after clear.", Assert.Single(owner.Entry.Snapshot().Queue).Parts!.Single().ToJsonString());
+            Assert.Single(owner.Archive.ReadMessages());
+        }
+        finally
+        {
+            release.TrySetResult();
+            await clearing;
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task Fork_precommit_compensates_owned_sources_postrename_retains_real_partial_child(
         bool committed
     )
@@ -331,7 +392,7 @@ public sealed class ForkClearLifecycleTests
         var parent = await fixture.Manager.CreateNamedAsync("main", "main", null, null);
         await AppendAsync(parent, Text("prefix"));
         var id = parent.Id + "_fault";
-        fixture.Fault(id, "create", committed);
+        fixture.FailNextWrite(id, committed);
         if (committed)
         {
             var error = await Assert.ThrowsAsync<CommittedSessionCreationException>(() =>
@@ -369,7 +430,7 @@ public sealed class ForkClearLifecycleTests
         var parent = await fixture.Manager.CreateNamedAsync("main", "main", null, null);
         await AppendAsync(parent, Text("retained audit"));
         var before = parent.Entry.Snapshot();
-        fixture.Fault(parent.Id, "clear", committed);
+        fixture.FailNextWrite(parent.Id, committed);
         if (committed)
             await Assert.ThrowsAsync<AuthorityCommittedException>(() =>
                 fixture.Manager.ClearAsync(parent)
@@ -406,16 +467,14 @@ public sealed class ForkClearLifecycleTests
         var parent = await fixture.Manager.CreateNamedAsync("main", "main", null, null);
         await AppendAsync(parent, Text("parent audit"));
         var id = parent.Id + "_residue";
-        fixture.Fault(id, "create", false);
-        await File.WriteAllTextAsync(
-            Path.Combine(
-                fixture.Data,
-                "state",
-                "experiment-faults",
-                SessionIdentity.ExecDirectorySegment(id) + ".create-cleanup-fail"
-            ),
-            "once"
-        );
+        fixture.FailNextWrite(id, false);
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={fixture.Database}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = $"CREATE TRIGGER owned_branch_cleanup BEFORE DELETE ON archive_branches WHEN OLD.session_id='{id}' BEGIN SELECT RAISE(ABORT,'Owned branch cleanup failure'); END";
+            command.ExecuteNonQuery();
+        }
         await Assert.ThrowsAsync<AggregateException>(() =>
             fixture.Manager.ForkAsync(parent, "residue")
         );
@@ -504,6 +563,7 @@ public sealed class ForkClearLifecycleTests
         internal readonly string Data,
             Database;
         internal readonly SessionManager Manager;
+        internal Action<string, AtomicJsonWriteStage>? WriteStage;
 
         internal LifecycleFixture(Action<string>? prepareArchive = null)
         {
@@ -525,24 +585,22 @@ public sealed class ForkClearLifecycleTests
                 work,
                 options,
                 HostModels.ForTest(options),
-                Path.Combine(temp.Path, "skills")
+                Path.Combine(temp.Path, "skills"),
+                authorityStageHook: (id, stage) => WriteStage?.Invoke(id, stage)
             );
         }
 
-        internal void Fault(string id, string action, bool committed)
+        internal void FailNextWrite(string id, bool committed)
         {
-            var folder = Path.Combine(Data, "state", "experiment-faults");
-            Directory.CreateDirectory(folder);
-            File.WriteAllText(
-                Path.Combine(
-                    folder,
-                    SessionIdentity.ExecDirectorySegment(id)
-                        + "."
-                        + action
-                        + (committed ? "-after-rename" : "-before-rename")
-                ),
-                "once"
-            );
+            WriteStage = (current, stage) =>
+            {
+                if (current != id || stage != (committed
+                    ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
+                    : AtomicJsonWriteStage.BeforeRename))
+                    return;
+                WriteStage = null;
+                throw new IOException("Owned authority write failure.");
+            };
         }
 
         public async ValueTask DisposeAsync()

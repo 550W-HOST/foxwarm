@@ -60,13 +60,7 @@ public sealed class RetryInputSafePointTests
         internal SessionManager Manager = null!;
         internal SessionOwner Owner = null!;
 
-        internal string Marker(string suffix) =>
-            Path.Combine(
-                Data,
-                "state",
-                "experiment-faults",
-                SessionIdentity.ExecDirectorySegment(Owner.Id) + suffix
-            );
+        internal Func<string, int, CancellationToken, Task>? CanonicalStage;
 
         internal static async Task<Fixture> Create(Uri uri)
         {
@@ -79,7 +73,8 @@ public sealed class RetryInputSafePointTests
                     fixture.Data,
                     Path.Combine(fixture.Temp.Path, "work"),
                     options,
-                    HostModels.ForTest(options)
+                    HostModels.ForTest(options),
+                    canonicalCommitBarrier: (id, commit, token) => fixture.CanonicalStage?.Invoke(id, commit, token) ?? Task.CompletedTask
                 );
                 await fixture.Manager.LoadAsync();
                 fixture.Owner = await fixture.Manager.CreateNamedAsync("main", "retry", null, null);
@@ -141,7 +136,8 @@ public sealed class RetryInputSafePointTests
             }
         );
         await using var f = await Fixture.Create(peer.BaseUri);
-        var marker = f.Marker(".canonical-hold-before-rename");
+        var appendReached = Signal();
+        var appendRelease = Signal();
         try
         {
             await f.Enqueue("seed");
@@ -169,13 +165,16 @@ public sealed class RetryInputSafePointTests
                     .History.Materialize()
                     .Any(row => row["__meta"]?["noticeType"]?.GetValue<string>() == "llm-retry")
             );
-            Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
-            await File.WriteAllTextAsync(marker, "hold");
-            await WaitFor(() => File.Exists(marker + ".reached"));
+            f.CanonicalStage = async (_, _, _) =>
+            {
+                appendReached.TrySetResult();
+                await appendRelease.Task;
+            };
+            await appendReached.Task.WaitAsync(TimeSpan.FromSeconds(10));
             Assert.True(Stopwatch.GetElapsedTime(failedAt).TotalMilliseconds >= 1900);
             var late = f.Enqueue("late-input");
             Assert.False(late.IsCompleted);
-            File.Delete(marker);
+            appendRelease.TrySetResult();
             await late;
             var second = await peer.RequestAt(1).WaitAsync(TimeSpan.FromSeconds(10));
             Assert.Contains("queued-one", second.Body);
@@ -268,8 +267,7 @@ public sealed class RetryInputSafePointTests
         {
             errorRelease.TrySetResult();
             responseRelease.TrySetResult();
-            if (File.Exists(marker))
-                File.Delete(marker);
+            appendRelease.TrySetResult();
         }
     }
 
@@ -383,7 +381,8 @@ public sealed class RetryInputSafePointTests
             }
         );
         await using var f = await Fixture.Create(peer.BaseUri);
-        var marker = f.Marker(".canonical-hold-before-rename");
+        var appendReached = Signal();
+        var appendRelease = Signal();
         try
         {
             await f.Enqueue("seed");
@@ -397,13 +396,16 @@ public sealed class RetryInputSafePointTests
                     .History.Materialize()
                     .Any(row => row["__meta"]?["noticeType"]?.GetValue<string>() == "llm-retry")
             );
-            Directory.CreateDirectory(Path.GetDirectoryName(marker)!);
-            await File.WriteAllTextAsync(marker, "hold");
-            await WaitFor(() => File.Exists(marker + ".reached"));
+            f.CanonicalStage = async (_, _, _) =>
+            {
+                appendReached.TrySetResult();
+                await appendRelease.Task;
+            };
+            await appendReached.Task.WaitAsync(TimeSpan.FromSeconds(10));
             var stopping = runQueued
                 ? (Task)f.Owner.Registry.Control.DequeueAsync(f.Owner.Id)
                 : f.Owner.Registry.Control.StopAsync(f.Owner.Id);
-            File.Delete(marker);
+            appendRelease.TrySetResult();
             await stopping;
             await running.WaitAsync(TimeSpan.FromSeconds(15));
             var state = f.Owner.Entry.Snapshot();
@@ -421,8 +423,7 @@ public sealed class RetryInputSafePointTests
         finally
         {
             errorRelease.TrySetResult();
-            if (File.Exists(marker))
-                File.Delete(marker);
+            appendRelease.TrySetResult();
         }
     }
 

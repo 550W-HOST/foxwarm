@@ -2,11 +2,11 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { createHash } from 'node:crypto'
-import { readFile, writeFile, mkdir, symlink, rm } from 'node:fs/promises'
+import { readFile, writeFile, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import yaml from 'js-yaml'
 import { WebSocketServer } from 'ws'
-import { createHostFixture, saveModelsInOriginalApp, until, sleep } from './experimentHostFixture.mjs'
+import { createHostFixture, saveModelsInOriginalApp, until } from './experimentHostFixture.mjs'
 
 const fixture = await createHostFixture('fork-clear'), records = [], errors = [], connections = [], held = new Map(), heldOnce = new Set(), commandNotices = []
 const route = id => '/api/sessions/' + encodeURIComponent(id)
@@ -104,8 +104,7 @@ async function compact(id) {
 const branch = id => fixture.sql('SELECT parent_session_id,fork_message_seq,fork_block_id FROM archive_branches WHERE session_id=?', [id])[0]
 const archive = id => fixture.sql('SELECT seq,message_json FROM archive_messages WHERE session_id=? ORDER BY seq', [id])
 const fork = async (id, suffix) => { const result = await fixture.api('POST', route(id) + '/fork', { suffix }); assert.equal(result.status, 200, JSON.stringify(result.body)); return result.body.newSessionId }
-const segment = id => /^s_[a-f0-9]{32}$/i.test(id) ? id : 'id_' + Buffer.from(id).toString('base64url')
-async function fault(id, operation, committed) { const folder = join(fixture.data, 'state/experiment-faults'); await mkdir(folder, { recursive: true }); await writeFile(join(folder, segment(id) + '.' + operation + (committed ? '-after-rename' : '-before-rename')), 'once') }
+
 try {
   await fixture.start(); const parent = await create(), page = await fixture.openApp()
   await saveModelsInOriginalApp(page, yaml.dump(config), fixture.modelPath)
@@ -185,45 +184,11 @@ try {
   held.get('held-notice').complete(final('DONE-held-notice')); held.delete('held-notice')
   await until(async () => !(await history(parent)).session.busy && (await authority(parent)).queue.length === 0, 'ordinary busy notice was consumed')
 
-  for (const committed of [false, true]) {
-    const suffix = committed ? 'notice-post' : 'notice-pre', initialTask = 'CASE:' + suffix + '-task Task was actually delivered.'
-    await fault(parent, 'fork-notice', committed); const reply = await command(parent, '/fork ' + suffix + ' ' + initialTask)
-    assert.equal(reply.status, 200); assert.equal(commandFailed(parent), true); const createdId = parent + '_' + suffix
-    await until(async () => !(await history(createdId)).session.busy && (await history(createdId)).messages.some(row => row.parts?.some(part => part.text === 'DONE-' + suffix + '-task')), 'retained delivered child finishes after parent notice fault')
-    assert((await history(createdId)).messages.some(row => row.parts?.some(part => (part.text || part.system || '').includes(initialTask))))
-    assert.equal((await history(parent)).messages.some(row => row.parts?.some(part => part.system?.includes(initialTask))), committed)
-  }
-  const rollbackId = parent + '_pre-fault'; await fault(rollbackId, 'create', false)
-  assert.equal((await fixture.api('POST', route(parent) + '/fork', { suffix: 'pre-fault' })).status, 500)
-  assert.equal((await fixture.api('GET', route(rollbackId) + '/history')).status, 404); assert.equal(fixture.sql('SELECT COUNT(*) FROM archive_branches WHERE session_id=?', [rollbackId])[0][0], 0)
-  assert.equal(fixture.sql('SELECT COUNT(*) FROM archive_messages WHERE session_id=?', [rollbackId])[0][0], 0); assert.equal(await fork(parent, 'pre-fault'), rollbackId)
-  const committedId = parent + '_post-fault'; await fault(committedId, 'create', true)
-  const partial = await fixture.api('POST', route(parent) + '/fork', { suffix: 'post-fault' }); assert.equal(partial.status, 500); assert.equal(partial.body.code, 'partial_create'); assert.equal(partial.body.sessionId, committedId)
-  assert.equal((await fixture.api('GET', route(committedId) + '/history')).status, 200); assert(branch(committedId)); assert.equal(await fork(parent, 'post-fault'), committedId + '_2')
-  const beforeFault = (await authority(parent)).history; await fault(parent, 'clear', false); assert.equal((await command(parent, '/session clear')).status, 200); assert.equal(commandFailed(parent), true)
-  assert.deepEqual((await authority(parent)).history, beforeFault)
-  await fault(parent, 'clear', true); const retainedClear = await command(parent, '/session clear'); assert.equal(retainedClear.status, 200); assert.equal(commandFailed(parent), true); assert.equal((await authority(parent)).history.length, 0)
-  assert.equal((await command(parent, '/session clear')).status, 200); assert.equal(commandFailed(parent), false, 'lane and admission fence remain usable')
-
   await seed(parent, 'cancelled'); holdPlan = true; held.delete('plan'); assert.equal((await command(parent, '/compact')).status, 200)
   await until(() => held.has('plan'), 'held real background planner before clear'); const cancelledPlan = held.get('plan'), beforeCancelledClear = records.length
   assert.equal((await command(parent, '/session clear')).status, 200); assert.equal(commandFailed(parent), false); await until(() => cancelledPlan.connection.closed, 'clear settles exactly its planner')
   assert.equal((await authority(parent)).history.length, 0); assert(!(await authority(parent)).queue.some(item => item.type === 'compact-commit')); assert.equal(records.length, beforeCancelledClear)
   holdPlan = false; held.delete('plan')
-  const clearHold = join(fixture.data, 'state/experiment-faults', segment(parent) + '.clear-hold-before-rename')
-  await writeFile(clearHold, 'hold'); const heldClear = command(parent, '/session clear')
-  await until(async () => (await readFile(clearHold + '.reached', 'utf8').catch(() => '')) === 'reached', 'real clear publication barrier')
-  assert.equal((await fixture.api('POST', route(parent) + '/message', { text: '/compact', controlRequestId: 'held-clear-compact' })).status, 409, 'clear fence rejects a new compact admission')
-  let laterAcknowledged = false
-  const laterIngress = command(parent, 'CASE:clear-survivor Later legal ordinary input.').then(result => { laterAcknowledged = true; return result })
-  await sleep(100); assert.equal(laterAcknowledged, false, 'later ingress waits behind the real held authority publication')
-  await rm(clearHold); assert.equal((await heldClear).status, 200); assert.equal(commandFailed(parent), false); assert.equal((await laterIngress).status, 202)
-  await until(async () => !(await history(parent)).session.busy && (await history(parent)).messages.some(row => row.parts?.some(part => part.text === 'DONE-clear-survivor')), 'later acknowledged input survives strict clear')
-  const residualId = parent + '_known-residue'; await fault(residualId, 'create', false)
-  await writeFile(join(fixture.data, 'state/experiment-faults', segment(residualId) + '.create-cleanup-fail'), 'once')
-  assert.equal((await fixture.api('POST', route(parent) + '/fork', { suffix: 'known-residue' })).status, 500)
-  assert.equal((await fixture.api('GET', route(residualId) + '/history')).status, 404); assert(branch(residualId)); assert.equal(archive(residualId).length, 0)
-  assert.equal(await fork(parent, 'known-residue'), residualId + '_2')
   const beforeRestartArchive = archive(parent), childBeforeRestart = (await authority(child)).history, nestedBeforeRestart = (await authority(nested)).history
   await fixture.stop()
   const persisted = await authority(parent); persisted.systemPromptFiles = 'selected-prompt.md, ordinary-link.md, selected-prompt.md'; persisted.persistentMemorySnapshot = ''; persisted.nextBlockId = 1

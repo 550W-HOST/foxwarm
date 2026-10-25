@@ -19,16 +19,15 @@ public sealed class InboundMcpLifetimeTests
     {
         await using var f = await InboundMcpFixture.CreateAsync();
         await using var client = await f.ClientAsync();
-        var faults = Path.Combine(f.Data, "state", "experiment-faults");
-        Directory.CreateDirectory(faults);
-        File.WriteAllText(
-            Path.Combine(
-                faults,
-                SessionIdentity.ExecDirectorySegment(f.Target.Id)
-                    + (renamed ? ".wait-after-rename" : ".wait-before-rename")
-            ),
-            "fault"
-        );
+        f.WriteStage = (id, stage) =>
+        {
+            if (id != f.Target.Id || stage != (renamed
+                ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
+                : AtomicJsonWriteStage.BeforeRename))
+                return;
+            f.WriteStage = null;
+            throw new IOException("Owned strict admission write failure.");
+        };
         var result = await InboundMcpFixture.CallAsync(
             client,
             "foxwarm_session",

@@ -333,6 +333,54 @@ public sealed class WebUiUploadedFilesTests
         Assert.False(Directory.Exists(Path.Combine(remote.Work, ".temp")));
     }
 
+    [Theory]
+    [InlineData("before-copy", 0)]
+    [InlineData("after-copy", 1)]
+    public async Task Credential_revocation_during_preparation_keeps_only_already_copied_files_and_never_admits_input(string stage, int savedCount)
+    {
+        await using var f = await Fixture.Create();
+        var configuration = new AccessConfiguration(JsonNode.Parse("""
+            {"access":{"identities":{"alice":{"token":"synthetic-upload-alice","surfaces":{"webui":{"sessions":["source"]}}}}}}
+            """)!.AsObject());
+        using var access = new WebUiAccess(new SessionRuntime(f.Manager), configuration);
+        access.Start();
+        var context = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        context.Request.Headers.Authorization = "Bearer synthetic-upload-alice";
+        var scoped = access.Authenticate(context)!;
+        var staged = await f.Stage("revoked.txt", Encoding.UTF8.GetBytes("Actual copied bytes."));
+        scoped.RegisterUpload(f.Owner.Id, staged["path"]!.ToString());
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        f.Files.BeforeStage = (_, current) =>
+        {
+            if (current != stage)
+                return Task.CompletedTask;
+            reached.TrySetResult();
+            return release.Task;
+        };
+        using var admission = f.Manager.BeginFileIngress(f.Owner);
+        var preparing = f.Files.PrepareAsync(
+            new JsonObject { ["text"] = "Must never be admitted.", ["uploadedFiles"] = new JsonArray(staged) },
+            f.Owner, CancellationToken.None, scoped);
+        try
+        {
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await configuration.ApplyAsync(AccessConfiguration.Normalize(null, false));
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+        var error = await Assert.ThrowsAsync<UploadPreparationException>(() => preparing);
+        Assert.IsType<WebUiAccessException>(error.InnerException);
+        Assert.Equal(savedCount, error.SavedFiles.Count);
+        foreach (var file in error.SavedFiles)
+            Assert.Equal("Actual copied bytes.", await File.ReadAllTextAsync(file["path"]!.ToString()));
+        Assert.False(File.Exists(staged["path"]!.ToString()));
+        Assert.Empty(f.Owner.Entry.Snapshot().Queue);
+        Assert.Empty(f.Owner.History());
+    }
+
     [Fact]
     public async Task Actual_Source_inbound_callee_bytes_storage_naming_and_shared_XML_descriptor_differential()
     {

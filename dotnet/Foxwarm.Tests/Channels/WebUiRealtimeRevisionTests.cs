@@ -749,15 +749,10 @@ public sealed class WebUiRealtimeRevisionTests
             await Until(() => manager.Find("target") is not null, stopped.Token);
             if (outcome == "retired")
             {
-                var faults = Path.Combine(data, "state", "experiment-faults");
-                Directory.CreateDirectory(faults);
-                await File.WriteAllTextAsync(
-                    Path.Combine(
-                        faults,
-                        SessionIdentity.ExecDirectorySegment("target") + ".delete-json-unlink"
-                    ),
-                    "owned unlink fault"
-                );
+                manager.BeforeDeleteStage = (stage, _) =>
+                    stage == "json-unlink"
+                        ? Task.FromException(new IOException("Owned unlink failure."))
+                        : Task.CompletedTask;
                 await Assert.ThrowsAsync<SessionDeletionException>(() =>
                     manager.DeleteAsync("target")
                 );

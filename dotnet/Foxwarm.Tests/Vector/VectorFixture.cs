@@ -157,7 +157,8 @@ internal sealed class VectorFixture : IAsyncDisposable
     internal async Task<SessionManager> ManagerAsync(
         bool child = false,
         bool lexical = false,
-        Uri? modelPeer = null
+        Uri? modelPeer = null,
+        Action<string, AtomicJsonWriteStage>? authorityStageHook = null
     )
     {
         var config = new JsonObject
@@ -207,7 +208,8 @@ internal sealed class VectorFixture : IAsyncDisposable
             Work,
             options,
             configuration.Models,
-            Path.Combine(Temp.Path, "skills")
+            Path.Combine(Temp.Path, "skills"),
+            authorityStageHook: authorityStageHook
         );
         await manager.LoadAsync();
         return manager;

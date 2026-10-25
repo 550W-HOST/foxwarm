@@ -32,25 +32,26 @@ public sealed class SessionNodeCommitTests
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
         var work = Path.Combine(temp.Path, "work");
+        Action<string, AtomicJsonWriteStage>? writeStage = null;
         await using var manager = new SessionManager(
             data,
             work,
             Options,
-            HostModels.ForTest(Options)
+            HostModels.ForTest(Options),
+            authorityStageHook: (id, stage) => writeStage?.Invoke(id, stage)
         );
         await manager.LoadAsync();
         var owner = await manager.CreateNamedAsync("main", "placement", null, null);
         await owner.UpdateCwdAsync("old-directory");
         var before = owner.Entry.Snapshot();
-        var fault = Path.Combine(
-            data,
-            "state",
-            "experiment-faults",
-            SessionIdentity.ExecDirectorySegment(owner.Id)
-                + (renamed ? ".settings-after-rename" : ".settings-before-rename")
-        );
-        Directory.CreateDirectory(Path.GetDirectoryName(fault)!);
-        await File.WriteAllTextAsync(fault, "fault");
+        writeStage = (_, stage) =>
+        {
+            if (stage == (renamed ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync : AtomicJsonWriteStage.BeforeRename))
+            {
+                writeStage = null;
+                throw new IOException("Owned placement commit failure.");
+            }
+        };
         await Assert.ThrowsAnyAsync<Exception>(() =>
             owner.Entry.SaveLane.CommitNodeAsync("approved-node", clearCwd)
         );

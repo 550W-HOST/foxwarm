@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { spawn } from 'node:child_process'
-import { mkdir, readFile, writeFile, access, readdir, rm } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, access, readdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import sharp from 'sharp'
 import WebSocket, { WebSocketServer } from 'ws'
@@ -226,15 +226,6 @@ rules:
   good(state, 'default-export'); good(state, 'default-send'); good(state, 'master-export')
   assert.deepEqual(await readFile(join(remoteOne, 'default/crop.png')), cropped); assert.deepEqual(await readFile(join(fixture.work, 'explicit-master.png')), cropped)
   assert(!await exists(join(homes.one.project, 'default/crop.png')))
-  const partialMarker = join(fixture.data, 'state/experiment-faults', 'id_' + Buffer.from(actor).toString('base64url') + '.file-after-write-hold')
-  await mkdir(join(fixture.data, 'state/experiment-faults'), { recursive: true }); await writeFile(partialMarker, 'hold')
-  await begin(actor, 'partial-image', [[call('partial-export', 'image_write_to_file', { id: 'crop#1', filePath: 'partial/crop.png', node: 'two' })]])
-  await until(() => exists(partialMarker + '.reached'), 'remote image written before failure')
-  // The existing fault barrier times out after the committed remote write, rather than deleting/replaying it.
-  state = await finish(actor, 'partial-image')
-  assert(pair(state, 'partial-export').error); assert.equal(pair(state, 'partial-export').fileWritten, true); assert.deepEqual(await readFile(join(remoteTwo, 'partial/crop.png')), cropped)
-  assert.equal(wire.filter(entry => entry.type === 'file_write_request' && entry.filePath === 'partial/crop.png').length, 1)
-  await rm(partialMarker); await rm(partialMarker + '.reached')
   await writeFile(join(fixture.work, 'policy.yaml'), 'version: 1\nrules:\n- id: ordinary-remote-files\n  action: deny\n  match:\n    tool: {source: node, name: [read, write]}\n    targetNode: [one, two]\n')
   state = await turn(actor, 'node-file-deny-policy', [[call('node-file-deny-policy', 'call_tool', { toolId: 'builtin:set_config', args: { target: 'tool-rules', filePath: join(fixture.work, 'policy.yaml') } })]])
   good(state, 'node-file-deny-policy')

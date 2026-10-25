@@ -36,15 +36,13 @@ public sealed class TaskChildDeliveryTests
                     await manager.CreateChildAsync(parent, "vanished", null, null, null, null)
                 ).Child;
                 committedChild = child;
-                var faults = Path.Combine(temp.Path, "data", "state", "experiment-faults");
-                Directory.CreateDirectory(faults);
-                await File.WriteAllTextAsync(
-                    Path.Combine(
-                        faults,
-                        SessionIdentity.ExecDirectorySegment(child.Id) + ".catalog-projection"
-                    ),
-                    "fail"
-                );
+                manager.Catalog.BeforeAuthorityProjection = id =>
+                {
+                    if (id != child.Id)
+                        return;
+                    manager.Catalog.BeforeAuthorityProjection = null;
+                    throw new IOException("Owned child delivery projection failure.");
+                };
                 return child;
             },
             "delivery failure message"
@@ -63,15 +61,7 @@ public sealed class TaskChildDeliveryTests
         Assert.Equal(committedChild.Id, task["ownerSessionId"]!.GetValue<string>());
         Assert.Equal(committedChild.Id, task["attachedSessionId"]!.GetValue<string>());
         Assert.Equal("failed", task["assignmentNotificationStatus"]!.GetValue<string>());
-        File.Delete(
-            Path.Combine(
-                temp.Path,
-                "data",
-                "state",
-                "experiment-faults",
-                SessionIdentity.ExecDirectorySegment(committedChild.Id) + ".catalog-projection"
-            )
-        );
+        manager.Catalog.BeforeAuthorityProjection = null;
         await manager.ShutdownAsync();
     }
 

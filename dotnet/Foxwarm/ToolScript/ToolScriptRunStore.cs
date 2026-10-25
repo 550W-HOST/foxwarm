@@ -126,17 +126,7 @@ internal sealed class ToolScriptRunStore(string root)
             {
                 if (StageForTests is { } hook)
                     hook(id, stage).GetAwaiter().GetResult();
-                var marker = Path.Combine(
-                    root,
-                    "state",
-                    "experiment-faults",
-                    "toolscript-" + id + "." + stage
-                );
-                if (File.Exists(marker))
-                {
-                    File.Delete(marker);
-                    throw new IOException("Injected experimental ToolScript record write failure.");
-                }
+
             }
         );
         await Task.Run(

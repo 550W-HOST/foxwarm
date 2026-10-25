@@ -20,6 +20,76 @@ internal static class SessionRestartCommand
         var startedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         Directory.CreateDirectory(Path.GetDirectoryName(resultPath)!);
 
+        if (mode is "identity-copy-before" or "identity-copy-after" or "identity-finishing" or "identity-recover")
+        {
+            var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
+            var work = root + "-workspace";
+            await using var manager = new SessionManager(root, work, options, HostModels.ForTest(options));
+            await manager.LoadMainHostAsync();
+            if (mode == "identity-recover")
+            {
+                var restored = await manager.RequiredAsync(sessionId);
+                await WriteResultAsync(new JsonObject
+                {
+                    ["id"] = restored.Id,
+                    ["historyCount"] = restored.Entry.Snapshot().History.Count,
+                    ["archiveCount"] = restored.Archive.ReadMessages().Count,
+                    ["memory"] = await File.ReadAllTextAsync(Path.Combine(manager.MemoryDirectory(restored.Agent), "proof.md")),
+                    ["pending"] = File.Exists(Path.Combine(root, "state", "session-id-move-pending.json")),
+                    ["copiedAgent"] = Directory.Exists(Path.Combine(work, "agents", "copied")),
+                });
+                return;
+            }
+            var owner = await manager.CreateNamedAsync("main", sessionId, null, null);
+            Directory.CreateDirectory(manager.MemoryDirectory(owner.Agent));
+            await File.WriteAllTextAsync(Path.Combine(manager.MemoryDirectory(owner.Agent), "proof.md"), "Copied memory survives crash: 雪");
+            await owner.Entry.SaveLane.CommitCanonicalAppendAsync(state =>
+            {
+                var seq = state.NextMessageSeq;
+                var row = new JsonObject
+                {
+                    ["role"] = "user",
+                    ["parts"] = new JsonArray(new JsonObject { ["text"] = "Committed source before move." }),
+                    ["__meta"] = new JsonObject { ["seq"] = seq, ["timestamp"] = 1000 },
+                };
+                var snapshot = state.Snapshot();
+                var meta = (JsonObject)snapshot.Meta.DeepClone();
+                meta["messageCount"] = 1;
+                return new CanonicalAppendPreparation(
+                    snapshot with { History = snapshot.History.AppendJson([row]), NextMessageSeq = seq + 1, Meta = meta },
+                    [row], live =>
+                    {
+                        live.History.Add(row);
+                        live.NextMessageSeq = seq + 1;
+                        live.Meta["messageCount"] = 1;
+                    });
+            });
+            var crashStage = mode switch
+            {
+                "identity-copy-before" => "before-agent-copy",
+                "identity-copy-after" => "after-agent-copy",
+                _ => "before-alias-commit",
+            };
+            manager.BeforeIdentityStage = async (_, stage) =>
+            {
+                if (stage != crashStage)
+                    return;
+                await WriteResultAsync(new JsonObject
+                {
+                    ["stage"] = stage,
+                    ["pending"] = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(root, "state", "session-id-move-pending.json"))),
+                });
+                await Task.Delay(Timeout.InfiniteTimeSpan);
+            };
+            await manager.MoveIdentityAsync(owner, new JsonObject
+            {
+                ["createAgent"] = true,
+                ["newAgentName"] = "copied",
+                ["createAgentInheritMemory"] = true,
+            });
+            throw new InvalidOperationException("Identity crash checkpoint was not reached.");
+        }
+
         if (mode == "load-check")
         {
             var store = new PersistentSessionAuthorityStore(root, sessionId);

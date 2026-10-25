@@ -12,6 +12,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
 {
     private readonly PendingWriteRefs pendingWrites = new();
     private readonly string root;
+    private readonly Action<string, AtomicJsonWriteStage>? authorityStageHook;
+    private readonly Func<string, int, CancellationToken, Task>? canonicalCommitBarrier;
     private readonly HostPaths? hostPaths;
     internal Foxwarm.Images.ImageBlobStore Images { get; }
     internal Foxwarm.Artifacts.ArtifactStore Artifacts { get; }
@@ -60,10 +62,14 @@ internal sealed partial class SessionManager : IAsyncDisposable
         ResponsesClientOptions options,
         HostModels models,
         string? skillsRoot = null,
-        HostPaths? hostPaths = null
+        HostPaths? hostPaths = null,
+        Action<string, AtomicJsonWriteStage>? authorityStageHook = null,
+        Func<string, int, CancellationToken, Task>? canonicalCommitBarrier = null
     )
     {
         this.hostPaths = hostPaths;
+        this.authorityStageHook = authorityStageHook;
+        this.canonicalCommitBarrier = canonicalCommitBarrier;
         Images = new(root);
         Artifacts = new(Path.Combine(root, "state", "artifacts"), ArtifactPreparation);
         ToolScript = new(root);
@@ -98,20 +104,6 @@ internal sealed partial class SessionManager : IAsyncDisposable
         );
         Catalog.Changed += () => TopologyChanged?.Invoke();
         Catalog.BeforePresentationMutation = BeginCatalogMutation;
-        Catalog.BeforeAuthorityProjection = id =>
-        {
-            var marker = Path.Combine(
-                this.root,
-                "state",
-                "experiment-faults",
-                SessionIdentity.ExecDirectorySegment(id) + ".catalog-projection"
-            );
-            if (File.Exists(marker))
-            {
-                File.Delete(marker);
-                throw new IOException("Injected experimental catalog projection failure.");
-            }
-        };
         var recoveringMove = IdentityJournal.Read();
         agents = new AgentCatalog(
             this.root,

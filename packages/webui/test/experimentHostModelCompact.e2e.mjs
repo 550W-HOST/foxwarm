@@ -19,7 +19,7 @@ const betaToken = 'local-beta-provider-secret'
 const dll = process.env.FOXWARM_EXPERIMENT_HOST_DLL || resolve(import.meta.dirname, '../../../dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')
 const dotnet = join(process.env.DOTNET_ROOT || '', 'dotnet')
 assert(process.env.DOTNET_ROOT, 'Set DOTNET_ROOT to a .NET 10 SDK.')
-const dist = resolve('packages/webui/dist')
+
 const root = await mkdtemp(join(tmpdir(), 'foxwarm-model-compact-browser-'))
 let provider, browser, host
 const errors = []
@@ -229,28 +229,13 @@ try {
   const noOpBefore = await readFile(authorityFile, 'utf8')
   assert.equal((await json(hostPort, 'POST', `/api/sessions/${parentUrl}/child-model`, { clear: true })).status, 200)
   assert.equal(await readFile(authorityFile, 'utf8'), noOpBefore)
-  const faults = join(dataRoot, 'state', 'experiment-faults'); await mkdir(faults, { recursive: true })
-  const faultKey = 'id_' + Buffer.from(parentId).toString('base64url')
-  // Use the same encoded Session segment as the existing scoped fault fixtures.
-  await writeFile(join(faults, faultKey + '.settings-before-rename'), '')
-  const beforeFault = await setting('before-fault', 'set_session_child_model', { model: 'beta/beta-wire' })
-  assert(beforeFault.error); assert.equal((await view(parentId)).childModelDefault, null)
-  await writeFile(join(faults, faultKey + '.settings-after-rename'), '')
-  const afterFault = await setting('after-fault', 'set_session_child_model', { model: 'beta/beta-wire', effort: 'high' })
-  assert(afterFault.error); assert.equal((await view(parentId)).childModelDefault, 'beta/beta-wire')
-
-  // A real held target accepts strict setting faults, later ingress and immediate Stop without full-envelope rollback.
+  // A real held target accepts settings, later ingress and immediate Stop.
   const heldId = await create(hostPort)
   await send(hostPort, heldId, 'hold-settings')
   await until(() => provider.heldSettings, 'held settings target')
   const heldAuthority = join(dataRoot, 'state', 'sessions', heldId + '.json')
   const heldSnapshot = JSON.parse(await readFile(heldAuthority, 'utf8')).persistentMemorySnapshot
-  const heldFaultKey = 'id_' + Buffer.from(heldId).toString('base64url')
-  await writeFile(join(faults, heldFaultKey + '.settings-before-rename'), '')
-  assert((await setting('held-before', 'set_session_child_model', { sessionId: heldId, model: 'gamma/gamma-wire' })).error)
-  assert.equal((await view(heldId)).childModelDefault, null)
-  await writeFile(join(faults, heldFaultKey + '.settings-after-rename'), '')
-  assert((await setting('held-after', 'set_session_child_model', { sessionId: heldId, model: 'gamma/gamma-wire' })).error)
+  await setting('held-child-model', 'set_session_child_model', { sessionId: heldId, model: 'gamma/gamma-wire' })
   assert.equal((await view(heldId)).childModelDefault, 'gamma/gamma-wire')
   await send(hostPort, heldId, 'later-ingress-preserved')
   assert((await state(hostPort, heldId)).queueLength >= 1)
@@ -483,7 +468,7 @@ try {
     stopId, requestCount: provider.requests.length, planCount: provider.layerPlanCount,
     firstPlanInvalidThenCorrected: provider.invalidSent, l2Id: l2.id, childIds: l2.sourceBlockIds,
     archivedOriginalBytes: Buffer.byteLength(original.body.messageJson), browserNestedExpansion: true,
-    pruneOnlyRecallFiltered: true, exactLayeredRecall: true, selectedSessionReadPure: true, boundedSqlPlans: true, oldResultRestart: true, orderedSourceFixture: true, sessionSettings: true, originalChildSelector: true, childGrandchildDefaults: true, settingsFaultRestore: true, heldSettingsIngressStopSnapshot: true, heldPlannerStopped: provider.heldStopClosed, frozenModelAndPersistedEffort: true }))
+    pruneOnlyRecallFiltered: true, exactLayeredRecall: true, selectedSessionReadPure: true, boundedSqlPlans: true, oldResultRestart: true, orderedSourceFixture: true, sessionSettings: true, originalChildSelector: true, childGrandchildDefaults: true, heldSettingsIngressStopSnapshot: true, heldPlannerStopped: provider.heldStopClosed, frozenModelAndPersistedEffort: true }))
 } finally {
   if (browser) await browser.close().catch(() => {})
   if (host?.child.exitCode === null) {

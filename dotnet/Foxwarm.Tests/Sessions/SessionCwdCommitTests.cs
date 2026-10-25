@@ -9,20 +9,14 @@ public sealed class SessionCwdCommitTests
     private static ResponsesClientOptions Options =>
         new(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
 
-    private static SessionManager Manager(string root) =>
+    private static SessionManager Manager(string root, Action<string, AtomicJsonWriteStage> stage) =>
         new(
             Path.Combine(root, "data"),
             Path.Combine(root, "work"),
             Options,
-            HostModels.ForTest(Options)
+            HostModels.ForTest(Options),
+            authorityStageHook: stage
         );
-
-    private static async Task WaitFor(Func<bool> ready)
-    {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (!ready())
-            await Task.Delay(2, timeout.Token);
-    }
 
     [Theory]
     [InlineData(false)]
@@ -32,18 +26,19 @@ public sealed class SessionCwdCommitTests
     )
     {
         using var temp = new TempDirectory();
-        await using var manager = Manager(temp.Path);
+        Action<string, AtomicJsonWriteStage>? writeStage = null;
+        await using var manager = Manager(temp.Path, (id, stage) => writeStage?.Invoke(id, stage));
         await manager.LoadAsync();
         var owner = await manager.CreateNamedAsync("main", "cwd", null, null);
         var before = owner.Entry.Snapshot();
-        var directory = Path.Combine(temp.Path, "data", "state", "experiment-faults");
-        Directory.CreateDirectory(directory);
-        var marker = Path.Combine(
-            directory,
-            SessionIdentity.ExecDirectorySegment("cwd")
-                + (renamed ? ".settings-after-rename" : ".settings-before-rename")
-        );
-        await File.WriteAllTextAsync(marker, "fault");
+        writeStage = (_, stage) =>
+        {
+            if (stage == (renamed ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync : AtomicJsonWriteStage.BeforeRename))
+            {
+                writeStage = null;
+                throw new IOException("Owned CWD commit failure.");
+            }
+        };
         var desired = Path.Combine(temp.Path, "does-not-exist");
         await Assert.ThrowsAnyAsync<Exception>(() => owner.UpdateCwdAsync(desired));
         var persisted = JsonNode.Parse(
@@ -79,26 +74,30 @@ public sealed class SessionCwdCommitTests
     public async Task Accepted_cwd_commit_moves_with_same_owner_and_later_settings_and_cwd_keep_each_other()
     {
         using var temp = new TempDirectory();
-        await using var manager = Manager(temp.Path);
+        Action<string, AtomicJsonWriteStage>? writeStage = null;
+        await using var manager = Manager(temp.Path, (id, stage) => writeStage?.Invoke(id, stage));
         await manager.LoadAsync();
         var owner = await manager.CreateNamedAsync("main", "old", null, null);
-        var directory = Path.Combine(temp.Path, "data", "state", "experiment-faults");
-        Directory.CreateDirectory(directory);
-        var marker = Path.Combine(
-            directory,
-            SessionIdentity.ExecDirectorySegment("old") + ".settings-hold-before-rename"
-        );
-        await File.WriteAllTextAsync(marker, "hold");
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        writeStage = (_, stage) =>
+        {
+            if (stage != AtomicJsonWriteStage.BeforeRename)
+                return;
+            writeStage = null;
+            reached.TrySetResult();
+            release.Task.GetAwaiter().GetResult();
+        };
         var first = Task.Run(() => owner.UpdateCwdAsync(Path.Combine(temp.Path, "first")));
         try
         {
-            await WaitFor(() => File.Exists(marker + ".reached"));
+            await reached.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var move = manager.MoveIdentityAsync(
                 owner,
                 new JsonObject { ["newSessionId"] = "new" }
             );
             Assert.False(move.IsCompleted);
-            File.Delete(marker);
+            release.TrySetResult();
             await first;
             await move;
             Assert.Same(owner, await manager.RequiredAsync("old"));
@@ -119,7 +118,7 @@ public sealed class SessionCwdCommitTests
         }
         finally
         {
-            File.Delete(marker);
+            release.TrySetResult();
         }
     }
 }

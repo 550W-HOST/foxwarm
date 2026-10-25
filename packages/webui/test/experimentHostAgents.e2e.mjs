@@ -92,7 +92,7 @@ try {
           [call('legacy-child-pwd', 'exec', { command: 'pwd', timeout: 2 })]
       else if (latest.includes('LITERAL-PERCENT')) output = [text('LITERAL-DONE')]
       else if (latest.includes('UI-CHAT')) output = [text('UI-CHAT-DONE')]
-      else if (latest.includes('LEGACY-POSTRENAME')) output = [text('LEGACY-POSTRENAME-DONE')]
+      else if (latest.includes('LEGACY-CREATION')) output = [text('LEGACY-CREATION-DONE')]
       else if (latest.includes('MODEL-CATALOG')) {
         if (!previousCalls.some(item => item.call_id === 'model-create-agent'))
           output = [call('model-create-agent', 'create_agent', { agentName: 'gamma', createMainSession: false })]
@@ -341,41 +341,12 @@ try {
   assert.equal((await history(betaId)).flatMap(row => row.parts || []).filter(part => part.system?.includes('BETA-NONPARENT')).length, 1)
   assert.equal(requests.filter(item => item.id === secondId && item.latest.includes('ALPHA-SEND-OTHER')).length, 1,
     'finish must not send another provider request')
-  const firstSnapshot = JSON.parse(await readFile(join(dataRoot, 'state', 'sessions', 'alpha', secondId.split('/')[1] + '.json'), 'utf8'))
-    .persistentMemorySnapshot
-  assert.equal((await request('POST', `/api/sessions/${encodeURIComponent(secondId)}/model`, { model: 'local-b/two', effort: null })).status, 200)
-  const marker = 'id_' + Buffer.from(secondId).toString('base64url') + '.snapshot-before-rename'
-  await mkdir(join(dataRoot, 'state', 'experiment-faults'), { recursive: true })
-  await writeFile(join(dataRoot, 'state', 'experiment-faults', marker), 'fail exactly the owner memory snapshot rename')
-  const beforeFault = requests.filter(item => item.id === secondId).length
-  await send(secondId, 'SNAPSHOT-FAIL')
-  await until(async () => await readFile(join(dataRoot, 'state', 'experiment-faults', marker)).then(() => false, () => true) && !(await request('GET', `/api/sessions/${encodeURIComponent(secondId)}/state`)).body.session.busy,
-    'observed strict memory save failure')
-  assert.equal(requests.filter(item => item.id === secondId).length, beforeFault, 'no provider after failed strict snapshot save')
-  assert.equal(JSON.parse(await readFile(join(dataRoot, 'state', 'sessions', 'alpha', secondId.split('/')[1] + '.json'), 'utf8'))
-    .persistentMemorySnapshot, firstSnapshot, 'pre-rename failure cannot publish a matching hot marker')
-  await send(secondId, 'SNAPSHOT-RECOVER'); await finished(secondId, 'SNAPSHOT-RECOVER-DONE')
-  assert(requests.filter(item => item.id === secondId && item.latest.includes('SNAPSHOT-RECOVER')).at(-1)
-    .instructions.includes('<foxwarm-current-model model-id="local-b/two" />'))
-  // Explicit legacy-shaped creation keeps the existing post-rename fault boundary:
-  // and retains its live owner even though the final directory sync failed.
   const archiveRowsFor = id => Number(execFileSync('python3', ['-c',
     'import sqlite3,sys; db=sqlite3.connect(sys.argv[1]); print(db.execute("SELECT COUNT(*) FROM archive_messages WHERE session_id=?", (sys.argv[2],)).fetchone()[0])',
     join(dataRoot, 'state', 'archive-store.sqlite'), id], { encoding: 'utf8' }).trim())
-  await writeFile(join(dataRoot, 'state', 'experiment-faults', 'legacy-create-after-rename'), 'one injected legacy create')
-  const legacyFaultName = 's_11111111111111111111111111111111'
-  const partial = await request('POST', '/api/sessions', { sessionId: legacyFaultName })
-  assert.equal(partial.status, 409, JSON.stringify(partial.body))
-  const committedLegacyId = partial.body.sessionId
-  assert.equal(committedLegacyId, legacyFaultName)
-  assert.equal(partial.body.committed, true)
-  assert.equal((await request('GET', `/api/sessions/${committedLegacyId}/state`)).status, 200)
-  assert.equal(JSON.parse(await readFile(join(dataRoot, 'state', 'sessions', committedLegacyId + '.json'), 'utf8')).history.length, 0)
-  assert.equal(archiveRowsFor(committedLegacyId), 0)
-  await send(committedLegacyId, 'LEGACY-POSTRENAME'); await finished(committedLegacyId, 'LEGACY-POSTRENAME-DONE')
-  const committedHistory = await history(committedLegacyId)
-  const rowsBeforeRestart = archiveRowsFor(committedLegacyId)
-  assert.equal(rowsBeforeRestart, committedHistory.length)
+  const committedLegacyId = 's_11111111111111111111111111111111'
+  assert.equal((await request('POST', '/api/sessions', { sessionId: committedLegacyId })).status, 200)
+  await send(committedLegacyId, 'LEGACY-CREATION'); await finished(committedLegacyId, 'LEGACY-CREATION-DONE')
   // Main path uses the actual original inline Composer, not the test helper's message fetch.
   await page.evaluate(id => window.foxwarmTest.switchToSession(id), committedLegacyId)
   await page.waitForFunction(id => decodeURIComponent(location.hash).includes('chat:' + id), {}, committedLegacyId)

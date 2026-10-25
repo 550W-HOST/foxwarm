@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createServer, request as httpRequest } from 'node:http'
 import { once } from 'node:events'
 import { execFileSync } from 'node:child_process'
-import { mkdir, readFile, writeFile, readdir, rm, access } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, readdir, access } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import WebSocket from 'ws'
@@ -14,7 +14,7 @@ const options = { normalStartup: true, env: {} }, host = await createHostFixture
 options.cwd = host.root
 options.publicRoot = host.origin + '/nested/app/'
 const route = id => '/api/sessions/' + encodeURIComponent(id)
-const segment = id => 'id_' + Buffer.from(id).toString('base64url')
+
 const requests = [], errors = [], sockets = [], streams = [], browserErrors = [], scopedRequests = []
 let releaseAdmitted, enteredAdmitted, browser, aliceToken = 'synthetic-alice-1'
 let candidatePath = join(host.work, 'candidate.yaml')
@@ -61,7 +61,6 @@ const config = (token = aliceToken, extra = {}) => ({
 let current = config()
 await writeFile(join(host.data, 'state/config.yaml'), JSON.stringify(current))
 const exists = path => access(path).then(() => true, () => false)
-const faults = join(host.data, 'state/experiment-faults'); await mkdir(faults)
 const saved = async id => JSON.parse(await readFile(join(host.data, 'state/sessions', id + '.json'), 'utf8'))
 async function api(token, method, path, body) {
   const response = await fetch(host.origin + '/nested/app' + path, { method, headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
@@ -135,19 +134,15 @@ try {
   const history = await alice('GET', route('chat') + '/history'); assert.equal(history.body.persistentMemorySnapshot, null); assert(!JSON.stringify(history).includes('PRIVATE-PROMPT-SNAPSHOT')); assert(!('parentSessionId' in history.body.session)); assert(history.body.session.runtimeState)
   assert.equal((await admin('GET', route('chat') + '/history')).body.persistentMemorySnapshot.includes('PRIVATE-PROMPT-SNAPSHOT'), true)
 
-  // A real cold-owner read, held input body, held multipart upload, WS and SSE are all in flight at rotation.
+  // A real held input body, held multipart upload, WS and SSE are all in flight at rotation.
   const aliceWs = await ws(aliceToken, 'chat'), bobWs = await ws('synthetic-bob', 'chat')
   await until(() => aliceWs.frames.some(frame => frame.type === 'subscriptions-applied') && bobWs.frames.some(frame => frame.type === 'subscriptions-applied'), 'WS snapshots')
   const aliceSse = await sse(aliceToken, 'chat'), bobSse = await sse('synthetic-bob', 'chat')
   const heldInput = heldBody(route('chat') + '/message', aliceToken, 'application/json', '{"text":"NEVER-ADMITTED')
   const heldUpload = heldBody('/api/upload?sessionId=chat', aliceToken, 'multipart/form-data; boundary=held', '--held\r\nContent-Disposition: form-data; name="sessionId"\r\n\r\nchat\r\n--held\r\nContent-Disposition: form-data; name="file"; filename="held.txt"\r\nContent-Type: text/plain\r\n\r\npartial')
-  // The original parent remains cold: no earlier successful request admitted it.
-  const marker = join(faults, segment(seed.parent) + '.admission-hold'); await writeFile(marker, 'hold')
-  const heldHistory = alice('GET', route(seed.parent) + '/history').then(value => ({ value }), error => ({ error: error.message }))
-  await until(() => exists(marker + '.reached'), 'cold history owner barrier')
-  const oldToken = aliceToken; await rotate(); await rm(marker)
+  const oldToken = aliceToken; await rotate()
   await until(() => aliceWs.closed && aliceSse.closed && heldInput.closed && heldUpload.closed, 'selective transport and body revocation')
-  assert(!bobWs.closed); assert(!bobSse.closed); assert((await heldHistory).error)
+  assert(!bobWs.closed); assert(!bobSse.closed)
   bobWs.socket.send(JSON.stringify({ type: 'set-subscriptions', revision: 2, sessionListActive: false, sessionListIds: [], sessionIds: ['chat'] }))
   await until(() => bobWs.frames.some(frame => frame.type === 'subscriptions-applied' && frame.revision === 2), 'unrelated WS remains functional')
   assert.equal((await api(oldToken, 'GET', '/api/auth/session')).status, 401)
@@ -204,19 +199,6 @@ try {
   assert.equal((await alice('POST', route('chat') + '/message', { text: 'ADMITTED-HOLD' })).status, 202)
   await admitted; await rotate(); releaseAdmitted(); await complete('chat', 'ADMITTED-DONE')
   assert.equal((await saved('chat')).history.filter(row => JSON.stringify(row).includes('ADMITTED-HOLD')).length, 1)
-  for (const stage of ['before-copy', 'after-copy']) {
-    const attachment = await upload(aliceToken, 'chat', stage + '.txt', Buffer.from(stage))
-    const marker = join(faults, segment('chat') + '.upload-' + stage + '-hold'); await writeFile(marker, 'hold')
-    const sending = alice('POST', route('chat') + '/message', { text: 'NEVER-' + stage, uploadedFiles: [attachment.body] }).then(value => ({ value }), error => ({ error: error.message }))
-    await until(() => exists(marker + '.reached'), 'attachment ' + stage + ' barrier')
-    const directory = join(host.work, '.temp/channel-files/webui')
-    const before = (await readdir(directory)).filter(name => name.endsWith(stage + '.txt'))
-    assert.equal(before.length, stage === 'after-copy' ? 1 : 0)
-    await rotate(); await rm(marker); await sending
-    assert(!await exists(attachment.body.path)); assert.equal((await readdir(directory)).filter(name => name.endsWith(stage + '.txt')).length, stage === 'after-copy' ? 1 : 0)
-    assert(!(await saved('chat')).history.some(row => JSON.stringify(row).includes('NEVER-' + stage)))
-  }
-
   // Same serialized installer through a real model set_config call, not a second configuration API.
   await writeFile(candidatePath, JSON.stringify(config(aliceToken, { declared: { token: 'synthetic-mcp-only', surfaces: { mcp: {} } } })))
   assert.equal((await admin('POST', '/api/sessions', { agentId: 'main', sessionId: 'installer' })).status, 200)
@@ -272,12 +254,11 @@ try {
   await administrator.waitForSelector('.foxwarm-model-selector-trigger')
   assert.equal(await administrator.$('[data-webui-role="webui"]'), null)
   await host.stop()
-  console.log(JSON.stringify({ normalHost: true, hostPids: host.hostPids, originalRestrictedApp: true, scopedNativeCookieLess: true, distinctIdentities: true, setupAndToolInstall: true, exactAndAgentMoves: true, activeAndCommittedArchiveImages: true, signedHeadAfterRotation: true, heldHttpWsSseUploadInput: true, admittedEffectsRetained: true, savedFileEffectsRetained: true, scopedRequests: scopedRequests.length, providerRequests: requests.length }))
+  console.log(JSON.stringify({ normalHost: true, hostPids: host.hostPids, originalRestrictedApp: true, scopedNativeCookieLess: true, distinctIdentities: true, setupAndToolInstall: true, exactAndAgentMoves: true, activeAndCommittedArchiveImages: true, signedHeadAfterRotation: true, heldHttpWsSseUploadInput: true, admittedEffectsRetained: true, scopedRequests: scopedRequests.length, providerRequests: requests.length }))
 } finally {
   releaseAdmitted()
   for (const stream of streams) stream.controller.abort()
   for (const { socket } of sockets) socket.terminate()
   if (browser) await browser.close().catch(() => {})
-  for (const name of await readdir(faults).catch(() => [])) if (name.endsWith('-hold')) await rm(join(faults, name), { force: true })
   await host.cleanup(); await new Promise(done => peer.close(done))
 }

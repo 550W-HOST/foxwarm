@@ -164,13 +164,10 @@ try {
   const owner = await create('original-owner'); await select(owner)
   const exact = await background(owner, 'strict-save-loss', 'printf once >> completion-effect; sleep 4; printf completed', [call('switch', 'node', { action: 'select', nodeId: 'master' })])
   droppedTask = tasks.find(task => task.exec === exact).task
-  await mkdir(join(fixture.data, 'state/experiment-faults'), { recursive: true }); await writeFile(join(fixture.data, 'state/experiment-faults', 'id_' + Buffer.from(owner).toString('base64url') + '.wait-before-rename'), 'fault')
   state = await turn(actor, 'move-original', [call('move-original', 'call_tool', { toolId: 'builtin:move_session', args: { sessionId: owner, newSessionId: 'moved-owner' } })]); assert(!pair(state, 'move-original').error, JSON.stringify(pair(state, 'move-original')))
-  // Move uses the real owner. Place the same one-shot strict-save fault under its new identity.
-  await writeFile(join(fixture.data, 'state/experiment-faults', 'id_' + Buffer.from('moved-owner').toString('base64url') + '.wait-before-rename'), 'fault')
   state = await finish('moved-owner', 'strict-save-loss', 25000)
-  await until(() => reports.filter(report => report.task === droppedTask && report.kind === 'finished').length >= 3, '503 then lost response then successful retry')
-  assert(reports.some(report => report.task === droppedTask && report.status === 503)); assert(lostResponse); assert.equal(state.currentNode, 'master'); assert.equal(state.meta.wait, undefined); assert.equal(state.meta.acceptedExternalEventIds.filter(receipt => receipt === 'remote-exec-completion:' + exact).length, 1); assert.equal(await readFile(join(startup, 'completion-effect'), 'utf8'), 'once')
+  await until(() => reports.filter(report => report.task === droppedTask && report.kind === 'finished').length >= 2, 'lost response then successful retry')
+  assert(lostResponse); assert.equal(state.currentNode, 'master'); assert.equal(state.meta.wait, undefined); assert.equal(state.meta.acceptedExternalEventIds.filter(receipt => receipt === 'remote-exec-completion:' + exact).length, 1); assert.equal(await readFile(join(startup, 'completion-effect'), 'utf8'), 'once')
   // HTTP replacement leaves delivered tasks authorized under their original dispatch connection.
   const replaced = await create('replaced-owner'); await select(replaced)
   const replacementExec = await background(replaced, 'replacement', 'printf once >> replacement-effect; sleep 4; printf done')

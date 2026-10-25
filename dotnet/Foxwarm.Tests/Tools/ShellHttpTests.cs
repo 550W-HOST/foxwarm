@@ -23,6 +23,7 @@ public sealed partial class ShellHttpTests
     {
         internal readonly TempDirectory Temp = new();
         internal SessionManager Manager = null!;
+        internal Action<string, AtomicJsonWriteStage>? WriteStage;
         internal SessionOwner Owner = null!;
         internal WebApplication App = null!;
         internal HttpClient Client = null!;
@@ -38,7 +39,8 @@ public sealed partial class ShellHttpTests
                 Data,
                 Path.Combine(Temp.Path, "work"),
                 Options,
-                HostModels.ForTest(Options)
+                HostModels.ForTest(Options),
+                authorityStageHook: (id, stage) => WriteStage?.Invoke(id, stage)
             );
             await Manager.LoadAsync();
             Owner = await Manager.CreateNamedAsync("main", "shell-owner", null, null);
@@ -217,16 +219,15 @@ public sealed partial class ShellHttpTests
                 ["wakeIfNoActivityAfterSeconds"] = null,
             }
         );
-        var faults = Path.Combine(fixture.Data, "state", "experiment-faults");
-        Directory.CreateDirectory(faults);
-        await File.WriteAllTextAsync(
-            Path.Combine(
-                faults,
-                SessionIdentity.ExecDirectorySegment(fixture.Owner.Id)
-                    + (afterRename ? ".wait-after-rename" : ".wait-before-rename")
-            ),
-            "fault"
-        );
+        fixture.WriteStage = (id, stage) =>
+        {
+            if (id != fixture.Owner.Id || stage != (afterRename
+                ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
+                : AtomicJsonWriteStage.BeforeRename))
+                return;
+            fixture.WriteStage = null;
+            throw new IOException("Owned strict admission write failure.");
+        };
         using var rejected = await fixture.Report(
             task.Task,
             true,

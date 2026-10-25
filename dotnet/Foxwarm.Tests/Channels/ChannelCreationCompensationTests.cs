@@ -129,20 +129,16 @@ public sealed class ChannelCreationCompensationTests
             return;
         await using var f = await ExternalChannelFixture.CreateAsync();
         var state = Path.Combine(f.Data, "state");
-        var faults = Path.Combine(state, "experiment-faults");
-        Directory.CreateDirectory(faults);
         var permissions = File.GetUnixFileMode(state);
         string? candidate = null;
         f.Manager.BeforeCreationPublication = async id =>
         {
             candidate = id;
-            await File.WriteAllTextAsync(
-                Path.Combine(
-                    faults,
-                    SessionIdentity.ExecDirectorySegment(id) + ".create-cleanup-fail"
-                ),
-                "fail"
-            );
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={Path.Combine(state, "archive-store.sqlite")}");
+            await connection.OpenAsync();
+            using var command = connection.CreateCommand();
+            command.CommandText = $"CREATE TRIGGER owned_candidate_cleanup BEFORE DELETE ON archive_branches WHEN OLD.session_id='{id}' BEGIN SELECT RAISE(ABORT,'Owned candidate cleanup failure'); END";
+            await command.ExecuteNonQueryAsync();
             File.SetUnixFileMode(state, UnixFileMode.UserRead | UnixFileMode.UserExecute);
         };
         try
@@ -154,8 +150,7 @@ public sealed class ChannelCreationCompensationTests
             Assert.Contains(
                 failure.InnerExceptions,
                 error =>
-                    error is IOException
-                    && error.Message.Contains("branch cleanup failure", StringComparison.Ordinal)
+                    error is Microsoft.Data.Sqlite.SqliteException
             );
             Assert.Contains(candidate!, failure.Message);
             Assert.Null(f.Manager.ChannelBinding("alpha:failed-cleanup"));

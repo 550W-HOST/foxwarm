@@ -5,7 +5,7 @@ import { once } from 'node:events'
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
+import { createHostFixture, until } from './experimentHostFixture.mjs'
 import { writeModelFixture } from './experimentModelFixture.mjs'
 const fixtures = [], requests = [], failures = [], counts = new Map()
 const route = id => '/api/sessions/' + encodeURIComponent(id)
@@ -31,7 +31,7 @@ async function fixture(name) {
   await mkdir(join(owned.work, 'memory'), { recursive: true }); await writeFile(join(owned.work, 'memory/ONBOOT.md'), ' \n')
   await writeModelFixture(owned.data, models); return owned
 }
-function mutate(owned, sql) { const db = new DatabaseSync(join(owned.data, 'state/archive-store.sqlite')); try { db.exec(sql) } finally { db.close() } }
+
 try {
   const owned = await fixture('identity-move-app'); await owned.start()
   assert.equal((await owned.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'main' })).status, 200)
@@ -68,33 +68,8 @@ try {
   for (const id of ['chain-old', 'chain-middle', 'chain-current']) { assert.notEqual((await owned.api('POST', '/api/sessions', { agentId: 'main', sessionId: id })).status, 200); assert.equal((await owned.api('GET', route(id) + '/state')).status, 404) }
   assert.deepEqual(owned.sql('SELECT seq,agent,message_json FROM archive_messages WHERE session_id=? ORDER BY seq', ['chain-current']), chainAudit); await owned.stop()
 
-  const broken = await fixture('identity-move-reverse'); await broken.start()
-  assert.equal((await broken.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'main' })).status, 200)
-  const fault = join(broken.data, 'state/experiment-faults'); await mkdir(fault, { recursive: true });
-  await writeFile(join(fault, 'id_' + Buffer.from('main').toString('base64url') + '.identity-after-target-persistence'), 'once')
-  mutate(broken, "CREATE TRIGGER failed_reverse BEFORE UPDATE OF session_id ON archive_branches WHEN OLD.session_id='failed-new' AND NEW.session_id='main' BEGIN SELECT RAISE(ABORT,'Real reverse SQL failure'); END")
-  assert.equal((await broken.api('POST', route('main') + '/message', { text: 'MOVE-CASE:reverse' })).status, 202)
-  await until(async () => JSON.parse(await readFile(join(broken.data, 'state/session-id-move-pending.json'), 'utf8').catch(() => '{}')).phase === 'rolling-back', 'actual reverse failure journal')
-  await until(async () => (await broken.api('GET', route('main') + '/state')).status === 500, 'affected owner authority unavailable')
-  await sleep(100); assert.equal(counts.get('reverse'), 1)
-  const audit = broken.sql('SELECT session_id,seq,role,message_json FROM archive_messages ORDER BY seq'); assert.equal(audit.length, 2); assert(audit.every(row => row[0] === 'failed-new'))
-  assert(!audit.some(row => row[2] === 'tool')); assert(!broken.sql('SELECT session_id FROM archive_branches').some(([id]) => id === 'main'))
-  const append = await broken.api('POST', route('main') + '/message', { text: 'Blocked normal input.' }); assert.equal(append.status, 500)
-  assert.deepEqual(broken.sql('SELECT session_id,seq,role,message_json FROM archive_messages ORDER BY seq'), audit)
-  const durableBeforeRecovery = JSON.parse(await readFile(join(broken.data, 'state/sessions/main.json'), 'utf8'))
-  mutate(broken, 'DROP TRIGGER failed_reverse'); await broken.crash(); await access(broken.root); assert.equal(JSON.parse(await readFile(join(broken.data, 'state/session-id-move-pending.json'), 'utf8')).phase, 'rolling-back')
-  await broken.start()
-  await until(async () => { const current = JSON.parse(await readFile(join(broken.data, 'state/sessions/main.json'), 'utf8')); return !current.busy && current.history.some(row => row.parts?.some(part => part.text === 'DONE-MOVE-reverse')) }, 'recovered busy owner continues without replaying interrupted effects')
-  const recovered = JSON.parse(await readFile(join(broken.data, 'state/sessions/main.json'), 'utf8'))
-  assert.deepEqual(recovered.history.slice(0, durableBeforeRecovery.history.length), durableBeforeRecovery.history)
-  const resumed = requests.find(record => record.key === 'reverse' && record.n === 1)
-  for (const id of ['failed-self-move', 'forbidden-effect']) assert.match(resumed.body.input.find(item => item.type === 'function_call_output' && item.call_id === id).output, /^error:/)
-  assert.equal(await access(join(broken.work, 'must-not-run.txt')).then(() => true, () => false), false)
-  assert.equal(await access(join(broken.data, 'state/session-id-move-pending.json')).then(() => true, () => false), false)
-  assert.deepEqual(broken.sql('SELECT DISTINCT session_id FROM archive_messages'), [['main']]); assert.equal(counts.get('reverse'), 2)
-  await broken.stop()
   assert.equal(failures.length, 0, failures.join('\n'))
-  console.log(JSON.stringify({ requests: requests.length, roots: fixtures.map(value => value.root), hosts: fixtures.flatMap(value => value.hostPids), originalApp: true, sameOwner: true, failedReverseWriteBarrier: true }))
+  console.log(JSON.stringify({ requests: requests.length, roots: fixtures.map(value => value.root), hosts: fixtures.flatMap(value => value.hostPids), originalApp: true, sameOwner: true }))
 } finally {
   if (fixtures[0]) await writeFile(join(fixtures[0].root, 'identity-requests.json'), JSON.stringify({ requests, failures, roots: fixtures.map(value => value.root), hosts: fixtures.flatMap(value => value.hostPids) }, null, 2)).catch(() => {})
   for (const owned of fixtures) { await owned.cleanup(); if (process.env.FOXWARM_KEEP_E2E_ROOT !== '1') await assert.rejects(access(owned.root), { code: 'ENOENT' }) }

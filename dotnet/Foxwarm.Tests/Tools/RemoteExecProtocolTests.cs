@@ -26,6 +26,7 @@ public sealed class RemoteExecProtocolTests
         internal ClientWebSocket Socket = null!;
         internal JsonObject Credential = null!;
         internal int Wakes;
+        internal Action<string, AtomicJsonWriteStage>? WriteStage;
         internal string Data => Path.Combine(Temp.Path, "data");
         internal string Work => Path.Combine(Temp.Path, "work");
 
@@ -35,7 +36,7 @@ public sealed class RemoteExecProtocolTests
             bool advertiseExec = true
         )
         {
-            Manager = new(Data, Work, Options, HostModels.ForTest(Options));
+            Manager = new(Data, Work, Options, HostModels.ForTest(Options), authorityStageHook: (id, stage) => WriteStage?.Invoke(id, stage));
             await Manager.LoadAsync();
             Owner = await Manager.CreateNamedAsync("main", "exec-owner", null, null);
             Owner.Registry.TriggerOverride = _ =>
@@ -188,7 +189,7 @@ public sealed class RemoteExecProtocolTests
             await App.StopAsync();
             await App.DisposeAsync();
             await Manager.DisposeAsync();
-            Manager = new(Data, Work, Options, HostModels.ForTest(Options));
+            Manager = new(Data, Work, Options, HostModels.ForTest(Options), authorityStageHook: (id, stage) => WriteStage?.Invoke(id, stage));
             await Manager.LoadAsync();
             Owner = await Manager.RequiredAsync(Owner.Id);
             Owner.Registry.TriggerOverride = _ =>
@@ -271,16 +272,15 @@ public sealed class RemoteExecProtocolTests
                 ["wakeIfNoActivityAfterSeconds"] = null,
             }
         );
-        var faults = Path.Combine(fixture.Data, "state", "experiment-faults");
-        Directory.CreateDirectory(faults);
-        await File.WriteAllTextAsync(
-            Path.Combine(
-                faults,
-                SessionIdentity.ExecDirectorySegment(fixture.Owner.Id)
-                    + (afterRename ? ".wait-after-rename" : ".wait-before-rename")
-            ),
-            "fault"
-        );
+        fixture.WriteStage = (id, stage) =>
+        {
+            if (id != fixture.Owner.Id || stage != (afterRename
+                ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
+                : AtomicJsonWriteStage.BeforeRename))
+                return;
+            fixture.WriteStage = null;
+            throw new IOException("Owned strict admission write failure.");
+        };
         await fixture.Send(fixture.Completion(request));
         Assert.Equal("error", (await fixture.Read())["type"]!.GetValue<string>());
         Assert.True(fixture.Manager.Nodes.ExecClaims.Has(fixture.Owner, id));

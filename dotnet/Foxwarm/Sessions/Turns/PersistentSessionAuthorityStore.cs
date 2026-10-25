@@ -111,21 +111,11 @@ public sealed class PersistentSessionAuthorityStore
     public DirectorySyncResult LastDirectorySyncResult => authorityFile.LastDirectorySyncResult;
     public SqliteArchiveMessageStore Archive => archive;
 
-    internal bool IsIdentitySnapshotCommit { get; private set; }
-
     internal Task PersistIdentitySnapshotAsync(SessionSnapshot snapshot)
     {
         ValidateBoundSnapshot(snapshot);
-        IsIdentitySnapshotCommit = true;
-        try
-        {
-            authorityFile.Write(ToAuthority(snapshot));
-            return Task.CompletedTask;
-        }
-        finally
-        {
-            IsIdentitySnapshotCommit = false;
-        }
+        authorityFile.Write(ToAuthority(snapshot));
+        return Task.CompletedTask;
     }
 
     public Task CommitAsync(

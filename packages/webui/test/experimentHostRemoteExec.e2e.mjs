@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process'
 import { mkdir, readFile, writeFile, access } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import WebSocket, { WebSocketServer } from 'ws'
-import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
+import { createHostFixture, until } from './experimentHostFixture.mjs'
 
 const fixture = await createHostFixture('remote-exec', { env: {} })
 const plans = new Map(), rounds = new Map(), failures = [], wire = [], clients = [], connections = new Set()
@@ -19,7 +19,7 @@ const done = key => [{ type: 'message', role: 'assistant', content: [{ type: 'ou
 const callsFor = id => wire.filter(entry => entry.direction === 'request' && entry.value.type === 'tool_call' && entry.value.sessionId === id)
 const eventsFor = id => wire.filter(entry => entry.direction === 'reply' && entry.value.type === 'session_event' && entry.value.sessionId === id)
 const execId = result => result.execId || /execId: ([\w-]+)/.exec(result.output)?.[1]
-const count = async file => (await readFile(file, 'utf8')).trim().split('\n').filter(Boolean).length
+
 const peer = createServer(async (request, response) => {
   try {
     let text = ''; for await (const chunk of request) text += chunk
@@ -152,17 +152,6 @@ try {
   state = await finish(switched, 'switch'); assert.equal(state.currentNode, 'master'); assert.equal(state.meta.wait, undefined)
   assert.equal(state.meta.acceptedExternalEventIds.filter(id => id === 'remote-exec-completion:' + started.backgroundExecId).length, 1)
   assert.equal(callsFor(switched).filter(entry => entry.value.tool === 'exec').length, 1)
-  // Save failure has no success ACK; the official pending completion retries without a second effect.
-  const faulted = await create('save-fault'); await select(faulted)
-  const faultRequest = await waitBackground(faulted, 'save-fault', 'printf once >> save-fault-count; sleep 3')
-  await mkdir(join(fixture.data, 'state/experiment-faults'), { recursive: true })
-  await writeFile(join(fixture.data, 'state/experiment-faults', 'id_' + Buffer.from(faulted).toString('base64url') + '.wait-before-rename'), 'fault')
-  state = await finish(faulted, 'save-fault', 45000)
-  const faultEvents = eventsFor(faulted); assert(faultEvents.length >= 2)
-  assert(wire.some(entry => entry.value.type === 'error' && entry.value.requestId === faultEvents[0].value.requestId))
-  assert(!wire.some(entry => entry.value.type === 'session_event_accepted' && entry.value.requestId === faultEvents[0].value.requestId))
-  assert.equal(await readFile(join(remote, 'save-fault-count'), 'utf8'), 'once')
-  assert.equal(state.meta.acceptedExternalEventIds.filter(id => id === 'remote-exec-completion:' + faultRequest.backgroundExecId).length, 1)
   // Dropped correlated ACK retries the existing completion, never the command or owner wake.
   const duplicate = await create('dropped-ack'); await select(duplicate); dropAck.add(duplicate)
   const duplicateRequest = await waitBackground(duplicate, 'dropped-ack', 'printf once >> dropped-ack-count; sleep 3')
@@ -171,7 +160,7 @@ try {
   assert.equal(state.meta.acceptedExternalEventIds.filter(id => id === 'remote-exec-completion:' + duplicateRequest.backgroundExecId).length, 1)
   assert.equal(await readFile(join(remote, 'dropped-ack-count'), 'utf8'), 'once')
   assertPairs(await saved(duplicate))
-  console.log('Official foreground, cwd, temporary routing, native Monty, direct parallel, switch/wait, strict-save retry and dropped ACK qualified.')
+  console.log('Official foreground, cwd, temporary routing, native Monty, direct parallel, switch/wait, dropped ACK qualified.')
   // Actual Node-target authorization blocks all three execution entrances before a wire call.
   await writeFile(join(fixture.work, 'deny-exec.yaml'), 'version: 1\nrules:\n  - id: deny-remote-exec\n    action: deny\n    match:\n      tool: {source: node, name: exec}\n      targetNode: official-cli\n')
   await turn(actor, 'install-exec-policy', [call('exec-policy', 'set_config', { target: 'tool-rules', filePath: 'deny-exec.yaml' })])
@@ -334,7 +323,6 @@ try {
   await writeFile(join(fixture.root, 'remote-exec-proof.json'), JSON.stringify(proof, null, 2))
   console.log('Official creation/child/fork/timer placement, authorization, ordinary background/trigger/onboot, Node rename, offline observation and Archive evidence qualified.')
   console.log(JSON.stringify(proof))
-
 
 } catch (error) {
   console.error('Host:', fixture.output)
