@@ -138,13 +138,17 @@ async function installDependencies(sourceDir, commit, nodeVersion, forceInstall)
     return
   }
 
-  await run('npm', ['ci'], {
+  const installOptions = {
     cwd: sourceDir,
     env: {
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1',
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1',
     },
-  })
+  }
+  // Match upstream CI: install and overlay Electron headers before dependency
+  // install scripts compile native addons. npm ci runs the root preinstall too late.
+  await run(process.execPath, ['build/npm/preinstall.ts'], installOptions)
+  await run('npm', ['ci'], installOptions)
   await fs.writeFile(markerPath, JSON.stringify({ commit, nodeMajor: nodeVersion.split('.')[0] }, null, 2))
 }
 

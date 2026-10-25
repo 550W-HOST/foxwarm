@@ -1,6 +1,6 @@
 # Unit: VS Code Web package and extensions
 
-Files: packages/vscode-web/README.md, packages/vscode-web/package.json, packages/vscode-web/code-oss-version.json, packages/vscode-web/yaml-extension-version.json, packages/vscode-web/Dockerfile.code-oss, packages/vscode-web/scripts/build-code-docker.mjs, packages/vscode-web/scripts/build-code-oss.mjs, packages/vscode-web/scripts/prepare-assets.mjs, packages/vscode-web/scripts/prepare-yaml-extension.mjs, packages/vscode-web/scripts/yaml-extension-assets.mjs, packages/vscode-web/test/assetCommands.test.mjs, packages/vscode-web/test/yamlSchema.e2e.mjs, packages/vscode-web/foxwarm-fs/, packages/vscode-web/foxwarm-terminal/, packages/vscode-web/foxwarm-scm/, packages/vscode-web/foxwarm-webui/, skills/webui-markers/SKILL.md
+Files: packages/vscode-web/README.md, packages/vscode-web/package.json, packages/vscode-web/code-oss-version.json, packages/vscode-web/yaml-extension-version.json, packages/vscode-web/Dockerfile.code-oss, packages/vscode-web/scripts/build-code-docker.mjs, packages/vscode-web/scripts/build-code-oss.mjs, packages/vscode-web/scripts/prepare-assets.mjs, packages/vscode-web/scripts/prepare-yaml-extension.mjs, packages/vscode-web/scripts/yaml-extension-assets.mjs, packages/vscode-web/test/assetCommands.test.mjs, packages/vscode-web/test/sourceInstall.test.mjs, packages/vscode-web/test/yamlSchema.e2e.mjs, packages/vscode-web/foxwarm-fs/, packages/vscode-web/foxwarm-terminal/, packages/vscode-web/foxwarm-scm/, packages/vscode-web/foxwarm-webui/, skills/webui-markers/SKILL.md
 Secondary files: package.json, .gitignore, Dockerfile
 
 ## Purpose
@@ -13,6 +13,7 @@ Cross-module contract: [Code integration](../threads/code-integration.md).
 
 - `npm run build:code` builds the pinned MIT Code - OSS source in the dedicated Node 24 Docker builder and publishes required ignored assets.
 - `build:code:local` is the explicit host-native alternative for an environment with matching Node/native prerequisites.
+- Before an uncached dependency install, both build paths run upstream `build/npm/preinstall.ts` explicitly, matching upstream CI. This installs and overlays Electron headers before `npm ci` compiles native addons; npm's root preinstall lifecycle runs after dependency installation. Header preparation failure stops the build before `npm ci` or the ready-cache marker.
 - The current Code - OSS pin is stable `1.141.0` at commit `2a59476c9bfcb90b3ddc372c36762471b7dfad1c`; the version file remains the source of truth for the builder.
 - `npm run download:code` fetches the pinned Microsoft `web-standalone` product build for licensed/internal use; its product license is distinct from Code - OSS MIT.
 - Asset regression coverage distinguishes the root server's pinned Node 24 trixie build/runtime stages, required by its native runtime dependencies, from the Code OSS builder, node runtime, and unrelated test images that remain on bookworm.
