@@ -66,16 +66,12 @@ public sealed class StartupDiagnosticsTests
             Assert.Equal(0, process.ExitCode);
             var output = (await stdout).Replace("\r\n", "\n");
             var errors = (await stderr).Replace("\r\n", "\n");
-            var ordinary = Enumerable
-                .Range(0, 10000)
-                .Select(index => "ordinary startup " + index);
+            var ordinary = Enumerable.Range(0, 10000).Select(index => "ordinary startup " + index);
             var diagnostics = Enumerable
                 .Range(0, 10000)
-                .SelectMany(index => new[]
-                {
-                    "timer diagnostic " + index,
-                    "   at supported delivery",
-                });
+                .SelectMany(index =>
+                    new[] { "timer diagnostic " + index, "   at supported delivery" }
+                );
             if (mode == "stderr")
                 Assert.Empty(output);
             else
@@ -88,7 +84,10 @@ public sealed class StartupDiagnosticsTests
                 Assert.Contains("Main file logging failed:", errors);
                 Assert.Equal(
                     Enumerable.Range(0, 10000).Select(index => "timer diagnostic " + index).Order(),
-                    Regex.Matches(errors, @"timer diagnostic \d+").Select(match => match.Value).Order()
+                    Regex
+                        .Matches(errors, @"timer diagnostic \d+")
+                        .Select(match => match.Value)
+                        .Order()
                 );
                 Assert.Equal(10000, Regex.Matches(errors, "   at supported delivery").Count);
                 Assert.Contains("partial stderr", errors);
@@ -100,7 +99,8 @@ public sealed class StartupDiagnosticsTests
                     ? "partial stdoutpartial stderrretained stdout\nretained stderr\n"
                     : "partial stderrretained stderr\n";
             Assert.EndsWith(tail, errors);
-            const string consoleMessage = @"ordinary startup \d+|timer diagnostic \d+|   at supported delivery";
+            const string consoleMessage =
+                @"ordinary startup \d+|timer diagnostic \d+|   at supported delivery";
             var prefix = errors[..^tail.Length];
             Assert.Equal(
                 (mode == "stderr" ? ordinary.Concat(diagnostics) : diagnostics).Order(),
@@ -124,10 +124,7 @@ public sealed class StartupDiagnosticsTests
                     .Order(),
                 records[..^2].Order()
             );
-            Assert.Equal(
-                new[] { "INFO: partial stdout", "ERROR: partial stderr" },
-                records[^2..]
-            );
+            Assert.Equal(new[] { "INFO: partial stdout", "ERROR: partial stderr" }, records[^2..]);
         }
         finally
         {
