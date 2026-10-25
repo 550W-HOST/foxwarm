@@ -20,7 +20,7 @@ Extension tools use short names within their Node namespace. They operate shared
 
 Sharing resolves from an explicit live tab rule, then the nearest matching hostname rule, then the current shared window, then Off. Ask/Auto share basic metadata; Off discloses none. Ask gates each targeted page operation, including JavaScript. Positive direct-tab grants are origin-bound; explicit Off applies to the live tab across navigation. Tab/window IDs live only in browser-session storage. Persistent site rules include subdomains. Sharing a window dynamically includes current/new/moved-in HTTP(S) tabs; moving out removes only its window-derived grant. Clearing a tab rule restores inheritance.
 
-Approval shows the actual Agent, Session, page and action. Document, current sharing, membership, cancellation and deadline are checked at approval/execution and before releasing page results. Navigation, revocation, moves and Stop invalidate pending work. Per-tab operations use bounded transient ordering, without durable queues, replay or selector reconstruction.
+Approval shows the actual Agent, Session, page and action. Document, current sharing, membership, cancellation and deadline are checked at approval/execution and before releasing page results. Navigation, revocation, moves and Stop invalidate pending work. Sharing edits also cancel in-flight targetless listings so an earlier settings read cannot authorize metadata first observed after revocation. Per-tab operations use bounded transient ordering, without durable queues, replay or selector reconstruction.
 
 ### D-browser-node-main-world-js
 

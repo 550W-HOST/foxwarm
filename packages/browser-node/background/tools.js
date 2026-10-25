@@ -104,6 +104,7 @@ export async function executeTool(name, args, context) {
   checkActive();
   if (name === 'list_tabs') {
     const perms = await storage.getPermissions();
+    checkActive();
     // This is the final asynchronous observation. Authorize exactly the Tab data
     // being released, never an earlier query object against an ID's later page.
     const observed = await chrome.tabs.query({});

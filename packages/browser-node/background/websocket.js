@@ -70,6 +70,7 @@ async function toolCall(socket, message) {
   const deadline = Date.now() + timeout;
   const invocation = {
     controller,
+    tool: message.tool,
     tabId: message.args?.tabId,
     windowId: message.args?.windowId,
   };
