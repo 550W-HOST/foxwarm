@@ -134,16 +134,19 @@ public sealed partial class WebUiStartupTests
             return output.ToString();
         }
 
+        internal async Task WaitForListening()
+        {
+            var exited = Process.WaitForExitAsync();
+            await Task.WhenAny(listening.Task, exited).WaitAsync(TimeSpan.FromSeconds(20));
+            if (Process.HasExited || !listening.Task.IsCompletedSuccessfully)
+                throw new InvalidOperationException(await Output());
+            Assert.Equal("http://0.0.0.0:" + Port, await listening.Task);
+        }
+
         internal async Task Ready(string? token = null, bool quiet = false)
         {
             if (!quiet)
-            {
-                var exited = Process.WaitForExitAsync();
-                await Task.WhenAny(listening.Task, exited).WaitAsync(TimeSpan.FromSeconds(20));
-                if (Process.HasExited || !listening.Task.IsCompletedSuccessfully)
-                    throw new InvalidOperationException(await Output());
-                Assert.Equal("http://0.0.0.0:" + Port, await listening.Task);
-            }
+                await WaitForListening();
             else
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
@@ -516,13 +519,7 @@ public sealed partial class WebUiStartupTests
     {
         await using var h = new Host();
         h.Start();
-        using (var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20)))
-        {
-            while (!File.Exists(h.TokenPath) && !h.Process.HasExited)
-                await Task.Delay(25, deadline.Token);
-        }
-        if (h.Process.HasExited)
-            throw new InvalidOperationException(await h.Output());
+        await h.WaitForListening();
         var fresh = await File.ReadAllTextAsync(h.TokenPath);
         Assert.Matches("^[0-9a-f]{64}$", fresh);
         if (!OperatingSystem.IsWindows())
