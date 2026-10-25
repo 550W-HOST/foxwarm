@@ -62,6 +62,37 @@ public sealed class ModelInteractionDiagnosticsTests
 
     private static string Recent(string root) => Path.Combine(root, "state", "logs", "recent");
 
+    [Fact]
+    public async Task Diagnostic_serialization_depth_failure_does_not_escape_a_successful_Anthropic_request()
+    {
+        using var temp = new TempDirectory();
+        // The provider's depth-64 JSON parses successfully. Its diagnostic wrapper
+        // exceeds the writer's depth limit without invalidating the provider result.
+        var body =
+            "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"answer\"}],\"opaque\":"
+            + new string('[', 63)
+            + "0"
+            + new string(']', 63)
+            + "}";
+        using var handler = new DiagnosticHandler((_, _) => (HttpStatusCode.OK, body));
+        using var http = new HttpClient(handler);
+        var uri = new Uri("http://unused.invalid");
+        var config = Catalog(uri, "anthropic");
+        config["providers"]!["a"]!["extraFields"]!["stream"] = false;
+        ChatResult? result = null;
+        var error = await Record.ExceptionAsync(async () =>
+        {
+            result = await Request(
+                new(http, Options(uri), new ModelRouting(), diagnostics: new(temp.Path)),
+                HostModels.Parse(config, new JsonObject())
+            );
+        });
+        Assert.Null(error);
+        Assert.NotNull(result);
+        Assert.Contains("answer", result.AssistantMessage!.ToJsonString());
+        Assert.Single(handler.Bodies);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
