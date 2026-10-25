@@ -181,6 +181,14 @@ try {
   assert.deepEqual({ code: restartCode, signal: restartSignal }, { code: 0, signal: null }, output)
   console.log(JSON.stringify({ published: true, collectedReactCompiler: true, originalArtifactRun: true, mainBrowserImage: true, restartPreserved: true, browserLogin: true, noModelSetup: true, implicitSessions: 0, nodeArchive: true, extensionBundles: 4, nativeToolScript: true, globalSkillResource: true, vectorDisabledLazy: true, requests: requests.length }))
 } catch (error) {
+  // Observation only: the original qualification failure is always rethrown below.
+  if (lastProviderReply === 'browse_open' && qualificationHistory?.session?.busy) {
+    console.error('Original qualification failed; observing the outstanding browser call without changing its SDK deadlines.')
+    await until(async () => {
+      qualificationHistory = (await api('GET', '/api/sessions/' + encodeURIComponent(qualificationHistory.session.id) + '/history')).body
+      return qualificationHistory.messages?.flatMap(row => row.parts || []).some(part => part.functionResponse?.name === 'browse_open')
+    }, 'outstanding browser SDK observation', 190000).catch(observationError => console.error('Browser observation: ' + observationError.message))
+  }
   console.error('Published Core output:\n' + output)
   // Main's launch policy is independent of the browser used to drive the App.
   const mainBrowserExecutable = { path: '/usr/bin/chromium' }
@@ -219,6 +227,7 @@ try {
     },
     lastCall: lastCall && { id: lastCall.id, name: lastCall.name },
     lastTool: toolState(responses.at(-1)),
+    observedBrowseOpen: toolState(responses.find(response => response.name === 'browse_open')),
     lastToolFailure: toolState(responses.findLast(response => response.response?.error || response.response?.status === 'failed')),
     lastNotice: lastNotice && {
       type: lastNotice.__meta.noticeType,

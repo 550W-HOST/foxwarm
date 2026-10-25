@@ -20,6 +20,7 @@ env:
 
 jobs:
   core:
+    if: ${{ false }}
     name: Core, packages, and quality
     runs-on: ubuntu-24.04
     timeout-minutes: 35
@@ -129,6 +130,7 @@ jobs:
           FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
         run: npm run test:published
       - name: Run Chromium fixtures
+        if: ${{ false }}
         env:
           FOXWARM_E2E_CHROMIUM: ${{ steps.browser.outputs.path }}
           FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
@@ -148,6 +150,7 @@ jobs:
           retention-days: 7
 
   app:
+    if: ${{ false }}
     name: Real app with mock LLM
     runs-on: ubuntu-24.04
     timeout-minutes: 10

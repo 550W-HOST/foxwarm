@@ -27,11 +27,13 @@ internal sealed class MainBrowserTools(Func<LaunchOptions, Task<IBrowser>>? laun
 
     private async Task<IBrowser> EnsureBrowser()
     {
+        Console.Error.WriteLine($"{DateTime.UtcNow:O} Main browser observation: launch lock wait");
         await launch.WaitAsync();
         try
         {
             if (browser is null)
             {
+                Console.Error.WriteLine($"{DateTime.UtcNow:O} Main browser observation: launch start");
                 browser = await launchBrowser(
                     new LaunchOptions
                     {
@@ -48,8 +50,15 @@ internal sealed class MainBrowserTools(Func<LaunchOptions, Task<IBrowser>>? laun
                         ],
                     }
                 );
-                foreach (var page in await browser.PagesAsync())
+                Console.Error.WriteLine($"{DateTime.UtcNow:O} Main browser observation: launch returned; existing pages start");
+                var initialPages = await browser.PagesAsync();
+                Console.Error.WriteLine($"{DateTime.UtcNow:O} Main browser observation: existing pages returned");
+                foreach (var page in initialPages)
+                {
+                    Console.Error.WriteLine($"{DateTime.UtcNow:O} Main browser observation: existing page webdriver start");
                     await page.EvaluateFunctionOnNewDocumentAsync(Webdriver);
+                    Console.Error.WriteLine($"{DateTime.UtcNow:O} Main browser observation: existing page webdriver returned");
+                }
             }
             return browser;
         }
@@ -82,6 +91,7 @@ internal sealed class MainBrowserTools(Func<LaunchOptions, Task<IBrowser>>? laun
         }
         catch (Exception error) when (error is PuppeteerException or ProcessException)
         {
+            Console.Error.WriteLine($"{DateTime.UtcNow:O} Main browser observation SDK failure: {error}");
             // SDK failures enter the existing local tool-error path, not the Main fatal path.
             throw new InvalidOperationException(error.Message, error);
         }
@@ -107,12 +117,19 @@ internal sealed class MainBrowserTools(Func<LaunchOptions, Task<IBrowser>>? laun
         {
             var active = await EnsureBrowser();
             var url = Required(args, "url");
+            Console.Error.WriteLine($"{DateTime.UtcNow:O} Main browser observation: new page start");
             var page = await active.NewPageAsync();
+            Console.Error.WriteLine($"{DateTime.UtcNow:O} Main browser observation: new page returned");
             await page.EvaluateFunctionOnNewDocumentAsync(Webdriver);
+            Console.Error.WriteLine($"{DateTime.UtcNow:O} Main browser observation: new page webdriver returned; user agent start");
             await page.SetUserAgentAsync(UserAgent);
+            Console.Error.WriteLine($"{DateTime.UtcNow:O} Main browser observation: user agent returned; viewport start");
             await page.SetViewportAsync(new ViewPortOptions { Width = 1280, Height = 720 });
+            Console.Error.WriteLine($"{DateTime.UtcNow:O} Main browser observation: viewport returned; navigation start");
             await page.GoToAsync(url, Navigation(30000));
+            Console.Error.WriteLine($"{DateTime.UtcNow:O} Main browser observation: navigation returned; title start");
             var title = await page.GetTitleAsync();
+            Console.Error.WriteLine($"{DateTime.UtcNow:O} Main browser observation: title returned");
             string id;
             lock (gate)
             {
