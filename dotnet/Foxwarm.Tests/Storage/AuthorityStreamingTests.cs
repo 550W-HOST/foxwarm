@@ -12,13 +12,38 @@ public sealed class AuthorityStreamingTests
     [InlineData(true)]
     public void Complete_UTF8_values_match_document_serialization_in_bounded_writes(bool immutable)
     {
-        var messages = Enumerable.Range(1, 320).Select(index =>
-        {
-            var message = Fixture.Message(index, "café 漢字 🦊\n\t\"\\\u2028\u2029" + new string('x', 1600), index * 1000);
-            message["future"] = JsonNode.Parse("{\"n\":9007199254740993,\"exponent\":1e400,\"null\":null,\"array\":[true,false,{},[]]}");
-            return message;
-        }).ToArray();
-        var block = new ArchiveBlockRecord(Fixture.SessionId, "main", 1, 1, "message", 1, 2, null, 1, 2, 1000, 2000, "summary", null, 3000).ToMessage();
+        var messages = Enumerable
+            .Range(1, 320)
+            .Select(index =>
+            {
+                var message = Fixture.Message(
+                    index,
+                    "café 漢字 🦊\n\t\"\\\u2028\u2029" + new string('x', 1600),
+                    index * 1000
+                );
+                message["future"] = JsonNode.Parse(
+                    "{\"n\":9007199254740993,\"exponent\":1e400,\"null\":null,\"array\":[true,false,{},[]]}"
+                );
+                return message;
+            })
+            .ToArray();
+        var block = new ArchiveBlockRecord(
+            Fixture.SessionId,
+            "main",
+            1,
+            1,
+            "message",
+            1,
+            2,
+            null,
+            1,
+            2,
+            1000,
+            2000,
+            "summary",
+            null,
+            3000
+        ).ToMessage();
         messages[0] = block;
         var root = PersistencePrimitiveTests.FixtureAuthority(messages);
         root["futureState"] = new JsonObject { ["array"] = new JsonArray("opaque", 0.1m, null) };
@@ -54,35 +79,77 @@ public sealed class AuthorityStreamingTests
     {
         using var temp = new TempDirectory();
         var store = new PersistentSessionAuthorityStore(temp.Path, "s");
-        var original = new SessionSnapshot("s", [Fixture.Message(1, "original", 1000)], [], false, null, false, new(), 2, 0, new());
+        var original = new SessionSnapshot(
+            "s",
+            [Fixture.Message(1, "original", 1000)],
+            [],
+            false,
+            null,
+            false,
+            new(),
+            2,
+            0,
+            new()
+        );
         await store.CommitAsync(original, SaveKind.Strict);
         var previous = await File.ReadAllBytesAsync(store.AuthorityPath);
         var bad = Fixture.Message(2, "invalid", 2000);
         switch (fault)
         {
-            case "role": bad["role"] = "unknown"; break;
-            case "parts": bad["parts"] = new JsonArray(1); break;
-            case "seq": bad["__meta"]!["seq"] = 0; break;
-            case "timestamp": bad["__meta"]!["timestamp"] = JsonNode.Parse("1e400"); break;
-            case "frontier": bad["__meta"]!["contextFrontierItem"] = null; break;
-            case "block": bad["__meta"]!["contextBlock"] = new JsonObject(); break;
+            case "role":
+                bad["role"] = "unknown";
+                break;
+            case "parts":
+                bad["parts"] = new JsonArray(1);
+                break;
+            case "seq":
+                bad["__meta"]!["seq"] = 0;
+                break;
+            case "timestamp":
+                bad["__meta"]!["timestamp"] = JsonNode.Parse("1e400");
+                break;
+            case "frontier":
+                bad["__meta"]!["contextFrontierItem"] = null;
+                break;
+            case "block":
+                bad["__meta"]!["contextBlock"] = new JsonObject();
+                break;
         }
-        var invalid = original with { History = original.History.AppendJson([bad]), NextMessageSeq = 3 };
+        var invalid = original with
+        {
+            History = original.History.AppendJson([bad]),
+            NextMessageSeq = 3,
+        };
         var error = await Record.ExceptionAsync(() => store.CommitAsync(invalid, SaveKind.Strict));
         Assert.True(error is InvalidDataException or UnsupportedSessionAuthorityException);
         Assert.Equal(previous, await File.ReadAllBytesAsync(store.AuthorityPath));
         Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(store.AuthorityPath)!, "*.tmp-*"));
-        Assert.Single((await new PersistentSessionAuthorityStore(temp.Path, "s").LoadAsync("s"))!.History);
+        Assert.Single(
+            (await new PersistentSessionAuthorityStore(temp.Path, "s").LoadAsync("s"))!.History
+        );
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Unwritable_unknown_values_keep_the_existing_serialization_failure_boundary(bool inHistory)
+    public async Task Unwritable_unknown_values_keep_the_existing_serialization_failure_boundary(
+        bool inHistory
+    )
     {
         using var temp = new TempDirectory();
         var store = new PersistentSessionAuthorityStore(temp.Path, "s");
-        var original = new SessionSnapshot("s", [Fixture.Message(1, "original", 1000)], [], false, null, false, new(), 2, 0, new());
+        var original = new SessionSnapshot(
+            "s",
+            [Fixture.Message(1, "original", 1000)],
+            [],
+            false,
+            null,
+            false,
+            new(),
+            2,
+            0,
+            new()
+        );
         await store.CommitAsync(original, SaveKind.Strict);
         var previous = await File.ReadAllBytesAsync(store.AuthorityPath);
         var nested = new JsonObject();
@@ -108,16 +175,33 @@ public sealed class AuthorityStreamingTests
         {
             // Immutable ingress can own a deep element independently of serializer admission.
             // Its active-file depth still has to obey the same full-document writer limit.
-            var json = "{\"role\":\"user\",\"parts\":[],\"__meta\":{\"seq\":1,\"timestamp\":1000},\"future\":"
-                + new string('[', 65) + "0" + new string(']', 65) + "}";
-            using var parsed = JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = 1000 });
-            invalid = original with { History = SessionHistory.FromMessages([HistoryMessage.FromElement(parsed.RootElement)]) };
+            var json =
+                "{\"role\":\"user\",\"parts\":[],\"__meta\":{\"seq\":1,\"timestamp\":1000},\"future\":"
+                + new string('[', 65)
+                + "0"
+                + new string(']', 65)
+                + "}";
+            using var parsed = JsonDocument.Parse(
+                json,
+                new JsonDocumentOptions { MaxDepth = 1000 }
+            );
+            invalid = original with
+            {
+                History = SessionHistory.FromMessages([
+                    HistoryMessage.FromElement(parsed.RootElement),
+                ]),
+            };
         }
         else
         {
-            invalid = original with { AuthorityEnvelope = new JsonObject { ["future"] = nested.DeepClone() } };
+            invalid = original with
+            {
+                AuthorityEnvelope = new JsonObject { ["future"] = nested.DeepClone() },
+            };
         }
-        await Assert.ThrowsAsync<InvalidOperationException>(() => store.CommitAsync(invalid, SaveKind.Strict));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.CommitAsync(invalid, SaveKind.Strict)
+        );
         Assert.Equal(previous, await File.ReadAllBytesAsync(store.AuthorityPath));
         Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(store.AuthorityPath)!, "*.tmp-*"));
     }
@@ -127,14 +211,22 @@ public sealed class AuthorityStreamingTests
     {
         using var temp = new TempDirectory();
         var file = new LinuxAtomicJsonFile(temp.Path, "state/authority.json");
-        var document = SessionAuthorityDocument.FromNode(PersistencePrimitiveTests.FixtureAuthority(), Fixture.SessionId);
+        var document = SessionAuthorityDocument.FromNode(
+            PersistencePrimitiveTests.FixtureAuthority(),
+            Fixture.SessionId
+        );
         file.Write(document);
         var previous = File.ReadAllBytes(file.FilePath);
-        Assert.Throws<IOException>(() => file.WriteStreamPayload(stream =>
-        {
-            stream.Write(Encoding.UTF8.GetBytes("{\"partial\":"));
-            throw new IOException("owned interrupted stream");
-        }, default));
+        Assert.Throws<IOException>(() =>
+            file.WriteStreamPayload(
+                stream =>
+                {
+                    stream.Write(Encoding.UTF8.GetBytes("{\"partial\":"));
+                    throw new IOException("owned interrupted stream");
+                },
+                default
+            )
+        );
         Assert.Equal(previous, File.ReadAllBytes(file.FilePath));
         Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(file.FilePath)!, "*.tmp-*"));
     }

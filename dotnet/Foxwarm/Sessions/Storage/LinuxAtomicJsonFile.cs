@@ -73,8 +73,8 @@ public sealed class LinuxAtomicJsonFile
             cancellationToken
         );
 
-    internal void WriteStreamPayload(Action<Stream> write, CancellationToken cancellationToken)
-        => WriteStreamPayloadAsync(write, null, cancellationToken).GetAwaiter().GetResult();
+    internal void WriteStreamPayload(Action<Stream> write, CancellationToken cancellationToken) =>
+        WriteStreamPayloadAsync(write, null, cancellationToken).GetAwaiter().GetResult();
 
     // The same atomic publication path can prepare UTF-8 while accepted Archive work is
     // pending, then await its receipt before rename. A failed prerequisite discards the temp file.

@@ -155,19 +155,23 @@ public sealed class PersistentSessionAuthorityStore
         try
         {
             var state = PrepareAuthorityState(stagedSnapshot);
-            await authorityFile.WriteStreamPayloadAsync(
-                stream => SessionAuthorityDocument.WriteTo(stream, state, stagedSnapshot.History),
-                async () =>
-                {
-                    if (canonicalCommitBarrier is not null)
-                        await canonicalCommitBarrier(
-                            Interlocked.Increment(ref canonicalCommitCount),
-                            cancellationToken
-                        ).ConfigureAwait(false);
-                    inserted = await receipt.Completion.ConfigureAwait(false);
-                },
-                default
-            ).ConfigureAwait(false);
+            await authorityFile
+                .WriteStreamPayloadAsync(
+                    stream =>
+                        SessionAuthorityDocument.WriteTo(stream, state, stagedSnapshot.History),
+                    async () =>
+                    {
+                        if (canonicalCommitBarrier is not null)
+                            await canonicalCommitBarrier(
+                                    Interlocked.Increment(ref canonicalCommitCount),
+                                    cancellationToken
+                                )
+                                .ConfigureAwait(false);
+                        inserted = await receipt.Completion.ConfigureAwait(false);
+                    },
+                    default
+                )
+                .ConfigureAwait(false);
             published = true;
         }
         catch (AuthorityCommittedException error)
@@ -221,15 +225,18 @@ public sealed class PersistentSessionAuthorityStore
         try
         {
             var state = PrepareAuthorityState(stagedSnapshot);
-            await authorityFile.WriteStreamPayloadAsync(
-                stream => SessionAuthorityDocument.WriteTo(stream, state, stagedSnapshot.History),
-                async () =>
-                {
-                    (newBlocks, newMessages) = await receipt.Completion.ConfigureAwait(false);
-                    cancellationToken.ThrowIfCancellationRequested();
-                },
-                cancellationToken
-            ).ConfigureAwait(false);
+            await authorityFile
+                .WriteStreamPayloadAsync(
+                    stream =>
+                        SessionAuthorityDocument.WriteTo(stream, state, stagedSnapshot.History),
+                    async () =>
+                    {
+                        (newBlocks, newMessages) = await receipt.Completion.ConfigureAwait(false);
+                        cancellationToken.ThrowIfCancellationRequested();
+                    },
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
             published = true;
         }
         catch (AuthorityCommittedException error)

@@ -95,13 +95,16 @@ public sealed class SessionAuthorityDocument
     // record with the same schema as document ingress, without retaining a mutable history tree.
     internal static void WriteTo(Stream stream, JsonObject state, SessionHistory? history = null)
     {
-        using var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
-        {
-            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-            Indented = true,
-            // Match ToJson's JsonSerializerOptions default, including unknown nested values.
-            MaxDepth = 64,
-        });
+        using var writer = new Utf8JsonWriter(
+            stream,
+            new JsonWriterOptions
+            {
+                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+                Indented = true,
+                // Match ToJson's JsonSerializerOptions default, including unknown nested values.
+                MaxDepth = 64,
+            }
+        );
         writer.WriteStartObject();
         foreach (var property in state)
         {
@@ -263,7 +266,12 @@ public sealed class SessionAuthorityDocument
             );
     }
 
-    internal static void ValidateState(JsonObject root, int historyCount, string sessionId, string agent)
+    internal static void ValidateState(
+        JsonObject root,
+        int historyCount,
+        string sessionId,
+        string agent
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(agent);
