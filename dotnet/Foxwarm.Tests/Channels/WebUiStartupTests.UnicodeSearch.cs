@@ -38,11 +38,13 @@ public sealed partial class WebUiStartupTests
             {
                 var id = $"unicode-{index}-{suffix}";
                 var created = await h.Client.PostAsJsonAsync(
-                    "/api/sessions", new { agentId = "main", sessionId = id }
+                    "/api/sessions",
+                    new { agentId = "main", sessionId = id }
                 );
                 Assert.Equal(HttpStatusCode.OK, created.StatusCode);
                 var named = await h.Client.PostAsJsonAsync(
-                    $"/api/sessions/{id}/name", new { name }
+                    $"/api/sessions/{id}/name",
+                    new { name }
                 );
                 Assert.Equal(HttpStatusCode.OK, named.StatusCode);
             }
@@ -53,8 +55,11 @@ public sealed partial class WebUiStartupTests
                 );
                 Assert.Equal(HttpStatusCode.OK, response.StatusCode);
                 var result = (await response.Content.ReadFromJsonAsync<JsonObject>())!;
-                var ids = result["sessions"]!.AsArray()
-                    .Select(row => row!["id"]!.GetValue<string>()).Order().ToArray();
+                var ids = result["sessions"]!
+                    .AsArray()
+                    .Select(row => row!["id"]!.GetValue<string>())
+                    .Order()
+                    .ToArray();
                 Assert.Equal(new[] { $"unicode-{index}-lower", $"unicode-{index}-upper" }, ids);
             }
         }
