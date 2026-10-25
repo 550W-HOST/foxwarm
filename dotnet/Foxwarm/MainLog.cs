@@ -12,7 +12,7 @@ internal sealed class MainLog : IDisposable
 {
     private readonly TextWriter stdout = Console.Out;
     private readonly TextWriter stderr = Console.Error;
-    private readonly object gate = new();
+    private readonly object gate;
     private readonly StreamWriter file;
     private readonly Capture output;
     private readonly Capture error;
@@ -75,7 +75,11 @@ internal sealed class MainLog : IDisposable
             : stdout;
         output = new Capture(this, suppress ? null : console, false);
         error = new Capture(this, suppress ? null : stderr, true);
-        Console.SetOut(output);
+        // Unix console writes reacquire Console.Out. Use its published monitor for
+        // capture, forwarding, flush and failure fallback before any saved writer.
+        var synchronizedOutput = TextWriter.Synchronized(output);
+        gate = synchronizedOutput;
+        Console.SetOut(synchronizedOutput);
         Console.SetError(error);
         Volatile.Write(ref active, this);
     }

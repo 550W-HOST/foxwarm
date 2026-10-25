@@ -19,6 +19,8 @@ The actual console and Desktop entries opt into one process Console capture owne
 
 `AppendLogFile.Open` uses Linux O_APPEND or Windows FILE_APPEND_DATA. A persistent ordinary .NET FileMode.Append stream retains a write position and can overwrite bytes appended by another process; native append rights preserve the established shared-file producer path. There is no rotation, fanout, retry, recovery queue or flush-to-disk promise. Complete records are synchronously appended/flushed; normal host drain precedes the final stop diagnostic and writer disposal/partial-line flush. A write failure is reported to the original stderr and disables subsequent file writes; it cannot turn an already committed request/effect into a replay or retry.
 
+Main capture uses the published synchronized stdout monitor for pending lines, file records, console forwarding, flush, disposal and file-failure reporting. Saved console writers are acquired afterward because Unix console output can reacquire the current stdout monitor. This retains synchronous record completion with one consistent lock order, including stderr redirection and failure fallback.
+
 One-shot model/archive commands, native helpers and the private Vector child dispatch before this capture exists, so their protocol framing and lifetimes remain unchanged. In-process embedding/test hosts do not replace global Console writers unless their entry explicitly opts in.
 
 ## Existing realtime sender integration
@@ -30,5 +32,7 @@ The existing single output channel and serialized WebSocket sender remain. Queue
 ## Evidence
 
 `WebUiLogsTests` compares actual Source reader windows/time results against managed results for multilingual/CRLF/partial lines, incomplete EOF, dated/JSON/ANSI/HH-only samples and 384 MiB sparse bounds. It also proves continuous paging, EOF completion, missing/empty, observed lifetimes, subscriber isolation, catch-up gaps and disposal. `WebUiStartupTests` exercises actual Main production/final exit, configured filename/TUI policy, synchronous JSON and console flags, real authenticated HTTP and the existing WS, scoped denial, logical lifetime/reconnect, shared-file append and replacement, plus a real failing diagnostic device without failing an accepted HTTP effect. `WebUiRealtimeRevisionTests` holds the actual sender to qualify byte-backlog gaps and retained unrelated subscription behavior.
+
+`StartupDiagnosticsTests` uses the existing DevTools subprocess harness for concurrent ordinary stdout/stderr writes and flushes, including stderr redirection and a failing file device. It checks console content, synchronous complete file records, partial-line disposal and harmless writes through retained capture references after disposal.
 
 The unchanged maintained `test/app-e2e/logs.e2e.mjs` exercises the production App's menu/sole-tab controls, bounded history/live/time/text safety, restore, popout, embedded and mobile dark-mode paths, partial UTF-8 and observed replacement. [Artifact publication](./dotnet-artifacts.md) has its own producer and application scenario. Native Windows qualification separately exercises the actual Main writer's append-only access, opened-object identity, HTTP/realtime delivery, shared external append, rename/reset and final flush; Linux test results alone do not establish those Windows behaviors.
