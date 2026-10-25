@@ -48,7 +48,7 @@ export async function createHostFixture(name, options = {}) {
     else startup.FOXWARM_EXPERIMENT_API_TOKEN = token
     ownedListener = false
     const source = options.runtime === 'source'
-    const child = spawn(source ? process.execPath : join(process.env.DOTNET_ROOT, 'dotnet'), [resolve(source ? 'lib/index.js' : 'dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
+    const child = spawn(source ? process.execPath : join(process.env.DOTNET_ROOT, 'dotnet'), [resolve(source ? 'lib/index.js' : options.corePath || 'dotnet/Foxwarm/bin/Debug/net10.0/Foxwarm.dll')], {
       stdio: ['ignore', 'pipe', 'pipe'], ...(options.cwd ? { cwd: options.cwd } : {}), env: startup
     })
     let output = ''

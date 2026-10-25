@@ -1,61 +1,43 @@
-# Unit: browser node extension
+# Unit: Browser Node extension
 
-Files: packages/browser-node/manifest.json, packages/browser-node/README.md, packages/browser-node/background/main.js, packages/browser-node/background/websocket.js, packages/browser-node/background/nodeProtocol.js, packages/browser-node/background/tools.js, packages/browser-node/background/toolResults.js, packages/browser-node/background/permissions.js, packages/browser-node/background/storage.js, packages/browser-node/popup/popup.html, packages/browser-node/popup/popup.js, packages/browser-node/popup/popup.css, packages/browser-node/test/nodeProtocol.test.mjs, packages/browser-node/test/toolResults.test.mjs, packages/browser-node/test/pairingStatus.test.mjs
+Files: `packages/browser-node/manifest.json`, `packages/browser-node/README.md`, `packages/browser-node/background/main.js`, `packages/browser-node/background/websocket.js`, `packages/browser-node/background/nodeProtocol.js`, `packages/browser-node/background/tools.js`, `packages/browser-node/background/cdp.js`, `packages/browser-node/background/pageFunctions.js`, `packages/browser-node/background/toolResults.js`, `packages/browser-node/background/permissions.js`, `packages/browser-node/background/storage.js`, `packages/browser-node/popup/popup.html`, `packages/browser-node/popup/popup.js`, `packages/browser-node/popup/popup.css`, `packages/browser-node/test/nodeProtocol.test.mjs`, `packages/browser-node/test/toolResults.test.mjs`, `packages/browser-node/test/pairingStatus.test.mjs`, `packages/browser-node/test/sharing.test.mjs`, `packages/browser-node/test/x11.py`
 
-## Purpose
+## Purpose and contracts
 
-Plain-ES-module Manifest V3 extension that pairs/authenticates to Foxwarm as a node, advertises browser-specific tools, applies tab/domain permissions, injects page operations, and exposes connection/permission/confirmation controls in the popup.
+The plain-module Chrome MV3 extension supplies the cooperative shared-browser product defined by the [Browser Node module](../modules/browser-node.md). Short tool names are self-advertised on the existing Node connection; there is no compatibility alias or alternate scripting/screenshot driver.
 
 ## File responsibilities
 
-- `manifest.json` — tabs, scripting, storage, notifications, alarms, and all-URL host permissions.
-- `background/websocket.js` — connection state, pairing/auth, credentials, reconnect, heartbeat, and tool-call responses.
-- `background/nodeProtocol.js` — pure strict range/registered-response validation shared by the service worker and deterministic protocol tests.
-- `background/tools.js` — seven tool definitions and implementations.
-- `background/permissions.js` — tab/domain/default policy and pending confirmations.
-- `background/storage.js` — browser-extension config, credentials, and permission persistence.
-- `background/main.js` — service-worker wiring and popup message dispatch.
-- `popup/*` — URL/token/name setup, status, tab policies, domain/default policy, and confirmation UI.
+- `manifest.json`: Chrome 120+ manifest minimum, qualified with Chrome 145 on Linux; tabs/debugger/webNavigation/storage/notifications/alarms, module worker and popup. No host grants, activeTab or scripting driver.
+- `storage.js`: serialized connection/site writes in local storage and live tab/window sharing in session storage. Main normalization preserves deployment paths. Credential installation checks current target and enabled intent.
+- `permissions.js`: one synchronous observation-based tab/site/window/Off resolver, with an async current-tab wrapper, transient Ask requests, full action previews, expiry/cancellation and async validation on Allow. Notifications only draw attention to the popup; closing one denies the pending request.
+- `main.js`: local popup dispatch, reconnect wakeups and tab/window lifecycle invalidation. Rule changes cancel all in-flight targetless tab listings as well as affected targeted calls/confirmations; losing sharing detaches its page.
+- `websocket.js`: exact-socket pairing/authentication, persisted-enabled admission, bounded heartbeat/reconnect, up to 32 active calls, per-call deadlines/abort signals and correlated `tool_call_cancel`. Stop aborts pending work, closes the socket and detaches. Late replies never move to a new socket or changed Main.
+- `tools.js`: exact approved schemas/copy, metadata authorized from the same final tab-query observation without later asynchronous per-ID policy lookups, tab/window admission, document capture before the per-tab ordering lane, Ask and execution/result checks. `open_tab` requires a shared destination window and creates inactive; closing a last tab can close its window.
+- `cdp.js`: one tab-targeted Page/Runtime/Input adapter, retained attachments, isolated-world DOM helpers, page identities, screenshots and supported input. It never activates windows, retries actions or exposes arbitrary CDP commands. Unexpected detach stops connection intent.
+- `pageFunctions.js`: bounded DOM snapshot/text/HTML extraction with password omission, current-snapshot element maps, unique selector checks, focus/select/scroll helpers and fixed wait conditions. Old refs are not reconstructed.
+- `toolResults.js`: current structured PNG `inlineData` envelope consumed by the established Main image path.
+- `popup/*`: Main setup, Stop/Forget, tabs grouped by window, explicit Off/Ask/Auto and Clear-to-inherit, persistent site editing and actual Agent/Session/page/action approval cards. Fill previews mask entered text.
 
-## Tools
+## Page operations
 
-| Tool | Current behavior |
-|---|---|
-| `browser_list_tabs` | Returns tabs whose resolved policy is not `off`; does not prompt for `ask` tabs |
-| `browser_get_tab_content` | Accessibility-style interactive/landmark list, capped HTML, or capped body text |
-| `browser_screenshot` | Activates target if needed and returns a visible-tab PNG in the current structured `inlineData` result; prior tab is not restored |
-| `browser_click` | CSS-selector or viewport-coordinate click after scrolling selector target into view |
-| `browser_execute_js` | Evaluates code in `world:'MAIN'` and returns JSON-cloned/stringified result |
-| `browser_open_tab` | Creates a tab; currently skips permission resolution because no target tab exists |
-| `browser_close_tab` | Removes an allowed target tab |
+Snapshots return at most 400 visible semantic/interactive elements with opaque references from the latest snapshot; text/HTML and explicit JS results are bounded. Reference and selector operations target the top document. Selectors must match exactly one element. Coordinate clicks bind to a screenshot page identity and use viewport CSS pixels. Native CDP mouse/text/editing-key input is tab-targeted. Fill accepts text/search/email/url/tel/password/number inputs, textarea and contenteditable; other input types fail before focus/selection. Select and scroll use fixed DOM helpers. `wait_for` exposes element visible/hidden/attached, visible text and exact URL conditions within the remaining call deadline. JavaScript uses page context and awaits Promises under CSP; it remains privileged page access.
 
-## Permission behavior
+An exact active call marks its accepted navigation/close effect immediately at the native command boundary. URL events preserve only that dispatched effect, while canceling pending Ask/queued work and invalidating refs. Completed mouse/key input returns its boolean outcome without old-document data, including when it follows a link. A move, revocation, Stop, deadline or command failure remains an interruption. When accepted navigation ends sharing, detach is deferred only until that exact call settles; the unshared destination's metadata is not returned. No action is replayed.
 
-- Exact tab override wins, then exact hostname, then parent-domain rules, then default `ask`.
-- Targeted `off` rejects before execution.
-- Targeted `ask` creates a 60-second confirmation request, notification, and popup event.
-- Notification close denies. Popup/notification actions resolve the pending request.
-- `auto` proceeds immediately.
+Navigation waits for the requested document commit, then resolves sharing before reporting the resulting identity. Navigation can intentionally end sharing; no destination content is released in that case. Ordinary calls keep identity checks internal; stale targets fail and require a fresh snapshot/screenshot.
 
-## Connection behavior
+## Connection and packaging integration
 
-- Master URL is converted to `/node_ws` pairing or authenticated URL.
-- Approved credentials are stored and cause a quick authenticated reconnect.
-- The pending state and popup expose the exact `/node approve <pending-id>` command, including when the popup opens after the pairing status event; no six-digit display code is used.
-- Ordinary close schedules a 5-second reconnect unless manually disconnected or pairing was rejected.
-- Pairing and authenticated registration advertise core Node protocol range 1-2, select generation 2 with a current Master, accept an unversioned old-Master response as generation 1, and stop automatic reconnect on a malformed/disjoint upgrade-required mismatch. Canonical contract: [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility).
-- The extension handles pairing states, registration, `tool_call`, error, and an expected JSON `pong`.
+Pairing and authenticated registration retain the shared core Node protocol range 1–2 and omitted-protocol legacy response reader; this is shared transport compatibility, not old Browser configuration migration. Approved pairing discards the bootstrap token. JSON ping every 25 seconds is answered by current C# Main; reconnect alarms respect disabled intent. No self-port keepalive exists. Main transport uses only a WebSocket; no cross-origin fetch/XHR or host-permission page driver remains. The packaged extension is qualified without broad HTTP/HTTPS host grants.
 
-## Limitations
+The C# publish carries extension assets through `Delivery.targets`; `NodeBootstrap` assembles a credential-free ZIP from those runtime files. Authenticated `NodeRoutes` Browser setup returns the normalized Main address and private pairing token. Production `NodeOnboardingModal` exposes download, load-unpacked, pair/approve/share steps and the debugger banner. Deployment-relative URLs preserve non-root mounts. These C# and UI files remain owned by their existing units.
 
-- The current master does not answer the extension's JSON `ping`; see [browser node known limitation](../modules/browser-node.md#known-limitation).
-- Protocol, tool-result and pending-state Node tests exist; a full browser-extension popup and live browser workflow are not covered by these tests. There is no separate build step in this package.
-- Host permission does not make browser-internal/restricted pages scriptable.
-- The extension exposes no node file transfer, session RPC, or backend service messages.
+## Validation
 
-## Canonical ownership
+- `packages/browser-node/test/*.test.mjs`: shared protocol responses, current image envelope, target/Stop/Forget/late-pairing lifecycle, sharing precedence/session storage, stale/expired/canceled Ask, and completed revocation canceling a targetless listing across an independently delayed settings response.
+- `packages/webui/test/experimentHostBrowserNode.e2e.mjs`: existing disposable host fixture, published-runtime ZIP installed as the real MV3 extension, non-root setup, real model discovery/explicit routing/authorization, DOM refs, duplicate selectors, forms, strict CSP/Promise, target screenshots/image history, sharing/window membership, metadata/navigation races, selector/ref link completion, bounded fill types, stale approvals and Main Stop, credential host switch, heartbeat and Stop/Forget past alarms. Ordinary entry is headless regardless of inherited `DISPLAY`. The explicit test-only `--owned-xvfb` flag, used with `xvfb-run -a -s '-screen 0 1280x900x24 -nolisten tcp'`, also checks foreground OS typing and actual Chrome banner Cancel; `x11.py` is only that owned-display test's driver.
+- `experimentHostExternalNodes.e2e.mjs`: retained broader official-client protocol/authorization/CLI qualification and current Browser tool names/sharing path.
+- `experimentHostNodeOnboarding.e2e.mjs`: original production App Browser choice, prefixed download and authenticated pairing details alongside existing CLI onboarding.
 
-- Extension tab/domain/default permission boundary: [D-browser-node-tab-policy](../modules/browser-node.md#d-browser-node-tab-policy).
-- Distinct extension `browser_*` tool names: [D-browser-node-distinct-tools](../modules/browser-node.md#d-browser-node-distinct-tools).
-- Main-world JavaScript risk boundary: [D-browser-node-main-world-js](../modules/browser-node.md#d-browser-node-main-world-js).
-- Structured current screenshot writing and the separately deletable old-node reader: [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
+These tests own config, credentials, ports and profiles. They do not qualify personal logins, enterprise restrictions, every OS/compositor/window state, store publication, Firefox, complex frames or simultaneous human editing of the same tab.

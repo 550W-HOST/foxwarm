@@ -48,6 +48,7 @@ Unauthenticated bootstrap routes are:
 - `/node/run-interactive.sh` and compatibility `/node/run-cli-node.sh` — CLI/TUI launcher.
 - `/node/run.ps1` — PowerShell launcher; binds node-owned agent storage to its absolute state directory and launches from the script directory rather than the caller's project cwd.
 - `/node/docker-compose.yaml` — compose template.
+- `/node/browser-extension.zip` — credential-free unpacked Chrome/Chromium extension assembled from published runtime assets.
 - `/node/source.tar.gz` — minimal dynamic archive containing shared, CLI-node, PTY-runtime, and sandbox-start sources/artifacts.
 
 The source archive normally includes the built CLI bundles produced by the master build. `run.sh` uses `client.bundle.js` without installing the CLI dependency tree; if the bundle is absent it requires npm and builds shared/CLI as a fallback. The optional `node-pty` runtime is installed separately. Bare-metal failure leaves non-PTY capabilities available; Docker image preparation treats its required installation path as fatal.

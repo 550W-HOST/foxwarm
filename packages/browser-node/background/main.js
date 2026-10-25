@@ -1,179 +1,163 @@
-/**
- * Background service worker entry point
- * Handles message routing between popup, content scripts, and WebSocket
- */
-
-import * as wsManager from './websocket.js';
+import * as ws from './websocket.js';
 import * as storage from './storage.js';
 import * as permissions from './permissions.js';
+import * as cdp from './cdp.js';
 
-// ─── Message handler for popup and content scripts ───
-
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // We need to return true to indicate async response
-  handleMessage(message, sender).then(sendResponse).catch(err => {
-    sendResponse({ error: err.message || String(err) });
-  });
-  return true; // Keep the message channel open for async response
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  handle(message).then(respond, (error) => respond({ error: error.message || 'Request failed.' }));
+  return true;
 });
-
-async function handleMessage(message, sender) {
+async function changed(predicate) {
+  permissions.cancelConfirmations(predicate);
+  ws.cancelCalls((entry) => entry.tool === 'list_tabs' || predicate(entry));
+  for (const tab of await chrome.tabs.query({}))
+    if ((await permissions.resolvePermission(tab.id)) === 'off') await cdp.detach(tab.id);
+  chrome.runtime.sendMessage({ type: 'sharing_changed' }).catch(() => {});
+}
+async function handle(message) {
   switch (message.type) {
-    // ─── Connection management ───
     case 'get_state':
-      return wsManager.getState();
-
-    case 'connect': {
-      const { host, pairingToken, nodeName } = message;
-      await storage.saveConnectionConfig(host, pairingToken, nodeName);
-      await wsManager.connect();
+      return ws.getState();
+    case 'connect':
+      await ws.disconnect();
+      await storage.saveConnectionConfig(message.host, message.pairingToken, message.nodeName);
+      await ws.connect();
       return { success: true };
-    }
-
     case 'disconnect':
-      wsManager.disconnect();
+      await ws.disconnect();
       return { success: true };
-
     case 'reset':
-      await wsManager.resetAndDisconnect();
+      await ws.resetAndDisconnect();
       return { success: true };
-
-    case 'get_connection':
-      return await storage.getConnection();
-
-    // ─── Permission management ───
+    case 'get_connection': {
+      const conn = await storage.getConnection();
+      return {
+        host: conn.host,
+        nodeName: conn.nodeName,
+        hasCredentials: !!conn.authToken,
+        enabled: conn.enabled,
+      };
+    }
     case 'get_permissions':
-      return await storage.getPermissions();
-
-    case 'set_domain_permission':
-      await storage.setDomainPermission(message.domain, message.level);
-      return { success: true };
-
+      return storage.getPermissions();
     case 'set_tab_permission':
       await storage.setTabPermission(message.tabId, message.level);
+      await changed((entry) => entry.tabId === message.tabId);
       return { success: true };
-
-    case 'set_default_permission':
-      await storage.setDefaultPermission(message.level);
-      return { success: true };
-
-    case 'remove_domain_permission':
-      await storage.removeDomainPermission(message.domain);
-      return { success: true };
-
     case 'remove_tab_permission':
       await storage.removeTabPermission(message.tabId);
+      await changed((entry) => entry.tabId === message.tabId);
       return { success: true };
-
-    case 'resolve_permission': {
-      const level = await permissions.resolvePermission(message.tabId, message.tabUrl);
-      return { level };
+    case 'set_window_permission': {
+      await storage.setWindowPermission(message.windowId, message.level);
+      const members = new Set(
+        (await chrome.tabs.query({ windowId: message.windowId })).map((tab) => tab.id),
+      );
+      await changed((entry) => entry.windowId === message.windowId || members.has(entry.tabId));
+      return { success: true };
     }
-
-    // ─── Confirmation responses ───
-    case 'confirmation_response':
-      permissions.respondToConfirmation(message.requestId, message.approved);
+    case 'remove_window_permission': {
+      await storage.removeWindowPermission(message.windowId);
+      const members = new Set(
+        (await chrome.tabs.query({ windowId: message.windowId })).map((tab) => tab.id),
+      );
+      await changed((entry) => entry.windowId === message.windowId || members.has(entry.tabId));
       return { success: true };
-
+    }
+    case 'set_domain_permission': {
+      await storage.setDomainPermission(message.domain, message.level);
+      const members = new Set(
+        (await chrome.tabs.query({}))
+          .filter((tab) => {
+            try {
+              const host = new URL(tab.url).hostname;
+              return host === message.domain || host.endsWith('.' + message.domain);
+            } catch {
+              return false;
+            }
+          })
+          .map((tab) => tab.id),
+      );
+      await changed((entry) => members.has(entry.tabId));
+      return { success: true };
+    }
+    case 'remove_domain_permission': {
+      await storage.removeDomainPermission(message.domain);
+      const members = new Set(
+        (await chrome.tabs.query({}))
+          .filter((tab) => {
+            try {
+              const host = new URL(tab.url).hostname;
+              return host === message.domain || host.endsWith('.' + message.domain);
+            } catch {
+              return false;
+            }
+          })
+          .map((tab) => tab.id),
+      );
+      await changed((entry) => members.has(entry.tabId));
+      return { success: true };
+    }
+    case 'resolve_permission':
+      return { level: await permissions.resolvePermission(message.tabId) };
+    case 'confirmation_response':
+      return {
+        approved: await permissions.respondToConfirmation(message.requestId, message.approved),
+      };
     case 'get_pending_confirmations':
       return { confirmations: permissions.getPendingConfirmations() };
-
     default:
-      throw new Error(`Unknown message type: ${message.type}`);
+      throw new Error('Unknown popup request.');
   }
 }
-
-// ─── Service Worker keepalive ───
-// MV3 service workers are terminated after ~30s of inactivity.
-// Strategy 1: chrome.alarms to periodically wake and reconnect if needed.
-// Strategy 2: While WS is connected, keep a self-referencing port alive
-//             to prevent the service worker from being terminated.
-
-const KEEPALIVE_ALARM = 'foxwarm-keepalive';
-
-chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 }); // 30s
-
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === KEEPALIVE_ALARM) {
-    const state = wsManager.getState();
-    if (state.state === 'disconnected' || state.state === 'reconnecting') {
-      autoConnect();
-    }
-  }
-});
-
-// Keep service worker alive while WebSocket is active by maintaining a port
-let keepAlivePort = null;
-
-function startKeepAlive() {
-  if (keepAlivePort) return;
-  // Connect to ourselves — this keeps the service worker alive as long as the port is open
-  keepAlivePort = chrome.runtime.connect({ name: 'keepalive' });
-  keepAlivePort.onDisconnect.addListener(() => {
-    keepAlivePort = null;
-    // Re-establish if still connected
-    const state = wsManager.getState();
-    if (state.state === 'registered' || state.state === 'connected' ||
-        state.state === 'pair_pending' || state.state === 'pair_approved') {
-      setTimeout(startKeepAlive, 0);
-    }
-  });
-}
-
-function stopKeepAlive() {
-  if (keepAlivePort) {
-    keepAlivePort.disconnect();
-    keepAlivePort = null;
-  }
-}
-
-// Listen for keepalive port connections (from ourselves)
-chrome.runtime.onConnect.addListener((port) => {
-  if (port.name === 'keepalive') {
-    // Just hold the port open — nothing to do
-    port.onDisconnect.addListener(() => {});
-  }
-});
-
-// Hook into wsManager state changes to start/stop keepalive
-wsManager.onStateChange((state) => {
-  if (state === 'registered' || state === 'connected' ||
-      state === 'pair_pending' || state === 'pair_approved' ||
-      state === 'connecting' || state === 'reconnecting') {
-    startKeepAlive();
-  } else if (state === 'disconnected') {
-    stopKeepAlive();
-  }
-});
-
-// ─── Auto-connect on startup if credentials exist ───
-
-async function autoConnect() {
+async function resume() {
   const conn = await storage.getConnection();
-  if (conn.host && (conn.authToken || conn.pairingToken)) {
-    console.log('[foxwarm-node] Auto-connecting on startup...');
-    try {
-      await wsManager.connect();
-    } catch (e) {
-      console.error('[foxwarm-node] Auto-connect failed:', e);
-    }
-  }
+  if (conn.enabled && ['disconnected', 'reconnecting'].includes(ws.getState().state))
+    await ws.connect().catch(() => {});
 }
-
-// Service worker activation
-chrome.runtime.onInstalled.addListener(() => {
-  console.log('[foxwarm-node] Extension installed');
+chrome.alarms.create('foxwarm-reconnect', { periodInMinutes: 0.5 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'foxwarm-reconnect') void resume();
 });
-
 chrome.runtime.onStartup.addListener(() => {
-  console.log('[foxwarm-node] Browser started');
-  autoConnect();
+  void resume();
 });
-
-// Also try to connect when the service worker wakes up
-autoConnect();
-
-// Clean up tab-specific permissions when tabs are closed
-chrome.tabs.onRemoved.addListener(async (tabId) => {
-  await storage.removeTabPermission(tabId);
+void resume();
+function tabChanged(tabId, expectedEffect) {
+  ws.cancelCalls(
+    (entry) => entry.tabId === tabId && (!expectedEffect || entry.effect !== expectedEffect),
+  );
+  permissions.cancelConfirmations((entry) => entry.tabId === tabId);
+  cdp.invalidate(tabId);
+  chrome.runtime.sendMessage({ type: 'sharing_changed' }).catch(() => {});
+}
+chrome.tabs.onUpdated.addListener((tabId, change) => {
+  if (change.url || change.status === 'loading') {
+    tabChanged(tabId, 'navigation');
+    void permissions
+      .resolvePermission(tabId)
+      .then((level) => {
+        if (level === 'off' && !ws.isNavigating(tabId)) return cdp.detach(tabId);
+      })
+      .catch(() => {});
+  }
+});
+chrome.tabs.onDetached.addListener((tabId) => tabChanged(tabId));
+chrome.tabs.onAttached.addListener((tabId) => {
+  tabChanged(tabId);
+  void permissions
+    .resolvePermission(tabId)
+    .then((level) => {
+      if (level === 'off') return cdp.detach(tabId);
+    })
+    .catch(() => {});
+});
+chrome.tabs.onRemoved.addListener((tabId) => {
+  tabChanged(tabId, 'close');
+  void storage.removeTabPermission(tabId);
+  void cdp.detach(tabId);
+});
+chrome.windows.onRemoved.addListener((windowId) => {
+  permissions.cancelConfirmations((entry) => entry.windowId === windowId);
+  void storage.removeWindowPermission(windowId);
 });

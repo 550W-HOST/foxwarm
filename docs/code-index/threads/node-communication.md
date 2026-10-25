@@ -19,10 +19,10 @@ This thread owns the authenticated remote transport contract among the master [n
 1. Main's generic Node registry resolves the exact selected Node to the authenticated remote provider after current-node/isolation permission evaluation.
 2. Master dispatch sends `tool_call` with call/session IDs.
 3. CLI node resolves shared `nodeTools` and optionally asks its TUI interceptor.
-4. Browser node resolves only its advertised `browser_*` handlers and applies extension tab policy.
+4. Browser Node resolves its advertised short-name handlers and applies extension tab/window/site sharing.
 5. `tool_call_response` or `tool_call_error` resolves the master request. Current nodes write canonical structured image fields. The master applies the isolated old-node result reader described in [D-node-thread-tool-result-compatibility](#d-node-thread-tool-result-compatibility) only at this remote response ingress.
 
-The browser extension's `browser_*` tools and shared Puppeteer `browse_*` tools are distinct current surfaces.
+The browser extension's short-name Node tools and shared Puppeteer `browse_*` tools are distinct surfaces; see [Browser Node](../modules/browser-node.md#d-browser-node-distinct-tools).
 
 ## File transfer and backend services
 
@@ -43,7 +43,7 @@ Remote background exec completion is a narrower protocol exception, not a generi
 
 - Master and CLI node both send WebSocket protocol ping frames every 30 seconds and require liveness within 10 seconds.
 - Browser WebSocket automatically answers master's protocol ping.
-- The browser extension also sends JSON `ping` and expects JSON `pong`; the master currently has no matching handler. This known mismatch can force extension reconnects and is not documented as a working symmetric heartbeat.
+- The browser extension also sends JSON `ping` every 25 seconds; current C# Main replies with JSON `pong`. Persisted disabled intent prevents reconnect alarms from overriding user Stop.
 
 ## Approved-node administration
 
@@ -59,7 +59,7 @@ Remote background exec completion is a narrower protocol exception, not a generi
 
 ## Bootstrap and setup
 
-The master serves current launch scripts, compose, PowerShell, and a minimal dynamic source archive. The `skills/node-setup/SKILL.md` source skill is the single operator-facing pairing/bootstrap workflow. Agent-isolated worker creation begins only after an approved node is online.
+The master serves current launch scripts, compose, PowerShell, a minimal dynamic source archive and a credential-free Browser extension ZIP from published runtime assets. Browser onboarding obtains private pairing details through a separate authenticated API and uses deployment-relative download links. The `skills/node-setup/SKILL.md` source skill is the single operator-facing pairing/bootstrap workflow. Agent-isolated worker creation begins only after an approved node is online.
 
 ## Units
 
@@ -93,9 +93,15 @@ The optional top-level `url` supplies public bootstrap instruction/download exam
 
 The independent Nodes Workbench page shows Node metadata without Session lists, filters, usage or inspectors. New nodes opens friendly setup methods and pending approvals through authenticated Main APIs. Commands inline complete addresses, prioritizing configured `url`, using a replaceable example host for CLI help or the browser deployment address as a GUI suggestion; a user override wins. Pending summaries exclude approved offline handoffs and expose no credentials. Approval is explicit and stale/repeated approval cannot mint a second identity.
 
-Linux CLI (including systemd), interactive CLI, Docker (including manual Compose), and Windows default to pairing approval and can switch to a pre-created token. Shell uses direct authentication only. Creation is always an explicit action; method/mode changes and command updates never create or rotate an identity. One modal-owned created identity can supply every method's supported direct-auth input. Its bound name/address remain separate from editable pairing drafts, while directory changes regenerate commands with the same credential.
+Linux CLI (including systemd), interactive CLI, Docker (including manual Compose), and Windows default to pairing approval and can switch to a pre-created token. Shell uses direct authentication only. Browser uses the existing request/approve pairing flow, with a credential-free unpacked extension download, authenticated address/token details, explicit sharing and Chrome debugger-banner guidance. Creation is always an explicit action; method/mode changes and command updates never create or rotate an identity. One modal-owned created identity can supply every method's supported direct-auth input. Its bound name/address remain separate from editable pairing drafts, while directory changes regenerate commands with the same credential.
 
 Browser setup credentials are modal-owned, not persisted or placed in ordinary summaries, URLs or logs; closing aborts requests and discards modal state, but does not revoke an already accepted creation. No recovery or automatic creation retry is introduced. No new pairing identity, claim protocol or token platform is introduced. Implementation: [WebUI Node onboarding](../units/webui-node-onboarding.md) and [authenticated onboarding routes](../units/src-webui-node-onboarding.md).
+
+### D-node-thread-call-cancellation
+
+A Node may advertise optional `capabilities.features.toolCallCancellation: true` for ordinary non-exec calls. C# Main sends correlated `tool_call_cancel {callId}` when that dispatched call's Session cancellation or deadline ends its wait. Only that authenticated connection receives the cancel; unsupported clients retain unknown-outcome behavior. Browser Node aborts the exact call's pending Ask/queued work and discards canceled results. Already accepted page effects cannot be undone and are not retried.
+
+This capability does not change persistent exec. Its separately negotiated `execWaitCancellation` still ends foreground waiting through the existing background-registration handshake while retaining exec reply correlation and process lifetime. No Browser-specific Core routing is introduced.
 
 ### D-node-thread-tool-service-split
 
@@ -136,8 +142,3 @@ The terminal helper has only local capability IPC. Path resolution and remote ro
 ### D-node-thread-tool-result-compatibility
 
 Official node and browser-extension tool writers use the current structured `inlineData` / `inlineDataItems` result fields with camel-case `mimeType`. Old source-specific image payloads are read only by one pure compatibility adapter at the master remote-node response ingress. Generic tool processing accepts only the current structured fields. Keep the adapter isolated so deleting its file, tests, and one ingress call is the complete migration from read-old/write-new compatibility to a strict current-node requirement.
-
-## Open questions
-
-- Should the master add a JSON ping/pong compatibility message for browser clients, or should the extension remove its client-side JSON wait and rely on server protocol heartbeat plus normal socket close/error signals?
-- Should a future API intentionally unify extension `browser_*` and shared `browse_*` tools, and if so which persisted/tool-schema compatibility contract is required?

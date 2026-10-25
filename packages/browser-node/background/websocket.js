@@ -1,342 +1,225 @@
-/**
- * WebSocket connection manager — handles pairing, auth, reconnect, heartbeat
- */
-
 import * as storage from './storage.js';
-import { TOOL_DEFINITIONS, TOOL_HANDLERS } from './tools.js';
+import { executeTool, TOOL_DEFINITIONS } from './tools.js';
+import { cancelConfirmations, resolvePermission } from './permissions.js';
+import * as cdp from './cdp.js';
 import { NODE_PROTOCOL, resolveMasterNodeProtocol } from './nodeProtocol.js';
 
-const HEARTBEAT_INTERVAL_MS = 25000;
-const HEARTBEAT_TIMEOUT_MS = 10000;
-const RECONNECT_DELAY_MS = 5000;
-const NODE_TYPE = 'browser-extension';
-
-let ws = null;
-let heartbeatTimer = null;
-let heartbeatAwaitingPong = false;
-let heartbeatLastPingAt = 0;
-let reconnectTimer = null;
-let forceImmediateReconnect = false;
-let connectionState = 'disconnected'; // disconnected, connecting, connected, pairing, registered
-let pairingRejected = false;
-let protocolIncompatible = false;
-let currentNodeId = null;
-let currentPendingId = null;
-let manualDisconnect = false;
-let stateChangeCallback = null;
-
-export function onStateChange(cb) {
-  stateChangeCallback = cb;
+let ws,
+  heartbeat,
+  reconnect,
+  generation = 0;
+let state = { state: 'disconnected', nodeId: null, pendingId: null };
+const activeCalls = new Map();
+function publish(next, detail = {}) {
+  state = { state: next, nodeId: detail.nodeId || null, pendingId: detail.pendingId || null };
+  chrome.runtime.sendMessage({ type: 'connection_state', state: next, detail }).catch(() => {});
 }
-
-function setState(state, detail = {}) {
-  connectionState = state;
-  currentPendingId = state === 'pair_pending' ? detail.pendingId : null;
-  // Notify callback
-  if (stateChangeCallback) {
-    try { stateChangeCallback(state, detail); } catch {}
-  }
-  // Broadcast to popup
-  chrome.runtime.sendMessage({
-    type: 'connection_state',
-    state,
-    detail,
-  }).catch(() => { /* popup not open */ });
-}
-
 export function getState() {
-  return { state: connectionState, nodeId: currentNodeId, pendingId: currentPendingId };
+  return state;
 }
-
-function stopHeartbeat() {
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
-  }
-  heartbeatAwaitingPong = false;
+function cancelWork() {
+  for (const { controller } of activeCalls.values())
+    controller.abort(new Error('Browser connection stopped.'));
+  activeCalls.clear();
+  cancelConfirmations();
 }
-
-function startHeartbeat() {
-  stopHeartbeat();
-  heartbeatTimer = setInterval(() => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
-    if (heartbeatAwaitingPong && Date.now() - heartbeatLastPingAt >= HEARTBEAT_TIMEOUT_MS) {
-      console.warn('[foxwarm-node] Heartbeat timeout, closing connection');
-      ws.close();
-      return;
-    }
-
-    // WebSocket API in service workers doesn't have ping/pong frames.
-    // We send a JSON ping message instead and expect a pong from the server.
-    // Actually, the server uses WS-level ping/pong which the browser handles automatically.
-    // The browser's WebSocket will respond to server pings automatically.
-    // For client-side keepalive, we just send a small message.
-    heartbeatAwaitingPong = true;
-    heartbeatLastPingAt = Date.now();
-    try {
-      // Send a lightweight keepalive. The server's heartbeat (ping frames) is the primary mechanism.
-      // We just need to detect if the connection is dead from our side.
-      ws.send(JSON.stringify({ type: 'ping' }));
-    } catch (e) {
-      console.warn('[foxwarm-node] Failed to send heartbeat:', e);
-    }
-  }, HEARTBEAT_INTERVAL_MS);
+export function cancelCalls(predicate) {
+  for (const entry of activeCalls.values())
+    if (predicate(entry)) entry.controller.abort(new Error('Page or sharing changed.'));
 }
-
-function scheduleReconnect() {
-  if (reconnectTimer || manualDisconnect) return;
-
-  const delay = forceImmediateReconnect ? 250 : RECONNECT_DELAY_MS;
-  forceImmediateReconnect = false;
-
-  console.log(`[foxwarm-node] Reconnecting in ${delay}ms...`);
-  setState('reconnecting', { delay });
-
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    connect().catch(err => {
-      console.error('[foxwarm-node] Reconnect failed:', err);
-      scheduleReconnect();
-    });
-  }, delay);
+export function isNavigating(tabId) {
+  return [...activeCalls.values()].some(
+    (entry) =>
+      entry.tabId === tabId && entry.effect === 'navigation' && !entry.controller.signal.aborted,
+  );
 }
-
-async function handleMessage(data) {
-  // Any message from server means connection is alive
-  heartbeatAwaitingPong = false;
-
-  switch (data.type) {
-    case 'registered': {
-      try {
-        resolveMasterNodeProtocol(data.nodeProtocol);
-      } catch (error) {
-        protocolIncompatible = true;
-        console.error('[foxwarm-node] Master Node protocol is incompatible; update Master or this extension', error);
-        setState('protocol_incompatible', { nodeId: data.nodeId, nodeProtocol: data.nodeProtocol });
-        ws?.close(1008, 'Master Node protocol incompatible');
-        break;
-      }
-      protocolIncompatible = false;
-      console.log(`[foxwarm-node] Registered as ${data.nodeId}`);
-      currentNodeId = data.nodeId;
-      setState('registered', { nodeId: data.nodeId });
-      break;
-    }
-
-    case 'node_incompatible':
-      protocolIncompatible = true;
-      console.error('[foxwarm-node] Node protocol is incompatible:', data.message);
-      setState('protocol_incompatible', data);
-      break;
-
-    case 'pair_pending':
-      console.log(`[foxwarm-node] Pairing pending. Run /node approve ${data.pendingId}`);
-      setState('pair_pending', { pendingId: data.pendingId });
-      break;
-
-    case 'pair_approved':
-      console.log(`[foxwarm-node] Pairing approved: ${data.nodeId}`);
-      await storage.saveCredentials(String(data.nodeId), String(data.authToken));
-      currentNodeId = String(data.nodeId);
-      setState('pair_approved', { nodeId: data.nodeId });
-      forceImmediateReconnect = true;
-      ws?.close(1000, 'Reconnect with credentials');
-      break;
-
-    case 'pair_rejected':
-      console.warn(`[foxwarm-node] Pairing rejected:`, data.reason);
-      pairingRejected = true;
-      setState('pair_rejected', { reason: data.reason });
-      break;
-
-    case 'tool_call':
-      await handleToolCall(data);
-      break;
-
-    case 'pong':
-      // Server responded to our ping
-      heartbeatAwaitingPong = false;
-      break;
-
-    case 'error':
-      console.error(`[foxwarm-node] Server error:`, data.error);
-      break;
-
-    default:
-      console.warn(`[foxwarm-node] Unknown message type:`, data.type);
-  }
+export async function disconnect() {
+  generation++;
+  clearTimeout(reconnect);
+  clearInterval(heartbeat);
+  reconnect = heartbeat = null;
+  const previous = ws;
+  ws = null;
+  previous?.close(1000, 'User stopped');
+  cancelWork();
+  publish('disconnected');
+  await Promise.all([storage.setEnabled(false), cdp.detachAll()]);
 }
-
-async function handleToolCall(message) {
-  const { callId, tool, args } = message;
-  console.log(`[foxwarm-node] Tool call: ${tool} (${callId})`);
-
-  try {
-    const handler = TOOL_HANDLERS[tool];
-    if (!handler) {
-      throw new Error(`Unknown tool: ${tool}`);
-    }
-
-    const result = await handler(args || {});
-    send({
-      type: 'tool_call_response',
-      callId,
-      result: normalizeResult(result),
-    });
-    console.log(`[foxwarm-node] Tool ${tool} completed (${callId})`);
-  } catch (e) {
-    console.error(`[foxwarm-node] Tool ${tool} failed:`, e);
-    send({
-      type: 'tool_call_error',
-      callId,
-      error: e.message || String(e),
-    });
-  }
-}
-
-function normalizeResult(raw) {
-  if (raw === undefined) return { output: '(No output)' };
-  if (raw === null) return { output: null };
-  if (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean') {
-    return { output: raw };
-  }
-  if (typeof raw === 'object') return raw;
-  return { output: String(raw) };
-}
-
-function send(data) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(data));
-  } else {
-    console.warn('[foxwarm-node] Cannot send: WebSocket not connected');
-  }
-}
-
-export async function connect() {
-  const conn = await storage.getConnection();
-
-  if (!conn.host) {
-    throw new Error('No host configured');
-  }
-
-  const hasCredentials = conn.nodeId && conn.authToken;
-  const hasPairingToken = !!conn.pairingToken;
-
-  if (!hasCredentials && !hasPairingToken) {
-    throw new Error('No credentials or pairing token');
-  }
-
-  // Close existing connection
-  if (ws) {
-    ws.close();
-    ws = null;
-  }
-
-  manualDisconnect = false;
-  pairingRejected = false;
-
-  const isAuthMode = hasCredentials;
-  const wsHost = conn.host.replace(/\/$/, '').replace(/^http/, 'ws');
-  const wsUrl = isAuthMode
-    ? `${wsHost}/node_ws?id=${encodeURIComponent(conn.nodeId)}&auth=${encodeURIComponent(conn.authToken)}`
-    : `${wsHost}/node_ws?token=${encodeURIComponent(conn.pairingToken)}`;
-
-  console.log(`[foxwarm-node] Connecting (${isAuthMode ? 'auth' : 'pairing'})...`);
-  setState('connecting', { mode: isAuthMode ? 'authenticated' : 'pairing' });
-
-  const capabilities = { tools: TOOL_DEFINITIONS };
-
-  ws = new WebSocket(wsUrl);
-
-  ws.onopen = () => {
-    console.log('[foxwarm-node] Connected');
-    setState('connected', { mode: isAuthMode ? 'authenticated' : 'pairing' });
-
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
-
-    startHeartbeat();
-
-    if (isAuthMode) {
-      send({
-        type: 'node_register',
-        nodeType: NODE_TYPE,
-        capabilities,
-        nodeProtocol: NODE_PROTOCOL,
-      });
-    } else {
-      send({
-        type: 'pair_request',
-        requestedName: conn.nodeName || 'browser-ext',
-        nodeType: NODE_TYPE,
-        capabilities,
-        nodeProtocol: NODE_PROTOCOL,
-      });
-    }
-  };
-
-  ws.onmessage = async (event) => {
-    try {
-      const data = JSON.parse(event.data);
-      await handleMessage(data);
-    } catch (e) {
-      console.error('[foxwarm-node] Error handling message:', e);
-    }
-  };
-
-  ws.onclose = async (event) => {
-    stopHeartbeat();
-    console.warn(`[foxwarm-node] Disconnected: code=${event.code} reason=${event.reason}`);
-    setState('disconnected', { code: event.code, reason: event.reason });
-
-    if (pairingRejected) {
-      console.warn('[foxwarm-node] Pairing rejected, not reconnecting');
-      return;
-    }
-    if (protocolIncompatible) {
-      console.error('[foxwarm-node] Protocol incompatible, not reconnecting until the extension is updated/reloaded');
-      return;
-    }
-
-    // If auth failed and we have a pairing token, clear credentials and retry
-    if (event.code === 1008 && event.reason?.includes('Invalid node credentials') && hasPairingToken) {
-      console.warn('[foxwarm-node] Auth failed, clearing credentials for re-pairing');
-      await storage.clearCredentials();
-    }
-
-    if (!manualDisconnect) {
-      scheduleReconnect();
-    }
-  };
-
-  ws.onerror = (event) => {
-    console.error('[foxwarm-node] WebSocket error:', event);
-  };
-}
-
-export function disconnect() {
-  manualDisconnect = true;
-  stopHeartbeat();
-
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
-
-  if (ws) {
-    ws.close(1000, 'User disconnect');
-    ws = null;
-  }
-
-  currentNodeId = null;
-  setState('disconnected', { manual: true });
-}
-
 export async function resetAndDisconnect() {
-  disconnect();
-  await storage.clearCredentials();
-  currentNodeId = null;
+  await disconnect();
+  await storage.forget();
+}
+cdp.setDetachHandler(() => {
+  void disconnect();
+});
+
+async function toolCall(socket, message) {
+  if (state.state !== 'registered' || socket !== ws) return;
+  if (activeCalls.size >= 32) {
+    socket.send(
+      JSON.stringify({
+        type: 'tool_call_error',
+        callId: message.callId,
+        error: 'Too many pending browser calls.',
+      }),
+    );
+    return;
+  }
+  const controller = new AbortController();
+  const timeout = Math.min(62000, Math.max(1, Number(message.timeoutMs) || 62000));
+  const deadline = Date.now() + timeout;
+  const invocation = {
+    controller,
+    tool: message.tool,
+    tabId: message.args?.tabId,
+    windowId: message.args?.windowId,
+  };
+  activeCalls.set(message.callId, invocation);
+  const timer = setTimeout(
+    () => controller.abort(new Error('Browser call deadline expired.')),
+    timeout,
+  );
+  try {
+    if (!TOOL_DEFINITIONS.some((tool) => tool.name === message.tool))
+      throw new Error('Unknown browser tool.');
+    const result = await executeTool(message.tool, message.args || {}, {
+      signal: controller.signal,
+      deadline,
+      sessionId: message.sessionId,
+      agentName: message.agentName,
+      beginEffect: (effect) => {
+        controller.signal.throwIfAborted();
+        invocation.effect = effect;
+      },
+    });
+    controller.signal.throwIfAborted();
+    if (ws === socket && socket.readyState === WebSocket.OPEN)
+      socket.send(JSON.stringify({ type: 'tool_call_response', callId: message.callId, result }));
+  } catch (error) {
+    // Errors do not contain argument previews or entered values.
+    const detail = error.message || 'Browser call canceled.';
+    if (ws === socket && socket.readyState === WebSocket.OPEN)
+      socket.send(
+        JSON.stringify({
+          type: 'tool_call_error',
+          callId: message.callId,
+          error: invocation.effect
+            ? detail + ' The requested page effect may have occurred; it was not retried.'
+            : detail,
+        }),
+      );
+  } finally {
+    clearTimeout(timer);
+    activeCalls.delete(message.callId);
+    if (invocation.effect === 'navigation') {
+      try {
+        if ((await resolvePermission(invocation.tabId)) === 'off')
+          await cdp.detach(invocation.tabId);
+      } catch {
+        /* Tab may have closed. */
+      }
+    }
+  }
+}
+export async function connect() {
+  const attempt = ++generation;
+  clearTimeout(reconnect);
+  clearInterval(heartbeat);
+  const conn = await storage.getConnection();
+  if (attempt !== generation || !conn.enabled) return;
+  if (!conn.host || !((conn.nodeId && conn.authToken) || conn.pairingToken))
+    throw new Error('Enter the Main address and pairing token.');
+  const previous = ws;
+  ws = null;
+  previous?.close();
+  cancelWork();
+  const authenticated = !!(conn.nodeId && conn.authToken);
+  const query = authenticated
+    ? `id=${encodeURIComponent(conn.nodeId)}&auth=${encodeURIComponent(conn.authToken)}`
+    : `token=${encodeURIComponent(conn.pairingToken)}`;
+  const socket = new WebSocket(conn.host.replace(/^http/, 'ws') + '/node_ws?' + query);
+  ws = socket;
+  publish('connecting');
+  let awaitingPong = false;
+  socket.onopen = () => {
+    if (ws !== socket) return;
+    publish('connected');
+    socket.send(
+      JSON.stringify({
+        type: authenticated ? 'node_register' : 'pair_request',
+        requestedName: conn.nodeName || 'browser',
+        nodeType: 'browser-extension',
+        nodeProtocol: NODE_PROTOCOL,
+        capabilities: { tools: TOOL_DEFINITIONS, features: { toolCallCancellation: true } },
+      }),
+    );
+    heartbeat = setInterval(() => {
+      if (ws !== socket) return;
+      if (awaitingPong) {
+        socket.close();
+        return;
+      }
+      awaitingPong = true;
+      socket.send(JSON.stringify({ type: 'ping' }));
+    }, 25000);
+  };
+  socket.onmessage = async (event) => {
+    if (ws !== socket || attempt !== generation) return;
+    let data;
+    try {
+      data = JSON.parse(event.data);
+      awaitingPong = false;
+      switch (data.type) {
+        case 'registered':
+          resolveMasterNodeProtocol(data.nodeProtocol);
+          publish('registered', { nodeId: data.nodeId });
+          break;
+        case 'pair_pending':
+          publish('pair_pending', { pendingId: data.pendingId });
+          break;
+        case 'pair_approved':
+          await storage.saveCredentials(conn.host, String(data.nodeId), String(data.authToken));
+          if (socket === ws && attempt === generation) {
+            publish('pair_approved', { nodeId: data.nodeId });
+            socket.close(1000, 'Use approved credentials');
+          }
+          break;
+        case 'pair_rejected':
+        case 'node_incompatible':
+          await disconnect();
+          publish(data.type === 'pair_rejected' ? 'pair_rejected' : 'protocol_incompatible');
+          break;
+        case 'tool_call':
+          void toolCall(socket, data);
+          break;
+        case 'tool_call_cancel':
+          activeCalls
+            .get(data.callId)
+            ?.controller.abort(new Error('Session canceled this browser call.'));
+          break;
+      }
+    } catch {
+      // A malformed registration or stale pairing cannot enable work or keep reconnecting.
+      await disconnect();
+      publish('disconnected');
+    }
+  };
+  socket.onclose = async (event) => {
+    if (ws !== socket || attempt !== generation) return;
+    ws = null;
+    clearInterval(heartbeat);
+    cancelWork();
+    await cdp.detachAll();
+    if (attempt !== generation) return;
+    if (event.code === 1008) {
+      await storage.setEnabled(false);
+      publish('disconnected');
+      return;
+    }
+    publish('reconnecting');
+    reconnect = setTimeout(() => {
+      void connect().catch(() => publish('disconnected'));
+    }, 1000);
+  };
+  socket.onerror = () => {}; // close owns bounded reconnect.
 }

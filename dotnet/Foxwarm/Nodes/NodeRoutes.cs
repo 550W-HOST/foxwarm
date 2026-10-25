@@ -76,6 +76,18 @@ internal static class NodeRoutes
         );
         MapPost(
             app,
+            "/api/nodes/onboarding/browser",
+            (body, _) =>
+                Task.FromResult(
+                    new JsonObject
+                    {
+                        ["baseUrl"] = NodeBootstrap.OnboardingBaseUrl(body, configuredBaseUrl),
+                        ["pairingToken"] = hub.Registry.PairingToken,
+                    }
+                )
+        );
+        MapPost(
+            app,
             "/api/nodes/onboarding/commands",
             (body, _) =>
             {

@@ -27,7 +27,8 @@ internal sealed class NodeBootstrap(
     ];
 
     internal static bool IsPublicPath(PathString path) =>
-        path == "/node/source.tar.gz"
+        path == "/node/browser-extension.zip"
+        || path == "/node/source.tar.gz"
         || Templates.Any(name => path == "/node/" + name)
         || path == "/node/run-cli-node.sh";
 
@@ -219,6 +220,39 @@ internal sealed class NodeBootstrap(
                 }
             );
         }
+        app.MapGet(
+            "/node/browser-extension.zip",
+            async (HttpContext context) =>
+            {
+                var root = Path.Combine(AppContext.BaseDirectory, "packages", "browser-node");
+                if (!File.Exists(Path.Combine(root, "manifest.json")))
+                {
+                    context.Response.StatusCode = 503;
+                    return;
+                }
+                context.Response.ContentType = "application/zip";
+                context.Response.Headers.ContentDisposition =
+                    "attachment; filename=foxwarm-browser-node.zip";
+                using var buffer = new MemoryStream();
+                using (var archive = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
+                {
+                    foreach (
+                        var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+                    )
+                    {
+                        var entry = archive.CreateEntry(
+                            Path.GetRelativePath(root, path).Replace('\\', '/'),
+                            CompressionLevel.Fastest
+                        );
+                        await using var output = entry.Open();
+                        await using var input = File.OpenRead(path);
+                        await input.CopyToAsync(output, context.RequestAborted);
+                    }
+                }
+                buffer.Position = 0;
+                await buffer.CopyToAsync(context.Response.Body, context.RequestAborted);
+            }
+        );
         app.MapGet(
             "/node/source.tar.gz",
             async (HttpContext context) =>

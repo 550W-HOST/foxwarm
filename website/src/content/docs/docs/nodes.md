@@ -37,6 +37,16 @@ Tools differ between clients. If a Node is marked **upgrade required**, update i
 
 See the repository's [Node client guide](https://github.com/550W-HOST/foxwarm/blob/main/docs/node-client.md) for bootstrap flags, service installation, and client troubleshooting.
 
+## Share your existing browser
+
+Open **Nodes → New nodes → Browser**, download the extension ZIP and extract it. In Chrome or Chromium, open `chrome://extensions`, enable Developer mode and use **Load unpacked** to select the extracted folder. The setup page provides your Main address and private pairing token; enter them in the extension, Connect, then approve its request in Foxwarm.
+
+Use the extension popup to share a tab or an entire window with **Ask** or **Auto**. New installations share nothing. A shared window includes current, new and moved-in HTTP(S) tabs; an explicit tab **Off** excludes it. **Clear** restores inheritance. Tab/window sharing lasts for the browser session; remembered site rules persist.
+
+Page operations show Chrome's debugging banner. Pressing **Cancel** or the extension's **Stop** stops Browser Node until you deliberately Connect again. Debugger permission is broad and the extension enforces sharing; Chrome does not isolate this permission by window. Avoid editing the same tab at the same time as an Agent. The first distribution supports unpacked Chrome/Chromium, not Firefox or a browser store.
+
+Browser tools have short Node-local names such as `list_tabs`, `get_tab_content`, `fill` and `screenshot`. They control your shared logged-in tabs. The separate `browse_*` tools use a process-owned browser. You can leave a development Node selected and explicitly target Browser Node through tool discovery and `call_tool`.
+
 ## Select the execution Node
 
 To select an approved or provider-created Node for the current Session:

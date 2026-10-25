@@ -1,4 +1,4 @@
-// Stage-one external Node qualification against the real host and unchanged official clients.
+// Stage-one external Node qualification against the real host and official clients.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
@@ -297,17 +297,18 @@ try {
   const extensionId = new URL(target.url()).host
   await popup.goto('chrome-extension://' + extensionId + '/popup/popup.html')
   await popup.evaluate(async ({ host, token }) => {
-    await chrome.runtime.sendMessage({ type: 'set_default_permission', level: 'auto' })
     const result = await chrome.runtime.sendMessage({ type: 'connect', host, pairingToken: token, nodeName: 'owned-browser' })
     if (result.error) throw new Error(result.error)
   }, { host: hostUrl, token: pairingToken })
   const browserPending = await until(async () => (await fixture.api('GET', '/api/nodes/onboarding/pending')).body.items.find(value => value.requestedName === 'owned-browser'), 'real extension pairing')
   assert.equal((await fixture.api('POST', '/api/nodes/onboarding/approve', { pendingId: browserPending.id })).status, 200); await online('owned-browser')
   const tab = await browser.newPage(); await tab.goto(`http://127.0.0.1:${peer.address().port}/owned-page`)
-  state = await turn(actor, 'browser-list', [call('browser-select', 'node', { action: 'select', nodeId: 'owned-browser' }), call('browser-list', 'browser_list_tabs', {})])
+  const sharedWindow = await popup.evaluate(async () => (await chrome.tabs.query({ url: '*://127.0.0.1/*' }))[0].windowId)
+  await popup.evaluate(windowId => chrome.runtime.sendMessage({ type: 'set_window_permission', windowId, level: 'auto' }), sharedWindow)
+  state = await turn(actor, 'browser-list', [call('browser-select', 'node', { action: 'select', nodeId: 'owned-browser' }), call('browser-list', 'list_tabs', {})])
   const ownedTab = pair(state, 'browser-list').tabs.find(tab => tab.url.endsWith('/owned-page')); assert(ownedTab)
-  state = await turn(actor, 'browser-text', [call('browser-text', 'browser_get_tab_content', { tabId: ownedTab.tabId, format: 'text' })]); assert.match(pair(state, 'browser-text').text, /Owned external Node tab/)
-  state = await turn(actor, 'browser-image', [call('browser-image', 'browser_screenshot', { tabId: ownedTab.tabId })])
+  state = await turn(actor, 'browser-text', [call('browser-text', 'get_tab_content', { tabId: ownedTab.tabId, format: 'text' })]); assert.match(pair(state, 'browser-text').text, /Owned external Node tab/)
+  state = await turn(actor, 'browser-image', [call('browser-image', 'screenshot', { tabId: ownedTab.tabId })])
   const screenshotRow = state.history.find(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'browser-image'))
   const image = screenshotRow.parts.find(part => part.inlineDataRef)?.inlineDataRef
   assert(image?.blobId, JSON.stringify(screenshotRow.parts.map(part => ({ keys: Object.keys(part), inlineData: part.inlineData ? Object.keys(part.inlineData) : null }))))

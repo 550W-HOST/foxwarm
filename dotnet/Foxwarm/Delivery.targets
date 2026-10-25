@@ -63,6 +63,13 @@
       CopyToPublishDirectory="PreserveNewest"
     />
     <Content
+      Include="../../packages/browser-node/**/*"
+      Exclude="../../packages/browser-node/test/**/*"
+      Link="packages/browser-node/%(RecursiveDir)%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
+    <Content
       Include="../../packages/cli-node-runtime/**/*"
       Exclude="../../packages/cli-node-runtime/node_modules/**/*"
       Link="packages/cli-node-runtime/%(RecursiveDir)%(Filename)%(Extension)"
