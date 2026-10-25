@@ -2,6 +2,8 @@
 
 Files: `dotnet/Foxwarm.Tests/`
 
+The standalone `scripts/host-e2e.py` uses ordinary owned HTTP actors through clean restarts. Its idle missing/corrupt-authority tail checks the [cold-admission boundary](./session-manager-bootstrap.md): metadata remains available while semantic access fails without provider work or authority reconstruction. It does not require every idle member to be hydrated or rejected during startup.
+
 ## Purpose
 
 The xUnit project is the executable contract map for the .NET host: channels/routes, images, memory, model wire/retries/journal, Session admission/turn/save/identity/catalog, Archive storage/lineage, timers/tasks, ToolScript, tools/authorization, and terminal/Code boundaries.

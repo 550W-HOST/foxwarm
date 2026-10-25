@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Foxwarm.Models;
 
 namespace Foxwarm.DevTools;
@@ -22,6 +23,11 @@ internal static class ResponsesStreamCommand
         var jsonOptions = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        };
+        var partOptions = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         };
         foreach (var item in corpus)
         {
@@ -95,7 +101,15 @@ internal static class ResponsesStreamCommand
             }
             var observation = new JsonObject
             {
-                ["progress"] = JsonSerializer.SerializeToNode(progress, jsonOptions),
+                ["progress"] = new JsonArray(
+                    progress.Select(snapshot => (JsonNode)new JsonObject
+                    {
+                        ["reasoning"] = snapshot.Reasoning,
+                        ["text"] = snapshot.Text,
+                        ["toolCalls"] = JsonSerializer.SerializeToNode(snapshot.ToolCalls, jsonOptions),
+                        ["parts"] = JsonSerializer.SerializeToNode(snapshot.Parts, partOptions),
+                    }).ToArray()
+                ),
                 ["meaningfulCount"] = meaningful,
                 ["safety"] = new JsonArray(safety.Select(x => x.DeepClone()).ToArray()),
                 ["decodedRaw"] = decoded.ToString(),

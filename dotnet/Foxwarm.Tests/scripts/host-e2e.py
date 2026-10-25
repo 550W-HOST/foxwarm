@@ -306,6 +306,7 @@ def main():
         assert count == 10, ('request count', count)
         stop_host(second, port)
         second = None
+        admission_cases = []
         for kind in ('missing', 'corrupt'):
             case_root = base / f'case-{kind}'
             shutil.copytree(data, case_root)
@@ -315,23 +316,41 @@ def main():
             else:
                 authority.write_text('{invalid')
             case_env = dict(env, FOXWARM_DATA_DIR=str(case_root), FOXWARM_AGENTS_DIR=str(case_root / 'agents'))
-            (case_root / 'state/config.yaml').write_text(f'bot: {{httpPort: {open_port()}}}\n')
-            with open(logs / f'{kind}.out', 'w') as out, open(logs / f'{kind}.err', 'w') as err:
-                candidate = subprocess.Popen([dotnet, str(dll)], env=case_env, stdout=out, stderr=err,
-                                             start_new_session=True)
+            case_port = open_port()
+            candidate = None
             try:
-                assert candidate.wait(timeout=8) != 0, f'{kind}: missing/corrupt authority launched successfully'
-                assert 'InvalidDataException' in (logs / f'{kind}.err').read_text(), kind
+                # Idle members stay cold at startup; semantic access must still reject bad authority.
+                candidate = start_host(dotnet, dll, case_env, case_port, logs, kind)
+                code, listing = call(case_port, 'GET', '/api/sessions')
+                assert code == 200 and b in [row['id'] for row in listing['sessions']], (kind, code, listing)
+                history_code, failure = call(case_port, 'GET', f'/api/sessions/{b}/history')
+                assert history_code == 500, (kind, history_code, failure)
+                assert call(case_port, 'GET', '/health')[0] == 200, kind
+                code, listing = call(case_port, 'GET', '/api/sessions')
+                assert code == 200 and b in [row['id'] for row in listing['sessions']], (kind, code, listing)
+                stop_host(candidate, case_port)
+                candidate = None
+                if kind == 'missing':
+                    assert not authority.exists(), 'admission recreated missing authority'
+                else:
+                    assert authority.read_text() == '{invalid', 'admission rewrote corrupt authority'
+                with sqlite3.connect(case_root / 'state/archive-store.sqlite') as conn:
+                    assert conn.execute('SELECT session_id, COUNT(*), MIN(seq), MAX(seq) '
+                                        'FROM archive_messages GROUP BY session_id ORDER BY session_id').fetchall() == sorted([
+                                            (a, 5, 1, 5), (b, 14, 1, 14)])
+                with REQUEST_LOCK:
+                    assert len(REQUESTS) == count, f'{kind}: rejected admission made a provider request'
+                admission_cases.append({'kind': kind, 'historyStatus': history_code})
             finally:
                 cleanup_process(candidate)
         with REQUEST_LOCK:
-            assert len(REQUESTS) == count, 'fail-closed startup made a provider request'
+            assert len(REQUESTS) == count, 'rejected admission made a provider request'
         print(json.dumps({'result': 'ok', 'firstPid': prior_pid, 'secondPid': resumed_pid,
                           'sessions': [a, b], 'providerRequests': count, 'alphaHistory': 5,
                           'betaHistory': 14, 'betaNextSeq': 15, 'stopClosedProvider': HELD_CLOSED.is_set(),
                           'incrementSeen': PROGRESS_SEEN.is_set(), 'concurrentProviderRequests': B_REQUEST_SEEN.is_set(),
                           'workspaceFile': 'updated',
-                          'missingAndCorruptStartup': 'fail-closed'}))
+                          'idleAuthorityAdmission': admission_cases}))
     finally:
         cleanup_process(first)
         cleanup_process(second)

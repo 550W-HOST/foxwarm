@@ -14,6 +14,8 @@ Provides developer-facing command entry points for Responses request/stream prob
 
 Commands use the same source contracts but should not be treated as production consumers. Probe writes/fixtures must not be described as a second authority; command output is bounded/debug-facing and does not change the WebUI/Main route boundary.
 
+`ResponsesStreamCommand` observes typed cumulative progress with absent nullable part fields omitted; zero indices and empty text remain present. This projection applies only to progress-part DTOs, not provider-owned completion/unknown JSON or the comparator's field-presence checks. Part creation and event ordering remain observable, including a part whose text has not arrived.
+
 ## Tests
 
 Covered indirectly by model/journal/memory/session persistence tests. The command project is declared in `dotnet/Foxwarm.sln` and references `Foxwarm`.
