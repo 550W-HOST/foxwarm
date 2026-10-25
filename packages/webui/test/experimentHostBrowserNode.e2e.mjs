@@ -91,6 +91,8 @@ let browser,
   popup,
   worker,
   sessionId,
+  launchOptions,
+  stage = 'owned Main startup',
   count = 0;
 const call = (id, name, args) => ({
   type: 'function_call',
@@ -164,6 +166,7 @@ async function connect(token) {
 }
 try {
   await fixture.start();
+  stage = 'Browser onboarding and extension archive';
   const setup = await fixture.api('POST', '/api/nodes/onboarding/browser', {
     fallbackUrl: fixture.origin,
   });
@@ -187,7 +190,8 @@ try {
     extension,
   ]);
   assert(!zip.includes(Buffer.from(setup.body.pairingToken)));
-  browser = await puppeteer.launch({
+  stage = 'browser launch (including initial page target)';
+  launchOptions = {
     executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium',
     headless: !ownedXvfb,
     ignoreDefaultArgs: ['--disable-infobars', '--enable-automation'],
@@ -199,15 +203,22 @@ try {
       '--disable-extensions-except=' + extension,
       '--load-extension=' + extension,
     ],
-  });
+  };
+  browser = await puppeteer.launch(launchOptions);
+  stage = 'browser version';
   evidence.browser = await browser.version();
   evidence.mode = ownedXvfb ? 'owned-xvfb' : 'headless';
+  stage = 'extension service-worker admission';
   const target = await browser.waitForTarget(
     (target) => target.type() === 'service_worker' && target.url().endsWith('/background/main.js'),
   );
+  stage = 'extension worker handle';
   worker = await target.worker();
+  stage = 'popup page creation';
   popup = await browser.newPage();
+  stage = 'popup navigation';
   await popup.goto('chrome-extension://' + new URL(target.url()).host + '/popup/popup.html');
+  stage = 'initial popup context and connect';
   const response = await msg({
     type: 'connect',
     host: base,
@@ -215,6 +226,7 @@ try {
     nodeName: 'owned-browser',
   });
   assert(!response.error);
+  stage = 'pairing request';
   const approval = await until(
     async () =>
       (await fixture.api('GET', '/api/nodes/onboarding/pending')).body.items.find(
@@ -222,21 +234,30 @@ try {
       ),
     'pair request',
   );
+  stage = 'pairing approval';
   await fixture.api('POST', '/api/nodes/onboarding/approve', { pendingId: approval.id });
+  stage = 'initial registration context';
   await until(
     async () => (await msg({ type: 'get_state' })).state === 'registered',
     'initial register',
   );
+  stage = 'fixture Session creation';
   const created = await fixture.api('POST', '/api/sessions', {
     agentId: 'main',
     sessionId: 'browser',
   });
   sessionId = created.body.sessionId;
+  stage = 'red page creation';
   const red = await browser.newPage();
+  stage = 'red page navigation';
   await red.goto(origin + '/red');
+  stage = 'blue page creation';
   const blue = await browser.newPage();
+  stage = 'blue page navigation';
   await blue.goto(origin + '/blue');
+  stage = 'initial tab-query context';
   const local = await popup.evaluate(() => chrome.tabs.query({}));
+  stage = 'Browser functional qualification';
   const redTab = local.find((tab) => tab.url.endsWith('/red')),
     blueTab = local.find((tab) => tab.url.endsWith('/blue'));
   assert.deepEqual((await invoke('list_tabs')).tabs, []);
@@ -710,6 +731,34 @@ try {
     await writeFile(process.env.FOXWARM_BROWSER_EVIDENCE, JSON.stringify(evidence, null, 2) + '\n');
 } catch (error) {
   console.error(fixture.output);
+  try {
+    const boundedArgs = (args) => args?.slice(0, 64).map((arg) => arg.slice(0, 1024));
+    console.error(
+      'Browser fixture diagnostics: ' +
+        JSON.stringify({
+          stage,
+          executable: launchOptions?.executablePath,
+          version: evidence.browser,
+          headless: !ownedXvfb,
+          requestedArgs: boundedArgs(launchOptions?.args),
+          effectiveArgs: boundedArgs(browser?.process()?.spawnargs),
+          targets: browser?.targets().slice(0, 32).map((target) => {
+            let url = '';
+            try {
+              const parsed = new URL(target.url());
+              url = ['http:', 'https:', 'ws:', 'wss:', 'chrome-extension:'].includes(parsed.protocol)
+                ? parsed.protocol + '//' + parsed.host + parsed.pathname
+                : parsed.protocol === 'about:'
+                  ? parsed.protocol + parsed.pathname
+                  : parsed.protocol;
+            } catch {}
+            return { type: target.type(), url: url.slice(0, 512) };
+          }),
+        }),
+    );
+  } catch {
+    console.error('Browser fixture diagnostics unavailable at stage: ' + stage);
+  }
   throw error;
 } finally {
   if (browser) await browser.close();
