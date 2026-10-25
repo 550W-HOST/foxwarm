@@ -784,11 +784,18 @@ public sealed partial class WebUiStartupTests
             new { agentId = "main", sessionId = "task-observer" }
         );
         Assert.True(observerSession.IsSuccessStatusCode);
-        var observerId = (await observerSession.Content.ReadFromJsonAsync<JsonObject>())!["sessionId"]!.GetValue<string>();
+        var observerId = (await observerSession.Content.ReadFromJsonAsync<JsonObject>())![
+            "sessionId"
+        ]!.GetValue<string>();
         var title = new string('t', 198) + "😀";
         var rename = await h.Client.PatchAsJsonAsync(
             $"/api/tasks/{taskId}",
-            new { sessionId = observerId, title, notifySession = true }
+            new
+            {
+                sessionId = observerId,
+                title,
+                notifySession = true,
+            }
         );
         Assert.Equal(HttpStatusCode.OK, rename.StatusCode);
         var renamed = await rename.Content.ReadFromJsonAsync<JsonObject>();
@@ -798,16 +805,36 @@ public sealed partial class WebUiStartupTests
         var beforeRejected = await h.Client.GetFromJsonAsync<JsonObject>($"/api/tasks/{taskId}");
         var forbiddenStatus = await h.Client.PatchAsJsonAsync(
             $"/api/tasks/{taskId}",
-            new { sessionId = observerId, title = "must not persist", status = "active" }
+            new
+            {
+                sessionId = observerId,
+                title = "must not persist",
+                status = "active",
+            }
         );
         Assert.Equal(HttpStatusCode.Forbidden, forbiddenStatus.StatusCode);
         var invalidTitle = await h.Client.PatchAsJsonAsync(
             $"/api/tasks/{taskId}",
-            new { sessionId = ownerId, title = title + "x", description = "must not persist" }
+            new
+            {
+                sessionId = ownerId,
+                title = title + "x",
+                description = "must not persist",
+            }
         );
         Assert.Equal(HttpStatusCode.BadRequest, invalidTitle.StatusCode);
-        Assert.Equal("TASK_INVALID_ARGS", (await invalidTitle.Content.ReadFromJsonAsync<JsonObject>())!["code"]!.GetValue<string>());
-        Assert.True(JsonNode.DeepEquals(beforeRejected, await h.Client.GetFromJsonAsync<JsonObject>($"/api/tasks/{taskId}")));
+        Assert.Equal(
+            "TASK_INVALID_ARGS",
+            (await invalidTitle.Content.ReadFromJsonAsync<JsonObject>())![
+                "code"
+            ]!.GetValue<string>()
+        );
+        Assert.True(
+            JsonNode.DeepEquals(
+                beforeRejected,
+                await h.Client.GetFromJsonAsync<JsonObject>($"/api/tasks/{taskId}")
+            )
+        );
 
         var progress = new string('n', 1998) + "😀";
         var comment = await h.Client.PostAsJsonAsync(

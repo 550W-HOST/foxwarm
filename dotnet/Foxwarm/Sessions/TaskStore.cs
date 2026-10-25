@@ -1220,7 +1220,13 @@ internal sealed class TaskStore : IDisposable
             "list" => key is "status" or "scope",
             "get" or "claim" => key is "taskId",
             "assign" => key is "taskId" or "ownerSessionId" or "notifySession",
-            "update" => key is "taskId" or "title" or "description" or "note" or "status" or "notifySession",
+            "update" => key
+                is "taskId"
+                    or "title"
+                    or "description"
+                    or "note"
+                    or "status"
+                    or "notifySession",
             "complete" => key is "taskId" or "result",
             "cancel" => key is "taskId" or "reason",
             _ => false,
