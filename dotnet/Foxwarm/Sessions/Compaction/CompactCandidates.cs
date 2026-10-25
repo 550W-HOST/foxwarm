@@ -109,8 +109,11 @@ internal static class CompactCandidateBuilder
             var cursor = split;
             while (cursor > 0 && (Role(history[cursor]) == "tool" || Transparent(history[cursor])))
                 cursor--;
-            if (Role(history[cursor]) == "model" && Calls(history[cursor])
-                && RawExchangeEnd(history, cursor, seqCounts) >= split)
+            if (
+                Role(history[cursor]) == "model"
+                && Calls(history[cursor])
+                && RawExchangeEnd(history, cursor, seqCounts) >= split
+            )
                 split = cursor;
         }
         return split;
@@ -314,8 +317,10 @@ internal static class CompactCandidateBuilder
             }
             if (priorKind is not null && priorKind != "message")
                 segment++;
-            var endIndex = Role(message) == "model" && Calls(message)
-                ? RawExchangeEnd(older, index, seqCounts) : index;
+            var endIndex =
+                Role(message) == "model" && Calls(message)
+                    ? RawExchangeEnd(older, index, seqCounts)
+                    : index;
             var grouped = older.Skip(index).Take(endIndex - index + 1).ToArray();
             var text = string.Join(
                 " | ",
@@ -434,10 +439,14 @@ internal static class CompactCandidateBuilder
             var row = history[next];
             var meta = Meta(row);
             var seq = Number(meta?["seq"]);
-            if (meta?["contextBlock"] is not null
+            if (
+                meta?["contextBlock"] is not null
                 || !preserved && Number(meta?["preservedFromBlockId"]) is > 0
-                || seq is null || seqCounts.GetValueOrDefault(seq.Value) != 1
-                || seq != walkedSeq + 1 || Role(row) != "tool" && !Transparent(row))
+                || seq is null
+                || seqCounts.GetValueOrDefault(seq.Value) != 1
+                || seq != walkedSeq + 1
+                || Role(row) != "tool" && !Transparent(row)
+            )
                 break;
             walkedSeq = seq;
             // A trailing presentation notice alone does not extend a call-only source.
@@ -462,9 +471,13 @@ internal static class CompactCandidateBuilder
             var row = history[index];
             var meta = Meta(row);
             var seq = Number(meta?["seq"]);
-            if (seq is null || seqCounts.GetValueOrDefault(seq.Value) != 1
-                || seq != previousSeq + 1 || meta?["contextBlock"] is not null
-                || index < currentIndex && !Transparent(row))
+            if (
+                seq is null
+                || seqCounts.GetValueOrDefault(seq.Value) != 1
+                || seq != previousSeq + 1
+                || meta?["contextBlock"] is not null
+                || index < currentIndex && !Transparent(row)
+            )
                 return false;
             previousSeq = seq;
         }
