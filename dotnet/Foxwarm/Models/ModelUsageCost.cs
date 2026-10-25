@@ -18,9 +18,7 @@ internal static class ModelUsageCost
                     "pricing." + key + " must be a finite nonnegative number."
                 );
         if (prices.Any(pair => pair.Key is not ("cached" or "input" or "output")))
-            throw new InvalidDataException(
-                "pricing only accepts cached, input and output."
-            );
+            throw new InvalidDataException("pricing only accepts cached, input and output.");
         return (JsonObject)prices.DeepClone();
     }
 

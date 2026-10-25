@@ -33,11 +33,7 @@ public sealed partial class ModelUsageCostTests
                             ? new JsonObject { ["stream"] = false }
                             : new JsonObject(),
                     ["models"] = new JsonArray(
-                        new JsonObject
-                        {
-                            ["id"] = "wire",
-                            ["pricing"] = Prices(factor),
-                        }
+                        new JsonObject { ["id"] = "wire", ["pricing"] = Prices(factor) }
                     ),
                 },
             },
@@ -58,15 +54,24 @@ public sealed partial class ModelUsageCostTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Raw_Setup_pricing_save_records_cost_on_the_next_normal_request(bool providerLeaf)
+    public async Task Raw_Setup_pricing_save_records_cost_on_the_next_normal_request(
+        bool providerLeaf
+    )
     {
         await using var peer = new ScriptedResponsesSequenceServer(
             1,
-            (_, stream, _) => LoopbackResponsesServer.WriteResponseAsync(
-                stream, 200, "text/event-stream", Encoding.UTF8.GetBytes(Body("openai-responses")))
+            (_, stream, _) =>
+                LoopbackResponsesServer.WriteResponseAsync(
+                    stream,
+                    200,
+                    "text/event-stream",
+                    Encoding.UTF8.GetBytes(Body("openai-responses"))
+                )
         );
         using var temp = new TempDirectory();
-        var configuration = new ModelConfiguration(HostPaths.ForDataRoot(temp.Path, environment: _ => null));
+        var configuration = new ModelConfiguration(
+            HostPaths.ForDataRoot(temp.Path, environment: _ => null)
+        );
         var settings = (await HttpServerSettings.CaptureAsync(configuration, temp.Path)) with
         {
             Port = 0,
@@ -84,32 +89,64 @@ public sealed partial class ModelUsageCostTests
         var leaf = providerLeaf
             ? "    pricing: { cached: 1, input: 2, output: 3 }\n"
             : "    models:\n      - id: wire\n        pricing: { cached: 1, input: 2, output: 3 }\n";
-        var raw = "# user-authored prices\ndefault: priced\nproviders:\n  priced:\n    providerType: openai-responses\n    baseUrl: " + peer.BaseUri + "\n" + leaf;
+        var raw =
+            "# user-authored prices\ndefault: priced\nproviders:\n  priced:\n    providerType: openai-responses\n    baseUrl: "
+            + peer.BaseUri
+            + "\n"
+            + leaf;
         var saved = await client.PostAsJsonAsync("/api/setup/models", new { yaml = raw });
         Assert.Equal(HttpStatusCode.OK, saved.StatusCode);
         Assert.Equal(raw, await File.ReadAllTextAsync(configuration.ActivePath));
-        Assert.Equal(2, configuration.Capture().Resolve("priced").Configuration["pricing"]!["input"]!.GetValue<double>());
+        Assert.Equal(
+            2,
+            configuration.Capture().Resolve("priced").Configuration["pricing"]![
+                "input"
+            ]!.GetValue<double>()
+        );
         var status = (await client.GetFromJsonAsync<JsonObject>("/api/setup/status"))!;
         Assert.Equal(raw, status["models"]!["rawYaml"]!.GetValue<string>());
-        var created = await client.PostAsJsonAsync("/api/sessions", new { agentId = "main", sessionId = "setup-pricing" });
+        var created = await client.PostAsJsonAsync(
+            "/api/sessions",
+            new { agentId = "main", sessionId = "setup-pricing" }
+        );
         Assert.True(created.IsSuccessStatusCode);
-        var sessionId = (await created.Content.ReadFromJsonAsync<JsonObject>())!["sessionId"]!.GetValue<string>();
-        var triggered = await client.PostAsJsonAsync("/trigger", new { text = "exercise saved pricing", sessionId });
+        var sessionId = (await created.Content.ReadFromJsonAsync<JsonObject>())![
+            "sessionId"
+        ]!.GetValue<string>();
+        var triggered = await client.PostAsJsonAsync(
+            "/trigger",
+            new { text = "exercise saved pricing", sessionId }
+        );
         Assert.True(triggered.IsSuccessStatusCode, await triggered.Content.ReadAsStringAsync());
         // Observe the normal HTTP consumer, not an internal accounting shortcut.
         JsonObject? history = null;
         var deadline = DateTime.UtcNow.AddSeconds(15);
         do
         {
-            history = await client.GetFromJsonAsync<JsonObject>("/api/sessions/" + Uri.EscapeDataString(sessionId) + "/history");
-            if (history?["messages"]!.AsArray().Any(row => row?["__meta"]?["usage"]?["cost"] is not null) == true)
+            history = await client.GetFromJsonAsync<JsonObject>(
+                "/api/sessions/" + Uri.EscapeDataString(sessionId) + "/history"
+            );
+            if (
+                history
+                    ?["messages"]!.AsArray()
+                    .Any(row => row?["__meta"]?["usage"]?["cost"] is not null) == true
+            )
                 break;
             await Task.Delay(25);
         } while (DateTime.UtcNow < deadline);
-        var model = Assert.Single(history!["messages"]!.AsArray(), row => row?["role"]?.ToString() == "model");
+        var model = Assert.Single(
+            history!["messages"]!.AsArray(),
+            row => row?["role"]?.ToString() == "model"
+        );
         Assert.Equal(.000027, model!["__meta"]!["usage"]!["cost"]!.GetValue<double>(), 10);
-        var persisted = await new PersistentSessionAuthorityStore(temp.Path, sessionId).LoadAsync(sessionId);
-        Assert.Equal(.000027, persisted!.AuthorityEnvelope["stats"]!["totalCost"]!.GetValue<double>(), 10);
+        var persisted = await new PersistentSessionAuthorityStore(temp.Path, sessionId).LoadAsync(
+            sessionId
+        );
+        Assert.Equal(
+            .000027,
+            persisted!.AuthorityEnvelope["stats"]!["totalCost"]!.GetValue<double>(),
+            10
+        );
     }
 
     [Theory]
@@ -431,9 +468,7 @@ public sealed partial class ModelUsageCostTests
         var document = Document(new Uri("http://127.0.0.1:1"), "openai-responses");
         await config.SaveAsync(new JsonObject { ["yaml"] = document.ToJsonString() });
         var before = await File.ReadAllTextAsync(config.ActivePath);
-        document["providers"]!["priced"]!["models"]![0]!["pricing"] = JsonNode.Parse(
-            raw
-        );
+        document["providers"]!["priced"]!["models"]![0]!["pricing"] = JsonNode.Parse(raw);
         await Assert.ThrowsAsync<InvalidDataException>(() =>
             config.SaveAsync(new JsonObject { ["yaml"] = document.ToJsonString() })
         );

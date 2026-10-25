@@ -21,9 +21,7 @@ internal sealed partial class HostModels
         config["model"] = id;
         var pricingScope = model ?? provider;
         if (pricingScope.ContainsKey("pricing"))
-            config["pricing"] = ModelUsageCost.ValidatePrices(
-                pricingScope["pricing"]
-            );
+            config["pricing"] = ModelUsageCost.ValidatePrices(pricingScope["pricing"]);
         var family =
             type == "anthropic" ? "anthropic"
             : type is "openai" or "openai-responses" or "openai-ws" or "openai-completions"
