@@ -146,11 +146,23 @@ public sealed class WebUiLogsTests
         using var temp = new TempDirectory();
         var path = Path.Combine(temp.Path, "main.log");
         using var logs = new WebUiLogFile(path);
-        Assert.True((await logs.Read()).Missing);
+        var missing = await logs.Read();
+        Assert.True(missing.Missing);
+        Assert.True(
+            JsonNode.DeepEquals(
+                JsonNode.Parse(
+                    """{"fileId":null,"size":0,"startOffset":0,"endOffset":0,"text":"","lineCount":0,"startsMidLine":false,"endsMidLine":false,"pendingBytes":0,"missing":true}"""
+                ),
+                missing.Json()
+            )
+        );
         await File.WriteAllTextAsync(path, "");
         var empty = await logs.Read();
         Assert.False(empty.Missing);
         Assert.Equal(0, empty.LineCount);
+        var emptyJson = empty.Json();
+        Assert.Equal(empty.FileId, emptyJson["fileId"]!.GetValue<string>());
+        Assert.False(emptyJson["missing"]!.GetValue<bool>());
         var text =
             string.Concat(Enumerable.Repeat("synthetic 汉字 🦊 record\r\n", 24000))
             + "unfinished tail";

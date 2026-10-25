@@ -1,5 +1,6 @@
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using Foxwarm.Sessions;
@@ -9,6 +10,9 @@ namespace Foxwarm.Channels.WebUi;
 /// <summary>Revisioned list/session subscription union, installed before acknowledged snapshots and buffered events.</summary>
 internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs = null)
 {
+    // Match JsonNode.ToJsonString's writer depth, not the serializer's 64-level default.
+    private static readonly JsonSerializerOptions SendJson = new() { MaxDepth = 1000 };
+
     // Optional scheduling seam for the focused transport test; normal hosts leave it unset.
     internal Func<JsonObject, CancellationToken, Task>? BeforeQueuedSend { get; init; }
     private const int MaxPendingEvents = 1000; // webuiRealtime.ts initialization limit.
@@ -646,8 +650,9 @@ internal sealed class WebUiRealtime(SessionRuntime runtime, WebUiLogFile? logs =
                 if (data["session"] is JsonObject session)
                     data["session"] = scoped.Session(session);
             }
-            var bytes = Encoding.UTF8.GetBytes(
-                Foxwarm.Images.ImageTransport.Project(data)!.ToJsonString()
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(
+                Foxwarm.Images.ImageTransport.Project(data),
+                SendJson
             );
             if (!queued)
                 Interlocked.Add(ref queuedBytes, bytes.Length);

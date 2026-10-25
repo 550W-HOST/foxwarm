@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Channels.WebUi;
 using Foxwarm.Models;
@@ -232,10 +233,49 @@ public sealed class WebUiMessageTransportTests
         using var reader = new StreamReader(await sse.Content.ReadAsStreamAsync(deadline.Token));
         await Receive(reader, "connected", deadline.Token);
         await Receive(reader, "session-state", deadline.Token);
-        await ForkClearLifecycleTests.AppendAsync(owner, Message());
+        var authored = Message();
+        authored["parts"]!
+            .AsArray()
+            .Add(
+                new JsonObject
+                {
+                    ["text"] = string.Concat(
+                        Enumerable.Repeat("汉字 🦊 e\u0301 \"\\\r\n\t <>& \u2028\u2029", 2000)
+                    ),
+                    ["inlineData"] = new JsonObject
+                    {
+                        ["mimeType"] = "image/png",
+                        ["data"] = "private-image-bytes",
+                    },
+                    ["extension"] = JsonNode.Parse(
+                        """{"missing":null,"count":0,"enabled":false}"""
+                    ),
+                }
+            );
+        await ForkClearLifecycleTests.AppendAsync(owner, authored);
         var canonical = owner.History().Single().ToJsonString();
         var archive = owner.Archive.ReadMessages().Single().MessageJson;
-        AssertProjected((await Receive(ws, "message", deadline.Token))["message"]!.AsObject());
+        var sent = await ReceiveFrame(ws, "message", deadline.Token);
+        AssertProjected(sent.Frame["message"]!.AsObject());
+        var expected = new JsonObject
+        {
+            ["type"] = "message",
+            ["sessionId"] = owner.Id,
+            ["message"] = WebUiMessageTransport.Message(Obj(canonical)),
+        };
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(Foxwarm.Images.ImageTransport.Project(expected)!.ToJsonString()),
+            sent.Bytes
+        );
+        var tail = sent.Frame["message"]!["parts"]!.AsArray().Last()!;
+        Assert.Null(tail["inlineData"]);
+        Assert.Equal("image/png", tail["inlineDataUnavailable"]!["mimeType"]!.GetValue<string>());
+        Assert.True(
+            JsonNode.DeepEquals(
+                authored["parts"]!.AsArray().Last()!["extension"],
+                tail["extension"]
+            )
+        );
         AssertProjected((await Receive(reader, "message", deadline.Token))["message"]!.AsObject());
         var history = (await f.Admin.GetFromJsonAsync<JsonObject>("api/sessions/payload/history"))!;
         AssertProjected(history["messages"]![0]!.AsObject());
@@ -316,6 +356,25 @@ public sealed class WebUiMessageTransportTests
             runtime
         );
         AssertProjected(batch["messages"]![0]!.AsObject());
+
+        // Dynamic event envelopes can exceed the serializer's 64-level default.
+        // Keep the previous DOM writer limit when encoding directly to UTF-8.
+        var deep = new JsonObject { ["value"] = "汉字 🦊" };
+        for (var depth = 0; depth < 80; depth++)
+            deep = new JsonObject { ["child"] = deep };
+        owner.Emit(SessionEventKind.ModelStream, deep);
+        var deepSent = await ReceiveFrame(ws, "session-event", deadline.Token, maxDepth: 1000);
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(
+                new JsonObject
+                {
+                    ["type"] = "session-event",
+                    ["sessionId"] = owner.Id,
+                    ["event"] = deep.DeepClone(),
+                }.ToJsonString()
+            ),
+            deepSent.Bytes
+        );
         Assert.Equal(canonical, owner.History().Single().ToJsonString());
         Assert.Equal(archive, owner.Archive.ReadMessages().Single().MessageJson);
         Assert.Equal(
@@ -329,6 +388,13 @@ public sealed class WebUiMessageTransportTests
         ClientWebSocket ws,
         string type,
         CancellationToken token
+    ) => (await ReceiveFrame(ws, type, token)).Frame;
+
+    private static async Task<(JsonObject Frame, byte[] Bytes)> ReceiveFrame(
+        ClientWebSocket ws,
+        string type,
+        CancellationToken token,
+        int maxDepth = 64
     )
     {
         while (true)
@@ -343,9 +409,12 @@ public sealed class WebUiMessageTransportTests
                     throw new IOException("Unexpected WebSocket close");
                 data.Write(buffer, 0, received.Count);
             } while (!received.EndOfMessage);
-            var frame = JsonNode.Parse(data.ToArray())!.AsObject();
+            var bytes = data.ToArray();
+            var frame = JsonNode
+                .Parse(bytes, documentOptions: new JsonDocumentOptions { MaxDepth = maxDepth })!
+                .AsObject();
             if (SessionWait.Text(frame["type"]) == type)
-                return frame;
+                return (frame, bytes);
         }
     }
 
