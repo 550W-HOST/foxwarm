@@ -1,11 +1,13 @@
 # Unit: local-test-runner
 
-Files: scripts/test/run-tests.mjs, scripts/test/test-inventory.mjs, scripts/test/test-process-env.mjs, scripts/test/test-process-env.cjs, scripts/test/test-isolation.test.mjs, scripts/test/reference-isolation.test.mjs, scripts/test/test-installation-fixture.mjs, scripts/test/test-routing.test.mjs, scripts/test/managed-preparation.test.mjs, scripts/test/prepare-browser.mjs, scripts/test/browser-preparation.test.mjs, src/testEnvironment.ts, .github/workflows/tests.yml, docs/testing.md
+Files: scripts/test/diagnose-loopback-ssh.cjs, scripts/test/run-tests.mjs, scripts/test/test-inventory.mjs, scripts/test/test-process-env.mjs, scripts/test/test-process-env.cjs, scripts/test/test-isolation.test.mjs, scripts/test/reference-isolation.test.mjs, scripts/test/test-installation-fixture.mjs, scripts/test/test-routing.test.mjs, scripts/test/managed-preparation.test.mjs, scripts/test/prepare-browser.mjs, scripts/test/browser-preparation.test.mjs, src/testEnvironment.ts, .github/workflows/tests.yml, docs/testing.md
 Secondary files: packages/webui/test/experimentHostFixture.mjs, packages/webui/test/experimentHostReadiness.e2e.mjs, package.json, README.md, packages/webui/test/webuiReadiness.mjs, packages/webui/test/backendIsolation.e2e.mjs, packages/webui/test/orderedResponsesDraft.e2e.mjs, packages/webui/test/authorizations.e2e.mjs, packages/shared/src/nodeTools.test.ts, packages/shared/src/nodeFileTransfer.test.ts, packages/cli-node/src/sessionEventAck.test.ts
 
 ## Purpose
 
 Owns deterministic local test discovery, classification, data isolation, process orchestration, and artifacts for the application repository. It keeps deferred or separately owned tests visible without running them in the wrong environment.
+
+This temporary qualification snapshot replaces `.github/workflows/tests.yml` with a dispatch-only Ubuntu job. `scripts/test/diagnose-loopback-ssh.cjs` first checks the existing owned PAM-enabled daemon's effective key-only configuration, unchanged account status, public adapter readiness and strict Python/helper/refusal controls without application builds. The job then builds the actual Main and packaged resources and runs the complete existing native SSH scenario, including persisted-reference restart and strict trust refusal. The probe fails on unsuccessful discovery or controls and cleans its generated keys/configuration/data. It is diagnostic evidence; the maintained CI contract below describes the full workflow temporarily replaced by this snapshot.
 
 ## Commands
 

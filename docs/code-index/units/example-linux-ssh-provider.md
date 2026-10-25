@@ -1,7 +1,7 @@
 # Unit: example-linux-ssh-provider
 
 Files: skills/node-setup/examples/linux-ssh/provider.py, skills/node-setup/examples/linux-ssh/target.py, skills/node-setup/examples/linux-ssh/README.md
-Secondary files: scripts/test/loopbackSshFixture.cjs, packages/webui/test/experimentHostProviderSsh.e2e.mjs, src/nodes/linuxSshProvider.test.ts, src/nodes/providerExecRestartTestFixture.ts, docs/executable-node-provider-protocol.md
+Secondary files: scripts/test/loopbackSshFixture.cjs, scripts/test/diagnose-loopback-ssh.cjs, packages/webui/test/experimentHostProviderSsh.e2e.mjs, src/nodes/linuxSshProvider.test.ts, src/nodes/providerExecRestartTestFixture.ts, docs/executable-node-provider-protocol.md
 
 ## Purpose
 
