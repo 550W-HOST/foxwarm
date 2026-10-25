@@ -26,7 +26,7 @@ exports.sshFixture = async function sshFixture(root) {
   await fs.writeFile(configPath, [
     `Port ${port}`, 'ListenAddress 127.0.0.1', `HostKey ${host}`, `PidFile ${pidPath}`,
     `AuthorizedKeysFile ${authorizedKeys}`, 'PasswordAuthentication no', 'KbdInteractiveAuthentication no',
-    'UsePAM no', 'StrictModes yes', `AllowUsers ${os.userInfo().username}`, 'LogLevel VERBOSE',
+    'UsePAM yes', 'StrictModes yes', `AllowUsers ${os.userInfo().username}`, 'LogLevel VERBOSE',
   ].join('\n'));
   const daemon = spawn('sudo', ['-n', '/usr/sbin/sshd', '-D', '-e', '-f', configPath], { stdio: ['ignore', 'ignore', 'pipe'] });
   let diagnostics = '';
@@ -56,6 +56,7 @@ exports.sshFixture = async function sshFixture(root) {
     throw error;
   }
   return {
+    get diagnostics() { return diagnostics; },
     target: `${os.userInfo().username}@127.0.0.1`,
     sshArgs: ['-F', '/dev/null', '-p', String(port), '-i', identity, `-oUserKnownHostsFile=${knownHosts}`, '-oIdentitiesOnly=yes'],
     close,

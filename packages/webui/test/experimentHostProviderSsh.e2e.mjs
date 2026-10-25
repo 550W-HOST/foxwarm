@@ -63,7 +63,7 @@ try {
   let state = await turn('discovery', [call('discovery', 'run_script', { code: "return [call_tool('node', {'action':'list'}),call_tool('node', {'action':'inspect','providerId':'external-ssh'})]" })])
   const discovery = result(state, 'discovery')
   assert.equal(discovery.status, 'completed', JSON.stringify(discovery))
-  assert.equal(discovery.result[0].nodes.find(row => row.id === node).availability, 'ready')
+  assert.equal(discovery.result[0].nodes.find(row => row.id === node).availability, 'ready', connection.diagnostics)
   assert.deepEqual(discovery.result[0].providers.find(row => row.id === 'external-ssh').lifecycle, [])
   assert.deepEqual(discovery.result[1].provider.lifecycle, [])
   assert(discovery.result[1].provider.dataRetention)
