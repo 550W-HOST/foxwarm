@@ -11,6 +11,8 @@ For a focused managed check, use `FOXWARM_TS_ROOT="$PWD" dotnet test dotnet/Foxw
 
 The reference checkout also needs Git history: eight fixture producers read pinned ancestor revisions with `git show` (session creation, task policy, tool authorization, onboot, command administration, canonical entry, handoff confirmation and session command effects). Use a full-history clone, or run `git fetch --unshallow` in an existing shallow clone before these comparisons. The Core CI checkout uses `fetch-depth: 0`. Building the current reference supplies shared packages and retained runtime readers; it does not supply historical Git objects. Missing revisions fail the comparisons.
 
+The full-Unicode lowercase oracle and `dotnet/scripts/generate-source-lowercase.mjs` require a Node runtime with Unicode 17.0 data; use Node 24.21.0, matching CI. Both entry points reject other Unicode versions before comparison or generation. With that runtime on PATH, `node dotnet/scripts/generate-source-lowercase.mjs` regenerates all three checked-in lowercase/property tables; then run the repository C# formatter with `(cd dotnet && dotnet csharpier format .)`. Ordinary builds use those tables without rewriting metadata or generating from the host runtime. The full-scalar/contextual comparison and normal Main HTTP metadata-search controls exercise the same lowerer.
+
 ## Source assets and consumers
 
 - Feature directories contain xUnit tests and feature-local fixtures such as MCP peers, Python exec peers and ToolScript JSON. Their project copy rules remain local to those consumers.

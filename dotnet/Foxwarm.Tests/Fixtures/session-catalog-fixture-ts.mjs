@@ -3,6 +3,9 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 
+if (process.versions.unicode !== '17.0') {
+  throw new Error(`Unicode 17.0 is required for Source lowercase generation/comparison; use Node 24.21.0 (running Node ${process.versions.node}, Unicode ${process.versions.unicode}).`);
+}
 const [root, inputPath, outputPath] = process.argv.slice(2)
 if (!root || !inputPath || !outputPath) throw new Error('usage: session-catalog-fixture-ts.mjs ROOT INPUT OUTPUT')
 const repository = process.env.FOXWARM_TS_ROOT || path.resolve(import.meta.dirname, '../../..')
@@ -54,6 +57,6 @@ await fs.copyFile(path.join(root, 'source-v1.sqlite'), path.join(root, 'dotnet-v
 const upgrade = new SessionCatalogStore(path.join(root, 'source-v1.sqlite')); upgrade.open()
 const upgraded = snapshot(upgrade); upgrade.close()
 // Exercise full, locale-independent source lowercasing, including contextual sigma.
-let text = 'İ ΟΣ ΟΣΑ ΟΣ\u0307Α ΟΣ\u2019 '; for (let code = 0; code <= 0x10ffff; code++) if (code < 0xd800 || code > 0xdfff) text += String.fromCodePoint(code)
+let text = 'İ ΟΣ ΟΣΑ ΟΣ\u0307Α ΟΣ\u2019 ΑΣ꟎ ꟎Σ ΑΣ\u{16EA0} \u{16EA0}Σ ΑΣ\u1ACFΑ Α\u1ACFΣ '; for (let code = 0; code <= 0x10ffff; code++) if (code < 0xd800 || code > 0xdfff) text += String.fromCodePoint(code)
 await fs.writeFile(path.join(root, 'lower-input.txt'), text); await fs.writeFile(path.join(root, 'lower-expected.txt'), text.toLowerCase())
 await fs.writeFile(outputPath, JSON.stringify({ expected, upgraded, schema: v2schema, upgradedSchema: schema(path.join(root, 'source-v1.sqlite')) }))

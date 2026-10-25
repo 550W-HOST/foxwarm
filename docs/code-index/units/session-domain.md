@@ -22,6 +22,10 @@ These are value/domain boundaries, not persistence writers. JSON authority owns 
 
 Session metadata, DTOs, status and bounded global/descendant summaries project optional recorded cost with presence-aware live overlays; the end-to-end contract is [D-model-usage-cost](../threads/model-request-and-streaming.md#d-model-usage-cost).
 
+## Metadata search lowercasing
+
+`SessionListQueries.Search` lowercases both query and metadata candidates through `SourceStringLower`. Its generated mapping, Cased and Case_Ignorable tables use Unicode 17.0 data from Node 24.21.0, including supplementary case pairs and contextual final sigma. Original metadata remains unchanged; candidate normalization happens at query time. The existing generator and full-scalar Source oracle require Unicode 17.0 input, while ordinary managed execution uses the checked-in tables independently of the host Node runtime. `SessionCatalogSourceTests` retains full-scalar and contextual comparison, and `WebUiStartupTests.UnicodeSearch.cs` covers authenticated creation/name-setting/search with new case pairs, contextual sigma, existing casing controls and an absent query.
+
 ## Tool argument parsing
 
 `FunctionCallArguments.Parse` is the shared canonical boundary for Responses HTTP/WS, Chat Completions conversion, and Anthropic Messages. Null, direct objects, empty strings and JSON object strings retain their established meanings. Malformed strings, JSON strings containing nonobjects, and raw numeric/boolean/array values produce empty `args` plus `rawArgsText` and `argsParseError`; they do not reject valid siblings or enter whole-response provider retry. Direct malformed values use Source's diagnostic string projection, including array joining, without making those values executable arguments. Ordinary strings retain their exact text.

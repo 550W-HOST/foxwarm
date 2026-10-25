@@ -139,6 +139,13 @@ public sealed partial class CommandAdministrationTests
             Message("/timer cron \"0 * * * *\" -- quoted")
         );
         Assert.Equal(2, f.Manager.Timers.List(f.Owner.Id).Count);
+        // The shortened cron is live on Sundays; isolate the one-shot checks from its next tick.
+        foreach (var timer in f.Manager.Timers.List(f.Owner.Id))
+            await f.Router.HandleExternalMessageAsync(
+                source,
+                Message("/timer delete " + SessionWait.Text(timer!["id"]))
+            );
+        Assert.Empty(f.Manager.Timers.List(f.Owner.Id));
         await f.Router.HandleExternalMessageAsync(
             source,
             Message("/timer after 1 -- current after trigger")

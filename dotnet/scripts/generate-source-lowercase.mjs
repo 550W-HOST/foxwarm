@@ -1,6 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+if (process.versions.unicode !== '17.0') {
+  throw new Error(`Unicode 17.0 is required for Source lowercase generation/comparison; use Node 24.21.0 (running Node ${process.versions.node}, Unicode ${process.versions.unicode}).`);
+}
 const target = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../Foxwarm/Sessions');
 const map = [], cased = [], ignorable = [];
 for (let code = 0; code <= 0x10ffff; code++) {

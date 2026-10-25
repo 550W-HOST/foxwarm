@@ -195,26 +195,33 @@ public sealed class WeWorkBoundedSocketTests
             else
                 cancel.Cancel();
         }
-        try
-        {
+        var failure = await Record.ExceptionAsync(async () =>
             await Task.WhenAll(sends)
-                .WaitAsync(TimeSpan.FromSeconds(outcome == "deadline" ? 13 : 3));
-        }
-        catch (IOException) { }
-        catch (OperationCanceledException) { }
-        Assert.All(sends, send => Assert.True(send.IsCompleted && !send.IsCompletedSuccessfully));
-        if (outcome == "stop")
-        {
-            Assert.All(
-                sends,
-                send => Assert.Contains("stopped", send.Exception!.GetBaseException().Message)
-            );
-            return;
-        }
-        Assert.All(
-            sends.Where(send => send.IsFaulted),
-            send => Assert.Matches("timed out|closed", send.Exception!.GetBaseException().Message)
+                .WaitAsync(TimeSpan.FromSeconds(outcome == "deadline" ? 13 : 3))
         );
+        Assert.NotNull(failure);
+        Assert.IsNotType<TimeoutException>(failure);
+        Assert.All(sends, send => Assert.True(send.IsCompleted && !send.IsCompletedSuccessfully));
+        foreach (var send in sends)
+        {
+            var error = await Record.ExceptionAsync(() => send);
+            Assert.NotNull(error);
+            if (outcome == "stop")
+                Assert.Contains("stopped", Assert.IsType<IOException>(error).Message);
+            else if (error is OperationCanceledException cancelled)
+            {
+                Assert.Equal("cancel", outcome);
+                Assert.True(cancel.IsCancellationRequested);
+                Assert.Equal(cancel.Token, cancelled.CancellationToken);
+            }
+            else if (error is ObjectDisposedException disposed)
+                // A queued writer can enter after socket abort but before receive-finalization.
+                Assert.Equal(typeof(ClientWebSocket).FullName, disposed.ObjectName);
+            else
+                Assert.True(error is IOException or WebSocketException, error.ToString());
+        }
+        if (outcome == "stop")
+            return;
         using var replacement = await Peer.Accept(listener);
         await replacement.Subscribe();
         await Healthy(channel, replacement);

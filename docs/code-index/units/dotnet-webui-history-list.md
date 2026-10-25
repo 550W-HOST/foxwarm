@@ -20,6 +20,8 @@ All message-bearing routes use [WebUI message transport](./webui-message-transpo
 
 History search source messages and exact/earlier/later viewer windows use the [History-specific hosted display projection](./webui-message-transport.md#history-hosted-display-projection). Ordinary Chat, continuous history, exact Archive reads and Debug retain hosted replay metadata after the ordinary WebUI projection.
 
+Metadata search normalizes queries and candidate fields through the [Unicode lowercase owner](./session-domain.md#metadata-search-lowercasing), retaining substring matching and original metadata.
+
 ## Tests
 
 `SessionTurnTests.cs`; `SessionCatalogTests.cs`; `SessionCatalogPublicationTests.cs`; `SessionCatalogSourceTests.cs`; bounded replay/list route tests; `WebUiAdjacentProjectionTests` (owned HTTP queue/Debug and converter-to-Archive viewer display/preservation paths), `WebUiMessageTransportVectorTests` (real local Vector History search display projection). `WebUiContinuousHistoryTests` covers reopened cumulative fork pages, exact snapshot bounds, live aliases, image transport and invalid queries; `dotnet/Foxwarm.Tests/Fixtures/continuous-history-fixture-ts.mjs` seeds original rows through Source persistence APIs for `packages/webui/test/experimentHostContinuousDownloads.e2e.mjs`, which qualifies real compaction, earlier/newer/reconnect/restored-window reads and an archived image in the built original App.
