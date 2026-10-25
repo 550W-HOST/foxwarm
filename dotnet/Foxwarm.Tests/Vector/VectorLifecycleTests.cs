@@ -13,7 +13,10 @@ public sealed class VectorLifecycleTests
     {
         await using var f = await VectorFixture.CreateAsync();
         Action<string, AtomicJsonWriteStage>? writeStage = null;
-        await using var manager = await f.ManagerAsync(lexical: true, authorityStageHook: (id, stage) => writeStage?.Invoke(id, stage));
+        await using var manager = await f.ManagerAsync(
+            lexical: true,
+            authorityStageHook: (id, stage) => writeStage?.Invoke(id, stage)
+        );
         var source = await manager.CreateNamedAsync("main", "retained", null, null);
         await ForkClearLifecycleTests.AppendAsync(
             source,

@@ -4,7 +4,6 @@ namespace Foxwarm.Sessions;
 
 public sealed partial class SessionSaveLane
 {
-
     internal async Task<SessionSnapshot> CaptureForkAsync(Func<long> effectiveBlockHighWater)
     {
         SessionSnapshot? result = null;

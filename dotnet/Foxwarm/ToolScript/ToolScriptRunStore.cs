@@ -126,7 +126,6 @@ internal sealed class ToolScriptRunStore(string root)
             {
                 if (StageForTests is { } hook)
                     hook(id, stage).GetAwaiter().GetResult();
-
             }
         );
         await Task.Run(

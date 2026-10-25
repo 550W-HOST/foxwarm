@@ -36,7 +36,13 @@ public sealed class RemoteExecProtocolTests
             bool advertiseExec = true
         )
         {
-            Manager = new(Data, Work, Options, HostModels.ForTest(Options), authorityStageHook: (id, stage) => WriteStage?.Invoke(id, stage));
+            Manager = new(
+                Data,
+                Work,
+                Options,
+                HostModels.ForTest(Options),
+                authorityStageHook: (id, stage) => WriteStage?.Invoke(id, stage)
+            );
             await Manager.LoadAsync();
             Owner = await Manager.CreateNamedAsync("main", "exec-owner", null, null);
             Owner.Registry.TriggerOverride = _ =>
@@ -189,7 +195,13 @@ public sealed class RemoteExecProtocolTests
             await App.StopAsync();
             await App.DisposeAsync();
             await Manager.DisposeAsync();
-            Manager = new(Data, Work, Options, HostModels.ForTest(Options), authorityStageHook: (id, stage) => WriteStage?.Invoke(id, stage));
+            Manager = new(
+                Data,
+                Work,
+                Options,
+                HostModels.ForTest(Options),
+                authorityStageHook: (id, stage) => WriteStage?.Invoke(id, stage)
+            );
             await Manager.LoadAsync();
             Owner = await Manager.RequiredAsync(Owner.Id);
             Owner.Registry.TriggerOverride = _ =>
@@ -274,9 +286,15 @@ public sealed class RemoteExecProtocolTests
         );
         fixture.WriteStage = (id, stage) =>
         {
-            if (id != fixture.Owner.Id || stage != (afterRename
-                ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
-                : AtomicJsonWriteStage.BeforeRename))
+            if (
+                id != fixture.Owner.Id
+                || stage
+                    != (
+                        afterRename
+                            ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
+                            : AtomicJsonWriteStage.BeforeRename
+                    )
+            )
                 return;
             fixture.WriteStage = null;
             throw new IOException("Owned strict admission write failure.");

@@ -221,9 +221,15 @@ public sealed partial class ShellHttpTests
         );
         fixture.WriteStage = (id, stage) =>
         {
-            if (id != fixture.Owner.Id || stage != (afterRename
-                ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
-                : AtomicJsonWriteStage.BeforeRename))
+            if (
+                id != fixture.Owner.Id
+                || stage
+                    != (
+                        afterRename
+                            ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
+                            : AtomicJsonWriteStage.BeforeRename
+                    )
+            )
                 return;
             fixture.WriteStage = null;
             throw new IOException("Owned strict admission write failure.");

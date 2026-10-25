@@ -315,7 +315,8 @@ internal sealed class SessionDeletionChannels(
         Write(payload);
     }
 
-    private void Barrier(string? participant, string stage) => beforeStage?.Invoke(participant, stage);
+    private void Barrier(string? participant, string stage) =>
+        beforeStage?.Invoke(participant, stage);
 
     private void Write(JsonObject payload)
     {

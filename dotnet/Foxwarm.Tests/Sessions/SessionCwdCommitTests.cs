@@ -9,7 +9,10 @@ public sealed class SessionCwdCommitTests
     private static ResponsesClientOptions Options =>
         new(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
 
-    private static SessionManager Manager(string root, Action<string, AtomicJsonWriteStage> stage) =>
+    private static SessionManager Manager(
+        string root,
+        Action<string, AtomicJsonWriteStage> stage
+    ) =>
         new(
             Path.Combine(root, "data"),
             Path.Combine(root, "work"),
@@ -33,7 +36,14 @@ public sealed class SessionCwdCommitTests
         var before = owner.Entry.Snapshot();
         writeStage = (_, stage) =>
         {
-            if (stage == (renamed ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync : AtomicJsonWriteStage.BeforeRename))
+            if (
+                stage
+                == (
+                    renamed
+                        ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
+                        : AtomicJsonWriteStage.BeforeRename
+                )
+            )
             {
                 writeStage = null;
                 throw new IOException("Owned CWD commit failure.");

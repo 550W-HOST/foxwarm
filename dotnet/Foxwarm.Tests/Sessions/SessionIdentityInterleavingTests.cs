@@ -57,14 +57,18 @@ public sealed class SessionIdentityInterleavingTests
         var release = Signal();
         var hold = false;
         await using var manager = new SessionManager(
-            Path.Combine(temp.Path, "data"), Path.Combine(temp.Path, "work"), Options, HostModels.ForTest(Options),
+            Path.Combine(temp.Path, "data"),
+            Path.Combine(temp.Path, "work"),
+            Options,
+            HostModels.ForTest(Options),
             canonicalCommitBarrier: async (_, _, _) =>
             {
                 if (!hold)
                     return;
                 reached.TrySetResult();
                 await release.Task;
-            });
+            }
+        );
         await manager.LoadAsync();
         var owner = await manager.CreateNamedAsync("main", "old", null, null);
         hold = true;
@@ -151,7 +155,10 @@ public sealed class SessionIdentityInterleavingTests
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, true)]
-    public async Task Shared_channel_mutations_serialize_real_read_modify_write_without_lost_bindings(bool migration, bool twoDeletes)
+    public async Task Shared_channel_mutations_serialize_real_read_modify_write_without_lost_bindings(
+        bool migration,
+        bool twoDeletes
+    )
     {
         using var temp = new TempDirectory();
         var state = Path.Combine(temp.Path, "state");
@@ -165,17 +172,32 @@ public sealed class SessionIdentityInterleavingTests
         };
         await File.WriteAllTextAsync(
             migration ? Path.Combine(state, "sessions.json.pre-catalog-sqlite-v1.bak") : channels,
-            new JsonObject { [migration ? "channelAttachments" : "channels"] = bindings }.ToJsonString());
+            new JsonObject
+            {
+                [migration ? "channelAttachments" : "channels"] = bindings,
+            }.ToJsonString()
+        );
         var reached = Signal();
         var release = Signal();
         var secondStarted = Signal();
-        var authority = new SessionDeletionChannels(temp.Path, (id, stage) =>
-        {
-            if (id != "old" || stage != (migration ? "migration-before-write" : twoDeletes ? "after-read" : "identity-after-read"))
-                return;
-            reached.TrySetResult();
-            release.Task.WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
-        });
+        var authority = new SessionDeletionChannels(
+            temp.Path,
+            (id, stage) =>
+            {
+                if (
+                    id != "old"
+                    || stage
+                        != (
+                            migration ? "migration-before-write"
+                            : twoDeletes ? "after-read"
+                            : "identity-after-read"
+                        )
+                )
+                    return;
+                reached.TrySetResult();
+                release.Task.WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+            }
+        );
         var first = Task.Run(() =>
         {
             if (twoDeletes)

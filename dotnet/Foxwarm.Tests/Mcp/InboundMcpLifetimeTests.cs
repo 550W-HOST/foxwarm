@@ -21,9 +21,15 @@ public sealed class InboundMcpLifetimeTests
         await using var client = await f.ClientAsync();
         f.WriteStage = (id, stage) =>
         {
-            if (id != f.Target.Id || stage != (renamed
-                ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
-                : AtomicJsonWriteStage.BeforeRename))
+            if (
+                id != f.Target.Id
+                || stage
+                    != (
+                        renamed
+                            ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
+                            : AtomicJsonWriteStage.BeforeRename
+                    )
+            )
                 return;
             f.WriteStage = null;
             throw new IOException("Owned strict admission write failure.");

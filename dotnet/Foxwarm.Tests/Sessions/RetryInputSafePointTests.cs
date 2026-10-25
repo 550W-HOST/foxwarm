@@ -74,7 +74,8 @@ public sealed class RetryInputSafePointTests
                     Path.Combine(fixture.Temp.Path, "work"),
                     options,
                     HostModels.ForTest(options),
-                    canonicalCommitBarrier: (id, commit, token) => fixture.CanonicalStage?.Invoke(id, commit, token) ?? Task.CompletedTask
+                    canonicalCommitBarrier: (id, commit, token) =>
+                        fixture.CanonicalStage?.Invoke(id, commit, token) ?? Task.CompletedTask
                 );
                 await fixture.Manager.LoadAsync();
                 fixture.Owner = await fixture.Manager.CreateNamedAsync("main", "retry", null, null);

@@ -36,9 +36,15 @@ public sealed partial class McpNotificationTests
         var id = await context.Task.WaitAsync(TimeSpan.FromSeconds(10));
         peer.WriteStage = (id, stage) =>
         {
-            if (id != peer.Target.Id || stage != (committed
-                ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
-                : AtomicJsonWriteStage.BeforeRename))
+            if (
+                id != peer.Target.Id
+                || stage
+                    != (
+                        committed
+                            ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
+                            : AtomicJsonWriteStage.BeforeRename
+                    )
+            )
                 return;
             peer.WriteStage = null;
             throw new IOException("Owned strict admission write failure.");

@@ -358,7 +358,11 @@ public sealed class ProcessRestartTests
     [InlineData("identity-copy-before", "rolling-back", "s")]
     [InlineData("identity-copy-after", "rolling-back", "s")]
     [InlineData("identity-finishing", "finishing", "copied/main")]
-    public async Task Actual_identity_copy_or_alias_crash_recovers_only_recorded_direction_and_preserves_sources(string mode, string phase, string expectedId)
+    public async Task Actual_identity_copy_or_alias_crash_recovers_only_recorded_direction_and_preserves_sources(
+        string mode,
+        string phase,
+        string expectedId
+    )
     {
         using var temp = new TempDirectory();
         var root = Path.Combine(temp.Path, "data");
@@ -378,9 +382,15 @@ public sealed class ProcessRestartTests
                 Assert.Equal(expectedId, recovered["id"]!.GetValue<string>());
                 Assert.Equal(1, recovered["historyCount"]!.GetValue<int>());
                 Assert.Equal(1, recovered["archiveCount"]!.GetValue<int>());
-                Assert.Equal("Copied memory survives crash: 雪", recovered["memory"]!.GetValue<string>());
+                Assert.Equal(
+                    "Copied memory survives crash: 雪",
+                    recovered["memory"]!.GetValue<string>()
+                );
                 Assert.False(recovered["pending"]!.GetValue<bool>());
-                Assert.Equal(expectedId == "copied/main", recovered["copiedAgent"]!.GetValue<bool>());
+                Assert.Equal(
+                    expectedId == "copied/main",
+                    recovered["copiedAgent"]!.GetValue<bool>()
+                );
             }
         }
         finally

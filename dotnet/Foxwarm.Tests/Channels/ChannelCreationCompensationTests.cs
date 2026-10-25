@@ -134,10 +134,13 @@ public sealed class ChannelCreationCompensationTests
         f.Manager.BeforeCreationPublication = async id =>
         {
             candidate = id;
-            using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={Path.Combine(state, "archive-store.sqlite")}");
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                $"Data Source={Path.Combine(state, "archive-store.sqlite")}"
+            );
             await connection.OpenAsync();
             using var command = connection.CreateCommand();
-            command.CommandText = $"CREATE TRIGGER owned_candidate_cleanup BEFORE DELETE ON archive_branches WHEN OLD.session_id='{id}' BEGIN SELECT RAISE(ABORT,'Owned candidate cleanup failure'); END";
+            command.CommandText =
+                $"CREATE TRIGGER owned_candidate_cleanup BEFORE DELETE ON archive_branches WHEN OLD.session_id='{id}' BEGIN SELECT RAISE(ABORT,'Owned candidate cleanup failure'); END";
             await command.ExecuteNonQueryAsync();
             File.SetUnixFileMode(state, UnixFileMode.UserRead | UnixFileMode.UserExecute);
         };
@@ -149,8 +152,7 @@ public sealed class ChannelCreationCompensationTests
             Assert.Contains(failure.InnerExceptions, error => error is UnauthorizedAccessException);
             Assert.Contains(
                 failure.InnerExceptions,
-                error =>
-                    error is Microsoft.Data.Sqlite.SqliteException
+                error => error is Microsoft.Data.Sqlite.SqliteException
             );
             Assert.Contains(candidate!, failure.Message);
             Assert.Null(f.Manager.ChannelBinding("alpha:failed-cleanup"));

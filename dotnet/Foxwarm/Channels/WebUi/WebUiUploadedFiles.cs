@@ -352,5 +352,4 @@ internal sealed class WebUiUploadedFiles(SessionManager sessions)
         if (BeforeStage is { } callback)
             await callback(owner, stage);
     }
-
 }

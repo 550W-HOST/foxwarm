@@ -93,7 +93,13 @@ internal sealed class InboundMcpFixture : IAsyncDisposable
                 "",
                 713
             );
-            f.Manager = new(f.Data, f.Work, options, f.Configuration.Models, authorityStageHook: (id, stage) => f.WriteStage?.Invoke(id, stage));
+            f.Manager = new(
+                f.Data,
+                f.Work,
+                options,
+                f.Configuration.Models,
+                authorityStageHook: (id, stage) => f.WriteStage?.Invoke(id, stage)
+            );
             await f.Manager.LoadMainHostAsync();
             f.Target = await f.Manager.CreateNamedAsync("main", "target", null, null);
             f.Target.Registry.TriggerOverride = _ => Task.CompletedTask;

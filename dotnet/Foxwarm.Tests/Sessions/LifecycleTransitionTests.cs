@@ -304,7 +304,8 @@ public sealed class LifecycleTransitionTests
                 options,
                 HostModels.ForTest(options),
                 authorityStageHook: (id, stage) => WriteStage?.Invoke(id, stage),
-                canonicalCommitBarrier: (id, commit, token) => CanonicalStage?.Invoke(id, commit, token) ?? Task.CompletedTask
+                canonicalCommitBarrier: (id, commit, token) =>
+                    CanonicalStage?.Invoke(id, commit, token) ?? Task.CompletedTask
             );
             manager.TopologyChanged += () =>
             {

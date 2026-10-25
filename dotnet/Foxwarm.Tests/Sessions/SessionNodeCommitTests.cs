@@ -46,7 +46,14 @@ public sealed class SessionNodeCommitTests
         var before = owner.Entry.Snapshot();
         writeStage = (_, stage) =>
         {
-            if (stage == (renamed ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync : AtomicJsonWriteStage.BeforeRename))
+            if (
+                stage
+                == (
+                    renamed
+                        ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
+                        : AtomicJsonWriteStage.BeforeRename
+                )
+            )
             {
                 writeStage = null;
                 throw new IOException("Owned placement commit failure.");

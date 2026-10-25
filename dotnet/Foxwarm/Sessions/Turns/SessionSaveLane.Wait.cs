@@ -4,7 +4,6 @@ namespace Foxwarm.Sessions;
 
 public sealed partial class SessionSaveLane
 {
-
     internal Task<bool> AdmitTimerAsync(QueueItem item) =>
         AdmitWithReceiptAsync(item, null, SaveKind.BestEffort);
 

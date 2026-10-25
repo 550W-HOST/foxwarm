@@ -5,7 +5,6 @@ namespace Foxwarm.Sessions;
 
 public sealed partial class SessionSaveLane
 {
-
     internal Task CommitSettingsAsync(JsonObject patch, HostModels models) =>
         EnqueueOperationAsync(async () =>
         {
