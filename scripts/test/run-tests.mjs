@@ -10,6 +10,7 @@ import {
   deferredGroups,
   loadTestInventory,
   routineUnitGroups,
+  referenceGroups,
   standaloneSelftests,
 } from './test-inventory.mjs'
 import { parseTestResultCounts } from './test-result-counts.mjs'
@@ -26,7 +27,7 @@ if (!validTargets.has(target)) {
 
 const inventory = loadTestInventory(repoRoot)
 const unclassified = inventory.unclassified || []
-const missingGroups = routineUnitGroups.filter(group => !(inventory[group]?.length))
+const missingGroups = [...routineUnitGroups, ...referenceGroups].filter(group => !(inventory[group]?.length))
 if (unclassified.length || missingGroups.length) {
   if (unclassified.length) console.error(`Unclassified tests:\n${unclassified.map(file => `  ${file}`).join('\n')}`)
   if (missingGroups.length) console.error(`Empty required test groups: ${missingGroups.join(', ')}`)
@@ -39,7 +40,7 @@ function printInventory() {
     const note = deferredGroups[group] ? ` — ${deferredGroups[group]}` : ''
     console.log(`${group.padEnd(20)} ${String(files.length).padStart(3)} file(s)${note}`)
   }
-  console.log(`standalone-selftests ${String(standaloneSelftests.length).padStart(3)} executable(s)`)
+  console.log(`standalone-selftests ${String(standaloneSelftests.length).padStart(3)} executable(s) — Retired Main programs; explicit test:reference only.`)
 }
 
 if (target === 'inventory') {
@@ -119,7 +120,8 @@ function publishedGroup() {
 }
 
 function unitGroups() {
-  const backend = requireFiles(inventory.backend.map(compiledPath), 'backend tests')
+  const bootstrap = requireFiles(inventory['node-bootstrap'].map(compiledPath), 'Node bootstrap tests')
+  const helpers = requireFiles(inventory['runtime-helpers'].map(compiledPath), 'runtime helper tests')
   const shared = requireFiles(inventory.shared.map(compiledPath), 'shared tests')
   const cli = requireFiles(inventory['cli-node'].map(compiledPath), 'CLI Node tests')
   const browserNode = requireFiles(inventory['browser-node'], 'browser Node tests')
@@ -127,20 +129,9 @@ function unitGroups() {
   const skillNode = requireFiles(inventory['skill-node'], 'skill Node tests')
   const webui = requireFiles(inventory['webui-unit'], 'WebUI unit tests')
   const python = requireFiles(inventory.python, 'Python tests')
-  requireFiles(standaloneSelftests, 'standalone selftests')
-  const vectorFailure = backend.find(file => file.endsWith('/vector.indexFailure.test.js'))
-  const backendShards = chunks(backend.filter(file => file !== vectorFailure), 8)
   return [
-    {
-      name: 'backend',
-      // Backend test files are short-lived; keep their logger worker out of teardown.
-      // The dedicated async logger test removes this setting in its child process.
-      env: { FOXWARM_SYNC_FILE_LOG: process.env.FOXWARM_SYNC_FILE_LOG ?? '1' },
-      steps: [
-        ...backendShards.map((files, index) => nodeTestStep(`backend-${String(index + 1).padStart(2, '0')}`, files, { concurrency: 8, timeoutMs: 600_000 })),
-        ...(vectorFailure ? [nodeTestStep('vector.indexFailure', [vectorFailure], { timeoutMs: 120_000 })] : []),
-      ],
-    },
+    { name: 'node-bootstrap', steps: [nodeTestStep('node-bootstrap', bootstrap, { concurrency: 2, timeoutMs: 240_000 })] },
+    { name: 'runtime-helpers', steps: [nodeTestStep('runtime-helpers', helpers, { concurrency: 2 })] },
     { name: 'shared', steps: [nodeTestStep('shared', shared, { concurrency: 4, timeoutMs: 240_000 })] },
     { name: 'cli-node', steps: [nodeTestStep('cli-node', cli, { concurrency: 4, timeoutMs: 180_000 })] },
     { name: 'browser-node', steps: [nodeTestStep('browser-node', browserNode, { concurrency: 2, timeoutMs: 120_000 })] },
@@ -156,6 +147,26 @@ function unitGroups() {
       name: 'python',
       steps: python.map(file => directStep(path.basename(file), 'python3', [file], 180_000)),
     },
+  ]
+}
+
+function referenceTestGroups() {
+  const backend = requireFiles(inventory['reference-backend'].map(compiledPath), 'reference backend tests')
+  const isolation = requireFiles(inventory['reference-isolation'], 'reference isolation tests')
+  requireFiles(standaloneSelftests, 'standalone selftests')
+  const vectorFailure = backend.find(file => file.endsWith('/vector.indexFailure.test.js'))
+  const shards = chunks(backend.filter(file => file !== vectorFailure), 8)
+  return [
+    {
+      name: 'reference-backend',
+      // The async logger regression clears this setting in its own child.
+      env: { FOXWARM_SYNC_FILE_LOG: process.env.FOXWARM_SYNC_FILE_LOG ?? '1' },
+      steps: [
+        ...shards.map((files, index) => nodeTestStep(`backend-${String(index + 1).padStart(2, '0')}`, files, { concurrency: 8, timeoutMs: 600_000 })),
+        ...(vectorFailure ? [nodeTestStep('vector.indexFailure', [vectorFailure], { timeoutMs: 120_000 })] : []),
+      ],
+    },
+    { name: 'reference-isolation', steps: [nodeTestStep('reference-isolation', isolation, { timeoutMs: 240_000 })] },
     {
       name: 'standalone-selftests',
       steps: standaloneSelftests.map(file => directStep(path.basename(file, '.js'), process.execPath, [file], 240_000)),
@@ -296,7 +307,8 @@ async function runStep(group, step, log) {
 const groups = [
   ...(target === 'managed' || target === 'unit' || target === 'all' ? [managedGroup()] : []),
   ...(target === 'published' || target === 'all' ? [publishedGroup()] : []),
-  ...(target === 'unit' || target === 'reference' || target === 'all' ? unitGroups() : []),
+  ...(target === 'unit' || target === 'all' ? unitGroups() : []),
+  ...(target === 'reference' ? referenceTestGroups() : []),
   ...(target === 'browser' || target === 'all' ? [browserGroup()] : []),
   ...(target === 'app' || target === 'all' ? [appGroup()] : []),
 ]

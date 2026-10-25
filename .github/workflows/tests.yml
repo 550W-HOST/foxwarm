@@ -50,7 +50,9 @@ jobs:
           npm run build:reference
       - name: Prepare optional HEIF test prerequisite
         run: bash dotnet/scripts/build-image-decoder.sh "$RUNNER_TEMP/heif-test"
-      - name: Run core and package tests
+      # Source is still needed by managed oracles and fixture producers; the
+      # retired Main unit suite is available separately through test:reference.
+      - name: Run maintained core and component tests
         env:
           LD_LIBRARY_PATH: ${{ runner.temp }}/heif-test/prefix/lib
           FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts

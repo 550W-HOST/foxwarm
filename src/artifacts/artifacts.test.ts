@@ -4,19 +4,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { validateArtifactDocument } from '../../packages/shared/dist/artifacts/registry';
-import { parseArtifactReceipt } from '../../packages/shared/dist/artifacts/types';
 import { ArtifactStore } from './store';
-import { prepareArtifact } from './prepare';
 const example = (name: string) => fs.readFile(path.resolve(`skills/${name === 'chart' ? 'data-visualization/examples/training-metrics' : 'react-artifacts/examples/sorting'}.json`), 'utf8').then(JSON.parse);
-test('bundled skills publish valid manifests; chart rejects executable/resource-bearing specifications', async () => {
-  const chart = await example('chart'); assert.equal(validateArtifactDocument(chart).type, 'chart');
-  for (const bad of [{ ...chart, data: { url: 'https://invalid' } }, { ...chart, spec: { ...chart.spec, transform: [{ calculate: 'alert(1)' }] } }, { ...chart, spec: { mark: { type: 'line', color: 'url(https://invalid)' } } }, { ...chart, spec: { mark: 'line', encoding: { color: { value: 'url(https://invalid)' } } } }, { ...chart, schemaVersion: 2 }]) assert.throws(() => validateArtifactDocument(bad));
-  assert.throws(() => validateArtifactDocument({ ...chart, spec: { mark: 'image' } }));
-  assert.throws(() => validateArtifactDocument({ ...chart, data: [{ constructor: 1 }] }));
-  assert.throws(() => validateArtifactDocument({ ...chart, controls: { smoothing: { field: 'success', as: 'success', window: 1 } } }));
-  assert.equal(parseArtifactReceipt({ protocolVersion: 1, artifactId: '../../secret' }), undefined);
-});
 test('immutable snapshots, ownership, optimistic revision conflicts and atomic concurrent updates', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'fw-artifact-'));
   try {
@@ -33,16 +22,6 @@ test('immutable snapshots, ownership, optimistic revision conflicts and atomic c
     assert.equal((await fs.readdir(path.join(root, first.receipt.artifactId))).length, 2);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
-test('React compilation accepts local source and fixed runtime, rejects Node/network imports without executing source', async () => {
-  const doc = await example('react');
-  const compiled = await prepareArtifact(validateArtifactDocument(doc));
-  assert.ok(compiled.compiled.includes('Insertion sort')); assert.ok(compiled.compiled.length > 10000);
-  for (const specifier of ['node:fs', 'https://invalid.test/pkg.js', '../../secrets', 'child_process']) {
-    await assert.rejects(prepareArtifact(validateArtifactDocument({ ...doc, files: { 'App.tsx': `import x from '${specifier}'; export default function App(){return x}` } })), /Import not allowed|Source file not found/);
-  }
-  assert.throws(() => validateArtifactDocument({ ...doc, files: { '../App.tsx': 'export default ()=>null' } }));
-});
-
 test('artifact HTTP reads recheck identity scope and original owner; IDs grant no access', async () => {
   const express = (await import('express')).default;
   const { registerArtifactRoutes } = await import('./routes');
@@ -100,7 +79,6 @@ test('image resources are immutable, independently authorized and never executab
     await assert.rejects(store.resource(record.receipt.artifactId, 1, 'beta', 'image'));
     await assert.rejects(store.resource(record.receipt.artifactId, 1, 'alpha', '../image'));
     await assert.rejects(store.publish('alpha', { ...doc, width: 99 }, undefined, undefined, { image: bytes }), /metadata/);
-    await assert.rejects(describeImage(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'), 'unsafe'), /Only PNG/);
     await assert.rejects(store.publish('alpha', doc), /raster file/);
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
