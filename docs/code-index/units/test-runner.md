@@ -22,6 +22,8 @@ The default `unit` and `all` targets exclude historical-reference execution. Cla
 
 GitHub Actions uses those same public commands in separate core/unit-quality, Chromium-fixture, and real-application jobs. It does not introduce a workflow-only test selector.
 
+The Chromium job builds the same pinned optional HEIF prerequisite as Core and exposes its owned library prefix to fixture subprocesses. It also prepares the root-owned mode-0755 SSH privilege-separation directory before the loopback fixture starts its dedicated daemon; it does not start a system SSH service. Interactive Source CLI fixture subprocesses use `CI=false` to receive live Ink frames, including redirected stdout. Native CLI subprocesses retain the caller's CI environment.
+
 ## Behavior
 
 - Patch parser/matcher fixtures run in the shared unit group, not as a separate root algorithm selftest.

@@ -123,6 +123,10 @@ jobs:
         run: |
           npm run build
           npm run build:reference
+      - name: Prepare optional HEIF test prerequisite
+        run: bash dotnet/scripts/build-image-decoder.sh "$RUNNER_TEMP/heif-test"
+      - name: Prepare owned SSH daemon prerequisite
+        run: sudo install -d -o root -g root -m 0755 /run/sshd
       - name: Qualify complete managed publish
         env:
           FOXWARM_E2E_CHROMIUM: ${{ steps.browser.outputs.path }}
@@ -130,6 +134,7 @@ jobs:
         run: npm run test:published
       - name: Run Chromium fixtures
         env:
+          LD_LIBRARY_PATH: ${{ runner.temp }}/heif-test/prefix/lib
           FOXWARM_E2E_CHROMIUM: ${{ steps.browser.outputs.path }}
           FOXWARM_TEST_ARTIFACT_DIR: ${{ runner.temp }}/foxwarm-test-artifacts
         run: npm run test:webui:e2e

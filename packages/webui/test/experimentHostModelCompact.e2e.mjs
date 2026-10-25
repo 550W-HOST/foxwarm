@@ -261,6 +261,7 @@ try {
   const readCall = (await json(hostPort, 'GET', `/api/sessions/${layeredId}/archive/messages/18`)).body.message
   const readResult = (await json(hostPort, 'GET', `/api/sessions/${layeredId}/archive/messages/19`)).body.message
   assert.equal(readCall.parts[0].functionCall.id, 'layered-read-pair')
+  assert.equal(readResult.parts[0].functionResponse.tool_use_id, readCall.parts[0].functionCall.id)
   assert(readResult.parts[0].functionResponse.response.output.startsWith('PAIRED_TOOL_CONTENT\n---\n'))
   try {
     await until(async () => provider.layerPlanCount >= 1 && (await history(hostPort, layeredId)).messages.some(
@@ -345,7 +346,9 @@ try {
   const rawDetail = await exact('raw', { sessionId: layeredId, target: 'MSG : B#' + l2.id, contentFilter: 'seed-l1-0', previewLength: 2000 })
   assert(rawDetail.includes('seed-l1-0'))
   const reversed = await exact('reversed', { sessionId: layeredId, target: 'msg#19-msg#18', toolDetail: 'full', previewLength: 2000 })
-  assert(reversed.includes('layered-read-pair') && reversed.includes('PAIRED_TOOL_CONTENT'))
+  assert(reversed.indexOf('[#18 ') >= 0 && reversed.indexOf('[#19 ') > reversed.indexOf('[#18 '))
+  assert(reversed.includes('[call:read]') && reversed.includes('"filePath":"toolpair.txt"'))
+  assert(reversed.includes('[tool:read] PAIRED_TOOL_CONTENT'))
   const narrow = await exact('one', { sessionId: layeredId, target: 'msg#19', contentFilter: 'PAIRED_TOOL_CONTENT', toolDetail: 'names', previewLength: 1000 })
   assert(narrow.includes('Matched in omitted tool'))
   assert((await exact('missing-block', { sessionId: layeredId, target: 'B#999999' })).includes('No CTX-BLOCK'))
@@ -434,7 +437,7 @@ try {
   host = second
   assert.notEqual(second.child.pid, firstPid)
   assert.equal((await history(hostPort, switchId)).session.modelKey, 'beta')
-  assert.equal((await view(parentId)).childModelDefault, 'beta/beta-wire'); assert.equal((await view(parentId)).childEffortDefault, 'high'); assert.equal((await view(parentId)).compactThresholdTokens, 12345)
+  assert.equal((await view(parentId)).childModelDefault, null); assert.equal((await view(parentId)).childEffortDefault, null); assert.equal((await view(parentId)).compactThresholdTokens, 12345)
   assert.equal((await history(hostPort, switchId)).session.effectiveEffort, 'high')
   assert.equal((await history(hostPort, layeredId)).messages.find(row => row.__meta?.contextBlock?.level === 2)?.__meta?.contextBlock?.id, l2.id)
   await send(hostPort, legacyId, 'OLD-RECALL-RESTORE')
