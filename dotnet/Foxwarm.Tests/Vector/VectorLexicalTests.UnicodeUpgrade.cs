@@ -51,13 +51,28 @@ public sealed partial class VectorLexicalTests
             db.Open();
             using var command = db.CreateCommand();
             command.CommandText = await File.ReadAllTextAsync(
-                Path.Combine(VectorFixture.Repository(), "dotnet", "Foxwarm.Tests", "Fixtures", "archive-search-unicode16.sql")
+                Path.Combine(
+                    VectorFixture.Repository(),
+                    "dotnet",
+                    "Foxwarm.Tests",
+                    "Fixtures",
+                    "archive-search-unicode16.sql"
+                )
             );
             command.ExecuteNonQuery();
         }
-        Assert.Equal("1", Scalar("SELECT value FROM archive_search_metadata WHERE key='schema_version'"));
-        Assert.Equal("1", Scalar("SELECT value FROM archive_search_metadata WHERE key='normalizer_version'"));
-        Assert.Contains("αας꟎", Assert.IsType<string>(Scalar("SELECT index_text FROM archive_search_documents")));
+        Assert.Equal(
+            "1",
+            Scalar("SELECT value FROM archive_search_metadata WHERE key='schema_version'")
+        );
+        Assert.Equal(
+            "1",
+            Scalar("SELECT value FROM archive_search_metadata WHERE key='normalizer_version'")
+        );
+        Assert.Contains(
+            "αας꟎",
+            Assert.IsType<string>(Scalar("SELECT index_text FROM archive_search_documents"))
+        );
         Assert.Throws<ArchiveSearchRebuildRequiredException>(() => ArchiveSearchIndex.Open(path));
         var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -76,13 +91,25 @@ public sealed partial class VectorLexicalTests
                 Assert.True(status["rebuilding"]!.GetValue<bool>());
                 Assert.False(status["ready"]!.GetValue<bool>());
                 Assert.True(File.Exists(path + ".next"));
-                Assert.Equal("1", Scalar("SELECT value FROM archive_search_metadata WHERE key='normalizer_version'"));
-                var unavailable = await runtime.Lexical.QueryAsync("ΑΑΣ꟎", 5, new(SessionIds: [id]));
+                Assert.Equal(
+                    "1",
+                    Scalar(
+                        "SELECT value FROM archive_search_metadata WHERE key='normalizer_version'"
+                    )
+                );
+                var unavailable = await runtime.Lexical.QueryAsync(
+                    "ΑΑΣ꟎",
+                    5,
+                    new(SessionIds: [id])
+                );
                 Assert.Empty(unavailable.Hits);
                 Assert.False(unavailable.Lexical["ready"]!.GetValue<bool>());
                 Assert.False(unavailable.Lexical["used"]!.GetValue<bool>());
                 Assert.True(unavailable.Lexical["backfilling"]!.GetValue<bool>());
-                Assert.Equal("ARCHIVE_SEARCH_REBUILD_REQUIRED", unavailable.Lexical["errorCode"]!.GetValue<string>());
+                Assert.Equal(
+                    "ARCHIVE_SEARCH_REBUILD_REQUIRED",
+                    unavailable.Lexical["errorCode"]!.GetValue<string>()
+                );
             }
             finally
             {
@@ -98,8 +125,14 @@ public sealed partial class VectorLexicalTests
         using var reopened = ArchiveSearchIndex.Open(path);
         Assert.Single(reopened.Query("ΑΑΣ꟎", new(SessionIds: [id]), 5));
         Assert.Single(reopened.Query("αασ꟏", new(SessionIds: [id]), 5));
-        Assert.Equal("1", Scalar("SELECT value FROM archive_search_metadata WHERE key='schema_version'"));
-        Assert.Equal("2", Scalar("SELECT value FROM archive_search_metadata WHERE key='normalizer_version'"));
+        Assert.Equal(
+            "1",
+            Scalar("SELECT value FROM archive_search_metadata WHERE key='schema_version'")
+        );
+        Assert.Equal(
+            "2",
+            Scalar("SELECT value FROM archive_search_metadata WHERE key='normalizer_version'")
+        );
         Assert.False(File.Exists(path + ".next"));
         Assert.False(File.Exists(path + ".bak"));
         Assert.Equal(authority, await File.ReadAllTextAsync(authorityPath));

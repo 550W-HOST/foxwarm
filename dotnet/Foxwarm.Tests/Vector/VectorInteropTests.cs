@@ -221,13 +221,18 @@ public sealed class VectorInteropTests
             await restarted.StartAsync();
             await restarted.WaitForStartupAsync();
             var clipped = await restarted.SearchAsync(
-                "violet", 10, new(LineageSessions: [new(id, 2, 0)])
+                "violet",
+                10,
+                new(LineageSessions: [new(id, 2, 0)])
             );
-            Assert.All(clipped.Hits, hit =>
-            {
-                Assert.DoesNotContain("CSharp third", hit.ToJsonString());
-                Assert.DoesNotContain("managed fourth", hit.ToJsonString());
-            });
+            Assert.All(
+                clipped.Hits,
+                hit =>
+                {
+                    Assert.DoesNotContain("CSharp third", hit.ToJsonString());
+                    Assert.DoesNotContain("managed fourth", hit.ToJsonString());
+                }
+            );
             Assert.Contains(clipped.Hits, hit => VectorRuntime.Integer(hit["end_seq"]) == 2);
         }
         using (var table = new VectorTable())
