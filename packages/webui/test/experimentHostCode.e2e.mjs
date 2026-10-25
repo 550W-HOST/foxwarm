@@ -150,8 +150,13 @@ try {
   await page.waitForSelector('.xterm-screen, .xterm-rows', { timeout: 30000 }); await page.click('.xterm-screen, .xterm-rows'); await page.keyboard.type("printf 'APP-PTY\\n' > app-pty.txt"); await page.keyboard.press('Enter')
   await until(async () => (await readFile(join(owned.work, 'app-pty.txt'), 'utf8').catch(() => '')) === 'APP-PTY\n', 'original App keyboard reached PTY', 30000)
   await page.keyboard.type("cd ..; pwd > app-cwd.txt"); await page.keyboard.press('Enter')
-  await until(async () => (await readFile(join(dirname(owned.work), 'app-cwd.txt'), 'utf8').catch(() => '')).trim() === dirname(owned.work), 'original App cwd tracking', 30000)
-  const appCwd = await owned.api('GET', `/api/terminals/${encodeURIComponent(appTerminal.id)}`); assert.equal(appCwd.body.terminal.pid, appTerminal.pid); assert.equal(appCwd.body.terminal.cwd, dirname(owned.work))
+  // The command's file effect precedes the prompt hook that publishes terminal cwd.
+  await until(async () => {
+    if ((await readFile(join(dirname(owned.work), 'app-cwd.txt'), 'utf8').catch(() => '')).trim() !== dirname(owned.work)) return false
+    const appCwd = await owned.api('GET', `/api/terminals/${encodeURIComponent(appTerminal.id)}`)
+    assert.equal(appCwd.body.terminal.pid, appTerminal.pid)
+    return appCwd.body.terminal.cwd === dirname(owned.work)
+  }, 'original App cwd tracking', 30000)
   const persistedTabId = await until(async () => page.evaluate(id => { try { const saved = JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4') || '{}'); const state = saved.state || saved; return Object.entries(state.tabsById || {}).find(([, tab]) => tab.terminalId === id && !tab.createMode)?.[0] || false } catch { return false } }, appTerminal.id), 'original App terminal tab persistence', 30000)
   await page.reload({ waitUntil: 'domcontentloaded' }); await waitForWebUiReady(page); await page.waitForFunction(() => window.foxwarmTest?.switchToSession); await page.evaluate(id => { window.location.hash = '#tab/' + encodeURIComponent(id) }, persistedTabId); await page.waitForSelector('.xterm-screen, .xterm-rows', { timeout: 30000 })
   const appAfterReload = await owned.api('GET', `/api/terminals/${encodeURIComponent(appTerminal.id)}`); assert.equal(appAfterReload.body.terminal.pid, appTerminal.pid); assert.equal(appAfterReload.body.terminal.cwd, dirname(owned.work))
