@@ -34,6 +34,8 @@ public sealed class ArchiveWriterOverlapTests
             Assert.False(commit.IsCompleted);
             Assert.Equal(previous, await File.ReadAllTextAsync(store.AuthorityPath));
             Assert.Empty(store.Archive.ReadMessages());
+            var staged = Assert.Single(Directory.GetFiles(Path.GetDirectoryName(store.AuthorityPath)!, "*.tmp-*"));
+            Assert.Single(SessionAuthorityDocument.Load(staged, "s").CloneRoot()["history"]!.AsArray());
         }
         finally
         {
@@ -44,8 +46,10 @@ public sealed class ArchiveWriterOverlapTests
         Assert.Single(store.Archive.ReadMessages());
     }
 
-    [Fact]
-    public async Task Failed_authority_preparation_waits_for_accepted_archive_work_then_compensates_only_new_rows()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Failed_authority_preparation_waits_for_accepted_archive_work_then_compensates_only_new_rows(bool serializationFailure)
     {
         using var temp = new TempDirectory();
         using var owner = SqliteArchiveMessageStore.AcquireWriter(
@@ -64,7 +68,10 @@ public sealed class ArchiveWriterOverlapTests
         };
         var added = Fixture.Message(2, "new row", 2000);
         var bad = Snapshot([existing, added]);
-        bad.AuthorityEnvelope["childHandoffState"] = new JsonObject();
+        if (serializationFailure)
+            bad.AuthorityEnvelope["futureValue"] = double.NaN;
+        else
+            bad.AuthorityEnvelope["childHandoffState"] = new JsonObject();
         var commit = store.CommitCanonicalAppendAsync(bad, [existing, added]);
         try
         {
@@ -75,10 +82,10 @@ public sealed class ArchiveWriterOverlapTests
         {
             release.TrySetResult();
         }
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
-            commit.WaitAsync(TimeSpan.FromSeconds(5))
-        );
+        var error = await Record.ExceptionAsync(() => commit.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(serializationFailure ? error is ArgumentException : error is InvalidDataException);
         Assert.Equal(previous, await File.ReadAllTextAsync(store.AuthorityPath));
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(store.AuthorityPath)!, "*.tmp-*"));
         Assert.Equal(
             "existing",
             Assert.Single(store.Archive.ReadMessages()).Message["parts"]![0]![

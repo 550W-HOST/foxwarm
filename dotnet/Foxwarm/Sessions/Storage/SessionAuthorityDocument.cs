@@ -89,6 +89,62 @@ public sealed class SessionAuthorityDocument
             }
         );
 
+    internal void WriteTo(Stream stream) => WriteTo(stream, root);
+
+    // State is owned by the save attempt; history records remain immutable. Validate each
+    // record with the same schema as document ingress, without retaining a mutable history tree.
+    internal static void WriteTo(Stream stream, JsonObject state, SessionHistory? history = null)
+    {
+        using var writer = new Utf8JsonWriter(stream, new JsonWriterOptions
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            Indented = true,
+            // Match ToJson's JsonSerializerOptions default, including unknown nested values.
+            MaxDepth = 64,
+        });
+        writer.WriteStartObject();
+        foreach (var property in state)
+        {
+            writer.WritePropertyName(property.Key);
+            if (property.Key == "history")
+            {
+                writer.WriteStartArray();
+                if (history is not null)
+                {
+                    var index = 0;
+                    foreach (var message in history)
+                    {
+                        ValidateMessage(message.ToJson(), null, $"history[{index++}]");
+                        message.Data.WriteTo(writer);
+                        FlushBuffer();
+                    }
+                }
+                else
+                    foreach (var message in (JsonArray)property.Value!)
+                    {
+                        message!.WriteTo(writer);
+                        FlushBuffer();
+                    }
+                writer.WriteEndArray();
+            }
+            else if (property.Value is null)
+                writer.WriteNullValue();
+            else
+                property.Value.WriteTo(writer);
+            FlushBuffer();
+        }
+        writer.WriteEndObject();
+        writer.Flush();
+
+        void FlushBuffer()
+        {
+            // Utf8JsonWriter otherwise buffers the complete document. Flush at record/property
+            // boundaries so memory is bounded by a batch or the largest individual value.
+            if (writer.BytesPending >= 64 * 1024)
+                writer.Flush();
+        }
+    }
+
     internal static string ValidateMessageContent(JsonObject message, string label)
     {
         var role = RequiredString(message, "role", label);
@@ -192,15 +248,29 @@ public sealed class SessionAuthorityDocument
 
     internal static void Validate(JsonObject root, string sessionId, string agent)
     {
+        var history =
+            root["history"] as JsonArray
+            ?? throw new InvalidDataException("Session authority history must be an array.");
+        ValidateState(root, history.Count, sessionId, agent);
+        for (var index = 0; index < history.Count; index++)
+            ValidateMessage(
+                history[index] as JsonObject
+                    ?? throw new InvalidDataException(
+                        $"Session authority history[{index}] must be an object."
+                    ),
+                null,
+                $"history[{index}]"
+            );
+    }
+
+    internal static void ValidateState(JsonObject root, int historyCount, string sessionId, string agent)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(agent);
         if (RequiredSafeInteger(root, "sessionStateVersion", "Session authority") != 1)
             throw new UnsupportedSessionAuthorityException(
                 "Only sessionStateVersion 1 is supported."
             );
-        var history =
-            root["history"] as JsonArray
-            ?? throw new InvalidDataException("Session authority history must be an array.");
         if (
             root["persistentMemorySnapshot"] is not JsonValue memory
             || !memory.TryGetValue<string>(out _)
@@ -221,7 +291,7 @@ public sealed class SessionAuthorityDocument
             ?? throw new InvalidDataException("Session authority meta must be an object.");
         _ = RequiredFiniteNumber(meta, "lastMessageTime", "Session authority meta");
         var messageCount = RequiredSafeInteger(meta, "messageCount", "Session authority meta");
-        if (messageCount != history.Count)
+        if (messageCount != historyCount)
             throw new InvalidDataException(
                 "Session authority meta.messageCount must equal history length."
             );
@@ -334,15 +404,6 @@ public sealed class SessionAuthorityDocument
                 );
         }
 
-        for (var index = 0; index < history.Count; index++)
-            ValidateMessage(
-                history[index] as JsonObject
-                    ?? throw new InvalidDataException(
-                        $"Session authority history[{index}] must be an object."
-                    ),
-                null,
-                $"history[{index}]"
-            );
         var nextMessageSeq = RequiredSafeInteger(root, "nextMessageSeq", "Session authority");
         if (nextMessageSeq < 1)
             throw new InvalidDataException("Session authority nextMessageSeq must be positive.");

@@ -114,7 +114,7 @@ public sealed class PersistentSessionAuthorityStore
     internal Task PersistIdentitySnapshotAsync(SessionSnapshot snapshot)
     {
         ValidateBoundSnapshot(snapshot);
-        authorityFile.Write(ToAuthority(snapshot));
+        WriteAuthority(snapshot);
         return Task.CompletedTask;
     }
 
@@ -129,7 +129,7 @@ public sealed class PersistentSessionAuthorityStore
         AuthorityCommittedException? publicationError = null;
         try
         {
-            authorityFile.Write(ToAuthority(snapshot));
+            WriteAuthority(snapshot);
         }
         catch (AuthorityCommittedException error)
         {
@@ -154,16 +154,20 @@ public sealed class PersistentSessionAuthorityStore
         AuthorityCommittedException? publicationError = null;
         try
         {
-            // Build, validate and serialize the owned snapshot while Archive persistence is pending.
-            var payload = ToAuthority(stagedSnapshot).ToJson(indented: true);
-            if (canonicalCommitBarrier is not null)
-                await canonicalCommitBarrier(
-                        Interlocked.Increment(ref canonicalCommitCount),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-            inserted = await receipt.Completion.ConfigureAwait(false);
-            authorityFile.WriteTextPayload(payload, default);
+            var state = PrepareAuthorityState(stagedSnapshot);
+            await authorityFile.WriteStreamPayloadAsync(
+                stream => SessionAuthorityDocument.WriteTo(stream, state, stagedSnapshot.History),
+                async () =>
+                {
+                    if (canonicalCommitBarrier is not null)
+                        await canonicalCommitBarrier(
+                            Interlocked.Increment(ref canonicalCommitCount),
+                            cancellationToken
+                        ).ConfigureAwait(false);
+                    inserted = await receipt.Completion.ConfigureAwait(false);
+                },
+                default
+            ).ConfigureAwait(false);
             published = true;
         }
         catch (AuthorityCommittedException error)
@@ -216,10 +220,16 @@ public sealed class PersistentSessionAuthorityStore
         AuthorityCommittedException? publicationError = null;
         try
         {
-            var payload = ToAuthority(stagedSnapshot).ToJson(indented: true);
-            (newBlocks, newMessages) = await receipt.Completion.ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
-            authorityFile.WriteTextPayload(payload, cancellationToken);
+            var state = PrepareAuthorityState(stagedSnapshot);
+            await authorityFile.WriteStreamPayloadAsync(
+                stream => SessionAuthorityDocument.WriteTo(stream, state, stagedSnapshot.History),
+                async () =>
+                {
+                    (newBlocks, newMessages) = await receipt.Completion.ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                },
+                cancellationToken
+            ).ConfigureAwait(false);
             published = true;
         }
         catch (AuthorityCommittedException error)
@@ -371,7 +381,16 @@ public sealed class PersistentSessionAuthorityStore
         return ArchiveMessageRecord.Create(sessionId, agent, seq, timestamp, message);
     }
 
-    private SessionAuthorityDocument ToAuthority(SessionSnapshot snapshot)
+    private void WriteAuthority(SessionSnapshot snapshot)
+    {
+        var state = PrepareAuthorityState(snapshot);
+        authorityFile.WriteStreamPayload(
+            stream => SessionAuthorityDocument.WriteTo(stream, state, snapshot.History),
+            default
+        );
+    }
+
+    private JsonObject PrepareAuthorityState(SessionSnapshot snapshot)
     {
         var root = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
         if (mainFields?.Invoke() is { } main)
@@ -382,9 +401,8 @@ public sealed class PersistentSessionAuthorityStore
         if (root["goalState"] is JsonObject goal)
             goal.Remove("remindOnTurnEnd");
         root["agent"] = agent;
-        root["history"] = new JsonArray(
-            snapshot.History.Select(message => (JsonNode)message.ToJson()).ToArray()
-        );
+        // Keep the existing property position; the writer supplies the immutable array values.
+        root["history"] = null;
         root["persistentMemorySnapshot"] ??= "";
         root["queue"] = new JsonArray(
             snapshot.Queue.Select(ToQueueJson).Cast<JsonNode>().ToArray()
@@ -408,7 +426,8 @@ public sealed class PersistentSessionAuthorityStore
         root["lastAppliedMailboxId"] = 0;
         root["nextMessageSeq"] = snapshot.NextMessageSeq;
         root["nextBlockId"] ??= 1;
-        return SessionAuthorityDocument.FromOwned(root, sessionId, agent);
+        SessionAuthorityDocument.ValidateState(root, snapshot.History.Count, sessionId, agent);
+        return root;
     }
 
     private SessionSnapshot FromAuthority(JsonObject root)

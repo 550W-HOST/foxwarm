@@ -285,7 +285,10 @@ public sealed class PersistentSessionTurnTests
             ["parts"] = new JsonArray(new JsonObject { ["text"] = "exact" }),
             ["__meta"] = new JsonObject { ["timestamp"] = 1000 },
         };
-        var archived = CanonicalMessage(1, "exact", 1000);
+        // Exact replay includes JSON property order. Match the canonical append's metadata
+        // construction (the supplied timestamp precedes the newly assigned sequence).
+        var archived = (JsonObject)prebuilt.DeepClone();
+        archived["__meta"]!["seq"] = 1;
         Assert.Single(
             store.Archive.WriteMessages([
                 ArchiveMessageRecord.Create("s", "main", 1, 1000, archived),

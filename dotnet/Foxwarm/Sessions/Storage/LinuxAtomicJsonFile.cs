@@ -59,7 +59,7 @@ public sealed class LinuxAtomicJsonFile
     public void Write(
         SessionAuthorityDocument document,
         CancellationToken cancellationToken = default
-    ) => WriteText(document.ToJson(indented: true), cancellationToken);
+    ) => WriteStreamPayload(document.WriteTo, cancellationToken);
 
     internal void WritePayload(System.Text.Json.Nodes.JsonObject payload) =>
         WriteText(payload.ToJsonString(), default);
@@ -74,6 +74,15 @@ public sealed class LinuxAtomicJsonFile
         );
 
     internal void WriteStreamPayload(Action<Stream> write, CancellationToken cancellationToken)
+        => WriteStreamPayloadAsync(write, null, cancellationToken).GetAwaiter().GetResult();
+
+    // The same atomic publication path can prepare UTF-8 while accepted Archive work is
+    // pending, then await its receipt before rename. A failed prerequisite discards the temp file.
+    internal async Task WriteStreamPayloadAsync(
+        Action<Stream> write,
+        Func<Task>? beforePublish,
+        CancellationToken cancellationToken
+    )
     {
         Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
         var tempPath = Path.Combine(
@@ -90,16 +99,19 @@ public sealed class LinuxAtomicJsonFile
                 Access = FileAccess.Write,
                 Share = FileShare.None,
                 BufferSize = 4096,
-                Options = FileOptions.WriteThrough,
             };
             if (privateFile && !OperatingSystem.IsWindows())
                 options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
             using (var stream = new FileStream(tempPath, options))
             {
                 write(stream);
+                // One complete-file durability boundary, rather than synchronous disk I/O
+                // for every chunk emitted by a streaming serializer.
                 stream.Flush(flushToDisk: true);
             }
             stageHook?.Invoke(AtomicJsonWriteStage.AfterTempFileSync);
+            if (beforePublish is not null)
+                await beforePublish().ConfigureAwait(false);
             stageHook?.Invoke(AtomicJsonWriteStage.BeforeRename);
             cancellationToken.ThrowIfCancellationRequested();
             File.Move(tempPath, filePath, overwrite: true);
