@@ -112,6 +112,48 @@ public sealed partial class ProviderFileConsumerTests
         Assert.False(Directory.Exists(Path.Combine(f.Data, "state", "exec")));
     }
 
+    [Theory]
+    [InlineData(0.05)]
+    [InlineData(0.35)]
+    [InlineData(0.6)]
+    public async Task Provider_foreground_consumes_completed_polls_across_sampling_intervals(
+        double delaySeconds
+    )
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        await using var f = await Fixture.Create();
+        Success(await f.Manager.SelectNodeAsync(f.Owner, f.Node));
+        Directory.CreateDirectory(f.FilePath(" sub "));
+        await File.WriteAllTextAsync(
+            Path.Combine(f.Target, "poll-delay"),
+            JsonSerializer.Serialize(new Dictionary<string, double> { ["*"] = delaySeconds })
+        );
+
+        var value = await f.Call(
+            "run_script",
+            new JsonObject
+            {
+                ["code"] =
+                    "return call_tool('exec', {'command':\"cd ' sub '; printf '  héllo\\n'; exit 7\", 'timeout':15})",
+            }
+        );
+
+        Success(value);
+        Assert.Equal("completed", value["result"]!["status"]!.GetValue<string>());
+        Assert.Equal(7, value["result"]!["exitCode"]!.GetValue<int>());
+        Assert.Equal("  héllo\n", value["result"]!["content"]!.GetValue<string>());
+        Assert.Equal(
+            "opaque://root/ sub ",
+            f.Owner.Entry.Snapshot().AuthorityEnvelope["cwd"]!.GetValue<string>()
+        );
+        Assert.Empty(ExecRecords(f.Data));
+        Assert.Single(
+            await f.Requests(),
+            request => request["operation"]!.GetValue<string>() == "exec-start"
+        );
+    }
+
     [Fact]
     public async Task Ordinary_Stop_during_dispatched_start_does_not_cancel_launcher_or_target_and_unknown_receipt_is_not_replayed()
     {

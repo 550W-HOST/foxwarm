@@ -27,12 +27,25 @@ internal sealed partial class LocalExecManager
             else
             {
                 var query = ReadStatusAsync(record);
-                var pause = DelayAsync(
-                    Math.Min(250, Math.Max(0, seconds * 1000 - clock.Elapsed.TotalMilliseconds)),
-                    wake.Token
-                );
-                if (await Task.WhenAny(query, pause) == query && await query is { } status)
-                    return status;
+                try
+                {
+                    var status = await query.WaitAsync(
+                        TimeSpan.FromMilliseconds(
+                            Math.Max(0, seconds * 1000 - clock.Elapsed.TotalMilliseconds)
+                        ),
+                        wake.Token
+                    );
+                    if (status is not null)
+                        return status;
+                }
+                catch (TimeoutException)
+                {
+                    return null;
+                }
+                catch (OperationCanceledException) when (wake.IsCancellationRequested)
+                {
+                    return null;
+                }
             }
             if (wake.IsCancellationRequested)
                 return null;
