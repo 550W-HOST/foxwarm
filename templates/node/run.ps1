@@ -96,7 +96,7 @@ foreach ($dir in @(
     (Join-Path $StateDir "logs"),
     $SourceDir
 )) {
-    if (-not (Test-Path $dir)) {
+    if (-not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
 }
@@ -106,7 +106,7 @@ if ($Pairing -and $AuthToken) {
     Write-Error "Use either -Pairing or -AuthToken, not both."
     exit 1
 }
-if (-not $Pairing -and -not $AuthToken -and -not (Test-Path $CredentialsFile)) {
+if (-not $Pairing -and -not $AuthToken -and -not (Test-Path -LiteralPath $CredentialsFile)) {
     Write-Error "Pairing or per-node auth token is required for first-time setup (no stored credentials at $CredentialsFile)."
     exit 1
 }
@@ -120,7 +120,7 @@ Invoke-WebRequest -Uri $tarUrl -OutFile $tarFile -UseBasicParsing
 
 Write-Host "Extracting source ..."
 tar -xzf $tarFile -C $SourceDir
-Remove-Item $tarFile -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $tarFile -Force -ErrorAction SilentlyContinue
 
 # ─── Determine entry point ───
 if ($Interactive) {
@@ -129,7 +129,7 @@ if ($Interactive) {
     $entryPoint = Join-Path $SourceDir "packages\cli-node\dist\client.bundle.js"
 }
 
-if (Test-Path $entryPoint) {
+if (Test-Path -LiteralPath $entryPoint) {
     Write-Host "Using bundled node client from source archive; skipping npm install."
 } else {
     if (-not (Get-Command "npm" -ErrorAction SilentlyContinue)) {
@@ -138,7 +138,7 @@ if (Test-Path $entryPoint) {
     }
 
     Write-Host "Bundled node client not found; installing minimal package dependencies and building fallback ..."
-    Push-Location (Join-Path $SourceDir "packages\shared")
+    Push-Location -LiteralPath (Join-Path $SourceDir "packages\shared")
     try {
         & npm ci
         if ($LASTEXITCODE -ne 0) { throw "npm ci failed in packages/shared" }
@@ -148,7 +148,7 @@ if (Test-Path $entryPoint) {
         Pop-Location
     }
 
-    Push-Location (Join-Path $SourceDir "packages\cli-node")
+    Push-Location -LiteralPath (Join-Path $SourceDir "packages\cli-node")
     try {
         & npm ci
         if ($LASTEXITCODE -ne 0) { throw "npm ci failed in packages/cli-node" }
@@ -159,13 +159,13 @@ if (Test-Path $entryPoint) {
     }
 }
 
-if (-not (Test-Path $entryPoint)) {
+if (-not (Test-Path -LiteralPath $entryPoint)) {
     if ($Interactive) {
         $entryPoint = Join-Path $SourceDir "packages\cli-node\dist\tui.js"
     } else {
         $entryPoint = Join-Path $SourceDir "packages\cli-node\dist\client.js"
     }
-    if (-not (Test-Path $entryPoint)) {
+    if (-not (Test-Path -LiteralPath $entryPoint)) {
         Write-Error "Entry point not found: $entryPoint"
         exit 1
     }
@@ -175,7 +175,7 @@ if (-not (Test-Path $entryPoint)) {
 # prebuilds; Linux requires node-gyp build prerequisites.
 $runtimeDir = Join-Path $SourceDir "packages\cli-node-runtime"
 $runtimeLock = Join-Path $runtimeDir "package-lock.json"
-if (Test-Path $runtimeLock) {
+if (Test-Path -LiteralPath $runtimeLock) {
     if (Get-Command "npm" -ErrorAction SilentlyContinue) {
         Write-Host "Installing the target-platform PTY runtime (node-pty only) ..."
         & npm --prefix $runtimeDir ci --omit=dev
@@ -220,7 +220,7 @@ Write-Host "  Agents:       $NodeAgentsDir"
 Write-Host "  Credentials:  $CredentialsFile"
 Write-Host ""
 
-if (-not $Pairing -or (Test-Path $CredentialsFile)) {
+if (-not $Pairing -or (Test-Path -LiteralPath $CredentialsFile)) {
     Write-Host "Using stored credentials."
 } else {
     Write-Host "First run - after startup, approve on master:"
@@ -232,7 +232,7 @@ Write-Host ""
 
 # ─── Run synchronously ───
 $nodeExitCode = 1
-Push-Location $ScriptDir
+Push-Location -LiteralPath $ScriptDir
 try {
     & node @nodeArgs
     $nodeExitCode = $LASTEXITCODE

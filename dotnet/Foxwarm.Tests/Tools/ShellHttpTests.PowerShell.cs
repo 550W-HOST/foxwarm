@@ -92,8 +92,8 @@ public sealed partial class ShellHttpTests
         const string credential = "literal'$credential`";
         foreach (var memory in new[] { false, true })
         {
-            var scriptDir = Path.Combine(fixture.Temp.Path, "saved launcher");
-            var caller = Path.Combine(fixture.Temp.Path, memory ? "memory caller" : "saved caller");
+            var scriptDir = Path.Combine(fixture.Temp.Path, "saved launcher ' [雪]");
+            var caller = Path.Combine(fixture.Temp.Path, memory ? "memory caller ' [雪]" : "saved caller ' [雪]");
             Directory.CreateDirectory(scriptDir);
             Directory.CreateDirectory(caller);
             var capture = Path.Combine(caller, "capture.json");
