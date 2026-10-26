@@ -152,7 +152,11 @@ public sealed class WebUiResourceBoundaryTests
             else
             {
                 var deleted = await f.Admin.DeleteAsync("api/sessions/asset-owner");
-                Assert.Equal(HttpStatusCode.OK, deleted.StatusCode);
+                var body = await deleted.Content.ReadAsStringAsync();
+                Assert.True(
+                    deleted.StatusCode == HttpStatusCode.OK,
+                    $"Expected HTTP 200; DELETE returned {(int)deleted.StatusCode} ({deleted.StatusCode}). Body: {body}"
+                );
                 Assert.Null(f.Runtime.Catalog.Get("asset-owner"));
                 Assert.Equal(
                     HttpStatusCode.Forbidden,
