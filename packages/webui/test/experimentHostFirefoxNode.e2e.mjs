@@ -206,7 +206,9 @@ try {
   await sleep(100); assert.equal((await pending()).length, 1, 'Ask remains pending without a notification service');
   assert.equal(request.entry.agentName, 'main'); assert.equal(request.entry.sessionId, sessionId);
   assert(!JSON.stringify(request.entry).includes('SECOND-SECRET'));
-  await msg({ type: 'confirmation_response', requestId: request.entry.requestId, approved: true });
+  assert.equal(await value(red.id, '#password'), 'SYNTHETIC-SECRET', 'Ask must not fill before Allow');
+  await until(() => browser.evaluate(id => !!document.querySelector(`.confirmation-item[data-request-id="${id}"] [data-approved="true"]`), request.entry.requestId), 'actual popup approval card');
+  await browser.click(`.confirmation-item[data-request-id="${request.entry.requestId}"] [data-approved="true"]`);
   assert(pair(await finish(request.key), request.key).filled);
   assert.equal(await browser.evaluate(() => chrome.action.getBadgeText({})), '');
   assert(!JSON.stringify(pair(await saved(), request.key)).includes('SECOND-SECRET'));
