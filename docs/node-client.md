@@ -4,6 +4,7 @@ Foxwarm can expose helper endpoints for bootstrapping a generic node client from
 
 - `/node/run.sh`
 - `/node/run-shell.sh` (independent exec-only POSIX shell client)
+- `/node/run-shell.ps1` (independent exec-only Windows PowerShell client)
 - `/node/run-docker.sh`
 - `/node/run-interactive.sh`
 - `/node/run.ps1`
@@ -95,7 +96,7 @@ For Windows, use **Windows Shell** in New nodes, or run the PowerShell client fr
 
 The bootstrap is executed in memory. Each Windows command runs in a fresh Windows PowerShell process. PowerShell commands use literal cwd paths, including drive paths and UNC shares; relative paths use the startup directory even when Main runs on Linux. The script uses inbox .NET HTTP/process APIs, bounded per-job command files, and in-memory output samples. Child processes read those command files into a ScriptBlock rather than invoking them with `-File`, so the client does not change Windows execution policy. It creates no resident service. Per-node authentication is required on both platforms.
 
-The explicit host preserves a reverse-proxy deployment prefix. Normal curl certificate verification remains enabled. The shared pairing token cannot authenticate this client. Its per-node bearer is sent in headers through a private temporary curl configuration, not in URLs or ordinary client logs.
+The explicit host preserves a reverse-proxy deployment prefix. Both clients retain normal certificate verification. The shared pairing token cannot authenticate a Shell Node. The POSIX client keeps its bearer in a private temporary curl configuration; Windows keeps it in process memory. Both send credentials in headers, not URLs or ordinary client logs.
 
 Select `my-shell` using the normal Node selector or `/node my-shell`, then call ordinary `exec`. This Node advertises only `exec`, with command/cwd/timeout. It has no file tools, Code/Git/PTY services, Agent storage directories, or external-owner execution. Omitted cwd uses the startup directory, relative cwd resolves there, and a command's `cd` does not change the next command's default.
 
