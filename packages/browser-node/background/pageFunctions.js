@@ -1,4 +1,4 @@
-// These fixed functions run in a top-document isolated world through CDP only.
+// Fixed DOM helpers run in a top-document isolated world in either browser.
 export function readPage(format, snapshotId) {
   const passwords = [...document.querySelectorAll('input[type=password]')]
     .map((el) => el.value)
@@ -77,11 +77,13 @@ export function elementAction(args, operation) {
       throw new Error(`Selector must match exactly one element (matched ${matches.length}).`);
     el = matches[0];
   }
+  const replace = operation === 'replace';
+  if (replace) operation = 'fill';
   if (operation !== 'scroll' && !el)
     throw new Error('Supply an element reference or a unique CSS selector.');
   if (el?.disabled || (el?.readOnly && operation === 'fill'))
     throw new Error('Element is not editable.');
-  if (operation === 'point') {
+  if (operation === 'point' || operation === 'click') {
     el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
     const rect = el.getBoundingClientRect();
     if (!rect.width || !rect.height) throw new Error('Element is not visible.');
@@ -89,6 +91,13 @@ export function elementAction(args, operation) {
     const y = Math.max(0, rect.y) + (Math.min(innerHeight, rect.bottom) - Math.max(0, rect.y)) / 2;
     const hit = document.elementFromPoint(x, y);
     if (hit !== el && !el.contains(hit)) throw new Error('Element is covered by another element.');
+    if (operation === 'click') {
+      el.dispatchEvent(new MouseEvent('click', {
+        bubbles: true, cancelable: true, composed: true, view: window,
+        clientX: x, clientY: y, button: 0, detail: 1,
+      }));
+      return { clicked: true };
+    }
     return { x, y };
   }
   if (operation === 'focus' || operation === 'fill') {
@@ -113,6 +122,17 @@ export function elementAction(args, operation) {
         selection.removeAllRanges();
         selection.addRange(range);
       } else el.select();
+    }
+    if (replace) {
+      if (el.isContentEditable) el.textContent = args.text;
+      else {
+        const prototype = el instanceof HTMLTextAreaElement
+          ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        Object.getOwnPropertyDescriptor(prototype, 'value').set.call(el, args.text);
+      }
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertReplacementText' }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return { filled: true };
     }
     return { focused: true };
   }

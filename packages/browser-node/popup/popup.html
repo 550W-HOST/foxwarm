@@ -55,7 +55,12 @@
       <h2>Sharing</h2>
 
       <p>New tabs are Off. Share a tab or a whole window with Ask or Auto. Tab rules override sites, then windows. Clear a tab rule to inherit.</p>
-      <p>Chrome shows a debugging banner during page operations. Cancel stops Browser Node. Human and Agent edits in the same tab may compete.</p>
+      <p id="page-operation-notice">Chrome shows a debugging banner during page operations. Cancel stops Browser Node. Human and Agent edits in the same tab may compete.</p>
+      <div id="page-javascript" hidden>
+        <p>Optional page JavaScript follows the tab’s Ask or Auto mode.</p>
+        <button id="allow-javascript" class="btn btn-secondary">Allow page JavaScript</button>
+        <button id="remove-javascript" class="btn btn-secondary" hidden>Remove JavaScript permission</button>
+      </div>
       <!-- Domain rules -->
       <div class="subsection">
         <h3>Domain Rules</h3>

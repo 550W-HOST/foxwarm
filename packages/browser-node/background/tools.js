@@ -5,7 +5,7 @@ import {
   requestConfirmation,
 } from './permissions.js';
 import * as storage from './storage.js';
-import * as cdp from './cdp.js';
+import * as driver from './pageDriver.js';
 
 const lanes = new Map();
 function ordered(key, run, signal) {
@@ -95,6 +95,8 @@ function validateArgs(name, args) {
   if (name === 'navigate' || name === 'open_tab') args.url = httpUrl(args.url);
 }
 export async function executeTool(name, args, context) {
+  if (name === 'press_key' && !driver.supportsEditingKeys)
+    throw new Error('Editing-key input is not supported by Firefox Browser Node.');
   validateArgs(name, args);
   const { signal } = context;
   const checkActive = () => {
@@ -188,13 +190,13 @@ export async function executeTool(name, args, context) {
       await validateAdmission();
       const tab = await chrome.tabs.get(args.tabId);
       if ((await resolvePermission(tab.id)) === 'off') throw new Error('Tab is not shared.');
-      const expected = await cdp.page(tab.id, signal);
+      const expected = await driver.page(tab.id, signal);
       const validate = async () => {
         await validateAdmission();
         const current = await chrome.tabs.get(tab.id);
         if (current.windowId !== tab.windowId || (await resolvePermission(tab.id)) === 'off')
           throw new Error('Sharing changed.');
-        await cdp.assertPage(tab.id, expected, signal);
+        await driver.assertPage(tab.id, expected, signal);
       };
       if (args.ref && !args.ref.startsWith(expected.pageId + '/'))
         throw new Error('Element reference is stale. Read a fresh snapshot.');
@@ -225,8 +227,8 @@ export async function executeTool(name, args, context) {
       };
       let result;
       if (name === 'get_tab_content')
-        result = await cdp.content(tab.id, expected, args.format || 'snapshot', signal);
-      else if (name === 'screenshot') result = await cdp.screenshot(tab.id, expected, signal);
+        result = await driver.content(tab.id, expected, args.format || 'snapshot', signal);
+      else if (name === 'screenshot') result = await driver.screenshot(tab.id, expected, signal);
       else if (name === 'close_tab') {
         context.beginEffect?.('close');
         await chrome.tabs.remove(tab.id);
@@ -236,7 +238,7 @@ export async function executeTool(name, args, context) {
         const end = Math.min(context.deadline, Date.now() + (args.timeoutMs || 10000));
         while (true) {
           await validate();
-          if (await cdp.action(tab.id, expected, name, args, signal)) {
+          if (await driver.action(tab.id, expected, name, args, signal)) {
             result = { matched: true };
             break;
           }
@@ -246,15 +248,15 @@ export async function executeTool(name, args, context) {
           }
           await pause(Math.min(100, end - Date.now()), signal);
         }
-      } else result = await cdp.action(tab.id, expected, name, args, signal, beginNavigation);
+      } else result = await driver.action(tab.id, expected, name, args, signal, beginNavigation);
       if (name === 'navigate') {
         // Navigation may intentionally leave the shared origin; release no unshared metadata.
         checkActive();
         if ((await resolvePermission(tab.id)) === 'off') {
-          await cdp.detach(tab.id);
+          await driver.detach(tab.id);
           return { tabId: tab.id, sharing: 'off' };
         }
-        const currentPage = await cdp.page(tab.id, signal);
+        const currentPage = await driver.page(tab.id, signal);
         const perms = await storage.getPermissions();
         const currentTab = await chrome.tabs.get(tab.id);
         checkActive();
@@ -262,7 +264,7 @@ export async function executeTool(name, args, context) {
           throw new Error('Tab moved during navigation; its outcome may have occurred.');
         const sharing = permissionForTab(currentTab, perms);
         if (sharing === 'off') {
-          await cdp.detach(tab.id);
+          await driver.detach(tab.id);
           return { tabId: tab.id, sharing };
         }
         if (currentTab.url !== currentPage.url)
@@ -450,8 +452,10 @@ const schemas = {
   ],
   close_tab: [{ tabId }, ['tabId']],
 };
-export const TOOL_DEFINITIONS = Object.entries(schemas).map(([name, [properties, required]]) => ({
-  name,
-  description: descriptions[name],
-  parameters: { type: 'object', properties, required, additionalProperties: false },
-}));
+export const TOOL_DEFINITIONS = Object.entries(schemas)
+  .filter(([name]) => name !== 'press_key' || driver.supportsEditingKeys)
+  .map(([name, [properties, required]]) => ({
+    name,
+    description: driver.descriptionOverrides[name] || descriptions[name],
+    parameters: { type: 'object', properties, required, additionalProperties: false },
+  }));

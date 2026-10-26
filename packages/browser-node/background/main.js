@@ -1,7 +1,7 @@
 import * as ws from './websocket.js';
 import * as storage from './storage.js';
 import * as permissions from './permissions.js';
-import * as cdp from './cdp.js';
+import * as driver from './pageDriver.js';
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   handle(message).then(respond, (error) => respond({ error: error.message || 'Request failed.' }));
@@ -11,7 +11,7 @@ async function changed(predicate) {
   permissions.cancelConfirmations(predicate);
   ws.cancelCalls((entry) => entry.tool === 'list_tabs' || predicate(entry));
   for (const tab of await chrome.tabs.query({}))
-    if ((await permissions.resolvePermission(tab.id)) === 'off') await cdp.detach(tab.id);
+    if ((await permissions.resolvePermission(tab.id)) === 'off') await driver.detach(tab.id);
   chrome.runtime.sendMessage({ type: 'sharing_changed' }).catch(() => {});
 }
 async function handle(message) {
@@ -128,7 +128,7 @@ function tabChanged(tabId, expectedEffect) {
     (entry) => entry.tabId === tabId && (!expectedEffect || entry.effect !== expectedEffect),
   );
   permissions.cancelConfirmations((entry) => entry.tabId === tabId);
-  cdp.invalidate(tabId);
+  driver.invalidate(tabId);
   chrome.runtime.sendMessage({ type: 'sharing_changed' }).catch(() => {});
 }
 chrome.tabs.onUpdated.addListener((tabId, change) => {
@@ -137,7 +137,7 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
     void permissions
       .resolvePermission(tabId)
       .then((level) => {
-        if (level === 'off' && !ws.isNavigating(tabId)) return cdp.detach(tabId);
+        if (level === 'off' && !ws.isNavigating(tabId)) return driver.detach(tabId);
       })
       .catch(() => {});
   }
@@ -148,14 +148,14 @@ chrome.tabs.onAttached.addListener((tabId) => {
   void permissions
     .resolvePermission(tabId)
     .then((level) => {
-      if (level === 'off') return cdp.detach(tabId);
+      if (level === 'off') return driver.detach(tabId);
     })
     .catch(() => {});
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
   tabChanged(tabId, 'close');
   void storage.removeTabPermission(tabId);
-  void cdp.detach(tabId);
+  void driver.detach(tabId);
 });
 chrome.windows.onRemoved.addListener((windowId) => {
   permissions.cancelConfirmations((entry) => entry.windowId === windowId);

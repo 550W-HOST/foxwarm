@@ -23,7 +23,14 @@ export async function windowPermission(windowId) {
 }
 
 const pending = new Map();
+const firefox = !!chrome.runtime.getBrowserInfo;
+function updateBadge() {
+  if (firefox)
+    chrome.action.setBadgeText({ text: pending.size ? String(pending.size) : '' }).catch(() => {});
+}
+updateBadge();
 function notify() {
+  updateBadge();
   chrome.runtime.sendMessage({ type: 'confirmations_changed' }).catch(() => {});
 }
 function finish(id, approved) {
@@ -32,7 +39,7 @@ function finish(id, approved) {
   pending.delete(id);
   clearTimeout(entry.timer);
   entry.signal?.removeEventListener('abort', entry.abort);
-  chrome.notifications.clear(id).catch(() => {});
+  if (!firefox) chrome.notifications.clear(id).catch(() => {});
   entry.resolve(approved);
   notify();
 }
@@ -55,15 +62,17 @@ export function requestConfirmation(info, validate, signal, timeoutMs) {
       createdAt: Date.now(),
     });
     signal.addEventListener('abort', abort, { once: true });
-    chrome.notifications
-      .create(requestId, {
-        type: 'basic',
-        iconUrl: chrome.runtime.getURL('icons/icon128.png'),
-        title: `${info.agentName || 'Agent'}: ${info.toolName}`,
-        message: `${info.sessionId || 'Session'}\n${info.title || ''}\n${info.url || `Window ${info.windowId}`}\nOpen Foxwarm Browser Node to review.`,
-        requireInteraction: true,
-      })
-      .catch(() => {});
+    if (!firefox) {
+      chrome.notifications
+        .create(requestId, {
+          type: 'basic',
+          iconUrl: chrome.runtime.getURL('icons/icon128.png'),
+          title: `${info.agentName || 'Agent'}: ${info.toolName}`,
+          message: `${info.sessionId || 'Session'}\n${info.title || ''}\n${info.url || `Window ${info.windowId}`}\nOpen Foxwarm Browser Node to review.`,
+          requireInteraction: true,
+        })
+        .catch(() => {});
+    }
     notify();
   });
 }
@@ -100,9 +109,11 @@ export function getPendingConfirmations() {
     };
   });
 }
-chrome.notifications.onClicked.addListener((id) => {
-  if (pending.has(id)) chrome.action.openPopup?.().catch(() => {});
-});
-chrome.notifications.onClosed.addListener((id, byUser) => {
-  if (byUser) finish(id, false);
-});
+if (!firefox) {
+  chrome.notifications.onClicked.addListener((id) => {
+    if (pending.has(id)) chrome.action.openPopup?.().catch(() => {});
+  });
+  chrome.notifications.onClosed.addListener((id, byUser) => {
+    if (byUser) finish(id, false);
+  });
+}

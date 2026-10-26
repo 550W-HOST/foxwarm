@@ -1,7 +1,7 @@
 import * as storage from './storage.js';
 import { executeTool, TOOL_DEFINITIONS } from './tools.js';
 import { cancelConfirmations, resolvePermission } from './permissions.js';
-import * as cdp from './cdp.js';
+import * as driver from './pageDriver.js';
 import { NODE_PROTOCOL, resolveMasterNodeProtocol } from './nodeProtocol.js';
 
 let ws,
@@ -43,13 +43,13 @@ export async function disconnect() {
   previous?.close(1000, 'User stopped');
   cancelWork();
   publish('disconnected');
-  await Promise.all([storage.setEnabled(false), cdp.detachAll()]);
+  await Promise.all([storage.setEnabled(false), driver.detachAll()]);
 }
 export async function resetAndDisconnect() {
   await disconnect();
   await storage.forget();
 }
-cdp.setDetachHandler(() => {
+driver.setDetachHandler(() => {
   void disconnect();
 });
 
@@ -114,7 +114,7 @@ async function toolCall(socket, message) {
     if (invocation.effect === 'navigation') {
       try {
         if ((await resolvePermission(invocation.tabId)) === 'off')
-          await cdp.detach(invocation.tabId);
+          await driver.detach(invocation.tabId);
       } catch {
         /* Tab may have closed. */
       }
@@ -209,7 +209,7 @@ export async function connect() {
     ws = null;
     clearInterval(heartbeat);
     cancelWork();
-    await cdp.detachAll();
+    await driver.detachAll();
     if (attempt !== generation) return;
     if (event.code === 1008) {
       await storage.setEnabled(false);

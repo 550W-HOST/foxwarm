@@ -50,7 +50,7 @@ const methods = [
   { id: 'windowsShell', label: 'Windows Shell', detail: 'Use Windows PowerShell for commands only, without Node.js.' },
   { id: 'shell', label: 'Linux Shell', detail: 'Use POSIX sh and curl for commands only.' },
   { id: 'docker', label: 'Docker', detail: 'Run the CLI Node in a container.' },
-  { id: 'browser', label: 'Browser', detail: 'Share existing Chrome or Chromium tabs and windows.' },
+  { id: 'browser', label: 'Browser', detail: 'Share existing Chrome, Chromium, or Firefox tabs and windows.' },
   { id: 'windows', label: 'Windows CLI', detail: 'Download and run the PowerShell launcher.' },
 ]
 
@@ -75,6 +75,7 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
+  const [browserKind, setBrowserKind] = useState<'chrome' | 'firefox'>('chrome')
   const [browserSetup, setBrowserSetup] = useState<{ baseUrl: string; pairingToken: string } | null>(null)
   const [approving, setApproving] = useState<string | null>(null)
   const [approvalError, setApprovalError] = useState('')
@@ -162,13 +163,14 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
         <div className="mt-4 flex flex-wrap gap-2">{methods.map(item => <button key={item.id} type="button" disabled={busy} aria-pressed={method === item.id} onClick={() => { setMethod(item.id); setCopied(false); setError('') }} className={`rounded-lg border px-3 py-2 text-sm ${method === item.id ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent' : 'border-fw-border hover:bg-fw-hover'}`}>{item.label}</button>)}</div>
         <p className="mt-2 text-xs text-fw-text-muted">{methods.find(item => item.id === method)?.detail}</p>
         {method === 'browser' ? <div className="mt-4 space-y-3 text-sm">
+          <label className="block text-xs font-medium">Browser<select aria-label="Browser package" value={browserKind} onChange={event => setBrowserKind(event.target.value as 'chrome' | 'firefox')} className={fieldClass}><option value="chrome">Chrome / Chromium</option><option value="firefox">Firefox 153+</option></select></label>
           <ol className="list-decimal space-y-2 pl-5">
-            <li><a className="text-fw-accent underline" href={`${API_BASE_PATH.slice(0, -4)}/node/browser-extension.zip`} download>Download Browser Node</a> and extract the ZIP.</li>
-            <li>Open Chrome or Chromium extensions, enable Developer mode, choose Load unpacked, and select the extracted folder.</li>
+            <li><a className="text-fw-accent underline" href={`${API_BASE_PATH.slice(0, -4)}/node/browser-extension${browserKind === 'firefox' ? '-firefox' : ''}.zip`} download>Download Browser Node</a> and extract the ZIP.</li>
+            {browserKind === 'firefox' ? <li>Open about:debugging → This Firefox → Load Temporary Add-on, and select manifest.json in the extracted folder. Load it again after restarting Firefox; this package is unsigned.</li> : <li>Open Chrome or Chromium extensions, enable Developer mode, choose Load unpacked, and select the extracted folder.</li>}
             <li>Open the extension, enter the Main address and pairing token below, then Connect. Approve the request in Pending approvals.</li>
             <li>Share a tab or window with Ask or Auto in the extension. New tabs are Off unless a shared window or site rule includes them.</li>
           </ol>
-          <p>Page operations show Chrome’s debugging banner. Cancel or the extension’s Stop button stops Browser Node. Sharing is controlled by the extension; debugger permission is not isolated by window. Avoid editing the same tab at the same time as an Agent.</p>
+          {browserKind === 'firefox' ? <p>Firefox needs broad page-host access for target-tab screenshots and DOM operations. Sharing still limits Agent access. Actions use synthetic DOM events; trusted mouse input and editing keys are unavailable. Enable optional page JavaScript in the extension when needed. Pin its icon to see pending Ask counts, then open the popup to review. Use Stop to disconnect.</p> : <p>Page operations show Chrome’s debugging banner. Cancel or the extension’s Stop button stops Browser Node. Sharing is controlled by the extension; debugger permission is not isolated by window. Avoid editing the same tab at the same time as an Agent.</p>}
           <label className="block text-xs font-medium">Main address<input aria-label="Browser Main address" disabled={busy} value={baseUrl} onChange={event => { setBaseUrl(event.target.value); setBrowserSetup(null) }} className={fieldClass} /></label>
           <button type="button" disabled={busy || !baseUrl} onClick={() => void loadBrowserSetup()} className="rounded-lg border border-fw-border px-3 py-2">Show pairing details</button>
           {browserSetup ? <div className="space-y-2 rounded-lg border border-fw-border p-3"><p className="break-all">{browserSetup.baseUrl}</p><label className="block text-xs">Pairing token<input aria-label="Browser pairing token" type="password" readOnly value={browserSetup.pairingToken} className={fieldClass} /></label><button type="button" onClick={() => void navigator.clipboard.writeText(browserSetup.pairingToken).catch(() => setError('Copy failed. Select the token and copy it manually.'))}>Copy pairing token</button><p className="text-xs text-fw-text-muted">Keep this token private. The extension download contains no credentials.</p></div> : null}

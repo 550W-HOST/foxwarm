@@ -170,3 +170,25 @@ void action(async () => {
   await sharing();
   await confirmations();
 });
+
+if (chrome.runtime.getManifest().browser_specific_settings?.gecko) {
+  $('#page-operation-notice').textContent = 'Firefox uses broad page-host access for screenshots and DOM operations; sharing still limits Agent access. DOM actions use synthetic events, not trusted mouse or keyboard input. Ask requests appear on the extension icon; open this popup to review them. Use Stop to disconnect.';
+  $('#page-javascript').hidden = false;
+  const updateJavaScriptPermission = async () => {
+    const allowed = await chrome.permissions.contains({ permissions: ['userScripts'] });
+    $('#allow-javascript').hidden = allowed;
+    $('#remove-javascript').hidden = !allowed;
+  };
+  $('#allow-javascript').onclick = () => {
+    // Call directly in the user gesture; do not infer this grant from sharing.
+    const request = chrome.permissions.request({ permissions: ['userScripts'] });
+    void action(async () => { await request; await updateJavaScriptPermission(); });
+  };
+  $('#remove-javascript').onclick = () => action(async () => {
+    await chrome.permissions.remove({ permissions: ['userScripts'] });
+    await updateJavaScriptPermission();
+  });
+  chrome.permissions.onAdded.addListener(updateJavaScriptPermission);
+  chrome.permissions.onRemoved.addListener(updateJavaScriptPermission);
+  void updateJavaScriptPermission();
+}
