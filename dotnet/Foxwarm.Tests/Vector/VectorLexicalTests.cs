@@ -54,6 +54,7 @@ public sealed partial class VectorLexicalTests
         await using var runtime = new VectorRuntime(f.Data, f.Configuration(lexical: true), clock);
         await runtime.StartAsync();
         await runtime.WaitForStartupAsync();
+        await runtime.Lexical.WaitForIdleAsync();
         f.Append(id, 2, "FooBar second violet");
         runtime.Schedule(id, 2, 8000, 0);
         await VectorStorageTests.UntilAsync(() =>
