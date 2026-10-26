@@ -258,10 +258,23 @@ internal sealed partial class NodeConnectionHub
             return Require(id).Http?.Cwd;
     }
 
-    private ShellRuntime PublishShell(string id, string auth, string cwd, bool powershell, string? publication, string? predecessor)
+    private ShellRuntime PublishShell(
+        string id,
+        string auth,
+        string cwd,
+        bool powershell,
+        string? publication,
+        string? predecessor
+    )
     {
         var connection = new Connection { Id = id, Type = "shell-node" };
-        var runtime = connection.Http = new ShellRuntime(this, connection, cwd, powershell, publication);
+        var runtime = connection.Http = new ShellRuntime(
+            this,
+            connection,
+            cwd,
+            powershell,
+            publication
+        );
         connection.Capabilities = new JsonObject
         {
             ["tools"] = new JsonArray(ShellCapability(powershell)),
@@ -283,8 +296,13 @@ internal sealed partial class NodeConnectionHub
             var current = Registry.Publication(id, auth);
             if (predecessor is not null && current != predecessor && current != publication)
                 throw new InvalidOperationException("Connection was replaced.");
-            if (publication is not null && nodes.TryGetValue(id, out var published)
-                && published.Http is { } existing && existing.Id == publication && published.Open)
+            if (
+                publication is not null
+                && nodes.TryGetValue(id, out var published)
+                && published.Http is { } existing
+                && existing.Id == publication
+                && published.Open
+            )
                 return existing;
             // Recheck the credential and durably touch it inside revocation's publication lock.
             Registry.Touch(
@@ -392,9 +410,11 @@ internal sealed partial class NodeConnectionHub
         return (id, auth[7..]);
     }
 
-    private static string NewShellConnection() => Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+    private static string NewShellConnection() =>
+        Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
 
-    private static bool ShellConnectionId(string value) => value.Length == 32 && value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
+    private static bool ShellConnectionId(string value) =>
+        value.Length == 32 && value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
 
     private static void ShellFailure(HttpContext context, int status, string reason)
     {
@@ -414,7 +434,9 @@ internal sealed partial class NodeConnectionHub
         foreach (var suffix in new[] { "register", "poll", "report" })
             app.MapMethods(
                 "/node/shell/" + suffix,
-                suffix == "poll" ? ["GET"] : suffix == "register" ? ["POST", "HEAD"] : ["POST"],
+                suffix == "poll" ? ["GET"]
+                    : suffix == "register" ? ["POST", "HEAD"]
+                    : ["POST"],
                 async (HttpContext context) =>
                 {
                     var credential = AuthenticateShell(context);
@@ -426,8 +448,13 @@ internal sealed partial class NodeConnectionHub
                         {
                             lock (gate)
                             {
-                                context.Response.Headers["X-Foxwarm-Predecessor"] = Registry.Publication(credential.Value.Id, credential.Value.Auth);
-                                context.Response.Headers["X-Foxwarm-Connection"] = NewShellConnection();
+                                context.Response.Headers["X-Foxwarm-Predecessor"] =
+                                    Registry.Publication(
+                                        credential.Value.Id,
+                                        credential.Value.Auth
+                                    );
+                                context.Response.Headers["X-Foxwarm-Connection"] =
+                                    NewShellConnection();
                             }
                             ShellAck(context);
                         }
@@ -435,7 +462,13 @@ internal sealed partial class NodeConnectionHub
                         {
                             var predecessor = ShellHeader(context.Request, "X-Foxwarm-Predecessor");
                             var publication = ShellHeader(context.Request, "X-Foxwarm-Connection");
-                            if (predecessor.Length > 0 && (!ShellConnectionId(publication) || (predecessor != "none" && !ShellConnectionId(predecessor))))
+                            if (
+                                predecessor.Length > 0
+                                && (
+                                    !ShellConnectionId(publication)
+                                    || (predecessor != "none" && !ShellConnectionId(predecessor))
+                                )
+                            )
                                 throw new InvalidDataException("Invalid publication identity.");
                             var cwd = Encoding.UTF8.GetString(
                                 await ShellBody(context.Request, 4096, context.RequestAborted)
@@ -476,7 +509,11 @@ internal sealed partial class NodeConnectionHub
                     catch (InvalidOperationException)
                     {
                         if (!context.Response.HasStarted)
-                            ShellFailure(context, 409, suffix == "register" ? "connection-replaced" : "request-conflict");
+                            ShellFailure(
+                                context,
+                                409,
+                                suffix == "register" ? "connection-replaced" : "request-conflict"
+                            );
                     }
                     catch (IOException)
                     {
@@ -504,7 +541,13 @@ internal sealed partial class NodeConnectionHub
             var connectionId = ShellHeader(context.Request, "X-Foxwarm-Connection");
             if (!nodes.TryGetValue(id, out var active))
             {
-                ShellFailure(context, 409, Registry.Publication(id, auth) == connectionId ? "connection-unavailable" : "connection-replaced");
+                ShellFailure(
+                    context,
+                    409,
+                    Registry.Publication(id, auth) == connectionId
+                        ? "connection-unavailable"
+                        : "connection-replaced"
+                );
                 return;
             }
             if (active.Http is not { } http || http.Id != connectionId)
@@ -518,7 +561,10 @@ internal sealed partial class NodeConnectionHub
                 ShellFailure(context, 409, "connection-unavailable");
                 return;
             }
-            try { poll = runtime.Poll(); }
+            try
+            {
+                poll = runtime.Poll();
+            }
             catch (InvalidOperationException)
             {
                 ShellFailure(context, 409, "poll-pending");

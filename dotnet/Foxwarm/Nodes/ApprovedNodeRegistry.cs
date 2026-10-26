@@ -388,7 +388,13 @@ internal sealed class ApprovedNodeRegistry
             return true;
         });
 
-    internal void Touch(string id, string auth, JsonObject input, JsonObject compatibility, string? publication = null) =>
+    internal void Touch(
+        string id,
+        string auth,
+        JsonObject input,
+        JsonObject compatibility,
+        string? publication = null
+    ) =>
         Change(next =>
         {
             var record =
