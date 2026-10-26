@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import puppeteer from 'puppeteer-core';
@@ -76,6 +76,7 @@ peer.listen(0, '127.0.0.1');
 await once(peer, 'listening');
 const origin = `http://127.0.0.1:${peer.address().port}`;
 const base = fixture.origin + '/browser-proof';
+const chromeLogPath = join(fixture.root, 'chrome.log');
 await writeFile(
   join(fixture.data, 'state/config.yaml'),
   (await readFile(join(fixture.data, 'state/config.yaml'), 'utf8')) + 'url: ' + base + '\n',
@@ -92,6 +93,7 @@ let browser,
   worker,
   sessionId,
   launchOptions,
+  startupPairingToken,
   stage = 'owned Main startup',
   count = 0;
 const call = (id, name, args) => ({
@@ -171,6 +173,7 @@ try {
     fallbackUrl: fixture.origin,
   });
   assert.equal(setup.status, 200);
+  startupPairingToken = setup.body.pairingToken;
   assert.equal(setup.body.baseUrl, base);
   assert.equal(
     (await fetch(base + '/api/nodes/onboarding/browser', { method: 'POST', body: '{}' })).status,
@@ -197,6 +200,8 @@ try {
     ignoreDefaultArgs: ['--disable-infobars', '--enable-automation'],
     userDataDir: join(fixture.root, 'profile'),
     args: [
+      '--enable-logging',
+      '--log-file=' + chromeLogPath,
       '--no-sandbox',
       '--disable-dev-shm-usage',
       '--window-size=1280,900',
@@ -758,6 +763,38 @@ try {
     );
   } catch {
     console.error('Browser fixture diagnostics unavailable at stage: ' + stage);
+  }
+  try {
+    const log = await open(chromeLogPath, 'r');
+    let text;
+    try {
+      const { size } = await log.stat();
+      const start = Math.max(0, size - 8192);
+      const buffer = Buffer.alloc(Math.min(size, 8192));
+      const { bytesRead } = await log.read(buffer, 0, buffer.length, start);
+      text = buffer.subarray(0, bytesRead).toString('utf8');
+      if (start > 0) text = text.slice(text.indexOf('\n') + 1);
+      text = text.slice(0, text.lastIndexOf('\n') + 1);
+    } finally {
+      await log.close();
+    }
+    for (const secret of [fixture.token, startupPairingToken])
+      if (secret) text = text.replaceAll(secret, '[redacted]');
+    text = text.replace(/\b(?:https?|wss?|chrome-extension):\/\/[^\s"'<>]+/gi, (value) => {
+      try {
+        const url = new URL(value);
+        return url.protocol + '//' + url.host + url.pathname;
+      } catch {
+        return '[URL]';
+      }
+    });
+    text = text.replace(
+      /(\b(?:authorization|(?:pairing|auth)?token|bootstrap(?:Token)?)["']?\s*[:=]\s*)(?:Bearer\s+)?(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi,
+      '$1[redacted]',
+    );
+    console.error('Browser fixture Chrome log: ' + JSON.stringify(text.slice(-4096)));
+  } catch {
+    console.error('Browser fixture Chrome log unavailable.');
   }
   throw error;
 } finally {
