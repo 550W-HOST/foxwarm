@@ -70,7 +70,11 @@ public sealed partial class ProviderFileConsumerTests
             );
             Assert.Equal(
                 new[] { "inspect" },
-                data["providers"]!.AsArray().Single(p => SessionWait.Text(p?["id"]) == fixedProvider)!["lifecycle"]!.AsArray().Select(SessionWait.Text)
+                data["providers"]!
+                    .AsArray()
+                    .Single(p => SessionWait.Text(p?["id"]) == fixedProvider)!["lifecycle"]!
+                    .AsArray()
+                    .Select(SessionWait.Text)
             );
         }
         var created = await f.Call(
@@ -175,7 +179,12 @@ public sealed partial class ProviderFileConsumerTests
         Assert.Equal("master", main["node"]!["id"]!.GetValue<string>());
         Assert.Equal("master", main["node"]!["type"]!.GetValue<string>());
         Assert.True(main["node"]!["online"]!.GetValue<bool>());
-        Assert.True(JsonNode.DeepEquals(f.Manager.NodeSummaries()[0]!["services"], main["node"]!["services"]));
+        Assert.True(
+            JsonNode.DeepEquals(
+                f.Manager.NodeSummaries()[0]!["services"],
+                main["node"]!["services"]
+            )
+        );
         Assert.Null(main["node"]!["defaultCwd"]);
         foreach (var type in new[] { "cli-node", "browser-extension", "shell-node", "android" })
         {
@@ -193,7 +202,10 @@ public sealed partial class ProviderFileConsumerTests
                 },
                 NodeConnectionHub.Protocol(new JsonObject())
             );
-            var credential = f.Manager.Nodes.Registry.Approve(requested["id"]!.GetValue<string>(), id);
+            var credential = f.Manager.Nodes.Registry.Approve(
+                requested["id"]!.GetValue<string>(),
+                id
+            );
             var result = await f.Call(
                 "call_tool",
                 new JsonObject { ["toolId"] = "builtin:node", ["args"] = Lifecycle("inspect", id) }
@@ -211,7 +223,10 @@ public sealed partial class ProviderFileConsumerTests
             Assert.Null(node["defaultCwd"]);
             Assert.DoesNotContain("tokenHash", result.ToJsonString());
             Assert.DoesNotContain("approvedAuthToken", result.ToJsonString());
-            Assert.DoesNotContain(credential["authToken"]!.GetValue<string>(), result.ToJsonString());
+            Assert.DoesNotContain(
+                credential["authToken"]!.GetValue<string>(),
+                result.ToJsonString()
+            );
         }
         var missing = await f.Call("node", Lifecycle("inspect", "missing-native"));
         Assert.Contains("Node is not available: missing-native", missing.ToJsonString());
@@ -223,7 +238,10 @@ public sealed partial class ProviderFileConsumerTests
         }
         foreach (var provider in new[] { "master", "authenticated-remote" })
         foreach (var action in new[] { "create", "ensure" })
-            Assert.Contains("does not support", (await f.Call("node", Lifecycle(action, provider: provider))).ToJsonString());
+            Assert.Contains(
+                "does not support",
+                (await f.Call("node", Lifecycle(action, provider: provider))).ToJsonString()
+            );
         Assert.False(File.Exists(Path.Combine(f.Target, "calls.jsonl")));
         Assert.False(File.Exists(Path.Combine(f.OtherTarget, "calls.jsonl")));
         Assert.Equal("master", f.Manager.CurrentNode(f.Owner));
@@ -239,7 +257,10 @@ public sealed partial class ProviderFileConsumerTests
         Assert.Contains("does not support", unsupported.ToJsonString());
         Assert.Null(unsupported["node"]);
         var policy = Path.Combine(f.Data, "state", "tool-authorization.yaml");
-        await File.WriteAllTextAsync(policy, "version: 1\nrules: [{action: deny, node: offline-cli-node}]\n");
+        await File.WriteAllTextAsync(
+            policy,
+            "version: 1\nrules: [{action: deny, node: offline-cli-node}]\n"
+        );
         f.Manager.Authorization.Invalidate();
         var denied = await f.Call("node", Lifecycle("inspect", "offline-cli-node"));
         Assert.Equal("tool_authorization_denied", SessionWait.Text(denied["error"]?["type"]));

@@ -227,9 +227,15 @@ public sealed class NodePolicyCliTests
             Assert.Equal("cli-node", inspectedNode["type"]!.GetValue<string>());
             Assert.True(inspectedNode["connected"]!.GetValue<bool>());
             Assert.True(inspectedNode["executable"]!.GetValue<bool>());
-            Assert.Contains(inspectedNode["tools"]!.AsArray(), tool => SessionWait.Text(tool?["name"]) == "read");
+            Assert.Contains(
+                inspectedNode["tools"]!.AsArray(),
+                tool => SessionWait.Text(tool?["name"]) == "read"
+            );
             Assert.DoesNotContain("tokenHash", inspected.ToJsonString());
-            Assert.DoesNotContain(credential["authToken"]!.GetValue<string>(), inspected.ToJsonString());
+            Assert.DoesNotContain(
+                credential["authToken"]!.GetValue<string>(),
+                inspected.ToJsonString()
+            );
             Assert.Equal("master", f.Manager.CurrentNode(f.Target));
             Assert.Null(
                 Error(await Call("node", Obj("""{"action":"select","nodeId":"official"}""")))
