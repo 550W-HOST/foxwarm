@@ -167,7 +167,12 @@ namespace Foxwarm {
                     + Encoding.UTF8.GetString(script)
                     + "\nif (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }\n";
                 File.WriteAllText(path, text, new UTF8Encoding(true));
-                var info = new ProcessStartInfo(engine, "-NoLogo -NoProfile -NonInteractive -File \"" + path + "\"") {
+                // Match the bootstrap's in-memory execution under the default Windows policy.
+                // Only this fixed, short file-reader expression travels in argv; the command stays bounded on disk.
+                var invoke = "& ([ScriptBlock]::Create([IO.File]::ReadAllText('" + path.Replace("'", "''")
+                    + "', [Text.Encoding]::UTF8)))";
+                var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(invoke));
+                var info = new ProcessStartInfo(engine, "-NoLogo -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand " + encoded) {
                     UseShellExecute = false, CreateNoWindow = true,
                     RedirectStandardOutput = true, RedirectStandardError = true,
                     WorkingDirectory = startup

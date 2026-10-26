@@ -111,6 +111,11 @@ public sealed partial class ShellHttpTests
                 RedirectStandardError = true,
                 UseShellExecute = false,
             };
+            if (OperatingSystem.IsWindows())
+            {
+                start.ArgumentList.Add("-ExecutionPolicy");
+                start.ArgumentList.Add("RemoteSigned"); // Process-only test scope permits the intentionally saved launcher.
+            }
             foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-File", harness }) start.ArgumentList.Add(argument);
             start.Environment["FIXTURE_CAPTURE"] = capture;
             start.Environment["FIXTURE_LAUNCHER"] = saved;

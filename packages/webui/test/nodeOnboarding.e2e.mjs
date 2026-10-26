@@ -173,7 +173,7 @@ test('Nodes is a real independent surface; pending approval, inline copy and exp
   await page.click('button[aria-label="Refresh pending approvals"]')
   await page.waitForFunction(() => !document.querySelector('[role=alert]'))
 
-  await click('Shell')
+  await click('Linux Shell')
   assert.equal(await page.$('[data-node-command]'), null)
   assert.equal((await registry.listApprovedNodes()).length, 2, 'selecting Shell does not create trust')
   await replace('Node name', 'browser-shell')
@@ -198,7 +198,7 @@ test('Nodes is a real independent surface; pending approval, inline copy and exp
   await page.waitForSelector('[data-node-surface]')
   await click('New nodes')
   await page.waitForSelector('[data-node-command]')
-  await click('Shell')
+  await click('Linux Shell')
   assert.equal(await page.$('[data-node-command]'), null, 'closed credentials are not reused on reopening')
   assert.equal((await registry.listApprovedNodes()).length, 3)
   await click('Close New nodes')
@@ -232,7 +232,7 @@ test('every setup method supports explicit pre-creation, safe switching, updates
   await click('New nodes')
   await page.waitForSelector('[data-node-command]')
   await idle()
-  for (const method of ['Linux CLI', 'Interactive CLI', 'Docker', 'Windows']) {
+  for (const method of ['Linux CLI', 'Interactive CLI', 'Docker', 'Windows CLI']) {
     await click(method)
     assert.ok((await command()).includes('synthetic-pairing-credential'), method)
     await choose('Pre-created token')
@@ -278,7 +278,7 @@ test('every setup method supports explicit pre-creation, safe switching, updates
   assert.equal((await registry.authenticateApprovedNode('browser-token', token))?.nodeId, 'browser-token')
   assert.equal((await registry.listApprovedNodes()).length, baseline + 1)
   const callsAfterCreate = createCalls
-  for (const method of ['Linux CLI', 'Interactive CLI', 'Docker', 'Windows', 'Shell']) {
+  for (const method of ['Linux CLI', 'Interactive CLI', 'Docker', 'Windows CLI', 'Linux Shell']) {
     await click(method)
     const text = await command()
     assert.ok(text.includes(token), method)

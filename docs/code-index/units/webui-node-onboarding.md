@@ -1,7 +1,7 @@
 # Unit: webui-node-onboarding
 
 Files: packages/webui/src/components/NodeOnboardingModal.tsx, packages/webui/test/nodeOnboarding.e2e.mjs
-Secondary files: packages/webui/src/components/NodesView.tsx, src/channels/webuiNodeOnboarding.ts
+Secondary files: packages/webui/src/components/NodesView.tsx, src/channels/webuiNodeOnboarding.ts, dotnet/Foxwarm.Tests/scripts/qualify-shell-onboarding.mjs
 
 ## Purpose
 
@@ -27,4 +27,4 @@ Provides friendly, explicitly invoked Node setup and pending approval inside the
 
 ## Tests
 
-The browser fixture uses React 18, production theme/CSS, actual Chromium, real authenticated HTTP routes and a fresh temporary Main registry/catalog. It covers independent Nodes rendering and Architecture summary navigation, deployment-prefix fallback, explicit literal address override/copy, true pending total refresh without credential reload, hidden-page pause, stale approval recovery, explicit Shell and full-CLI creation, all pairing/token methods and variants, copied commands, duplicate and failed creation, directory regeneration without identity changes, switching between edited pairing drafts and a bound token, and reopening without retained credentials. A delayed accepted creation response is discarded on close without retrying or revoking that identity. It verifies no setup token enters storage or request URLs. Screenshots use only synthetic fixture data. No deployed Node, credential or shared runtime is used.
+The current C# host qualification `qualify-shell-onboarding.mjs` uses production WebUI and disposable Main state for Windows Shell creation, authentication, dialect switching, generated commands and modal credential lifetime. The retained source browser fixture uses React 18, production theme/CSS, actual Chromium, real authenticated HTTP routes and a fresh temporary Main registry/catalog. It covers independent Nodes rendering and Architecture summary navigation, deployment-prefix fallback, explicit literal address override/copy, true pending total refresh without credential reload, hidden-page pause, stale approval recovery, explicit Shell and full-CLI creation, all pairing/token methods and variants, copied commands, duplicate and failed creation, directory regeneration without identity changes, switching between edited pairing drafts and a bound token, and reopening without retained credentials. A delayed accepted creation response is discarded on close without retrying or revoking that identity. It verifies no setup token enters storage or request URLs. Screenshots use only synthetic fixture data. No deployed Node, credential or shared runtime is used.

@@ -93,7 +93,7 @@ For Windows, use **Windows Shell** in New nodes, or run the PowerShell client fr
 & ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing -Uri 'https://foxwarm.example.invalid/foxwarm/node/run-shell.ps1').Content)) -HostUrl 'https://foxwarm.example.invalid/foxwarm' -NodeId 'my-shell' -AuthToken 'YOUR_PER_NODE_AUTH_TOKEN'
 ```
 
-The bootstrap is executed in memory. Each Windows command runs in a fresh Windows PowerShell process. PowerShell commands use literal cwd paths, including drive paths and UNC shares; relative paths use the startup directory even when Main runs on Linux. The script uses inbox .NET HTTP/process APIs, bounded per-job command files, and in-memory output samples. It creates no resident service. Per-node authentication is required on both platforms.
+The bootstrap is executed in memory. Each Windows command runs in a fresh Windows PowerShell process. PowerShell commands use literal cwd paths, including drive paths and UNC shares; relative paths use the startup directory even when Main runs on Linux. The script uses inbox .NET HTTP/process APIs, bounded per-job command files, and in-memory output samples. Child processes read those command files into a ScriptBlock rather than invoking them with `-File`, so the client does not change Windows execution policy. It creates no resident service. Per-node authentication is required on both platforms.
 
 The explicit host preserves a reverse-proxy deployment prefix. Normal curl certificate verification remains enabled. The shared pairing token cannot authenticate this client. Its per-node bearer is sent in headers through a private temporary curl configuration, not in URLs or ordinary client logs.
 
