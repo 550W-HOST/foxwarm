@@ -234,57 +234,65 @@ internal sealed class NodeBootstrap(
             );
         }
         foreach (var firefox in new[] { false, true })
-        app.MapGet(
-            firefox ? "/node/browser-extension-firefox.zip" : "/node/browser-extension.zip",
-            async (HttpContext context) =>
-            {
-                var root = Path.Combine(AppContext.BaseDirectory, "packages", "browser-node");
-                var manifest = firefox ? "manifest.firefox.json" : "manifest.json";
-                if (!File.Exists(Path.Combine(root, manifest)))
+            app.MapGet(
+                firefox ? "/node/browser-extension-firefox.zip" : "/node/browser-extension.zip",
+                async (HttpContext context) =>
                 {
-                    context.Response.StatusCode = 503;
-                    return;
-                }
-                context.Response.ContentType = "application/zip";
-                context.Response.Headers.ContentDisposition =
-                    firefox
+                    var root = Path.Combine(AppContext.BaseDirectory, "packages", "browser-node");
+                    var manifest = firefox ? "manifest.firefox.json" : "manifest.json";
+                    if (!File.Exists(Path.Combine(root, manifest)))
+                    {
+                        context.Response.StatusCode = 503;
+                        return;
+                    }
+                    context.Response.ContentType = "application/zip";
+                    context.Response.Headers.ContentDisposition = firefox
                         ? "attachment; filename=foxwarm-browser-node-firefox.zip"
                         : "attachment; filename=foxwarm-browser-node.zip";
-                using var buffer = new MemoryStream();
-                using (var archive = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
-                {
-                    foreach (
-                        var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+                    using var buffer = new MemoryStream();
+                    using (
+                        var archive = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true)
                     )
                     {
-                        var name = Path.GetRelativePath(root, path).Replace('\\', '/');
-                        if (name == "manifest.firefox.json")
+                        foreach (
+                            var path in Directory.EnumerateFiles(
+                                root,
+                                "*",
+                                SearchOption.AllDirectories
+                            )
+                        )
                         {
-                            if (!firefox) continue;
-                            name = "manifest.json";
-                        }
-                        else if (firefox && name == "manifest.json") continue;
-                        if (name == (firefox ? "background/cdp.js" : "background/firefox.js")) continue;
-                        var entry = archive.CreateEntry(name, CompressionLevel.Fastest);
-                        await using var output = entry.Open();
-                        if (firefox && name == "background/pageDriver.js")
-                        {
-                            await output.WriteAsync(
-                                "export * from './firefox.js';\n"u8.ToArray(),
-                                context.RequestAborted
-                            );
-                        }
-                        else
-                        {
-                            await using var input = File.OpenRead(path);
-                            await input.CopyToAsync(output, context.RequestAborted);
+                            var name = Path.GetRelativePath(root, path).Replace('\\', '/');
+                            if (name == "manifest.firefox.json")
+                            {
+                                if (!firefox)
+                                    continue;
+                                name = "manifest.json";
+                            }
+                            else if (firefox && name == "manifest.json")
+                                continue;
+                            if (name == (firefox ? "background/cdp.js" : "background/firefox.js"))
+                                continue;
+                            var entry = archive.CreateEntry(name, CompressionLevel.Fastest);
+                            await using var output = entry.Open();
+                            if (firefox && name == "background/pageDriver.js")
+                            {
+                                await output.WriteAsync(
+                                    "export * from './firefox.js';\n"u8.ToArray(),
+                                    context.RequestAborted
+                                );
+                            }
+                            else
+                            {
+                                await using var input = File.OpenRead(path);
+                                await input.CopyToAsync(output, context.RequestAborted);
+                            }
                         }
                     }
+                    buffer.Position = 0;
+                    await buffer.CopyToAsync(context.Response.Body, context.RequestAborted);
                 }
-                buffer.Position = 0;
-                await buffer.CopyToAsync(context.Response.Body, context.RequestAborted);
-            }
-        );
+            );
         app.MapGet(
             "/node/source.tar.gz",
             async (HttpContext context) =>
