@@ -220,12 +220,17 @@ public sealed class NodePolicyCliTests
             );
 
             await f.PolicyAsync(broad);
-            // Generic lifecycle inspection follows the fixed provider's empty declaration;
-            // the separate human/API Node summary remains supported.
-            Assert.Equal(
-                "tool_error",
-                Error(await Call("node", Obj("""{"action":"inspect","nodeId":"official"}""")))
-            );
+            var inspected = await Call("node", Obj("""{"action":"inspect","nodeId":"official"}"""));
+            Assert.Null(Error(inspected));
+            var inspectedNode = inspected["node"]!;
+            Assert.Equal("official", inspectedNode["id"]!.GetValue<string>());
+            Assert.Equal("cli-node", inspectedNode["type"]!.GetValue<string>());
+            Assert.True(inspectedNode["connected"]!.GetValue<bool>());
+            Assert.True(inspectedNode["executable"]!.GetValue<bool>());
+            Assert.Contains(inspectedNode["tools"]!.AsArray(), tool => SessionWait.Text(tool?["name"]) == "read");
+            Assert.DoesNotContain("tokenHash", inspected.ToJsonString());
+            Assert.DoesNotContain(credential["authToken"]!.GetValue<string>(), inspected.ToJsonString());
+            Assert.Equal("master", f.Manager.CurrentNode(f.Target));
             Assert.Null(
                 Error(await Call("node", Obj("""{"action":"select","nodeId":"official"}""")))
             );

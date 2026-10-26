@@ -92,17 +92,41 @@ internal sealed partial class NodeProviderRegistry
         return new JsonArray(values.Select(Summary).Cast<JsonNode?>().ToArray());
     }
 
+    internal static JsonObject MasterSummary(bool hasPty = false) =>
+        new()
+        {
+            ["id"] = "master",
+            ["nodeId"] = "master",
+            ["type"] = "master",
+            ["displayName"] = "master",
+            ["online"] = true,
+            ["connected"] = true,
+            ["executable"] = true,
+            ["services"] = hasPty
+                ? new JsonObject
+                {
+                    ["vscode-fs"] = 1,
+                    ["vscode-git"] = 2,
+                    ["vscode-pty"] = 1,
+                }
+                : new JsonObject { ["vscode-fs"] = 1, ["vscode-git"] = 2 },
+        };
+
     internal async Task<JsonObject?> ResolveAsync(string id, CancellationToken token)
     {
         ValidateId(id);
         // Fixed native owners never consult optional executable discovery.
+        if (id == "master")
+        {
+            var summary = MasterSummary();
+            summary["availability"] = "ready";
+            return summary;
+        }
         if (!IsProviderNode(id))
-            return id == "master"
-                ? new JsonObject { ["id"] = id, ["availability"] = "ready" }
-                : native
-                    .List()
-                    .OfType<JsonObject>()
-                    .FirstOrDefault(value => SessionWait.Text(value["id"]) == id);
+            return native
+                .List()
+                .OfType<JsonObject>()
+                .FirstOrDefault(value => SessionWait.Text(value["id"]) == id);
         var slash = id.IndexOf('/');
         if (!providers.TryGetValue(id[..slash], out var provider))
             return null;

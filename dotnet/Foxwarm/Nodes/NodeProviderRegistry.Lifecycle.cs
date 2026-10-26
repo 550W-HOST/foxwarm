@@ -16,14 +16,14 @@ internal sealed partial class NodeProviderRegistry
             {
                 ["label"] = "Main host",
                 ["description"] = "The colocated Main execution environment.",
-                ["lifecycle"] = new JsonArray(),
+                ["lifecycle"] = new JsonArray("inspect"),
             },
             "authenticated-remote" => new()
             {
                 ["label"] = "Authenticated Nodes",
                 ["description"] =
                     "Resident Nodes connected through authenticated CLI, HTTP or WebSocket transports. Pairing and revocation are managed separately.",
-                ["lifecycle"] = new JsonArray(),
+                ["lifecycle"] = new JsonArray("inspect"),
             },
             _ => await RequiredProvider(providerId).DescribeAsync(token),
         };
@@ -104,7 +104,7 @@ internal sealed partial class NodeProviderRegistry
             ExecutableNodeProvider provider;
             if (creating)
             {
-                // Fixed providers are configured owners too, but declare no lifecycle methods.
+                // Fixed providers expose inspection only; provisioning stays with their existing owners.
                 if (providerId is "master" or "authenticated-remote")
                     throw Unsupported(providerId, action);
                 provider = RequiredProvider(providerId!);
@@ -133,8 +133,13 @@ internal sealed partial class NodeProviderRegistry
                     nodeId!.Contains('/') ? nodeId[..nodeId.IndexOf('/')]
                     : nodeId == "master" ? "master"
                     : "authenticated-remote";
-                if (!providers.TryGetValue(id, out provider!))
+                if (id is "master" or "authenticated-remote")
+                {
+                    if (action == "inspect")
+                        return new JsonObject { ["node"] = existing.DeepClone() };
                     throw Unsupported(id, action);
+                }
+                provider = RequiredProvider(id);
             }
             var description = await provider.DescribeAsync(token);
             if (!description["lifecycle"]!.AsArray().Any(item => SessionWait.Text(item) == action))
