@@ -64,7 +64,7 @@ internal sealed partial class NodeConnectionHub
             kind == "finished"
             && (
                 !Unsigned(bytesField)
-                || !Unsigned(exitField)
+                || (!task.Runtime.PowerShell && !Unsigned(exitField))
                 || !long.TryParse(
                     bytesField,
                     NumberStyles.None,
@@ -74,11 +74,11 @@ internal sealed partial class NodeConnectionHub
                 || total > 9007199254740991L
                 || !int.TryParse(
                     exitField,
-                    NumberStyles.None,
+                    task.Runtime.PowerShell ? NumberStyles.AllowLeadingSign : NumberStyles.None,
                     CultureInfo.InvariantCulture,
                     out exit
                 )
-                || exit > 255
+                || (!task.Runtime.PowerShell && exit > 255)
                 || sample.Length != Math.Min(total, ShellOutputBytes)
             )
         )

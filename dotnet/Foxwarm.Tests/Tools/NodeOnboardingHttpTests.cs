@@ -140,7 +140,7 @@ public sealed class NodeOnboardingHttpTests
         var token = created["authToken"]!.GetValue<string>();
         Assert.Equal(url, created["baseUrl"]!.GetValue<string>());
         var commands = created["commands"]!.AsObject();
-        Assert.Equal(8, commands.Count);
+        Assert.Equal(9, commands.Count);
         foreach (var command in commands)
         {
             var text = command.Value!.GetValue<string>();

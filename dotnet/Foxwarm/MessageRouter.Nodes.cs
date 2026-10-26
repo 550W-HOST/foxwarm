@@ -68,13 +68,15 @@ internal sealed partial class MessageRouter
                         ("interactive", "Interactive CLI", "bash"),
                         ("docker", "Docker", "bash"),
                         ("manualCompose", "Manual Docker Compose", "bash"),
-                        ("windows", "Windows PowerShell", "powershell"),
+                        ("windows", "Windows CLI (PowerShell bootstrap)", "powershell"),
                     }
                 )
                     reply += $"**{title}**\n```{language}\n{commands[key]}\n```\n\n";
                 reply +=
                     "**Shell-only Node (POSIX sh + curl; exec only)**\nFirst run `/node create my-shell`; replace the per-node token placeholder below with its token.\n```sh\n"
                     + commands["shell"]
+                    + "\n```\n\n**Shell-only Node (Windows PowerShell 5.1; exec only)**\nUse the same pre-created per-node credential with the Windows client.\n```powershell\n"
+                    + commands["windowsShell"]
                     + "\n```\n\n**Approve a pending Node**\nCopy the exact `/node approve <pending-id>` command shown by the client, or approve it in WebUI → Nodes → New nodes.\n\nThe commands above contain pairing credentials. Keep them private.";
             }
             else if (args[0] == "create")

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
+using Foxwarm.Nodes;
 
 namespace Foxwarm.Tests;
 
@@ -27,9 +28,8 @@ public sealed partial class ShellHttpTests
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
-        options.ArgumentList.Add(script);
-        options.ArgumentList.Add("--host=" + fixture.Client.BaseAddress!.ToString().TrimEnd('/'));
-        options.ArgumentList.Add("--node-id=shell");
+        options.ArgumentList.Add("-c");
+        options.ArgumentList.Add(new NodeBootstrap(fixture.Manager.Nodes, new PublicWebAddress("http://127.0.0.1", "", "/", false)).ShellCommand(fixture.Client.BaseAddress!.ToString().TrimEnd('/'), "shell", fixture.Auth));
         options.Environment["NODE_AUTH_TOKEN"] = fixture.Auth;
         options.Environment["TMPDIR"] = temp;
         using var client = Process.Start(options)!;
@@ -60,6 +60,7 @@ public sealed partial class ShellHttpTests
             fixture.Manager.Nodes.Remove("shell");
             await client.WaitForExitAsync(budget.Token);
             Assert.Equal(0, client.ExitCode);
+            Assert.False(File.Exists(Path.Combine(startup, "run-shell.sh")));
             Assert.DoesNotContain(fixture.Auth, await stdout);
             Assert.DoesNotContain(fixture.Auth, await stderr);
         }
@@ -74,6 +75,10 @@ public sealed partial class ShellHttpTests
         // A missing utility is a startup failure, not a package installation or registration.
         var missing = Path.Combine(fixture.Temp.Path, "empty-path");
         Directory.CreateDirectory(missing);
+        options.ArgumentList.Clear();
+        options.ArgumentList.Add(script);
+        options.ArgumentList.Add("--host=" + fixture.Client.BaseAddress!.ToString().TrimEnd('/'));
+        options.ArgumentList.Add("--node-id=shell");
         options.Environment["PATH"] = missing;
         using var denied = Process.Start(options)!;
         var deniedOutput = denied.StandardOutput.ReadToEndAsync();

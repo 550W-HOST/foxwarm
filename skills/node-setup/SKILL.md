@@ -76,6 +76,7 @@ This skill matches the current bootstrap surfaces exposed by a running master:
 - `/node/run-docker.sh`
 - `/node/run-interactive.sh`
 - `/node/run.ps1`
+- `/node/run-shell.ps1`
 - `/node/docker-compose.yaml`
 - `/node/source.tar.gz`
 
@@ -398,11 +399,18 @@ For a device that needs only command execution without Node.js, use the independ
 First run `/node create my-shell` on the master and save the returned per-node token privately. The global pairing token is not a Shell Node credential. Run from the desired default command directory:
 
 ```sh
-curl -fsSL 'https://foxwarm.example.invalid/foxwarm/node/run-shell.sh' -o run-shell.sh
-NODE_AUTH_TOKEN=YOUR_PER_NODE_AUTH_TOKEN sh ./run-shell.sh --host='https://foxwarm.example.invalid/foxwarm' --node-id=my-shell
+curl -fsSL 'https://foxwarm.example.invalid/foxwarm/node/run-shell.sh' | NODE_AUTH_TOKEN=YOUR_PER_NODE_AUTH_TOKEN sh -s -- --host='https://foxwarm.example.invalid/foxwarm' --node-id=my-shell
 ```
 
 Always passing `--host` preserves any deployment prefix. Curl retains certificate verification. The token is kept in an owner-only temporary curl config and Authorization headers, not URLs. The script installs no runtime or service and creates no Agent directories.
+
+For Windows, choose **Windows Shell** in the administrator onboarding modal, or invoke the Windows PowerShell 5.1 client in memory. It uses inbox .NET Framework, requires FullLanguage PowerShell, and needs no Node.js:
+
+```powershell
+& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing -Uri 'https://foxwarm.example.invalid/foxwarm/node/run-shell.ps1').Content)) -HostUrl 'https://foxwarm.example.invalid/foxwarm' -NodeId 'my-shell' -AuthToken 'YOUR_PER_NODE_AUTH_TOKEN'
+```
+
+Both Shell methods require a pre-created per-node credential. Windows commands run in separate PowerShell processes with literal Windows cwd handling, private bounded command files, continuously drained pipes and fixed-size output samples. The Windows client has the same exec-only transport and completion ownership as the POSIX client; it installs no service.
 
 Use the normal Node selector or `/node my-shell`; ordinary `exec` then targets this Node. Only `exec` is advertised. Omitted and relative cwd use its startup directory; `cd` does not carry over between calls. File tools, Code/Git/PTY/backend services and external-owner execution are unavailable.
 
@@ -439,13 +447,13 @@ Why this works:
 ## Windows bootstrap
 
 ```powershell
-irm http://YOUR_MASTER:3001/node/run.ps1 | iex
+& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing -Uri 'http://YOUR_MASTER:3001/node/run.ps1').Content)) -HostUrl 'http://YOUR_MASTER:3001' -Pairing 'PAIRING_TOKEN' -NodeId 'my-pc'
 ```
 
 That downloaded script also defaults `HostUrl` from the request URL.
 Override `-HostUrl` only when needed.
 
-For a saved `run.ps1`, node-owned agent and exec-capture state is bound to
+The bootstrap is downloaded into memory and its parameters are bound separately. CLI programs and state remain installed. In-memory invocation uses the caller directory for default source/state paths. For a saved `run.ps1`, node-owned agent and exec-capture state is bound to
 `<StateDir>\agents`, and the Node client starts from the directory containing
 the script rather than inheriting the caller's project cwd. The bootstrap
 overrides inherited agent-directory environment values so `StateDir` remains

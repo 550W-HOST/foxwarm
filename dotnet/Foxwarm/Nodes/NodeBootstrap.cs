@@ -13,6 +13,7 @@ internal sealed class NodeBootstrap(
     private static readonly string[] Templates =
     [
         "run-shell.sh",
+        "run-shell.ps1",
         "run.sh",
         "run-docker.sh",
         "run-interactive.sh",
@@ -72,6 +73,10 @@ internal sealed class NodeBootstrap(
             ["commands"] = new JsonObject
             {
                 ["shell"] = ShellCommand(url, shellId, authToken ?? "YOUR_PER_NODE_AUTH_TOKEN"),
+                ["windowsShell"] = PowerShellDownload(url, "run-shell.ps1")
+                    + " -HostUrl " + PowerShellQuote(url)
+                    + " -AuthToken " + PowerShellQuote(authToken ?? "YOUR_PER_NODE_AUTH_TOKEN")
+                    + " -NodeId " + PowerShellQuote(shellId),
                 ["bareMetal"] = Download("run.sh") + " --dir=" + Quote(directory) + arguments,
                 ["bareMetalBackground"] =
                     Download("run.sh") + " --dir=" + Quote(directory) + arguments + " -d",
@@ -95,9 +100,8 @@ internal sealed class NodeBootstrap(
                     + ComposeQuote(id)
                     + "\nNODE_DATA_DIR=./data\nFOXWARM_NODE_ENV\nchmod 600 .env\n\ndocker compose up -d --build",
                 ["windows"] =
-                    "Invoke-WebRequest "
-                    + PowerShellQuote(url + "/node/run.ps1")
-                    + " -OutFile .\\run.ps1\n.\\run.ps1 -HostUrl "
+                    PowerShellDownload(url, "run.ps1")
+                    + " -HostUrl "
                     + PowerShellQuote(url)
                     + (authToken is null ? " -Pairing " : " -AuthToken ")
                     + PowerShellQuote(credential)
@@ -163,13 +167,17 @@ internal sealed class NodeBootstrap(
         return protocol + "://" + host;
     }
 
+    private static string PowerShellDownload(string url, string name) =>
+        "& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing -Uri "
+        + PowerShellQuote(url.TrimEnd('/') + "/node/" + name)
+        + ").Content))";
+
     internal string ShellCommand(string url, string id, string auth) =>
         "curl -fsSL "
         + Quote(url.TrimEnd('/') + "/node/run-shell.sh")
-        + " -o run-shell.sh\n"
-        + "NODE_AUTH_TOKEN="
+        + " | NODE_AUTH_TOKEN="
         + Quote(auth)
-        + " sh ./run-shell.sh --host="
+        + " sh -s -- --host="
         + Quote(url.TrimEnd('/'))
         + " --node-id="
         + Quote(id);

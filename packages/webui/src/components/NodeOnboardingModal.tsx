@@ -47,10 +47,11 @@ export function useNodePendingApprovals(enabled: boolean) {
 const methods = [
   { id: 'bareMetal', label: 'Linux CLI', detail: 'Install a full CLI Node on a Linux host.' },
   { id: 'interactive', label: 'Interactive CLI', detail: 'Open the CLI with local tool approvals and chat.' },
-  { id: 'shell', label: 'Shell', detail: 'Use POSIX sh and curl for commands only.' },
+  { id: 'windowsShell', label: 'Windows Shell', detail: 'Use Windows PowerShell for commands only, without Node.js.' },
+  { id: 'shell', label: 'Linux Shell', detail: 'Use POSIX sh and curl for commands only.' },
   { id: 'docker', label: 'Docker', detail: 'Run the CLI Node in a container.' },
   { id: 'browser', label: 'Browser', detail: 'Share existing Chrome or Chromium tabs and windows.' },
-  { id: 'windows', label: 'Windows', detail: 'Download and run the PowerShell launcher.' },
+  { id: 'windows', label: 'Windows CLI', detail: 'Download and run the PowerShell launcher.' },
 ]
 
 export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }: {
@@ -65,7 +66,8 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
   const [commands, setCommands] = useState<Commands>({})
   const [tokenMode, setTokenMode] = useState(false)
   const [created, setCreated] = useState<CreatedNode | null>(null)
-  const direct = method !== 'browser' && (method === 'shell' || tokenMode)
+  const shellOnly = method === 'shell' || method === 'windowsShell'
+  const direct = method !== 'browser' && (shellOnly || tokenMode)
   const address = direct && created ? created.baseUrl : baseUrl
   const name = direct && created ? created.nodeId : nodeId
   const [install, setInstall] = useState(false)
@@ -172,7 +174,7 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
           {browserSetup ? <div className="space-y-2 rounded-lg border border-fw-border p-3"><p className="break-all">{browserSetup.baseUrl}</p><label className="block text-xs">Pairing token<input aria-label="Browser pairing token" type="password" readOnly value={browserSetup.pairingToken} className={fieldClass} /></label><button type="button" onClick={() => void navigator.clipboard.writeText(browserSetup.pairingToken).catch(() => setError('Copy failed. Select the token and copy it manually.'))}>Copy pairing token</button><p className="text-xs text-fw-text-muted">Keep this token private. The extension download contains no credentials.</p></div> : null}
         </div> : null}
         {method !== 'browser' ? <>
-        {method !== 'shell' ? <fieldset disabled={busy} className="mt-3 flex flex-wrap gap-4 text-sm"><legend className="mb-1 text-xs font-medium">Authentication</legend>{[{ value: false, label: 'Pairing approval' }, { value: true, label: 'Pre-created token' }].map(mode => <label key={mode.label} className="flex items-center gap-2"><input type="radio" name="node-authentication" checked={tokenMode === mode.value} onChange={() => { setTokenMode(mode.value); setCopied(false); setError('') }} />{mode.label}</label>)}</fieldset> : null}
+        {!shellOnly ? <fieldset disabled={busy} className="mt-3 flex flex-wrap gap-4 text-sm"><legend className="mb-1 text-xs font-medium">Authentication</legend>{[{ value: false, label: 'Pairing approval' }, { value: true, label: 'Pre-created token' }].map(mode => <label key={mode.label} className="flex items-center gap-2"><input type="radio" name="node-authentication" checked={tokenMode === mode.value} onChange={() => { setTokenMode(mode.value); setCopied(false); setError('') }} />{mode.label}</label>)}</fieldset> : null}
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <label className="text-xs font-medium">Reachable address<input aria-label="Reachable address" disabled={busy || (direct && !!created)} value={address} onChange={event => { setBaseUrl(event.target.value); setCommands({}); setCopied(false) }} className={fieldClass} /></label>
           <label className="text-xs font-medium">Node name<input aria-label="Node name" value={name} onChange={event => { setNodeId(event.target.value); setCommands({}); setCopied(false) }} disabled={busy || (direct && !!created)} className={fieldClass} /></label>
@@ -181,7 +183,7 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
         {method === 'bareMetal' ? <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" disabled={busy} checked={install} onChange={event => { setInstall(event.target.checked); setCopied(false) }} />Start automatically with systemd</label> : null}
         {method === 'docker' ? <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" disabled={busy} checked={compose} onChange={event => { setCompose(event.target.checked); setCopied(false) }} />Manual Docker Compose</label> : null}
         <div className="mt-3 flex items-center gap-2">
-          {direct && !created ? <button type="button" disabled={busy || !address || !name} onClick={() => void createNode()} className="inline-flex items-center gap-2 rounded-lg bg-fw-accent px-3 py-2 text-sm font-medium text-fw-accent-text disabled:opacity-50"><Plus className="h-4 w-4" />Create</button> : method !== 'shell' ? <button type="button" disabled={busy || !address || !name} onClick={() => void updateCommands()} className="inline-flex items-center gap-2 rounded-lg border border-fw-border px-3 py-2 text-sm hover:bg-fw-hover disabled:opacity-50"><RefreshCw className="h-4 w-4" />Update command</button> : null}
+          {direct && !created ? <button type="button" disabled={busy || !address || !name} onClick={() => void createNode()} className="inline-flex items-center gap-2 rounded-lg bg-fw-accent px-3 py-2 text-sm font-medium text-fw-accent-text disabled:opacity-50"><Plus className="h-4 w-4" />Create</button> : !shellOnly ? <button type="button" disabled={busy || !address || !name} onClick={() => void updateCommands()} className="inline-flex items-center gap-2 rounded-lg border border-fw-border px-3 py-2 text-sm hover:bg-fw-hover disabled:opacity-50"><RefreshCw className="h-4 w-4" />Update command</button> : null}
           {busy ? <span role="status" className="text-xs text-fw-text-muted">Loading…</span> : null}
         </div>
         {direct && created ? <p className="mt-2 text-sm">{created.nodeId} created. Copy its command before closing.</p> : null}

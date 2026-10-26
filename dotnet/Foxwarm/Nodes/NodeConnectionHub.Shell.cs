@@ -20,12 +20,12 @@ internal sealed partial class NodeConnectionHub
         || path == "/node/shell/report";
 
     // This is the actual transport capability, not the Main/CLI exec definition.
-    private static JsonObject ShellCapability() =>
+    private static JsonObject ShellCapability(bool powershell) =>
         new()
         {
             ["name"] = "exec",
             ["description"] =
-                "Run a POSIX shell command on this Node. Returns bounded output with its total byte count; full output is not retained. If the command outlasts timeout, it continues in the background and returns an execId. Completion is reported to the originating Session.",
+                powershell ? "Run a PowerShell command on this Windows Node. Returns bounded output with its total byte count; full output is not retained. If the command outlasts timeout, it continues in the background and returns an execId. Completion is reported to the originating Session." : "Run a POSIX shell command on this Node. Returns bounded output with its total byte count; full output is not retained. If the command outlasts timeout, it continues in the background and returns an execId. Completion is reported to the originating Session.",
             ["parameters"] = new JsonObject
             {
                 ["type"] = "object",
@@ -34,7 +34,7 @@ internal sealed partial class NodeConnectionHub
                     ["command"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Shell command or pipeline to execute.",
+                        ["description"] = powershell ? "PowerShell command or pipeline to execute." : "Shell command or pipeline to execute.",
                     },
                     ["cwd"] = new JsonObject
                     {
@@ -82,10 +82,11 @@ internal sealed partial class NodeConnectionHub
 
     // Each runtime is published through the same authenticated identity boundary as WS.
     // All queue/poll/map operations hold the hub gate; report admission holds only task.Serial.
-    private sealed class ShellRuntime(NodeConnectionHub hub, Connection connection, string cwd)
+    private sealed class ShellRuntime(NodeConnectionHub hub, Connection connection, string cwd, bool powershell)
     {
         internal readonly Connection Connection = connection;
         internal readonly string Cwd = cwd;
+        internal readonly bool PowerShell = powershell;
         internal readonly string Id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
         internal DateTimeOffset LastSeen = DateTimeOffset.UtcNow;
         internal bool Closed;
@@ -120,7 +121,8 @@ internal sealed partial class NodeConnectionHub
             var explicitCwd = SessionWait.Text(args["cwd"]);
             if (args.ContainsKey("cwd") && string.IsNullOrWhiteSpace(explicitCwd))
                 throw new InvalidDataException("cwd must be a non-empty directory.");
-            var directory = ResolveCwd(Cwd, explicitCwd ?? sessionCwd ?? Cwd);
+            var value = explicitCwd ?? sessionCwd ?? Cwd;
+            var directory = PowerShell ? value : ResolveCwd(Cwd, value);
             if (directory.Contains('\0') || Encoding.UTF8.GetByteCount(directory) > 4096)
                 throw new InvalidDataException("Shell Node cwd is invalid.");
             var seconds = args["timeout"] is null
@@ -139,7 +141,11 @@ internal sealed partial class NodeConnectionHub
                 this,
                 callId,
                 call,
-                "cd '" + directory.Replace("'", "'\"'\"'") + "' || exit 125\n" + command + "\n",
+                PowerShell
+                    ? "try { Set-Location -LiteralPath '" + Cwd.Replace("'", "''")
+                        + "' -ErrorAction Stop; Set-Location -LiteralPath '" + directory.Replace("'", "''")
+                        + "' -ErrorAction Stop } catch { Write-Error $_; exit 125 }\n" + command + "\n"
+                    : "cd '" + directory.Replace("'", "'\"'\"'") + "' || exit 125\n" + command + "\n",
                 (int)Math.Ceiling(Math.Min(seconds, 60)),
                 warning,
                 programmatic
@@ -235,13 +241,13 @@ internal sealed partial class NodeConnectionHub
             return Require(id).Http?.Cwd;
     }
 
-    private ShellRuntime PublishShell(string id, string auth, string cwd)
+    private ShellRuntime PublishShell(string id, string auth, string cwd, bool powershell)
     {
         var connection = new Connection { Id = id, Type = "shell-node" };
-        var runtime = connection.Http = new ShellRuntime(this, connection, cwd);
+        var runtime = connection.Http = new ShellRuntime(this, connection, cwd, powershell);
         connection.Capabilities = new JsonObject
         {
-            ["tools"] = new JsonArray(ShellCapability()),
+            ["tools"] = new JsonArray(ShellCapability(powershell)),
             ["features"] = new JsonObject { ["remoteExecBackgroundRegistration"] = true },
         };
         connection.Protocol = Protocol(
@@ -384,12 +390,20 @@ internal sealed partial class NodeConnectionHub
                             var cwd = Encoding.UTF8.GetString(
                                 await ShellBody(context.Request, 4096, context.RequestAborted)
                             );
-                            if (!cwd.StartsWith('/') || cwd.Any(c => c is '\0' or '\r' or '\n'))
+                            var dialect = ShellHeader(context.Request, "X-Foxwarm-Shell-Dialect");
+                            if (dialect is not ("" or "posix" or "powershell"))
+                                throw new InvalidDataException("Unsupported shell dialect.");
+                            var powershell = dialect == "powershell";
+                            var absolute = powershell
+                                ? System.Text.RegularExpressions.Regex.IsMatch(cwd, @"^(?:[a-zA-Z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+(?:[\\/]|$))")
+                                : cwd.StartsWith('/');
+                            if (!absolute || cwd.Any(c => c is '\0' or '\r' or '\n'))
                                 throw new InvalidDataException("Invalid startup directory.");
                             var runtime = PublishShell(
                                 credential.Value.Id,
                                 credential.Value.Auth,
-                                cwd
+                                cwd,
+                                powershell
                             );
                             context.Response.Headers["X-Foxwarm-Connection"] = runtime.Id;
                             ShellAck(context);

@@ -43,7 +43,7 @@ Replace `YOUR_MASTER` in the command you copy with a host reachable from the new
 
 ## WebUI onboarding
 
-Open **System Architecture → Nodes**. This view shows Node identity, type, connection/compatibility status and available services without Session rows or inspectors. **New nodes** opens setup methods for Linux CLI, interactive CLI, Shell, Docker and Windows. The address defaults to `config.url`, or the current browser address including its deployment path. You can explicitly change it for the new Node's network.
+Open **System Architecture → Nodes**. This view shows Node identity, type, connection/compatibility status and available services without Session rows or inspectors. **New nodes** opens setup methods for Linux CLI, interactive CLI, Linux Shell, Windows Shell, Docker and Windows CLI. The address defaults to `config.url`, or the current browser address including its deployment path. You can explicitly change it for the new Node's network.
 
 Copy a setup command and keep it private. CLI clients using pairing appear in **Pending approvals**; approve only requests you recognize. The button's pending count excludes already approved clients waiting to reconnect. Shell setup instead requires an explicit **Create** action, which reserves a Node name and shows its one-time per-node credential in the command. Copy that command before closing; closing the dialog discards its credentials.
 
@@ -82,10 +82,18 @@ On the master, first reserve the Node and save its per-node token privately:
 From the desired default working directory on the Linux device:
 
 ```sh
-curl -fsSL 'https://foxwarm.example.invalid/foxwarm/node/run-shell.sh' -o run-shell.sh
-NODE_AUTH_TOKEN=YOUR_PER_NODE_AUTH_TOKEN sh ./run-shell.sh \
+curl -fsSL 'https://foxwarm.example.invalid/foxwarm/node/run-shell.sh' | \
+  NODE_AUTH_TOKEN=YOUR_PER_NODE_AUTH_TOKEN sh -s -- \
   --host='https://foxwarm.example.invalid/foxwarm' --node-id=my-shell
 ```
+
+For Windows, use **Windows Shell** in New nodes, or run the PowerShell client from the desired startup directory. It requires Windows PowerShell 5.1, inbox .NET Framework and FullLanguage execution; it does not require Node.js:
+
+```powershell
+& ([ScriptBlock]::Create((Invoke-WebRequest -UseBasicParsing -Uri 'https://foxwarm.example.invalid/foxwarm/node/run-shell.ps1').Content)) -HostUrl 'https://foxwarm.example.invalid/foxwarm' -NodeId 'my-shell' -AuthToken 'YOUR_PER_NODE_AUTH_TOKEN'
+```
+
+The bootstrap is executed in memory. Each Windows command runs in a fresh Windows PowerShell process. PowerShell commands use literal cwd paths, including drive paths and UNC shares; relative paths use the startup directory even when Main runs on Linux. The script uses inbox .NET HTTP/process APIs, bounded per-job command files, and in-memory output samples. It creates no resident service. Per-node authentication is required on both platforms.
 
 The explicit host preserves a reverse-proxy deployment prefix. Normal curl certificate verification remains enabled. The shared pairing token cannot authenticate this client. Its per-node bearer is sent in headers through a private temporary curl configuration, not in URLs or ordinary client logs.
 
@@ -93,11 +101,13 @@ Select `my-shell` using the normal Node selector or `/node my-shell`, then call 
 
 The default foreground wait is 15 seconds, values above 60 are clamped, and fractional waits are rounded up to the next second. A command exceeding the wait keeps running; its initial response contains the existing exec ID, and completion is reported to the original Session even if its selected Node has changed. The retained output sample and total byte count arrive with completion. Use the returned exec ID with normal `wait`; there is no running-output/read-exec endpoint.
 
-Output is drained continuously into a FIFO collector. At most the first and last 4096 bytes are retained, with an exact total-byte count, exit code, and truncation notice. Short samples do not duplicate the overlapping middle. Binary samples are displayed as bounded hexadecimal. Full logs are not retained, and an infinite or no-newline stream does not grow an unbounded log file. Temporary sample files remain bounded per command. Each job independently waits and reports, so foreground commands, background commands and report retries do not stop task polling. The server bounds unfinished dispatches.
+Output is drained continuously into a POSIX FIFO collector or Windows pipe readers. At most the first and last 4096 bytes are retained, with an exact total-byte count, exit code, and truncation notice. Short samples do not duplicate the overlapping middle. Binary samples are displayed as bounded hexadecimal. Full logs are not retained, and an infinite or no-newline stream does not grow an unbounded log file. Temporary sample files remain bounded per command. Each job independently waits and reports, so foreground commands, background commands and report retries do not stop task polling. The server bounds unfinished dispatches.
 
-Only result reports are retried after a lost network response; commands already handed out are never redispatched. A missed response, lost Main process context, or client crash can leave the outcome unknown. There is no durable task queue, persisted completion outbox, or crash continuation. Stop/restart the client explicitly after a lost registration. Stopping or revoking a Node does not kill already-running commands; use an explicit command or the device's process controls when that is needed. Report authorization ends after 24 hours, but an active FIFO/collector is not removed until the command exits. Finished temporary state is then removed.
+Only result reports are retried after a lost network response; commands already handed out are never redispatched. A missed response, lost Main process context, or client crash can leave the outcome unknown. There is no durable task queue, persisted completion outbox, or crash continuation. Stop/restart the client explicitly after a lost registration. Stopping or revoking a Node does not kill already-running commands; use an explicit command or the device's process controls when that is needed. Report authorization ends after 24 hours, but active command/collector state is not removed until the command exits. Finished temporary state is then removed.
 
 `/node remove my-shell` revokes the credential and disconnects the polling runtime. Keep the token outside public scripts and shell history; the environment placeholder above is only an example.
+
+Windows CLI onboarding also downloads its `run.ps1` bootstrap into a ScriptBlock, with URL, credential and Node ID bound as separate parameters. The full CLI still needs Node.js and retains its source/program directory and state: saved `run.ps1` uses its script directory, while in-memory invocation uses the caller directory. Only the bootstrap download file is eliminated.
 
 ## Bare-metal one-command bootstrap
 
