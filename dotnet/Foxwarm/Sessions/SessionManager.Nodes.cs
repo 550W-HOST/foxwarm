@@ -51,27 +51,7 @@ internal sealed partial class SessionManager
         var nodes = Nodes.List();
         foreach (var value in nodes.OfType<JsonObject>())
             value["online"] = value["connected"]!.DeepClone();
-        nodes.Insert(
-            0,
-            new JsonObject
-            {
-                ["id"] = "master",
-                ["nodeId"] = "master",
-                ["type"] = "master",
-                ["displayName"] = "master",
-                ["online"] = true,
-                ["connected"] = true,
-                ["executable"] = true,
-                ["services"] = hasPty
-                    ? new JsonObject
-                    {
-                        ["vscode-fs"] = 1,
-                        ["vscode-git"] = 2,
-                        ["vscode-pty"] = 1,
-                    }
-                    : new JsonObject { ["vscode-fs"] = 1, ["vscode-git"] = 2 },
-            }
-        );
+        nodes.Insert(0, Foxwarm.Nodes.NodeProviderRegistry.MasterSummary(hasPty));
         foreach (var node in NodeProviders.Snapshot())
             nodes.Add(node?.DeepClone());
         return nodes;

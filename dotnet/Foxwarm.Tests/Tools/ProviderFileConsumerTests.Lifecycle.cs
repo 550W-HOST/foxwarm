@@ -64,7 +64,18 @@ public sealed partial class ProviderFileConsumerTests
         {
             var description = await f.Call("node", Lifecycle("inspect", provider: fixedProvider));
             Success(description);
-            Assert.Empty(description["provider"]!["lifecycle"]!.AsArray());
+            Assert.Equal(
+                new[] { "inspect" },
+                description["provider"]!["lifecycle"]!.AsArray().Select(SessionWait.Text)
+            );
+            Assert.Equal(
+                new[] { "inspect" },
+                data["providers"]!
+                    .AsArray()
+                    .Single(p => SessionWait.Text(p?["id"]) == fixedProvider)!["lifecycle"]!
+                    .AsArray()
+                    .Select(SessionWait.Text)
+            );
         }
         var created = await f.Call(
             "node",
@@ -156,6 +167,107 @@ public sealed partial class ProviderFileConsumerTests
     }
 
     [Fact]
+    public async Task Fixed_node_inspection_uses_safe_known_catalog_data_without_discovery_selection_or_provisioning()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+        await using var f = await Fixture.Create("lifecycle");
+        await f.Owner.UpdateCwdAsync(f.Work);
+        await File.WriteAllTextAsync(Path.Combine(f.Target, "list-unavailable"), "");
+        var main = await f.Call("node", Lifecycle("inspect", "master"));
+        Success(main);
+        Assert.Equal("master", main["node"]!["id"]!.GetValue<string>());
+        Assert.Equal("master", main["node"]!["type"]!.GetValue<string>());
+        Assert.True(main["node"]!["online"]!.GetValue<bool>());
+        Assert.True(
+            JsonNode.DeepEquals(
+                f.Manager.NodeSummaries()[0]!["services"],
+                main["node"]!["services"]
+            )
+        );
+        Assert.Null(main["node"]!["defaultCwd"]);
+        foreach (var type in new[] { "cli-node", "browser-extension", "shell-node", "android" })
+        {
+            var id = "offline-" + type;
+            var requested = f.Manager.Nodes.Registry.Request(
+                new JsonObject
+                {
+                    ["requestedName"] = "Known " + type,
+                    ["nodeType"] = type,
+                    ["capabilities"] = new JsonObject
+                    {
+                        ["tools"] = new JsonArray(new JsonObject { ["name"] = "read" }),
+                        ["services"] = new JsonObject { ["vscode-fs"] = 1 },
+                    },
+                },
+                NodeConnectionHub.Protocol(new JsonObject())
+            );
+            var credential = f.Manager.Nodes.Registry.Approve(
+                requested["id"]!.GetValue<string>(),
+                id
+            );
+            var result = await f.Call(
+                "call_tool",
+                new JsonObject { ["toolId"] = "builtin:node", ["args"] = Lifecycle("inspect", id) }
+            );
+            Assert.True(result["error"] is null, result.ToJsonString());
+            var node = result["node"]!;
+            Assert.Equal(id, node["id"]!.GetValue<string>());
+            Assert.Equal(type, node["type"]!.GetValue<string>());
+            Assert.Equal("Known " + type, node["displayName"]!.GetValue<string>());
+            Assert.False(node["connected"]!.GetValue<bool>());
+            Assert.False(node["executable"]!.GetValue<bool>());
+            Assert.Empty(node["tools"]!.AsArray());
+            Assert.Empty(node["services"]!.AsObject());
+            Assert.Null(node["capabilities"]);
+            Assert.Null(node["defaultCwd"]);
+            Assert.DoesNotContain("tokenHash", result.ToJsonString());
+            Assert.DoesNotContain("approvedAuthToken", result.ToJsonString());
+            Assert.DoesNotContain(
+                credential["authToken"]!.GetValue<string>(),
+                result.ToJsonString()
+            );
+        }
+        var missing = await f.Call("node", Lifecycle("inspect", "missing-native"));
+        Assert.Contains("Node is not available: missing-native", missing.ToJsonString());
+        foreach (var id in new[] { "master", "offline-cli-node" })
+        {
+            var destroy = Lifecycle("destroy", id);
+            destroy["confirmation"] = "destroy node " + id;
+            Assert.Contains("does not support", (await f.Call("node", destroy)).ToJsonString());
+        }
+        foreach (var provider in new[] { "master", "authenticated-remote" })
+        foreach (var action in new[] { "create", "ensure" })
+            Assert.Contains(
+                "does not support",
+                (await f.Call("node", Lifecycle(action, provider: provider))).ToJsonString()
+            );
+        Assert.False(File.Exists(Path.Combine(f.Target, "calls.jsonl")));
+        Assert.False(File.Exists(Path.Combine(f.OtherTarget, "calls.jsonl")));
+        Assert.Equal("master", f.Manager.CurrentNode(f.Owner));
+        Assert.Equal(f.Work, f.Manager.ExecutionPlacement(f.Owner).Cwd);
+        Assert.Equal(new[] { "main" }, f.Manager.Agents());
+
+        // A real executable discovery failure and an unsupported executable inspection stay errors.
+        var unavailable = await f.Call("node", Lifecycle("inspect", f.Node));
+        Assert.Contains("Directory temporarily unavailable", unavailable.ToJsonString());
+        Assert.Null(unavailable["node"]);
+        Assert.Equal("list", Assert.Single(await f.Requests())["operation"]!.GetValue<string>());
+        var unsupported = await f.Call("node", Lifecycle("inspect", "other/target"));
+        Assert.Contains("does not support", unsupported.ToJsonString());
+        Assert.Null(unsupported["node"]);
+        var policy = Path.Combine(f.Data, "state", "tool-authorization.yaml");
+        await File.WriteAllTextAsync(
+            policy,
+            "version: 1\nrules: [{action: deny, node: offline-cli-node}]\n"
+        );
+        f.Manager.Authorization.Invalidate();
+        var denied = await f.Call("node", Lifecycle("inspect", "offline-cli-node"));
+        Assert.Equal("tool_authorization_denied", SessionWait.Text(denied["error"]?["type"]));
+        Assert.Null(denied["node"]);
+    }
+
+    [Fact]
     public async Task Action_arguments_identity_confirmation_and_policy_reject_before_effect_and_uncertain_effect_is_not_replayed()
     {
         if (!OperatingSystem.IsLinux())
@@ -177,7 +289,6 @@ public sealed partial class ProviderFileConsumerTests
                     provider: "fixture",
                     parameters: new JsonObject { ["notAllowed"] = true }
                 ),
-                Lifecycle("inspect", "master"),
                 Lifecycle("create", provider: "other"),
                 Lifecycle("destroy", "fixture/target"),
                 new JsonObject
@@ -347,6 +458,7 @@ public sealed partial class ProviderFileConsumerTests
                 Lifecycle("ensure", "fixture/denied", "fixture"),
                 Lifecycle("destroy", f.Node),
                 Lifecycle("inspect", "other/target"),
+                Lifecycle("inspect", "master"),
                 Lifecycle("select", "master"),
             }
         )
