@@ -161,7 +161,6 @@ internal sealed class ApprovedNodeRegistry
         var copy = (JsonObject)record.DeepClone();
         copy.Remove("tokenHash");
         copy.Remove("approvedAuthToken");
-        copy.Remove("connectionGeneration");
         return copy;
     }
 
@@ -196,18 +195,6 @@ internal sealed class ApprovedNodeRegistry
         lock (gate)
             return Approved(data)[id] is JsonObject record
                 && Equal(SessionWait.Text(record["tokenHash"]) ?? "", Hash(auth));
-    }
-
-    // Publication fencing survives host restart without retaining transport or task state.
-    internal string Publication(string id, string auth)
-    {
-        lock (gate)
-        {
-            var record = Approved(data)[id] as JsonObject;
-            if (record is null || !Equal(SessionWait.Text(record["tokenHash"]) ?? "", Hash(auth)))
-                throw new InvalidDataException("Node credentials were removed or replaced.");
-            return SessionWait.Text(record["connectionGeneration"]) ?? "none";
-        }
     }
 
     internal JsonObject Create(string id)
@@ -388,13 +375,7 @@ internal sealed class ApprovedNodeRegistry
             return true;
         });
 
-    internal void Touch(
-        string id,
-        string auth,
-        JsonObject input,
-        JsonObject compatibility,
-        string? publication = null
-    ) =>
+    internal void Touch(string id, string auth, JsonObject input, JsonObject compatibility) =>
         Change(next =>
         {
             var record =
@@ -406,7 +387,6 @@ internal sealed class ApprovedNodeRegistry
             record["capabilities"] = input["capabilities"]!.DeepClone();
             record["nodeProtocol"] = compatibility["client"]!.DeepClone();
             record["protocolCompatibility"] = compatibility.DeepClone();
-            record["connectionGeneration"] = publication ?? Guid.NewGuid().ToString("N");
             record["lastSeenAt"] = Now;
             record["updatedAt"] = Now;
             return true;

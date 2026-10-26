@@ -1,8 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
-using System.Text.Json.Nodes;
-using Foxwarm.Nodes;
 using Foxwarm.Sessions;
 
 namespace Foxwarm.Tests;
@@ -56,6 +54,8 @@ public sealed partial class ShellHttpTests
             prepared.Predecessor
         );
         Assert.Equal(HttpStatusCode.NoContent, retry.StatusCode);
+        using var reconnectRetry = await ConditionalShell(fixture, prepared.Connection, prepared.Connection);
+        Assert.Equal(HttpStatusCode.NoContent, reconnectRetry.StatusCode);
         var task = await fixture.Poll();
         using var running = await fixture.Report(task.Task);
         Assert.Equal(HttpStatusCode.NoContent, running.StatusCode);
@@ -82,19 +82,6 @@ public sealed partial class ShellHttpTests
         );
         Assert.Equal(HttpStatusCode.NoContent, finished.StatusCode);
         Assert.Single(fixture.Owner.Entry.Snapshot().Queue);
-        // Removal of a successor runtime must not erase its publication fence.
-        fixture.Manager.Nodes.Disconnect("shell", "qualification end");
-        using var staleAfterDisconnect = await ConditionalShell(
-            fixture,
-            prepared.Connection,
-            prepared.Connection
-        );
-        Assert.Equal(HttpStatusCode.Conflict, staleAfterDisconnect.StatusCode);
-        Assert.DoesNotContain("connectionGeneration", fixture.Manager.Nodes.List().ToJsonString());
-        Assert.Equal(
-            fixture.Connection,
-            new ApprovedNodeRegistry(fixture.Data).Publication("shell", fixture.Auth)
-        );
     }
 
     [Fact]
@@ -102,23 +89,22 @@ public sealed partial class ShellHttpTests
     {
         await using var fixture = new Fixture();
         await fixture.Start();
+        var registryPath = Path.Combine(fixture.Data, "state", "nodes.json");
+        var registry = await File.ReadAllTextAsync(registryPath);
         var prepared = await PrepareShell(fixture);
-        Assert.Equal(fixture.Connection, prepared.Predecessor);
-        Assert.Equal(
-            fixture.Connection,
-            fixture.Manager.Nodes.Registry.Publication("shell", fixture.Auth)
-        );
-        await fixture.Register();
+        Assert.NotEqual("none", prepared.Predecessor);
+        Assert.Equal(registry, await File.ReadAllTextAsync(registryPath));
+        var original = fixture.Connection;
+        await fixture.Restart();
+        using var recovered = await ConditionalShell(fixture, original, original);
+        Assert.Equal(HttpStatusCode.NoContent, recovered.StatusCode);
         using var lostRace = await ConditionalShell(
             fixture,
             prepared.Connection,
             prepared.Predecessor
         );
         Assert.Equal(HttpStatusCode.Conflict, lostRace.StatusCode);
-        Assert.Equal(
-            fixture.Connection,
-            fixture.Manager.Nodes.Registry.Publication("shell", fixture.Auth)
-        );
+        Assert.NotEqual(prepared.Predecessor, (await PrepareShell(fixture)).Predecessor);
         fixture.Manager.Nodes.Remove("shell");
         using var revoked = await ConditionalShell(fixture, fixture.Connection, fixture.Connection);
         Assert.Equal(HttpStatusCode.Unauthorized, revoked.StatusCode);
@@ -129,53 +115,52 @@ public sealed partial class ShellHttpTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Conditional_registration_retries_both_precommit_and_committed_persistence_failures(
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task An_abandoned_failed_registration_leaves_the_original_client_recoverable(
+        bool legacy,
         bool committed
     )
     {
         await using var fixture = new Fixture();
         await fixture.Start();
+        var original = fixture.Connection;
         var prepared = await PrepareShell(fixture);
         ObserveRegistryWrite(
             fixture.Manager.Nodes,
             stage =>
             {
-                if (
-                    stage
-                    == (
-                        committed
-                            ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
-                            : AtomicJsonWriteStage.BeforeRename
-                    )
-                )
+                if (stage == (committed ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync : AtomicJsonWriteStage.BeforeRename))
                     throw new IOException("Injected registration persistence failure.");
             }
         );
         try
         {
-            using var failed = await ConditionalShell(
-                fixture,
-                prepared.Connection,
-                prepared.Predecessor
-            );
+            using var failed = legacy
+                ? await fixture.Request("register", Encoding.UTF8.GetBytes("/abandoned"))
+                : await ConditionalShell(fixture, prepared.Connection, prepared.Predecessor);
             Assert.Equal(HttpStatusCode.ServiceUnavailable, failed.StatusCode);
         }
         finally
         {
             ObserveRegistryWrite(fixture.Manager.Nodes, null);
         }
-        using var retry = await ConditionalShell(
-            fixture,
-            prepared.Connection,
-            prepared.Predecessor
-        );
-        Assert.Equal(HttpStatusCode.NoContent, retry.StatusCode);
-        Assert.Equal(
-            prepared.Connection,
-            fixture.Manager.Nodes.Registry.Publication("shell", fixture.Auth)
-        );
+        // B is abandoned without retry. A still receives and reports a real dispatch.
+        Assert.Equal(prepared.Predecessor, (await PrepareShell(fixture)).Predecessor);
+        var execution = fixture.Exec();
+        var task = await fixture.Poll();
+        using var finished = await fixture.Report(task.Task, true);
+        Assert.Equal(HttpStatusCode.NoContent, finished.StatusCode);
+        await execution;
+        await fixture.Restart();
+        using var missing = await fixture.Request("poll", connection: original);
+        Assert.Equal(HttpStatusCode.Conflict, missing.StatusCode);
+        Assert.Equal("connection-unavailable", missing.Headers.GetValues("X-Foxwarm-Shell-Reason").Single());
+        using var recovery = await ConditionalShell(fixture, original, original);
+        Assert.Equal(HttpStatusCode.NoContent, recovery.StatusCode);
+        Assert.NotEqual("none", (await PrepareShell(fixture)).Predecessor);
         Assert.True(fixture.Manager.Nodes.Online("shell"));
     }
 

@@ -291,19 +291,20 @@ internal sealed partial class NodeConnectionHub
         {
             if (shutdown.IsCancellationRequested)
                 throw new IOException("Host is shutting down.");
-            // The persisted predecessor is checked under the same gate as every HTTP/WS publication.
-            // Repeating a successful request may acknowledge itself, never displace a successor.
-            var current = Registry.Publication(id, auth);
-            if (predecessor is not null && current != predecessor && current != publication)
-                throw new InvalidOperationException("Connection was replaced.");
-            if (
-                publication is not null
-                && nodes.TryGetValue(id, out var published)
-                && published.Http is { } existing
-                && existing.Id == publication
-                && published.Open
-            )
+            // Compare the current live transport under the shared HTTP/WS publication gate.
+            // With no live transport, an authorized client may recover after expiry or restart.
+            nodes.TryGetValue(id, out old);
+            var current = old is { Retired: false } && old.Open
+                ? old.Generation.ToString("N")
+                : null;
+            if (current is not null && publication is not null && old!.Http is { } existing && existing.Id == publication)
+            {
+                if (!Registry.Authenticate(id, auth))
+                    throw new InvalidDataException("Node credentials were removed or replaced.");
                 return existing;
+            }
+            if (predecessor is not null && current is not null && current != predecessor)
+                throw new InvalidOperationException("Connection was replaced.");
             // Recheck the credential and durably touch it inside revocation's publication lock.
             Registry.Touch(
                 id,
@@ -313,10 +314,8 @@ internal sealed partial class NodeConnectionHub
                     ["nodeType"] = "shell-node",
                     ["capabilities"] = connection.Capabilities.DeepClone(),
                 },
-                connection.Protocol,
-                runtime.Id
+                connection.Protocol
             );
-            nodes.TryGetValue(id, out old);
             if (old is not null)
                 old.Retired = true;
             nodes[id] = connection;
@@ -449,10 +448,10 @@ internal sealed partial class NodeConnectionHub
                             lock (gate)
                             {
                                 context.Response.Headers["X-Foxwarm-Predecessor"] =
-                                    Registry.Publication(
-                                        credential.Value.Id,
-                                        credential.Value.Auth
-                                    );
+                                    nodes.TryGetValue(credential.Value.Id, out var current)
+                                    && !current.Retired && current.Open
+                                        ? current.Generation.ToString("N")
+                                        : "none";
                                 context.Response.Headers["X-Foxwarm-Connection"] =
                                     NewShellConnection();
                             }
@@ -497,7 +496,7 @@ internal sealed partial class NodeConnectionHub
                             ShellAck(context);
                         }
                         else if (suffix == "poll")
-                            await PollShell(context, credential.Value.Id, credential.Value.Auth);
+                            await PollShell(context, credential.Value.Id);
                         else
                             await ReportShell(context, credential.Value.Id);
                     }
@@ -532,22 +531,16 @@ internal sealed partial class NodeConnectionHub
         context.Response.StatusCode = 204;
     }
 
-    private async Task PollShell(HttpContext context, string id, string auth)
+    private async Task PollShell(HttpContext context, string id)
     {
         ShellRuntime runtime;
         TaskCompletionSource<ShellTask?> poll;
         lock (gate)
         {
             var connectionId = ShellHeader(context.Request, "X-Foxwarm-Connection");
-            if (!nodes.TryGetValue(id, out var active))
+            if (!nodes.TryGetValue(id, out var active) || active.Retired || !active.Open)
             {
-                ShellFailure(
-                    context,
-                    409,
-                    Registry.Publication(id, auth) == connectionId
-                        ? "connection-unavailable"
-                        : "connection-replaced"
-                );
+                ShellFailure(context, 409, "connection-unavailable");
                 return;
             }
             if (active.Http is not { } http || http.Id != connectionId)
@@ -556,11 +549,6 @@ internal sealed partial class NodeConnectionHub
                 return;
             }
             runtime = http;
-            if (!active.Open || active.Retired)
-            {
-                ShellFailure(context, 409, "connection-unavailable");
-                return;
-            }
             try
             {
                 poll = runtime.Poll();

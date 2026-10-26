@@ -109,11 +109,6 @@ try {
   const pong = once(ws, 'message'); ws.send(JSON.stringify({ type: 'ping' }))
   assert.equal(JSON.parse(String((await pong)[0])).type, 'pong')
   assert(await online(value.nodeId))
-  // The durable successor fence remains after its real socket closes and Main restarts.
-  ws.close(); await once(ws, 'close'); await fixture.stop(); await fixture.start()
-  const prior = registrations[0].connection
-  const denied = await fetch(fixture.origin + '/node/shell/register', { method: 'POST', headers: { Authorization: 'Bearer ' + value.authToken, 'X-Foxwarm-Node': value.nodeId, 'X-Foxwarm-Connection': prior, 'X-Foxwarm-Predecessor': prior, 'content-type': 'application/octet-stream' }, body: fixture.work })
-  assert.equal(denied.status, 409)
   const revokedValue = await credential('revoked'), revoked = launch(revokedValue, script)
   await connected(revokedValue.nodeId)
   assert.equal((await fixture.api('DELETE', '/api/nodes/' + revokedValue.nodeId)).status, 200)

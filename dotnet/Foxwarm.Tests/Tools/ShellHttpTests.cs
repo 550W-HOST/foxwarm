@@ -33,7 +33,7 @@ public sealed partial class ShellHttpTests
         internal string Data => Path.Combine(Temp.Path, "data");
         internal string Auth => Credential["authToken"]!.GetValue<string>();
 
-        internal async Task Start(bool register = true, bool bootstrap = false)
+        internal async Task Start(bool register = true, bool bootstrap = false, bool restart = false)
         {
             Manager = new(
                 Data,
@@ -43,13 +43,16 @@ public sealed partial class ShellHttpTests
                 authorityStageHook: (id, stage) => WriteStage?.Invoke(id, stage)
             );
             await Manager.LoadAsync();
-            Owner = await Manager.CreateNamedAsync("main", "shell-owner", null, null);
+            Owner = restart
+                ? await Manager.RequiredAsync("shell-owner")
+                : await Manager.CreateNamedAsync("main", "shell-owner", null, null);
             Owner.Registry.TriggerOverride = _ =>
             {
                 Wakes++;
                 return Task.CompletedTask;
             };
-            Credential = Manager.Nodes.Registry.Create("shell");
+            if (!restart)
+                Credential = Manager.Nodes.Registry.Create("shell");
             var builder = WebApplication.CreateBuilder();
             builder.Logging.ClearProviders();
             builder.WebHost.UseUrls("http://127.0.0.1:0");
@@ -70,6 +73,15 @@ public sealed partial class ShellHttpTests
             };
             if (register)
                 await Register();
+        }
+
+        internal async Task Restart()
+        {
+            Client.Dispose();
+            await App.StopAsync();
+            await App.DisposeAsync();
+            await Manager.DisposeAsync();
+            await Start(register: false, restart: true);
         }
 
         internal async Task Register()
