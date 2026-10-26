@@ -54,6 +54,8 @@ namespace Foxwarm
         readonly string startup;
         readonly string engine;
         string connection;
+        string predecessor;
+        bool legacy;
         readonly HashSet<string> delivered = new HashSet<string>();
         readonly Queue<string> finished = new Queue<string>();
         readonly object jobsGate = new object();
@@ -79,12 +81,12 @@ namespace Foxwarm
             }
         }
 
-        Reply Http(string endpoint, byte[] body, Dictionary<string, string> headers)
+        Reply Http(string endpoint, byte[] body, Dictionary<string, string> headers, bool prepare = false)
         {
             try
             {
                 var request = (HttpWebRequest)WebRequest.Create(host + "/node/shell/" + endpoint);
-                request.Method = endpoint == "poll" ? "GET" : "POST";
+                request.Method = prepare ? "HEAD" : endpoint == "poll" ? "GET" : "POST";
                 request.AllowAutoRedirect = false;
                 // The bootstrap may already have created this origin's ServicePoint.
                 // Set its limit directly so report workers cannot serialize behind a two-connection default.
@@ -168,11 +170,13 @@ namespace Foxwarm
             long total,
             int exit,
             long elapsed,
-            DateTime started
+            DateTime started,
+            string dispatchedConnection
         )
         {
             var headers = new Dictionary<string, string>
             {
+                { "X-Foxwarm-Connection", dispatchedConnection },
                 { "X-Foxwarm-Task", task },
                 { "X-Foxwarm-Result", kind },
                 { "X-Foxwarm-Bytes", total.ToString(CultureInfo.InvariantCulture) },
@@ -234,7 +238,7 @@ namespace Foxwarm
             }
         }
 
-        void RunJob(string task, byte[] script, int timeout, DateTime dispatched)
+        void RunJob(string task, byte[] script, int timeout, DateTime dispatched, string dispatchedConnection)
         {
             string directory = null;
             var sample = new Sample();
@@ -316,7 +320,8 @@ namespace Foxwarm
                                     0,
                                     0,
                                     (long)watch.Elapsed.TotalSeconds,
-                                    dispatched
+                                    dispatched,
+                                    dispatchedConnection
                                 )
                             )
                                 Console.Error.WriteLine(
@@ -336,7 +341,7 @@ namespace Foxwarm
                 );
                 sample.Append(error, error.Length);
             }
-            if (!Report(task, "finished", sample.Bytes(), sample.Total, exit, elapsed, dispatched))
+            if (!Report(task, "finished", sample.Bytes(), sample.Total, exit, elapsed, dispatched, dispatchedConnection))
                 Console.Error.WriteLine(
                     "Completion unavailable; command will not be executed again."
                 );
@@ -351,45 +356,127 @@ namespace Foxwarm
             }
         }
 
+        static bool ConnectionId(string value)
+        {
+            return value != null && Regex.IsMatch(value, "^[a-f0-9]{32}$");
+        }
+
+        static void Stopped(int status, string reason = null)
+        {
+            Console.Error.WriteLine(status == 401 || status == 403
+                ? "Shell Node stopped: credentials rejected or revoked."
+                : status == 409 ? (reason == "connection-replaced" ? "Shell Node stopped: connection replaced by another client." : "Shell Node stopped: connection conflict; safe automatic reconnect is unavailable.")
+                : status == 410 ? "Shell Node stopped: connection retired by server."
+                : "Shell Node stopped: registration request rejected.");
+        }
+
+        void Prepare()
+        {
+            bool retrying = false;
+            while (true)
+            {
+                var reply = Http("register", null, null, true);
+                var proposed = reply.Headers["X-Foxwarm-Connection"];
+                var previous = reply.Headers["X-Foxwarm-Predecessor"];
+                if (reply.Status == 204 && reply.Marked && ConnectionId(proposed)
+                    && (previous == "none" || ConnectionId(previous)))
+                {
+                    connection = proposed;
+                    predecessor = previous;
+                    return;
+                }
+                if (reply.Status == 404 || reply.Status == 405 || reply.Status == 501)
+                {
+                    legacy = true;
+                    return;
+                }
+                if (Terminal(reply.Status))
+                {
+                    Stopped(reply.Status, reply.Headers["X-Foxwarm-Shell-Reason"]);
+                    throw new InvalidOperationException("Shell Node registration failed; no command was executed.");
+                }
+                if (!retrying) Console.Error.WriteLine("Shell Node registration unavailable; retrying in 2 seconds.");
+                retrying = true;
+                Thread.Sleep(2000);
+            }
+        }
+
+        bool Register()
+        {
+            bool retrying = false;
+            while (true)
+            {
+                var headers = new Dictionary<string, string> { { "X-Foxwarm-Shell-Dialect", "powershell" } };
+                if (!legacy) headers["X-Foxwarm-Predecessor"] = predecessor;
+                var reply = Http("register", Encoding.UTF8.GetBytes(startup), headers);
+                var registered = reply.Headers["X-Foxwarm-Connection"];
+                if (reply.Status == 204 && reply.Marked && ConnectionId(registered)
+                    && (legacy || registered == connection))
+                {
+                    connection = registered;
+                    predecessor = connection;
+                    return true;
+                }
+                if (Terminal(reply.Status))
+                {
+                    Stopped(reply.Status, reply.Headers["X-Foxwarm-Shell-Reason"]);
+                    return false;
+                }
+                if (legacy)
+                {
+                    Console.Error.WriteLine("Shell Node registration unconfirmed; this server does not support safe registration retry.");
+                    return false;
+                }
+                if (!retrying) Console.Error.WriteLine("Shell Node registration unavailable; retrying in 2 seconds.");
+                retrying = true;
+                Thread.Sleep(2000);
+            }
+        }
+
         public void Run()
         {
             // Windows PowerShell 5.1 may otherwise offer only older TLS protocol defaults.
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-            var registered = Http(
-                "register",
-                Encoding.UTF8.GetBytes(startup),
-                new Dictionary<string, string> { { "X-Foxwarm-Shell-Dialect", "powershell" } }
-            );
-            connection = registered.Headers["X-Foxwarm-Connection"];
-            if (
-                registered.Status != 204
-                || !registered.Marked
-                || connection == null
-                || !Regex.IsMatch(connection, "^[a-f0-9]{32}$")
-            )
-                throw new InvalidOperationException(
-                    "Shell Node registration failed; no command was executed."
-                );
+            Prepare();
+            if (!Register())
+                throw new InvalidOperationException("Shell Node registration failed; no command was executed.");
             Console.WriteLine(
                 "Shell Node " + node + " ready (Windows PowerShell, bounded output)."
             );
+            bool retrying = false;
             try
             {
                 while (true)
                 {
                     var reply = Http("poll", null, null);
                     if (reply.Status == 204 && reply.Marked)
-                        continue;
-                    if (
-                        reply.Status == 401
-                        || reply.Status == 403
-                        || reply.Status == 409
-                        || reply.Status == 410
-                    )
                     {
-                        Console.Error.WriteLine(
-                            "Shell Node disconnected; existing commands are not re-executed."
-                        );
+                        if (retrying) Console.Error.WriteLine("Shell Node polling resumed.");
+                        retrying = false;
+                        continue;
+                    }
+                    var reason = reply.Headers["X-Foxwarm-Shell-Reason"];
+                    if (reply.Status == 409 && reply.Marked && !legacy)
+                    {
+                        if (reason == "connection-unavailable")
+                        {
+                            Console.Error.WriteLine("Shell Node connection expired or Main restarted; reconnecting.");
+                            if (!Register()) break;
+                            Console.Error.WriteLine("Shell Node reconnected; delivered commands are not replayed.");
+                            retrying = false;
+                            continue;
+                        }
+                        if (reason == "poll-pending")
+                        {
+                            if (!retrying) Console.Error.WriteLine("Shell Node previous poll is still pending; retrying in 2 seconds.");
+                            retrying = true;
+                            Thread.Sleep(2000);
+                            continue;
+                        }
+                    }
+                    if (reply.Status == 401 || reply.Status == 403 || reply.Status == 409 || reply.Status == 410)
+                    {
+                        Stopped(reply.Status, reply.Headers["X-Foxwarm-Shell-Reason"]);
                         break;
                     }
                     int timeout;
@@ -414,9 +501,13 @@ namespace Foxwarm
                         || timeout > 60
                     )
                     {
+                        if (!retrying) Console.Error.WriteLine("Shell Node poll unavailable or invalid; retrying in 2 seconds.");
+                        retrying = true;
                         Thread.Sleep(2000);
                         continue;
                     }
+                    if (retrying) Console.Error.WriteLine("Shell Node polling resumed.");
+                    retrying = false;
                     // Match Main's bounded recent receipts; Main never redelivers a handed-out task.
                     lock (jobsGate)
                     {
@@ -425,13 +516,14 @@ namespace Foxwarm
                     }
                     var script = reply.Body;
                     var dispatched = DateTime.UtcNow;
+                    var dispatchedConnection = connection;
                     lock (jobsGate)
                         jobs++;
                     var worker = new Thread(() =>
                     {
                         try
                         {
-                            RunJob(task, script, timeout, dispatched);
+                            RunJob(task, script, timeout, dispatched, dispatchedConnection);
                         }
                         finally
                         {

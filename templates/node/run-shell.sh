@@ -49,16 +49,73 @@ http() {
     --max-filesize 65536 --dump-header "$headers" --output "$response" --write-out '%{http_code}' \
     "$@" "$HOST/node/shell/$endpoint"
 }
-code=$(http "$STATE/register.headers" "$STATE/register.body" register \
-  -H 'Content-Type: application/octet-stream' --data-binary "@$STATE/cwd") || code=000
-CONNECTION=$(header_value "$STATE/register.headers" 'x-foxwarm-connection')
-case "$CONNECTION" in ''|*[!a-f0-9]*) CONNECTION=invalid ;; esac
-if [ "$code" != 204 ] || [ "${#CONNECTION}" -ne 32 ] || \
-   [ "$(header_value "$STATE/register.headers" 'x-foxwarm-shell')" != foxwarm-shell-1 ]; then
-  echo 'Shell Node registration failed; no command was executed.' >&2
-  rm -rf "$STATE"; exit 1
-fi
+valid_connection() {
+  case "$1" in ''|*[!a-f0-9]*) return 1 ;; esac
+  [ "${#1}" -eq 32 ]
+}
+terminal_message() {
+  case "$1" in
+    401|403) echo 'Shell Node stopped: credentials rejected or revoked.' >&2 ;;
+    409)
+      if [ "${2:-}" = connection-replaced ]; then
+        echo 'Shell Node stopped: connection replaced by another client.' >&2
+      else
+        echo 'Shell Node stopped: connection conflict; safe automatic reconnect is unavailable.' >&2
+      fi ;;
+    410) echo 'Shell Node stopped: connection retired by server.' >&2 ;;
+    *) echo 'Shell Node stopped: registration request rejected.' >&2 ;;
+  esac
+}
+# HEAD only reads the predecessor and proposes an identity. A lost response has no effect.
+# POST retries use the same pair, so an unobserved success cannot replace a successor.
+CONNECTION=
+PREDECESSOR=
+LEGACY=0
+retry_notice=0
+while [ "$STOP" -eq 0 ]; do
+  code=$(http "$STATE/register.headers" "$STATE/register.body" register --head) || code=000
+  if [ "$code" = 204 ] && [ "$(header_value "$STATE/register.headers" 'x-foxwarm-shell')" = foxwarm-shell-1 ]; then
+    CONNECTION=$(header_value "$STATE/register.headers" 'x-foxwarm-connection')
+    PREDECESSOR=$(header_value "$STATE/register.headers" 'x-foxwarm-predecessor')
+    if valid_connection "$CONNECTION" && { [ "$PREDECESSOR" = none ] || valid_connection "$PREDECESSOR"; }; then break; fi
+  fi
+  case "$code" in
+    404|405|501) LEGACY=1; break ;;
+    400|401|403|409|410|413|415) terminal_message "$code"; rm -rf "$STATE"; exit 1 ;;
+  esac
+  if [ "$retry_notice" -eq 0 ]; then echo 'Shell Node registration unavailable; retrying in 2 seconds.' >&2; retry_notice=1; fi
+  sleep 2
+done
+register() {
+  retry_notice=0
+  while [ "$STOP" -eq 0 ]; do
+    if [ "$LEGACY" -eq 1 ]; then
+      code=$(http "$STATE/register.headers" "$STATE/register.body" register \
+        -H 'Content-Type: application/octet-stream' --data-binary "@$STATE/cwd") || code=000
+    else
+      code=$(http "$STATE/register.headers" "$STATE/register.body" register \
+        -H "X-Foxwarm-Connection: $CONNECTION" -H "X-Foxwarm-Predecessor: $PREDECESSOR" \
+        -H 'Content-Type: application/octet-stream' --data-binary "@$STATE/cwd") || code=000
+    fi
+    registered=$(header_value "$STATE/register.headers" 'x-foxwarm-connection')
+    if [ "$code" = 204 ] && valid_connection "$registered" && \
+       [ "$(header_value "$STATE/register.headers" 'x-foxwarm-shell')" = foxwarm-shell-1 ] && \
+       { [ "$LEGACY" -eq 1 ] || [ "$registered" = "$CONNECTION" ]; }; then
+      CONNECTION=$registered; PREDECESSOR=$CONNECTION
+      return 0
+    fi
+    case "$code" in 400|401|403|409|410|413|415) terminal_message "$code" "$(header_value "$STATE/register.headers" 'x-foxwarm-shell-reason')"; return 1 ;; esac
+    if [ "$LEGACY" -eq 1 ]; then
+      echo 'Shell Node registration unconfirmed; this server does not support safe registration retry.' >&2; return 1
+    fi
+    if [ "$retry_notice" -eq 0 ]; then echo 'Shell Node registration unavailable; retrying in 2 seconds.' >&2; retry_notice=1; fi
+    sleep 2
+  done
+  return 1
+}
+if ! register; then rm -rf "$STATE"; exit 1; fi
 printf 'Shell Node %s ready (POSIX sh, bounded output).\n' "$NODE_ID"
+retry_notice=0
 
 collect() {
   dir=$1
@@ -156,12 +213,31 @@ while [ "$STOP" -eq 0 ]; do
   # Main bounds unfinished dispatches. Waiting/reports must never block polling.
   code=$(http "$STATE/poll.headers" "$STATE/poll.body" poll -H "X-Foxwarm-Connection: $CONNECTION") || code=000
   protocol=$(header_value "$STATE/poll.headers" 'x-foxwarm-shell')
-  if [ "$code" = 204 ] && [ "$protocol" = foxwarm-shell-1 ]; then continue; fi
-  case "$code" in 401|403|409|410) echo 'Shell Node disconnected; existing commands are not re-executed.' >&2; break ;; esac
+  if [ "$code" = 204 ] && [ "$protocol" = foxwarm-shell-1 ]; then
+    if [ "$retry_notice" -eq 1 ]; then echo 'Shell Node polling resumed.' >&2; retry_notice=0; fi
+    continue
+  fi
+  reason=$(header_value "$STATE/poll.headers" 'x-foxwarm-shell-reason')
+  if [ "$code" = 409 ] && [ "$protocol" = foxwarm-shell-1 ] && [ "$LEGACY" -eq 0 ]; then
+    case "$reason" in
+      connection-unavailable)
+        [ "$STOP" -eq 0 ] || break
+        echo 'Shell Node connection expired or Main restarted; reconnecting.' >&2
+        if ! register; then break; fi
+        echo 'Shell Node reconnected; delivered commands are not replayed.' >&2
+        retry_notice=0; continue ;;
+      poll-pending)
+        if [ "$retry_notice" -eq 0 ]; then echo 'Shell Node previous poll is still pending; retrying in 2 seconds.' >&2; retry_notice=1; fi
+        sleep 2; continue ;;
+    esac
+  fi
+  case "$code" in 401|403|409|410) terminal_message "$code" "$reason"; break ;; esac
   if [ "$code" != 200 ] || [ "$protocol" != foxwarm-shell-1 ] || \
      [ "$(header_value "$STATE/poll.headers" 'content-type')" != 'application/x-foxwarm-shell; charset=utf-8' ]; then
+    if [ "$retry_notice" -eq 0 ]; then echo 'Shell Node poll unavailable or invalid; retrying in 2 seconds.' >&2; retry_notice=1; fi
     sleep 2; continue
   fi
+  if [ "$retry_notice" -eq 1 ]; then echo 'Shell Node polling resumed.' >&2; retry_notice=0; fi
   task=$(header_value "$STATE/poll.headers" 'x-foxwarm-task')
   exec_id=$(header_value "$STATE/poll.headers" 'x-foxwarm-exec')
   timeout=$(header_value "$STATE/poll.headers" 'x-foxwarm-timeout')

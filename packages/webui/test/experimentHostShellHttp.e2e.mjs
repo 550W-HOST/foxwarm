@@ -15,7 +15,7 @@ const prefix = '/shell-proof'
 await writeFile(join(fixture.data, 'state/config.yaml'), (await readFile(join(fixture.data, 'state/config.yaml'), 'utf8')) + 'url: ' + fixture.origin + prefix + '\n')
 const plans = new Map(), rounds = new Map(), errors = [], requests = [], clients = [], sockets = []
 const tasks = [], reports = []
-let droppedTask, invalidPolls = 3, lostResponse = false
+let droppedTask, invalidPolls = 3, lostResponse = false, blockedPollNode
 const ajv = new Ajv({ strict: false })
 const route = id => '/api/sessions/' + encodeURIComponent(id)
 const saved = id => readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8').then(JSON.parse)
@@ -47,6 +47,7 @@ await writeFile(fixture.modelPath, JSON.stringify({ default: 'local', providers:
 // Faults affect HTTP responses only, never commands or caller authority.
 const proxy = createServer(async (request, response) => {
   try {
+    if (request.url.endsWith('/poll') && request.headers['x-foxwarm-node'] === blockedPollNode) { response.writeHead(503); response.end(); return }
     if (request.url.endsWith('/poll') && invalidPolls > 0) {
       const variant = invalidPolls--
       if (variant !== 2) response.setHeader('X-Foxwarm-Shell', 'foxwarm-shell-1')
@@ -57,7 +58,7 @@ const proxy = createServer(async (request, response) => {
     }
     const chunks = []; for await (const chunk of request) chunks.push(chunk)
     const headers = { ...request.headers }; delete headers.host; delete headers['content-length']
-    const result = await fetch(fixture.origin + request.url, { method: request.method, headers, ...(request.method === 'GET' ? {} : { body: Buffer.concat(chunks) }) })
+    const result = await fetch(fixture.origin + request.url, { method: request.method, headers, ...(['GET', 'HEAD'].includes(request.method) ? {} : { body: Buffer.concat(chunks) }) })
     const bytes = Buffer.from(await result.arrayBuffer())
     if (request.url.endsWith('/poll') && result.status === 200) tasks.push({ task: result.headers.get('x-foxwarm-task'), exec: result.headers.get('x-foxwarm-exec'), script: bytes.toString(), timeout: result.headers.get('x-foxwarm-timeout') })
     if (request.url.endsWith('/report')) {
@@ -152,6 +153,13 @@ try {
   // while four independent 95-second jobs and two concurrent 35-second calls remain live.
   const idle = (await fixture.api('POST', '/api/nodes/onboarding/create', { fallbackUrl: fixture.origin, nodeId: 'idle-shell' })).body
   assert.equal((await fetch(fixture.origin + prefix + '/node/shell/register', { method: 'POST', headers: directHeaders(idle), body: startup })).status, 204)
+  // A second official BusyBox client expires while an already delivered job keeps running.
+  const expiryCreated = await fixture.api('POST', '/api/nodes/onboarding/create-shell', { nodeId: 'expiry-client' }); assert.equal(expiryCreated.status, 200)
+  const expiryToken = /NODE_AUTH_TOKEN='([a-f0-9]{64})'/.exec(expiryCreated.body.command)[1]
+  const expiryClient = client('expiry-client', expiryToken, downloaded); await online('expiry-client')
+  const expiryOwner = await create('expiry-owner'); await select(expiryOwner, 'expiry-client')
+  const expiryExec = await background(expiryOwner, 'expiry-active', 'printf once >> expiry-effect; sleep 110; printf done')
+  blockedPollNode = 'expiry-client'; const expiryStart = Date.now()
   const longStart = Date.now()
   state = await turn(actor, 'long-backgrounds', Array.from({ length: 4 }, (_, index) => call('long-' + index, 'exec', { command: `printf once >> background-${index}; sleep 95; printf background-${index}`, timeout: 1 })))
   const ids = Array.from({ length: 4 }, (_, index) => pair(state, 'long-' + index).execId); assert(ids.every(Boolean))
@@ -161,6 +169,12 @@ try {
   await until(async () => { const list = await nodes(); assert(list.find(node => node.id === 'shell-client').online); const state = await saved(actor); return ids.every(id => state.meta.acceptedExternalEventIds?.includes('remote-exec-completion:' + id)) }, 'four completions over actual 90s boundary', 75000)
   assert(Date.now() - longStart >= 90000); assert.equal((await nodes()).find(node => node.id === 'idle-shell').online, false)
   for (let index = 0; index < 4; index++) { assert.equal(await readFile(join(startup, 'background-' + index), 'utf8'), 'once'); assert.equal((await saved(actor)).meta.acceptedExternalEventIds.filter(receipt => receipt === 'remote-exec-completion:' + ids[index]).length, 1) }
+  assert(Date.now() - expiryStart >= 90000); assert.equal((await nodes()).find(node => node.id === 'expiry-client').online, false)
+  blockedPollNode = undefined; await online('expiry-client'); assert.equal(expiryClient.child.exitCode, null)
+  const expiryState = await finish(expiryOwner, 'expiry-active', 25000)
+  assert.equal(await readFile(join(startup, 'expiry-effect'), 'utf8'), 'once')
+  assert.equal(expiryState.meta.acceptedExternalEventIds.filter(receipt => receipt === 'remote-exec-completion:' + expiryExec).length, 1)
+  assert(reports.some(report => report.task === tasks.find(task => task.exec === expiryExec).task && report.kind === 'finished' && report.status === 204))
   const owner = await create('original-owner'); await select(owner)
   const exact = await background(owner, 'strict-save-loss', 'printf once >> completion-effect; sleep 4; printf completed', [call('switch', 'node', { action: 'select', nodeId: 'master' })])
   droppedTask = tasks.find(task => task.exec === exact).task
@@ -172,20 +186,22 @@ try {
   const replaced = await create('replaced-owner'); await select(replaced)
   const replacementExec = await background(replaced, 'replacement', 'printf once >> replacement-effect; sleep 4; printf done')
   const registration = await fetch(fixture.origin + prefix + '/node/shell/register', { method: 'POST', headers: directHeaders(credential), body: startup }); assert.equal(registration.status, 204)
+  await until(() => shell.child.exitCode !== null, 'superseded client stops polling'); assert(shell.output.includes('connection replaced'))
   await finish(replaced, 'replacement'); assert.equal(await readFile(join(startup, 'replacement-effect'), 'utf8'), 'once'); assert(reports.some(report => report.task === tasks.find(task => task.exec === replacementExec).task && report.status === 204))
   // Unknown process-local Main context is never recovered or replayed on restart.
-  client('shell-client', token, downloaded); await online('shell-client')
+  const recovering = client('shell-client', token, downloaded); await online('shell-client')
   const unknown = await create('restart-unknown'); await select(unknown)
   const unknownExec = await background(unknown, 'unknown', 'printf start >> unknown-effect; sleep 5; printf done >> unknown-effect')
   const unknownTask = tasks.find(task => task.exec === unknownExec).task
   await fixture.stop(); await fixture.start()
   await until(() => reports.some(report => report.task === unknownTask && report.kind === 'finished' && report.status === 410), 'unknown restart report rejected', 15000)
   assert.equal(await readFile(join(startup, 'unknown-effect'), 'utf8'), 'startdone'); assert(!(await saved(unknown)).meta.acceptedExternalEventIds?.includes('remote-exec-completion:' + unknownExec))
-  client('shell-client', token, downloaded); await online('shell-client')
+  await online('shell-client'); assert.equal(recovering.child.exitCode, null)
+  state = await turn(actor, 'after-restart', [call('after-restart', 'exec', { command: 'printf once >> recovered-effect; printf recovered' })]); assert.equal(pair(state, 'after-restart').exitCode, 0); assert.equal(await readFile(join(startup, 'recovered-effect'), 'utf8'), 'once')
   assert.equal((await fixture.api('DELETE', '/api/nodes/shell-client')).status, 200)
   for (const endpoint of ['register', 'poll', 'report']) assert.equal((await fetch(fixture.origin + prefix + '/node/shell/' + endpoint, { method: endpoint === 'poll' ? 'GET' : 'POST', headers: directHeaders(credential), ...(endpoint === 'poll' ? {} : { body: startup }) })).status, 401)
   assert.equal((await fetch(fixture.origin + prefix + '/node/shell/register', { method: 'POST', headers: { ...directHeaders(credential), Authorization: 'Bearer ' + fixture.token }, body: startup })).status, 401)
-  assert(!fixture.output.includes(token)); assert(clients.every(client => !client.output.includes(token)))
+  assert(!fixture.output.includes(token)); assert(clients.every(client => !client.output.includes(token) && !client.output.includes(expiryToken)))
   assert(requests.some(request => Object.keys(request.tools.find(tool => tool.name === 'exec')?.parameters.properties || {}).filter(key => !key.startsWith('__')).join(',') === 'command,cwd,timeout'))
   console.log(JSON.stringify({ result: 'passed', busybox, deliveredTasks: tasks.length, reportRequests: reports.length, largestSampleFile: largest, longBoundaryMilliseconds: Date.now() - longStart, ownedHostStarts: fixture.hostPids.length, nativeMonty: true, schemaCheckedModelRequests: requests.length }))
   await fixture.stop()

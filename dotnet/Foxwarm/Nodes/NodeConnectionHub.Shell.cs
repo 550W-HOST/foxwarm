@@ -89,13 +89,14 @@ internal sealed partial class NodeConnectionHub
         NodeConnectionHub hub,
         Connection connection,
         string cwd,
-        bool powershell
+        bool powershell,
+        string? publication = null
     )
     {
         internal readonly Connection Connection = connection;
         internal readonly string Cwd = cwd;
         internal readonly bool PowerShell = powershell;
-        internal readonly string Id = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+        internal readonly string Id = publication ?? NewShellConnection();
         internal DateTimeOffset LastSeen = DateTimeOffset.UtcNow;
         internal bool Closed;
         private readonly Queue<ShellTask> queue = new();
@@ -257,10 +258,10 @@ internal sealed partial class NodeConnectionHub
             return Require(id).Http?.Cwd;
     }
 
-    private ShellRuntime PublishShell(string id, string auth, string cwd, bool powershell)
+    private ShellRuntime PublishShell(string id, string auth, string cwd, bool powershell, string? publication, string? predecessor)
     {
         var connection = new Connection { Id = id, Type = "shell-node" };
-        var runtime = connection.Http = new ShellRuntime(this, connection, cwd, powershell);
+        var runtime = connection.Http = new ShellRuntime(this, connection, cwd, powershell, publication);
         connection.Capabilities = new JsonObject
         {
             ["tools"] = new JsonArray(ShellCapability(powershell)),
@@ -277,6 +278,14 @@ internal sealed partial class NodeConnectionHub
         {
             if (shutdown.IsCancellationRequested)
                 throw new IOException("Host is shutting down.");
+            // The persisted predecessor is checked under the same gate as every HTTP/WS publication.
+            // Repeating a successful request may acknowledge itself, never displace a successor.
+            var current = Registry.Publication(id, auth);
+            if (predecessor is not null && current != predecessor && current != publication)
+                throw new InvalidOperationException("Connection was replaced.");
+            if (publication is not null && nodes.TryGetValue(id, out var published)
+                && published.Http is { } existing && existing.Id == publication && published.Open)
+                return existing;
             // Recheck the credential and durably touch it inside revocation's publication lock.
             Registry.Touch(
                 id,
@@ -286,7 +295,8 @@ internal sealed partial class NodeConnectionHub
                     ["nodeType"] = "shell-node",
                     ["capabilities"] = connection.Capabilities.DeepClone(),
                 },
-                connection.Protocol
+                connection.Protocol,
+                runtime.Id
             );
             nodes.TryGetValue(id, out old);
             if (old is not null)
@@ -376,10 +386,21 @@ internal sealed partial class NodeConnectionHub
             || !Registry.Authenticate(id, auth[7..])
         )
         {
-            context.Response.StatusCode = 401;
+            ShellFailure(context, 401, "credentials-rejected");
             return null;
         }
         return (id, auth[7..]);
+    }
+
+    private static string NewShellConnection() => Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+
+    private static bool ShellConnectionId(string value) => value.Length == 32 && value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static void ShellFailure(HttpContext context, int status, string reason)
+    {
+        context.Response.Headers["X-Foxwarm-Shell"] = ShellProtocol;
+        context.Response.Headers["X-Foxwarm-Shell-Reason"] = reason;
+        context.Response.StatusCode = status;
     }
 
     internal void RegisterShellRoutes(WebApplication app)
@@ -393,7 +414,7 @@ internal sealed partial class NodeConnectionHub
         foreach (var suffix in new[] { "register", "poll", "report" })
             app.MapMethods(
                 "/node/shell/" + suffix,
-                [suffix == "poll" ? "GET" : "POST"],
+                suffix == "poll" ? ["GET"] : suffix == "register" ? ["POST", "HEAD"] : ["POST"],
                 async (HttpContext context) =>
                 {
                     var credential = AuthenticateShell(context);
@@ -401,8 +422,21 @@ internal sealed partial class NodeConnectionHub
                         return;
                     try
                     {
-                        if (suffix == "register")
+                        if (suffix == "register" && HttpMethods.IsHead(context.Request.Method))
                         {
+                            lock (gate)
+                            {
+                                context.Response.Headers["X-Foxwarm-Predecessor"] = Registry.Publication(credential.Value.Id, credential.Value.Auth);
+                                context.Response.Headers["X-Foxwarm-Connection"] = NewShellConnection();
+                            }
+                            ShellAck(context);
+                        }
+                        else if (suffix == "register")
+                        {
+                            var predecessor = ShellHeader(context.Request, "X-Foxwarm-Predecessor");
+                            var publication = ShellHeader(context.Request, "X-Foxwarm-Connection");
+                            if (predecessor.Length > 0 && (!ShellConnectionId(publication) || (predecessor != "none" && !ShellConnectionId(predecessor))))
+                                throw new InvalidDataException("Invalid publication identity.");
                             var cwd = Encoding.UTF8.GetString(
                                 await ShellBody(context.Request, 4096, context.RequestAborted)
                             );
@@ -422,30 +456,32 @@ internal sealed partial class NodeConnectionHub
                                 credential.Value.Id,
                                 credential.Value.Auth,
                                 cwd,
-                                powershell
+                                powershell,
+                                predecessor.Length == 0 ? null : publication,
+                                predecessor.Length == 0 ? null : predecessor
                             );
                             context.Response.Headers["X-Foxwarm-Connection"] = runtime.Id;
                             ShellAck(context);
                         }
                         else if (suffix == "poll")
-                            await PollShell(context, credential.Value.Id);
+                            await PollShell(context, credential.Value.Id, credential.Value.Auth);
                         else
                             await ReportShell(context, credential.Value.Id);
                     }
                     catch (InvalidDataException)
                     {
                         if (!context.Response.HasStarted)
-                            context.Response.StatusCode = 400;
+                            ShellFailure(context, 400, "invalid-request");
                     }
                     catch (InvalidOperationException)
                     {
                         if (!context.Response.HasStarted)
-                            context.Response.StatusCode = 409;
+                            ShellFailure(context, 409, suffix == "register" ? "connection-replaced" : "request-conflict");
                     }
                     catch (IOException)
                     {
                         if (!context.Response.HasStarted)
-                            context.Response.StatusCode = 503;
+                            ShellFailure(context, 503, "server-unavailable");
                     }
                     catch (OperationCanceledException)
                         when (context.RequestAborted.IsCancellationRequested) { }
@@ -459,18 +495,35 @@ internal sealed partial class NodeConnectionHub
         context.Response.StatusCode = 204;
     }
 
-    private async Task PollShell(HttpContext context, string id)
+    private async Task PollShell(HttpContext context, string id, string auth)
     {
         ShellRuntime runtime;
         TaskCompletionSource<ShellTask?> poll;
         lock (gate)
         {
-            runtime =
-                Require(id).Http
-                ?? throw new InvalidOperationException("Not a Shell HTTP connection.");
-            if (runtime.Id != ShellHeader(context.Request, "X-Foxwarm-Connection"))
-                throw new InvalidOperationException("Connection was replaced.");
-            poll = runtime.Poll();
+            var connectionId = ShellHeader(context.Request, "X-Foxwarm-Connection");
+            if (!nodes.TryGetValue(id, out var active))
+            {
+                ShellFailure(context, 409, Registry.Publication(id, auth) == connectionId ? "connection-unavailable" : "connection-replaced");
+                return;
+            }
+            if (active.Http is not { } http || http.Id != connectionId)
+            {
+                ShellFailure(context, 409, "connection-replaced");
+                return;
+            }
+            runtime = http;
+            if (!active.Open || active.Retired)
+            {
+                ShellFailure(context, 409, "connection-unavailable");
+                return;
+            }
+            try { poll = runtime.Poll(); }
+            catch (InvalidOperationException)
+            {
+                ShellFailure(context, 409, "poll-pending");
+                return;
+            }
         }
         ShellTask? task;
         try
