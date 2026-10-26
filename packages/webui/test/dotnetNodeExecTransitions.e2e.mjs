@@ -75,7 +75,8 @@ for (const runtime of ['source', 'dotnet']) for (const clientRuntime of ['source
       const pending = await until(async () => (await fixture.api('GET', '/api/nodes/onboarding/pending')).body.items.find(item => item.requestedName === 'exec-cli'), 'ordinary pending CLI')
       assert.equal((await fixture.api('POST', '/api/nodes/onboarding/approve', { pendingId: pending.id })).status, 200)
     }
-    await until(async () => (await fixture.api('GET', '/api/nodes')).body.nodes.find(node => node.id === 'exec-cli' && node.online), runtime + ' Node online')
+    // Main publishes online before the client finishes saving its credentials.
+    await until(async () => (source ? handle.output.includes('Node registered') : handle.output.includes('[registered]')) && (await fixture.api('GET', '/api/nodes')).body.nodes.find(node => node.id === 'exec-cli' && node.online), runtime + ' CLI registered and Node online')
     credential = JSON.parse(await readFile(join(cwd, 'credentials.json'), 'utf8'))
     return handle
   }
