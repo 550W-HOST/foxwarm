@@ -76,7 +76,8 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
   const [browserKind, setBrowserKind] = useState<'chrome' | 'firefox'>('chrome')
-  const [browserSetup, setBrowserSetup] = useState<{ baseUrl: string; pairingToken: string } | null>(null)
+  const [pairingToken, setPairingToken] = useState('')
+  const [browserCopied, setBrowserCopied] = useState<'address' | 'token' | null>(null)
   const [approving, setApproving] = useState<string | null>(null)
   const [approvalError, setApprovalError] = useState('')
   const [approvalNotice, setApprovalNotice] = useState('')
@@ -146,11 +147,22 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
       if (mounted.current) { setApprovalError(failure instanceof Error ? failure.message : 'Could not approve this request.'); await pending.refresh() }
     } finally { if (mounted.current) setApproving(null) }
   }
-  const loadBrowserSetup = async () => {
-    setBusy(true); setError('');
-    try { const payload = await post('browser', { baseUrl }); if (mounted.current) setBrowserSetup(payload) }
-    catch (failure) { if (mounted.current) setError(failure instanceof Error ? failure.message : 'Could not load Browser setup.') }
+  const selectMethod = async (nextMethod: string) => {
+    setMethod(nextMethod); setCopied(false); setBrowserCopied(null); setError('')
+    if (nextMethod !== 'browser' || pairingToken) return
+    setBusy(true)
+    try {
+      const payload = await post('browser', { baseUrl })
+      if (mounted.current) { setBaseUrl(payload.baseUrl); setPairingToken(payload.pairingToken) }
+    } catch (failure) { if (mounted.current) setError(failure instanceof Error ? failure.message : 'Could not load Browser setup.') }
     finally { if (mounted.current) setBusy(false) }
+  }
+  const copyBrowserDetail = async (field: 'address' | 'token') => {
+    setBrowserCopied(null); setError('')
+    try {
+      await navigator.clipboard.writeText(field === 'address' ? baseUrl : pairingToken)
+      if (mounted.current) setBrowserCopied(field)
+    } catch { if (mounted.current) setError(`Copy failed. Select the ${field === 'address' ? 'address' : 'token'} and copy it manually.`) }
   }
   const commandKey = method === 'bareMetal' && install ? 'bareMetalInstall' : method === 'docker' && compose ? 'manualCompose' : method
   const command = (direct ? created?.commands[commandKey] : commands[commandKey]) || ''
@@ -160,20 +172,25 @@ export default function NodeOnboardingModal({ pending, onClose, onNodesChanged }
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3" onClick={event => { if (event.target === event.currentTarget) close() }}>
       <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="node-onboarding-title" className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-fw-border bg-fw-surface p-5 text-fw-text shadow-xl">
         <div className="flex items-center justify-between gap-3"><div><h2 id="node-onboarding-title" className="text-lg font-semibold text-fw-text-strong">New nodes</h2><p className="mt-1 text-sm text-fw-text-muted">Choose how to connect a new Node.</p></div><button type="button" aria-label="Close New nodes" onClick={close} className="rounded-lg p-2 hover:bg-fw-hover"><X className="h-5 w-5" /></button></div>
-        <div className="mt-4 flex flex-wrap gap-2">{methods.map(item => <button key={item.id} type="button" disabled={busy} aria-pressed={method === item.id} onClick={() => { setMethod(item.id); setCopied(false); setError('') }} className={`rounded-lg border px-3 py-2 text-sm ${method === item.id ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent' : 'border-fw-border hover:bg-fw-hover'}`}>{item.label}</button>)}</div>
+        <div className="mt-4 flex flex-wrap gap-2">{methods.map(item => <button key={item.id} type="button" disabled={busy} aria-pressed={method === item.id} onClick={() => void selectMethod(item.id)} className={`rounded-lg border px-3 py-2 text-sm ${method === item.id ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent' : 'border-fw-border hover:bg-fw-hover'}`}>{item.label}</button>)}</div>
         <p className="mt-2 text-xs text-fw-text-muted">{methods.find(item => item.id === method)?.detail}</p>
         {method === 'browser' ? <div className="mt-4 space-y-3 text-sm">
           <label className="block text-xs font-medium">Browser<select aria-label="Browser package" value={browserKind} onChange={event => setBrowserKind(event.target.value as 'chrome' | 'firefox')} className={fieldClass}><option value="chrome">Chrome / Chromium</option><option value="firefox">Firefox 153+</option></select></label>
           <ol className="list-decimal space-y-2 pl-5">
             <li><a className="text-fw-accent underline" href={`${API_BASE_PATH.slice(0, -4)}/node/browser-extension${browserKind === 'firefox' ? '-firefox' : ''}.zip`} download>Download Browser Node</a> and extract the ZIP.</li>
-            {browserKind === 'firefox' ? <li>Open about:debugging → This Firefox → Load Temporary Add-on, and select manifest.json in the extracted folder. Load it again after restarting Firefox; this package is unsigned.</li> : <li>Open Chrome or Chromium extensions, enable Developer mode, choose Load unpacked, and select the extracted folder.</li>}
-            <li>Open the extension, enter the Main address and pairing token below, then Connect. Approve the request in Pending approvals.</li>
-            <li>Share a tab or window with Ask or Auto in the extension. New tabs are Off unless a shared window or site rule includes them.</li>
+            {browserKind === 'firefox' ? <li>Open about:debugging → This Firefox → Load Temporary Add-on, and select manifest.json in the extracted folder. Reload it after restarting Firefox.</li> : <li>Open Chrome or Chromium extensions, enable Developer mode, choose Load unpacked, and select the extracted folder.</li>}
+            <li>In the extension, enter the address and token below, then Connect. Approve the request here.</li>
+            <li>Share a tab or window with Ask or Auto.</li>
           </ol>
-          {browserKind === 'firefox' ? <p>Firefox needs broad page-host access for target-tab screenshots and DOM operations. Sharing still limits Agent access. Actions use synthetic DOM events; trusted mouse input and editing keys are unavailable. Enable optional page JavaScript in the extension when needed. Pin its icon to see pending Ask counts, then open the popup to review. Use Stop to disconnect.</p> : <p>Page operations show Chrome’s debugging banner. Cancel or the extension’s Stop button stops Browser Node. Sharing is controlled by the extension; debugger permission is not isolated by window. Avoid editing the same tab at the same time as an Agent.</p>}
-          <label className="block text-xs font-medium">Main address<input aria-label="Browser Main address" disabled={busy} value={baseUrl} onChange={event => { setBaseUrl(event.target.value); setBrowserSetup(null) }} className={fieldClass} /></label>
-          <button type="button" disabled={busy || !baseUrl} onClick={() => void loadBrowserSetup()} className="rounded-lg border border-fw-border px-3 py-2">Show pairing details</button>
-          {browserSetup ? <div className="space-y-2 rounded-lg border border-fw-border p-3"><p className="break-all">{browserSetup.baseUrl}</p><label className="block text-xs">Pairing token<input aria-label="Browser pairing token" type="password" readOnly value={browserSetup.pairingToken} className={fieldClass} /></label><button type="button" onClick={() => void navigator.clipboard.writeText(browserSetup.pairingToken).catch(() => setError('Copy failed. Select the token and copy it manually.'))}>Copy pairing token</button><p className="text-xs text-fw-text-muted">Keep this token private. The extension download contains no credentials.</p></div> : null}
+          {busy ? <span role="status" className="text-xs text-fw-text-muted">Loading…</span> : null}
+          <div>
+            <div className="flex items-center justify-between gap-2"><label htmlFor="browser-main-address" className="text-xs font-medium">Main address</label><button type="button" aria-label="Copy Main address" disabled={busy || !baseUrl} onClick={() => void copyBrowserDetail('address')} className="inline-flex items-center gap-1.5 text-xs font-medium text-fw-accent disabled:opacity-50">{browserCopied === 'address' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}{browserCopied === 'address' ? 'Copied' : 'Copy'}</button></div>
+            <input id="browser-main-address" aria-label="Browser Main address" disabled={busy} value={baseUrl} onChange={event => { setBaseUrl(event.target.value); setCommands({}); setBrowserCopied(null) }} className={fieldClass} />
+          </div>
+          <div>
+            <div className="flex items-center justify-between gap-2"><label htmlFor="browser-pairing-token" className="text-xs font-medium">Pairing token</label><button type="button" aria-label="Copy pairing token" disabled={!pairingToken} onClick={() => void copyBrowserDetail('token')} className="inline-flex items-center gap-1.5 text-xs font-medium text-fw-accent disabled:opacity-50">{browserCopied === 'token' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}{browserCopied === 'token' ? 'Copied' : 'Copy'}</button></div>
+            <input id="browser-pairing-token" aria-label="Browser pairing token" readOnly value={pairingToken} className={`${fieldClass} font-mono`} />
+          </div>
         </div> : null}
         {method !== 'browser' ? <>
         {!shellOnly ? <fieldset disabled={busy} className="mt-3 flex flex-wrap gap-4 text-sm"><legend className="mb-1 text-xs font-medium">Authentication</legend>{[{ value: false, label: 'Pairing approval' }, { value: true, label: 'Pre-created token' }].map(mode => <label key={mode.label} className="flex items-center gap-2"><input type="radio" name="node-authentication" checked={tokenMode === mode.value} onChange={() => { setTokenMode(mode.value); setCopied(false); setError('') }} />{mode.label}</label>)}</fieldset> : null}
