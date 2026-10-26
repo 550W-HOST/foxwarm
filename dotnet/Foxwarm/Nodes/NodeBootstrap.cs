@@ -73,10 +73,14 @@ internal sealed class NodeBootstrap(
             ["commands"] = new JsonObject
             {
                 ["shell"] = ShellCommand(url, shellId, authToken ?? "YOUR_PER_NODE_AUTH_TOKEN"),
-                ["windowsShell"] = PowerShellDownload(url, "run-shell.ps1")
-                    + " -HostUrl " + PowerShellQuote(url)
-                    + " -AuthToken " + PowerShellQuote(authToken ?? "YOUR_PER_NODE_AUTH_TOKEN")
-                    + " -NodeId " + PowerShellQuote(shellId),
+                ["windowsShell"] =
+                    PowerShellDownload(url, "run-shell.ps1")
+                    + " -HostUrl "
+                    + PowerShellQuote(url)
+                    + " -AuthToken "
+                    + PowerShellQuote(authToken ?? "YOUR_PER_NODE_AUTH_TOKEN")
+                    + " -NodeId "
+                    + PowerShellQuote(shellId),
                 ["bareMetal"] = Download("run.sh") + " --dir=" + Quote(directory) + arguments,
                 ["bareMetalBackground"] =
                     Download("run.sh") + " --dir=" + Quote(directory) + arguments + " -d",

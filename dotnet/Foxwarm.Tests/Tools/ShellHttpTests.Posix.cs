@@ -29,7 +29,16 @@ public sealed partial class ShellHttpTests
             RedirectStandardError = true,
         };
         options.ArgumentList.Add("-c");
-        options.ArgumentList.Add(new NodeBootstrap(fixture.Manager.Nodes, new PublicWebAddress("http://127.0.0.1", "", "/", false)).ShellCommand(fixture.Client.BaseAddress!.ToString().TrimEnd('/'), "shell", fixture.Auth));
+        options.ArgumentList.Add(
+            new NodeBootstrap(
+                fixture.Manager.Nodes,
+                new PublicWebAddress("http://127.0.0.1", "", "/", false)
+            ).ShellCommand(
+                fixture.Client.BaseAddress!.ToString().TrimEnd('/'),
+                "shell",
+                fixture.Auth
+            )
+        );
         options.Environment["NODE_AUTH_TOKEN"] = fixture.Auth;
         options.Environment["TMPDIR"] = temp;
         using var client = Process.Start(options)!;

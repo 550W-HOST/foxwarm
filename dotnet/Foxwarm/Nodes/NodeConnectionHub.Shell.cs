@@ -24,8 +24,9 @@ internal sealed partial class NodeConnectionHub
         new()
         {
             ["name"] = "exec",
-            ["description"] =
-                powershell ? "Run a PowerShell command on this Windows Node. Returns bounded output with its total byte count; full output is not retained. If the command outlasts timeout, it continues in the background and returns an execId. Completion is reported to the originating Session." : "Run a POSIX shell command on this Node. Returns bounded output with its total byte count; full output is not retained. If the command outlasts timeout, it continues in the background and returns an execId. Completion is reported to the originating Session.",
+            ["description"] = powershell
+                ? "Run a PowerShell command on this Windows Node. Returns bounded output with its total byte count; full output is not retained. If the command outlasts timeout, it continues in the background and returns an execId. Completion is reported to the originating Session."
+                : "Run a POSIX shell command on this Node. Returns bounded output with its total byte count; full output is not retained. If the command outlasts timeout, it continues in the background and returns an execId. Completion is reported to the originating Session.",
             ["parameters"] = new JsonObject
             {
                 ["type"] = "object",
@@ -34,7 +35,9 @@ internal sealed partial class NodeConnectionHub
                     ["command"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = powershell ? "PowerShell command or pipeline to execute." : "Shell command or pipeline to execute.",
+                        ["description"] = powershell
+                            ? "PowerShell command or pipeline to execute."
+                            : "Shell command or pipeline to execute.",
                     },
                     ["cwd"] = new JsonObject
                     {
@@ -82,7 +85,12 @@ internal sealed partial class NodeConnectionHub
 
     // Each runtime is published through the same authenticated identity boundary as WS.
     // All queue/poll/map operations hold the hub gate; report admission holds only task.Serial.
-    private sealed class ShellRuntime(NodeConnectionHub hub, Connection connection, string cwd, bool powershell)
+    private sealed class ShellRuntime(
+        NodeConnectionHub hub,
+        Connection connection,
+        string cwd,
+        bool powershell
+    )
     {
         internal readonly Connection Connection = connection;
         internal readonly string Cwd = cwd;
@@ -142,10 +150,18 @@ internal sealed partial class NodeConnectionHub
                 callId,
                 call,
                 PowerShell
-                    ? "try { Set-Location -LiteralPath '" + Cwd.Replace("'", "''")
-                        + "' -ErrorAction Stop; Set-Location -LiteralPath '" + directory.Replace("'", "''")
-                        + "' -ErrorAction Stop } catch { Write-Error $_; exit 125 }\n" + command + "\n"
-                    : "cd '" + directory.Replace("'", "'\"'\"'") + "' || exit 125\n" + command + "\n",
+                    ? "try { Set-Location -LiteralPath '"
+                        + Cwd.Replace("'", "''")
+                        + "' -ErrorAction Stop; Set-Location -LiteralPath '"
+                        + directory.Replace("'", "''")
+                        + "' -ErrorAction Stop } catch { Write-Error $_; exit 125 }\n"
+                        + command
+                        + "\n"
+                    : "cd '"
+                        + directory.Replace("'", "'\"'\"'")
+                        + "' || exit 125\n"
+                        + command
+                        + "\n",
                 (int)Math.Ceiling(Math.Min(seconds, 60)),
                 warning,
                 programmatic
@@ -395,7 +411,10 @@ internal sealed partial class NodeConnectionHub
                                 throw new InvalidDataException("Unsupported shell dialect.");
                             var powershell = dialect == "powershell";
                             var absolute = powershell
-                                ? System.Text.RegularExpressions.Regex.IsMatch(cwd, @"^(?:[a-zA-Z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+(?:[\\/]|$))")
+                                ? System.Text.RegularExpressions.Regex.IsMatch(
+                                    cwd,
+                                    @"^(?:[a-zA-Z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+(?:[\\/]|$))"
+                                )
                                 : cwd.StartsWith('/');
                             if (!absolute || cwd.Any(c => c is '\0' or '\r' or '\n'))
                                 throw new InvalidDataException("Invalid startup directory.");

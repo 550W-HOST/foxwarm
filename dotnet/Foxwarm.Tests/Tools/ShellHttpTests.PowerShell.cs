@@ -33,19 +33,34 @@ public sealed partial class ShellHttpTests
         var execution = fixture.Exec(new JsonObject { ["command"] = command, ["cwd"] = cwd });
         var task = await fixture.Poll();
         Assert.Equal(
-            "try { Set-Location -LiteralPath '" + startup.Replace("'", "''")
-                + "' -ErrorAction Stop; Set-Location -LiteralPath '" + cwd.Replace("'", "''")
-                + "' -ErrorAction Stop } catch { Write-Error $_; exit 125 }\n" + command + "\n",
+            "try { Set-Location -LiteralPath '"
+                + startup.Replace("'", "''")
+                + "' -ErrorAction Stop; Set-Location -LiteralPath '"
+                + cwd.Replace("'", "''")
+                + "' -ErrorAction Stop } catch { Write-Error $_; exit 125 }\n"
+                + command
+                + "\n",
             task.Script
         );
-        using var completed = await fixture.Report(task.Task, true, Encoding.UTF8.GetBytes("雪"), exit: "-1073741819");
+        using var completed = await fixture.Report(
+            task.Task,
+            true,
+            Encoding.UTF8.GetBytes("雪"),
+            exit: "-1073741819"
+        );
         Assert.Equal(HttpStatusCode.NoContent, completed.StatusCode);
         Assert.Equal(-1073741819, (await execution)!["exitCode"]!.GetValue<int>());
-        using var invalidDialect = await fixture.Request("register", Encoding.UTF8.GetBytes(startup),
-            new() { ["X-Foxwarm-Shell-Dialect"] = "unknown" });
+        using var invalidDialect = await fixture.Request(
+            "register",
+            Encoding.UTF8.GetBytes(startup),
+            new() { ["X-Foxwarm-Shell-Dialect"] = "unknown" }
+        );
         Assert.Equal(HttpStatusCode.BadRequest, invalidDialect.StatusCode);
-        using var relativeStartup = await fixture.Request("register", Encoding.UTF8.GetBytes("relative"),
-            new() { ["X-Foxwarm-Shell-Dialect"] = "powershell" });
+        using var relativeStartup = await fixture.Request(
+            "register",
+            Encoding.UTF8.GetBytes("relative"),
+            new() { ["X-Foxwarm-Shell-Dialect"] = "powershell" }
+        );
         Assert.Equal(HttpStatusCode.BadRequest, relativeStartup.StatusCode);
     }
 
@@ -54,8 +69,10 @@ public sealed partial class ShellHttpTests
     {
         // Portable PowerShell checks script semantics only; native Windows qualification is separate.
         var engine = OperatingSystem.IsWindows() ? "powershell.exe" : "pwsh";
-        var enginePath = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator)
-            .Select(directory => Path.Combine(directory, engine)).FirstOrDefault(File.Exists);
+        var enginePath = (Environment.GetEnvironmentVariable("PATH") ?? "")
+            .Split(Path.PathSeparator)
+            .Select(directory => Path.Combine(directory, engine))
+            .FirstOrDefault(File.Exists);
         if (enginePath is null)
             return;
         await using var fixture = new Fixture();
@@ -63,8 +80,14 @@ public sealed partial class ShellHttpTests
         var launcher = await fixture.Client.GetStringAsync("/node/run.ps1");
         using var shell = await fixture.Client.GetAsync("/node/run-shell.ps1");
         shell.EnsureSuccessStatusCode();
-        Assert.DoesNotContain("__FOXWARM_DEFAULT_BASE_URL__", await shell.Content.ReadAsStringAsync());
-        var bootstrap = new NodeBootstrap(fixture.Manager.Nodes, new PublicWebAddress("http://example.invalid", "", "/", false));
+        Assert.DoesNotContain(
+            "__FOXWARM_DEFAULT_BASE_URL__",
+            await shell.Content.ReadAsStringAsync()
+        );
+        var bootstrap = new NodeBootstrap(
+            fixture.Manager.Nodes,
+            new PublicWebAddress("http://example.invalid", "", "/", false)
+        );
         const string url = "https://example.invalid/mount'path/$literal";
         const string credential = "literal'$credential`";
         foreach (var memory in new[] { false, true })
@@ -77,9 +100,12 @@ public sealed partial class ShellHttpTests
             var saved = Path.Combine(scriptDir, "run.ps1");
             await File.WriteAllTextAsync(saved, launcher);
             string Quote(string value) => "'" + value.Replace("'", "''") + "'";
-            var generated = bootstrap.Commands(url, "literal-node", authToken: credential)["commands"]!["windows"]!.GetValue<string>();
+            var generated = bootstrap.Commands(url, "literal-node", authToken: credential)[
+                "commands"
+            ]!["windows"]!.GetValue<string>();
             var harness = Path.Combine(caller, "harness.ps1");
-            await File.WriteAllTextAsync(harness,
+            await File.WriteAllTextAsync(
+                harness,
                 """
                 $ErrorActionPreference = 'Stop'
                 function Invoke-WebRequest {
@@ -103,9 +129,22 @@ public sealed partial class ShellHttpTests
                     } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $env:FIXTURE_CAPTURE -Encoding UTF8
                     $global:LASTEXITCODE = 0
                 }
-                """ + "\n" + (memory ? generated : "& " + Quote(saved) + " -HostUrl " + Quote(url)
-                    + " -AuthToken " + Quote(credential) + " -NodeId 'literal-node'"));
-            var start = new ProcessStartInfo(enginePath) {
+                """
+                    + "\n"
+                    + (
+                        memory
+                            ? generated
+                            : "& "
+                                + Quote(saved)
+                                + " -HostUrl "
+                                + Quote(url)
+                                + " -AuthToken "
+                                + Quote(credential)
+                                + " -NodeId 'literal-node'"
+                    )
+            );
+            var start = new ProcessStartInfo(enginePath)
+            {
                 WorkingDirectory = caller,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -116,7 +155,8 @@ public sealed partial class ShellHttpTests
                 start.ArgumentList.Add("-ExecutionPolicy");
                 start.ArgumentList.Add("RemoteSigned"); // Process-only test scope permits the intentionally saved launcher.
             }
-            foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-File", harness }) start.ArgumentList.Add(argument);
+            foreach (var argument in new[] { "-NoProfile", "-NonInteractive", "-File", harness })
+                start.ArgumentList.Add(argument);
             start.Environment["FIXTURE_CAPTURE"] = capture;
             start.Environment["FIXTURE_LAUNCHER"] = saved;
             start.Environment["FOXWARM_AGENT_DIR"] = "hostile-single-agent";
@@ -129,13 +169,29 @@ public sealed partial class ShellHttpTests
             var result = JsonNode.Parse(await File.ReadAllTextAsync(capture))!;
             var expected = memory ? caller : scriptDir;
             Assert.Equal(expected, result["cwd"]!.GetValue<string>());
-            Assert.Equal(Path.Combine(expected, "data", "agents"), result["agents"]!.GetValue<string>());
+            Assert.Equal(
+                Path.Combine(expected, "data", "agents"),
+                result["agents"]!.GetValue<string>()
+            );
             Assert.True(string.IsNullOrEmpty(result["agent"]?.GetValue<string>()));
-            var args = result["args"]!.AsArray().Select(value => value!.GetValue<string>()).ToArray();
+            var args = result["args"]!
+                .AsArray()
+                .Select(value => value!.GetValue<string>())
+                .ToArray();
             Assert.Contains(url, args);
             Assert.Contains(credential, args);
             Assert.Contains(Path.Combine(expected, "data", "state", "node_credentials.json"), args);
-            Assert.Contains(Path.Combine(expected, "foxwarm-node", "packages", "cli-node", "dist", "client.bundle.js"), args);
+            Assert.Contains(
+                Path.Combine(
+                    expected,
+                    "foxwarm-node",
+                    "packages",
+                    "cli-node",
+                    "dist",
+                    "client.bundle.js"
+                ),
+                args
+            );
             Assert.False(File.Exists(Path.Combine(caller, "run.ps1")));
         }
     }

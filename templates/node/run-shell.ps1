@@ -42,102 +42,184 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 
-namespace Foxwarm {
+namespace Foxwarm
+{
     // C# 5 / inbox .NET Framework surface: no package or resident service dependency.
-    public sealed class ShellHttpClient {
+    public sealed class ShellHttpClient
+    {
         const string Protocol = "foxwarm-shell-1";
-        readonly string host, node, auth, startup, engine;
+        readonly string host;
+        readonly string node;
+        readonly string auth;
+        readonly string startup;
+        readonly string engine;
         string connection;
         readonly HashSet<string> delivered = new HashSet<string>();
         readonly Queue<string> finished = new Queue<string>();
         readonly object jobsGate = new object();
         int jobs;
 
-        public ShellHttpClient(string host, string node, string auth, string startup, string engine) {
-            this.host = host.TrimEnd('/'); this.node = node; this.auth = auth;
-            this.startup = startup; this.engine = engine;
+        public ShellHttpClient(string host, string node, string auth, string startup, string engine)
+        {
+            this.host = host.TrimEnd('/');
+            this.node = node;
+            this.auth = auth;
+            this.startup = startup;
+            this.engine = engine;
         }
-        sealed class Reply {
+
+        sealed class Reply
+        {
             internal int Status;
             internal WebHeaderCollection Headers = new WebHeaderCollection();
             internal byte[] Body = new byte[0];
-            internal bool Marked { get { return Headers["X-Foxwarm-Shell"] == Protocol; } }
+            internal bool Marked
+            {
+                get { return Headers["X-Foxwarm-Shell"] == Protocol; }
+            }
         }
-        Reply Http(string endpoint, byte[] body, Dictionary<string,string> headers) {
-            try {
+
+        Reply Http(string endpoint, byte[] body, Dictionary<string, string> headers)
+        {
+            try
+            {
                 var request = (HttpWebRequest)WebRequest.Create(host + "/node/shell/" + endpoint);
                 request.Method = endpoint == "poll" ? "GET" : "POST";
                 request.AllowAutoRedirect = false;
-                request.Timeout = 35000; request.ReadWriteTimeout = 35000;
+                request.Timeout = 35000;
+                request.ReadWriteTimeout = 35000;
                 request.Headers["Authorization"] = "Bearer " + auth;
                 request.Headers["X-Foxwarm-Node"] = node;
-                if (connection != null) request.Headers["X-Foxwarm-Connection"] = connection;
-                if (headers != null) foreach (var pair in headers) request.Headers[pair.Key] = pair.Value;
-                if (body != null) {
+                if (connection != null)
+                    request.Headers["X-Foxwarm-Connection"] = connection;
+                if (headers != null)
+                    foreach (var pair in headers)
+                        request.Headers[pair.Key] = pair.Value;
+                if (body != null)
+                {
                     request.ContentType = "application/octet-stream";
                     request.ContentLength = body.Length;
-                    using (var stream = request.GetRequestStream()) stream.Write(body, 0, body.Length);
+                    using (var stream = request.GetRequestStream())
+                        stream.Write(body, 0, body.Length);
                 }
                 HttpWebResponse response;
-                try { response = (HttpWebResponse)request.GetResponse(); }
-                catch (WebException error) {
-                    response = error.Response as HttpWebResponse;
-                    if (response == null) return new Reply();
+                try
+                {
+                    response = (HttpWebResponse)request.GetResponse();
                 }
-                using (response) {
-                    var reply = new Reply { Status = (int)response.StatusCode, Headers = response.Headers };
+                catch (WebException error)
+                {
+                    response = error.Response as HttpWebResponse;
+                    if (response == null)
+                        return new Reply();
+                }
+                using (response)
+                {
+                    var reply = new Reply
+                    {
+                        Status = (int)response.StatusCode,
+                        Headers = response.Headers,
+                    };
                     using (var input = response.GetResponseStream())
-                    using (var output = new MemoryStream()) {
-                        var block = new byte[4096]; int size;
-                        while ((size = input.Read(block, 0, block.Length)) > 0) {
-                            if (output.Length + size > 65536) return new Reply();
+                    using (var output = new MemoryStream())
+                    {
+                        var block = new byte[4096];
+                        int size;
+                        while ((size = input.Read(block, 0, block.Length)) > 0)
+                        {
+                            if (output.Length + size > 65536)
+                                return new Reply();
                             output.Write(block, 0, size);
                         }
                         reply.Body = output.ToArray();
                     }
                     return reply;
                 }
-            } catch (WebException) { return new Reply(); }
-              catch (IOException) { return new Reply(); }
+            }
+            catch (WebException)
+            {
+                return new Reply();
+            }
+            catch (IOException)
+            {
+                return new Reply();
+            }
         }
-        static bool Terminal(int status) {
-            return status == 400 || status == 401 || status == 403 || status == 409
-                || status == 410 || status == 413 || status == 415;
+
+        static bool Terminal(int status)
+        {
+            return status == 400
+                || status == 401
+                || status == 403
+                || status == 409
+                || status == 410
+                || status == 413
+                || status == 415;
         }
-        bool Report(string task, string kind, byte[] sample, long total, int exit, long elapsed, DateTime started) {
-            var headers = new Dictionary<string,string> {
-                { "X-Foxwarm-Task", task }, { "X-Foxwarm-Result", kind },
+
+        bool Report(
+            string task,
+            string kind,
+            byte[] sample,
+            long total,
+            int exit,
+            long elapsed,
+            DateTime started
+        )
+        {
+            var headers = new Dictionary<string, string>
+            {
+                { "X-Foxwarm-Task", task },
+                { "X-Foxwarm-Result", kind },
                 { "X-Foxwarm-Bytes", total.ToString(CultureInfo.InvariantCulture) },
                 { "X-Foxwarm-Exit", exit.ToString(CultureInfo.InvariantCulture) },
-                { "X-Foxwarm-Elapsed-Seconds", elapsed.ToString(CultureInfo.InvariantCulture) }
+                { "X-Foxwarm-Elapsed-Seconds", elapsed.ToString(CultureInfo.InvariantCulture) },
             };
-            while ((DateTime.UtcNow - started).TotalSeconds <= 86400) {
+            while ((DateTime.UtcNow - started).TotalSeconds <= 86400)
+            {
                 var reply = Http("report", sample, headers);
-                if (reply.Status == 204 && reply.Marked) return true;
-                if (Terminal(reply.Status)) return false;
+                if (reply.Status == 204 && reply.Marked)
+                    return true;
+                if (Terminal(reply.Status))
+                    return false;
                 Thread.Sleep(2000);
             }
             return false;
         }
-        sealed class Sample {
-            readonly byte[] head = new byte[4096], tail = new byte[4096];
+
+        sealed class Sample
+        {
+            readonly byte[] head = new byte[4096],
+                tail = new byte[4096];
             internal long Total;
-            internal void Append(byte[] block, int size) {
-                lock (this) {
-                    for (int i = 0; i < size; i++) {
-                        if (Total < 4096) head[(int)Total] = block[i];
+
+            internal void Append(byte[] block, int size)
+            {
+                lock (this)
+                {
+                    for (int i = 0; i < size; i++)
+                    {
+                        if (Total < 4096)
+                            head[(int)Total] = block[i];
                         tail[(int)(Total % 4096)] = block[i];
                         Total++;
                     }
                 }
             }
-            internal void Drain(Stream input) {
-                using (input) {
-                    var block = new byte[4096]; int size;
-                    while ((size = input.Read(block, 0, block.Length)) > 0) Append(block, size);
+
+            internal void Drain(Stream input)
+            {
+                using (input)
+                {
+                    var block = new byte[4096];
+                    int size;
+                    while ((size = input.Read(block, 0, block.Length)) > 0)
+                        Append(block, size);
                 }
             }
-            internal byte[] Bytes() {
+
+            internal byte[] Bytes()
+            {
                 var output = new byte[(int)Math.Min(Total, 8192)];
                 int first = (int)Math.Min(Total, 4096);
                 Buffer.BlockCopy(head, 0, output, 0, first);
@@ -147,120 +229,231 @@ namespace Foxwarm {
                 return output;
             }
         }
-        void RunJob(string task, byte[] script, int timeout, DateTime dispatched) {
+
+        void RunJob(string task, byte[] script, int timeout, DateTime dispatched)
+        {
             string directory = null;
             var sample = new Sample();
             int exit = 125;
             long elapsed = 0;
-            try {
+            try
+            {
                 // Create a private job directory before writing the bounded script.
-                directory = Path.Combine(Path.GetTempPath(), "foxwarm-shell-" + Guid.NewGuid().ToString("N"));
+                directory = Path.Combine(
+                    Path.GetTempPath(),
+                    "foxwarm-shell-" + Guid.NewGuid().ToString("N")
+                );
                 var security = new DirectorySecurity();
                 security.SetAccessRuleProtection(true, false);
-                security.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().User,
-                    FileSystemRights.FullControl, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
-                    PropagationFlags.None, AccessControlType.Allow));
+                security.AddAccessRule(
+                    new FileSystemAccessRule(
+                        WindowsIdentity.GetCurrent().User,
+                        FileSystemRights.FullControl,
+                        InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                        PropagationFlags.None,
+                        AccessControlType.Allow
+                    )
+                );
                 Directory.CreateDirectory(directory, security);
                 var path = Path.Combine(directory, "command.ps1");
-                var text = "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)\n"
+                var text =
+                    "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)\n"
                     + "$OutputEncoding = [Console]::OutputEncoding\n"
                     + Encoding.UTF8.GetString(script)
                     + "\nif (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }\n";
                 File.WriteAllText(path, text, new UTF8Encoding(true));
                 // Match the bootstrap's in-memory execution under the default Windows policy.
                 // Only this fixed, short file-reader expression travels in argv; the command stays bounded on disk.
-                var invoke = "& ([ScriptBlock]::Create([IO.File]::ReadAllText('" + path.Replace("'", "''")
+                var invoke =
+                    "& ([ScriptBlock]::Create([IO.File]::ReadAllText('"
+                    + path.Replace("'", "''")
                     + "', [Text.Encoding]::UTF8)))";
                 var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(invoke));
-                var info = new ProcessStartInfo(engine, "-NoLogo -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand " + encoded) {
-                    UseShellExecute = false, CreateNoWindow = true,
-                    RedirectStandardOutput = true, RedirectStandardError = true,
-                    WorkingDirectory = startup
+                var info = new ProcessStartInfo(
+                    engine,
+                    "-NoLogo -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand "
+                        + encoded
+                )
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    WorkingDirectory = startup,
                 };
-                using (var process = new Process { StartInfo = info }) {
+                using (var process = new Process { StartInfo = info })
+                {
                     var watch = Stopwatch.StartNew();
                     process.Start();
                     // Independent readers keep both pipes drained, including no-newline/binary output.
                     var stdout = new Thread(() => sample.Drain(process.StandardOutput.BaseStream));
                     var stderr = new Thread(() => sample.Drain(process.StandardError.BaseStream));
-                    stdout.Start(); stderr.Start();
-                    using (var completed = new ManualResetEvent(false)) {
-                    var runner = new Thread(() => {
-                        process.WaitForExit();
-                        elapsed = (long)watch.Elapsed.TotalSeconds;
-                        exit = process.ExitCode;
-                        stdout.Join(); stderr.Join();
-                        completed.Set();
-                    });
-                    runner.Start();
-                    if (!completed.WaitOne(timeout * 1000)) {
-                        if (!Report(task, "background", new byte[0], 0, 0,
-                            (long)watch.Elapsed.TotalSeconds, dispatched))
-                            Console.Error.WriteLine("Background result unavailable; command will not be executed again.");
-                    }
-                    completed.WaitOne();
-                    runner.Join();
+                    stdout.Start();
+                    stderr.Start();
+                    using (var completed = new ManualResetEvent(false))
+                    {
+                        var runner = new Thread(() =>
+                        {
+                            process.WaitForExit();
+                            elapsed = (long)watch.Elapsed.TotalSeconds;
+                            exit = process.ExitCode;
+                            stdout.Join();
+                            stderr.Join();
+                            completed.Set();
+                        });
+                        runner.Start();
+                        if (!completed.WaitOne(timeout * 1000))
+                        {
+                            if (
+                                !Report(
+                                    task,
+                                    "background",
+                                    new byte[0],
+                                    0,
+                                    0,
+                                    (long)watch.Elapsed.TotalSeconds,
+                                    dispatched
+                                )
+                            )
+                                Console.Error.WriteLine(
+                                    "Background result unavailable; command will not be executed again."
+                                );
+                        }
+                        completed.WaitOne();
+                        runner.Join();
                     }
                 }
-            } catch (Exception) {
+            }
+            catch (Exception)
+            {
                 // Do not leak a command, token or private path through bootstrap diagnostics.
-                var error = Encoding.UTF8.GetBytes("Shell Node could not start or collect the command.\n");
+                var error = Encoding.UTF8.GetBytes(
+                    "Shell Node could not start or collect the command.\n"
+                );
                 sample.Append(error, error.Length);
             }
             if (!Report(task, "finished", sample.Bytes(), sample.Total, exit, elapsed, dispatched))
-                Console.Error.WriteLine("Completion unavailable; command will not be executed again.");
-            if (directory != null) {
-                try { Directory.Delete(directory, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+                Console.Error.WriteLine(
+                    "Completion unavailable; command will not be executed again."
+                );
+            if (directory != null)
+            {
+                try
+                {
+                    Directory.Delete(directory, true);
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
             }
         }
-        public void Run() {
+
+        public void Run()
+        {
             // Windows PowerShell 5.1 may otherwise offer only older TLS protocol defaults.
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-            ServicePointManager.DefaultConnectionLimit = Math.Max(ServicePointManager.DefaultConnectionLimit, 64);
-            var registered = Http("register", Encoding.UTF8.GetBytes(startup),
-                new Dictionary<string,string> { { "X-Foxwarm-Shell-Dialect", "powershell" } });
+            ServicePointManager.DefaultConnectionLimit = Math.Max(
+                ServicePointManager.DefaultConnectionLimit,
+                64
+            );
+            var registered = Http(
+                "register",
+                Encoding.UTF8.GetBytes(startup),
+                new Dictionary<string, string> { { "X-Foxwarm-Shell-Dialect", "powershell" } }
+            );
             connection = registered.Headers["X-Foxwarm-Connection"];
-            if (registered.Status != 204 || !registered.Marked || connection == null
-                || !Regex.IsMatch(connection, "^[a-f0-9]{32}$"))
-                throw new InvalidOperationException("Shell Node registration failed; no command was executed.");
-            Console.WriteLine("Shell Node " + node + " ready (Windows PowerShell, bounded output).");
-            try {
-                while (true) {
+            if (
+                registered.Status != 204
+                || !registered.Marked
+                || connection == null
+                || !Regex.IsMatch(connection, "^[a-f0-9]{32}$")
+            )
+                throw new InvalidOperationException(
+                    "Shell Node registration failed; no command was executed."
+                );
+            Console.WriteLine(
+                "Shell Node " + node + " ready (Windows PowerShell, bounded output)."
+            );
+            try
+            {
+                while (true)
+                {
                     var reply = Http("poll", null, null);
-                    if (reply.Status == 204 && reply.Marked) continue;
-                    if (reply.Status == 401 || reply.Status == 403 || reply.Status == 409 || reply.Status == 410) {
-                        Console.Error.WriteLine("Shell Node disconnected; existing commands are not re-executed.");
+                    if (reply.Status == 204 && reply.Marked)
+                        continue;
+                    if (
+                        reply.Status == 401
+                        || reply.Status == 403
+                        || reply.Status == 409
+                        || reply.Status == 410
+                    )
+                    {
+                        Console.Error.WriteLine(
+                            "Shell Node disconnected; existing commands are not re-executed."
+                        );
                         break;
                     }
                     int timeout;
                     var task = reply.Headers["X-Foxwarm-Task"];
                     var exec = reply.Headers["X-Foxwarm-Exec"];
-                    if (reply.Status != 200 || !reply.Marked
-                        || reply.Headers["Content-Type"] != "application/x-foxwarm-shell; charset=utf-8"
-                        || task == null || !Regex.IsMatch(task, "^[a-f0-9]{32}$")
-                        || exec == null || !Regex.IsMatch(exec, "^[a-z0-9_-]+$")
-                        || !Int32.TryParse(reply.Headers["X-Foxwarm-Timeout"], NumberStyles.None,
-                            CultureInfo.InvariantCulture, out timeout) || timeout < 1 || timeout > 60) {
-                        Thread.Sleep(2000); continue;
+                    if (
+                        reply.Status != 200
+                        || !reply.Marked
+                        || reply.Headers["Content-Type"]
+                            != "application/x-foxwarm-shell; charset=utf-8"
+                        || task == null
+                        || !Regex.IsMatch(task, "^[a-f0-9]{32}$")
+                        || exec == null
+                        || !Regex.IsMatch(exec, "^[a-z0-9_-]+$")
+                        || !Int32.TryParse(
+                            reply.Headers["X-Foxwarm-Timeout"],
+                            NumberStyles.None,
+                            CultureInfo.InvariantCulture,
+                            out timeout
+                        )
+                        || timeout < 1
+                        || timeout > 60
+                    )
+                    {
+                        Thread.Sleep(2000);
+                        continue;
                     }
                     // Match Main's bounded recent receipts; Main never redelivers a handed-out task.
-                    lock (jobsGate) { if (!delivered.Add(task)) continue; }
+                    lock (jobsGate)
+                    {
+                        if (!delivered.Add(task))
+                            continue;
+                    }
                     var script = reply.Body;
                     var dispatched = DateTime.UtcNow;
-                    lock (jobsGate) jobs++;
-                    var worker = new Thread(() => {
-                        try { RunJob(task, script, timeout, dispatched); }
-                        finally { lock (jobsGate) {
-                            finished.Enqueue(task);
-                            while (finished.Count > 32) delivered.Remove(finished.Dequeue());
-                            jobs--; Monitor.PulseAll(jobsGate);
-                        } }
+                    lock (jobsGate)
+                        jobs++;
+                    var worker = new Thread(() =>
+                    {
+                        try
+                        {
+                            RunJob(task, script, timeout, dispatched);
+                        }
+                        finally
+                        {
+                            lock (jobsGate)
+                            {
+                                finished.Enqueue(task);
+                                while (finished.Count > 32)
+                                    delivered.Remove(finished.Dequeue());
+                                jobs--;
+                                Monitor.PulseAll(jobsGate);
+                            }
+                        }
                     });
                     worker.Start();
                 }
-            } finally {
+            }
+            finally
+            {
                 // Replacement/revocation stops polling, not already delivered commands or reporters.
-                lock (jobsGate) while (jobs > 0) Monitor.Wait(jobsGate);
+                lock (jobsGate)
+                    while (jobs > 0)
+                        Monitor.Wait(jobsGate);
             }
         }
     }
