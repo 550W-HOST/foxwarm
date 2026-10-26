@@ -33,7 +33,11 @@ public sealed partial class ShellHttpTests
         internal string Data => Path.Combine(Temp.Path, "data");
         internal string Auth => Credential["authToken"]!.GetValue<string>();
 
-        internal async Task Start(bool register = true, bool bootstrap = false, bool restart = false)
+        internal async Task Start(
+            bool register = true,
+            bool bootstrap = false,
+            bool restart = false
+        )
         {
             Manager = new(
                 Data,

@@ -54,7 +54,11 @@ public sealed partial class ShellHttpTests
             prepared.Predecessor
         );
         Assert.Equal(HttpStatusCode.NoContent, retry.StatusCode);
-        using var reconnectRetry = await ConditionalShell(fixture, prepared.Connection, prepared.Connection);
+        using var reconnectRetry = await ConditionalShell(
+            fixture,
+            prepared.Connection,
+            prepared.Connection
+        );
         Assert.Equal(HttpStatusCode.NoContent, reconnectRetry.StatusCode);
         var task = await fixture.Poll();
         using var running = await fixture.Report(task.Task);
@@ -132,7 +136,14 @@ public sealed partial class ShellHttpTests
             fixture.Manager.Nodes,
             stage =>
             {
-                if (stage == (committed ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync : AtomicJsonWriteStage.BeforeRename))
+                if (
+                    stage
+                    == (
+                        committed
+                            ? AtomicJsonWriteStage.AfterRenameBeforeDirectorySync
+                            : AtomicJsonWriteStage.BeforeRename
+                    )
+                )
                     throw new IOException("Injected registration persistence failure.");
             }
         );
@@ -157,7 +168,10 @@ public sealed partial class ShellHttpTests
         await fixture.Restart();
         using var missing = await fixture.Request("poll", connection: original);
         Assert.Equal(HttpStatusCode.Conflict, missing.StatusCode);
-        Assert.Equal("connection-unavailable", missing.Headers.GetValues("X-Foxwarm-Shell-Reason").Single());
+        Assert.Equal(
+            "connection-unavailable",
+            missing.Headers.GetValues("X-Foxwarm-Shell-Reason").Single()
+        );
         using var recovery = await ConditionalShell(fixture, original, original);
         Assert.Equal(HttpStatusCode.NoContent, recovery.StatusCode);
         Assert.NotEqual("none", (await PrepareShell(fixture)).Predecessor);

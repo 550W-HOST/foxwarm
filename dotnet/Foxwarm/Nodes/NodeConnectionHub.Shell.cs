@@ -294,10 +294,14 @@ internal sealed partial class NodeConnectionHub
             // Compare the current live transport under the shared HTTP/WS publication gate.
             // With no live transport, an authorized client may recover after expiry or restart.
             nodes.TryGetValue(id, out old);
-            var current = old is { Retired: false } && old.Open
-                ? old.Generation.ToString("N")
-                : null;
-            if (current is not null && publication is not null && old!.Http is { } existing && existing.Id == publication)
+            var current =
+                old is { Retired: false } && old.Open ? old.Generation.ToString("N") : null;
+            if (
+                current is not null
+                && publication is not null
+                && old!.Http is { } existing
+                && existing.Id == publication
+            )
             {
                 if (!Registry.Authenticate(id, auth))
                     throw new InvalidDataException("Node credentials were removed or replaced.");
@@ -449,7 +453,8 @@ internal sealed partial class NodeConnectionHub
                             {
                                 context.Response.Headers["X-Foxwarm-Predecessor"] =
                                     nodes.TryGetValue(credential.Value.Id, out var current)
-                                    && !current.Retired && current.Open
+                                    && !current.Retired
+                                    && current.Open
                                         ? current.Generation.ToString("N")
                                         : "none";
                                 context.Response.Headers["X-Foxwarm-Connection"] =
