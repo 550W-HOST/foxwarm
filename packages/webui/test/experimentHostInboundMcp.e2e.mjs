@@ -78,9 +78,17 @@ const concrete = (owner, toolId, args = {}) => call(owner, 'foxwarm_call', { too
 const value = result => { assert(!result.isError, JSON.stringify(result)); return result.structuredContent ?? JSON.parse(result.content[0].text) }
 const rawText = result => result.content?.filter(item => item.type === 'text').map(item => item.text).join('\n')
 async function deleteOwner(owner) { await owner.transport.terminateSession() }
-async function get(owner) {
+async function get(owner, waitForRelease = false) {
   const controller = new AbortController()
-  const response = await fetch(host.origin + prefix + '/mcp', { headers: { authorization: 'Bearer ' + owner.token, accept: 'text/event-stream', 'mcp-session-id': owner.transport.sessionId, 'mcp-protocol-version': '2025-11-25' }, signal: controller.signal })
+  const open = async () => {
+    const response = await fetch(host.origin + prefix + '/mcp', { headers: { authorization: 'Bearer ' + owner.token, accept: 'text/event-stream', 'mcp-session-id': owner.transport.sessionId, 'mcp-protocol-version': '2025-11-25' }, signal: controller.signal })
+    if (!waitForRelease || response.status === 200) return response
+    const body = await response.text()
+    assert.equal(response.status, 409, body)
+    assert.deepEqual(JSON.parse(body), { error: 'MCP SSE stream already open.' }, body)
+    return false
+  }
+  const response = waitForRelease ? await until(open, 'previous physical MCP GET releases its attachment') : await open()
   const state = { controller, response, ended: false }
   state.reading = (async () => { try { for await (const _ of response.body) {} } catch {} finally { state.ended = true } })()
   streams.push(state); return state
@@ -216,11 +224,12 @@ try {
   await until(async () => !await exists(releasedRoot), 'real released CLI context artifacts are retired after surviving process exits')
 
   // Same initialized context accepts new physical GETs, with no replay header or initialize.
+  // Local close/abort can finish before remote attachment release; observe only its existing admission conflict.
   // Official JS already owns its automatic GET. Close it, then use independently authenticated physical requests.
   const raw = await connect()
   await raw.transport.close()
   for (let index = 0; index < 3; index++) {
-    const stream = await get(raw); assert.equal(stream.response.status, 200)
+    const stream = await get(raw, true); assert.equal(stream.response.status, 200)
     const duplicate = await get(raw); assert.equal(duplicate.response.status, 409)
     stream.controller.abort(); await stream.reading
   }
