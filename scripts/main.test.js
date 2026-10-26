@@ -25,7 +25,7 @@ async function until(check, message) {
 }
 function running(pid) {
   try { return !fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1].startsWith('Z'); }
-  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  catch (error) { if (error.code === 'ENOENT' || error.code === 'ESRCH') return false; throw error; }
 }
 
 function fixture(t, built = true) {
