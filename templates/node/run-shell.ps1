@@ -86,6 +86,10 @@ namespace Foxwarm
                 var request = (HttpWebRequest)WebRequest.Create(host + "/node/shell/" + endpoint);
                 request.Method = endpoint == "poll" ? "GET" : "POST";
                 request.AllowAutoRedirect = false;
+                // The bootstrap may already have created this origin's ServicePoint.
+                // Set its limit directly so report workers cannot serialize behind a two-connection default.
+                var point = request.ServicePoint;
+                point.ConnectionLimit = Math.Max(point.ConnectionLimit, 64);
                 request.Timeout = 35000;
                 request.ReadWriteTimeout = 35000;
                 request.Headers["Authorization"] = "Bearer " + auth;
@@ -351,10 +355,6 @@ namespace Foxwarm
         {
             // Windows PowerShell 5.1 may otherwise offer only older TLS protocol defaults.
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-            ServicePointManager.DefaultConnectionLimit = Math.Max(
-                ServicePointManager.DefaultConnectionLimit,
-                64
-            );
             var registered = Http(
                 "register",
                 Encoding.UTF8.GetBytes(startup),
