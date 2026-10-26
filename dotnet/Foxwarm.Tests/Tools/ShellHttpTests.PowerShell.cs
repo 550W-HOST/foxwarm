@@ -93,7 +93,10 @@ public sealed partial class ShellHttpTests
         foreach (var memory in new[] { false, true })
         {
             var scriptDir = Path.Combine(fixture.Temp.Path, "saved launcher ' [雪]");
-            var caller = Path.Combine(fixture.Temp.Path, memory ? "memory caller ' [雪]" : "saved caller ' [雪]");
+            var caller = Path.Combine(
+                fixture.Temp.Path,
+                memory ? "memory caller ' [雪]" : "saved caller ' [雪]"
+            );
             Directory.CreateDirectory(scriptDir);
             Directory.CreateDirectory(caller);
             var capture = Path.Combine(caller, "capture.json");
