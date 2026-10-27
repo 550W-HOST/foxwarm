@@ -157,7 +157,7 @@ async function start() {
     const legacyMainSystemPromptPath = path.join(MAIN_AGENT_MEMORY_DIR, '00_SYSTEM.md');
 
     if (DATA_ROOT_DIR !== BASE_DIR) {
-        logger.info(`Using experimental external data root: ${DATA_ROOT_DIR}`);
+        logger.info(`Using external data root: ${DATA_ROOT_DIR}`);
     }
 
     // Ensure agents directory exists

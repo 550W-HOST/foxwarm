@@ -176,7 +176,7 @@ internal sealed partial class SessionManager
             snapshot = recoveringBusy ? RecoverBusySnapshot(snapshot) : snapshot;
             if (snapshot.Stopping)
                 throw new InvalidDataException(
-                    "Stopping-only Session cannot be resumed automatically by the experiment host."
+                    "Stopping-only Session cannot be resumed automatically by the Session host."
                 );
             token.ThrowIfCancellationRequested();
             var owner = MakeSession(id, agent, store);

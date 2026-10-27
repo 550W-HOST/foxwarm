@@ -39,7 +39,7 @@ public sealed record ResponsesClientOptions(
 }
 
 public sealed class UnsupportedResponsesFeatureException(string feature)
-    : InvalidOperationException($"Experimental OpenAI Responses client does not support {feature}.")
+    : InvalidOperationException($"OpenAI Responses client does not support {feature}.")
 {
     public string Feature { get; } = feature;
 }

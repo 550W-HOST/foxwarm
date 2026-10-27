@@ -91,7 +91,7 @@ public sealed class SessionRegistry
         ISessionAuthorityStore store,
         IChatService chat,
         ITurnToolExecutor? tools = null,
-        int maxToolIterations = 500,
+        int maxToolIterations = 5000,
         Func<long>? clock = null,
         Func<SessionSnapshot, Task<SessionSnapshot>>? migrateGoal = null,
         Func<SessionEntry, string?>? parentSessionResolver = null

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One bounded localhost end-to-end flow for the experimental .NET HTTP host."""
+"""One bounded localhost end-to-end flow for the managed .NET HTTP host."""
 import http.client
 import json
 import os

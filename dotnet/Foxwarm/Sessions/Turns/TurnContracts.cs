@@ -111,7 +111,7 @@ public sealed class UnsupportedTurnToolExecutor : ITurnToolExecutor
 
 public sealed class ToolLoopLimitException(int limit)
     : InvalidOperationException(
-        $"Experimental Session turn exceeded the {limit} iteration tool-loop limit."
+        $"Session turn exceeded the {limit} iteration tool-loop limit."
     );
 
 public sealed record ChatResult(
@@ -148,7 +148,7 @@ public sealed class UnsupportedSessionTurnException : InvalidOperationException
     public string Path { get; }
 
     public UnsupportedSessionTurnException(string path)
-        : base($"Experimental Session turns do not support {path}.") => Path = path;
+        : base($"Session turns do not support {path}.") => Path = path;
 }
 
 internal sealed class HistoryAppendFinalizer(Action<IReadOnlyList<JsonObject>?> finalize)

@@ -56,7 +56,7 @@ Current CLI/browser writers use structured image result fields; any old source-s
 
 ## Current gaps
 
-Session Worker hosting remains excluded; generic executable provider registry/files are now connected separately from resident protocols, while provider exec/lifecycle remain later checkpoints. See [delivery scope](../overview.md#d-dotnet-delivery-scope) and [.NET providers](../units/dotnet-node-providers.md). Connected ordinary tools, exec/completion, whole-file consumers and fixed Code/PTY services remain supported without those platforms. Root package start/build still targets TypeScript Main (`lib/index.js`); `.NET Program.cs` is an experiment/host entry with explicit environment requirements, not a switched root launcher. Vector admission/search is not a current .NET capability.
+Session Worker hosting remains excluded. Executable-provider files, process primitives and lifecycle now connect through the [.NET provider owner](../units/dotnet-node-providers.md), independently of resident Node protocols. Root package startup/build selects managed Main through the [source entry](../units/source-main-entry.md); retained TypeScript Main is an explicit reference build. Configured Vector admission/search belongs to the [Vector owner](../units/vector-owner.md). See [delivery scope](../overview.md#d-dotnet-delivery-scope) for the remaining platform boundaries.
 
 ## Canonical units and tests
 

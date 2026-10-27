@@ -953,6 +953,73 @@ public sealed class SessionTurnTests
         Assert.Equal(2, chat.Calls.Count);
     }
 
+    [Theory]
+    [InlineData(false, 501)]
+    [InlineData(true, 501)]
+    [InlineData(false, 5000)]
+    [InlineData(true, 5000)]
+    public async Task DefaultToolLoopPassesFormerBoundaryAndStopsAtFiveThousand(
+        bool useRegistryHost,
+        int toolIterations
+    )
+    {
+        var store = new InMemorySessionAuthorityStore();
+        var chat = new RepeatingToolChat(toolIterations);
+        var tools = new RecordingToolExecutor(new JsonObject { ["output"] = "ok" });
+        var registry = new SessionRegistry(store, chat, tools);
+        var entry = registry.Add("s");
+        var host = useRegistryHost
+            ? registry.HostFor("s")
+            : new LocalSessionTurnHost(entry, store, chat, tools);
+        Assert.True(await host.TryClaimBusyAsync());
+        var input = QueueItem.UserText("loop");
+        entry.State.Queue.Add(input);
+        await host.AppendQueuedInputsAsync([input]);
+
+        if (toolIterations == 5000)
+            await Assert.ThrowsAsync<ToolLoopLimitException>(() => host.ChatAsync("turn"));
+        else
+        {
+            var result = await host.ChatAsync("turn");
+            Assert.Equal("final", result.AssistantMessage?["parts"]?[0]?["text"]?.GetValue<string>());
+        }
+
+        Assert.Equal(toolIterations == 5000 ? 5000 : toolIterations + 1, chat.Calls);
+        Assert.Equal(toolIterations, tools.Invocations);
+        var snapshot = (await store.LoadAsync("s"))!;
+        Assert.Equal(1 + toolIterations * 2 + (toolIterations == 5000 ? 0 : 1), snapshot.History.Count);
+        Assert.Equal(toolIterations == 5000 ? "tool" : "model", snapshot.History[^1].Role);
+        Assert.Equal(snapshot.History.Count + 1, snapshot.NextMessageSeq);
+    }
+
+    private sealed class RepeatingToolChat(int toolIterations) : ISessionChatService
+    {
+        public int Calls { get; private set; }
+
+        public Task<ChatResult> ChatAsync(
+            string sessionId,
+            IReadOnlyList<JsonObject> history,
+            CancellationToken cancellationToken
+        ) => throw new InvalidOperationException("Use the immutable Session history path.");
+
+        public Task<ChatResult> ChatAsync(
+            string sessionId,
+            SessionHistory history,
+            Func<CancellationToken, Task<bool>> prepareRetry,
+            CancellationToken cancellationToken
+        )
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Assert.Equal(1 + Calls * 2, history.Count);
+            Calls++;
+            return Task.FromResult(
+                Calls <= toolIterations
+                    ? FunctionCalls(FunctionCall($"call-{Calls}", "loop_tool", new JsonObject()))
+                    : ChatResult.Text("final")
+            );
+        }
+    }
+
     [Fact]
     public async Task ConfiguredToolLoopLimitStopsWithoutAThirdProviderCall()
     {
@@ -962,6 +1029,12 @@ public sealed class SessionTurnTests
         chat.QueueChatResult(FunctionCalls(FunctionCall("two", "write_fixture", new JsonObject())));
         var tools = new RecordingToolExecutor(new JsonObject { ["output"] = "ok" });
         var registry = new SessionRegistry(store, chat, tools, maxToolIterations: 2);
+        Exception? failure = null;
+        registry.OnTurnFailure = (error, _) =>
+        {
+            failure = error;
+            return Task.CompletedTask;
+        };
         var entry = registry.Add("s");
         entry.State.Queue.Add(QueueItem.UserText("loop"));
 
@@ -969,6 +1042,7 @@ public sealed class SessionTurnTests
 
         Assert.Equal(2, chat.Calls.Count);
         Assert.Equal(2, tools.Invocations);
+        Assert.IsType<ToolLoopLimitException>(failure);
         Assert.Equal(1, entry.ProcessorClaimCount);
         Assert.False(entry.Snapshot().Busy);
         Assert.Equal(

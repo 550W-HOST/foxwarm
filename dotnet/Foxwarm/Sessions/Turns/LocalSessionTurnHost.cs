@@ -37,7 +37,7 @@ public sealed partial class LocalSessionTurnHost
         ISessionAuthorityStore store,
         IChatService chat,
         ITurnToolExecutor? tools = null,
-        int maxToolIterations = 500,
+        int maxToolIterations = 5000,
         Func<long>? clock = null,
         Func<Task>? safePoint = null,
         Func<Task>? retrySafePoint = null,
