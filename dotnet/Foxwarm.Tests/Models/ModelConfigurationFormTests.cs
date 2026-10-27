@@ -105,6 +105,57 @@ public sealed class ModelConfigurationFormTests
         Assert.Equal(123, configuration.Capture().Resolve("local").MaxOutput);
     }
 
+    [Theory]
+    [InlineData("session-hash")]
+    [InlineData("failover")]
+    public async Task Structured_conversion_removes_native_history_provider_mapping_from_virtual_entries(
+        string strategy
+    )
+    {
+        using var temp = new TempDirectory();
+        var configuration = new ModelConfiguration(
+            HostPaths.ForDataRoot(temp.Path, environment: _ => null)
+        );
+        await configuration.SaveAsync(
+            new JsonObject
+            {
+                ["yaml"] = """
+                    {"default":"b/m","providers":{
+                      "a":{"models":["m","n"]},
+                      "b":{"sameProviderAs":"a","models":["m"]}
+                    }}
+                    """,
+            }
+        );
+        Assert.True(
+            configuration.Capture().Resolve("b/m").HistoryCompatibility.Matches("b/m", "a/m")
+        );
+        var form = JsonNode.Parse(
+            """
+            {"providers":[
+              {"id":"a","models":"m,n"},
+              {"id":"b","targets":["a/m","a/n"]}
+            ],"defaultModel":"b"}
+            """
+        )!.AsObject();
+        form["providers"]![1]!["providerType"] = strategy;
+        var receipt = await configuration.SaveAsync(form);
+        Assert.True(receipt["saved"]!.GetValue<bool>());
+        var saved = ConfigurationYaml.Parse(
+            await File.ReadAllTextAsync(configuration.ActivePath),
+            "models config"
+        );
+        Assert.Null(saved["providers"]!["b"]!["sameProviderAs"]);
+        Assert.Null(saved["providers"]!["b"]!["models"]);
+        var catalog = configuration.Capture();
+        Assert.Equal("b", catalog.DefaultKey);
+        var route = catalog.Resolve("b");
+        Assert.True(route.IsVirtual);
+        Assert.Equal(strategy, route.ProviderType);
+        Assert.Equal(new[] { "a/m", "a/n" }, route.Targets);
+        Assert.Equal("a/m", catalog.Resolve("a/m").Key);
+    }
+
     [Fact]
     public async Task Mixed_key_HTTP_save_publishes_every_submitted_provider_and_routes_the_next_normal_request()
     {

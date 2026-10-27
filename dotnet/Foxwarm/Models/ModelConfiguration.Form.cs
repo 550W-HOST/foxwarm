@@ -82,6 +82,7 @@ internal sealed partial class ModelConfiguration
                         "asyncCompact",
                         "disallowEmptyResponse",
                         "keepReasoningOnError",
+                        "sameProviderAs",
                     }
                 )
                     config.Remove(field);
