@@ -134,7 +134,10 @@ public sealed class DefaultToolWireTests(ITestOutputHelper output)
                 peer.Requests[1]["input"]!.AsArray(),
                 item => SessionWait.Text(item?["type"]) == "function_call_output"
             );
-            Assert.All(owner.History().Where(row => SessionWait.Text(row["role"]) == "model"), row => Assert.Equal("local/wire", SessionWait.Text(row["__meta"]?["modelId"])));
+            Assert.All(
+                owner.History().Where(row => SessionWait.Text(row["role"]) == "model"),
+                row => Assert.Equal("local/wire", SessionWait.Text(row["__meta"]?["modelId"]))
+            );
             Assert.Null(manager.ChannelBinding("fixture:destination"));
         }
         finally
