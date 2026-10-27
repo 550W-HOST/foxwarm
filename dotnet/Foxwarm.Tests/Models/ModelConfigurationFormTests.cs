@@ -120,24 +120,26 @@ public sealed class ModelConfigurationFormTests
             new JsonObject
             {
                 ["yaml"] = """
-                    {"default":"b/m","providers":{
-                      "a":{"models":["m","n"]},
-                      "b":{"sameProviderAs":"a","models":["m"]}
-                    }}
-                    """,
+                {"default":"b/m","providers":{
+                  "a":{"models":["m","n"]},
+                  "b":{"sameProviderAs":"a","models":["m"]}
+                }}
+                """,
             }
         );
         Assert.True(
             configuration.Capture().Resolve("b/m").HistoryCompatibility.Matches("b/m", "a/m")
         );
-        var form = JsonNode.Parse(
-            """
-            {"providers":[
-              {"id":"a","models":"m,n"},
-              {"id":"b","targets":["a/m","a/n"]}
-            ],"defaultModel":"b"}
-            """
-        )!.AsObject();
+        var form = JsonNode
+            .Parse(
+                """
+                {"providers":[
+                  {"id":"a","models":"m,n"},
+                  {"id":"b","targets":["a/m","a/n"]}
+                ],"defaultModel":"b"}
+                """
+            )!
+            .AsObject();
         form["providers"]![1]!["providerType"] = strategy;
         var receipt = await configuration.SaveAsync(form);
         Assert.True(receipt["saved"]!.GetValue<bool>());
