@@ -110,7 +110,11 @@ public sealed partial class AsrRoutesTests
         Assert.Null(await Receive(socket));
         Assert.Equal(WebSocketCloseStatus.InternalServerError, socket.CloseStatus);
         using var closing = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "acknowledged", closing.Token);
+        await socket.CloseOutputAsync(
+            WebSocketCloseStatus.NormalClosure,
+            "acknowledged",
+            closing.Token
+        );
         Assert.Equal(WebSocketState.Closed, socket.State);
         await f.StreamCompleted.Task.WaitAsync(closing.Token);
         Assert.Equal(1, f.Requests);
@@ -203,7 +207,11 @@ public sealed partial class AsrRoutesTests
         Assert.Equal(WebSocketCloseStatus.PolicyViolation, client.CloseStatus);
         Assert.Equal("service reason", client.CloseStatusDescription);
         using var closing = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "acknowledged", closing.Token);
+        await client.CloseOutputAsync(
+            WebSocketCloseStatus.NormalClosure,
+            "acknowledged",
+            closing.Token
+        );
         Assert.Equal(WebSocketState.Closed, client.State);
         await f.StreamCompleted.Task.WaitAsync(closing.Token);
     }
