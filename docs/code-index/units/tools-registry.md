@@ -43,7 +43,7 @@ Resolved, authorized top-level dispatch supplies runtime name/source/server/Node
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Tools/MainLocalToolsTests.cs`; `ToolAuthorizationEffectsTests.cs`; `HandoffConfirmationTests.cs`; ToolScript tool tests and `ToolScriptPresentationTests.cs`. `RemoteExecProtocolTests.cs` covers selected-Node exec advertisement, policy hiding, builtin collisions and explicit overrides. `packages/webui/test/experimentHostRemoteExecSchemas.e2e.mjs` checks real provider request schemas before direct and adjacent exec effects through the unchanged official CLI, plus policy-hidden schemas and canonical pairs; its provider refuses undeclared calls.
+`dotnet/Foxwarm.Tests/Tools/MainLocalToolsTests.cs`; `ToolAuthorizationEffectsTests.cs`; `HandoffConfirmationTests.cs`; ToolScript tool tests and `ToolScriptPresentationTests.cs`. `RemoteExecProtocolTests.cs` covers selected-Node exec advertisement, policy hiding, builtin collisions and explicit overrides. `packages/webui/test/mainHostRemoteExecSchemas.e2e.mjs` checks real provider request schemas before direct and adjacent exec effects through the unchanged official CLI, plus policy-hidden schemas and canonical pairs; its provider refuses undeclared calls.
 
 `ToolAuthorizationEffectsTests.DefaultInjection.cs` checks hidden management discovery, explicit durable settings, deny-policy enforcement and unchanged explicit overrides. `dotnet/Foxwarm.Tests/scripts/qualify-bootstrap-default-tools.mjs` also captures a real ordinary Responses request to verify these management definitions do not leak into the default model tool list.
 

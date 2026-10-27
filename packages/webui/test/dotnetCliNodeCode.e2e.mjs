@@ -7,7 +7,7 @@ import { mkdir, readFile, writeFile, access, symlink, chmod, truncate, lstat, rm
 import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { WebSocketServer } from 'ws'
-import { until, sleep } from './experimentHostFixture.mjs'
+import { until, sleep } from './mainHostFixture.mjs'
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')

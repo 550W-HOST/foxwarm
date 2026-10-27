@@ -7,7 +7,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import sharp from 'sharp'
-import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
+import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
@@ -15,7 +15,7 @@ initializeTestEnvironment()
 const call = (id, name, args) => ({ type: 'function_call', call_id: id, name: name.startsWith('browse_') ? 'call_tool' : name, arguments: JSON.stringify(name.startsWith('browse_') ? { source: 'node', name, args } : args) })
 const dll = resolve('dotnet/Foxwarm.CliNode/bin/Debug/net10.0/Foxwarm.CliNode.dll')
 for (const runtime of ['source', 'dotnet']) {
-  const env = {}, fixture = await createHostFixture('browser-cli-' + runtime, { runtime, normalStartup: true, env })
+  const env = {}, fixture = await createHostFixture('browser-cli-' + runtime, { runtime, env })
   Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
   const site = createServer((req, res) => { res.setHeader('content-type', 'text/html'); res.end('<!doctype html><title>Local browser</title><h1>Local browser fixture</h1>') })
   site.listen(0, '127.0.0.1'); await once(site, 'listening'); const origin = `http://127.0.0.1:${site.address().port}`

@@ -34,8 +34,8 @@ The source preparation pin is Code-OSS 1.141.0; route-shape tests do not prove a
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Channels/CodeRoutesTests.cs` (real served files/Git, native metadata/link/error/partial-rename behavior, missing Git, renamed asset identifiers, unchanged source bytes and auth); `packages/webui/test/experimentHostWorkbenchParity.e2e.mjs` (normal host/original App, optional official Code-OSS FS/SCM/PTY extensions); `NodeServiceTransportTests.cs`; `packages/webui/test/experimentHostNodeCode.e2e.mjs` (owned hosts, unchanged official CLI, original WebUI and optional official workbench/browser extensions).
+`dotnet/Foxwarm.Tests/Channels/CodeRoutesTests.cs` (real served files/Git, native metadata/link/error/partial-rename behavior, missing Git, renamed asset identifiers, unchanged source bytes and auth); `packages/webui/test/mainHostWorkbenchParity.e2e.mjs` (normal host/original App, optional official Code-OSS FS/SCM/PTY extensions); `NodeServiceTransportTests.cs`; `packages/webui/test/mainHostNodeCode.e2e.mjs` (owned hosts, unchanged official CLI, original WebUI and optional official workbench/browser extensions).
 
 `packages/webui/test/dotnetCliNodeCodeMain.e2e.mjs` exercises the .NET CLI with normal Source/.NET Main, original App and prepared official FS/SCM extensions, without claiming remote PTY support.
 
-The remote-workspace data-folder command in `experimentHostNodeCode.e2e.mjs` observes the successful Master write for the exact workspace file before reading it and asserting the authoritative data root. Keyboard dispatch alone does not settle that asynchronous write.
+The remote-workspace data-folder command in `mainHostNodeCode.e2e.mjs` observes the successful Master write for the exact workspace file before reading it and asserting the authoritative data root. Keyboard dispatch alone does not settle that asynchronous write.

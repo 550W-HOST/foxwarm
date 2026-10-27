@@ -16,4 +16,4 @@ Deletion returns committed/partial/error state and cannot remove immutable Archi
 
 ## Tests
 
-`SessionDeletionTests.cs`; `WebUiRealtimeRevisionTests.cs`; `SessionDeletionTests.cs`; `NodeServiceTransportTests.cs`; `packages/webui/test/experimentHostNodeCode.e2e.mjs`.
+`SessionDeletionTests.cs`; `WebUiRealtimeRevisionTests.cs`; `SessionDeletionTests.cs`; `NodeServiceTransportTests.cs`; `packages/webui/test/mainHostNodeCode.e2e.mjs`.

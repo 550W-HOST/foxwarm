@@ -8,7 +8,7 @@ import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { WebSocketServer } from 'ws'
 import sharp from 'sharp'
-import { until } from './experimentHostFixture.mjs'
+import { until } from './mainHostFixture.mjs'
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
 const { processRoot: root } = initializeTestEnvironment()

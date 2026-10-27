@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import WebSocket, { WebSocketServer } from 'ws'
 import { consoleClient } from './cliNodeConsoleFixture.mjs'
-import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
+import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
@@ -15,7 +15,7 @@ initializeTestEnvironment()
 const functionCall = (id, name, args) => ({ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) })
 const exists = path => access(path).then(() => true, () => false)
 for (const runtime of ['source', 'dotnet']) {
-  const env = {}, fixture = await createHostFixture('cli-console-' + runtime, { runtime, normalStartup: true, env })
+  const env = {}, fixture = await createHostFixture('cli-console-' + runtime, { runtime, env })
   Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
   const cwd = join(fixture.root, 'cli'); await mkdir(join(cwd, 'agents/main'), { recursive: true })
   const plans = new Map(), rounds = new Map(), failures = [], wire = [], sockets = new Set()

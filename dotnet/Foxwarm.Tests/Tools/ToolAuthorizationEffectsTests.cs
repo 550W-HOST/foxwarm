@@ -591,7 +591,7 @@ public sealed partial class ToolAuthorizationEffectsTests
                                 "packages",
                                 "webui",
                                 "test",
-                                "experimentHostAuthorization.peer.mjs"
+                                "mainHostAuthorization.peer.mjs"
                             ),
                             peer,
                             Path.Combine(temp.Path, "unused-policy")

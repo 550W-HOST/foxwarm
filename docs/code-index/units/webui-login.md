@@ -34,4 +34,4 @@ Successful authentication keeps the existing `foxwarm_token` cookie/local-storag
 
 `login.e2e.mjs` serves the generated page under a nested deployment prefix with synthetic credentials only. Native Chromium checks desktop/mobile/short/landscape geometry, exact canonical fox paths, theme restoration, zero protected-asset dependencies, mask/reveal, pending deduplication, successful cookie/storage persistence, invalid/network/server/timeout recovery, fragment handling, storage denial and reduced motion. Screenshot artifacts use empty fields or synthetic pending data.
 
-`experimentHostLoginCookies.e2e.mjs` verifies the unchanged generated page against one owned .NET configuration through direct-root and prefix-stripping proxy URLs: cookie scope/lifetime, validation-only responses, scoped authorization/revocation and the old HttpOnly replacement limitation.
+`mainHostLoginCookies.e2e.mjs` verifies the unchanged generated page against one owned .NET configuration through direct-root and prefix-stripping proxy URLs: cookie scope/lifetime, validation-only responses, scoped authorization/revocation and the old HttpOnly replacement limitation.

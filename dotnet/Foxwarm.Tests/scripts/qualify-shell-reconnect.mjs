@@ -5,7 +5,7 @@ import { once } from 'node:events'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import WebSocket from 'ws'
-import { createHostFixture, until, sleep } from '../../../packages/webui/test/experimentHostFixture.mjs'
+import { createHostFixture, until, sleep } from '../../../packages/webui/test/mainHostFixture.mjs'
 
 // Own every host, credential, client and fault. No installed runtime is consulted.
 // An optional executable argument selects portable HTTP-only qualification.

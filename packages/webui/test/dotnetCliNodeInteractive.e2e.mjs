@@ -8,7 +8,7 @@ import { basename, join } from 'node:path'
 import { createRequire } from 'node:module'
 import { WebSocketServer } from 'ws'
 import { consoleClient } from './cliNodeConsoleFixture.mjs'
-import { until, sleep } from './experimentHostFixture.mjs'
+import { until, sleep } from './mainHostFixture.mjs'
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment } = require('../../../scripts/test/test-process-env.cjs')

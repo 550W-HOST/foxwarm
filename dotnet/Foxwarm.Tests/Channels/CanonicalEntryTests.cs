@@ -11,7 +11,7 @@ public sealed class CanonicalEntryTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Console_starts_from_another_cwd_without_experiment_roots_and_headless_has_no_listener(
+    public async Task Console_starts_from_another_cwd_and_headless_has_no_listener(
         bool headless
     )
     {
@@ -57,7 +57,6 @@ public sealed class CanonicalEntryTests
                 .ToArray()
         )
             start.Environment.Remove(key);
-        start.Environment["FOXWARM_APP_ROOT"] = cwd; // Retired inherited setting cannot select state.
         using var process = Process.Start(start)!;
         var error = process.StandardError.ReadToEndAsync();
         var ready = new TaskCompletionSource<string>(

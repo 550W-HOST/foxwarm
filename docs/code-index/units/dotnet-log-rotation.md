@@ -2,7 +2,7 @@
 
 Files: `dotnet/Foxwarm/LogRotation.cs`, `dotnet/Foxwarm.Tests/LogRotationTests.cs`
 
-Secondary/integration references: `dotnet/Foxwarm/MainHost.cs`, `dotnet/Foxwarm/Sessions/AgentCatalog.cs`, `src/logRotation.ts`, `src/index.ts`, `packages/webui/test/experimentHostNativeExec.e2e.mjs`
+Secondary/integration references: `dotnet/Foxwarm/MainHost.cs`, `dotnet/Foxwarm/Sessions/AgentCatalog.cs`, `src/logRotation.ts`, `src/index.ts`, `packages/webui/test/mainHostNativeExec.e2e.mjs`
 
 ## Contract and rationale
 
@@ -21,4 +21,4 @@ This artifact policy is independent of the [strict 24-hour exec tracking lifetim
 
 ## Verification
 
-`LogRotationTests` checks original archive contents, three/seven retention, skipped names, a real destination-open failure with original retention and subsequent successful archival, and the owned immediate schedule over only supplied roots. `experimentHostNativeExec.e2e.mjs` exercises actual Main startup archival alongside native command lifetime and real process restart. Linux evidence does not qualify Windows sharing/deletion or PowerShell execution.
+`LogRotationTests` checks original archive contents, three/seven retention, skipped names, a real destination-open failure with original retention and subsequent successful archival, and the owned immediate schedule over only supplied roots. `mainHostNativeExec.e2e.mjs` exercises actual Main startup archival alongside native command lifetime and real process restart. Linux evidence does not qualify Windows sharing/deletion or PowerShell execution.

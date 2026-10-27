@@ -27,4 +27,4 @@ Canonical conversion retains empty signed thinking and `redacted_thinking` data;
 
 ## Tests
 
-`AnthropicTests`, `AnthropicStreamingTests`, `CompletionsTests`, `ResponsesStreamingTests`, routing/retry/journal qualification and image/tool serialization tests. `packages/webui/test/experimentHostAnthropic.e2e.mjs` qualifies the original App against owned local SSE/JSON peers: live progress, held terminal completion, ordered real tools, invalid-input nonexecution, limit notices, replay/filtering, leaf image preparation, cancellation/watchdog, journal/Archive and clean host restart. No paid-provider behavior is claimed.
+`AnthropicTests`, `AnthropicStreamingTests`, `CompletionsTests`, `ResponsesStreamingTests`, routing/retry/journal qualification and image/tool serialization tests. `packages/webui/test/mainHostAnthropic.e2e.mjs` qualifies the original App against owned local SSE/JSON peers: live progress, held terminal completion, ordered real tools, invalid-input nonexecution, limit notices, replay/filtering, leaf image preparation, cancellation/watchdog, journal/Archive and clean host restart. No paid-provider behavior is claimed.

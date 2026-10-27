@@ -5,7 +5,7 @@ import { createServer, request } from 'node:http'
 import { once } from 'node:events'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { createHostFixture, until } from '../../../packages/webui/test/experimentHostFixture.mjs'
+import { createHostFixture, until } from '../../../packages/webui/test/mainHostFixture.mjs'
 
 const source = process.argv.includes('--source')
 const hidden = ['set_session_child_model', 'set_session_compact_threshold', 'refresh_session_snapshot', 'compact_session', 'create_agent', 'create_session', 'set_agent_inherit']
@@ -34,7 +34,7 @@ peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
 try {
   for (const configured of [false, true]) {
     const env = {}
-    const f = await createHostFixture('bootstrap-default-tools', { runtime: source ? 'source' : undefined, normalStartup: !source, env })
+    const f = await createHostFixture('bootstrap-default-tools', { runtime: source ? 'source' : undefined, env })
     env.FOXWARM_AGENTS_DIR = join(f.root, 'agents')
     const prefix = configured && !source ? '/mount' : ''
     const post = async (path, body, expected = 200) => { const value = await f.api('POST', prefix + path, body); assert.equal(value.status, expected, JSON.stringify(value)); return value.body }

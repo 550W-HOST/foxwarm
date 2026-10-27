@@ -4,7 +4,7 @@ import { once } from 'node:events'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { WebSocket } from 'ws'
-import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
+import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
 
 const options = { env: {} }, owned = await createHostFixture('terminal-native', options)
 options.cwd = owned.root; options.env = { HOME: join(owned.root, 'home'), }

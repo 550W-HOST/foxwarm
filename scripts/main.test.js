@@ -51,10 +51,9 @@ function fixture(t, built = true) {
   const preload = path.join(root, 'no-typescript.cjs');
   fs.writeFileSync(preload, `const Module=require('node:module'); const load=Module._load; Module._load=function(id,...args){ if(typeof id==='string' && (id.includes('/lib/index') || id.includes(${JSON.stringify(path.join(repository, 'lib') + path.sep)}))) throw Error('TS Main loaded'); return load.call(this,id,...args); };`);
   const env = { ...process.env, FOXWARM_SYNC_FILE_LOG: '0', FOXWARM_NO_CONSOLE_LOG: '', FOXWARM_LOG_STDERR: '',
-    FOXWARM_APP_ROOT: '', FOXWARM_DATA_DIR: '',
+    FOXWARM_DATA_DIR: '',
     // Retired filename controls cannot redirect the selected data/state/config.yaml.
     FOXWARM_CONFIG_PATH: 'app.yaml', CONFIG_PATH: 'wrong.yaml',
-    FOXWARM_EXPERIMENT_DATA_ROOT: '', FOXWARM_EXPERIMENT_TOOL_ROOT: '', FOXWARM_EXPERIMENT_SKILLS_ROOT: '',
     FOXWARM_MAIN_LIFETIME_PIPE: '',
     NODE_OPTIONS: `--require=${JSON.stringify(preload)}` };
   const children = [];
@@ -112,34 +111,17 @@ test('directory and resolved package execution keep installation identity, confi
   // A real package resolver selects the JS execution boundary; it is not an import API.
   const resolved = require.resolve(f.app);
   assert.equal(resolved, path.join(f.app, 'scripts/main.js'));
-  for (const entry of [f.app, resolved]) {
+  for (const [entry, signal] of [[f.app, 'SIGTERM'], [resolved, 'SIGINT']]) {
     const instance = await f.launch([entry]);
     const pid = await f.ready(instance);
     assert.match(instance.text, /Configured bot.enableTUI is ignored/);
     assert(fs.existsSync(path.join(f.data, 'agents/main/memory')));
     assert(!fs.existsSync(path.join(f.cwd, 'state')));
     assert(!fs.existsSync(path.join(f.app, 'state')));
-    instance.child.kill('SIGTERM');
+    instance.child.kill(signal);
     assert.deepEqual(await instance.exited, { code: 0, signal: null }, instance.text);
     await until(() => !running(pid), 'Managed Main survived foreground launcher shutdown.');
   }
-});
-
-test('retired installation environment cannot redirect package state', linux, async t => {
-  const f = fixture(t);
-  const other = path.join(f.cwd, 'retired installation');
-  fs.mkdirSync(other);
-  fs.writeFileSync(path.join(other, 'app.yaml'), 'bot: {httpPort: -1}\n');
-  const instance = await f.launch([f.app], { FOXWARM_APP_ROOT: other,
-    FOXWARM_EXPERIMENT_DATA_ROOT: other, FOXWARM_EXPERIMENT_TOOL_ROOT: other,
-    FOXWARM_EXPERIMENT_SKILLS_ROOT: other });
-  const pid = await f.ready(instance);
-  assert(fs.existsSync(path.join(f.data, 'agents/main/memory')));
-  assert(!fs.existsSync(path.join(other, 'state')));
-  assert(!fs.existsSync(path.join(other, 'memory')));
-  instance.child.kill('SIGINT');
-  assert.deepEqual(await instance.exited, { code: 0, signal: null }, instance.text);
-  await until(() => !running(pid), 'Managed Main survived SIGINT.');
 });
 
 function longTemporaryDirectory(f) {
@@ -344,11 +326,9 @@ function tmuxFixture(t) {
     spawnSync(tmuxBin, ['-S', socket, 'kill-server']);
     for (const release of cleanup) await release();
   });
-  // A stale server root must not decide what this invocation selects.
   tmux('new-session', '-d', '-s', 'fixture');
   tmux('set-option', '-g', 'default-shell', '/bin/bash');
   tmux('set-option', '-g', 'automatic-rename', 'off');
-  tmux('set-environment', '-g', 'FOXWARM_APP_ROOT', path.join(f.root, 'stale installation'));
   function install(app) {
     fs.mkdirSync(path.join(app, 'selected data/state'), { recursive: true });
     fs.writeFileSync(path.join(app, 'selected data/state/config.yaml'), 'vector: false\nbot: {enableWebUI: false, enableTrigger: false}\npaths: {agentsDir: "owned agents"}\n');
@@ -361,12 +341,9 @@ function tmuxFixture(t) {
   async function ready(count = 1) {
     await until(() => (text().match(/Main started without HTTP\./g) || []).length === count, 'Managed Main did not start in the private tmux pane.');
   }
-  function run(script, root) {
-    const launchEnv = { ...env };
-    if (root === undefined) delete launchEnv.FOXWARM_APP_ROOT;
-    else launchEnv.FOXWARM_APP_ROOT = root;
+  function run(script) {
     const result = spawnSync('bash', [path.join(f.app, 'scripts', script)], {
-      cwd: f.cwd, env: launchEnv, encoding: 'utf8', timeout: 15000,
+      cwd: f.cwd, env, encoding: 'utf8', timeout: 15000,
     });
     assert.equal(result.status, 0, result.stdout + result.stderr);
   }
@@ -380,47 +357,20 @@ function tmuxFixture(t) {
 
 const tmuxMain = { skip: process.platform !== 'linux' || spawnSync('tmux', ['-V']).status !== 0
   ? 'Requires Linux, Bash and tmux' : false };
-for (const script of ['start.sh', 'restart.sh']) {
-  for (const mode of ['relative', 'absolute', 'omitted', 'empty']) {
-    test(`Bash ${script} ignores a ${mode} retired installation setting`, tmuxMain, async t => {
-      const f = tmuxFixture(t);
-      const relative = 'selected installation';
-      const explicit = path.join(f.cwd, relative);
-      const wrong = path.join(f.app, relative);
-      const expected = f.app;
-      // Valid competing roots ensure ignored settings cannot quietly initialize another tree.
-      for (const app of [explicit, wrong, f.app]) f.install(app);
-      const input = { relative, absolute: explicit, omitted: undefined, empty: '' }[mode];
-      f.run(script, input);
-      await f.ready();
-      assert(fs.existsSync(path.join(expected, 'owned agents/main/memory')), `Missing selected installation ${expected}; checkout sibling initialized: ${fs.existsSync(path.join(wrong, 'owned agents/main/memory'))}`);
-      assert(fs.existsSync(path.join(expected, 'selected data/state/logs')), 'Diagnostic logs did not use installation-relative data.');
-      for (const other of [explicit, wrong, f.app].filter(app => app !== expected))
-        assert(!fs.existsSync(path.join(other, 'owned agents')), `Initialized unselected installation ${other}`);
-      assert(!fs.existsSync(path.join(f.cwd, 'selected data')), 'Relative data escaped the selected installation.');
-      await f.stop();
-    });
-  }
-}
-
-test('Bash restart stops the running Main and ignores retired installation overrides', tmuxMain, async t => {
+test('Bash restart drains the running Main before starting its replacement', tmuxMain, async t => {
   const f = tmuxFixture(t);
-  const relative = 'next installation';
-  const selected = path.join(f.cwd, relative);
-  const wrong = path.join(f.app, relative);
-  for (const app of [f.app, selected, wrong]) f.install(app);
+  f.install(f.app);
   f.run('start.sh');
   await f.ready();
   const shell = f.tmux('display-message', '-p', '-t', f.pane(), '#{pane_pid}');
   const launcher = execFileSync('pgrep', ['-P', shell], { encoding: 'utf8' }).trim();
   const main = Number(execFileSync('pgrep', ['-P', launcher], { encoding: 'utf8' }).trim());
-  f.run('restart.sh', relative);
+  f.run('restart.sh');
   await f.ready(2);
   assert(!running(main), 'Previous managed Main survived restart.');
   const log = f.text();
   assert(log.indexOf('Main stopped.') < log.lastIndexOf('Main started without HTTP.'), log);
   assert(fs.existsSync(path.join(f.app, 'owned agents/main/memory')));
-  assert(!fs.existsSync(path.join(selected, 'owned agents')));
-  assert(!fs.existsSync(path.join(wrong, 'owned agents')));
+  assert(!fs.existsSync(path.join(f.cwd, 'selected data')));
   await f.stop();
 });

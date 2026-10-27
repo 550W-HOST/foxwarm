@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { mkdir, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { until } from './experimentHostFixture.mjs'
+import { until } from './mainHostFixture.mjs'
 
 const require = createRequire(import.meta.url), pty = require('node-pty')
 const { isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')

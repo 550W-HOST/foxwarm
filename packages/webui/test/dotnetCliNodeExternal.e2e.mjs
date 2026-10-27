@@ -9,7 +9,7 @@ import { homedir } from 'node:os'
 import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { WebSocketServer } from 'ws'
-import { until, sleep } from './experimentHostFixture.mjs'
+import { until, sleep } from './mainHostFixture.mjs'
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
 const { processRoot: root } = initializeTestEnvironment()

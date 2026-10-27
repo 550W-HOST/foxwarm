@@ -2,7 +2,7 @@
 // Production WebUI and current C# onboarding routes, with owned state and listener.
 import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
-import { createHostFixture } from '../../../packages/webui/test/experimentHostFixture.mjs'
+import { createHostFixture } from '../../../packages/webui/test/mainHostFixture.mjs'
 
 let page
 const fixture = await createHostFixture('shell-onboarding', { env: {} })

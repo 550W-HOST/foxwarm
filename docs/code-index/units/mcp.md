@@ -1,7 +1,7 @@
 # Unit: Outbound MCP client
 
 Files: `dotnet/Foxwarm/McpClient.Connections.cs`, `dotnet/Foxwarm/McpClient.External.cs`, `dotnet/Foxwarm/McpClient.ExternalResults.cs`, `dotnet/Foxwarm/McpClient.cs`, `dotnet/Foxwarm/McpClient.Authorizations.cs`, `dotnet/Foxwarm/McpConfiguration.cs`
-Secondary files: `dotnet/Foxwarm.Tests/Mcp/OutboundMcpFixture.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpLifecycleTests.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpResultsTests.cs`, `dotnet/Foxwarm.Tests/Mcp/Fixtures/outbound-peer.mjs`, `packages/webui/test/experimentHostMcp.e2e.mjs`, `packages/webui/test/experimentHostMcp.peer.mjs`
+Secondary files: `dotnet/Foxwarm.Tests/Mcp/OutboundMcpFixture.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpLifecycleTests.cs`, `dotnet/Foxwarm.Tests/Mcp/OutboundMcpResultsTests.cs`, `dotnet/Foxwarm.Tests/Mcp/Fixtures/outbound-peer.mjs`, `packages/webui/test/mainHostMcp.e2e.mjs`, `packages/webui/test/mainHostMcp.peer.mjs`
 
 ## Purpose
 
@@ -41,4 +41,4 @@ Secrets are redacted using the exact configuration which supplied a connection's
 
 `OutboundMcpResultsTests` uses those peers plus an official C# SDK ASP.NET stateless/discover peer. Default SDK result metadata is preserved; an explicit official outgoing-message filter also qualifies metadata-free scalar/null/array structured results. Tests pass real values through the Session executor, native Monty, ordinary turn pairing, JSON/Archive persistence, image references/provider projection, and compaction previews. Audio and binary resource content remain result data, without playback or decoding.
 
-`experimentHostMcp.e2e.mjs` exercises the original App and actual HTTP Main through disposable SDK peers and a synthetic provider, including paired result forms, stdio process-key changes with active calls, real Stop, four HTTP/SSE/auto placements, control receipts, clean restart, Archive rows, and owned process cleanup. Existing authorization, image, ToolScript, and owner lifecycle regressions remain relevant.
+`mainHostMcp.e2e.mjs` exercises the original App and actual HTTP Main through disposable SDK peers and a synthetic provider, including paired result forms, stdio process-key changes with active calls, real Stop, four HTTP/SSE/auto placements, control receipts, clean restart, Archive rows, and owned process cleanup. Existing authorization, image, ToolScript, and owner lifecycle regressions remain relevant.

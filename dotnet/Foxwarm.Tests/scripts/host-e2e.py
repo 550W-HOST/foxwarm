@@ -220,8 +220,8 @@ def main():
     (data / 'state/token').write_text(TOKEN + '\n')
     env = dict(os.environ)
     for key in list(env):
-        if key.startswith('FOXWARM_EXPERIMENT_') or key in (
-                'FOXWARM_APP_ROOT', 'FOXWARM_MAIN_LIFETIME_PIPE',
+        if key in (
+                'FOXWARM_MAIN_LIFETIME_PIPE',
                 'FOXWARM_WINDOWS_CONTROL_PIPE', 'FOXWARM_CLI_LIFETIME_PIPE',
                 'ASPNETCORE_URLS'):
             del env[key]

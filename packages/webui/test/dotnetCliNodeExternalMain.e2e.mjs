@@ -10,14 +10,14 @@ import { createRequire } from 'node:module'
 import WebSocket, { WebSocketServer } from 'ws'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { createHostFixture, until } from './experimentHostFixture.mjs'
+import { createHostFixture, until } from './mainHostFixture.mjs'
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
 initializeTestEnvironment()
 const exists = file => access(file).then(() => true, () => false)
 const value = result => { assert(!result.isError, JSON.stringify(result)); return result.structuredContent ?? JSON.parse(result.content[0].text) }
 for (const runtime of ['source', 'dotnet']) {
-  const env = {}, host = await createHostFixture('cli-external-' + runtime, { runtime, normalStartup: true, env })
+  const env = {}, host = await createHostFixture('cli-external-' + runtime, { runtime, env })
   Object.assign(env, isolatedApplicationEnv(host.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
   const prefix = runtime === 'source' ? '' : '/external/main'
   const tokens = { alpha: 'synthetic-alpha', beta: 'synthetic-beta' }

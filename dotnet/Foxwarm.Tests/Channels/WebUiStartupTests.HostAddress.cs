@@ -27,15 +27,7 @@ public sealed partial class WebUiStartupTests
         }
         string Config(string url) => $"url: {url}\nbot: {{httpPort: {h.Port}}}\nvector: false\n";
         await File.WriteAllTextAsync(h.ConfigPath, Config("https://yaml.example/first"));
-        var environment = new Dictionary<string, string?>
-        {
-            ["FOXWARM_PUBLIC_BASE_URL"] = "https://retired.example/wrong",
-            ["FOXWARM_HTTP_PORT"] = "invalid",
-            ["FOXWARM_BIND_ADDRESS"] = "invalid",
-            ["FOXWARM_EXPERIMENT_PORT"] = "invalid",
-            ["FOXWARM_EXPERIMENT_BIND_ADDRESS"] = "invalid",
-        };
-        h.Start(environment);
+        h.Start();
         await h.Ready();
         async Task Check(string prefix, string publicUrl)
         {
@@ -103,7 +95,7 @@ public sealed partial class WebUiStartupTests
         );
         await Check("/first", "https://yaml.example/first");
         await h.Stop();
-        h.Start(environment);
+        h.Start();
         await h.Ready();
         await Check("/second", "https://saved.example/second");
         await h.Stop();

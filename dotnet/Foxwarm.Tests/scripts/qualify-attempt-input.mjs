@@ -6,7 +6,7 @@ import { once } from 'node:events'
 import { spawn, execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { createHostFixture, until } from '../../../packages/webui/test/experimentHostFixture.mjs'
+import { createHostFixture, until } from '../../../packages/webui/test/mainHostFixture.mjs'
 
 const f = await createHostFixture('attempt-input')
 const requests = [], rounds = new Map(), gates = new Map(), failures = []

@@ -21,7 +21,7 @@ This unit cannot reconstruct active history, authorize a Session mutation, or by
 
 ## Tests
 
-`packages/webui/test/experimentHostPresentation.e2e.mjs` drives zero-owner cold presentation commands, missing-authority versus offline-Node reads, immutable JSON/Archive controls, real SQLite rollback, original Sidebar/Architecture actions and catalog fields surviving a held semantic save and restart.
+`packages/webui/test/mainHostPresentation.e2e.mjs` drives zero-owner cold presentation commands, missing-authority versus offline-Node reads, immutable JSON/Archive controls, real SQLite rollback, original Sidebar/Architecture actions and catalog fields surviving a held semantic save and restart.
 
 `dotnet/Foxwarm.Tests/Sessions/SessionCatalogPublicationTests.cs`; `SessionIdentityMoveTests.cs`; `SessionDeletionTests.cs`; `SessionPresentationTests.cs`.
 

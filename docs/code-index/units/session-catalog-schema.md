@@ -26,6 +26,6 @@ Schema v3 adds nullable REAL request-cost subtotals and maintained known-cost an
 
 `dotnet/Foxwarm.Tests/Sessions/SessionCatalogMigrationTests.cs`; `SessionCatalogSourceTests.cs`; `SessionCatalogPublicationTests.cs`; `dotnet/Foxwarm.Tests/Storage/TypeScriptFixtureTests.cs`.
 
-`packages/webui/test/experimentHostCatalog.e2e.mjs` uses the actual Source catalog migration before Archive branch seeding. Its ambiguous presentation aliases, Unicode identities and parent cycles qualify the catalog-first persisted boundary without presenting those aliases as committed pre-catalog Archive moves. The real Main/browser scenarios retain bounded list queries, publication failures, pre-effect ordering and missing cold authority admission.
+`packages/webui/test/mainHostCatalog.e2e.mjs` uses the actual Source catalog migration before Archive branch seeding. Its ambiguous presentation aliases, Unicode identities and parent cycles qualify the catalog-first persisted boundary without presenting those aliases as committed pre-catalog Archive moves. The real Main/browser scenarios retain bounded list queries, publication failures, pre-effect ordering and missing cold authority admission.
 
 The execution-context and timer-lifecycle browser scenarios prepare post-migration catalog changes through the managed [DevTools catalog fixture](./devtools.md), not the retired TypeScript catalog reader. Timer membership snapshots use the normal host list route before shutdown.

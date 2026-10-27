@@ -1,0 +1,216 @@
+import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
+import { once } from 'node:events'
+import { writeModelFixture } from './mainModelFixture.mjs'
+import { createHostFixture, until } from './mainHostFixture.mjs'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
+
+const providerToken = 'history-observation-provider-token'
+const parentId = 'history-observation-parent'
+const movedId = 'history-observation-moved'
+let provider
+const fixture = await createHostFixture('history-observation')
+
+function complete(res) {
+  res.write(
+    `data: ${JSON.stringify({
+      type: 'response.completed',
+      response: {
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'history observation response' }],
+          },
+        ],
+      },
+    })}\n\n`,
+  )
+  res.end()
+}
+
+async function history(sessionId) {
+  return (await fixture.api('GET', `/api/sessions/${encodeURIComponent(sessionId)}/history?tail=500`)).body
+}
+
+async function waitForRows(sessionId, count) {
+  return until(async () => {
+    const value = await history(sessionId)
+    return value.messages?.length >= count ? value : false
+  }, `${sessionId} history`, 20000)
+}
+
+try {
+  provider = createServer(async (request, response) => {
+    try {
+      assert.equal(request.url, '/responses')
+      assert.equal(request.headers.authorization, `Bearer ${providerToken}`)
+      for await (const _chunk of request) {}
+      response.writeHead(200, { 'content-type': 'text/event-stream', connection: 'close' })
+      complete(response)
+    } catch (error) {
+      if (!response.headersSent) response.writeHead(500)
+      response.end()
+      throw error
+    }
+  })
+  provider.listen(0, '127.0.0.1')
+  await once(provider, 'listening')
+  await writeModelFixture(fixture.data, {
+    default: 'history-observation-model',
+    providers: {
+      'history-observation-model': {
+        providerType: 'openai-responses',
+        baseUrl: `http://127.0.0.1:${provider.address().port}`,
+        apiKey: providerToken,
+        models: ['history-observation-model'],
+      },
+    },
+  })
+  await fixture.start()
+
+  const created = await fixture.api('POST', '/api/sessions', { agentId: 'main', sessionId: parentId })
+  assert.equal(created.status, 200, JSON.stringify(created))
+  for (let index = 0; index < 30; index += 1) {
+    const sent = await fixture.api('POST', `/api/sessions/${parentId}/message`, { text: `history-seed-${index}` })
+    assert.equal(sent.status, 202, JSON.stringify(sent))
+    await waitForRows(parentId, (index + 1) * 2)
+  }
+
+  const fork = await fixture.api('POST', `/api/sessions/${parentId}/fork`, { suffix: 'child' })
+  assert.equal(fork.status, 200, JSON.stringify(fork))
+  const childId = fork.body.newSessionId
+  assert.equal(typeof childId, 'string')
+  const postForkText = 'history-parent-after-fork'
+  const postFork = await fixture.api('POST', `/api/sessions/${parentId}/message`, { text: postForkText })
+  assert.equal(postFork.status, 202, JSON.stringify(postFork))
+  const parentAfterFork = await waitForRows(parentId, 62)
+  const postForkRow = parentAfterFork.messages.find(row => JSON.stringify(row).includes(postForkText))
+  assert(postForkRow?.__meta?.seq)
+  const childWindow = await fixture.api(
+    'GET',
+    `/api/history/window?sessionId=${encodeURIComponent(childId)}&target=msg%23${postForkRow.__meta.seq}`,
+  )
+  assert.equal(childWindow.status, 200, JSON.stringify(childWindow))
+  assert(childWindow.body.messages.every(row => !JSON.stringify(row).includes(postForkText)))
+
+  const centered = await fixture.api('GET', `/api/history/window?sessionId=${parentId}&target=msg%2330`)
+  assert.equal(centered.status, 200, JSON.stringify(centered))
+  assert.equal(centered.body.hasEarlier, true)
+  const earlier = await fixture.api(
+    'GET',
+    `/api/history/window?sessionId=${parentId}&beforeSeq=${centered.body.firstSeq}`,
+  )
+  assert.equal(earlier.status, 200, JSON.stringify(earlier))
+  assert.equal(earlier.body.hasEarlier, true)
+  assert.equal(earlier.body.hasLater, true)
+
+  const selected = await fixture.api('GET', `/api/history/window?sessionId=${parentId}&target=msg%231-45`)
+  assert.equal(selected.status, 200, JSON.stringify(selected))
+  assert.equal(selected.body.messages.length, 20)
+  assert.equal(selected.body.hasMoreInTarget, true)
+  assert.equal(selected.body.hasLater, true)
+  const continued = await fixture.api(
+    'GET',
+    `/api/history/window?sessionId=${parentId}&afterSeq=${selected.body.lastSeq}&targetEndSeq=45`,
+  )
+  assert.equal(continued.status, 200, JSON.stringify(continued))
+  assert.equal(continued.body.messages.length, 20)
+  assert.equal(continued.body.hasMoreInTarget, true)
+  const finished = await fixture.api(
+    'GET',
+    `/api/history/window?sessionId=${parentId}&afterSeq=${continued.body.lastSeq}&targetEndSeq=45`,
+  )
+  assert.equal(finished.status, 200, JSON.stringify(finished))
+  assert.equal(finished.body.messages.length, 5)
+  assert.equal(finished.body.hasMoreInTarget, false)
+  assert.equal(finished.body.hasLater, true)
+  assert.deepEqual(
+    [...selected.body.messages, ...continued.body.messages, ...finished.body.messages].map(
+      row => row.__meta.seq,
+    ),
+    Array.from({ length: 45 }, (_, index) => index + 1),
+  )
+
+  const moved = await fixture.api('POST', `/api/sessions/${parentId}/message`, { text: `/session move ${movedId}` })
+  assert.equal(moved.status, 200, JSON.stringify(moved))
+  const aliasWindow = await fixture.api('GET', `/api/history/window?sessionId=${parentId}&target=msg%231`)
+  assert.equal(aliasWindow.status, 200, JSON.stringify(aliasWindow))
+  const debug = await fixture.api('GET', `/api/sessions/${movedId}/debug-file`)
+  assert.equal(debug.status, 200, JSON.stringify(debug))
+  assert.equal(debug.body.payload.contextFrontier, undefined)
+  const tree = await fixture.api('GET', '/api/agents/tree')
+  assert.equal(tree.status, 200, JSON.stringify(tree))
+  assert(tree.body.agents.some(row => row.id === childId))
+
+  const treeBeforeUnknown = await fixture.api('GET', '/api/agents/tree')
+  const unknown = await fixture.api(
+    'GET',
+    '/api/history/window?sessionId=history-observation-unknown&target=msg%231',
+  )
+  assert.equal(unknown.status, 404, JSON.stringify(unknown))
+  const unknownSearch = await fixture.api(
+    'GET',
+    '/api/history/search?query=history&sessionId=history-observation-unknown',
+  )
+  assert.equal(unknownSearch.status, 404, JSON.stringify(unknownSearch))
+  const treeAfterUnknown = await fixture.api('GET', '/api/agents/tree')
+  assert.deepEqual(
+    treeAfterUnknown.body,
+    treeBeforeUnknown.body,
+  )
+
+  const invalid = await fixture.api('GET', `/api/history/window?sessionId=${movedId}&beforeSeq=not-a-number`)
+  assert.equal(invalid.status, 400, JSON.stringify(invalid))
+  assert.equal(invalid.body.code, 'HISTORY_SEARCH_INVALID')
+  const duplicate = await fixture.api(
+    'GET',
+    `/api/history/window?sessionId=${movedId}&target=msg%231&target=msg%232`,
+  )
+  assert.equal(duplicate.status, 400, JSON.stringify(duplicate))
+  const semantic = await fixture.api('GET', '/api/history/search?query=history-seed')
+  assert.equal(semantic.status, 503, JSON.stringify(semantic))
+  assert.equal(semantic.body.code, 'VECTOR_DISABLED')
+  assert.equal((await fetch(`${fixture.origin}/api/agents/tree`)).status, 401)
+
+  const page = await fixture.openApp()
+  await page.setViewport({ width: 520, height: 800 })
+  await page.waitForSelector('#mobile-tab-search')
+  await page.click('#mobile-tab-search')
+  await page.waitForSelector('[data-history-query-input]')
+  await page.type('[data-history-query-input]', `sessionId=${parentId} msg#1-45`)
+  await page.click('button[type="submit"]')
+  await page.waitForSelector('[data-history-search-results] [data-history-result]')
+  assert((await page.$eval('[data-history-search-results]', node => node.textContent || '')).includes('Selected msg#1–45'))
+  await page.click('[data-history-search-results] [data-history-page="later"]')
+  await page.waitForFunction(() => (document.querySelector('[data-history-search-results]')?.textContent || '').includes('shown 1–40'))
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await waitForWebUiReady(page)
+  await page.waitForSelector('#mobile-tab-search')
+  await page.click('#mobile-tab-search')
+  await page.waitForSelector('[data-history-query-input]')
+  await page.type('[data-history-query-input]', `sessionId=${parentId} msg#1-45`)
+  await page.click('button[type="submit"]')
+  await page.waitForSelector('[data-history-search-results] [data-history-result]')
+  await page.evaluate(() => { location.hash = 'tab/chat:history-observation-moved' })
+  await page.waitForSelector('.foxwarm-chat-root')
+  let debugResponse
+  page.on('response', response => {
+    if (response.url().includes('/debug-file')) debugResponse = response
+  })
+  await page.click('button[title="Session options"]')
+  await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'debug info')?.click())
+  await page.waitForSelector('[data-json-inspector-dialog] [data-editor-ready="true"]')
+  assert(debugResponse)
+  assert.equal(debugResponse.status(), 200)
+  const debugBody = await debugResponse.json()
+  assert.equal(typeof debugBody.resolvedPath, 'string')
+  assert.equal(debugBody.payload.contextFrontier, undefined)
+  assert(Array.isArray(debugBody.payload.history))
+  assert((await page.$eval('[data-json-inspector-dialog]', node => node.textContent || '')).includes('resolvedSessionFilePath'))
+
+  console.log(JSON.stringify({ result: 'ok', childId, populatedWindow: true, selectedRangeContinuation: true, aliasWindow: true, tree: true, exactSearch: true, debugModal: true, semanticStatus: semantic.status }))
+} finally {
+  await fixture.cleanup()
+  if (provider?.listening) await new Promise(done => provider.close(done))
+}

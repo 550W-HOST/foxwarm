@@ -8,7 +8,7 @@ import { mkdir, readFile, writeFile, access } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import WebSocket, { WebSocketServer } from 'ws'
-import { createHostFixture, until } from './experimentHostFixture.mjs'
+import { createHostFixture, until } from './mainHostFixture.mjs'
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
@@ -19,7 +19,7 @@ const coreRoot = resolve('.')
 const sourceRoot = resolve(process.env.FOXWARM_TS_ROOT || '.')
 for (const runtime of ['source', 'dotnet']) for (const clientRuntime of ['source', 'dotnet']) {
   process.chdir(runtime === 'source' ? sourceRoot : coreRoot)
-  const env = {}, fixture = await createHostFixture('cli-exec-' + runtime, { runtime, normalStartup: true, env })
+  const env = {}, fixture = await createHostFixture('cli-exec-' + runtime, { runtime, env })
   Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
   const cwd = join(fixture.root, 'cli'), registry = join(cwd, 'agents/main/.temp/exec/running-exec.json')
   await mkdir(join(cwd, 'agents/main'), { recursive: true })

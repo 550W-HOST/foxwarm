@@ -6,7 +6,7 @@ import { once } from 'node:events'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import WebSocket from 'ws'
-import { createHostFixture, until } from '../../../packages/webui/test/experimentHostFixture.mjs'
+import { createHostFixture, until } from '../../../packages/webui/test/mainHostFixture.mjs'
 
 const source = process.argv.includes('--source')
 const results = []
@@ -22,7 +22,7 @@ for (const configured of [false, true]) {
     res.end('data: ' + JSON.stringify({ type: 'response.completed', response: { output } }) + '\n\n')
   })
   peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
-  const f = await createHostFixture('bootstrap-help', { normalStartup: true, ...(source ? { runtime: 'source' } : {}) })
+  const f = await createHostFixture('bootstrap-help', { ...(source ? { runtime: 'source' } : {}) })
   const prefix = configured && !source ? '/mount' : ''
   const expected = configured ? 'https://configured.example/mount' : `http://YOUR_MASTER:${f.port}`
   const api = async (method, path, body) => {

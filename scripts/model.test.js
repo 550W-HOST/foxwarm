@@ -91,7 +91,7 @@ test('real public model caller uses only Core, captured settings, one-shot reque
   const preload = path.join(root, 'no-ts-backend.cjs');
   fs.writeFileSync(preload, `const Module=require('node:module'); const load=Module._load; Module._load=function(id,...args){ if(typeof id==='string' && id.includes(${JSON.stringify(path.resolve(__dirname, '../lib') + path.sep)})) throw Error('TypeScript backend loaded'); return load.call(this,id,...args); };`);
   const env = {
-    FOXWARM_APP_ROOT: path.join(root, 'ignored'), FOXWARM_CONFIG_PATH: path.join(root, 'app.yaml'), CONFIG_PATH: path.join(root, 'wrong.yaml'),
+    FOXWARM_CONFIG_PATH: path.join(root, 'app.yaml'), CONFIG_PATH: path.join(root, 'wrong.yaml'),
     FOXWARM_DATA_DIR: data,
     TMPDIR: temporary,
     NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require=${preload}`,
@@ -213,9 +213,8 @@ test('terminating the public frontend stops the one-shot provider process after 
       resolve(); // Leave this real provider attempt pending until frontend termination.
     }));
     const child = spawn(process.execPath, [path.join(__dirname, 'foxwarm.js'), 'model', '-p', signal, '-t', '1'], {
-      env: { ...process.env, FOXWARM_APP_ROOT: root, FOXWARM_DATA_DIR: root,
-        TMPDIR: temporary,
-        FOXWARM_EXPERIMENT_DATA_ROOT: '', FOXWARM_EXPERIMENT_TOOL_ROOT: '' },
+      env: { ...process.env, FOXWARM_DATA_DIR: root,
+        TMPDIR: temporary },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     const closed = new Promise(resolve => child.once('close', resolve));

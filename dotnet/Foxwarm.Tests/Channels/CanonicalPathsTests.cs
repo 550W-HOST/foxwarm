@@ -55,7 +55,6 @@ public sealed class CanonicalPathsTests
     [InlineData("env-relative")]
     [InlineData("env-tilde")]
     [InlineData("path-overrides")]
-    [InlineData("retired-controls")]
     public async Task Captured_paths_match_frozen_Source_without_shell_cwd_or_parent_discovery(
         string kind
     )
@@ -86,17 +85,6 @@ public sealed class CanonicalPathsTests
         {
             env["MCP_CONFIG_PATH"] = "~/external mcp.json";
         }
-        if (kind == "retired-controls")
-            foreach (
-                var name in new[]
-                {
-                    "FOXWARM_APP_ROOT",
-                    "FOXWARM_EXPERIMENT_DATA_ROOT",
-                    "FOXWARM_EXPERIMENT_TOOL_ROOT",
-                    "FOXWARM_EXPERIMENT_SKILLS_ROOT",
-                }
-            )
-                env[name] = Path.Combine(temp.Path, "retired root");
         string? EnvironmentValue(string key) => env[key]?.GetValue<string>();
         var initial = HostPaths.Capture(app, resource, EnvironmentValue);
         Directory.CreateDirectory(Path.GetDirectoryName(initial.ConfigPath)!);

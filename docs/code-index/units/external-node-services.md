@@ -24,4 +24,4 @@ The host's normal instance-token/cookie authentication grants administrator API 
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Tools/NodeServiceTransportTests.cs` covers service discovery/version rejection, exact connection/request/service correlation, cancellation, replacement, disconnect and authenticated event identity using real HTTP/WebSocket transports. `packages/webui/test/experimentHostNodeCode.e2e.mjs` connects unchanged official CLI services to owned real hosts and browser consumers, including real files, Git, PTYs, resize, fanout, detach/close, reconnect, helper ownership and optional official Code assets.
+`dotnet/Foxwarm.Tests/Tools/NodeServiceTransportTests.cs` covers service discovery/version rejection, exact connection/request/service correlation, cancellation, replacement, disconnect and authenticated event identity using real HTTP/WebSocket transports. `packages/webui/test/mainHostNodeCode.e2e.mjs` connects unchanged official CLI services to owned real hosts and browser consumers, including real files, Git, PTYs, resize, fanout, detach/close, reconnect, helper ownership and optional official Code assets.

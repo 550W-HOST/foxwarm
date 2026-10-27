@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { until } from './experimentHostFixture.mjs';
+import { until } from './mainHostFixture.mjs';
 export async function launchFirefox(extension, logPath) {
   const socket = createServer(); socket.listen(0, '127.0.0.1'); await once(socket, 'listening');
   const port = socket.address().port; await new Promise(done => socket.close(done));

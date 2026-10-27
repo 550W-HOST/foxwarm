@@ -1598,8 +1598,8 @@ function App() {
       return (
         <Chat
           key={`chat:${tab.sessionId}`}
-          experimentalTextOnly={mainHost}
-          experimentalAttachments={mainHost}
+          sessionMessageMode={mainHost}
+          sessionMessageAttachments={mainHost}
           sessionId={tab.sessionId}
           searchShortcutActive={tab.id === focusedActiveTabId && (!isMobile || !showSessionList)}
           canonicalSessionId={sessionRecord?.id || tab.sessionId}

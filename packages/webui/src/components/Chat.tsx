@@ -153,8 +153,8 @@ function buildAsrContext(messages: Message[], draftText: string): string {
 interface ChatProps {
   sessionId: string
   searchShortcutActive?: boolean
-  experimentalTextOnly?: boolean
-  experimentalAttachments?: boolean
+  sessionMessageMode?: boolean
+  sessionMessageAttachments?: boolean
   canonicalSessionId?: string
   sessionDisplayName?: string
   webUiIdentityMode?: boolean
@@ -188,7 +188,7 @@ type StreamingAsrSession = {
   cancel: () => void
 }
 
-const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experimentalTextOnly = false, experimentalAttachments = false, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onNewSession, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', historyMode = historyModeForTimelineView(timelineView), showUsageBadge = true, showUserMessageMetadata = false, showInterAgentMessages = true, onShowInterAgentMessagesChange = () => {}, showCommentary = true, onShowCommentaryChange = () => {}, fullWidth = true, onFullWidthChange = () => {}, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
+const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessionMessageMode = false, sessionMessageAttachments = false, canonicalSessionId, sessionDisplayName, webUiIdentityMode = false, onBack, onNewSession, onOpenTerminal, onOpenCode, onOpenCodeFile, onOpenCodeCommit, onOpenModelSettings, sendKeyMode = 'modEnter', timelineView = 'detailed', historyMode = historyModeForTimelineView(timelineView), showUsageBadge = true, showUserMessageMetadata = false, showInterAgentMessages = true, onShowInterAgentMessagesChange = () => {}, showCommentary = true, onShowCommentaryChange = () => {}, fullWidth = true, onFullWidthChange = () => {}, onSendKeyModeChange = () => {}, onTimelineViewChange = () => {}, onShowUsageBadgeChange = () => {}, onShowUserMessageMetadataChange = () => {} }: ChatProps) {
   const viewportSessionId = canonicalSessionId || sessionId
   const initialContinuousAnchorSeq = useMemo(() => getChatViewportAnchorSeq(getStoredChatViewportState(viewportSessionId, 'continuous')), [viewportSessionId])
   const {
@@ -1728,8 +1728,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
       </div>
 
       <ChatComposer
-        experimentalTextOnly={experimentalTextOnly}
-        experimentalAttachments={experimentalAttachments}
+        sessionMessageMode={sessionMessageMode}
+        sessionMessageAttachments={sessionMessageAttachments}
         compactModelSelector={compactModelSelector}
         sessionId={sessionId}
         webUiIdentityMode={webUiIdentityMode}
@@ -1802,8 +1802,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, experi
 }, (prev, next) => (
   prev.sessionId === next.sessionId &&
   prev.searchShortcutActive === next.searchShortcutActive &&
-  prev.experimentalTextOnly === next.experimentalTextOnly &&
-  prev.experimentalAttachments === next.experimentalAttachments &&
+  prev.sessionMessageMode === next.sessionMessageMode &&
+  prev.sessionMessageAttachments === next.sessionMessageAttachments &&
   prev.sessionDisplayName === next.sessionDisplayName &&
   Boolean(prev.onBack) === Boolean(next.onBack) &&
   Boolean(prev.onNewSession) === Boolean(next.onNewSession) &&

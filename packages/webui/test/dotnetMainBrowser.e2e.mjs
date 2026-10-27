@@ -7,7 +7,7 @@ import { mkdir, readFile, writeFile, access, readdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import sharp from 'sharp'
-import { createHostFixture, until, sleep } from './experimentHostFixture.mjs'
+import { createHostFixture, until, sleep } from './mainHostFixture.mjs'
 
 const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
@@ -17,7 +17,7 @@ const call = (id, name, args) => ({ type: 'function_call', call_id: id, name, ar
 const browse = (id, name, args = {}, nodeId) => call(id, 'call_tool', { source: 'node', name, ...(nodeId ? { nodeId } : {}), args })
 const exists = path => access(path).then(() => true, () => false)
 for (const runtime of ['source', 'dotnet']) {
-  const env = {}, options = { runtime, normalStartup: true, env }
+  const env = {}, options = { runtime, env }
   const fixture = await createHostFixture('main-browser-' + runtime, options)
   options.cwd = fixture.root
   Object.assign(env, isolatedApplicationEnv(fixture.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '', HOME: join(fixture.root, 'home'), XDG_CONFIG_HOME: join(fixture.root, 'config'), XDG_CACHE_HOME: join(fixture.root, 'cache') })

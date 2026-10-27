@@ -42,4 +42,4 @@ Agent/knowledge/setup, file-delivery, wait, compact, authorization, settings, an
 
 `SessionCreationParityTests.PromptFiles.cs` covers registered tool and command rejection before publication, allowed target-relative and non-isolated outside selection, and bound-Node precedence. `SelectedPromptTests` retains Source normalization/symlink behavior and empty selection.
 
-`MainFileDeliveryTests` and the native nested-delivery test in `MainToolScriptTests` cover successful structured receipts, failure exclusion, destination identity and unchanged history/queue. The original-App continuous/download driver checks target filtering and native downloads; `experimentHostNodeFiles.e2e.mjs` checks direct/nested receipt provenance and real staging through official CLI clients.
+`MainFileDeliveryTests` and the native nested-delivery test in `MainToolScriptTests` cover successful structured receipts, failure exclusion, destination identity and unchanged history/queue. The original-App continuous/download driver checks target filtering and native downloads; `mainHostNodeFiles.e2e.mjs` checks direct/nested receipt provenance and real staging through official CLI clients.

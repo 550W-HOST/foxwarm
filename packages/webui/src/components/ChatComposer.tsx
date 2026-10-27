@@ -49,8 +49,8 @@ export type ModelOption = {
 interface ChatComposerProps {
   compactModelSelector?: boolean
   sessionId: string
-  experimentalTextOnly?: boolean
-  experimentalAttachments?: boolean
+  sessionMessageMode?: boolean
+  sessionMessageAttachments?: boolean
   webUiIdentityMode?: boolean
   currentNode?: string
   onChangeNode?: (nodeId: string, signal: AbortSignal) => Promise<void>
@@ -711,8 +711,8 @@ const ChatComposer = memo(function ChatComposer({
   sessionRunning = false,
   onStop,
   asrAvailable,
-  experimentalTextOnly = false,
-  experimentalAttachments = false,
+  sessionMessageMode = false,
+  sessionMessageAttachments = false,
   modelOptions,
   currentModelKey,
   sessionModel,
@@ -743,7 +743,7 @@ const ChatComposer = memo(function ChatComposer({
   onSend,
   onCreateStreamingTranscriber,
 }: ChatComposerProps) {
-  const attachmentEnabled = !experimentalTextOnly || experimentalAttachments
+  const attachmentEnabled = !sessionMessageMode || sessionMessageAttachments
   const loadedDraft = useMemo(() => loadComposerDraft(sessionId), [sessionId])
   const [draftState, setDraftState] = useState<{ sessionId: string; draft: ComposerDraft }>(() => ({ sessionId, draft: loadedDraft }))
   const draft = draftState.sessionId === sessionId ? draftState.draft : loadedDraft
@@ -1545,7 +1545,7 @@ const ChatComposer = memo(function ChatComposer({
           disabled={loading || sessionMissing || recordingLocked}
           placeholder={sessionMissing
             ? 'Session not found'
-            : mobileUi ? '' : webUiIdentityMode ? 'Send a message' : experimentalTextOnly ? 'Message this session' : 'Ask Foxwarm anything, + to add files, / for commands'}
+            : mobileUi ? '' : webUiIdentityMode ? 'Send a message' : sessionMessageMode ? 'Message this session' : 'Ask Foxwarm anything, + to add files, / for commands'}
           onChange={(nextDraft) => {
             commitDraft(nextDraft)
             setDismissedSlashQuery(null)
