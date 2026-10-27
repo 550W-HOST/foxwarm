@@ -109,7 +109,7 @@ public sealed class AgentSnapshotParityTests
             target.Id,
             QueueItem.UserText("Actual prompt dispatch.")
         );
-        await target.Registry.Runner.ProcessQueueAsync(target.Id);
+        await target.DrainForegroundAsync();
         Assert.Equal(1, failures);
         Assert.Equal(stale ? 1 : 0, peer.Requests.Count);
         Assert.Equal(
