@@ -361,7 +361,7 @@ public static partial class ResponsesRequestSerializer
                 ["type"] = "function",
                 ["name"] = "write_fixture",
                 ["description"] =
-                    "Create a UTF-8 text file in the experiment's temporary directory. The file must not already exist.",
+                    "Create a UTF-8 text file in the test fixture's temporary directory. The file must not already exist.",
                 ["parameters"] = new JsonObject
                 {
                     ["type"] = "object",
