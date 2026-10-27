@@ -110,9 +110,7 @@ public sealed class UnsupportedTurnToolExecutor : ITurnToolExecutor
 }
 
 public sealed class ToolLoopLimitException(int limit)
-    : InvalidOperationException(
-        $"Session turn exceeded the {limit} iteration tool-loop limit."
-    );
+    : InvalidOperationException($"Session turn exceeded the {limit} iteration tool-loop limit.");
 
 public sealed record ChatResult(
     JsonObject? AssistantMessage,

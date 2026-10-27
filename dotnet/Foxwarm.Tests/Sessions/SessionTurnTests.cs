@@ -981,13 +981,19 @@ public sealed class SessionTurnTests
         else
         {
             var result = await host.ChatAsync("turn");
-            Assert.Equal("final", result.AssistantMessage?["parts"]?[0]?["text"]?.GetValue<string>());
+            Assert.Equal(
+                "final",
+                result.AssistantMessage?["parts"]?[0]?["text"]?.GetValue<string>()
+            );
         }
 
         Assert.Equal(toolIterations == 5000 ? 5000 : toolIterations + 1, chat.Calls);
         Assert.Equal(toolIterations, tools.Invocations);
         var snapshot = (await store.LoadAsync("s"))!;
-        Assert.Equal(1 + toolIterations * 2 + (toolIterations == 5000 ? 0 : 1), snapshot.History.Count);
+        Assert.Equal(
+            1 + toolIterations * 2 + (toolIterations == 5000 ? 0 : 1),
+            snapshot.History.Count
+        );
         Assert.Equal(toolIterations == 5000 ? "tool" : "model", snapshot.History[^1].Role);
         Assert.Equal(snapshot.History.Count + 1, snapshot.NextMessageSeq);
     }
