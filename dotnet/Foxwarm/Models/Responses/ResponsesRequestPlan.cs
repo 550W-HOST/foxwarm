@@ -18,7 +18,8 @@ internal static class ResponsesRequestPlan
             options.MaxOutputTokens,
             options.Tools,
             options.Effort,
-            options.Images
+            options.Images,
+            options.HistoryCompatibility
         );
         var hostedTools = body["tools"] as JsonArray ?? new JsonArray();
         if (HostedResponsesTools.BuildWebSearchTool(options.WebSearch) is JsonObject search)

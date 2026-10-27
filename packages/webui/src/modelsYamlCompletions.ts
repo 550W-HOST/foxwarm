@@ -12,6 +12,8 @@ export const PROVIDER_MODEL_FAILURE_TTL_MS = 5_000
 export type ModelsYamlSuggestions = {
   modelKeys: string[]
   concreteKeys: string[]
+  historyModelKeys: string[]
+  providerKeys: string[]
 }
 
 export type ProviderModelConnection = {
@@ -79,14 +81,16 @@ export function parseModelsYamlSuggestions(rawYaml: string): ModelsYamlSuggestio
   const document = parseDocument(rawYaml)
   if (document.errors.length > 0) return null
   const root = document.toJS() as { providers?: unknown; models?: unknown } | null
-  if (!root || typeof root !== 'object') return { modelKeys: [], concreteKeys: [] }
+  if (!root || typeof root !== 'object') return { modelKeys: [], concreteKeys: [], historyModelKeys: [], providerKeys: [] }
   const rawProviders = root.providers ?? root.models
   if (!rawProviders || typeof rawProviders !== 'object' || Array.isArray(rawProviders)) {
-    return { modelKeys: [], concreteKeys: [] }
+    return { modelKeys: [], concreteKeys: [], historyModelKeys: [], providerKeys: [] }
   }
 
   const concreteKeys: string[] = []
   const virtualKeys: string[] = []
+  const historyModelKeys: string[] = []
+  const providerKeys: string[] = []
   for (const [providerKey, rawEntry] of Object.entries(rawProviders as Record<string, unknown>)) {
     if (typeof rawEntry === 'string') {
       if (rawEntry.trim()) virtualKeys.push(providerKey)
@@ -99,12 +103,18 @@ export function parseModelsYamlSuggestions(rawYaml: string): ModelsYamlSuggestio
       virtualKeys.push(providerKey)
     } else {
       concreteKeys.push(...getDisplayConcreteKeys(providerKey, entry))
+      providerKeys.push(providerKey)
+      const members = entry.models ?? entry.model
+      const ids = (Array.isArray(members) ? members : [members]).map(modelId).filter(Boolean)
+      historyModelKeys.push(...(ids.length ? ids.map((id) => `${providerKey}/${id}`) : [providerKey]))
     }
   }
 
   return {
     concreteKeys: [...new Set(concreteKeys)],
     modelKeys: [...new Set([...concreteKeys, ...virtualKeys])],
+    historyModelKeys: [...new Set(historyModelKeys)],
+    providerKeys,
   }
 }
 
@@ -112,9 +122,11 @@ function indentation(line: string): number {
   return line.match(/^\s*/)?.[0].length || 0
 }
 
-export function getModelsCompletionKind(lines: string[], lineIndex: number): 'default' | 'targets' | null {
+export function getModelsCompletionKind(lines: string[], lineIndex: number): 'default' | 'targets' | 'sameModelAs' | 'sameProviderAs' | null {
   const line = lines[lineIndex] || ''
   if (/^\s*default\s*:/.test(line)) return 'default'
+  if (/^\s*sameModelAs\s*:/.test(line)) return 'sameModelAs'
+  if (/^\s*sameProviderAs\s*:/.test(line)) return 'sameProviderAs'
 
   const currentIndent = indentation(line)
   if (/^\s*targets\s*:/.test(line)) return 'targets'
@@ -371,7 +383,9 @@ export function createModelsYamlCompletionProvider(
         const currentValues = parseModelsYamlSuggestions(model.getValue())
         if (currentValues) suggestionsByModel.set(MODELS_YAML_MODEL_URI, currentValues)
         const values = currentValues ?? suggestionsByModel.get(MODELS_YAML_MODEL_URI)
-        const keys = kind === 'targets' ? values?.concreteKeys : values?.modelKeys
+        const keys = kind === 'sameModelAs' ? values?.historyModelKeys
+          : kind === 'sameProviderAs' ? values?.providerKeys
+            : kind === 'targets' ? values?.concreteKeys : values?.modelKeys
         if (!keys?.length) return { suggestions: [] }
         const word = model.getWordUntilPosition(position)
         const range = {
@@ -386,7 +400,8 @@ export function createModelsYamlCompletionProvider(
             kind: monaco.languages.CompletionItemKind.Value,
             insertText: key,
             range,
-            detail: kind === 'targets' ? 'Configured concrete model' : 'Configured model',
+            detail: kind === 'sameProviderAs' ? 'Configured provider'
+              : kind === 'default' ? 'Configured model' : 'Configured concrete model',
           })),
         }
       }

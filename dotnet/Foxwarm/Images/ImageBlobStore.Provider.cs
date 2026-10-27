@@ -22,7 +22,8 @@ internal sealed partial class ImageBlobStore
         string protocol,
         string outputFormat = "webp",
         CancellationToken token = default,
-        string? concreteModelId = null
+        string? concreteModelId = null,
+        ModelHistoryCompatibility? compatibility = null
     )
     {
         var result = new List<JsonObject>();
@@ -54,7 +55,7 @@ internal sealed partial class ImageBlobStore
                     SessionWait.Text(message["role"]) == "model"
                     && protocol == "responses"
                     && concreteModelId is not null
-                    && generatedSource == concreteModelId
+                    && (compatibility ?? ModelHistoryCompatibility.Exact).Matches(generatedSource, concreteModelId)
                     && nativeGenerated;
                 if (
                     reference is not null

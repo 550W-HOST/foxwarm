@@ -334,7 +334,7 @@ internal sealed class ModelRequestOwner(
                         cancellationToken.ThrowIfCancellationRequested();
                     },
                 };
-                var prepared = ConcreteRequestHistory.PrepareRequest(history.Messages, leaf.Key);
+                var prepared = ConcreteRequestHistory.PrepareRequest(history.Messages, leaf.Key, options.HistoryCompatibility);
                 if (images is not null)
                 {
                     try
@@ -347,7 +347,8 @@ internal sealed class ModelRequestOwner(
                                 : "anthropic",
                             outputFormat: leaf.ProviderImageOutputFormat,
                             token: cancellationToken,
-                            concreteModelId: leaf.Key
+                            concreteModelId: leaf.Key,
+                            compatibility: options.HistoryCompatibility
                         );
                     }
                     catch (Foxwarm.Images.ImageInputException error)

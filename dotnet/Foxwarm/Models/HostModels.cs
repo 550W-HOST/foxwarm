@@ -17,6 +17,7 @@ internal sealed record ConcreteHostModel(
     string[] Targets
 )
 {
+    internal ModelHistoryCompatibility HistoryCompatibility { get; init; } = ModelHistoryCompatibility.Exact;
     internal string UpstreamModelId => HostModels.Text(Configuration, "upstreamModelId") ?? ModelId;
     internal double MaxOutput =>
         HostModels.PositiveSetting(Configuration["maxOutput"], 32768, "maxOutput");
@@ -170,8 +171,9 @@ internal sealed partial class HostModels
             var provider =
                 raw as JsonObject
                 ?? throw new InvalidDataException("Provider must be an object or alias string.");
-            if (provider.ContainsKey("upstreamModelId"))
-                throw new InvalidDataException("upstreamModelId belongs on model objects.");
+            foreach (var field in new[] { "upstreamModelId", "sameModelAs" })
+                if (provider.ContainsKey(field))
+                    throw new InvalidDataException(field + " belongs on model objects.");
             var type = ProviderType(provider);
             if (type is "session-hash" or "failover")
             {
@@ -251,6 +253,7 @@ internal sealed partial class HostModels
                     "keepReasoningOnError",
                     "webSearch",
                     "imageGeneration",
+                    "sameProviderAs",
                 }
             )
                 if (config.ContainsKey(forbidden))
@@ -321,6 +324,9 @@ internal sealed partial class HostModels
             );
             display.Add(key);
         }
+        var compatibility = ModelHistoryCompatibility.Build(models);
+        foreach (var key in models.Keys.ToArray())
+            models[key] = models[key] with { HistoryCompatibility = compatibility };
         var ordered = source
             .SelectMany(provider => display.Where(key => models[key].ProviderKey == provider.Key))
             .ToArray();

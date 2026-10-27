@@ -7,12 +7,14 @@ internal static class ConcreteRequestHistory
 {
     internal static IReadOnlyList<JsonObject> Prepare(
         IReadOnlyList<JsonObject> history,
-        string destinationModelId
-    ) => PrepareCore(history, destinationModelId, copyMessages: true);
+        string destinationModelId,
+        ModelHistoryCompatibility? compatibility = null
+    ) => PrepareCore(history, destinationModelId, compatibility, copyMessages: true);
 
     private static IReadOnlyList<JsonObject> PrepareCore(
         IReadOnlyList<JsonObject> history,
         string destinationModelId,
+        ModelHistoryCompatibility? compatibility,
         bool copyMessages
     )
     {
@@ -45,7 +47,7 @@ internal static class ConcreteRequestHistory
             }
             message.Remove("__meta");
             ProjectDisplayMetadata(message);
-            if (source is null || source == destinationModelId)
+            if (source is null || (compatibility ?? ModelHistoryCompatibility.Exact).Matches(source, destinationModelId))
             {
                 prepared.Add(message);
                 continue;
@@ -119,15 +121,17 @@ internal static class ConcreteRequestHistory
 
     internal static IReadOnlyList<JsonObject> PrepareRequest(
         IReadOnlyList<JsonObject> history,
-        string destinationModelId
+        string destinationModelId,
+        ModelHistoryCompatibility? compatibility = null
     ) =>
         PrepareCore(
             RequestHistoryRepair.SelectAndRepair(history),
             destinationModelId,
+            compatibility,
             copyMessages: false
         );
 
-    internal sealed class ChatService(IChatService inner, string destinationModelId) : IChatService
+    internal sealed class ChatService(IChatService inner, string destinationModelId, ModelHistoryCompatibility? compatibility = null) : IChatService
     {
         public Task<ChatResult> ChatAsync(
             string sessionId,
@@ -136,7 +140,7 @@ internal static class ConcreteRequestHistory
         ) =>
             inner.ChatAsync(
                 sessionId,
-                PrepareRequest(history, destinationModelId),
+                PrepareRequest(history, destinationModelId, compatibility),
                 cancellationToken
             );
     }

@@ -33,7 +33,7 @@ After a failed attempt commits a segment, ordinary retry preparation reads a fre
 
 ## Distinct image failure classes
 
-Same-model missing generated blob and other local preparation/persistence/hydration failures happen before provider send and are `ModelPreparationException` paths; they do not enter provider retry, health, or countable-failure handling. The `all-images-fail` condition is produced while processing provider output/generated-image results, not during send preparation; it is nevertheless non-retryable and non-countable for provider health. A provider HTTP/SSE/WS failure after attempt start follows normal provider retry classification. Concrete serialization and local active-attempt callback failures also stay outside provider retry/health handling, even though serializers run inside the service call.
+History-compatible missing generated blob and other local preparation/persistence/hydration failures happen before provider send and are `ModelPreparationException` paths; they do not enter provider retry, health, or countable-failure handling. The `all-images-fail` condition is produced while processing provider output/generated-image results, not during send preparation; it is nevertheless non-retryable and non-countable for provider health. A provider HTTP/SSE/WS failure after attempt start follows normal provider retry classification. Concrete serialization and local active-attempt callback failures also stay outside provider retry/health handling, even though serializers run inside the service call.
 
 ## Retry and journal ordering
 

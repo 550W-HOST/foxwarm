@@ -86,6 +86,7 @@ internal static class ConfiguredModelRequests
             RequestModel = model.UpstreamModelId,
             MaxOutputTokens = model.MaxOutput,
             ConcreteModelId = model.Key,
+            HistoryCompatibility = model.HistoryCompatibility,
             Token = model.Token,
             Effort = effort,
             Instructions = instructions,
@@ -119,7 +120,8 @@ internal static class ConfiguredModelRequests
     {
         return new ConcreteRequestHistory.ChatService(
             CreatePreparedService(http, model, options, cacheKey, progress),
-            model.Key
+            model.Key,
+            options.HistoryCompatibility
         );
     }
 

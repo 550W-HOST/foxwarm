@@ -127,13 +127,15 @@ internal sealed class ResponsesWsChatService(
                     }
                     var prepared = ConcreteRequestHistory.Prepare(
                         attempt.Committed.Concat(rows).ToArray(),
-                        options.ConcreteModelId
+                        options.ConcreteModelId,
+                        options.HistoryCompatibility
                     );
                     var replay = ResponsesRequestSerializer.ConvertHistoryWithImages(
                         prepared,
                         options.ConcreteModelId,
                         options.Images,
-                        attempt.ReplayBytes
+                        attempt.ReplayBytes,
+                        options.HistoryCompatibility
                     );
                     captured.Finalize(replay.Select(item => item?.DeepClone()).ToArray());
                 }

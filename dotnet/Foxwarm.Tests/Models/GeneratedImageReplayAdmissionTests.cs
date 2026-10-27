@@ -92,6 +92,8 @@ public sealed class GeneratedImageReplayAdmissionTests
                     "a":{"providerType":"openai-responses","models":["m"],"imageGeneration":{"enabled":true,"model":"image-side-model","outputFormat":"png"}},
                     "same":"a/m",
                     "b":{"providerType":"openai-responses","models":["m"]},
+                    "compatible":{"providerType":"openai-responses","sameProviderAs":"a","models":["m"]},
+                    "variant":{"providerType":"openai-responses","models":[{"id":"image-variant","upstreamModelId":"m","sameModelAs":"a/m"}]},
                     "c":{"providerType":"openai-completions","models":["m"]}
                 }}
                 """
@@ -196,7 +198,7 @@ public sealed class GeneratedImageReplayAdmissionTests
             row => row.ToJsonString() == canonical
         );
 
-        foreach (var selection in new[] { "a", "same" })
+        foreach (var selection in new[] { "a", "same", "compatible", "variant" })
         {
             await Turn(selection);
             var native = Assert.Single(
@@ -214,6 +216,8 @@ public sealed class GeneratedImageReplayAdmissionTests
         await Turn("c");
         Placeholder();
         await Turn("a", fails: true);
+        await Turn("compatible", fails: true);
+        await Turn("variant", fails: true);
 
         // The normal configuration owner installs a new protocol under the same concrete key.
         configuration["providers"]!["a"]!["providerType"] = "openai-completions";

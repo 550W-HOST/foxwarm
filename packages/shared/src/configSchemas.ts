@@ -168,10 +168,12 @@ const modelItem = {
     {
       type: 'object',
       required: ['id'],
+      not: { required: ['sameProviderAs'] },
       additionalProperties: true,
       properties: {
         id: { type: 'string', minLength: 1, description: 'Internal model identifier used for selection and history attribution.' },
         upstreamModelId: { type: 'string', pattern: '\\S', description: 'Optional model identifier sent to the upstream provider. Omitted uses id; internal selection and history keep id.' },
+        sameModelAs: { type: 'string', pattern: '\\S', description: 'Compatible native history model: a whole local model ID or provider/model key. Takes precedence over sameProviderAs; keeps model settings and attribution separate.' },
         ...modelOverrideProperties,
       },
     },
@@ -189,12 +191,13 @@ const modelListContainsHistoryReasoningField = {
 const providerObjectEntry = {
   type: 'object',
   additionalProperties: true,
-  not: { required: ['upstreamModelId'] },
+  not: { anyOf: ['upstreamModelId', 'sameModelAs'].map((field) => ({ required: [field] })) },
   properties: {
     providerType: knownProviderType,
     provider: { ...knownProviderType, deprecated: true, description: 'Legacy spelling for providerType. Prefer providerType.' },
     baseUrl: { type: 'string', description: 'Provider API base URL.' },
     apiKey: { type: 'string', description: 'Provider credential. Keep this file private.' },
+    sameProviderAs: { type: 'string', pattern: '\\S', description: 'Concrete provider whose same internal model IDs have compatible native history. Does not inherit connection settings, tools or prices.' },
     models: { type: 'array', items: modelItem, description: 'Preferred provider model list.' },
     model: {
       deprecated: true,
@@ -227,7 +230,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'pricing', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'pricing', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError', 'sameProviderAs', 'failureThreshold', 'cooldownMs'].map((field) => ({ required: [field] })) },
       },
     },
     {
@@ -235,7 +238,7 @@ const providerObjectEntry = {
       then: {
         required: ['targets'],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'pricing', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError'].map((field) => ({ required: [field] })) },
+        not: { anyOf: ['models', 'model', 'baseUrl', 'apiKey', 'requestCompression', 'extraFields', 'extraHeaders', 'webSearch', 'imageGeneration', 'contextLimit', 'maxOutput', 'providerImageOutputFormat', 'pricing', 'streamContentInactivityTimeoutMs', 'effort', 'historyReasoningField', 'asyncCompact', 'disallowEmptyResponse', 'keepReasoningOnError', 'sameProviderAs'].map((field) => ({ required: [field] })) },
       },
     },
     {

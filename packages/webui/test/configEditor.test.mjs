@@ -191,7 +191,8 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
           providerType: 'openai-responses',
           asyncCompact: true,
           disallowEmptyResponse: false,
-          models: [{ id: 'model-a', upstreamModelId: 'external-model', webSearch: false, imageGeneration: true, asyncCompact: false, disallowEmptyResponse: true }],
+          sameProviderAs: 'primary',
+          models: [{ id: 'model-a', upstreamModelId: 'external-model', sameModelAs: 'primary/model-a', webSearch: false, imageGeneration: true, asyncCompact: false, disallowEmptyResponse: true }],
         },
       },
     },
@@ -227,6 +228,13 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
   }
   const invalidFixtures = [
     { providers: { empty: '   ' } },
+    ...['', '   ', false, 123, null].flatMap(value => [
+      { providers: { invalid: { models: [{ id: 'm', sameModelAs: value }] } } },
+      { providers: { invalid: { sameProviderAs: value, models: ['m'] } } },
+    ]),
+    { providers: { invalid: { sameModelAs: 'other/m', models: ['m'] } } },
+    { providers: { invalid: { models: [{ id: 'm', sameProviderAs: 'other' }] } } },
+    { providers: { invalid: { providerType: 'session-hash', targets: ['leaf'], sameProviderAs: 'other' } } },
     ...['', '   ', false, 123, null].map(upstreamModelId => ({ providers: { invalid: { models: [{ id: 'model', upstreamModelId }] } } })),
     { providers: { invalid: { upstreamModelId: 'external', models: ['internal'] } } },
     { providers: { invalid: { providerType: 'session-hash', targets: ['leaf'], upstreamModelId: 'external' } } },
@@ -328,6 +336,8 @@ providers:
 `)
   assert.deepEqual(parsed.concreteKeys, ['one', 'many/model-b', 'many/model-c', 'custom'])
   assert.deepEqual(parsed.modelKeys, ['one', 'many/model-b', 'many/model-c', 'custom', 'sticky', 'fast', 'route'])
+  assert.deepEqual(parsed.historyModelKeys, ['one/model-a', 'many/model-b', 'many/model-c', 'custom'])
+  assert.deepEqual(parsed.providerKeys, ['one', 'many', 'custom'])
 })
 
 test('invalid partial YAML returns null so the editor can retain its last valid suggestions', () => {
@@ -582,4 +592,40 @@ test('model pricing requires complete nonnegative rates at concrete leaves', () 
   assert.equal(validateModelsSchema({ providers: { p: { models: ['wire'], pricing: rates } } }), false)
   assert.equal(validateModelsSchema({ providers: { p: { models: [] }, route: { providerType: 'session-hash', targets: ['p'], pricing: rates } } }), false)
   assert.equal(validateModelsSchema({ defaults: { pricing: rates }, providers: { p: {} } }), false)
+})
+
+
+test('history compatibility completions suggest whole configured concrete keys without provider requests', async () => {
+  let provider
+  const monaco = { languages: {
+    CompletionItemKind: { Value: 12 },
+    registerCompletionItemProvider(_language, value) { provider = value; return { dispose() {} } },
+  } }
+  const support = completions.createModelsYamlCompletionProvider(monaco, () => { throw new Error('must stay local') })
+  for (const [field, expected] of [
+    ['sameModelAs', ['primary/vendor/family/model', 'secondary/m']],
+    ['sameProviderAs', ['primary', 'secondary']],
+  ]) {
+    const value = `providers:
+  primary:
+    models: [vendor/family/model]
+  secondary:
+    models:
+      - id: m
+        ${field}: pri
+  virtual: primary/vendor/family/model
+`
+    const lines = value.split('\n')
+    const index = lines.findIndex(line => line.includes(`${field}:`))
+    const model = {
+      uri: { toString: () => schemas.MODELS_YAML_MODEL_URI },
+      getValue: () => value,
+      getLinesContent: () => lines,
+      getWordUntilPosition: () => ({ startColumn: lines[index].indexOf('pri') + 1, endColumn: lines[index].length + 1 }),
+    }
+    const result = await provider.provideCompletionItems(model, { lineNumber: index + 1, column: lines[index].length + 1 })
+    assert.deepEqual(result.suggestions.map(item => item.insertText), expected)
+    assert.equal(result.suggestions[0].range.startColumn, lines[index].indexOf('pri') + 1)
+  }
+  support.dispose()
 })

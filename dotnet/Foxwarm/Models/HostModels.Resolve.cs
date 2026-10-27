@@ -26,6 +26,10 @@ internal sealed partial class HostModels
                 throw new InvalidDataException("upstreamModelId must be a nonempty string.");
             config["upstreamModelId"] = upstream;
         }
+        if (model?.ContainsKey("sameProviderAs") == true)
+            throw new InvalidDataException("sameProviderAs belongs on provider objects.");
+        if (model is not null && ModelHistoryCompatibility.Reference(model, "sameModelAs") is { } sameModel)
+            config["sameModelAs"] = sameModel;
         var pricingScope = model ?? provider;
         if (pricingScope.ContainsKey("pricing"))
             config["pricing"] = ModelUsageCost.ValidatePrices(pricingScope["pricing"]);

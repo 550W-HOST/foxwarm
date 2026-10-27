@@ -24,6 +24,7 @@ public sealed record ResponsesClientOptions(
     bool DisallowEmptyResponse = false
 )
 {
+    internal ModelHistoryCompatibility HistoryCompatibility { get; init; } = ModelHistoryCompatibility.Exact;
     internal double? HardTimeoutMs { get; init; }
     internal TimeProvider? Clock { get; init; }
     internal bool KeepReasoningOnError { get; init; }
@@ -79,7 +80,8 @@ public static partial class ResponsesRequestSerializer
         IReadOnlyList<JsonObject> history,
         string concreteModelId,
         Foxwarm.Images.ImageBlobStore? images = null,
-        IReadOnlyDictionary<string, byte[]>? replayBytes = null
+        IReadOnlyDictionary<string, byte[]>? replayBytes = null,
+        ModelHistoryCompatibility? compatibility = null
     )
     {
         var input = new JsonArray();
@@ -156,7 +158,7 @@ public static partial class ResponsesRequestSerializer
                 if (
                     role == "assistant"
                     && outputItem is not null
-                    && sourceModelId == concreteModelId
+                    && (compatibility ?? ModelHistoryCompatibility.Exact).Matches(sourceModelId, concreteModelId)
                 )
                 {
                     if (HostedResponsesTools.IsGeneratedImage(outputItem))
@@ -250,7 +252,7 @@ public static partial class ResponsesRequestSerializer
                     var responseMeta = providerMeta?["openaiResponses"] as JsonObject;
                     if (
                         role == "assistant"
-                        && String(responseMeta, "sourceModelId") == concreteModelId
+                        && (compatibility ?? ModelHistoryCompatibility.Exact).Matches(String(responseMeta, "sourceModelId"), concreteModelId)
                         && responseMeta?["annotations"] is JsonArray annotations
                     )
                         textPart["annotations"] = annotations.DeepClone();
@@ -320,7 +322,8 @@ public static partial class ResponsesRequestSerializer
         double maxOutputTokens,
         JsonArray? tools = null,
         string? effort = null,
-        Foxwarm.Images.ImageBlobStore? images = null
+        Foxwarm.Images.ImageBlobStore? images = null,
+        ModelHistoryCompatibility? compatibility = null
     )
     {
         if (
@@ -333,7 +336,7 @@ public static partial class ResponsesRequestSerializer
         {
             ["model"] = requestModel,
             ["instructions"] = instructions,
-            ["input"] = ConvertHistoryWithImages(history, concreteModelId, images),
+            ["input"] = ConvertHistoryWithImages(history, concreteModelId, images, compatibility: compatibility),
             ["tools"] = tools is null ? BuildToolDefinitions() : tools.DeepClone(),
             ["tool_choice"] = "auto",
             ["parallel_tool_calls"] = true,

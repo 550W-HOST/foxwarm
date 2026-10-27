@@ -7,7 +7,7 @@ namespace Foxwarm.Tests;
 
 public sealed class ModelUpstreamIdTests
 {
-    private static JsonObject Document(Uri uri, string protocol)
+    private static JsonObject Document(Uri uri, string protocol, bool compatible = false)
     {
         var document = JsonNode
             .Parse(
@@ -31,6 +31,8 @@ public sealed class ModelUpstreamIdTests
             provider["extraFields"] = new JsonObject { ["stream"] = false };
         if (protocol is "openai-responses" or "openai-ws")
             provider["models"]![1]!["imageGeneration"] = true;
+        if (compatible)
+            provider["models"]![1]!["sameModelAs"] = "astra";
         return document;
     }
 
@@ -138,11 +140,14 @@ public sealed class ModelUpstreamIdTests
     }
 
     [Theory]
-    [InlineData("openai-responses")]
-    [InlineData("openai-completions")]
-    [InlineData("anthropic")]
-    public async Task HTTP_requests_share_upstream_ID_without_sharing_internal_options_attribution_or_reasoning(
-        string protocol
+    [InlineData("openai-responses", false)]
+    [InlineData("openai-responses", true)]
+    [InlineData("openai-completions", false)]
+    [InlineData("openai-completions", true)]
+    [InlineData("anthropic", false)]
+    [InlineData("anthropic", true)]
+    public async Task HTTP_requests_keep_internal_identity_and_replay_native_history_only_with_declared_compatibility(
+        string protocol, bool compatible
     )
     {
         var bodies = new List<JsonObject>();
@@ -159,28 +164,31 @@ public sealed class ModelUpstreamIdTests
                 );
             }
         );
-        await ExerciseAsync(peer.BaseUri, protocol, bodies);
+        await ExerciseAsync(peer.BaseUri, protocol, bodies, compatible: compatible);
     }
 
-    [Fact]
-    public async Task WS_requests_use_upstream_ID_and_keep_internal_model_options_and_attribution()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WS_requests_keep_internal_identity_and_replay_native_history_only_with_declared_compatibility(bool compatible)
     {
         await using var peer = await WsPeer.StartAsync((_, number) => Response(number));
         await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
-        await ExerciseAsync(peer.Uri, "openai-ws", peer.Requests, transport);
+        await ExerciseAsync(peer.Uri, "openai-ws", peer.Requests, transport, compatible);
     }
 
     private static async Task ExerciseAsync(
         Uri uri,
         string protocol,
         List<JsonObject> bodies,
-        ResponsesWsTransport? transport = null
+        ResponsesWsTransport? transport = null,
+        bool compatible = false
     )
     {
         using var temp = new TempDirectory();
         using var http = new HttpClient();
         using var journal = new LlmRequestJournalStore(temp.Path);
-        var catalog = HostModels.Parse(Document(uri, protocol), new JsonObject());
+        var catalog = HostModels.Parse(Document(uri, protocol, compatible), new JsonObject());
         var requests = new ModelRequestOwner(
             http,
             new(uri, "fallback", "fallback", "", "", 1000),
@@ -234,8 +242,17 @@ public sealed class ModelUpstreamIdTests
                 : "max_output_tokens";
         Assert.Equal(111, SessionWait.Number(bodies[0][maxOutput]));
         Assert.Equal(222, SessionWait.Number(bodies[1][maxOutput]));
-        Assert.DoesNotContain("private-reasoning", bodies[1].ToJsonString());
-        Assert.DoesNotContain("private-cipher", bodies[1].ToJsonString());
+        var secondWire = bodies[1].ToJsonString();
+        Assert.Equal(compatible, secondWire.Contains("private-reasoning", StringComparison.Ordinal));
+        Assert.Equal(compatible && protocol != "openai-completions", secondWire.Contains("private-cipher", StringComparison.Ordinal));
+        Assert.DoesNotContain("private-reasoning", bodies[2].ToJsonString());
+        if (protocol == "openai-completions")
+            Assert.Equal(compatible, secondWire.Contains("private-provider-field", StringComparison.Ordinal));
+        if (protocol is "openai-responses" or "openai-ws")
+        {
+            Assert.Equal(compatible, secondWire.Contains("native-search", StringComparison.Ordinal));
+            Assert.Equal(compatible, secondWire.Contains("citation-marker", StringComparison.Ordinal));
+        }
         if (protocol is "openai-responses" or "openai-ws")
         {
             Assert.DoesNotContain(
@@ -262,13 +279,15 @@ public sealed class ModelUpstreamIdTests
         );
     }
 
-    [Fact]
-    public async Task Equal_upstream_models_with_equal_options_still_use_distinct_WS_connections()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Compatible_models_with_equal_options_still_use_distinct_WS_connections(bool compatible)
     {
         await using var peer = await WsPeer.StartAsync();
         await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
         using var http = new HttpClient();
-        var document = Document(peer.Uri, "openai-ws");
+        var document = Document(peer.Uri, "openai-ws", compatible);
         var second = document["providers"]!["p"]!["models"]![1]!.AsObject();
         second.Remove("imageGeneration");
         second["maxOutput"] = 111;
@@ -326,7 +345,7 @@ public sealed class ModelUpstreamIdTests
         );
         using var temp = new TempDirectory();
         var catalog = HostModels.Parse(
-            Document(peer.BaseUri, "openai-responses"),
+            Document(peer.BaseUri, "openai-responses", compatible: true),
             new JsonObject()
         );
         await using var manager = new SessionManager(
@@ -375,6 +394,15 @@ public sealed class ModelUpstreamIdTests
                     ["encrypted_content"] = "private-cipher",
                 }
             );
+        response["output"]!.AsArray().Add(new JsonObject
+        {
+            ["type"] = "web_search_call", ["id"] = "native-search", ["status"] = "completed",
+            ["action"] = new JsonObject { ["type"] = "search", ["query"] = "synthetic" },
+        });
+        response["output"]![1]!["content"]![0]!["annotations"] = new JsonArray(new JsonObject
+        {
+            ["type"] = "url_citation", ["title"] = "citation-marker", ["url"] = "https://example.invalid/", ["start_index"] = 0, ["end_index"] = 1,
+        });
         response["usage"] = new JsonObject { ["input_tokens"] = 10, ["output_tokens"] = 5 };
         return response;
     }
@@ -385,7 +413,7 @@ public sealed class ModelUpstreamIdTests
             "anthropic" =>
                 "{\"content\":[{\"type\":\"thinking\",\"thinking\":\"private-reasoning\",\"signature\":\"private-cipher\"},{\"type\":\"text\",\"text\":\"answer\"}],\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}",
             "openai-completions" =>
-                "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"answer\",\"reasoning_content\":\"private-reasoning\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\ndata: [DONE]\n\n",
+                "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"answer\",\"reasoning_content\":\"private-reasoning\",\"provider_specific_fields\":{\"opaque\":\"private-provider-field\"}},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\ndata: [DONE]\n\n",
             _ => "data: "
                 + new JsonObject
                 {
