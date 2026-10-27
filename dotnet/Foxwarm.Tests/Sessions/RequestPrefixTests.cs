@@ -142,12 +142,18 @@ public sealed class RequestPrefixTests
         Assert.True(JsonNode.DeepEquals(captures[0]["tools"], captures[1]["tools"]));
         Assert.True(JsonNode.DeepEquals(captures[0]["tool_choice"], captures[1]["tool_choice"]));
         var tools = captures[1]["tools"]!.AsArray();
-        Assert.Equal(hostedTools ? "image_generation" : "function", tools[^1]!["type"]!.GetValue<string>());
+        Assert.Equal(
+            hostedTools ? "image_generation" : "function",
+            tools[^1]!["type"]!.GetValue<string>()
+        );
         if (hostedTools)
         {
             Assert.Equal("web_search", tools[^2]!["type"]!.GetValue<string>());
             Assert.Equal("high", tools[^2]!["search_context_size"]!.GetValue<string>());
-            Assert.Equal("example.test", tools[^2]!["filters"]!["allowed_domains"]![0]!.GetValue<string>());
+            Assert.Equal(
+                "example.test",
+                tools[^2]!["filters"]!["allowed_domains"]![0]!.GetValue<string>()
+            );
             Assert.Equal("US", tools[^2]!["user_location"]!["country"]!.GetValue<string>());
             Assert.Equal("image-model", tools[^1]!["model"]!.GetValue<string>());
             Assert.Equal("edit", tools[^1]!["action"]!.GetValue<string>());
@@ -158,16 +164,28 @@ public sealed class RequestPrefixTests
             Assert.Equal(80, tools[^1]!["output_compression"]!.GetValue<int>());
             Assert.Equal(0, tools[^1]!["partial_images"]!.GetValue<int>());
             if (overrideChoice)
-                Assert.Equal("image_generation", captures[1]["tool_choice"]!["type"]!.GetValue<string>());
+                Assert.Equal(
+                    "image_generation",
+                    captures[1]["tool_choice"]!["type"]!.GetValue<string>()
+                );
             else
-                Assert.Equal(background ? "auto" : "required", captures[1]["tool_choice"]!.GetValue<string>());
+                Assert.Equal(
+                    background ? "auto" : "required",
+                    captures[1]["tool_choice"]!.GetValue<string>()
+                );
         }
         else
             Assert.All(tools, tool => Assert.Equal("function", tool!["type"]!.GetValue<string>()));
         if (websocket && background)
-            Assert.NotEqual(captures[0]["prompt_cache_key"]!.ToJsonString(), captures[1]["prompt_cache_key"]!.ToJsonString());
+            Assert.NotEqual(
+                captures[0]["prompt_cache_key"]!.ToJsonString(),
+                captures[1]["prompt_cache_key"]!.ToJsonString()
+            );
         else
-            Assert.Equal(captures[0]["prompt_cache_key"]!.ToJsonString(), captures[1]["prompt_cache_key"]!.ToJsonString());
+            Assert.Equal(
+                captures[0]["prompt_cache_key"]!.ToJsonString(),
+                captures[1]["prompt_cache_key"]!.ToJsonString()
+            );
 
         var normal = captures[0]["input"]!.AsArray();
         var compact = captures[1]["input"]!.AsArray();
@@ -405,7 +423,9 @@ public sealed class RequestPrefixTests
         request["instructions"]!.GetValue<string>();
 
     private static string Event(JsonObject response) =>
-        "data: " + new JsonObject { ["type"] = "response.completed", ["response"] = response }.ToJsonString() + "\n\n";
+        "data: "
+        + new JsonObject { ["type"] = "response.completed", ["response"] = response }.ToJsonString()
+        + "\n\n";
 
     private static string Reply(JsonObject? plan) => Event(ResponseBody(plan));
 
@@ -428,10 +448,6 @@ public sealed class RequestPrefixTests
                 ["name"] = "submit_compact_plan",
                 ["arguments"] = plan.ToJsonString(),
             };
-        return new JsonObject
-        {
-            ["id"] = "synthetic-reply",
-            ["output"] = new JsonArray(output),
-        };
+        return new JsonObject { ["id"] = "synthetic-reply", ["output"] = new JsonArray(output) };
     }
 }
