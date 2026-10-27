@@ -132,10 +132,18 @@ try {
   assert(closure[0].response.output.includes(child)); assert.equal(closure[1].response.output, 'Pending execution in parent session')
   const childWire = records.find(row => row.scenario === 'child-task'); assert(childWire); assert.equal(childWire.body.prompt_cache_key, sha(child)); assert(!childWire.body.previous_response_id)
   assert(!JSON.stringify(childWire.full).includes('Retrying model request'), 'hidden copied notice is not projected')
-  await page.waitForSelector('[data-session-id="' + parent + '"]'); const responsePromise = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith('/fork'))
-  await page.click('[data-session-id="' + parent + '"]', { button: 'right' }); await page.waitForSelector('[role="menuitem"]')
-  await page.evaluate(() => [...document.querySelectorAll('[role="menuitem"]')].find(item => item.textContent.trim() === 'Fork').click())
-  const sidebarReply = await (await responsePromise).json(), manual = sidebarReply.newSessionId; assert(manual)
+  // The bounded list closes its menu when the owned row set changes. Observe
+  // the new child in that list before opening the parent's menu.
+  await page.waitForSelector('[data-session-id="' + child + '"]')
+  await page.waitForSelector('[data-session-id="' + parent + '"]')
+  const [sidebarResponse] = await Promise.all([
+    page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith(route(parent) + '/fork')),
+    (async () => {
+      await page.click('[data-session-id="' + parent + '"]', { button: 'right' }); await page.waitForSelector('[role="menuitem"]')
+      await page.evaluate(() => [...document.querySelectorAll('[role="menuitem"]')].find(item => item.textContent.trim() === 'Fork').click())
+    })(),
+  ])
+  const sidebarReply = await sidebarResponse.json(), manual = sidebarReply.newSessionId; assert(manual)
   const manualState = await authority(manual); assert.deepEqual(manualState.history.slice(0, parentCut.length), parentCut)
   assert(manualState.history[parentCut.length].parts.every(part => part.functionResponse.response.output === 'Pending execution in parent session'))
   assert.deepEqual((await authority(parent)).history, parentCut, 'Sidebar created no parent notice')
