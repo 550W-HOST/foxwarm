@@ -120,7 +120,7 @@ try {
   const closed = once(ws, 'close'); const shell = client('shell-client', token, downloaded); await closed
   const node = await online('shell-client'); assert.deepEqual(node.tools.map(tool => tool.name), ['exec']); assert.deepEqual(node.services, {})
   const actor = await create('shell-actor'); assert.equal((await select(actor)).defaultCwd, startup)
-  let state = await turn(actor, 'short', [call('short', 'exec', { command: 'pwd; printf hello; exit 7' })]); assert.equal(pair(state, 'short').exitCode, 7); assert(pair(state, 'short').output.includes(startup)); assert.equal(pair(state, 'short').content, undefined)
+  let state = await turn(actor, 'short', [call('short', 'exec', { command: 'pwd; printf hello; exit 7' })]); assert.deepEqual(Object.keys(pair(state, 'short')), ['output']); assert.match(pair(state, 'short').output, /Exit code: 7/); assert(pair(state, 'short').output.includes(startup)); assert.equal(requests.at(-1).input.find(row => row.type === 'function_call_output' && row.call_id === 'short').output.at(-1).text, pair(state, 'short').output)
   state = await turn(actor, 'relative', [call('relative', 'exec', { command: 'pwd', cwd: 'relative' })]); assert(pair(state, 'relative').output.includes(join(startup, 'relative')))
   await fixture.api('POST', route(actor) + '/cwd', { cwd: join(startup, 'relative') })
   state = await turn(actor, 'captured-cwd', [call('captured', 'exec', { command: 'pwd; printf captured > captured-effect' })]); assert(pair(state, 'captured').output.includes(join(startup, 'relative'))); assert.equal(await readFile(join(startup, 'relative/captured-effect'), 'utf8'), 'captured')
@@ -137,7 +137,7 @@ try {
   assert.equal(await readFile(join(startup, 'relative/native-effect'), 'utf8'), 'once'); assert(!await exists(join(fixture.work, 'native-effect')))
   await select(actor)
   state = await turn(actor, 'samples', [call('empty', 'exec', { command: ':' }), call('overlap', 'exec', { command: "dd if=/dev/zero bs=6000 count=1 2>/dev/null | tr '\\000' z" }), call('no-newline', 'exec', { command: 'printf no-newline' }), call('binary', 'exec', { command: "printf '\\000\\377'" }), call('fraction', 'exec', { command: 'sleep 1; printf rounded', timeout: 1.1 })])
-  assert.equal(pair(state, 'empty').totalBytes, 0); assert.equal(pair(state, 'overlap').output.split('\n')[0].length, 6000); assert.equal(pair(state, 'no-newline').totalBytes, 10); assert.match(pair(state, 'binary').output, /hexadecimal.*\n00ff/); assert.equal(pair(state, 'fraction').exitCode, 0); assert.equal(tasks.find(task => task.script.includes('printf rounded')).timeout, '2')
+  assert.match(pair(state, 'empty').output, /Total output bytes: 0$/); assert.equal(pair(state, 'overlap').output.split('\n')[0].length, 6000); assert.match(pair(state, 'no-newline').output, /Total output bytes: 10$/); assert.match(pair(state, 'binary').output, /hexadecimal.*\n00ff/); assert.match(pair(state, 'fraction').output, /Exit code: 0/); assert.equal(tasks.find(task => task.script.includes('printf rounded')).timeout, '2')
   let largest = 0, sawHead = false
   await begin(actor, 'continuous', [[call('continuous', 'exec', { command: "dd if=/dev/zero bs=65536 count=64 2>/dev/null | tr '\\000' x", timeout: 30 })]])
   while (!pair(await saved(actor), 'continuous')) {
@@ -147,7 +147,7 @@ try {
     }
     await sleep(20)
   }
-  state = await finish(actor, 'continuous'); assert.equal(pair(state, 'continuous').totalBytes, 4194304); assert.equal(pair(state, 'continuous').exitCode, 0); assert(pair(state, 'continuous').truncated); assert(sawHead)
+  state = await finish(actor, 'continuous'); assert.match(pair(state, 'continuous').output, /Total output bytes: 4194304$/); assert.match(pair(state, 'continuous').output, /Exit code: 0/); assert.match(pair(state, 'continuous').output, /first 4096 and last 4096 bytes; full output was not retained/); assert(sawHead)
   assert(!await exists(join(fixture.root, 'invalid-response-effect'))); assert.equal(invalidPolls, 0)
   // The actual 90-second online boundary is not shortened. An idle registration expires
   // while four independent 95-second jobs and two concurrent 35-second calls remain live.
@@ -165,7 +165,7 @@ try {
   const ids = Array.from({ length: 4 }, (_, index) => pair(state, 'long-' + index).execId); assert(ids.every(Boolean))
   const foregroundStart = Date.now(); await begin(actor, 'adjacent-foreground', [[call('first', 'exec', { command: 'printf started > foreground-first; sleep 35; printf first', timeout: 60 }), call('second', 'exec', { command: 'printf started > foreground-second; sleep 35; printf second', timeout: 60 })]])
   await until(async () => await exists(join(startup, 'foreground-first')) && await exists(join(startup, 'foreground-second')), 'both foreground effects started', 5000)
-  state = await finish(actor, 'adjacent-foreground', 55000); assert(Date.now() - foregroundStart < 55000); assert.equal(pair(state, 'first').exitCode, 0); assert.equal(pair(state, 'second').exitCode, 0)
+  state = await finish(actor, 'adjacent-foreground', 55000); assert(Date.now() - foregroundStart < 55000); assert.match(pair(state, 'first').output, /Exit code: 0/); assert.match(pair(state, 'second').output, /Exit code: 0/)
   await until(async () => { const list = await nodes(); assert(list.find(node => node.id === 'shell-client').online); const state = await saved(actor); return ids.every(id => state.meta.acceptedExternalEventIds?.includes('remote-exec-completion:' + id)) }, 'four completions over actual 90s boundary', 75000)
   assert(Date.now() - longStart >= 90000); assert.equal((await nodes()).find(node => node.id === 'idle-shell').online, false)
   for (let index = 0; index < 4; index++) { assert.equal(await readFile(join(startup, 'background-' + index), 'utf8'), 'once'); assert.equal((await saved(actor)).meta.acceptedExternalEventIds.filter(receipt => receipt === 'remote-exec-completion:' + ids[index]).length, 1) }
@@ -197,7 +197,7 @@ try {
   await until(() => reports.some(report => report.task === unknownTask && report.kind === 'finished' && report.status === 410), 'unknown restart report rejected', 15000)
   assert.equal(await readFile(join(startup, 'unknown-effect'), 'utf8'), 'startdone'); assert(!(await saved(unknown)).meta.acceptedExternalEventIds?.includes('remote-exec-completion:' + unknownExec))
   await online('shell-client'); assert.equal(recovering.child.exitCode, null)
-  state = await turn(actor, 'after-restart', [call('after-restart', 'exec', { command: 'printf once >> recovered-effect; printf recovered' })]); assert.equal(pair(state, 'after-restart').exitCode, 0); assert.equal(await readFile(join(startup, 'recovered-effect'), 'utf8'), 'once')
+  state = await turn(actor, 'after-restart', [call('after-restart', 'exec', { command: 'printf once >> recovered-effect; printf recovered' })]); assert.match(pair(state, 'after-restart').output, /Exit code: 0/); assert.equal(await readFile(join(startup, 'recovered-effect'), 'utf8'), 'once')
   assert.equal((await fixture.api('DELETE', '/api/nodes/shell-client')).status, 200)
   for (const endpoint of ['register', 'poll', 'report']) assert.equal((await fetch(fixture.origin + prefix + '/node/shell/' + endpoint, { method: endpoint === 'poll' ? 'GET' : 'POST', headers: directHeaders(credential), ...(endpoint === 'poll' ? {} : { body: startup }) })).status, 401)
   assert.equal((await fetch(fixture.origin + prefix + '/node/shell/register', { method: 'POST', headers: { ...directHeaders(credential), Authorization: 'Bearer ' + fixture.token }, body: startup })).status, 401)

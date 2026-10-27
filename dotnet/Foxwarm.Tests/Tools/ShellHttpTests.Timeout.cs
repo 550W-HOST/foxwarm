@@ -39,6 +39,6 @@ public sealed partial class ShellHttpTests
             Encoding.UTF8.GetBytes("successor")
         );
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
-        Assert.Equal(9, (await successor)!["totalBytes"]!.GetValue<long>());
+        Assert.Contains("Total output bytes: 9", (await successor)!["output"]!.GetValue<string>());
     }
 }

@@ -173,16 +173,12 @@ internal sealed partial class NodeConnectionHub
                     }
                     else
                     {
-                        var result = new JsonObject
-                        {
-                            ["output"] = output,
-                            ["exitCode"] = exit,
-                            ["totalBytes"] = total,
-                            ["truncated"] = total > ShellOutputBytes,
-                        };
+                        var result = new JsonObject { ["output"] = output };
                         if (task.Programmatic)
                         {
                             var full = total <= ShellOutputBytes ? ShellFullText(sample) : null;
+                            result["exitCode"] = exit;
+                            result["totalBytes"] = total;
                             result["status"] = "completed";
                             result["execId"] = claim.ExecId;
                             result["sizeBytes"] = total;

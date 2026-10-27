@@ -30,7 +30,10 @@ public sealed partial class ShellHttpTests
         Assert.Equal("exec", Assert.Single(node["tools"]!.AsArray())!["name"]!.GetValue<string>());
         Assert.Empty(node["services"]!.AsObject());
         const string command = "[Console]::Write('雪 ''$literal`'); exit -1073741819";
-        var execution = fixture.Exec(new JsonObject { ["command"] = command, ["cwd"] = cwd });
+        var execution = fixture.Exec(
+            new JsonObject { ["command"] = command, ["cwd"] = cwd },
+            programmatic: true
+        );
         var task = await fixture.Poll();
         Assert.Equal(
             "try { Set-Location -LiteralPath '"

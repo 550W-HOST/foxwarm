@@ -312,7 +312,7 @@ public sealed partial class ShellHttpTests
         Assert.Contains("printf new", task.Script);
         using var report = await fixture.Report(task.Task, true, Encoding.UTF8.GetBytes("new"));
         Assert.Equal(HttpStatusCode.NoContent, report.StatusCode);
-        Assert.Equal(3, (await fresh)!["totalBytes"]!.GetValue<long>());
+        Assert.Contains("Total output bytes: 3", (await fresh)!["output"]!.GetValue<string>());
         using var stale = await fixture.Request("poll", connection: old);
         Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
     }

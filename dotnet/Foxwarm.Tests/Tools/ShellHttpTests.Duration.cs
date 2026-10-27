@@ -34,11 +34,16 @@ public sealed partial class ShellHttpTests
         await using var fixture = new Fixture();
         await fixture.Start();
         await fixture.Manager.SelectNodeAsync(fixture.Owner, "shell");
-        var call = fixture.Exec();
+        var call = fixture.Exec(programmatic: true);
         var task = await fixture.Poll();
         using var background = await fixture.Report(task.Task, elapsed: "1");
         Assert.Equal(HttpStatusCode.NoContent, background.StatusCode);
-        Assert.Contains("Elapsed: ~1s", (await call)!["output"]!.GetValue<string>());
+        var running = (await call)!;
+        Assert.Contains("Elapsed: ~1s", running["output"]!.GetValue<string>());
+        Assert.Equal(task.Exec, running["execId"]!.GetValue<string>());
+        Assert.Equal("running", running["status"]!.GetValue<string>());
+        Assert.True(running["truncated"]!.GetValue<bool>());
+        Assert.Null(running["content"]);
         await fixture.Manager.SelectNodeAsync(fixture.Owner, "master");
         using var completed = await fixture.Report(task.Task, finished: true, elapsed: "2");
         Assert.Equal(HttpStatusCode.NoContent, completed.StatusCode);
