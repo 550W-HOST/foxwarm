@@ -6,7 +6,8 @@ namespace Foxwarm.Models;
 // A catalog-owned projection only: canonical source IDs and all other model identities stay intact.
 internal sealed class ModelHistoryCompatibility(IReadOnlyDictionary<string, string> targets)
 {
-    internal static ModelHistoryCompatibility Exact { get; } = new(new Dictionary<string, string>());
+    internal static ModelHistoryCompatibility Exact { get; } =
+        new(new Dictionary<string, string>());
 
     internal bool Matches(string? source, string destination) =>
         source is not null && Resolve(source) == Resolve(destination);
@@ -17,9 +18,12 @@ internal sealed class ModelHistoryCompatibility(IReadOnlyDictionary<string, stri
         IReadOnlyDictionary<string, ConcreteHostModel> entries
     )
     {
-        var models = entries.Values.Where(model => !model.IsVirtual)
-            .DistinctBy(model => model.Key).ToDictionary(model => model.Key, StringComparer.Ordinal);
-        var providers = models.Values.GroupBy(model => model.ProviderKey)
+        var models = entries
+            .Values.Where(model => !model.IsVirtual)
+            .DistinctBy(model => model.Key)
+            .ToDictionary(model => model.Key, StringComparer.Ordinal);
+        var providers = models
+            .Values.GroupBy(model => model.ProviderKey)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
         var providerTargets = providers.ToDictionary(
             pair => pair.Key,
@@ -33,7 +37,9 @@ internal sealed class ModelHistoryCompatibility(IReadOnlyDictionary<string, stri
             if (checkedProviders.Contains(key))
                 return;
             if (!visitingProviders.Add(key))
-                throw new InvalidDataException("sameProviderAs reference cycle at provider " + key + ".");
+                throw new InvalidDataException(
+                    "sameProviderAs reference cycle at provider " + key + "."
+                );
             if (providerTargets[key] is { } target)
             {
                 if (!providers.ContainsKey(target))
@@ -55,14 +61,20 @@ internal sealed class ModelHistoryCompatibility(IReadOnlyDictionary<string, stri
             if (resolved.TryGetValue(key, out var ready))
                 return ready;
             if (!visiting.Add(key))
-                throw new InvalidDataException("History compatibility reference cycle at " + key + ".");
+                throw new InvalidDataException(
+                    "History compatibility reference cycle at " + key + "."
+                );
             var result = key;
-            if (models.TryGetValue(key, out var model)
-                && Reference(model.Configuration, "sameModelAs") is { } reference)
+            if (
+                models.TryGetValue(key, out var model)
+                && Reference(model.Configuration, "sameModelAs") is { } reference
+            )
             {
                 // Try the whole local ID before the whole qualified key: model IDs may contain slashes.
-                if (!models.TryGetValue(providerKey + "/" + reference, out var target)
-                    && !models.TryGetValue(reference, out target))
+                if (
+                    !models.TryGetValue(providerKey + "/" + reference, out var target)
+                    && !models.TryGetValue(reference, out target)
+                )
                     throw new InvalidDataException(
                         $"Model {key} sameModelAs requires a known concrete model: {reference}."
                     );
@@ -78,7 +90,9 @@ internal sealed class ModelHistoryCompatibility(IReadOnlyDictionary<string, stri
         foreach (var model in models.Values)
             Visit(model.ProviderKey, model.ModelId);
         // Historical IDs not configured in this capture keep exact-ID fallback, including inferred intermediates.
-        return new ModelHistoryCompatibility(models.Keys.ToDictionary(key => key, key => resolved[key], StringComparer.Ordinal));
+        return new ModelHistoryCompatibility(
+            models.Keys.ToDictionary(key => key, key => resolved[key], StringComparer.Ordinal)
+        );
     }
 
     internal static string? Reference(JsonObject configuration, string field)
@@ -86,7 +100,8 @@ internal sealed class ModelHistoryCompatibility(IReadOnlyDictionary<string, stri
         if (!configuration.ContainsKey(field))
             return null;
         var text = SessionWait.Text(configuration[field])?.Trim();
-        return !string.IsNullOrEmpty(text) ? text
+        return !string.IsNullOrEmpty(text)
+            ? text
             : throw new InvalidDataException(field + " must be a nonempty string.");
     }
 }

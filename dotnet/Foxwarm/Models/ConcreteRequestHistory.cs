@@ -47,7 +47,13 @@ internal static class ConcreteRequestHistory
             }
             message.Remove("__meta");
             ProjectDisplayMetadata(message);
-            if (source is null || (compatibility ?? ModelHistoryCompatibility.Exact).Matches(source, destinationModelId))
+            if (
+                source is null
+                || (compatibility ?? ModelHistoryCompatibility.Exact).Matches(
+                    source,
+                    destinationModelId
+                )
+            )
             {
                 prepared.Add(message);
                 continue;
@@ -131,7 +137,11 @@ internal static class ConcreteRequestHistory
             copyMessages: false
         );
 
-    internal sealed class ChatService(IChatService inner, string destinationModelId, ModelHistoryCompatibility? compatibility = null) : IChatService
+    internal sealed class ChatService(
+        IChatService inner,
+        string destinationModelId,
+        ModelHistoryCompatibility? compatibility = null
+    ) : IChatService
     {
         public Task<ChatResult> ChatAsync(
             string sessionId,

@@ -28,7 +28,10 @@ internal sealed partial class HostModels
         }
         if (model?.ContainsKey("sameProviderAs") == true)
             throw new InvalidDataException("sameProviderAs belongs on provider objects.");
-        if (model is not null && ModelHistoryCompatibility.Reference(model, "sameModelAs") is { } sameModel)
+        if (
+            model is not null
+            && ModelHistoryCompatibility.Reference(model, "sameModelAs") is { } sameModel
+        )
             config["sameModelAs"] = sameModel;
         var pricingScope = model ?? provider;
         if (pricingScope.ContainsKey("pricing"))

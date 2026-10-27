@@ -334,7 +334,11 @@ internal sealed class ModelRequestOwner(
                         cancellationToken.ThrowIfCancellationRequested();
                     },
                 };
-                var prepared = ConcreteRequestHistory.PrepareRequest(history.Messages, leaf.Key, options.HistoryCompatibility);
+                var prepared = ConcreteRequestHistory.PrepareRequest(
+                    history.Messages,
+                    leaf.Key,
+                    options.HistoryCompatibility
+                );
                 if (images is not null)
                 {
                     try

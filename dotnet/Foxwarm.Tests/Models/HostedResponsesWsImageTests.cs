@@ -155,46 +155,87 @@ public sealed class HostedResponsesWsImageTests
     public async Task Compatible_variant_replays_original_image_on_its_own_connection_then_continues_its_chain()
     {
         using var temp = new TempDirectory();
-        const string png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
-        await using var peer = await WsPeer.StartAsync((_, number) => number == 1
-            ? new JsonObject
-            {
-                ["id"] = "generated-first", ["status"] = "completed",
-                ["output"] = new JsonArray(new JsonObject
-                {
-                    ["type"] = "image_generation_call", ["id"] = "variant-generated",
-                    ["status"] = "completed", ["output_format"] = "png", ["result"] = png,
-                }),
-            }
-            : ResponsesWsTests.Response(number));
+        const string png =
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+        await using var peer = await WsPeer.StartAsync(
+            (_, number) =>
+                number == 1
+                    ? new JsonObject
+                    {
+                        ["id"] = "generated-first",
+                        ["status"] = "completed",
+                        ["output"] = new JsonArray(
+                            new JsonObject
+                            {
+                                ["type"] = "image_generation_call",
+                                ["id"] = "variant-generated",
+                                ["status"] = "completed",
+                                ["output_format"] = "png",
+                                ["result"] = png,
+                            }
+                        ),
+                    }
+                    : ResponsesWsTests.Response(number)
+        );
         await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
-        var document = JsonNode.Parse("""
-            {"providers":{"p":{"providerType":"openai-ws","imageGeneration":true,"models":[
-              {"id":"a","upstreamModelId":"wire"},
-              {"id":"b","upstreamModelId":"wire","sameModelAs":"a"}]}}}
-            """)!.AsObject();
+        var document = JsonNode
+            .Parse(
+                """
+                {"providers":{"p":{"providerType":"openai-ws","imageGeneration":true,"models":[
+                  {"id":"a","upstreamModelId":"wire"},
+                  {"id":"b","upstreamModelId":"wire","sameModelAs":"a"}]}}}
+                """
+            )!
+            .AsObject();
         document["providers"]!["p"]!["baseUrl"] = peer.Uri.ToString();
         var catalog = HostModels.Parse(document, new JsonObject());
         using var http = new HttpClient();
         var images = new ImageBlobStore(temp.Path);
-        var owner = new ModelRequestOwner(http, new(peer.Uri, "wire", "unused", "", "", 1000),
-            new ModelRouting(), websockets: transport, images: images);
+        var owner = new ModelRequestOwner(
+            http,
+            new(peer.Uri, "wire", "unused", "", "", 1000),
+            new ModelRouting(),
+            websockets: transport,
+            images: images
+        );
         var history = new List<JsonObject> { ResponsesWsTests.Message("user", "draw") };
         foreach (var key in new[] { "p/a", "p/b", "p/b" })
         {
-            var result = await owner.RequestAsync("s", catalog, key, null, "cache", "turn", history,
-                (_, _) => Task.FromResult(""), null, null, null, null, default, ModelRequestScope.Canonical);
+            var result = await owner.RequestAsync(
+                "s",
+                catalog,
+                key,
+                null,
+                "cache",
+                "turn",
+                history,
+                (_, _) => Task.FromResult(""),
+                null,
+                null,
+                null,
+                null,
+                default,
+                ModelRequestScope.Canonical
+            );
             history.Add(result.AssistantMessage!);
             result.FinalizeHistory([result.AssistantMessage!]);
             history.Add(ResponsesWsTests.Message("user", "continue"));
         }
         Assert.Equal(2, peer.Connections);
         Assert.False(peer.Requests[1].ContainsKey("previous_response_id"));
-        var replay = Assert.Single(peer.Requests[1]["input"]!.AsArray(), item => item?["type"]?.GetValue<string>() == "image_generation_call");
+        var replay = Assert.Single(
+            peer.Requests[1]["input"]!.AsArray(),
+            item => item?["type"]?.GetValue<string>() == "image_generation_call"
+        );
         Assert.Equal(png, replay!["result"]!.GetValue<string>());
         Assert.True(peer.Requests[2].ContainsKey("previous_response_id"));
         Assert.Equal("p/a", history[1]["__meta"]!["modelId"]!.GetValue<string>());
-        Assert.Equal("p/a", history[1]["parts"]![0]!["providerMeta"]!["openaiResponses"]!["sourceModelId"]!.GetValue<string>());
+        Assert.Equal(
+            "p/a",
+            history[1]["parts"]![0]!["providerMeta"]!["openaiResponses"]![
+                "sourceModelId"
+            ]!.GetValue<string>()
+        );
         Assert.Null(history[1]["parts"]![0]!["inlineData"]);
     }
 

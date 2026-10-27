@@ -17,7 +17,8 @@ internal sealed record ConcreteHostModel(
     string[] Targets
 )
 {
-    internal ModelHistoryCompatibility HistoryCompatibility { get; init; } = ModelHistoryCompatibility.Exact;
+    internal ModelHistoryCompatibility HistoryCompatibility { get; init; } =
+        ModelHistoryCompatibility.Exact;
     internal string UpstreamModelId => HostModels.Text(Configuration, "upstreamModelId") ?? ModelId;
     internal double MaxOutput =>
         HostModels.PositiveSetting(Configuration["maxOutput"], 32768, "maxOutput");

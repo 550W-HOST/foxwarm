@@ -147,7 +147,8 @@ public sealed class ModelUpstreamIdTests
     [InlineData("anthropic", false)]
     [InlineData("anthropic", true)]
     public async Task HTTP_requests_keep_internal_identity_and_replay_native_history_only_with_declared_compatibility(
-        string protocol, bool compatible
+        string protocol,
+        bool compatible
     )
     {
         var bodies = new List<JsonObject>();
@@ -170,7 +171,9 @@ public sealed class ModelUpstreamIdTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task WS_requests_keep_internal_identity_and_replay_native_history_only_with_declared_compatibility(bool compatible)
+    public async Task WS_requests_keep_internal_identity_and_replay_native_history_only_with_declared_compatibility(
+        bool compatible
+    )
     {
         await using var peer = await WsPeer.StartAsync((_, number) => Response(number));
         await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
@@ -243,15 +246,30 @@ public sealed class ModelUpstreamIdTests
         Assert.Equal(111, SessionWait.Number(bodies[0][maxOutput]));
         Assert.Equal(222, SessionWait.Number(bodies[1][maxOutput]));
         var secondWire = bodies[1].ToJsonString();
-        Assert.Equal(compatible, secondWire.Contains("private-reasoning", StringComparison.Ordinal));
-        Assert.Equal(compatible && protocol != "openai-completions", secondWire.Contains("private-cipher", StringComparison.Ordinal));
+        Assert.Equal(
+            compatible,
+            secondWire.Contains("private-reasoning", StringComparison.Ordinal)
+        );
+        Assert.Equal(
+            compatible && protocol != "openai-completions",
+            secondWire.Contains("private-cipher", StringComparison.Ordinal)
+        );
         Assert.DoesNotContain("private-reasoning", bodies[2].ToJsonString());
         if (protocol == "openai-completions")
-            Assert.Equal(compatible, secondWire.Contains("private-provider-field", StringComparison.Ordinal));
+            Assert.Equal(
+                compatible,
+                secondWire.Contains("private-provider-field", StringComparison.Ordinal)
+            );
         if (protocol is "openai-responses" or "openai-ws")
         {
-            Assert.Equal(compatible, secondWire.Contains("native-search", StringComparison.Ordinal));
-            Assert.Equal(compatible, secondWire.Contains("citation-marker", StringComparison.Ordinal));
+            Assert.Equal(
+                compatible,
+                secondWire.Contains("native-search", StringComparison.Ordinal)
+            );
+            Assert.Equal(
+                compatible,
+                secondWire.Contains("citation-marker", StringComparison.Ordinal)
+            );
         }
         if (protocol is "openai-responses" or "openai-ws")
         {
@@ -282,7 +300,9 @@ public sealed class ModelUpstreamIdTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Compatible_models_with_equal_options_still_use_distinct_WS_connections(bool compatible)
+    public async Task Compatible_models_with_equal_options_still_use_distinct_WS_connections(
+        bool compatible
+    )
     {
         await using var peer = await WsPeer.StartAsync();
         await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
@@ -394,15 +414,27 @@ public sealed class ModelUpstreamIdTests
                     ["encrypted_content"] = "private-cipher",
                 }
             );
-        response["output"]!.AsArray().Add(new JsonObject
-        {
-            ["type"] = "web_search_call", ["id"] = "native-search", ["status"] = "completed",
-            ["action"] = new JsonObject { ["type"] = "search", ["query"] = "synthetic" },
-        });
-        response["output"]![1]!["content"]![0]!["annotations"] = new JsonArray(new JsonObject
-        {
-            ["type"] = "url_citation", ["title"] = "citation-marker", ["url"] = "https://example.invalid/", ["start_index"] = 0, ["end_index"] = 1,
-        });
+        response["output"]!
+            .AsArray()
+            .Add(
+                new JsonObject
+                {
+                    ["type"] = "web_search_call",
+                    ["id"] = "native-search",
+                    ["status"] = "completed",
+                    ["action"] = new JsonObject { ["type"] = "search", ["query"] = "synthetic" },
+                }
+            );
+        response["output"]![1]!["content"]![0]!["annotations"] = new JsonArray(
+            new JsonObject
+            {
+                ["type"] = "url_citation",
+                ["title"] = "citation-marker",
+                ["url"] = "https://example.invalid/",
+                ["start_index"] = 0,
+                ["end_index"] = 1,
+            }
+        );
         response["usage"] = new JsonObject { ["input_tokens"] = 10, ["output_tokens"] = 5 };
         return response;
     }

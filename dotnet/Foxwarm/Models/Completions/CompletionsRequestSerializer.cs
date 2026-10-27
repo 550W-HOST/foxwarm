@@ -173,7 +173,10 @@ internal static class CompletionsRequestSerializer
                 wire["tool_calls"] = calls;
             if (
                 role == "assistant"
-                && (compatibility ?? ModelHistoryCompatibility.Exact).Matches(SessionWait.Text(raw["providerMeta"]?["sourceModelId"]), concreteModelId)
+                && (compatibility ?? ModelHistoryCompatibility.Exact).Matches(
+                    SessionWait.Text(raw["providerMeta"]?["sourceModelId"]),
+                    concreteModelId
+                )
                 && raw["providerMeta"]?["providerSpecificFields"] is JsonObject fields
             )
                 wire["provider_specific_fields"] = fields.DeepClone();
@@ -190,7 +193,12 @@ internal static class CompletionsRequestSerializer
         string promptCacheKey
     )
     {
-        var messages = ConvertHistory(history, options.ConcreteModelId, reasoningField, options.HistoryCompatibility);
+        var messages = ConvertHistory(
+            history,
+            options.ConcreteModelId,
+            reasoningField,
+            options.HistoryCompatibility
+        );
         if (OpenAIRequestText.Trim(options.Instructions).Length > 0)
             messages.Insert(
                 0,
