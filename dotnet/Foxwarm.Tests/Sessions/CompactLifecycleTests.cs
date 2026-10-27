@@ -545,12 +545,14 @@ public sealed partial class CompactLifecycleTests
         bool expectedBackground
     )
     {
-        await using var fixture = await CompactFixture.CreateAsync(providerBackground, modelBackground);
+        await using var fixture = await CompactFixture.CreateAsync(
+            providerBackground,
+            modelBackground
+        );
         await fixture.SeedAsync();
-        var automatic = fixture.Owner.Compactor.AutoAfterTurnAsync(new ChatResult(null)
-        {
-            Usage = new JsonObject { ["inputTokens"] = 19000L },
-        });
+        var automatic = fixture.Owner.Compactor.AutoAfterTurnAsync(
+            new ChatResult(null) { Usage = new JsonObject { ["inputTokens"] = 19000L } }
+        );
         await fixture.Peer.PlanReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal("wire", fixture.Peer.PlanRequestModel);
         if (expectedBackground)
@@ -574,9 +576,15 @@ public sealed partial class CompactLifecycleTests
         bool modelBackground
     )
     {
-        await using var fixture = await CompactFixture.CreateAsync(providerBackground, modelBackground);
+        await using var fixture = await CompactFixture.CreateAsync(
+            providerBackground,
+            modelBackground
+        );
         await fixture.SeedAsync();
-        await fixture.Owner.Registry.Ingress.EnqueueAsync("s", QueueItem.UserText("hold foreground"));
+        await fixture.Owner.Registry.Ingress.EnqueueAsync(
+            "s",
+            QueueItem.UserText("hold foreground")
+        );
         await fixture.Peer.ForegroundReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var admission = await fixture.Owner.Compactor.StartManualAsync();
         Assert.Equal(modelBackground, admission.Started);
@@ -1239,9 +1247,11 @@ public sealed partial class CompactLifecycleTests
                 "",
                 713
             );
-            var configuration = JsonNode.Parse(
-                """{"default":"b","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://localhost","models":["wire"],"contextLimit":20000},"b":{"providerType":"openai-responses","baseUrl":"http://localhost","models":["wire-b"],"contextLimit":20000}}}"""
-            )!.AsObject();
+            var configuration = JsonNode
+                .Parse(
+                    """{"default":"b","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://localhost","models":["wire"],"contextLimit":20000},"b":{"providerType":"openai-responses","baseUrl":"http://localhost","models":["wire-b"],"contextLimit":20000}}}"""
+                )!
+                .AsObject();
             configuration["default"] = modelBackground is null ? "a" : "b";
             configuration["providers"]!["a"]!["asyncCompact"] = background;
             if (modelBackground is not null)
@@ -1310,7 +1320,10 @@ public sealed partial class CompactLifecycleTests
             Owner.Registry.TriggerOverride = _ => Owner.StartProcessing();
         }
 
-        internal static async Task<CompactFixture> CreateAsync(bool background = true, bool? modelBackground = null)
+        internal static async Task<CompactFixture> CreateAsync(
+            bool background = true,
+            bool? modelBackground = null
+        )
         {
             var fixture = new CompactFixture(background, modelBackground);
             if (modelBackground is not null)

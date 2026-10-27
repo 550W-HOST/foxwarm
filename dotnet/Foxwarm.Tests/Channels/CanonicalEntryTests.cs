@@ -11,9 +11,7 @@ public sealed class CanonicalEntryTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Console_starts_from_another_cwd_and_headless_has_no_listener(
-        bool headless
-    )
+    public async Task Console_starts_from_another_cwd_and_headless_has_no_listener(bool headless)
     {
         if (OperatingSystem.IsWindows())
             return; // This executable/cwd/signal fixture qualifies the Unix console path.

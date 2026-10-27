@@ -98,13 +98,20 @@ public sealed class DefaultToolWireTests(ITestOutputHelper output)
                     tool => SessionWait.Text(tool?["name"]) == "send_to_channel"
                 );
                 Assert.Contains(tools, tool => SessionWait.Text(tool?["name"]) == "read");
-                var search = tools.OfType<JsonObject>().SingleOrDefault(tool => SessionWait.Text(tool["type"]) == "web_search");
-                var image = tools.OfType<JsonObject>().SingleOrDefault(tool => SessionWait.Text(tool["type"]) == "image_generation");
+                var search = tools
+                    .OfType<JsonObject>()
+                    .SingleOrDefault(tool => SessionWait.Text(tool["type"]) == "web_search");
+                var image = tools
+                    .OfType<JsonObject>()
+                    .SingleOrDefault(tool => SessionWait.Text(tool["type"]) == "image_generation");
                 if (hostedEnabled)
                 {
                     Assert.NotNull(search);
                     Assert.Equal("high", SessionWait.Text(search["search_context_size"]));
-                    Assert.Equal("example.test", SessionWait.Text(search["filters"]?["allowed_domains"]?[0]));
+                    Assert.Equal(
+                        "example.test",
+                        SessionWait.Text(search["filters"]?["allowed_domains"]?[0])
+                    );
                     Assert.NotNull(image);
                     Assert.Equal("png", SessionWait.Text(image["output_format"]));
                 }
@@ -217,14 +224,27 @@ public sealed class DefaultToolWireTests(ITestOutputHelper output)
                     {
                         ["providerType"] = providerType,
                         ["baseUrl"] = uri.ToString(),
-                        ["models"] = new JsonArray(new JsonObject
+                        ["models"] = new JsonArray(
+                            new JsonObject
+                            {
+                                ["id"] = "wire",
+                                ["webSearch"] = hostedEnabled
+                                    ? new JsonObject { ["searchContextSize"] = "high" }
+                                    : JsonValue.Create(false),
+                                ["imageGeneration"] = hostedEnabled,
+                            }
+                        ),
+                        ["webSearch"] = new JsonObject
                         {
-                            ["id"] = "wire",
-                            ["webSearch"] = hostedEnabled ? new JsonObject { ["searchContextSize"] = "high" } : JsonValue.Create(false),
-                            ["imageGeneration"] = hostedEnabled,
-                        }),
-                        ["webSearch"] = new JsonObject { ["enabled"] = !hostedEnabled, ["searchContextSize"] = "low", ["allowedDomains"] = new JsonArray("example.test") },
-                        ["imageGeneration"] = new JsonObject { ["enabled"] = !hostedEnabled, ["outputFormat"] = "png" },
+                            ["enabled"] = !hostedEnabled,
+                            ["searchContextSize"] = "low",
+                            ["allowedDomains"] = new JsonArray("example.test"),
+                        },
+                        ["imageGeneration"] = new JsonObject
+                        {
+                            ["enabled"] = !hostedEnabled,
+                            ["outputFormat"] = "png",
+                        },
                     },
                 },
             },

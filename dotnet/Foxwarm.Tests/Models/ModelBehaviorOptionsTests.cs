@@ -11,17 +11,19 @@ public sealed class ModelBehaviorOptionsTests
     [Fact]
     public void Behavior_options_inherit_provider_defaults_and_fingerprint_resolved_leaf_overrides()
     {
-        var root = JsonNode.Parse(
-            """
-            {"providers":{
-              "builtin":{},
-              "leaf":{"asyncCompact":false,"disallowEmptyResponse":true},
-              "p":{"asyncCompact":false,"disallowEmptyResponse":true,"models":["inherited",{"id":"overridden","asyncCompact":true,"disallowEmptyResponse":false}]},
-              "alias":"p/overridden",
-              "route":{"providerType":"failover","targets":["p/inherited","p/overridden"]}
-            }}
-            """
-        )!.AsObject();
+        var root = JsonNode
+            .Parse(
+                """
+                {"providers":{
+                  "builtin":{},
+                  "leaf":{"asyncCompact":false,"disallowEmptyResponse":true},
+                  "p":{"asyncCompact":false,"disallowEmptyResponse":true,"models":["inherited",{"id":"overridden","asyncCompact":true,"disallowEmptyResponse":false}]},
+                  "alias":"p/overridden",
+                  "route":{"providerType":"failover","targets":["p/inherited","p/overridden"]}
+                }}
+                """
+            )!
+            .AsObject();
         var catalog = HostModels.Parse(root, new JsonObject());
         void Check(string key, bool background, bool strict)
         {
@@ -41,7 +43,12 @@ public sealed class ModelBehaviorOptionsTests
             var changed = (JsonObject)root.DeepClone();
             var model = changed["providers"]!["p"]!["models"]![1]!;
             model[field] = !model[field]!.GetValue<bool>();
-            Assert.NotEqual(original, HostModels.Parse(changed, new JsonObject()).Resolve("route").Configuration["fingerprint"]!.ToString());
+            Assert.NotEqual(
+                original,
+                HostModels.Parse(changed, new JsonObject()).Resolve("route").Configuration[
+                    "fingerprint"
+                ]!.ToString()
+            );
         }
     }
 
@@ -60,16 +67,20 @@ public sealed class ModelBehaviorOptionsTests
     )
     {
         using var temp = new TempDirectory();
-        await using var peer = await WsPeer.StartAsync((_, number) =>
-        {
-            var response = ResponsesWsTests.Response(number);
-            response["output"] = new JsonArray();
-            return response;
-        });
+        await using var peer = await WsPeer.StartAsync(
+            (_, number) =>
+            {
+                var response = ResponsesWsTests.Response(number);
+                response["output"] = new JsonArray();
+                return response;
+            }
+        );
         using var handler = new EmptyResponseHandler(providerType);
         using var http = new HttpClient(handler);
         await using var transport = new ResponsesWsTransport(diagnostics: _ => { });
-        var configuration = new ModelConfiguration(HostPaths.ForDataRoot(temp.Path, environment: _ => null));
+        var configuration = new ModelConfiguration(
+            HostPaths.ForDataRoot(temp.Path, environment: _ => null)
+        );
         var document = new JsonObject
         {
             ["default"] = "p/other",
@@ -103,13 +114,39 @@ public sealed class ModelBehaviorOptionsTests
         var captured = requests.Capture(configuration.Capture(), "alias", null);
         document["providers"]!["p"]!["models"]![1]!["disallowEmptyResponse"] = !strict;
         await configuration.SaveAsync(new JsonObject { ["yaml"] = document.ToJsonString() });
-        Assert.Equal(!strict, configuration.Capture().Resolve("p/selected").Configuration["disallowEmptyResponse"]!.GetValue<bool>());
-        var events = new List<ModelRetryEvent>();
-        Task<ChatResult> Send() => requests.RequestAsync(
-            "session", captured, "cache", "turn", new JsonObject[] { new() { ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["text"] = "empty" }) } },
-            (_, _) => Task.FromResult(""), value => { events.Add(value); return Task.FromResult(false); },
-            null, null, null, CancellationToken.None, ModelRequestScope.Canonical
+        Assert.Equal(
+            !strict,
+            configuration.Capture().Resolve("p/selected").Configuration[
+                "disallowEmptyResponse"
+            ]!.GetValue<bool>()
         );
+        var events = new List<ModelRetryEvent>();
+        Task<ChatResult> Send() =>
+            requests.RequestAsync(
+                "session",
+                captured,
+                "cache",
+                "turn",
+                new JsonObject[]
+                {
+                    new()
+                    {
+                        ["role"] = "user",
+                        ["parts"] = new JsonArray(new JsonObject { ["text"] = "empty" }),
+                    },
+                },
+                (_, _) => Task.FromResult(""),
+                value =>
+                {
+                    events.Add(value);
+                    return Task.FromResult(false);
+                },
+                null,
+                null,
+                null,
+                CancellationToken.None,
+                ModelRequestScope.Canonical
+            );
         if (strict)
         {
             var error = await Assert.ThrowsAsync<ModelRequestException>(Send);
@@ -136,18 +173,49 @@ public sealed class ModelBehaviorOptionsTests
     {
         using var handler = new EmptyResponseHandler("openai-responses");
         using var http = new HttpClient(handler);
-        var catalog = HostModels.Parse(JsonNode.Parse(
-            """
-            {"providers":{
-              "p":{"providerType":"openai-responses","baseUrl":"http://localhost","disallowEmptyResponse":true,"models":[{"id":"strict"},{"id":"accept","disallowEmptyResponse":false}]},
-              "route":{"providerType":"failover","targets":["p/strict","p/accept"],"failureThreshold":1}
-            }}
-            """
-        )!.AsObject(), new JsonObject());
-        var requests = new ModelRequestOwner(http, new(new Uri("http://localhost"), "fallback", "fallback", "", "", 1000), new ModelRouting(), (_, _) => Task.CompletedTask);
+        var catalog = HostModels.Parse(
+            JsonNode
+                .Parse(
+                    """
+                    {"providers":{
+                      "p":{"providerType":"openai-responses","baseUrl":"http://localhost","disallowEmptyResponse":true,"models":[{"id":"strict"},{"id":"accept","disallowEmptyResponse":false}]},
+                      "route":{"providerType":"failover","targets":["p/strict","p/accept"],"failureThreshold":1}
+                    }}
+                    """
+                )!
+                .AsObject(),
+            new JsonObject()
+        );
+        var requests = new ModelRequestOwner(
+            http,
+            new(new Uri("http://localhost"), "fallback", "fallback", "", "", 1000),
+            new ModelRouting(),
+            (_, _) => Task.CompletedTask
+        );
         var retries = new List<ModelRetryEvent>();
-        var result = await requests.RequestAsync("session", catalog, "route", null, "cache", "turn", [], (_, _) => Task.FromResult(""), value => { retries.Add(value); return Task.FromResult(false); }, null, null, null, CancellationToken.None);
-        Assert.Equal(new[] { "strict", "accept" }, handler.Requests.Select(body => body["model"]!.GetValue<string>()));
+        var result = await requests.RequestAsync(
+            "session",
+            catalog,
+            "route",
+            null,
+            "cache",
+            "turn",
+            [],
+            (_, _) => Task.FromResult(""),
+            value =>
+            {
+                retries.Add(value);
+                return Task.FromResult(false);
+            },
+            null,
+            null,
+            null,
+            CancellationToken.None
+        );
+        Assert.Equal(
+            new[] { "strict", "accept" },
+            handler.Requests.Select(body => body["model"]!.GetValue<string>())
+        );
         Assert.Equal("response-error", Assert.Single(retries).Kind);
         Assert.False(OpenAIHttp.HasMeaningfulAssistant(result.AssistantMessage));
         result.FinalizeHistory(null);
@@ -157,16 +225,32 @@ public sealed class ModelBehaviorOptionsTests
     {
         internal readonly List<JsonObject> Requests = [];
 
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
         {
-            Requests.Add(JsonNode.Parse(await request.Content!.ReadAsStringAsync(cancellationToken))!.AsObject());
+            Requests.Add(
+                JsonNode
+                    .Parse(await request.Content!.ReadAsStringAsync(cancellationToken))!
+                    .AsObject()
+            );
             var body = providerType switch
             {
-                "openai-completions" => "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                "openai-completions" =>
+                    "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
                 "anthropic" => "{\"content\":[]}",
-                _ => "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"empty\",\"status\":\"completed\",\"output\":[]}}\n\n",
+                _ =>
+                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"empty\",\"status\":\"completed\",\"output\":[]}}\n\n",
             };
-            return new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, providerType == "anthropic" ? "application/json" : "text/event-stream") };
+            return new(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    body,
+                    Encoding.UTF8,
+                    providerType == "anthropic" ? "application/json" : "text/event-stream"
+                ),
+            };
         }
     }
 }
