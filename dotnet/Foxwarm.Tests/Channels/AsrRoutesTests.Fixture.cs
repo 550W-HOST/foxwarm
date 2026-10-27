@@ -37,6 +37,9 @@ public sealed partial class AsrRoutesTests
         internal Func<HttpContext, Task>? Upload;
         internal Func<WebSocket, HttpContext, Task>? Stream = null;
         internal Func<HttpContext, Task>? BeforeStream;
+        internal readonly TaskCompletionSource StreamCompleted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         internal string PeerUrl = "";
         internal string Data => Path.Combine(Temp.Path, "data");
         internal string Work => Path.Combine(Temp.Path, "work");
@@ -172,6 +175,20 @@ public sealed partial class AsrRoutesTests
             f.Server = new([], 0, Token, null, f.Manager, f.Terminals, address, enabled);
             if (enabled)
             {
+                f.Server.App.Use(
+                    async (context, next) =>
+                    {
+                        try
+                        {
+                            await next(context);
+                        }
+                        finally
+                        {
+                            if (context.Request.Path == "/api/asr/stream")
+                                f.StreamCompleted.TrySetResult();
+                        }
+                    }
+                );
                 var runtime = new SessionRuntime(f.Manager);
                 new Foxwarm.Channels.WebUi.WebUIChannel(
                     f.Manager,

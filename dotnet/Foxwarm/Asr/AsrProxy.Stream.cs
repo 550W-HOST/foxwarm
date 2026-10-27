@@ -167,6 +167,15 @@ internal sealed partial class AsrProxy
                 CloseOutput(downstream, downstreamWrites, closeStatus, closeReason),
                 CloseOutput(upstream, upstreamWrites, WebSocketCloseStatus.NormalClosure, null)
             );
+            // The existing receive owner completes the browser's close exchange.
+            // Cancelling it immediately can reset the transport before the close is read.
+            if (!fromClient.IsCompleted && downstream.State == WebSocketState.CloseSent)
+                try
+                {
+                    await fromClient.WaitAsync(closing.Token);
+                }
+                catch (Exception error)
+                    when (error is WebSocketException or OperationCanceledException) { }
             lifetime.Cancel();
             pending.Writer.TryComplete();
             upstream.Abort();

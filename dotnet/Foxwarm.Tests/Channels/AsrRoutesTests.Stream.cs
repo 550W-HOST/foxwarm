@@ -109,6 +109,23 @@ public sealed partial class AsrRoutesTests
         using var socket = await f.Connect();
         Assert.Null(await Receive(socket));
         Assert.Equal(WebSocketCloseStatus.InternalServerError, socket.CloseStatus);
+        using var closing = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "acknowledged", closing.Token);
+        Assert.Equal(WebSocketState.Closed, socket.State);
+        await f.StreamCompleted.Task.WaitAsync(closing.Token);
+        Assert.Equal(1, f.Requests);
+    }
+
+    [Fact]
+    public async Task Upstream_rejection_without_browser_close_response_releases_the_request()
+    {
+        await using var f = await Fixture.Create();
+        f.StreamStatus = 307;
+        using var socket = await f.Connect();
+        Assert.Null(await Receive(socket));
+        Assert.Equal(WebSocketCloseStatus.InternalServerError, socket.CloseStatus);
+        // Keep the browser open without acknowledging. The close bound must release its receive owner.
+        await f.StreamCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(1, f.Requests);
     }
 
@@ -185,6 +202,10 @@ public sealed partial class AsrRoutesTests
         Assert.Null(await Receive(client));
         Assert.Equal(WebSocketCloseStatus.PolicyViolation, client.CloseStatus);
         Assert.Equal("service reason", client.CloseStatusDescription);
+        using var closing = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "acknowledged", closing.Token);
+        Assert.Equal(WebSocketState.Closed, client.State);
+        await f.StreamCompleted.Task.WaitAsync(closing.Token);
     }
 
     [Fact]
