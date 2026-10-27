@@ -4,7 +4,17 @@
 
 Foxwarm materializes each memory-backed Session system-prompt snapshot for one canonical concrete model identity. Individual memory source bodies may contain bounded full-line `foxwarm-if` blocks; the resulting snapshot begins with a deterministic current-model marker used to decide whether the persisted bytes can be reused for a selected provider attempt.
 
-The observable source/adoption choices and refresh rationale are owned by [working instructions](../behaviors/conversation-and-history.md#which-instructions-are-in-the-working-context). This thread owns concrete identity matching, owner persistence, detached clones, and request-journal linkage.
+The observable source/adoption choices and refresh rationale are owned by [working instructions](../behaviors/conversation-and-history.md#which-instructions-are-in-the-working-context). This thread owns the memory-backed request prefix, concrete identity matching, owner persistence, detached clones, and request-journal linkage.
+
+## Stable request prefix
+
+### D-memory-request-prefix-stability
+
+[2026-10-27] Keep memory-backed leading instructions stable so ordinary and dedicated compaction requests can share a prefix extending into older history. With unchanged base instructions and a matching concrete memory snapshot, ordinary, compact, and detached BTW requests compose the same base instructions plus snapshot bytes. Node selection, working directory, and connection status must not inject request-time text into this prefix or become snapshot inputs. Model-identity changes and the lifecycle refreshes below retain their existing effects.
+
+Dedicated compaction takes the unchanged older history prefix at the complete-exchange boundary and appends its planning instruction afterward. Provider normalization still applies, including adjacent same-role merging; the planning instruction can extend the final user item. BTW likewise appends its side request after copied history. These request suffixes do not rewrite leading instructions.
+
+Tool catalogs remain independent of memory snapshots: current Node capabilities and authorization determine available custom definitions. With stable selection and policy, ordinary and compact custom definitions align. Existing hosted `web_search`/`image_generation` purpose suppression and background `openai-ws` cache-key scope remain separate contracts in [Responses](../units/model-responses.md) and [model routing](./model-routing.md#d-model-routing-openai-ws-prompt-cache-key). Prefix alignment permits reuse; it does not guarantee an upstream cache hit or whole-request equality across Node changes.
 
 ## Source assembly
 
@@ -18,6 +28,7 @@ The observable source/adoption choices and refresh rationale are owned by [worki
 - The existing model-routing loop selects one concrete `ModelConfigEntry` and derives its canonical identity through the same concrete attribution helper used for assistant metadata.
 - Immediately before concrete request-plan construction, a narrow optional prompt resolver receives that selected identity. Fixed low-level, CLI, and setup callers omit the resolver and keep their supplied prompt unchanged.
 - Memory-backed `chat` compares the selected identity with the snapshot's first-line marker. A match reuses the exact bytes without rereading memory files, persisting the snapshot again, or rotating the cache key. Normal effective-selection metadata persistence is independent of snapshot materialization. A missing or different marker rebuilds from the configured memory sources for that concrete identity.
+- The original TypeScript `src/llm.ts` `chat` resolver passes the matching snapshot directly as `systemPrompt`; `src/session/history.ts` `buildCompactJobSnapshot`/`runCompactJob` reuses that caller with the older history prefix and a later planning message. The C# entry points are `SessionChatService.ChatCoreAsync`, `SessionCompactor.PlanAsync`, and `SessionManager.RunBtwAsync`.
 - The first selected attempt's effective prompt becomes the request journal prompt. Later attempts pass their effective prompt to the existing optional per-attempt prompt reference boundary. Routing selection, retries, request identity, and assistant attribution remain one logical request.
 
 ## Ownership and detached work

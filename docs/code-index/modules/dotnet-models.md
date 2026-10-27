@@ -6,6 +6,8 @@ Model configuration, routing, provider adapters, streaming, retries, images, and
 
 This module documents current .NET source behavior. Cross-module contracts belong to the linked threads; do not infer migration completion from the presence of a C# implementation.
 
+Leading instruction composition follows [conditional memory and request prefixes](../threads/conditional-memory-snapshots.md#d-memory-request-prefix-stability).
+
 ## Units
 
 - [Shared SQLite writer mechanics](../units/dotnet-sqlite-writers.md)

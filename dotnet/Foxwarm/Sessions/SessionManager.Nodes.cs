@@ -35,17 +35,6 @@ internal sealed partial class SessionManager
 
     internal string CurrentNode(SessionOwner owner) => ExecutionPlacement(owner).Node;
 
-    internal string ExecutionEnvironment(SessionOwner owner, SessionSnapshot? snapshot = null)
-    {
-        var placement = snapshot is null
-            ? ExecutionPlacement(owner)
-            : (
-                Node: ResolveExecutionNode(snapshot.AuthorityEnvelope, BoundNode(owner.Agent)),
-                Cwd: SessionWait.Text(snapshot.AuthorityEnvelope["cwd"])
-            );
-        return $"--- EXECUTION ENVIRONMENT ---\n- Current Node: {placement.Node}\n- Connected: {NodeProviders.Connected(placement.Node).ToString().ToLowerInvariant()}\n- Working directory: {placement.Cwd ?? "not set; use the Node's default directory"}\n- Agent memory and Session history remain on Main. The agent_folder above is this Agent's directory on Main, not its directory on another Node.";
-    }
-
     internal JsonArray NodeSummaries(bool hasPty = false)
     {
         var nodes = Nodes.List();

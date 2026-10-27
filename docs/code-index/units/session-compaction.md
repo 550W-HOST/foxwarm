@@ -6,6 +6,8 @@ Files: `dotnet/Foxwarm/ContextPreviewRenderer.Message.cs`, `dotnet/Foxwarm/Conte
 
 Plans context compaction, repairs bounded plan files, commits new immutable Archive blocks/messages with replacement active JSON history, and exposes exact capped Archive navigation/control tools.
 
+Dedicated planner instructions, custom tools and older history follow the [stable request-prefix contract](../threads/conditional-memory-snapshots.md#d-memory-request-prefix-stability).
+
 ## Stable methods and callers
 
 - `SessionCompactor.StartManualAsync`, `AutoAfterTurnAsync`, `BeforeContinuationAsync`, `ApplyCompletedAsync`, `SafePointAsync`, `StopAsync`, and `DrainAsync` own one transient per-Session operation, phase publication, cancellation, ready-wake application, and shutdown draining.
@@ -62,6 +64,8 @@ Manual `/compact tools` calls `PruneToolsManuallyAsync` on the same response-onl
 Plan operations may carry an integer `frictionScore` from 0 through 100. Missing/invalid scores are omitted without rejecting an otherwise valid plan. Accepted scores flow through immutable Archive block records, active context-block metadata, candidate prompts, exact recall, expansion, and previews; existing unscored blocks remain unscored. This is diagnostic metadata, not a changed pruning or retention policy.
 
 ## Tests
+
+`RequestPrefixTests.cs` covers ordinary/planner serialized prefix alignment and successful commit with independent commit-time memory refresh; [provider-neutral requests](./model-common-wire.md#tests) maps its placement/BTW coverage.
 
 `dotnet/Foxwarm.Tests/Sessions/InContextCompactTests.cs`, its fixture/selection/outcome/Anthropic parts (real complete-tool truncation → display notice → response → selection/next request, alongside foreground batches, next-request/canonical-pair evidence, terminal controls, policy/scope, single-child blocks, publication faults and cancellation); `dotnet/Foxwarm.Tests/Sessions/CompactLifecycleTests.cs`; `CompactContinuationTests.cs` (real required-wait cancellation and closure-before-wait); `dotnet/Foxwarm.Tests/scripts/qualify-shutdown-recovery.mjs` (owned host restart); `CompactRetentionTests.cs`; `CompactContextTests.cs` (real inter-Session sender, continuation identity/skill hint, recent notice retention, cold reload and immutable Archive controls); `CompactPruningTests.cs`; `CompactManualPruningTests.cs`; `CommittedArchiveBoundaryTests.cs`; `CommittedArchiveIdentityTests.cs`; `SelectedPromptTests.cs`; `dotnet/Foxwarm.Tests/Storage/ArchiveLineageTests.cs`.
 

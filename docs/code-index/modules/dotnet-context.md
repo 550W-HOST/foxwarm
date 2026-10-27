@@ -6,6 +6,8 @@ Canonical messages, compaction, immutable Archive navigation, Agent memory, and 
 
 This module documents current .NET source behavior. Cross-module contracts belong to the linked threads; do not infer migration completion from the presence of a C# implementation.
 
+[Conditional memory and request prefixes](../threads/conditional-memory-snapshots.md#d-memory-request-prefix-stability) owns instruction stability across ordinary, compact, and BTW requests, independently of execution placement and tool catalogs.
+
 ## Units
 
 - [Compaction plans and Archive recall](../units/session-compaction.md)

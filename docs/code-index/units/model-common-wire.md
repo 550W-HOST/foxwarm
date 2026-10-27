@@ -6,6 +6,8 @@ Files: `dotnet/Foxwarm/Models/ConcreteRequestHistory.cs`, `dotnet/Foxwarm/Models
 
 Builds provider-neutral request history, handles HTTP/SSE primitives, repairs retry inputs, adapts canonical image parts, and presents one chat-service contract to the Session turn host.
 
+Ordinary and detached BTW instruction composition follows the [stable request-prefix contract](../threads/conditional-memory-snapshots.md#d-memory-request-prefix-stability).
+
 ## Stable methods and callers
 
 - `ConcreteRequestHistory` selects canonical history/prompt-visible parts for a concrete request without changing active Session JSON.
@@ -31,5 +33,7 @@ Provider input is derived from Session state and request scope. The neutral repa
 Before stripping message `__meta`, concrete preparation projects a positive canonical tool-row seq onto the request-owned function-response envelope as `contextSeq`. The shared `OpenAIRequestText.PreviousRequest` prefix exposes it beside existing timing (or as seq-only tool metadata), covering Responses, Completions and Anthropic tool groups. Multiple results in one row share its seq; synthetic repaired responses without canonical seq receive none. Tool business payloads, canonical Session/Archive records and neutral journal history are unchanged. These cues locate a record, not a complete exchange; active source validation stays in the compactor.
 
 ## Tests
+
+`dotnet/Foxwarm.Tests/Sessions/RequestPrefixTests.cs` exercises actual Responses ordinary/BTW requests across owner Node selection, cwd and connection changes, plus ordinary-to-compaction leading instructions, custom tools and older serialized history. Planning submits and commits a validated plan; commit-time memory refresh and cache lineage remain observable controls.
 
 `dotnet/Foxwarm.Tests/Models/CanonicalSequenceCueTests.cs` (all three provider serializers, timing/no-timing, synthetic responses and immutable canonical source); `dotnet/Foxwarm.Tests/Models/NormalLoopJournalTests.cs` (real Task query/tool continuation, physical retry, next-turn reset, journal reconstruction and raw-log iteration); `RetryInputSafePointTests.cs` (changed-input retry keeps iteration before provider-time follow-up advances it); `dotnet/Foxwarm.Tests/Models/JournalHistoryReuseTests.cs`; `dotnet/Foxwarm.Tests/Models/RequestHistoryRepairTests.cs`; `ResponsesClientTests.cs`; `RetryPreparationTests.cs`; `EffectiveSelectionTests.cs`; `HostedResponsesWsImageTests.cs`; `LlmRequestJournalQualificationTests.cs`; `HttpErrorClassificationTests.cs` (long structured errors through real failover, bounded diagnostics and Stop during collection); `ProviderTransportParityTests.cs` (real negotiated compressed success/error, raw deflate, explicit headers, cookie isolation across configured keys and Anthropic single decoding); `HostedImageWatchdogParityTests.cs`.

@@ -525,8 +525,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 );
             },
             () => ModelDefinitions(hosted),
-            Tasks,
-            () => ExecutionEnvironment(hosted)
+            Tasks
         );
         var registry = new SessionRegistry(
             store,

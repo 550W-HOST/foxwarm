@@ -36,7 +36,6 @@ internal sealed partial class SessionManager
                     BoundNode(source.Agent)
                 )
             );
-            var environment = ExecutionEnvironment(source, snapshot);
             var requestId = Guid.NewGuid().ToString();
             var catalog = models.Capture();
             var selected = catalog.Select(snapshot.AuthorityEnvelope);
@@ -81,10 +80,9 @@ internal sealed partial class SessionManager
                         token,
                         AgentMemory.Selection(snapshot.AuthorityEnvelope)
                     );
-                var value = persistent + "\n\n" + environment;
                 return clientOptions.Instructions.Length == 0
-                    ? value
-                    : clientOptions.Instructions + "\n\n" + value;
+                    ? persistent
+                    : clientOptions.Instructions + "\n\n" + persistent;
             }
             result = await request.RequestAsync(
                 snapshot.Id,
