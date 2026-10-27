@@ -22,9 +22,11 @@ Two virtual `providerType` values are supported:
 
 A virtual entry uses `targets`, containing model lookup keys that resolve strictly to concrete leaves in the same models-config snapshot. Canonical identity is an actual expansion key, so slash-containing model IDs remain exact and a single-model bare alias and qualified key resolve to the same leaf. Version 1 rejects empty targets, unknown targets, self references, virtual-to-virtual references, and aliases that resolve to the same canonical concrete target. `session-hash` accepts one or more targets; `failover` requires at least two.
 
-Virtual entries do not accept `models`, legacy `model`, `baseUrl`, `apiKey`, `requestCompression`, `extraFields`, `extraHeaders`, `webSearch`, `imageGeneration`, `contextLimit`, `maxOutput`, `providerImageOutputFormat`, `effort`, `historyReasoningField`, or `asyncCompact`. `session-hash` also rejects failover-only threshold/cooldown fields. Concrete entries reject virtual routing fields. Provider entries must be plain objects, and failover threshold/cooldown values are positive integers. Request connection and serialization fields always come from the selected concrete leaf.
+Virtual entries do not accept `models`, legacy `model`, `baseUrl`, `apiKey`, `requestCompression`, `extraFields`, `extraHeaders`, `webSearch`, `imageGeneration`, `contextLimit`, `maxOutput`, `providerImageOutputFormat`, `effort`, `historyReasoningField`, `asyncCompact`, or `disallowEmptyResponse`. `session-hash` also rejects failover-only threshold/cooldown fields. Concrete entries reject virtual routing fields. Provider entries must be plain objects, and failover threshold/cooldown values are positive integers. Request connection and serialization fields always come from the selected concrete leaf.
 
 The three model settings `contextLimit`, `maxOutput`, and `providerImageOutputFormat` resolve once per concrete leaf from model → provider → root `defaults` → startup-owned legacy app `llm` → built-in defaults. The root defaults object accepts only these three fields. Effective limits and image formats participate in the existing leaf fingerprint, while virtual entries expose only their derived safe context limit. Canonical configuration ownership is [src-config](../units/src-config.md#model-resolution).
+
+The [configuration unit](../units/model-configuration.md#contract-and-side-effects) owns `asyncCompact` and `disallowEmptyResponse` provider/model precedence. Virtual async eligibility uses the resolved leaves; each attempted leaf supplies its own empty-response policy.
 
 Concrete provider/model entries may configure first-class `effort: { allowed, default }`. Omission allows `none`, `low`, `medium`, `high`, `xhigh`, and `max` with default `high`. Model-level fields inherit the provider values except that an explicit model `allowed` list replaces the provider list; the resolved default must be included. Virtual entries cannot configure effort and expose the ordered union of reachable concrete levels.
 
@@ -84,7 +86,7 @@ HTTP 400, 413, and 422 are terminal and do not affect route health unless the bo
 
 Abort, stop, and cancellation terminate immediately and do not count as target health failures.
 
-The [response-usability behavior](../behaviors/models-and-requests.md#routing-and-retry-change-the-attempted-request-not-the-saved-selection) distinguishes accepted empty completion from provider failure. `disallowEmptyResponse` is a concrete-provider-only fingerprinted field; when enabled, the common response classifier returns retryable `response-error` for empty/whitespace/reasoning-only output. Tool calls and successful hosted images remain usable content.
+The [response-usability behavior](../behaviors/models-and-requests.md#routing-and-retry-change-the-attempted-request-not-the-saved-selection) distinguishes accepted empty completion from provider failure. `disallowEmptyResponse` is a concrete provider/model fingerprinted field with model overrides and default `false`; when enabled, the common response classifier returns retryable `response-error` for empty/whitespace/reasoning-only output. Tool calls and successful hosted images remain usable content.
 
 ## Surfaces and attribution
 
@@ -164,7 +166,7 @@ Failover health is process-local, configuration-fingerprinted, generation-scoped
 
 ### D-model-routing-usable-response
 
-[2026-09-12] Provider success no longer requires content by default: a completed response without non-whitespace assistant content and without a tool call is accepted across all provider protocols, and the empty completion ends the turn without fake `Error:` history. The concrete provider field `disallowEmptyResponse` restores the previous strict contract, making empty, whitespace-only, or reasoning-only responses retryable `response-error`s. A successful hosted generated image counts as real content, so a text-free image turn is accepted rather than retried as empty. The field is provider-scoped, is rejected on virtual entries, participates in the route fingerprint, and is removed when structured setup converts a concrete provider into a virtual entry.
+[2026-09-12, updated 2026-10-28] Provider success no longer requires content by default: a completed response without non-whitespace assistant content and without a tool call is accepted across all provider protocols, and the empty completion ends the turn without fake `Error:` history. The concrete provider/model field `disallowEmptyResponse` restores the previous strict contract, making empty, whitespace-only, or reasoning-only responses retryable `response-error`s. A successful hosted generated image counts as real content, so a text-free image turn is accepted rather than retried as empty. The field inherits from provider to model with explicit model overrides, is rejected on virtual entries, participates in the route fingerprint, and is removed when structured setup converts a concrete provider into a virtual entry.
 
 ### D-model-routing-concrete-attribution
 

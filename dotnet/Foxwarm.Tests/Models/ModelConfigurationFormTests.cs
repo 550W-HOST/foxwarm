@@ -262,7 +262,7 @@ public sealed class ModelConfigurationFormTests
         );
 
         var raw =
-            "# exact raw bytes\r\ndefault: raw/wire\r\nproviders:\r\n  raw: {providerType: openai-responses, models: [wire]}\r\n";
+            "# exact raw bytes\r\ndefault: raw/wire\r\nproviders:\r\n  raw: {providerType: openai-responses, asyncCompact: false, disallowEmptyResponse: true, models: [{id: wire, asyncCompact: true, disallowEmptyResponse: false}]}\r\n";
         var rawResponse = await client.PostAsJsonAsync(
             "/api/setup/models",
             new
@@ -278,5 +278,11 @@ public sealed class ModelConfigurationFormTests
             await File.ReadAllBytesAsync(configuration.ActivePath)
         );
         Assert.Equal("raw/wire", configuration.Capture().DefaultKey);
+        var rawModel = configuration.Capture().Resolve(null);
+        Assert.True(rawModel.Configuration["asyncCompact"]!.GetValue<bool>());
+        Assert.False(rawModel.Configuration["disallowEmptyResponse"]!.GetValue<bool>());
+        var rawCatalog = (await client.GetFromJsonAsync<JsonObject>("/api/models"))!;
+        Assert.Equal("raw/wire", rawCatalog["defaultKey"]!.GetValue<string>());
+        Assert.True(rawCatalog["models"]![0]!["asyncCompact"]!.GetValue<bool>());
     }
 }

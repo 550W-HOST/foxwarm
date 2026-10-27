@@ -75,7 +75,14 @@ internal sealed partial class HostModels
                 )
             )
                 throw new InvalidDataException("keepReasoningOnError must be boolean.");
-        config["asyncCompact"] = provider["asyncCompact"]?.DeepClone() ?? JsonValue.Create(true);
+        config["asyncCompact"] =
+            model?["asyncCompact"]?.DeepClone()
+            ?? provider["asyncCompact"]?.DeepClone()
+            ?? JsonValue.Create(true);
+        config["disallowEmptyResponse"] =
+            model?["disallowEmptyResponse"]?.DeepClone()
+            ?? provider["disallowEmptyResponse"]?.DeepClone()
+            ?? JsonValue.Create(false);
         config["keepReasoningOnError"] =
             model?["keepReasoningOnError"]?.DeepClone()
             ?? provider["keepReasoningOnError"]?.DeepClone()

@@ -147,6 +147,8 @@ const pricing = {
 const modelOverrideProperties = {
   ...modelDefaultProperties,
   pricing,
+  asyncCompact: { type: 'boolean', description: 'Whether background compaction may use this provider or model. Model entries override the provider default.' },
+  disallowEmptyResponse: { type: 'boolean', description: 'Treat a completed response with no content and no tool calls as a retryable failure. Default false accepts it as a normal turn end. Model entries override the provider default.' },
   streamContentInactivityTimeoutMs: { type: 'integer', minimum: 1, maximum: 2147483647, default: 60000, description: 'Streaming output inactivity timeout in milliseconds. Model overrides provider; default 60000. First-output timeout and explicit caller deadline remain independent. Safety buffering uses at least 600000.' },
   effort: modelEffortConfig,
   historyReasoningField: {
@@ -205,9 +207,9 @@ const providerObjectEntry = {
     streamContentInactivityTimeoutMs: modelOverrideProperties.streamContentInactivityTimeoutMs,
     effort: modelEffortConfig,
     historyReasoningField: modelOverrideProperties.historyReasoningField,
-    asyncCompact: { type: 'boolean', description: 'Whether background compaction may use this provider.' },
+    asyncCompact: modelOverrideProperties.asyncCompact,
     requestCompression: { enum: ['gzip', 'br'], description: 'Optional request-body compression.' },
-    disallowEmptyResponse: { type: 'boolean', description: 'Treat a completed response with no content and no tool calls as a retryable failure. Default false accepts it as a normal turn end.' },
+    disallowEmptyResponse: modelOverrideProperties.disallowEmptyResponse,
     keepReasoningOnError: { type: 'boolean', default: false, description: 'Provider default for retaining completed encrypted reasoning after a failed normal Responses stream. Model entries may override it; this does not resume provider execution.' },
     extraFields: modelOverrideProperties.extraFields,
     extraHeaders: modelOverrideProperties.extraHeaders,

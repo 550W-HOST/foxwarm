@@ -22,12 +22,14 @@ providers:
     providerType: openai-completions
     baseUrl: https://api.openai.com/v1
     apiKey: your-openai-key
-    # Optional: disable background compact jobs for this model entry.
+    # Optional provider default: disable background compact jobs.
+    # Model objects may override this; omitted defaults to true.
     # asyncCompact: false
     # Optional: enable compressed request bodies for this provider entry.
     # requestCompression: gzip  # or: br
     # Optional: treat a completed response with no content and no tool calls as
     # a retryable failure. Default (unset/false) accepts it as a normal turn end.
+    # Model objects may override this, including false.
     # disallowEmptyResponse: true
     # Optional provider-level defaults for all models in this entry.
     # contextLimit: 200000
@@ -44,7 +46,9 @@ providers:
     #   x-provider-default: enabled
     models:
       - gpt-5.6-sol
-      - gpt-5.6-terra
+      - id: gpt-5.6-terra
+        # asyncCompact: false
+        # disallowEmptyResponse: true
       - gpt-5.6-luna
 
   # `openai` and `openai-responses` use the newer Responses API over HTTP/SSE.
@@ -58,7 +62,8 @@ providers:
   # this is not a transport resume or a promise of less provider computation.
   # keepReasoningOnError: true  # model object entries may override, including false
   # To enable hosted web search, first change providerType to openai-responses.
-  # It is not sent for compact/setup-test requests:
+  # Ordinary turns and compact-plan requests declare configured hosted tools.
+  # Background one-shot and setup-test requests omit them.
   # webSearch: true  # or false, for default settings
   # webSearch:
   #   enabled: true
@@ -78,6 +83,15 @@ providers:
   #   background: auto          # auto, opaque, or transparent
   #   outputFormat: png         # png, jpeg, or webp
   #   outputCompression: 90     # 0-100, used for jpeg and webp
+
+  # With a Responses provider, model objects can inherit and tune hosted tools:
+  # models:
+  #   - id: responses-model
+  #     webSearch: {searchContextSize: high}
+  #     imageGeneration: {quality: high}
+  #   - id: responses-model-without-hosted-tools
+  #     webSearch: false
+  #     imageGeneration: false
 
   anthropic:
     providerType: anthropic

@@ -15,10 +15,13 @@ namespace Foxwarm.Tests;
 public sealed class DefaultToolWireTests(ITestOutputHelper output)
 {
     [Theory]
-    [InlineData("openai-responses")]
-    [InlineData("openai-ws")]
+    [InlineData("openai-responses", true)]
+    [InlineData("openai-ws", true)]
+    [InlineData("openai-responses", false)]
+    [InlineData("openai-ws", false)]
     public async Task Ordinary_owner_catalog_passes_validating_transport_and_dispatches_channel_send(
-        string providerType
+        string providerType,
+        bool hostedEnabled
     )
     {
         await using var peer = await ToolWirePeer.StartAsync();
@@ -28,7 +31,7 @@ public sealed class DefaultToolWireTests(ITestOutputHelper output)
             Path.Combine(temp.Path, "data"),
             Path.Combine(temp.Path, "work"),
             options,
-            Catalog(peer.Uri, providerType)
+            Catalog(peer.Uri, providerType, hostedEnabled)
         );
         await manager.LoadMainHostAsync();
         manager.InitializeChannels(
@@ -95,11 +98,21 @@ public sealed class DefaultToolWireTests(ITestOutputHelper output)
                     tool => SessionWait.Text(tool?["name"]) == "send_to_channel"
                 );
                 Assert.Contains(tools, tool => SessionWait.Text(tool?["name"]) == "read");
-                Assert.Contains(tools, tool => SessionWait.Text(tool?["type"]) == "web_search");
-                Assert.Contains(
-                    tools,
-                    tool => SessionWait.Text(tool?["type"]) == "image_generation"
-                );
+                var search = tools.OfType<JsonObject>().SingleOrDefault(tool => SessionWait.Text(tool["type"]) == "web_search");
+                var image = tools.OfType<JsonObject>().SingleOrDefault(tool => SessionWait.Text(tool["type"]) == "image_generation");
+                if (hostedEnabled)
+                {
+                    Assert.NotNull(search);
+                    Assert.Equal("high", SessionWait.Text(search["search_context_size"]));
+                    Assert.Equal("example.test", SessionWait.Text(search["filters"]?["allowed_domains"]?[0]));
+                    Assert.NotNull(image);
+                    Assert.Equal("png", SessionWait.Text(image["output_format"]));
+                }
+                else
+                {
+                    Assert.Null(search);
+                    Assert.Null(image);
+                }
                 Assert.DoesNotContain(
                     tools.OfType<JsonObject>(),
                     tool => tool.ContainsKey("defaultInject")
@@ -193,7 +206,7 @@ public sealed class DefaultToolWireTests(ITestOutputHelper output)
         await manager.ShutdownAsync();
     }
 
-    private static HostModels Catalog(Uri uri, string providerType) =>
+    private static HostModels Catalog(Uri uri, string providerType, bool hostedEnabled) =>
         HostModels.Parse(
             new JsonObject
             {
@@ -204,9 +217,14 @@ public sealed class DefaultToolWireTests(ITestOutputHelper output)
                     {
                         ["providerType"] = providerType,
                         ["baseUrl"] = uri.ToString(),
-                        ["models"] = new JsonArray("wire"),
-                        ["webSearch"] = new JsonObject { ["enabled"] = true },
-                        ["imageGeneration"] = new JsonObject { ["enabled"] = true },
+                        ["models"] = new JsonArray(new JsonObject
+                        {
+                            ["id"] = "wire",
+                            ["webSearch"] = hostedEnabled ? new JsonObject { ["searchContextSize"] = "high" } : JsonValue.Create(false),
+                            ["imageGeneration"] = hostedEnabled,
+                        }),
+                        ["webSearch"] = new JsonObject { ["enabled"] = !hostedEnabled, ["searchContextSize"] = "low", ["allowedDomains"] = new JsonArray("example.test") },
+                        ["imageGeneration"] = new JsonObject { ["enabled"] = !hostedEnabled, ["outputFormat"] = "png" },
                     },
                 },
             },

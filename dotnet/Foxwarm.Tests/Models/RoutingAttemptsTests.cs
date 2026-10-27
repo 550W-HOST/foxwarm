@@ -84,13 +84,14 @@ public sealed class RoutingAttemptsTests
         parsed["providers"]!["a"]!["models"] = new JsonArray(
             new JsonObject { ["id"] = "m", ["asyncCompact"] = false }
         );
-        Assert.True(
+        Assert.False(
             HostModels.Parse(parsed, new JsonObject()).Resolve("route").Configuration[
                 "asyncCompact"
             ]!.GetValue<bool>()
         );
         parsed["providers"]!["a"]!["asyncCompact"] = false;
-        Assert.False(
+        parsed["providers"]!["a"]!["models"]![0]!["asyncCompact"] = true;
+        Assert.True(
             HostModels.Parse(parsed, new JsonObject()).Resolve("route").Configuration[
                 "asyncCompact"
             ]!.GetValue<bool>()

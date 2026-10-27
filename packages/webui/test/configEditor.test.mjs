@@ -46,6 +46,11 @@ test('static config schemas are distinct, permissive, and omit the removed model
   assert.equal(providerObject.properties.models.items.anyOf[1].properties.keepReasoningOnError.type, 'boolean')
   assert.equal(providerObject.properties.models.items.anyOf[1].properties.keepReasoningOnError.default, undefined,
     'an omitted model override must inherit the provider default')
+  for (const field of ['asyncCompact', 'disallowEmptyResponse']) {
+    assert.equal(providerObject.properties[field].type, 'boolean')
+    assert.equal(providerObject.properties.models.items.anyOf[1].properties[field].type, 'boolean')
+    assert.equal(providerObject.properties.models.items.anyOf[1].properties[field].default, undefined)
+  }
   assert.equal(schemas.APP_CONFIG_SCHEMA.properties.channels.additionalProperties.additionalProperties, true)
   assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.paths.properties, 'modelsConfigPath'), false)
   assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.llm.properties, 'thinkingBudget'), false)
@@ -182,7 +187,9 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
       providers: {
         modelOverride: {
           providerType: 'openai-responses',
-          models: [{ id: 'model-a', webSearch: false, imageGeneration: true }],
+          asyncCompact: true,
+          disallowEmptyResponse: false,
+          models: [{ id: 'model-a', webSearch: false, imageGeneration: true, asyncCompact: false, disallowEmptyResponse: true }],
         },
       },
     },
@@ -218,6 +225,7 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
   }
   const invalidFixtures = [
     { providers: { empty: '   ' } },
+    ...['asyncCompact', 'disallowEmptyResponse'].map(field => ({ providers: { invalid: { models: [{ id: 'model', [field]: 'false' }] } } })),
     { providers: { invalid: { providerType: 'openai-completions', models: ['model'], historyReasoningField: 'other' } } },
     { providers: { invalid: { providerType: 'openai-responses', models: ['model'], historyReasoningField: 'reasoning' } } },
     { providers: { invalid: { providerType: 'openai-responses', models: [{ id: 'model', historyReasoningField: 'reasoning' }] } } },

@@ -534,6 +534,74 @@ public sealed partial class CompactLifecycleTests
         Assert.Empty(fixture.Store.Archive.ReadMessages());
     }
 
+    [Theory]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, null, true)]
+    [InlineData(false, null, false)]
+    public async Task Selected_model_controls_automatic_background_or_awaited_planning(
+        bool providerBackground,
+        bool? modelBackground,
+        bool expectedBackground
+    )
+    {
+        await using var fixture = await CompactFixture.CreateAsync(providerBackground, modelBackground);
+        await fixture.SeedAsync();
+        var automatic = fixture.Owner.Compactor.AutoAfterTurnAsync(new ChatResult(null)
+        {
+            Usage = new JsonObject { ["inputTokens"] = 19000L },
+        });
+        await fixture.Peer.PlanReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal("wire", fixture.Peer.PlanRequestModel);
+        if (expectedBackground)
+            Assert.False(await automatic.WaitAsync(TimeSpan.FromSeconds(5)));
+        else
+            Assert.False(automatic.IsCompleted);
+        fixture.Peer.ReleasePlan();
+        var committed = await automatic.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(!expectedBackground, committed);
+        await fixture.Owner.Compactor.DrainAsync();
+        await fixture.Owner.DrainForegroundAsync();
+        Assert.Single(fixture.Store.Archive.ReadBlocks());
+        Assert.False(fixture.Owner.Compactor.Active);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task Model_override_controls_busy_manual_admission_and_idle_standalone_mode(
+        bool providerBackground,
+        bool modelBackground
+    )
+    {
+        await using var fixture = await CompactFixture.CreateAsync(providerBackground, modelBackground);
+        await fixture.SeedAsync();
+        await fixture.Owner.Registry.Ingress.EnqueueAsync("s", QueueItem.UserText("hold foreground"));
+        await fixture.Peer.ForegroundReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var admission = await fixture.Owner.Compactor.StartManualAsync();
+        Assert.Equal(modelBackground, admission.Started);
+        Assert.Equal(modelBackground, admission.Background);
+        Assert.Equal(!modelBackground, admission.BackgroundUnavailable);
+        if (!modelBackground)
+        {
+            Assert.False(fixture.Peer.PlanReached.Task.IsCompleted);
+            fixture.Peer.ReleaseForeground();
+            await fixture.Owner.DrainForegroundAsync();
+            admission = await fixture.Owner.Compactor.StartManualAsync();
+            Assert.True(admission.Started);
+            Assert.False(admission.Background);
+            Assert.True(fixture.Owner.Compactor.Standalone);
+        }
+        await fixture.Peer.PlanReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal("wire", fixture.Peer.PlanRequestModel);
+        fixture.Peer.ReleasePlan();
+        fixture.Peer.ReleaseForeground();
+        await fixture.Owner.Compactor.DrainAsync();
+        await fixture.Owner.DrainForegroundAsync();
+        Assert.Single(fixture.Store.Archive.ReadBlocks());
+        Assert.False(fixture.Owner.Entry.Snapshot().Busy);
+    }
+
     [Fact]
     public async Task Failed_ready_planner_concludes_only_itself_and_preserves_followup_input()
     {
@@ -1098,7 +1166,7 @@ public sealed partial class CompactLifecycleTests
         internal readonly SessionManager AuthorizationManager;
         internal readonly string TaskDataRoot;
 
-        private CompactFixture(bool background)
+        private CompactFixture(bool background, bool? modelBackground)
         {
             var data = Path.Combine(temp.Path, "data");
             var work = Path.Combine(temp.Path, "work");
@@ -1171,23 +1239,16 @@ public sealed partial class CompactLifecycleTests
                 "",
                 713
             );
-            var models = HostModels.Parse(
-                JsonNode
-                    .Parse(
-                        """{"default":"a","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://localhost","models":["wire"],"contextLimit":20000},"b":{"providerType":"openai-responses","baseUrl":"http://localhost","models":["wire-b"],"contextLimit":20000}}}"""
-                    )!
-                    .AsObject(),
-                new JsonObject()
-            );
-            if (!background)
-                models = HostModels.Parse(
-                    JsonNode
-                        .Parse(
-                            """{"default":"a","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://localhost","models":["wire"],"contextLimit":20000,"asyncCompact":false}}}"""
-                        )!
-                        .AsObject(),
-                    new JsonObject()
+            var configuration = JsonNode.Parse(
+                """{"default":"b","providers":{"a":{"providerType":"openai-responses","baseUrl":"http://localhost","models":["wire"],"contextLimit":20000},"b":{"providerType":"openai-responses","baseUrl":"http://localhost","models":["wire-b"],"contextLimit":20000}}}"""
+            )!.AsObject();
+            configuration["default"] = modelBackground is null ? "a" : "b";
+            configuration["providers"]!["a"]!["asyncCompact"] = background;
+            if (modelBackground is not null)
+                configuration["providers"]!["a"]!["models"] = new JsonArray(
+                    new JsonObject { ["id"] = "wire", ["asyncCompact"] = modelBackground.Value }
                 );
+            var models = HostModels.Parse(configuration, new JsonObject());
             var agents = new AgentCatalog(data, work);
             var skills = new Skills(agents, Path.Combine(temp.Path, "skills"));
             var memory = new AgentMemory(agents, skills);
@@ -1249,9 +1310,11 @@ public sealed partial class CompactLifecycleTests
             Owner.Registry.TriggerOverride = _ => Owner.StartProcessing();
         }
 
-        internal static async Task<CompactFixture> CreateAsync(bool background = true)
+        internal static async Task<CompactFixture> CreateAsync(bool background = true, bool? modelBackground = null)
         {
-            var fixture = new CompactFixture(background);
+            var fixture = new CompactFixture(background, modelBackground);
+            if (modelBackground is not null)
+                await fixture.Owner.UpdateModelAsync(new JsonObject { ["model"] = "a" });
             await fixture.Owner.Entry.SaveLane.SaveStrictAsync();
             return fixture;
         }
