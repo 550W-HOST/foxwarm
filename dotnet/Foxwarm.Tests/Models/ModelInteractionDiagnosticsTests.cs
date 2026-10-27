@@ -937,14 +937,20 @@ public sealed class ModelInteractionDiagnosticsTests
         Assert.Contains("answer", response["body"]!.ToJsonString());
     }
 
-    [Fact]
-    public async Task Effective_image_configuration_omits_raw_content_even_when_purpose_filters_the_tool()
+    [Theory]
+    [InlineData("compact-plan", true)]
+    [InlineData("background", false)]
+    [InlineData("setup-test", false)]
+    public async Task Effective_image_configuration_omits_raw_content_regardless_of_purpose_filtering(
+        string purpose,
+        bool declared
+    )
     {
         using var temp = new TempDirectory();
         using var handler = new DiagnosticHandler(
             (_, body) =>
             {
-                Assert.DoesNotContain("image_generation", body);
+                Assert.Equal(declared, body.Contains("image_generation", StringComparison.Ordinal));
                 return (HttpStatusCode.OK, Sse(ResponsesPrefixCommitTests.Completed(Answer())));
             }
         );
@@ -972,7 +978,7 @@ public sealed class ModelInteractionDiagnosticsTests
             null,
             null,
             default,
-            journalPurpose: "compact-plan"
+            journalPurpose: purpose
         );
         var raw = (await ReadResponse(temp.Path))["rawStream"]!;
         Assert.True(raw["contentOmitted"]?.GetValue<bool>() == true);

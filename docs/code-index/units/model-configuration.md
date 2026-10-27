@@ -9,7 +9,7 @@ Captures model YAML, derives concrete and virtual hosts, selects failover target
 ## Stable methods and callers
 
 - `ModelConfiguration` loads/reloads captured config/model paths from `HostPaths` and exposes provider/model limits and setup data. Configured startup locations do not change under a live owner when saved YAML changes its `paths` section.
-- `HostModels` resolves configured concrete hosts and virtual aliases; `ConfiguredModelRequests` prepares a request owner and concrete client settings.
+- `HostModels` resolves configured concrete hosts and virtual aliases; `ConfiguredModelRequests` prepares a request owner and concrete client settings. Native hosted-tool purpose selection is owned by [Responses](./model-responses.md#d-responses-hosted-tool-purpose).
 - `ModelRouting.Select/RecordFailure/Health` applies deterministic target order, cooldown, and attempt attribution; `ModelRoutingFingerprint` identifies routing prefixes.
 - `ModelUsageCost.ValidatePrices/Complete/FormatUsd` validates concrete-leaf rates, settles owned normalized completion usage and formats saved USD estimates under [D-model-usage-cost](../threads/model-request-and-streaming.md#d-model-usage-cost).
 - `ModelRequestOwner`, `ModelRequestScope`, and `ModelAttemptFailure` carry owner/attempt lifecycle into retries, streaming, journal, and Session messages. Terminal `ModelRequestException.Scope` retains the failed request origin, including errors propagated through a different request's preparation. Caller cancellation is rechecked after awaited retry-notice delivery before throwing a terminal provider failure.

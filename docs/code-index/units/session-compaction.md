@@ -6,7 +6,7 @@ Files: `dotnet/Foxwarm/ContextPreviewRenderer.Message.cs`, `dotnet/Foxwarm/Conte
 
 Plans context compaction, repairs bounded plan files, commits new immutable Archive blocks/messages with replacement active JSON history, and exposes exact capped Archive navigation/control tools.
 
-Dedicated planner instructions, custom tools and older history follow the [stable request-prefix contract](../threads/conditional-memory-snapshots.md#d-memory-request-prefix-stability).
+Dedicated planner instructions, custom tools and older history follow the [stable request-prefix contract](../threads/conditional-memory-snapshots.md#d-memory-request-prefix-stability). Configured native tools follow the [Responses hosted-tool purpose contract](./model-responses.md#d-responses-hosted-tool-purpose); the dedicated local call/repair gate does not govern upstream hosted execution.
 
 ## Stable methods and callers
 

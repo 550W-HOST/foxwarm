@@ -30,7 +30,7 @@ internal static class ConfiguredModelRequests
             throw new InvalidDataException(
                 "Image generation requires the OpenAI Responses protocol."
             );
-        var featurePurpose = purpose is "compact-plan" or "background" or "setup-test";
+        var featurePurpose = purpose is "background" or "setup-test";
         var imageDeclared = imageEnabled && !featurePurpose;
         if (responses)
         {

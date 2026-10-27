@@ -14,7 +14,7 @@ The observable source/adoption choices and refresh rationale are owned by [worki
 
 Dedicated compaction takes the unchanged older history prefix at the complete-exchange boundary and appends its planning instruction afterward. Provider normalization still applies, including adjacent same-role merging; the planning instruction can extend the final user item. BTW likewise appends its side request after copied history. These request suffixes do not rewrite leading instructions.
 
-Tool catalogs remain independent of memory snapshots: current Node capabilities and authorization determine available custom definitions. With stable selection and policy, ordinary and compact custom definitions align. Existing hosted `web_search`/`image_generation` purpose suppression and background `openai-ws` cache-key scope remain separate contracts in [Responses](../units/model-responses.md) and [model routing](./model-routing.md#d-model-routing-openai-ws-prompt-cache-key). Prefix alignment permits reuse; it does not guarantee an upstream cache hit or whole-request equality across Node changes.
+Tool catalogs remain independent of memory snapshots: current Node capabilities and authorization determine available custom definitions. With stable selection and policy, ordinary and compact custom definitions align. Native hosted-tool alignment is owned by [Responses](../units/model-responses.md#d-responses-hosted-tool-purpose); background `openai-ws` cache-key scope is owned by [model routing](./model-routing.md#d-model-routing-openai-ws-prompt-cache-key). Prefix alignment permits reuse; it does not guarantee an upstream cache hit or whole-request equality across Node changes.
 
 ## Source assembly
 

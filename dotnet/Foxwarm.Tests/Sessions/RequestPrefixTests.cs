@@ -8,53 +8,77 @@ namespace Foxwarm.Tests;
 
 public sealed class RequestPrefixTests
 {
-    [Fact]
-    public async Task Ordinary_and_committed_compaction_share_instructions_tools_and_older_wire_prefix()
+    [Theory]
+    [InlineData(false, false, false, false)]
+    [InlineData(false, false, true, false)]
+    [InlineData(true, false, true, true)]
+    [InlineData(true, true, true, false)]
+    public async Task Ordinary_and_committed_compaction_share_instructions_tools_and_older_wire_prefix(
+        bool websocket,
+        bool background,
+        bool hostedTools,
+        bool overrideChoice
+    )
     {
         using var temp = new TempDirectory();
         var captures = new List<JsonObject>();
-        await using var peer = new ScriptedResponsesSequenceServer(
-            2,
-            async (index, stream, captured) =>
+        JsonObject Response(string body, int index)
+        {
+            captures.Add(JsonNode.Parse(body)!.AsObject());
+            JsonObject? plan = null;
+            if (index == 1)
             {
-                captures.Add(JsonNode.Parse(captured.Body)!.AsObject());
-                JsonObject? plan = null;
-                if (index == 1)
-                {
-                    var candidates = Regex.Matches(
-                        captured.Body.Replace("\\n", "\n"),
-                        "^- M#(\\d+)(?:-#(\\d+))?\\s",
-                        RegexOptions.Multiline
-                    );
-                    Assert.NotEmpty(candidates);
-                    var last = candidates[^1];
-                    plan = new JsonObject
-                    {
-                        ["replaceAsBlocks"] = new JsonArray(
-                            new JsonObject
-                            {
-                                ["level"] = 1,
-                                ["sourceKind"] = "message",
-                                ["sourceStart"] = long.Parse(candidates[0].Groups[1].Value),
-                                ["sourceEnd"] = long.Parse(
-                                    last.Groups[2].Success
-                                        ? last.Groups[2].Value
-                                        : last.Groups[1].Value
-                                ),
-                                ["summary"] = "Completed synthetic source work.",
-                            }
-                        ),
-                    };
-                }
-                await LoopbackResponsesServer.WriteResponseAsync(
-                    stream,
-                    200,
-                    "text/event-stream",
-                    Encoding.UTF8.GetBytes(Reply(plan))
+                var candidates = Regex.Matches(
+                    body.Replace("\\n", "\n"),
+                    "^- M#(\\d+)(?:-#(\\d+))?\\s",
+                    RegexOptions.Multiline
                 );
+                Assert.NotEmpty(candidates);
+                var last = candidates[^1];
+                plan = new JsonObject
+                {
+                    ["replaceAsBlocks"] = new JsonArray(
+                        new JsonObject
+                        {
+                            ["level"] = 1,
+                            ["sourceKind"] = "message",
+                            ["sourceStart"] = long.Parse(candidates[0].Groups[1].Value),
+                            ["sourceEnd"] = long.Parse(
+                                last.Groups[2].Success ? last.Groups[2].Value : last.Groups[1].Value
+                            ),
+                            ["summary"] = "Completed synthetic source work.",
+                        }
+                    ),
+                };
             }
+            return ResponseBody(plan);
+        }
+        await using var peer = websocket
+            ? null
+            : new ScriptedResponsesSequenceServer(
+                2,
+                async (index, stream, captured) =>
+                {
+                    var response = Response(captured.Body, index);
+                    await LoopbackResponsesServer.WriteResponseAsync(
+                        stream,
+                        200,
+                        "text/event-stream",
+                        Encoding.UTF8.GetBytes(Event(response))
+                    );
+                }
+            );
+        await using var wsPeer = websocket
+            ? await WsPeer.StartAsync((wire, number) => Response(wire.ToJsonString(), number - 1))
+            : null;
+        await using var manager = await CreateManager(
+            temp.Path,
+            wsPeer?.Uri ?? peer!.BaseUri,
+            websocket: websocket,
+            background: background,
+            hostedTools: hostedTools,
+            overrideChoice: overrideChoice
         );
-        await using var manager = await CreateManager(temp.Path, peer.BaseUri);
         var owner = await manager.CreateNamedAsync("main", "prefix", null, null);
         owner.Registry.TriggerOverride = _ => Task.CompletedTask;
         await Append(owner, Text("older-a " + new string('a', 2500)));
@@ -107,13 +131,44 @@ public sealed class RequestPrefixTests
         var before = owner.Entry.Snapshot();
         var memoryPath = Path.Combine(temp.Path, "work", "memory", "prefix.md");
         await File.WriteAllTextAsync(memoryPath, "Refreshed memory after compact commit.");
+        owner.Registry.TriggerOverride = _ => owner.StartProcessing();
         var admission = await owner.Compactor.StartManualAsync(keepPercent: .5);
         Assert.True(admission.Started);
+        Assert.Equal(background, admission.Background);
         await owner.Compactor.DrainAsync().WaitAsync(TimeSpan.FromSeconds(25));
 
-        Assert.Equal(2, peer.RequestCount);
+        Assert.Equal(2, captures.Count);
         Assert.Equal(Instructions(captures[0]), Instructions(captures[1]));
         Assert.True(JsonNode.DeepEquals(captures[0]["tools"], captures[1]["tools"]));
+        Assert.True(JsonNode.DeepEquals(captures[0]["tool_choice"], captures[1]["tool_choice"]));
+        var tools = captures[1]["tools"]!.AsArray();
+        Assert.Equal(hostedTools ? "image_generation" : "function", tools[^1]!["type"]!.GetValue<string>());
+        if (hostedTools)
+        {
+            Assert.Equal("web_search", tools[^2]!["type"]!.GetValue<string>());
+            Assert.Equal("high", tools[^2]!["search_context_size"]!.GetValue<string>());
+            Assert.Equal("example.test", tools[^2]!["filters"]!["allowed_domains"]![0]!.GetValue<string>());
+            Assert.Equal("US", tools[^2]!["user_location"]!["country"]!.GetValue<string>());
+            Assert.Equal("image-model", tools[^1]!["model"]!.GetValue<string>());
+            Assert.Equal("edit", tools[^1]!["action"]!.GetValue<string>());
+            Assert.Equal("1024x1024", tools[^1]!["size"]!.GetValue<string>());
+            Assert.Equal("high", tools[^1]!["quality"]!.GetValue<string>());
+            Assert.Equal("opaque", tools[^1]!["background"]!.GetValue<string>());
+            Assert.Equal("webp", tools[^1]!["output_format"]!.GetValue<string>());
+            Assert.Equal(80, tools[^1]!["output_compression"]!.GetValue<int>());
+            Assert.Equal(0, tools[^1]!["partial_images"]!.GetValue<int>());
+            if (overrideChoice)
+                Assert.Equal("image_generation", captures[1]["tool_choice"]!["type"]!.GetValue<string>());
+            else
+                Assert.Equal(background ? "auto" : "required", captures[1]["tool_choice"]!.GetValue<string>());
+        }
+        else
+            Assert.All(tools, tool => Assert.Equal("function", tool!["type"]!.GetValue<string>()));
+        if (websocket && background)
+            Assert.NotEqual(captures[0]["prompt_cache_key"]!.ToJsonString(), captures[1]["prompt_cache_key"]!.ToJsonString());
+        else
+            Assert.Equal(captures[0]["prompt_cache_key"]!.ToJsonString(), captures[1]["prompt_cache_key"]!.ToJsonString());
+
         var normal = captures[0]["input"]!.AsArray();
         var compact = captures[1]["input"]!.AsArray();
         Assert.True(compact.Count > 2 && compact.Count < normal.Count);
@@ -239,7 +294,11 @@ public sealed class RequestPrefixTests
     private static async Task<SessionManager> CreateManager(
         string root,
         Uri uri,
-        bool providerNode = false
+        bool providerNode = false,
+        bool websocket = false,
+        bool background = false,
+        bool hostedTools = false,
+        bool overrideChoice = false
     )
     {
         var data = Path.Combine(root, "data");
@@ -272,11 +331,36 @@ public sealed class RequestPrefixTests
                 {
                     ["synthetic"] = new JsonObject
                     {
-                        ["providerType"] = "openai-responses",
+                        ["providerType"] = websocket ? "openai-ws" : "openai-responses",
                         ["baseUrl"] = uri.ToString(),
                         ["models"] = new JsonArray("wire"),
                         ["contextLimit"] = 200000,
-                        ["asyncCompact"] = false,
+                        ["asyncCompact"] = background,
+                        ["webSearch"] = new JsonObject
+                        {
+                            ["enabled"] = hostedTools,
+                            ["toolChoice"] = background ? "auto" : "required",
+                            ["searchContextSize"] = "high",
+                            ["allowedDomains"] = new JsonArray("example.test"),
+                            ["userLocation"] = new JsonObject { ["country"] = "US" },
+                        },
+                        ["imageGeneration"] = new JsonObject
+                        {
+                            ["enabled"] = hostedTools,
+                            ["model"] = "image-model",
+                            ["action"] = "edit",
+                            ["size"] = "1024x1024",
+                            ["quality"] = "high",
+                            ["background"] = "opaque",
+                            ["outputFormat"] = "webp",
+                            ["outputCompression"] = 80,
+                        },
+                        ["extraFields"] = overrideChoice
+                            ? new JsonObject
+                            {
+                                ["tool_choice"] = new JsonObject { ["type"] = "image_generation" },
+                            }
+                            : null,
                     },
                 },
             }.ToJsonString()
@@ -320,10 +404,14 @@ public sealed class RequestPrefixTests
     private static string Instructions(JsonObject request) =>
         request["instructions"]!.GetValue<string>();
 
-    private static string Reply(JsonObject? plan)
+    private static string Event(JsonObject response) =>
+        "data: " + new JsonObject { ["type"] = "response.completed", ["response"] = response }.ToJsonString() + "\n\n";
+
+    private static string Reply(JsonObject? plan) => Event(ResponseBody(plan));
+
+    private static JsonObject ResponseBody(JsonObject? plan)
     {
         const string text = "Synthetic completed reply.";
-        static string Event(JsonObject value) => "data: " + value.ToJsonString() + "\n\n";
         var output = plan is null
             ? new JsonObject
             {
@@ -340,16 +428,10 @@ public sealed class RequestPrefixTests
                 ["name"] = "submit_compact_plan",
                 ["arguments"] = plan.ToJsonString(),
             };
-        return Event(
-            new JsonObject
-            {
-                ["type"] = "response.completed",
-                ["response"] = new JsonObject
-                {
-                    ["id"] = "synthetic-reply",
-                    ["output"] = new JsonArray(output),
-                },
-            }
-        );
+        return new JsonObject
+        {
+            ["id"] = "synthetic-reply",
+            ["output"] = new JsonArray(output),
+        };
     }
 }
