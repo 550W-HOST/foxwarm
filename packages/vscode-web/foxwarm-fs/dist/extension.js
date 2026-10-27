@@ -546,6 +546,8 @@ var pricing = {
 var modelOverrideProperties = {
   ...modelDefaultProperties,
   pricing,
+  asyncCompact: { type: "boolean", description: "Whether background compaction may use this provider or model. Model entries override the provider default." },
+  disallowEmptyResponse: { type: "boolean", description: "Treat a completed response with no content and no tool calls as a retryable failure. Default false accepts it as a normal turn end. Model entries override the provider default." },
   streamContentInactivityTimeoutMs: { type: "integer", minimum: 1, maximum: 2147483647, default: 6e4, description: "Streaming output inactivity timeout in milliseconds. Model overrides provider; default 60000. First-output timeout and explicit caller deadline remain independent. Safety buffering uses at least 600000." },
   effort: modelEffortConfig,
   historyReasoningField: {
@@ -564,9 +566,12 @@ var modelItem = {
     {
       type: "object",
       required: ["id"],
+      not: { required: ["sameProviderAs"] },
       additionalProperties: true,
       properties: {
-        id: { type: "string", minLength: 1, description: "Provider model identifier." },
+        id: { type: "string", minLength: 1, description: "Internal model identifier used for selection and history attribution." },
+        upstreamModelId: { type: "string", pattern: "\\S", description: "Optional model identifier sent to the upstream provider. Omitted uses id; internal selection and history keep id." },
+        sameModelAs: { type: "string", pattern: "\\S", description: "Compatible native history model: a whole local model ID or provider/model key. Takes precedence over sameProviderAs; keeps model settings and attribution separate." },
         ...modelOverrideProperties
       }
     }
@@ -582,11 +587,13 @@ var modelListContainsHistoryReasoningField = {
 var providerObjectEntry = {
   type: "object",
   additionalProperties: true,
+  not: { anyOf: ["upstreamModelId", "sameModelAs"].map((field) => ({ required: [field] })) },
   properties: {
     providerType: knownProviderType,
     provider: { ...knownProviderType, deprecated: true, description: "Legacy spelling for providerType. Prefer providerType." },
     baseUrl: { type: "string", description: "Provider API base URL." },
     apiKey: { type: "string", description: "Provider credential. Keep this file private." },
+    sameProviderAs: { type: "string", pattern: "\\S", description: "Concrete provider whose same internal model IDs have compatible native history. Does not inherit connection settings, tools or prices." },
     models: { type: "array", items: modelItem, description: "Preferred provider model list." },
     model: {
       deprecated: true,
@@ -601,9 +608,9 @@ var providerObjectEntry = {
     streamContentInactivityTimeoutMs: modelOverrideProperties.streamContentInactivityTimeoutMs,
     effort: modelEffortConfig,
     historyReasoningField: modelOverrideProperties.historyReasoningField,
-    asyncCompact: { type: "boolean", description: "Whether background compaction may use this provider." },
+    asyncCompact: modelOverrideProperties.asyncCompact,
     requestCompression: { enum: ["gzip", "br"], description: "Optional request-body compression." },
-    disallowEmptyResponse: { type: "boolean", description: "Treat a completed response with no content and no tool calls as a retryable failure. Default false accepts it as a normal turn end." },
+    disallowEmptyResponse: modelOverrideProperties.disallowEmptyResponse,
     keepReasoningOnError: { type: "boolean", default: false, description: "Provider default for retaining completed encrypted reasoning after a failed normal Responses stream. Model entries may override it; this does not resume provider execution." },
     extraFields: modelOverrideProperties.extraFields,
     extraHeaders: modelOverrideProperties.extraHeaders,
@@ -619,7 +626,7 @@ var providerObjectEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 1 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs", "failureThreshold", "cooldownMs"].map((field) => ({ required: [field] })) }
       }
     },
     {
@@ -627,7 +634,7 @@ var providerObjectEntry = {
       then: {
         required: ["targets"],
         properties: { targets: { minItems: 2 } },
-        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError"].map((field) => ({ required: [field] })) }
+        not: { anyOf: ["models", "model", "baseUrl", "apiKey", "requestCompression", "extraFields", "extraHeaders", "webSearch", "imageGeneration", "contextLimit", "maxOutput", "providerImageOutputFormat", "pricing", "streamContentInactivityTimeoutMs", "effort", "historyReasoningField", "asyncCompact", "disallowEmptyResponse", "keepReasoningOnError", "sameProviderAs"].map((field) => ({ required: [field] })) }
       }
     },
     {
