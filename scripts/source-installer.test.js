@@ -22,7 +22,8 @@ function fixture(t) {
   stub('tmux', 'exit 1');
   stub('npm', 'printf "npm %s\\n" "$*" >> "$INSTALL_LOG"; printf synthetic-install-token > "$FOXWARM_DATA_DIR/state/token"');
   stub('dotnet', 'case "$1" in --version) echo "${INSTALL_SDK:-10.0.100}";; --list-runtimes) echo "Microsoft.AspNetCore.App ${INSTALL_RUNTIME:-10.0.1} [fixture]";; *) exit 1;; esac');
-  stub('gcc', 'exit "${INSTALL_GCC_EXIT:-0}"');
+  // Consume the piped source before returning the selected compiler result.
+  stub('gcc', 'cat > /dev/null\nexit "${INSTALL_GCC_EXIT:-0}"');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   function run(overrides = {}) {
     return spawnSync('/bin/bash', [path.join(__dirname, '../install-foxwarm.sh')], {
