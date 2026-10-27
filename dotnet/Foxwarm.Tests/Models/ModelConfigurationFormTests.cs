@@ -146,6 +146,7 @@ public sealed class ModelConfigurationFormTests
                         new JsonObject
                         {
                             ["id"] = "wire-b",
+                            ["upstreamModelId"] = "external-wire",
                             ["maxOutput"] = 123,
                             ["pricing"] = new JsonObject
                             {
@@ -217,7 +218,7 @@ public sealed class ModelConfigurationFormTests
         var request = JsonNode.Parse(
             (await peer.RequestAt(0).WaitAsync(TimeSpan.FromSeconds(10))).Body
         )!;
-        Assert.Equal("wire-b", request["model"]!.GetValue<string>());
+        Assert.Equal("external-wire", request["model"]!.GetValue<string>());
         Assert.Equal(123, request["max_output_tokens"]!.GetValue<int>());
         Assert.Equal("provider-override", request["retained_marker"]!.GetValue<string>());
 
@@ -253,6 +254,8 @@ public sealed class ModelConfigurationFormTests
         Assert.Equal(1, singleReceipt["models"]!["providerCount"]!.GetValue<int>());
         Assert.Equal("b/wire-b", singleReceipt["payload"]!["defaultKey"]!.GetValue<string>());
         Assert.Equal("b", Assert.Single(configuration.Capture().Options).ProviderKey);
+        Assert.Equal("external-wire", configuration.Capture().Resolve(null).UpstreamModelId);
+        Assert.Equal("wire-b", configuration.Capture().Resolve(null).ModelId);
         Assert.Equal(123, configuration.Capture().Resolve(null).MaxOutput);
         Assert.Equal(
             .25,
@@ -262,7 +265,7 @@ public sealed class ModelConfigurationFormTests
         );
 
         var raw =
-            "# exact raw bytes\r\ndefault: raw/wire\r\nproviders:\r\n  raw: {providerType: openai-responses, asyncCompact: false, disallowEmptyResponse: true, models: [{id: wire, asyncCompact: true, disallowEmptyResponse: false}]}\r\n";
+            "# exact raw bytes\r\ndefault: raw/wire\r\nproviders:\r\n  raw: {providerType: openai-responses, asyncCompact: false, disallowEmptyResponse: true, models: [{id: wire, upstreamModelId: raw-external, asyncCompact: true, disallowEmptyResponse: false}]}\r\n";
         var rawResponse = await client.PostAsJsonAsync(
             "/api/setup/models",
             new
@@ -279,10 +282,14 @@ public sealed class ModelConfigurationFormTests
         );
         Assert.Equal("raw/wire", configuration.Capture().DefaultKey);
         var rawModel = configuration.Capture().Resolve(null);
+        Assert.Equal("raw-external", rawModel.UpstreamModelId);
+        Assert.Equal("wire", rawModel.ModelId);
         Assert.True(rawModel.Configuration["asyncCompact"]!.GetValue<bool>());
         Assert.False(rawModel.Configuration["disallowEmptyResponse"]!.GetValue<bool>());
         var rawCatalog = (await client.GetFromJsonAsync<JsonObject>("/api/models"))!;
         Assert.Equal("raw/wire", rawCatalog["defaultKey"]!.GetValue<string>());
+        Assert.Equal("raw", rawCatalog["models"]![0]!["key"]!.GetValue<string>());
+        Assert.Equal("wire", rawCatalog["models"]![0]!["modelId"]!.GetValue<string>());
         Assert.True(rawCatalog["models"]![0]!["asyncCompact"]!.GetValue<bool>());
     }
 }

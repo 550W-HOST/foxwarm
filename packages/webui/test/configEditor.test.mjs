@@ -51,6 +51,8 @@ test('static config schemas are distinct, permissive, and omit the removed model
     assert.equal(providerObject.properties.models.items.anyOf[1].properties[field].type, 'boolean')
     assert.equal(providerObject.properties.models.items.anyOf[1].properties[field].default, undefined)
   }
+  assert.equal(providerObject.properties.models.items.anyOf[1].properties.upstreamModelId.type, 'string')
+  assert.equal(Object.hasOwn(providerObject.properties, 'upstreamModelId'), false)
   assert.equal(schemas.APP_CONFIG_SCHEMA.properties.channels.additionalProperties.additionalProperties, true)
   assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.paths.properties, 'modelsConfigPath'), false)
   assert.equal(Object.hasOwn(schemas.APP_CONFIG_SCHEMA.properties.llm.properties, 'thinkingBudget'), false)
@@ -189,7 +191,7 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
           providerType: 'openai-responses',
           asyncCompact: true,
           disallowEmptyResponse: false,
-          models: [{ id: 'model-a', webSearch: false, imageGeneration: true, asyncCompact: false, disallowEmptyResponse: true }],
+          models: [{ id: 'model-a', upstreamModelId: 'external-model', webSearch: false, imageGeneration: true, asyncCompact: false, disallowEmptyResponse: true }],
         },
       },
     },
@@ -225,6 +227,9 @@ test('models schema deliberately accepts current, legacy, custom, and backend-to
   }
   const invalidFixtures = [
     { providers: { empty: '   ' } },
+    ...['', '   ', false, 123, null].map(upstreamModelId => ({ providers: { invalid: { models: [{ id: 'model', upstreamModelId }] } } })),
+    { providers: { invalid: { upstreamModelId: 'external', models: ['internal'] } } },
+    { providers: { invalid: { providerType: 'session-hash', targets: ['leaf'], upstreamModelId: 'external' } } },
     ...['asyncCompact', 'disallowEmptyResponse'].map(field => ({ providers: { invalid: { models: [{ id: 'model', [field]: 'false' }] } } })),
     { providers: { invalid: { providerType: 'openai-completions', models: ['model'], historyReasoningField: 'other' } } },
     { providers: { invalid: { providerType: 'openai-responses', models: ['model'], historyReasoningField: 'reasoning' } } },

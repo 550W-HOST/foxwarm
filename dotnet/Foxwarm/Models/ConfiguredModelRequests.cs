@@ -83,7 +83,7 @@ internal static class ConfiguredModelRequests
             KeepReasoningOnError =
                 model.Configuration["keepReasoningOnError"]?.GetValue<bool>() == true,
             BaseUri = model.BaseUri,
-            RequestModel = model.ModelId,
+            RequestModel = model.UpstreamModelId,
             MaxOutputTokens = model.MaxOutput,
             ConcreteModelId = model.Key,
             Token = model.Token,

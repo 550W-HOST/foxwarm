@@ -84,12 +84,17 @@ providers:
   #   outputFormat: png         # png, jpeg, or webp
   #   outputCompression: 90     # 0-100, used for jpeg and webp
 
-  # With a Responses provider, model objects can inherit and tune hosted tools:
+  # Model objects may set upstreamModelId to separate their selectable internal
+  # ID from the upstream request's model. Omitted uses id. This field is model-only.
+  # Equal upstream IDs keep separate history compatibility and WS connections.
+  # With a Responses provider, distinct internal entries can share an upstream model:
   # models:
   #   - id: responses-model
+  #     upstreamModelId: upstream-responses-model
   #     webSearch: {searchContextSize: high}
   #     imageGeneration: {quality: high}
   #   - id: responses-model-without-hosted-tools
+  #     upstreamModelId: upstream-responses-model
   #     webSearch: false
   #     imageGeneration: false
 

@@ -84,6 +84,7 @@ public sealed class DefaultToolWireTests(ITestOutputHelper output)
             );
             foreach (var request in peer.Requests)
             {
+                Assert.Equal("upstream-wire", SessionWait.Text(request["model"]));
                 var tools = request["tools"]!.AsArray();
                 var selected = manager.ModelDefinitions(owner);
                 var functions = tools
@@ -133,6 +134,7 @@ public sealed class DefaultToolWireTests(ITestOutputHelper output)
                 peer.Requests[1]["input"]!.AsArray(),
                 item => SessionWait.Text(item?["type"]) == "function_call_output"
             );
+            Assert.All(owner.History().Where(row => SessionWait.Text(row["role"]) == "model"), row => Assert.Equal("local/wire", SessionWait.Text(row["__meta"]?["modelId"])));
             Assert.Null(manager.ChannelBinding("fixture:destination"));
         }
         finally
@@ -228,6 +230,7 @@ public sealed class DefaultToolWireTests(ITestOutputHelper output)
                             new JsonObject
                             {
                                 ["id"] = "wire",
+                                ["upstreamModelId"] = "upstream-wire",
                                 ["webSearch"] = hostedEnabled
                                     ? new JsonObject { ["searchContextSize"] = "high" }
                                     : JsonValue.Create(false),

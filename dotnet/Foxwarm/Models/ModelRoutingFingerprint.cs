@@ -35,6 +35,7 @@ internal static class ModelRoutingFingerprint
                     ["target"] = targets[index],
                     ["providerType"] = leaf.ProviderType,
                     ["model"] = leaf.ModelId,
+                    ["upstreamModelId"] = leaf.UpstreamModelId,
                     ["baseUrl"] = leaf.BaseUrl,
                     ["requestCompression"] = config["requestCompression"]?.DeepClone(),
                     ["contextLimit"] = leaf.ContextLimit,

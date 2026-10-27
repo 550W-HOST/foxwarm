@@ -17,6 +17,7 @@ internal sealed record ConcreteHostModel(
     string[] Targets
 )
 {
+    internal string UpstreamModelId => HostModels.Text(Configuration, "upstreamModelId") ?? ModelId;
     internal double MaxOutput =>
         HostModels.PositiveSetting(Configuration["maxOutput"], 32768, "maxOutput");
     internal string ProviderImageOutputFormat =>
@@ -169,6 +170,8 @@ internal sealed partial class HostModels
             var provider =
                 raw as JsonObject
                 ?? throw new InvalidDataException("Provider must be an object or alias string.");
+            if (provider.ContainsKey("upstreamModelId"))
+                throw new InvalidDataException("upstreamModelId belongs on model objects.");
             var type = ProviderType(provider);
             if (type is "session-hash" or "failover")
             {

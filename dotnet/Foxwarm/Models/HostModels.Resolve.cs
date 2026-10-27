@@ -19,6 +19,13 @@ internal sealed partial class HostModels
         var config = (JsonObject)provider.DeepClone();
         config["providerType"] = type;
         config["model"] = id;
+        if (model?.ContainsKey("upstreamModelId") == true)
+        {
+            var upstream = Text(model, "upstreamModelId")?.Trim();
+            if (string.IsNullOrEmpty(upstream))
+                throw new InvalidDataException("upstreamModelId must be a nonempty string.");
+            config["upstreamModelId"] = upstream;
+        }
         var pricingScope = model ?? provider;
         if (pricingScope.ContainsKey("pricing"))
             config["pricing"] = ModelUsageCost.ValidatePrices(pricingScope["pricing"]);

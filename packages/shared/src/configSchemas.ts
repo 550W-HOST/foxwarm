@@ -170,7 +170,8 @@ const modelItem = {
       required: ['id'],
       additionalProperties: true,
       properties: {
-        id: { type: 'string', minLength: 1, description: 'Provider model identifier.' },
+        id: { type: 'string', minLength: 1, description: 'Internal model identifier used for selection and history attribution.' },
+        upstreamModelId: { type: 'string', pattern: '\\S', description: 'Optional model identifier sent to the upstream provider. Omitted uses id; internal selection and history keep id.' },
         ...modelOverrideProperties,
       },
     },
@@ -188,6 +189,7 @@ const modelListContainsHistoryReasoningField = {
 const providerObjectEntry = {
   type: 'object',
   additionalProperties: true,
+  not: { required: ['upstreamModelId'] },
   properties: {
     providerType: knownProviderType,
     provider: { ...knownProviderType, deprecated: true, description: 'Legacy spelling for providerType. Prefer providerType.' },
