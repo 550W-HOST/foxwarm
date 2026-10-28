@@ -19,14 +19,18 @@ public sealed class SessionQueuedContentTests
         var value = JsonNode.Parse(await File.ReadAllTextAsync(file))!.AsObject();
         var parts = new JsonArray();
         if (withImage)
-            parts.Add(new JsonObject
-            {
-                ["inlineData"] = new JsonObject
+            parts.Add(
+                new JsonObject
                 {
-                    ["mimeType"] = "image/png",
-                    ["data"] = Convert.ToBase64String(ImageCodecTests.Raster(SKEncodedImageFormat.Png)),
-                },
-            });
+                    ["inlineData"] = new JsonObject
+                    {
+                        ["mimeType"] = "image/png",
+                        ["data"] = Convert.ToBase64String(
+                            ImageCodecTests.Raster(SKEncodedImageFormat.Png)
+                        ),
+                    },
+                }
+            );
         parts.Add(new JsonObject { ["functionResponse"] = "malformed-tool-shape" });
         var item = new JsonObject { ["type"] = "background" };
         if (wrapped)
@@ -64,7 +68,14 @@ public sealed class SessionQueuedContentTests
         Assert.Equal(original, await File.ReadAllTextAsync(file));
         Assert.False(Directory.Exists(blobRoot));
 
-        var options = new ResponsesClientOptions(new Uri("http://127.0.0.1:1"), "wire", "a", "", "", 713);
+        var options = new ResponsesClientOptions(
+            new Uri("http://127.0.0.1:1"),
+            "wire",
+            "a",
+            "",
+            "",
+            713
+        );
         await using var manager = new SessionManager(
             temp.Path,
             Path.Combine(temp.Path, "work"),
@@ -74,7 +85,9 @@ public sealed class SessionQueuedContentTests
         await manager.LoadAsync();
         Assert.Equal("healthy", Assert.Single(manager.Owners()).Id);
         Assert.Null(manager.Find("broken"));
-        var failure = await Assert.ThrowsAsync<SessionAuthorityUnavailableException>(() => manager.RequiredAsync("broken"));
+        var failure = await Assert.ThrowsAsync<SessionAuthorityUnavailableException>(() =>
+            manager.RequiredAsync("broken")
+        );
         var diagnostic = MainLog.SafeFailure(failure);
         Assert.Contains(field, diagnostic);
         Assert.DoesNotContain("malformed-tool-shape", diagnostic);

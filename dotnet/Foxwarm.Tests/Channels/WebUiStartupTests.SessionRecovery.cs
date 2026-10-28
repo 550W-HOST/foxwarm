@@ -32,7 +32,9 @@ public sealed partial class WebUiStartupTests
             var diagnostic = body["error"]!.GetValue<string>();
             Assert.Contains("state/sessions/" + id + ".json", diagnostic);
             Assert.Contains(
-                id == "parts" ? "queue[0].parts[0].functionResponse" : "queue[0].message.parts[0].functionResponse",
+                id == "parts"
+                    ? "queue[0].parts[0].functionResponse"
+                    : "queue[0].message.parts[0].functionResponse",
                 diagnostic
             );
             Assert.DoesNotContain("malformed-tool-shape", diagnostic);
@@ -45,7 +47,9 @@ public sealed partial class WebUiStartupTests
         foreach (var (id, original) in originals)
             Assert.Equal(
                 original,
-                await File.ReadAllTextAsync(Path.Combine(host.Data, "state", "sessions", id + ".json"))
+                await File.ReadAllTextAsync(
+                    Path.Combine(host.Data, "state", "sessions", id + ".json")
+                )
             );
     }
 

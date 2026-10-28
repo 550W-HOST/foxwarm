@@ -174,7 +174,16 @@ public sealed class SessionAuthorityDocument
                     $"{partLabel} must be an object.",
                     partLabel
                 );
-            foreach (var field in new[] { "inlineData", "inlineDataRef", "imageMeta", "functionCall", "functionResponse" })
+            foreach (
+                var field in new[]
+                {
+                    "inlineData",
+                    "inlineDataRef",
+                    "imageMeta",
+                    "functionCall",
+                    "functionResponse",
+                }
+            )
                 if (part[field] is JsonNode value && value is not JsonObject)
                     throw SessionAuthorityErrors.Invalid(
                         $"{partLabel}.{field} must be an object.",
