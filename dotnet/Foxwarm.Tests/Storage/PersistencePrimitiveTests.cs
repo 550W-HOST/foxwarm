@@ -69,8 +69,8 @@ public sealed class PersistencePrimitiveTests
         Assert.True(JsonNode.DeepEquals(root, roundTrip));
 
         var mailbox = (JsonObject)root.DeepClone();
-        mailbox["lastAppliedMailboxId"] = 1;
-        Assert.Throws<UnsupportedSessionAuthorityException>(() =>
+        mailbox["lastAppliedMailboxId"] = -1;
+        Assert.Throws<InvalidDataException>(() =>
             SessionAuthorityDocument.FromNode(mailbox, Fixture.SessionId)
         );
         var queue = (JsonObject)root.DeepClone();

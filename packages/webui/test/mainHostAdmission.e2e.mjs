@@ -147,16 +147,18 @@ try {
   await writeFile(join(sessions, 'cold-0003.json'), JSON.stringify(authority('cold-0003', { meta: { messageCount: 0, lastMessageTime: 0, wait: expired } })))
   updateCatalog('cold-0003', { meta: { messageCount: 0, lastMessageTime: 0, wait: expired } })
   const beforeFailure = requests.length
-  await assert.rejects(fixture.start(), /authority|Authority|JSON|Json|invalid|Invalid/)
-  await sleep(400); assert.equal(requests.length, beforeFailure); assert.deepEqual((await saved('cold-0003')).meta.wait, expired)
+  await fixture.start()
+  await until(() => requests.slice(beforeFailure).some(row => inputText(row.body).includes('wait-timeout')), 'healthy deadline resumes despite an unavailable exec recipient')
+  assert.equal((await fixture.api('GET', route('exec-bad') + '/history')).status, 500)
+  assert.equal(await readFile(join(sessions, 'exec-bad.json'), 'utf8'), '{bad')
   assert((await execRecords()).some(record => record.id === retainedExec.id)) // A failed recipient never acknowledges the completion.
-  await writeFile(join(sessions, 'exec-bad.json'), originalExecAuthority); await fixture.start()
-  await until(() => requests.slice(beforeFailure).some(row => inputText(row.body).includes('wait-timeout')), 'only fully validated restart activates the original expired deadline')
+  await writeFile(join(sessions, 'exec-bad.json'), originalExecAuthority)
+  assert.equal((await fixture.api('GET', route('exec-bad') + '/history')).status, 200)
   await until(() => (counts.get('exec-bad') || 0) === 3, 'finished completion delivered only after actual owner admission')
   await until(async () => !(await execRecords()).some(record => record.id === retainedExec.id), 'strict completion acknowledgement')
   assert.deepEqual((await readFile(join(fixture.work, 'executions'), 'utf8')).trim().split('\n').sort(), ['exec-bad', 'exec-finished', 'exec-live'])
   await fixture.stop()
-  console.log(JSON.stringify({ ok: true, syntheticProviderRequests: requests.length, coldMembers: rows.length, cleanHosts: 3, mandatoryReadinessFailure: true, deadlineAfterAllValidation: true, failedExecNoAcknowledgement: true, lostHintExactNoActivation: true, realExecNoReplay: true, persistedOnbootQueue: true, oldCompactWakeNoPlanner: true, hostPids: fixture.hostPids, peerPid: process.pid, root: fixture.root }))
+  console.log(JSON.stringify({ ok: true, syntheticProviderRequests: requests.length, coldMembers: rows.length, cleanHosts: 3, localRecoveryIsolation: true, healthyDeadlineContinues: true, failedExecNoAcknowledgement: true, lostHintExactNoActivation: true, realExecNoReplay: true, persistedOnbootQueue: true, oldCompactWakeNoPlanner: true, hostPids: fixture.hostPids, peerPid: process.pid, root: fixture.root }))
 } catch (error) { console.error(fixture.output); throw error } finally {
   console.log(JSON.stringify({ root: fixture.root, hostPids: fixture.hostPids }))
   for (const ws of sockets) ws.terminate()

@@ -313,29 +313,21 @@ public sealed class PersistentSessionAuthorityStore
             throw new InvalidOperationException(
                 $"Persistent store is bound to Session '{sessionId}', not '{requestedSessionId}'."
             );
-        if (!File.Exists(authorityFile.FilePath))
-        {
-            if (archive.ReadMessages().Count > 0)
-                throw new InvalidDataException(
-                    "Active Session authority is missing while Archive rows exist; Archive cannot rebuild active history."
-                );
-            return null;
-        }
-        JsonObject raw;
+        // Main-owned fields may read Catalog; keep that global failure outside the local reader.
+        var main = mainFields?.Invoke();
+        JsonObject normalized;
         try
         {
-            raw =
-                JsonNode.Parse(File.ReadAllText(authorityFile.FilePath)) as JsonObject
-                ?? throw new InvalidDataException("Session authority must be an object.");
+            normalized = SessionAuthorityReader.Read(root, sessionId, agent, main: main);
         }
-        catch (System.Text.Json.JsonException error)
+        catch (SessionAuthorityUnavailableException error)
+            when (error.InnerException is FileNotFoundException or DirectoryNotFoundException)
         {
-            throw new InvalidDataException("Session authority is malformed JSON.", error);
+            if (archive.ReadMessages().Count > 0)
+                throw new SessionAuthorityUnavailableException(sessionId,
+                    new(null, "Active Session authority is missing while Archive rows exist; Archive cannot rebuild active history."), error);
+            return null;
         }
-        var normalized = SessionCatalog.NormalizeAuthority(raw, sessionId, agent);
-        if (mainFields?.Invoke() is { } main)
-            SessionCatalog.OverlayAuthorityContext(normalized, main);
-        SessionAuthorityDocument.Validate(normalized, sessionId, agent);
         foreach (var message in ((JsonArray)normalized["history"]!).OfType<JsonObject>())
             await Images.ExternalizeMessageAsync(message, strict: false, cancellationToken);
         var loaded = FromAuthority(normalized);
@@ -430,7 +422,7 @@ public sealed class PersistentSessionAuthorityStore
         root["busyStartedAt"] = snapshot.BusyStartedAt;
         root["stopping"] = snapshot.Stopping;
         root["historyVersion"] = snapshot.HistoryVersion;
-        root["lastAppliedMailboxId"] = 0;
+        root["lastAppliedMailboxId"] ??= 0;
         root["nextMessageSeq"] = snapshot.NextMessageSeq;
         root["nextBlockId"] ??= 1;
         SessionAuthorityDocument.ValidateState(root, snapshot.History.Count, sessionId, agent);

@@ -30,6 +30,12 @@ if (CliCommands.IsCommand(args))
     return;
 }
 
+if (args is ["--inspect-upgrade"])
+{
+    Environment.ExitCode = SessionUpgradeInspection.Run(applicationRoot);
+    return;
+}
+
 if (args is ["--version"] or ["-v"])
 {
     Console.WriteLine(ProductVersion.Value);

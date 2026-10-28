@@ -629,6 +629,24 @@ public sealed partial class SqliteArchiveMessageStore
         return parsed;
     }
 
+    internal static void InspectSchema(string path)
+    {
+        if (!Path.Exists(path))
+            return;
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false,
+        }.ToString());
+        connection.Open();
+        if (TableExists(connection, "archive_messages"))
+            ValidateSchema(connection);
+        if (TableExists(connection, "archive_blocks"))
+            _ = ValidateBlocks(connection);
+        if (TableExists(connection, "archive_branches"))
+            ValidateBranches(connection);
+        _ = HasReservationTable(connection);
+    }
+
     private static void ValidateSchema(SqliteConnection connection)
     {
         using var columns = connection.CreateCommand();

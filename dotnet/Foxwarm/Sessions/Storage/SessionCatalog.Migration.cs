@@ -54,56 +54,29 @@ internal sealed partial class SessionCatalog
             var rows = new List<MigrationRow>();
             try
             {
-                var data =
-                    JsonNode.Parse(File.ReadAllText(source)) as JsonObject
-                    ?? throw new InvalidDataException("Catalog candidate must be an object.");
-                if (
-                    data.ContainsKey("channelAttachments")
-                    && data["channelAttachments"] is not JsonObject
-                )
-                    throw new InvalidDataException("Invalid legacy channelAttachments.");
-                var sessions = data["sessions"] is JsonObject set
-                    ? set
-                    : new JsonObject(
-                        data.Where(pair => pair.Key != "channelAttachments")
-                            .Select(pair => KeyValuePair.Create(pair.Key, pair.Value?.DeepClone()))
-                    );
+                var sessions = ReadCandidate(source);
                 foreach (var (id, node) in sessions)
                 {
                     var row =
                         node as JsonObject
                         ?? throw new InvalidDataException("Catalog row must be an object.");
-                    var main = Project(row);
-                    if (!SessionIdentity.IsValid(id))
-                        throw new SelectedAuthorityFailure(
-                            "Cataloged Session identity is not supported by this host."
-                        );
-                    if (Text(main["id"]) != id)
-                        throw new InvalidDataException("Catalog key does not match row ID.");
+                    var main = ProjectCandidate(id, row);
                     var authorityPath = Path.Combine(AuthorityDirectory, id + ".json");
                     JsonObject raw;
+                    JsonObject authority;
                     try
                     {
-                        raw =
-                            JsonNode.Parse(File.ReadAllText(authorityPath)) as JsonObject
-                            ?? throw new InvalidDataException("Authority must be an object.");
+                        raw = SessionAuthorityReader.ReadRaw(root, id);
+                        authority = SessionAuthorityReader.Normalize(raw, id, Text(main["agent"])!, row);
                     }
-                    catch (Exception error)
-                        when (error
-                                is IOException
-                                    or JsonException
-                                    or InvalidDataException
-                                    or UnauthorizedAccessException
-                        )
+                    catch (SessionAuthorityUnavailableException error)
                     {
-                        throw new SelectedAuthorityFailure(
-                            $"Cataloged Session '{id}' authority is missing, unreadable or malformed.",
-                            error
-                        );
+                        MainLog.Diagnostic("Session catalog migration retained unavailable member: " + MainLog.SafeFailure(error), failure: true);
+                        rows.Add(new(id, main));
+                        continue;
                     }
                     try
                     {
-                        var authority = NormalizeAuthority(raw, id, Text(main["agent"])!, row);
                         var projection = AuthorityProjection(authority, id, main);
                         string? staged = null;
                         if (!raw.ContainsKey("sessionStateVersion"))
@@ -140,6 +113,11 @@ internal sealed partial class SessionCatalog
                 Open();
                 return;
             }
+            catch (SessionAuthorityIdentityException)
+            {
+                CleanupStages(rows);
+                throw;
+            }
             catch (SelectedAuthorityFailure)
             {
                 CleanupStages(rows);
@@ -158,6 +136,17 @@ internal sealed partial class SessionCatalog
             );
         PublishNew([], null);
         Open();
+    }
+
+    private static JsonObject ReadCandidate(string source)
+    {
+        var data = JsonNode.Parse(File.ReadAllText(source)) as JsonObject
+            ?? throw new InvalidDataException("Catalog candidate must be an object.");
+        if (data.ContainsKey("channelAttachments") && data["channelAttachments"] is not JsonObject)
+            throw new InvalidDataException("Invalid legacy channelAttachments.");
+        return data["sessions"] is JsonObject set ? set : new JsonObject(
+            data.Where(pair => pair.Key != "channelAttachments")
+                .Select(pair => KeyValuePair.Create(pair.Key, pair.Value?.DeepClone())));
     }
 
     private string[] AuthorityFiles() =>

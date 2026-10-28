@@ -21,7 +21,8 @@ internal sealed partial class AgentCatalog
         string dataRoot,
         string workspaceRoot,
         string? recoveringOwnedAgent = null,
-        bool canonicalLayout = false
+        bool canonicalLayout = false,
+        bool createDirectories = true
     )
     {
         this.workspaceRoot = Path.GetFullPath(workspaceRoot);
@@ -69,8 +70,9 @@ internal sealed partial class AgentCatalog
             else
                 metadata = (JsonObject)index.DeepClone();
         }
-        Directory.CreateDirectory(agentRoot);
-        if ((File.GetAttributes(agentRoot) & FileAttributes.ReparsePoint) != 0)
+        if (createDirectories)
+            Directory.CreateDirectory(agentRoot);
+        if (Directory.Exists(agentRoot) && (File.GetAttributes(agentRoot) & FileAttributes.ReparsePoint) != 0)
             throw new InvalidDataException("Agent directory root cannot be a symbolic link.");
         foreach (var row in metadata)
             _ = Foxwarm.Tools.IsolatedToolCompatibility.Metadata(row.Value);

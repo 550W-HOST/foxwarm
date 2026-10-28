@@ -139,15 +139,15 @@ internal static class SessionWait
     {
         if (!meta.ContainsKey("wait"))
             return;
-        var wait = Current(meta) ?? throw new InvalidDataException("Wait state must be an object.");
+        var wait = Current(meta) ?? throw SessionAuthorityErrors.Invalid("Wait state must be an object.");
         if (
             string.IsNullOrWhiteSpace(Text(wait["id"]))
             || Number(wait["startedAt"]) is not double started
             || !double.IsFinite(started)
         )
-            throw new InvalidDataException("Wait state requires an ID and finite start time.");
+            throw SessionAuthorityErrors.Invalid("Wait state requires an ID and finite start time.");
         if (wait.ContainsKey("reason") && Text(wait["reason"]) is null)
-            throw new InvalidDataException("Invalid wait reason.");
+            throw SessionAuthorityErrors.Invalid("Invalid wait reason.");
         if (
             wait.ContainsKey("timeoutSeconds")
             && (
@@ -156,14 +156,14 @@ internal static class SessionWait
                 || seconds <= 0
             )
         )
-            throw new InvalidDataException("Invalid wait timeout.");
+            throw SessionAuthorityErrors.Invalid("Invalid wait timeout.");
         foreach (var key in new[] { "waitAnySessions", "waitExecIds" })
             if (wait.ContainsKey(key))
                 ValidateIds(wait[key], key, 1);
         if (wait.ContainsKey("waitForInput") && wait["waitForInput"]?.GetValue<bool>() != true)
-            throw new InvalidDataException("Invalid input wait.");
+            throw SessionAuthorityErrors.Invalid("Invalid input wait.");
         if (wait.ContainsKey("declarationVersion") && Number(wait["declarationVersion"]) != 1)
-            throw new InvalidDataException("Invalid wait declaration version.");
+            throw SessionAuthorityErrors.Invalid("Invalid wait declaration version.");
         if (wait["waitAll"] is JsonObject all)
         {
             // Stored/internal waits can have one source; new tool declarations are validated separately.
@@ -174,18 +174,18 @@ internal static class SessionWait
                     .Except(Strings(all["sessions"]), StringComparer.Ordinal)
                     .Any()
             )
-                throw new InvalidDataException("Unknown satisfied wait source.");
+                throw SessionAuthorityErrors.Invalid("Unknown satisfied wait source.");
             if (all["deferredQueue"] is not JsonArray deferred)
-                throw new InvalidDataException("Invalid deferred wait queue.");
+                throw SessionAuthorityErrors.Invalid("Invalid deferred wait queue.");
             foreach (var row in deferred)
                 _ = PersistentSessionAuthorityStore.FromQueueJson(
-                    row?.AsObject() ?? throw new InvalidDataException("Invalid deferred item.")
+                    row?.AsObject() ?? throw SessionAuthorityErrors.Invalid("Invalid deferred item.")
                 );
         }
         else if (wait.ContainsKey("waitAll"))
-            throw new InvalidDataException("Invalid wait-all state.");
+            throw SessionAuthorityErrors.Invalid("Invalid wait-all state.");
         if (wait["waitAll"] is not null && wait["waitAnySessions"] is not null)
-            throw new InvalidDataException("Wait-all and wait-any are mutually exclusive.");
+            throw SessionAuthorityErrors.Invalid("Wait-all and wait-any are mutually exclusive.");
     }
 
     private static void ValidateIds(JsonNode? node, string label, int minimum)
@@ -196,6 +196,6 @@ internal static class SessionWait
             || array.Any(value => string.IsNullOrWhiteSpace(Text(value)))
             || Strings(array).Distinct(StringComparer.Ordinal).Count() != array.Count
         )
-            throw new InvalidDataException($"Invalid {label}.");
+            throw SessionAuthorityErrors.Invalid($"Invalid {label}.");
     }
 }

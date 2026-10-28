@@ -29,6 +29,11 @@ public sealed partial class SqliteArchiveMessageStore
             CREATE INDEX IF NOT EXISTS idx_archive_branches_parent ON archive_branches(parent_session_id);
             """
         );
+        ValidateBranches(connection);
+    }
+
+    private static void ValidateBranches(SqliteConnection connection)
+    {
         using var schema = connection.CreateCommand();
         schema.CommandText = "PRAGMA table_info(archive_branches)";
         using var rows = schema.ExecuteReader();

@@ -43,11 +43,11 @@ internal sealed partial class SessionCatalog
     )
     {
         if (raw.ContainsKey("sessionStateVersion") && Number(raw["sessionStateVersion"]) != 1)
-            throw new UnsupportedSessionAuthorityException(
-                "Unsupported per-session state format version."
+            throw SessionAuthorityErrors.Unsupported(
+                "Unsupported per-session state format version.", "sessionStateVersion"
             );
         if (raw.ContainsKey("id") && Text(raw["id"]) != id)
-            throw new InvalidDataException("Authority identity does not match its catalog ID.");
+            throw new SessionAuthorityIdentityException(id);
         var legacy = !raw.ContainsKey("sessionStateVersion");
         var value = (JsonObject)raw.DeepClone();
         if (legacy && legacyCatalog is not null)
@@ -73,7 +73,7 @@ internal sealed partial class SessionCatalog
         if (legacy && raw.ContainsKey("history") && raw["history"] is not JsonArray)
             value["history"] = new JsonArray();
         if (value.ContainsKey("history") && value["history"] is not JsonArray)
-            throw new InvalidDataException("Authority history must be an array.");
+            throw SessionAuthorityErrors.Invalid("Authority history must be an array.");
         if (!value.ContainsKey("history"))
             value["history"] = new JsonArray();
         var history = value["history"]!.AsArray();
@@ -86,7 +86,7 @@ internal sealed partial class SessionCatalog
         if (!value.ContainsKey("queue"))
             value["queue"] = new JsonArray();
         if (value["queue"] is not JsonArray)
-            throw new InvalidDataException("Authority queue must be an array.");
+            throw SessionAuthorityErrors.Invalid("Authority queue must be an array.");
         if (!value.ContainsKey("stats"))
             value["stats"] = new JsonObject
             {
@@ -98,7 +98,7 @@ internal sealed partial class SessionCatalog
         if (!value.ContainsKey("meta"))
             value["meta"] = new JsonObject();
         if (value["meta"] is not JsonObject projectedMeta)
-            throw new InvalidDataException("Authority meta must be an object.");
+            throw SessionAuthorityErrors.Invalid("Authority meta must be an object.");
         projectedMeta.Remove("lastChannel");
         if (!projectedMeta.ContainsKey("lastMessageTime"))
             projectedMeta["lastMessageTime"] = 0;

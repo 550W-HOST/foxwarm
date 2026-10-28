@@ -24,59 +24,7 @@ internal sealed partial class CommittedArchiveIdentity(string root)
                 return;
             ValidateStartupEvidence(root);
             catalog.Initialize();
-            var mappings = ReadLedger(out var rewrite);
-            if (File.Exists(DatabasePath))
-            {
-                using var connection = Open(DatabasePath, SqliteOpenMode.ReadOnly);
-                if (SqliteArchiveMessageStore.HasReservationTable(connection))
-                {
-                    using var command = connection.CreateCommand();
-                    command.CommandText =
-                        "SELECT session_id,canonical_session_id FROM archive_session_id_reservations";
-                    using var rows = command.ExecuteReader();
-                    while (rows.Read())
-                    {
-                        var id = rows.GetString(0);
-                        var canonical = rows.GetString(1);
-                        ValidateIdentity(id);
-                        ValidateIdentity(canonical);
-                        if (mappings.TryGetValue(id, out var prior) && prior != canonical)
-                            throw new InvalidDataException(
-                                "Archive identity ledger and SQLite have conflicting committed mappings."
-                            );
-                        if (mappings.TryAdd(id, canonical))
-                            rewrite = true;
-                    }
-                }
-            }
-            ValidateGraph(mappings);
-            foreach (var row in catalog.List())
-            {
-                var canonical = SessionCatalog.Text(row["id"])!;
-                foreach (
-                    var alias in (row["aliases"] as JsonArray)
-                        ?.Select(SessionCatalog.Text)
-                        .OfType<string>()
-                        .Reverse()
-                        ?? []
-                )
-                {
-                    // Presentation claims are proof only when Main's exact-first resolution uniquely selects this owner.
-                    if (SessionCatalog.Text(catalog.Resolve(alias)["sessionId"]) != canonical)
-                        continue;
-                    if (mappings.TryGetValue(alias, out _))
-                    {
-                        if (Resolve(mappings, alias) != canonical)
-                            throw new InvalidDataException(
-                                "Proven Main alias conflicts with committed Archive identity."
-                            );
-                        continue;
-                    }
-                    mappings.Add(alias, canonical);
-                    ValidateGraph(mappings);
-                    rewrite = true;
-                }
-            }
+            var mappings = ReadMappings(catalog.List(), alias => SessionCatalog.Text(catalog.Resolve(alias)["sessionId"]), out var rewrite);
             if (rewrite)
                 WriteLedger(mappings);
             if (File.Exists(DatabasePath) || mappings.Count > 0)
@@ -88,6 +36,70 @@ internal sealed partial class CommittedArchiveIdentity(string root)
         {
             initialization.Release();
         }
+    }
+
+    internal void Inspect(IReadOnlyList<JsonObject> catalogRows, Func<string, string?> resolve)
+    {
+        _ = ReadMappings(catalogRows, resolve, out _);
+    }
+
+    private Dictionary<string, string> ReadMappings(IReadOnlyList<JsonObject> catalogRows,
+        Func<string, string?> resolve, out bool rewrite)
+    {
+        var mappings = ReadLedger(out rewrite);
+        if (File.Exists(DatabasePath))
+        {
+            using var connection = Open(DatabasePath, SqliteOpenMode.ReadOnly);
+            if (SqliteArchiveMessageStore.HasReservationTable(connection))
+            {
+                using var command = connection.CreateCommand();
+                command.CommandText =
+                    "SELECT session_id,canonical_session_id FROM archive_session_id_reservations";
+                using var rows = command.ExecuteReader();
+                while (rows.Read())
+                {
+                    var id = rows.GetString(0);
+                    var canonical = rows.GetString(1);
+                    ValidateIdentity(id);
+                    ValidateIdentity(canonical);
+                    if (mappings.TryGetValue(id, out var prior) && prior != canonical)
+                        throw new InvalidDataException(
+                            "Archive identity ledger and SQLite have conflicting committed mappings."
+                        );
+                    if (mappings.TryAdd(id, canonical))
+                        rewrite = true;
+                }
+            }
+        }
+        ValidateGraph(mappings);
+        foreach (var row in catalogRows)
+        {
+            var canonical = SessionCatalog.Text(row["id"])!;
+            foreach (
+                var alias in (row["aliases"] as JsonArray)
+                    ?.Select(SessionCatalog.Text)
+                    .OfType<string>()
+                    .Reverse()
+                    ?? []
+            )
+            {
+                // Presentation claims are proof only when Main's exact-first resolution uniquely selects this owner.
+                if (resolve(alias) != canonical)
+                    continue;
+                if (mappings.TryGetValue(alias, out _))
+                {
+                    if (Resolve(mappings, alias) != canonical)
+                        throw new InvalidDataException(
+                            "Proven Main alias conflicts with committed Archive identity."
+                        );
+                    continue;
+                }
+                mappings.Add(alias, canonical);
+                ValidateGraph(mappings);
+                rewrite = true;
+            }
+        }
+        return mappings;
     }
 
     private Dictionary<string, string> ReadLedger(out bool rewrite)

@@ -387,7 +387,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 $"Session catalog loaded: entries={catalogRows.Length}, requiredOwners={ids.Length}."
             );
         }
-        var mandatory = ids.Select(id => RequiredAsync(id)).ToList();
+        var mandatory = ids.Select(RecoverOwnerAsync).ToList();
         await Task.WhenAll(mandatory);
         if (startMainServices)
             Console.WriteLine($"Session startup: loadedOwners={sessions.Count}.");
@@ -407,6 +407,18 @@ internal sealed partial class SessionManager : IAsyncDisposable
         foreach (var owner in sessions.Values)
             if (owner.Registry.HasRunnableWork(owner.Entry))
                 _ = owner.StartProcessing();
+    }
+
+    private async Task RecoverOwnerAsync(string id)
+    {
+        try
+        {
+            await RequiredAsync(id);
+        }
+        catch (SessionAuthorityUnavailableException error)
+        {
+            MainLog.Diagnostic("Session recovery failed: " + MainLog.SafeFailure(error), failure: true);
+        }
     }
 
     private async Task StartMainServicesAsync()

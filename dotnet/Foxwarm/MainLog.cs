@@ -36,6 +36,12 @@ internal sealed class MainLog : IDisposable
     // Do not echo configuration values, credential-bearing URLs or vendor response bodies.
     internal static string SafeFailure(Exception error)
     {
+        if (error is Foxwarm.Sessions.SessionAuthorityIdentityException identity)
+            return error.GetType().Name + ": " + identity.SafeDetail;
+        if (error is Foxwarm.Sessions.SessionAuthorityUnavailableException unavailable)
+            return error.GetType().Name + ": " + unavailable.Diagnostic.Format(unavailable.SessionId);
+        if (Foxwarm.Sessions.SessionAuthorityErrors.Detail(error) is { } diagnostic)
+            return error.GetType().Name + ": " + diagnostic.Format();
         var detail = error switch
         {
             System.Net.Http.HttpRequestException { StatusCode: { } status } =>

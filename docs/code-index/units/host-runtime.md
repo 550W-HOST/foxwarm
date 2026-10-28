@@ -16,7 +16,7 @@ Composes the .NET executable, captures environment/configuration, builds ASP.NET
 
 ## Contract and side effects
 
-Configured Vector initialization is optional in both local and child placement; the [Vector owner](./vector-owner.md) retains the unavailable service without blocking unrelated Main startup. Authoritative Catalog/Archive load and migrations remain fatal under the [placement failure boundary](../threads/process-topology-and-rpc.md#vector-placement).
+Configured Vector initialization is optional in both local and child placement; the [Vector owner](./vector-owner.md) retains the unavailable service without blocking unrelated Main startup. Global Catalog/Archive/identity failures remain fatal; [Session-local recovery failures](./session-manager-bootstrap.md#local-recovery-failure-boundary) leave only their owners unavailable. The global boundary follows the [placement failure boundary](../threads/process-topology-and-rpc.md#vector-placement).
 
 HTTP authorization happens before state-changing routes and static application content. Browser login follows [the frontend cookie ownership contract](./webui-login.md#d-login-cookie-ownership). Existing valid raw and derived administrator cookies remain accepted; scoped credentials resolve through the live access snapshot.
 
@@ -56,7 +56,7 @@ Windows Main includes native PowerShell exec, ConPTY terminals/Code helper entry
 
 ## Tests
 
-`packages/webui/test/mainHostOnboot.e2e.mjs` exercises inert retired startup files, retained typed queue recovery, explicit Setup and first-turn snapshots, deferred virtual selection, cold alias/catalog preservation, and mandatory-authority failure before effects through the ordinary [startup admission](./session-manager-bootstrap.md) path.
+`packages/webui/test/mainHostOnboot.e2e.mjs` exercises inert retired startup files, retained typed queue recovery, explicit Setup and first-turn snapshots, deferred virtual selection, cold alias/catalog preservation, and Session-local recovery isolation with healthy queued/deadline siblings through the ordinary [startup admission](./session-manager-bootstrap.md) path.
 
 `packages/webui/test/mainHostWebUiDisabled.e2e.mjs` explicitly creates its bound Session, keeps a retired ONBOOT file as a negative control, and uses authenticated Trigger ingress with WebUI disabled to verify unavailable file delivery, unchanged attachments and independent Node administration. `mainHostOctoberAlignment.e2e.mjs` checks the administrator role/features through HTTP and the original App before exercising trusted activity receipts, native tools/waits, Anthropic replay, exact configuration installation and durable compaction facts.
 

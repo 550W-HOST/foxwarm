@@ -1,6 +1,6 @@
 # Unit: Session authority JSON and atomic file writes
 
-Files: `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityDocument.cs`, `dotnet/Foxwarm/Sessions/Storage/LinuxAtomicJsonFile.cs`
+Files: `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityDocument.cs`, `dotnet/Foxwarm/Sessions/Storage/LinuxAtomicJsonFile.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityReader.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityErrors.cs`
 
 ## Purpose
 
@@ -8,7 +8,7 @@ Defines and durably writes the active per-Session JSON authority. `SessionAuthor
 
 ## Stable symbols and callers
 
-- `SessionAuthorityDocument.Parse`, `FromNode`, `Load`, `CloneRoot`, and `ValidateMessage` validate version, history, queue, metadata, waits, images, context-block shape, and unsupported catalog/worker fields.
+- `SessionAuthorityDocument.Parse`, `FromNode`, `Load`, `CloneRoot`, and `ValidateMessage` validate version, history, queue, metadata, waits, images, context-block shape, and unsupported catalog/frontier fields.
 - `ValidateMessageContent` shares role/parts content checks with historical Archive readers, without active metadata admission. `ValidateMessage` still requires and validates active message metadata, sequence and timestamp. Archive writer admission uses it separately from historical reading and additionally checks row/inner timestamp equality.
 - `EcmaJson` keeps Archive finite/exact-integer admission, CLR decimal rejection, property normalization and writer failure contracts here; only pure finite binary64 formatting is shared through [NodePrimitives](./dotnet-node-primitives.md).
 - `SessionAuthorityDocument.ValidateState` shares envelope/queue/meta validation between full-document ingress and immutable-history streaming saves; `WriteTo` writes complete UTF-8 JSON while validating each immutable record with the existing message schema.
@@ -22,7 +22,8 @@ Callers: `PersistentSessionAuthorityStore` builds the authority envelope; `Sessi
 - Mutable `FromNode` input is copied before validation; `Parse` transfers its freshly parsed tree through internal `FromOwned`. The authority store instead prepares a detached non-history state tree and streams its immutable history separately. Transfer callers relinquish all mutable aliases; `CloneRoot` always returns a detached tree. Validation-only normalization uses `Validate` without constructing or copying a document.
 - The active `history` array and queue are validated as JSON-owned state; `meta.messageCount` must equal history length. Optional `meta.llmFailed` is boolean when present; missing legacy metadata carries no inferred failure. [Terminal foreground failure](../behaviors/messages-and-turns.md#terminal-foreground-request-failure-net) owns its lifecycle.
 - Persisted higher-level context blocks may omit `sourceBlockIds` when their source endpoints ascend, matching the Source legacy Archive contract. Load and ordinary save preserve that absence and inherited provenance; they do not synthesize IDs or rewrite Archive rows. Explicit null/non-array/empty lists still fail, as do descending ranges without IDs. This read/save compatibility does not make those blocks eligible for new compaction: [candidate admission](./session-compaction.md) still requires the current explicit ordered list. Raw-message metadata and Archive admission remain separate and strict.
-- Malformed `childHandoffState`, unsupported worker mailbox/frontier state, and catalog-only semantic fields fail closed instead of being silently migrated into active history.
+- Valid historical `lastAppliedMailboxId` values are non-negative ECMAScript safe integers, including nonzero cursors left by Source `performSessionWorkerHandback`. Load and ordinary save retain them as inert data; managed Main does not use them to execute Worker mailbox input. Missing legacy cursors normalize to zero. Malformed cursors, `childHandoffState`, unsupported frontier state and catalog-only semantic fields still fail validation.
+- `SessionAuthorityReader.ReadRaw`/`Normalize` share side-effect-free ingress between admission, catalog migration and [upgrade inspection](./session-upgrade-inspection.md). Identity disagreement has its own global exception; local read/shape failures become `SessionAuthorityUnavailableException` before image or owner effects. Known first-party validator details carry code-authored reason/field metadata. Diagnostics add JSON-escaped bound Session ID and data-root-relative `state/sessions/<id>.json`; arbitrary filesystem/configuration/vendor exception messages are not promoted to safe text. `MainLog.SafeFailure` and normal WebUI access consume this typed detail.
 - Streaming writes flush bounded batches at record/property boundaries rather than accumulating the complete UTF-8 document. A single large record or state property can exceed that batch size. The temporary file uses ordinary buffered writes followed by one `Flush(flushToDisk:true)` before rename; this retains the complete-file durability boundary without synchronous disk work for every serialization chunk.
 - A failure before rename leaves the previous authority and removes the temp file. A failure after rename raises `AuthorityCommittedException`; reading the file returns the newly published document.
 - Directory sync may be unsupported on a platform, but the result is recorded; the host still distinguishes publication from durability-finalization failure.
@@ -31,3 +32,5 @@ Callers: `PersistentSessionAuthorityStore` builds the authority envelope; `Sessi
 ## Tests
 
 `dotnet/Foxwarm.Tests/Storage/PersistencePrimitiveTests.cs`; `AuthorityStreamingTests.cs` (streamed/document value equivalence including raw and compacted history, open values, bounded chunks, invalid immutable history and partial-stream cleanup); `dotnet/Foxwarm.Tests/Memory/MessageJsonTests.cs`; `dotnet/Foxwarm.Tests/Sessions/PersistentSessionTurnTests.cs`; `LegacyBlockAuthorityTests.cs` with the actual Source fixture `dotnet/Foxwarm.Tests/Fixtures/legacy-block-fixture-ts.mjs`.
+
+`SessionUpgradeCompatibilityTests` and `WebUiStartupTests.SessionRecovery.cs` exercise cursor preservation, local unavailable members, safe recoverable/fatal diagnostics through real Main/API callers, and strict recovery-save commit classification.

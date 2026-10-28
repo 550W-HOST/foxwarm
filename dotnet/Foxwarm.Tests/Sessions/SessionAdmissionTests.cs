@@ -209,7 +209,7 @@ public sealed partial class SessionAdmissionTests
             Options,
             HostModels.ForTest(Options)
         );
-        await Assert.ThrowsAsync<InvalidDataException>(() => manager.RequiredAsync("missing"));
+        await Assert.ThrowsAsync<SessionAuthorityUnavailableException>(() => manager.RequiredAsync("missing"));
         var recovered = await manager.RequiredAsync("busy");
         Assert.False(recovered.Metadata().Busy);
         Assert.False(recovered.Entry.Snapshot().Stopping);
@@ -279,7 +279,7 @@ public sealed partial class SessionAdmissionTests
     }
 
     [Fact]
-    public async Task Mandatory_failure_keeps_another_wait_cold_and_does_not_arm_its_overdue_deadline()
+    public async Task Global_catalog_binding_failure_keeps_another_wait_cold_and_does_not_arm_its_overdue_deadline()
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
@@ -302,6 +302,7 @@ public sealed partial class SessionAdmissionTests
             var deadline = SessionCatalogTests.Row("deadline", 0);
             deadline["meta"]!["wait"] = raw["meta"]!["wait"]!.DeepClone();
             var broken = SessionCatalogTests.Row("broken", 0);
+            broken["agent"] = "absent";
             broken["queueLength"] = 1;
             catalog.Upsert([deadline, broken]);
         }
@@ -316,7 +317,7 @@ public sealed partial class SessionAdmissionTests
         manager.AdmissionReadObserved = reads.Add;
         await Assert.ThrowsAsync<InvalidDataException>(() => manager.LoadAsync());
         await Task.Delay(450);
-        Assert.Equal(new[] { "broken" }, reads);
+        Assert.Empty(reads);
         Assert.Null(manager.Find("deadline"));
         Assert.Equal(raw.ToJsonString(), await File.ReadAllTextAsync(file));
         Assert.Equal(

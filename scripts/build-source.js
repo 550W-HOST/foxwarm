@@ -25,6 +25,9 @@ function promote() {
   if (!fs.existsSync(path.join(staging, 'Foxwarm.dll'))) {
     throw new Error('No staged Core build. Run `npm run build -- --stage-only` first.');
   }
+  // Inspect with the candidate readers before selecting it. Warnings retain local
+  // failures; global/active-Worker blockers leave the selected output untouched.
+  run('dotnet', [path.join(staging, 'Foxwarm.dll'), '--installation-root', root, '--inspect-upgrade']);
   fs.mkdirSync(runtime, { recursive: true });
   const destination = path.join(runtime, `${Date.now()}-${randomUUID()}`);
   fs.renameSync(staging, destination);

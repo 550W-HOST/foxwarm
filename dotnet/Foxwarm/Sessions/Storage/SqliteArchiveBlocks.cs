@@ -120,6 +120,12 @@ public sealed partial class SqliteArchiveMessageStore
             )
             """
         );
+        if (!ValidateBlocks(connection))
+            Execute(connection, "ALTER TABLE archive_blocks ADD COLUMN friction_score INTEGER");
+    }
+
+    private static bool ValidateBlocks(SqliteConnection connection)
+    {
         using var schema = connection.CreateCommand();
         schema.CommandText = "PRAGMA table_info(archive_blocks)";
         using var rows = schema.ExecuteReader();
@@ -166,8 +172,7 @@ public sealed partial class SqliteArchiveMessageStore
             throw new InvalidDataException(
                 "archive_blocks does not match the current TypeScript schema."
             );
-        if (!hasFriction)
-            Execute(connection, "ALTER TABLE archive_blocks ADD COLUMN friction_score INTEGER");
+        return hasFriction;
     }
 
     private void ValidateBlock(ArchiveBlockRecord block, string? expectedIdentity = null)

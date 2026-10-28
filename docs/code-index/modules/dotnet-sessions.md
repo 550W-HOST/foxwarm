@@ -16,6 +16,7 @@ This module documents current .NET source behavior. Cross-module contracts belon
 - [Session manager Agent, setup, files, knowledge, waits, and compaction](../units/session-manager-operations.md)
 - [Session manager tasks, timers, and ToolScript launch](../units/session-manager-services.md)
 - [Session runtime, owner, and turn runner](../units/session-turns.md)
+- [Read-only Session upgrade inspection](../units/session-upgrade-inspection.md)
 - [Persistent Session authority store](../units/session-authority-store.md)
 - [Session authority JSON and atomic file writes](../units/session-authority-json.md)
 - [Session catalog schema, bootstrap, and migration](../units/session-catalog-schema.md)

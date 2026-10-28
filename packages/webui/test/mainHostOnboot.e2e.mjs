@@ -113,20 +113,24 @@ try {
   for (let offset = 0; offset < coldRows.length; offset += 100) { const listed = await alias.api('POST', '/api/session-list/by-id', { ids: coldRows.slice(offset, offset + 100).map(value => value.id) }); assert.equal(listed.status, 200, JSON.stringify(listed)); assert.equal(listed.body.results.length, 100) }
   await alias.stop()
 
-  // Only real mandatory busy catalog members reject before sibling effects.
+  // A local authority failure leaves that member unavailable while healthy recovery continues.
   for (const kind of ['missing', 'unsupported', 'malformed-json', 'malformed-node']) {
-    const broken = await create('onboot-required-' + kind, 'Legacy files remain inert even on failed startup.')
-    await put(broken, 'queued-sibling', { queue: [{ type: 'user', parts: [{ text: 'ON-TASK:sibling-should-not-start' }] }] })
+    const broken = await create('onboot-required-' + kind, 'Legacy files remain inert during partial Session recovery.')
+    await put(broken, 'queued-sibling', { queue: [{ type: 'user', parts: [{ text: 'ON-TASK:sibling-started' }] }] })
     const expired = { id: 'original-required-deadline', startedAt: 1, timeoutSeconds: 1, declarationVersion: 1 }
     const deadline = await put(broken, 'deadline-sibling', { meta: { messageCount: 0, lastMessageTime: 0, wait: expired } })
     if (kind !== 'missing') await put(broken, 'main', kind === 'unsupported' ? { sessionStateVersion: 99 } : kind === 'malformed-node' ? { currentNode: 'provider/instance/invalid' } : {})
     if (kind === 'malformed-json') await writeFile(join(broken.data, 'state/sessions/main.json'), '{broken')
     await seedCatalog(broken, [row('main', { busy: true }), row('queued-sibling', { queueLength: 1 }), row('deadline-sibling', { meta: deadline.meta })])
-    const count = requests.length
-    await assert.rejects(broken.start(), /authority|Session|Unsupported|invalid/i)
-    assert.equal(requests.length, count)
-    assert(!(await saved(broken, 'queued-sibling')).busy)
-    assert.deepEqual(await saved(broken, 'deadline-sibling'), deadline)
+    const invalidPath = join(broken.data, 'state/sessions/main.json')
+    const before = kind === 'missing' ? null : await readFile(invalidPath, 'utf8')
+    await broken.start()
+    await done(broken, 'sibling-started', 'queued-sibling')
+    await until(async () => !(await saved(broken, 'deadline-sibling')).meta.wait, 'healthy overdue deadline resumes')
+    assert.equal((await broken.api('GET', route('main') + '/history')).status, 500)
+    if (before === null) await assert.rejects(access(invalidPath))
+    else assert.equal(await readFile(invalidPath, 'utf8'), before)
+    await broken.stop()
   }
   assert.deepEqual(failures, [])
   console.log(JSON.stringify({ ok: true, originalApp: true, requests: requests.length, retiredFileInert: true, retainedQueueRecovery: true, setupThenFirstTurn: true, deferredVirtualSnapshot: true, coldMembers: 1000, roots: fixtures.map(value => value.root), hostPids: fixtures.flatMap(value => value.hostPids) }))

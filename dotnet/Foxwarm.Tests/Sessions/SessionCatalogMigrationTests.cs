@@ -69,15 +69,17 @@ public sealed class SessionCatalogMigrationTests
             if (kind == "version")
                 raw["sessionStateVersion"] = 2;
             else
-                raw["lastAppliedMailboxId"] = 9;
+                raw["lastAppliedMailboxId"] = -1;
             await File.WriteAllTextAsync(file, raw.ToJsonString());
         }
         await WriteCandidate(root, "bad");
         await WriteCandidate(root, "good", ".1.bak");
         using var catalog = new SessionCatalog(root);
-        await Assert.ThrowsAnyAsync<IOException>(() => Task.Run(catalog.Initialize));
-        Assert.False(File.Exists(catalog.FilePath));
-        Assert.True(File.Exists(Path.Combine(root, "state", "sessions.json")));
+        catalog.Initialize();
+        Assert.NotNull(catalog.Get("bad"));
+        Assert.Null(catalog.Get("good"));
+        Assert.True(File.Exists(catalog.FilePath));
+        Assert.True(File.Exists(Path.Combine(root, "state", "sessions.json.pre-catalog-sqlite-v1.bak")));
     }
 
     [Fact]
@@ -170,7 +172,7 @@ public sealed class SessionCatalogMigrationTests
         );
         await manager.LoadAsync();
         Assert.Empty(manager.Owners());
-        await Assert.ThrowsAsync<InvalidDataException>(() => manager.RequiredAsync("one"));
+        await Assert.ThrowsAsync<SessionAuthorityUnavailableException>(() => manager.RequiredAsync("one"));
     }
 
     [Fact]

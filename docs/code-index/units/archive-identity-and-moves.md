@@ -29,3 +29,5 @@ Ledger writes retain flush-to-disk, atomic replacement and the committed-failure
 ## Tests
 
 `dotnet/Foxwarm.Tests/Sessions/SessionIdentityRecoveryTests.cs`; `SessionIdentityMoveTests.cs`; `dotnet/Foxwarm.Tests/Sessions/CommittedArchiveBoundaryTests.cs`; `dotnet/Foxwarm.Tests/Storage/ArchiveLineageTests.cs`.
+
+The committed mapping reader/graph validation is also used by [upgrade inspection](./session-upgrade-inspection.md). Its inspection call performs no ledger rewrite or SQLite mirror; ordinary startup retains those publication steps.

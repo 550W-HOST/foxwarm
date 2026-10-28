@@ -114,7 +114,7 @@ public sealed class SessionExecutionEnvironmentTests
     }
 
     [Fact]
-    public async Task Malformed_Node_identity_cannot_arm_a_siblings_original_deadline()
+    public async Task Malformed_Node_identity_is_local_and_an_undue_sibling_wait_stays_cold()
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
@@ -131,8 +131,8 @@ public sealed class SessionExecutionEnvironmentTests
         raw["meta"]!["wait"] = new JsonObject
         {
             ["id"] = "original",
-            ["startedAt"] = 1,
-            ["timeoutSeconds"] = 1,
+            ["startedAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            ["timeoutSeconds"] = 3600,
             ["declarationVersion"] = 1,
         };
         await File.WriteAllTextAsync(file, raw.ToJsonString());
@@ -153,7 +153,7 @@ public sealed class SessionExecutionEnvironmentTests
         );
         var reads = new List<string>();
         manager.AdmissionReadObserved = reads.Add;
-        await Assert.ThrowsAsync<InvalidDataException>(() => manager.LoadAsync());
+        await manager.LoadAsync();
         await Task.Delay(100);
         Assert.Equal(new[] { "foreign" }, reads);
         Assert.Null(manager.Find("foreign"));

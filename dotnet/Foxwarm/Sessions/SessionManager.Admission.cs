@@ -165,19 +165,11 @@ internal sealed partial class SessionManager
             var store = MakeStore(id, agent);
             var snapshot =
                 await store.LoadAsync(id)
-                ?? throw new InvalidDataException("Cataloged Session authority is missing.");
+                ?? throw new SessionAuthorityUnavailableException(id,
+                    new(null, "Cataloged Session authority is missing."));
             AgentMemory.NormalizePersistedSelection(snapshot.AuthorityEnvelope);
-            ValidateExecutionEnvironment(
-                snapshot.AuthorityEnvelope,
-                agents.AgentDirectory(agent),
-                Directory.GetCurrentDirectory()
-            );
             var recoveringBusy = snapshot.Busy;
             snapshot = recoveringBusy ? RecoverBusySnapshot(snapshot) : snapshot;
-            if (snapshot.Stopping)
-                throw new InvalidDataException(
-                    "Stopping-only Session cannot be resumed automatically by the Session host."
-                );
             token.ThrowIfCancellationRequested();
             var owner = MakeSession(id, agent, store);
             owner.Registry.Add(id, snapshot);
