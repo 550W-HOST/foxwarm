@@ -155,30 +155,32 @@ public sealed class SessionAuthorityDocument
             throw SessionAuthorityErrors.Invalid($"{label}.role is unsupported.");
         var parts =
             message["parts"] as JsonArray
-            ?? throw SessionAuthorityErrors.Invalid($"{label}.parts must be an array.");
+            ?? throw SessionAuthorityErrors.Invalid(
+                $"{label}.parts must be an array.",
+                $"{label}.parts"
+            );
+        ValidateMessageParts(parts, $"{label}.parts");
+        return role;
+    }
+
+    private static void ValidateMessageParts(JsonArray parts, string label)
+    {
         foreach (var (partNode, partIndex) in parts.Select((value, index) => (value, index)))
         {
+            var partLabel = $"{label}[{partIndex}]";
             var part =
                 partNode as JsonObject
                 ?? throw SessionAuthorityErrors.Invalid(
-                    $"{label}.parts[{partIndex}] must be an object."
+                    $"{partLabel} must be an object.",
+                    partLabel
                 );
-            foreach (var imageField in new[] { "inlineData", "inlineDataRef", "imageMeta" })
-                if (part[imageField] is JsonNode image && image is not JsonObject)
+            foreach (var field in new[] { "inlineData", "inlineDataRef", "imageMeta", "functionCall", "functionResponse" })
+                if (part[field] is JsonNode value && value is not JsonObject)
                     throw SessionAuthorityErrors.Invalid(
-                        $"{label}.parts[{partIndex}].{imageField} must be an object."
+                        $"{partLabel}.{field} must be an object.",
+                        $"{partLabel}.{field}"
                     );
-            if (part["functionCall"] is JsonNode callNode && callNode is not JsonObject)
-                throw SessionAuthorityErrors.Invalid(
-                    $"{label}.parts[{partIndex}].functionCall must be an object."
-                );
-            if (part["functionResponse"] is JsonNode responseNode && responseNode is not JsonObject)
-                throw SessionAuthorityErrors.Invalid(
-                    $"{label}.parts[{partIndex}].functionResponse must be an object."
-                );
         }
-
-        return role;
     }
 
     internal static void ValidateMessage(JsonObject message, long? expectedSeq, string label)
@@ -576,16 +578,14 @@ public sealed class SessionAuthorityDocument
                     $"Session authority queue[{index}].parts must be an array."
                 );
             if (item["parts"] is JsonArray itemParts)
-                for (var partIndex = 0; partIndex < itemParts.Count; partIndex++)
-                    if (itemParts[partIndex] is not JsonObject)
-                        throw SessionAuthorityErrors.Invalid(
-                            $"Session authority queue[{index}].parts[{partIndex}] must be an object."
-                        );
+                ValidateMessageParts(itemParts, $"queue[{index}].parts");
             var hasMessage = item["message"] is JsonObject;
             if (item.ContainsKey("message") && item["message"] is not JsonObject)
                 throw SessionAuthorityErrors.Invalid(
                     $"Session authority queue[{index}].message must be an object."
                 );
+            if (item["message"] is JsonObject message)
+                ValidateMessageContent(message, $"queue[{index}].message");
             if (!hasParts && !hasMessage)
                 throw SessionAuthorityErrors.Invalid(
                     $"Session authority queue[{index}] must contain nonempty parts or a message."

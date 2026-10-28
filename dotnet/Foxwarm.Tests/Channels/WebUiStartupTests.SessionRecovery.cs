@@ -8,6 +8,48 @@ namespace Foxwarm.Tests;
 public sealed partial class WebUiStartupTests
 {
     [Fact]
+    public async Task Malformed_queued_content_keeps_Main_HTTP_and_healthy_owners_available()
+    {
+        await using var host = new Host();
+        await File.AppendAllTextAsync(host.ConfigPath, "vector: false\nchannels: {}\n");
+        await File.WriteAllTextAsync(host.TokenPath, host.Token);
+        await SessionUpgradeCompatibilityTests.Seed(host.Data, "healthy", required: true);
+        var originals = new Dictionary<string, string>();
+        foreach (var (id, wrapped) in new[] { ("parts", false), ("message", true) })
+            originals[id] = await SessionQueuedContentTests.SeedMalformed(host.Data, id, wrapped);
+        host.Start();
+        await host.Ready();
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await host.Client.GetAsync("/api/sessions/healthy/state")).StatusCode
+        );
+        foreach (var id in originals.Keys)
+        {
+            var response = await host.Client.GetAsync("/api/sessions/" + id + "/state");
+            Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+            var body = await response.Content.ReadFromJsonAsync<JsonObject>();
+            Assert.Equal("SESSION_STATE_UNAVAILABLE", body!["code"]!.GetValue<string>());
+            var diagnostic = body["error"]!.GetValue<string>();
+            Assert.Contains("state/sessions/" + id + ".json", diagnostic);
+            Assert.Contains(
+                id == "parts" ? "queue[0].parts[0].functionResponse" : "queue[0].message.parts[0].functionResponse",
+                diagnostic
+            );
+            Assert.DoesNotContain("malformed-tool-shape", diagnostic);
+        }
+        await host.Stop();
+        var output = await host.Output();
+        Assert.Contains("Session recovery failed:", output);
+        Assert.DoesNotContain("Main fatal startup failure", output);
+        Assert.DoesNotContain("malformed-tool-shape", output);
+        foreach (var (id, original) in originals)
+            Assert.Equal(
+                original,
+                await File.ReadAllTextAsync(Path.Combine(host.Data, "state", "sessions", id + ".json"))
+            );
+    }
+
+    [Fact]
     public async Task Local_authority_failure_is_logged_safely_and_access_reports_it_while_HTTP_and_healthy_sessions_start()
     {
         await using var host = new Host();
