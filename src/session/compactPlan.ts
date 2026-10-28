@@ -194,7 +194,7 @@ export const COMPACT_PLAN_TOOL_DEFINITION: ToolDefinition = {
     properties: {
       argsFilePath: {
         type: 'string',
-        description: "Read a JSON compaction plan from this file instead of direct plan fields.",
+        description: "Submit the repaired JSON arguments file identified in this compaction operation's feedback. Supply this path alone, without direct plan fields.",
       },
       replaceAsBlocks: {
         description: "Blocks to create from continuous candidate ranges. Supply an array, or a JSON string encoding the same array. Use an empty array when only removing previously preserved messages.",
