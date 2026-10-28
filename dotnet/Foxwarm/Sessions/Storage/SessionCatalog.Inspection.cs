@@ -14,16 +14,24 @@ internal sealed partial class SessionCatalog
     {
         if (Path.Exists(FilePath))
         {
-            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-            {
-                DataSource = FilePath, Mode = SqliteOpenMode.ReadOnly, Pooling = false,
-            }.ToString());
+            using var connection = new SqliteConnection(
+                new SqliteConnectionStringBuilder
+                {
+                    DataSource = FilePath,
+                    Mode = SqliteOpenMode.ReadOnly,
+                    Pooling = false,
+                }.ToString()
+            );
             connection.Open();
             var version = Convert.ToInt32(Scalar(connection, "PRAGMA user_version"));
             if (version is not (1 or 2 or 3))
                 throw new InvalidDataException("Unsupported Session catalog schema version.");
-            return Rows(connection, $"SELECT {Columns} FROM session_catalog ORDER BY recent_rank,session_id")
-                .Select(row => new SessionCatalogInspectionRow(row)).ToArray();
+            return Rows(
+                    connection,
+                    $"SELECT {Columns} FROM session_catalog ORDER BY recent_rank,session_id"
+                )
+                .Select(row => new SessionCatalogInspectionRow(row))
+                .ToArray();
         }
         var seen = false;
         foreach (var source in Candidates())
@@ -36,7 +44,9 @@ internal sealed partial class SessionCatalog
                 var result = new List<SessionCatalogInspectionRow>();
                 foreach (var (id, node) in ReadCandidate(source))
                 {
-                    var row = node as JsonObject ?? throw new InvalidDataException("Catalog row must be an object.");
+                    var row =
+                        node as JsonObject
+                        ?? throw new InvalidDataException("Catalog row must be an object.");
                     var main = ProjectCandidate(id, row);
                     result.Add(new(main, row));
                 }
@@ -56,7 +66,9 @@ internal sealed partial class SessionCatalog
     {
         var main = Project(row);
         if (!SessionIdentity.IsValid(id))
-            throw new SelectedAuthorityFailure("Cataloged Session identity is not supported by this host.");
+            throw new SelectedAuthorityFailure(
+                "Cataloged Session identity is not supported by this host."
+            );
         if (Text(main["id"]) != id)
             throw new InvalidDataException("Catalog key does not match row ID.");
         return main;
@@ -66,8 +78,12 @@ internal sealed partial class SessionCatalog
     {
         if (rows.Any(row => Text(row["id"]) == requested))
             return requested;
-        var matches = rows.Where(row => SessionWait.Strings(row["aliases"]).Contains(requested, StringComparer.Ordinal))
-            .Select(row => Text(row["id"])!).Take(2).ToArray();
+        var matches = rows.Where(row =>
+                SessionWait.Strings(row["aliases"]).Contains(requested, StringComparer.Ordinal)
+            )
+            .Select(row => Text(row["id"])!)
+            .Take(2)
+            .ToArray();
         return matches.Length == 1 ? matches[0] : null;
     }
 }

@@ -165,8 +165,10 @@ internal sealed partial class SessionManager
             var store = MakeStore(id, agent);
             var snapshot =
                 await store.LoadAsync(id)
-                ?? throw new SessionAuthorityUnavailableException(id,
-                    new(null, "Cataloged Session authority is missing."));
+                ?? throw new SessionAuthorityUnavailableException(
+                    id,
+                    new(null, "Cataloged Session authority is missing.")
+                );
             AgentMemory.NormalizePersistedSelection(snapshot.AuthorityEnvelope);
             var recoveringBusy = snapshot.Busy;
             snapshot = recoveringBusy ? RecoverBusySnapshot(snapshot) : snapshot;

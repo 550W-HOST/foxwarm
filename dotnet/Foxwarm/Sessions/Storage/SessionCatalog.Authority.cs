@@ -44,7 +44,8 @@ internal sealed partial class SessionCatalog
     {
         if (raw.ContainsKey("sessionStateVersion") && Number(raw["sessionStateVersion"]) != 1)
             throw SessionAuthorityErrors.Unsupported(
-                "Unsupported per-session state format version.", "sessionStateVersion"
+                "Unsupported per-session state format version.",
+                "sessionStateVersion"
             );
         if (raw.ContainsKey("id") && Text(raw["id"]) != id)
             throw new SessionAuthorityIdentityException(id);

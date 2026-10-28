@@ -324,8 +324,14 @@ public sealed class PersistentSessionAuthorityStore
             when (error.InnerException is FileNotFoundException or DirectoryNotFoundException)
         {
             if (archive.ReadMessages().Count > 0)
-                throw new SessionAuthorityUnavailableException(sessionId,
-                    new(null, "Active Session authority is missing while Archive rows exist; Archive cannot rebuild active history."), error);
+                throw new SessionAuthorityUnavailableException(
+                    sessionId,
+                    new(
+                        null,
+                        "Active Session authority is missing while Archive rows exist; Archive cannot rebuild active history."
+                    ),
+                    error
+                );
             return null;
         }
         foreach (var message in ((JsonArray)normalized["history"]!).OfType<JsonObject>())

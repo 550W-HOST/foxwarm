@@ -21,13 +21,22 @@ public sealed partial class WebUiStartupTests
         {
             var path = Path.Combine(host.Data, "state", "sessions", id + ".json");
             var raw = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
-            raw["queue"] = new JsonArray(new JsonObject { ["type"] = "credential-and-vendor-body-must-not-leak", ["parts"] = new JsonArray(new JsonObject { ["text"] = "keep-this-input" }) });
+            raw["queue"] = new JsonArray(
+                new JsonObject
+                {
+                    ["type"] = "credential-and-vendor-body-must-not-leak",
+                    ["parts"] = new JsonArray(new JsonObject { ["text"] = "keep-this-input" }),
+                }
+            );
             original[id] = raw.ToJsonString();
             await File.WriteAllTextAsync(path, original[id]);
         }
         host.Start();
         await host.Ready();
-        Assert.Equal(HttpStatusCode.OK, (await host.Client.GetAsync("/api/sessions/healthy/state")).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await host.Client.GetAsync("/api/sessions/healthy/state")).StatusCode
+        );
         foreach (var id in new[] { "broken", "cold" })
         {
             var response = await host.Client.GetAsync("/api/sessions/" + id + "/state");
@@ -45,16 +54,26 @@ public sealed partial class WebUiStartupTests
         Assert.Contains("Session recovery failed:", output);
         Assert.Contains("state/sessions/broken.json", output);
         Assert.DoesNotContain("credential-and-vendor-body", output);
-        var log = await File.ReadAllTextAsync(Path.Combine(host.Data, "state", "logs", "foxwarm.log"));
+        var log = await File.ReadAllTextAsync(
+            Path.Combine(host.Data, "state", "logs", "foxwarm.log")
+        );
         Assert.Contains("state/sessions/broken.json", log);
         Assert.DoesNotContain("credential-and-vendor-body", log);
         foreach (var (id, before) in original)
-            Assert.Equal(before, await File.ReadAllTextAsync(Path.Combine(host.Data, "state", "sessions", id + ".json")));
+            Assert.Equal(
+                before,
+                await File.ReadAllTextAsync(
+                    Path.Combine(host.Data, "state", "sessions", id + ".json")
+                )
+            );
     }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task First_catalog_migration_isolates_local_files_but_identity_conflicts_remain_fatal(bool identityConflict)
+    public async Task First_catalog_migration_isolates_local_files_but_identity_conflicts_remain_fatal(
+        bool identityConflict
+    )
     {
         await using var host = new Host();
         await File.AppendAllTextAsync(host.ConfigPath, "vector: false\nchannels: {}\n");
@@ -77,7 +96,10 @@ public sealed partial class WebUiStartupTests
             members[id] = row;
         }
         var candidate = Path.Combine(host.Data, "state", "sessions.json");
-        await File.WriteAllTextAsync(candidate, new JsonObject { ["sessions"] = members }.ToJsonString());
+        await File.WriteAllTextAsync(
+            candidate,
+            new JsonObject { ["sessions"] = members }.ToJsonString()
+        );
         host.Start();
         if (identityConflict)
         {
@@ -93,8 +115,14 @@ public sealed partial class WebUiStartupTests
         else
         {
             await host.Ready();
-            Assert.Equal(HttpStatusCode.OK, (await host.Client.GetAsync("/api/sessions/healthy/state")).StatusCode);
-            Assert.Equal(HttpStatusCode.InternalServerError, (await host.Client.GetAsync("/api/sessions/broken/state")).StatusCode);
+            Assert.Equal(
+                HttpStatusCode.OK,
+                (await host.Client.GetAsync("/api/sessions/healthy/state")).StatusCode
+            );
+            Assert.Equal(
+                HttpStatusCode.InternalServerError,
+                (await host.Client.GetAsync("/api/sessions/broken/state")).StatusCode
+            );
             await host.Stop();
             Assert.False(File.Exists(candidate));
             using var catalog = new SessionCatalog(host.Data);
@@ -102,5 +130,4 @@ public sealed partial class WebUiStartupTests
         }
         Assert.Equal(original, await File.ReadAllTextAsync(path));
     }
-
 }

@@ -139,13 +139,16 @@ internal static class SessionWait
     {
         if (!meta.ContainsKey("wait"))
             return;
-        var wait = Current(meta) ?? throw SessionAuthorityErrors.Invalid("Wait state must be an object.");
+        var wait =
+            Current(meta) ?? throw SessionAuthorityErrors.Invalid("Wait state must be an object.");
         if (
             string.IsNullOrWhiteSpace(Text(wait["id"]))
             || Number(wait["startedAt"]) is not double started
             || !double.IsFinite(started)
         )
-            throw SessionAuthorityErrors.Invalid("Wait state requires an ID and finite start time.");
+            throw SessionAuthorityErrors.Invalid(
+                "Wait state requires an ID and finite start time."
+            );
         if (wait.ContainsKey("reason") && Text(wait["reason"]) is null)
             throw SessionAuthorityErrors.Invalid("Invalid wait reason.");
         if (
@@ -179,7 +182,8 @@ internal static class SessionWait
                 throw SessionAuthorityErrors.Invalid("Invalid deferred wait queue.");
             foreach (var row in deferred)
                 _ = PersistentSessionAuthorityStore.FromQueueJson(
-                    row?.AsObject() ?? throw SessionAuthorityErrors.Invalid("Invalid deferred item.")
+                    row?.AsObject()
+                        ?? throw SessionAuthorityErrors.Invalid("Invalid deferred item.")
                 );
         }
         else if (wait.ContainsKey("waitAll"))

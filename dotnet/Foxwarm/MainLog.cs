@@ -39,7 +39,9 @@ internal sealed class MainLog : IDisposable
         if (error is Foxwarm.Sessions.SessionAuthorityIdentityException identity)
             return error.GetType().Name + ": " + identity.SafeDetail;
         if (error is Foxwarm.Sessions.SessionAuthorityUnavailableException unavailable)
-            return error.GetType().Name + ": " + unavailable.Diagnostic.Format(unavailable.SessionId);
+            return error.GetType().Name
+                + ": "
+                + unavailable.Diagnostic.Format(unavailable.SessionId);
         if (Foxwarm.Sessions.SessionAuthorityErrors.Detail(error) is { } diagnostic)
             return error.GetType().Name + ": " + diagnostic.Format();
         var detail = error switch

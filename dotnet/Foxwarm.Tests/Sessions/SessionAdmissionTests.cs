@@ -209,7 +209,9 @@ public sealed partial class SessionAdmissionTests
             Options,
             HostModels.ForTest(Options)
         );
-        await Assert.ThrowsAsync<SessionAuthorityUnavailableException>(() => manager.RequiredAsync("missing"));
+        await Assert.ThrowsAsync<SessionAuthorityUnavailableException>(() =>
+            manager.RequiredAsync("missing")
+        );
         var recovered = await manager.RequiredAsync("busy");
         Assert.False(recovered.Metadata().Busy);
         Assert.False(recovered.Entry.Snapshot().Stopping);

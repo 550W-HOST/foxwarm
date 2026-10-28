@@ -26,14 +26,25 @@ internal static class SessionAuthorityReader
             return JsonNode.Parse(File.ReadAllText(path)) as JsonObject
                 ?? throw SessionAuthorityErrors.Invalid("Session authority must be a JSON object.");
         }
-        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or JsonException)
+        catch (Exception error)
+            when (error
+                    is IOException
+                        or InvalidDataException
+                        or UnauthorizedAccessException
+                        or JsonException
+            )
         {
             throw SessionAuthorityErrors.Unavailable(id, error);
         }
     }
 
-    internal static JsonObject Normalize(JsonObject raw, string id, string agent,
-        JsonObject? legacyCatalog = null, JsonObject? main = null)
+    internal static JsonObject Normalize(
+        JsonObject raw,
+        string id,
+        string agent,
+        JsonObject? legacyCatalog = null,
+        JsonObject? main = null
+    )
     {
         try
         {
@@ -47,15 +58,32 @@ internal static class SessionAuthorityReader
             }
             catch (InvalidDataException)
             {
-                throw SessionAuthorityErrors.Invalid("Session Node identity is invalid.", "currentNode");
+                throw SessionAuthorityErrors.Invalid(
+                    "Session Node identity is invalid.",
+                    "currentNode"
+                );
             }
-            if (value["stopping"] is JsonValue stopping && stopping.TryGetValue<bool>(out var stopped)
-                && stopped && value["busy"]!.GetValue<bool>() == false)
-                throw SessionAuthorityErrors.Invalid("Stopping-only Session cannot be resumed automatically by the Session host.", "stopping");
+            if (
+                value["stopping"] is JsonValue stopping
+                && stopping.TryGetValue<bool>(out var stopped)
+                && stopped
+                && value["busy"]!.GetValue<bool>() == false
+            )
+                throw SessionAuthorityErrors.Invalid(
+                    "Stopping-only Session cannot be resumed automatically by the Session host.",
+                    "stopping"
+                );
             return value;
         }
-        catch (Exception error) when (error is InvalidDataException or UnsupportedSessionAuthorityException
-            or InvalidOperationException or FormatException or OverflowException or ArgumentException)
+        catch (Exception error)
+            when (error
+                    is InvalidDataException
+                        or UnsupportedSessionAuthorityException
+                        or InvalidOperationException
+                        or FormatException
+                        or OverflowException
+                        or ArgumentException
+            )
         {
             throw SessionAuthorityErrors.Unavailable(id, error);
         }

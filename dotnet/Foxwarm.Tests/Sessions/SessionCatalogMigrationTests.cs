@@ -79,7 +79,9 @@ public sealed class SessionCatalogMigrationTests
         Assert.NotNull(catalog.Get("bad"));
         Assert.Null(catalog.Get("good"));
         Assert.True(File.Exists(catalog.FilePath));
-        Assert.True(File.Exists(Path.Combine(root, "state", "sessions.json.pre-catalog-sqlite-v1.bak")));
+        Assert.True(
+            File.Exists(Path.Combine(root, "state", "sessions.json.pre-catalog-sqlite-v1.bak"))
+        );
     }
 
     [Fact]
@@ -172,7 +174,9 @@ public sealed class SessionCatalogMigrationTests
         );
         await manager.LoadAsync();
         Assert.Empty(manager.Owners());
-        await Assert.ThrowsAsync<SessionAuthorityUnavailableException>(() => manager.RequiredAsync("one"));
+        await Assert.ThrowsAsync<SessionAuthorityUnavailableException>(() =>
+            manager.RequiredAsync("one")
+        );
     }
 
     [Fact]

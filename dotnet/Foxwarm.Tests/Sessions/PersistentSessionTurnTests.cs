@@ -531,10 +531,14 @@ public sealed class PersistentSessionTurnTests
 
         File.Delete(reopened.AuthorityPath);
         var missing = new PersistentSessionAuthorityStore(temp.Path, "s");
-        await Assert.ThrowsAsync<SessionAuthorityUnavailableException>(() => missing.LoadAsync("s"));
+        await Assert.ThrowsAsync<SessionAuthorityUnavailableException>(() =>
+            missing.LoadAsync("s")
+        );
         File.WriteAllText(missing.AuthorityPath, "{not-json");
         var corrupt = new PersistentSessionAuthorityStore(temp.Path, "s");
-        await Assert.ThrowsAsync<SessionAuthorityUnavailableException>(() => corrupt.LoadAsync("s"));
+        await Assert.ThrowsAsync<SessionAuthorityUnavailableException>(() =>
+            corrupt.LoadAsync("s")
+        );
     }
 
     private static JsonObject CanonicalMessage(long seq, string text, long timestamp) =>

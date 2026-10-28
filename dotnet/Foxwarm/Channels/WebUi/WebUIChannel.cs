@@ -68,10 +68,19 @@ internal sealed partial class WebUIChannel(
                         )
                         .ExecuteAsync(context);
                 }
-                catch (SessionAuthorityUnavailableException error) when (!context.Response.HasStarted)
+                catch (SessionAuthorityUnavailableException error)
+                    when (!context.Response.HasStarted)
                 {
-                    await Results.Json(new { error = MainLog.SafeFailure(error), code = "SESSION_STATE_UNAVAILABLE" },
-                        statusCode: 500).ExecuteAsync(context);
+                    await Results
+                        .Json(
+                            new
+                            {
+                                error = MainLog.SafeFailure(error),
+                                code = "SESSION_STATE_UNAVAILABLE",
+                            },
+                            statusCode: 500
+                        )
+                        .ExecuteAsync(context);
                 }
                 catch (BadHttpRequestException error) when (!context.Response.HasStarted)
                 {

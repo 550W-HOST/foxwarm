@@ -72,7 +72,10 @@ internal sealed partial class AgentCatalog
         }
         if (createDirectories)
             Directory.CreateDirectory(agentRoot);
-        if (Directory.Exists(agentRoot) && (File.GetAttributes(agentRoot) & FileAttributes.ReparsePoint) != 0)
+        if (
+            Directory.Exists(agentRoot)
+            && (File.GetAttributes(agentRoot) & FileAttributes.ReparsePoint) != 0
+        )
             throw new InvalidDataException("Agent directory root cannot be a symbolic link.");
         foreach (var row in metadata)
             _ = Foxwarm.Tools.IsolatedToolCompatibility.Metadata(row.Value);

@@ -67,11 +67,20 @@ internal sealed partial class SessionCatalog
                     try
                     {
                         raw = SessionAuthorityReader.ReadRaw(root, id);
-                        authority = SessionAuthorityReader.Normalize(raw, id, Text(main["agent"])!, row);
+                        authority = SessionAuthorityReader.Normalize(
+                            raw,
+                            id,
+                            Text(main["agent"])!,
+                            row
+                        );
                     }
                     catch (SessionAuthorityUnavailableException error)
                     {
-                        MainLog.Diagnostic("Session catalog migration retained unavailable member: " + MainLog.SafeFailure(error), failure: true);
+                        MainLog.Diagnostic(
+                            "Session catalog migration retained unavailable member: "
+                                + MainLog.SafeFailure(error),
+                            failure: true
+                        );
                         rows.Add(new(id, main));
                         continue;
                     }
@@ -140,13 +149,17 @@ internal sealed partial class SessionCatalog
 
     private static JsonObject ReadCandidate(string source)
     {
-        var data = JsonNode.Parse(File.ReadAllText(source)) as JsonObject
+        var data =
+            JsonNode.Parse(File.ReadAllText(source)) as JsonObject
             ?? throw new InvalidDataException("Catalog candidate must be an object.");
         if (data.ContainsKey("channelAttachments") && data["channelAttachments"] is not JsonObject)
             throw new InvalidDataException("Invalid legacy channelAttachments.");
-        return data["sessions"] is JsonObject set ? set : new JsonObject(
-            data.Where(pair => pair.Key != "channelAttachments")
-                .Select(pair => KeyValuePair.Create(pair.Key, pair.Value?.DeepClone())));
+        return data["sessions"] is JsonObject set
+            ? set
+            : new JsonObject(
+                data.Where(pair => pair.Key != "channelAttachments")
+                    .Select(pair => KeyValuePair.Create(pair.Key, pair.Value?.DeepClone()))
+            );
     }
 
     private string[] AuthorityFiles() =>

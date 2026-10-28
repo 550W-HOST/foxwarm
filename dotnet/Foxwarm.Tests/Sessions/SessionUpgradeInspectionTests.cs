@@ -9,13 +9,22 @@ public sealed class SessionUpgradeInspectionTests
 {
     internal static async Task SourceFixture(string root, string state = "inactive")
     {
-        var repository = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
+        var repository =
+            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
             ?? throw new InvalidOperationException("Owned Source checkout is required.");
         var start = new ProcessStartInfo("node")
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            ArgumentList = { Path.Combine(repository, "dotnet/Foxwarm.Tests/Fixtures/session-upgrade-fixture-ts.mjs"), root, state },
+            ArgumentList =
+            {
+                Path.Combine(
+                    repository,
+                    "dotnet/Foxwarm.Tests/Fixtures/session-upgrade-fixture-ts.mjs"
+                ),
+                root,
+                state,
+            },
         };
         using var child = Process.Start(start)!;
         var stdout = child.StandardOutput.ReadToEndAsync();
@@ -26,10 +35,14 @@ public sealed class SessionUpgradeInspectionTests
 
     private static string WorkerRows(string root)
     {
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = Path.Combine(root, "state", "session-runtime.sqlite"), Mode = SqliteOpenMode.ReadOnly, Pooling = false,
-        }.ToString());
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = Path.Combine(root, "state", "session-runtime.sqlite"),
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString()
+        );
         connection.Open();
         using var command = connection.CreateCommand();
         var rows = new List<string>();
@@ -38,7 +51,11 @@ public sealed class SessionUpgradeInspectionTests
             command.CommandText = "SELECT * FROM " + table + " ORDER BY 1";
             using var reader = command.ExecuteReader();
             while (reader.Read())
-                rows.Add(System.Text.Json.JsonSerializer.Serialize(Enumerable.Range(0, reader.FieldCount).Select(reader.GetValue)));
+                rows.Add(
+                    System.Text.Json.JsonSerializer.Serialize(
+                        Enumerable.Range(0, reader.FieldCount).Select(reader.GetValue)
+                    )
+                );
         }
         return string.Join('\n', rows);
     }
@@ -46,7 +63,10 @@ public sealed class SessionUpgradeInspectionTests
     [Theory]
     [InlineData("inactive", true)]
     [InlineData("candidate", false)]
-    public async Task Source_handback_cursor_and_retained_mailbox_are_inspected_without_replay_or_migration(string state, bool selectable)
+    public async Task Source_handback_cursor_and_retained_mailbox_are_inspected_without_replay_or_migration(
+        string state,
+        bool selectable
+    )
     {
         using var temp = new TempDirectory();
         await SourceFixture(temp.Path, state);
@@ -64,7 +84,10 @@ public sealed class SessionUpgradeInspectionTests
         Assert.Contains("kind=enqueue", pending.Detail);
         Assert.Contains("createdAt=", pending.Detail);
         Assert.DoesNotContain("Synthetic retained input", pending.Detail);
-        Assert.Equal(state == "candidate" ? 1 : 0, report.Issues.Count(issue => issue.Category == "active Worker"));
+        Assert.Equal(
+            state == "candidate" ? 1 : 0,
+            report.Issues.Count(issue => issue.Category == "active Worker")
+        );
         Assert.Equal(authority, await File.ReadAllTextAsync(path));
         Assert.Equal(workerRows, WorkerRows(temp.Path));
         Assert.Equal(before, catalog.ReadForInspection().Select(row => row.Main.ToJsonString()));
@@ -76,7 +99,12 @@ public sealed class SessionUpgradeInspectionTests
             var store = new PersistentSessionAuthorityStore(temp.Path, "retained");
             var snapshot = await store.LoadAsync("retained");
             await store.CommitAsync(snapshot!, SaveKind.Strict);
-            Assert.Equal(1, JsonNode.Parse(await File.ReadAllTextAsync(path))!["lastAppliedMailboxId"]!.GetValue<int>());
+            Assert.Equal(
+                1,
+                JsonNode.Parse(await File.ReadAllTextAsync(path))![
+                    "lastAppliedMailboxId"
+                ]!.GetValue<int>()
+            );
             Assert.Equal(workerRows, WorkerRows(temp.Path));
         }
     }
@@ -103,16 +131,31 @@ public sealed class SessionUpgradeInspectionTests
         {
             var path = Path.Combine(temp.Path, "state", "sessions", id + ".json");
             var raw = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
-            if (id is "cold" or "required") raw["lastAppliedMailboxId"] = -1;
-            if (id == "identity") raw["id"] = "foreign";
+            if (id is "cold" or "required")
+                raw["lastAppliedMailboxId"] = -1;
+            if (id == "identity")
+                raw["id"] = "foreign";
             if (id == "healthy")
             {
-                raw["history"]!.AsArray().Add(new JsonObject
-                {
-                    ["role"] = "user",
-                    ["parts"] = new JsonArray(new JsonObject { ["inlineData"] = new JsonObject { ["mimeType"] = "image/png", ["data"] = "c3ludGhldGlj" } }),
-                    ["__meta"] = new JsonObject { ["seq"] = 1, ["timestamp"] = 1000 },
-                });
+                raw["history"]!
+                    .AsArray()
+                    .Add(
+                        new JsonObject
+                        {
+                            ["role"] = "user",
+                            ["parts"] = new JsonArray(
+                                new JsonObject
+                                {
+                                    ["inlineData"] = new JsonObject
+                                    {
+                                        ["mimeType"] = "image/png",
+                                        ["data"] = "c3ludGhldGlj",
+                                    },
+                                }
+                            ),
+                            ["__meta"] = new JsonObject { ["seq"] = 1, ["timestamp"] = 1000 },
+                        }
+                    );
                 raw["meta"]!["messageCount"] = 1;
                 raw["nextMessageSeq"] = 2;
             }
@@ -123,9 +166,17 @@ public sealed class SessionUpgradeInspectionTests
         var report = SessionUpgradeInspection.Inspect(HostPaths.ForDataRoot(temp.Path));
         Assert.Equal(5, report.Sessions);
         Assert.Equal(3, report.Issues.Count(issue => !issue.Blocking));
-        Assert.Single(report.Issues, issue => issue.Blocking && issue.Category == "Session identity");
+        Assert.Single(
+            report.Issues,
+            issue => issue.Blocking && issue.Category == "Session identity"
+        );
         foreach (var (id, original) in authorities)
-            Assert.Equal(original, await File.ReadAllTextAsync(Path.Combine(temp.Path, "state", "sessions", id + ".json")));
+            Assert.Equal(
+                original,
+                await File.ReadAllTextAsync(
+                    Path.Combine(temp.Path, "state", "sessions", id + ".json")
+                )
+            );
         Assert.False(Directory.Exists(Path.Combine(temp.Path, "state", "images")));
         Assert.False(File.Exists(Path.Combine(temp.Path, "state", "migrationVersion.json")));
     }
@@ -139,11 +190,14 @@ public sealed class SessionUpgradeInspectionTests
         var bad = Path.Combine(temp.Path, "state", "sessions", "bad.json");
         await File.WriteAllTextAsync(bad, "{malformed-secret-value");
         var catalog = Path.Combine(temp.Path, "state", "sessions.json");
-        var selected = new JsonObject { ["sessions"] = new JsonObject
+        var selected = new JsonObject
         {
-            ["healthy"] = SessionCatalogTests.Row("healthy", 0),
-            ["bad"] = SessionCatalogTests.Row("bad", 0),
-        }}.ToJsonString();
+            ["sessions"] = new JsonObject
+            {
+                ["healthy"] = SessionCatalogTests.Row("healthy", 0),
+                ["bad"] = SessionCatalogTests.Row("bad", 0),
+            },
+        }.ToJsonString();
         await File.WriteAllTextAsync(catalog, selected);
         var report = SessionUpgradeInspection.Inspect(HostPaths.ForDataRoot(temp.Path));
         Assert.True(report.CanSelect);

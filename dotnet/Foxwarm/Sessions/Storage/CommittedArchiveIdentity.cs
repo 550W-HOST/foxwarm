@@ -24,7 +24,11 @@ internal sealed partial class CommittedArchiveIdentity(string root)
                 return;
             ValidateStartupEvidence(root);
             catalog.Initialize();
-            var mappings = ReadMappings(catalog.List(), alias => SessionCatalog.Text(catalog.Resolve(alias)["sessionId"]), out var rewrite);
+            var mappings = ReadMappings(
+                catalog.List(),
+                alias => SessionCatalog.Text(catalog.Resolve(alias)["sessionId"]),
+                out var rewrite
+            );
             if (rewrite)
                 WriteLedger(mappings);
             if (File.Exists(DatabasePath) || mappings.Count > 0)
@@ -43,8 +47,11 @@ internal sealed partial class CommittedArchiveIdentity(string root)
         _ = ReadMappings(catalogRows, resolve, out _);
     }
 
-    private Dictionary<string, string> ReadMappings(IReadOnlyList<JsonObject> catalogRows,
-        Func<string, string?> resolve, out bool rewrite)
+    private Dictionary<string, string> ReadMappings(
+        IReadOnlyList<JsonObject> catalogRows,
+        Func<string, string?> resolve,
+        out bool rewrite
+    )
     {
         var mappings = ReadLedger(out rewrite);
         if (File.Exists(DatabasePath))

@@ -633,10 +633,14 @@ public sealed partial class SqliteArchiveMessageStore
     {
         if (!Path.Exists(path))
             return;
-        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = path, Mode = SqliteOpenMode.ReadOnly, Pooling = false,
-        }.ToString());
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = path,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false,
+            }.ToString()
+        );
         connection.Open();
         if (TableExists(connection, "archive_messages"))
             ValidateSchema(connection);

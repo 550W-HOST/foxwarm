@@ -417,7 +417,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
         }
         catch (SessionAuthorityUnavailableException error)
         {
-            MainLog.Diagnostic("Session recovery failed: " + MainLog.SafeFailure(error), failure: true);
+            MainLog.Diagnostic(
+                "Session recovery failed: " + MainLog.SafeFailure(error),
+                failure: true
+            );
         }
     }
 

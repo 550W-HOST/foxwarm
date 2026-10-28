@@ -160,7 +160,9 @@ public sealed class SessionAuthorityDocument
         {
             var part =
                 partNode as JsonObject
-                ?? throw SessionAuthorityErrors.Invalid($"{label}.parts[{partIndex}] must be an object.");
+                ?? throw SessionAuthorityErrors.Invalid(
+                    $"{label}.parts[{partIndex}] must be an object."
+                );
             foreach (var imageField in new[] { "inlineData", "inlineDataRef", "imageMeta" })
                 if (part[imageField] is JsonNode image && image is not JsonObject)
                     throw SessionAuthorityErrors.Invalid(
@@ -184,7 +186,10 @@ public sealed class SessionAuthorityDocument
         var role = ValidateMessageContent(message, label);
         var meta =
             message["__meta"] as JsonObject
-            ?? throw SessionAuthorityErrors.Invalid($"{label}.__meta must be an object.", $"{label}.__meta");
+            ?? throw SessionAuthorityErrors.Invalid(
+                $"{label}.__meta must be an object.",
+                $"{label}.__meta"
+            );
         if (meta.ContainsKey("contextFrontierItem"))
             throw SessionAuthorityErrors.Unsupported(
                 $"{label} contains unsupported context frontier state."
@@ -253,7 +258,10 @@ public sealed class SessionAuthorityDocument
     {
         var history =
             root["history"] as JsonArray
-            ?? throw SessionAuthorityErrors.Invalid("Session authority history must be an array.", "history");
+            ?? throw SessionAuthorityErrors.Invalid(
+                "Session authority history must be an array.",
+                "history"
+            );
         ValidateState(root, history.Count, sessionId, agent);
         for (var index = 0; index < history.Count; index++)
             ValidateMessage(
@@ -277,30 +285,44 @@ public sealed class SessionAuthorityDocument
         ArgumentException.ThrowIfNullOrWhiteSpace(agent);
         if (RequiredSafeInteger(root, "sessionStateVersion", "Session authority") != 1)
             throw SessionAuthorityErrors.Unsupported(
-                "Only sessionStateVersion 1 is supported.", "sessionStateVersion"
+                "Only sessionStateVersion 1 is supported.",
+                "sessionStateVersion"
             );
         if (
             root["persistentMemorySnapshot"] is not JsonValue memory
             || !memory.TryGetValue<string>(out _)
         )
             throw SessionAuthorityErrors.Invalid(
-                "Session authority persistentMemorySnapshot must be a string.", "persistentMemorySnapshot");
+                "Session authority persistentMemorySnapshot must be a string.",
+                "persistentMemorySnapshot"
+            );
         var queue =
             root["queue"] as JsonArray
-            ?? throw SessionAuthorityErrors.Invalid("Session authority queue must be an array.", "queue");
+            ?? throw SessionAuthorityErrors.Invalid(
+                "Session authority queue must be an array.",
+                "queue"
+            );
         ValidateQueue(queue);
         var stats =
             root["stats"] as JsonObject
-            ?? throw SessionAuthorityErrors.Invalid("Session authority stats must be an object.", "stats");
+            ?? throw SessionAuthorityErrors.Invalid(
+                "Session authority stats must be an object.",
+                "stats"
+            );
         ValidateStats(stats);
         var meta =
             root["meta"] as JsonObject
-            ?? throw SessionAuthorityErrors.Invalid("Session authority meta must be an object.", "meta");
+            ?? throw SessionAuthorityErrors.Invalid(
+                "Session authority meta must be an object.",
+                "meta"
+            );
         _ = RequiredFiniteNumber(meta, "lastMessageTime", "Session authority meta");
         var messageCount = RequiredSafeInteger(meta, "messageCount", "Session authority meta");
         if (messageCount != historyCount)
             throw SessionAuthorityErrors.Invalid(
-                "Session authority meta.messageCount must equal history length.", "meta.messageCount");
+                "Session authority meta.messageCount must equal history length.",
+                "meta.messageCount"
+            );
         if (meta.ContainsKey("lastChannel"))
             throw SessionAuthorityErrors.Unsupported(
                 "Catalog-only meta.lastChannel is not supported in Session authority."
@@ -314,23 +336,41 @@ public sealed class SessionAuthorityDocument
             meta.ContainsKey("llmFailed")
             && (meta["llmFailed"] is not JsonValue failed || !failed.TryGetValue<bool>(out _))
         )
-            throw SessionAuthorityErrors.Invalid("Session authority meta.llmFailed must be boolean.", "meta.llmFailed");
+            throw SessionAuthorityErrors.Invalid(
+                "Session authority meta.llmFailed must be boolean.",
+                "meta.llmFailed"
+            );
         try
         {
             SessionWait.Validate(meta);
         }
-        catch (Exception error) when (error is InvalidDataException or InvalidOperationException
-            or UnsupportedSessionTurnException or FormatException or NullReferenceException)
+        catch (Exception error)
+            when (error
+                    is InvalidDataException
+                        or InvalidOperationException
+                        or UnsupportedSessionTurnException
+                        or FormatException
+                        or NullReferenceException
+            )
         {
             if (SessionAuthorityErrors.Detail(error) is not null)
                 throw;
             throw SessionAuthorityErrors.Invalid("Session wait state is invalid.", "meta.wait");
         }
-        if (root["busyStartedAt"] is JsonNode
-            && (SessionWait.Number(root["busyStartedAt"]) is not double startedAt
-                || !double.IsFinite(startedAt) || startedAt != Math.Truncate(startedAt)
-                || startedAt < long.MinValue || startedAt >= (double)long.MaxValue))
-            throw SessionAuthorityErrors.Invalid("Session authority busyStartedAt must be an integer.", "busyStartedAt");
+        if (
+            root["busyStartedAt"] is JsonNode
+            && (
+                SessionWait.Number(root["busyStartedAt"]) is not double startedAt
+                || !double.IsFinite(startedAt)
+                || startedAt != Math.Truncate(startedAt)
+                || startedAt < long.MinValue
+                || startedAt >= (double)long.MaxValue
+            )
+        )
+            throw SessionAuthorityErrors.Invalid(
+                "Session authority busyStartedAt must be an integer.",
+                "busyStartedAt"
+            );
         if (root["busy"] is not JsonValue busy || !busy.TryGetValue<bool>(out _))
             throw SessionAuthorityErrors.Invalid("Session authority busy must be boolean.", "busy");
         if (
@@ -338,26 +378,38 @@ public sealed class SessionAuthorityDocument
             && (stoppingNode is not JsonValue stopping || !stopping.TryGetValue<bool>(out _))
         )
             throw SessionAuthorityErrors.Invalid(
-                "Session authority stopping must be boolean when present.", "stopping");
+                "Session authority stopping must be boolean when present.",
+                "stopping"
+            );
         if (RequiredSafeInteger(root, "historyVersion", "Session authority") < 0)
             throw SessionAuthorityErrors.Invalid(
-                "Session authority historyVersion must be non-negative.", "historyVersion");
+                "Session authority historyVersion must be non-negative.",
+                "historyVersion"
+            );
         _ = RequiredSafeInteger(root, "lastAppliedMailboxId", "Session authority");
         if (
             root.ContainsKey("nextBlockId")
             && RequiredSafeInteger(root, "nextBlockId", "Session authority") < 1
         )
-            throw SessionAuthorityErrors.Invalid("Session authority nextBlockId must be positive.", "nextBlockId");
+            throw SessionAuthorityErrors.Invalid(
+                "Session authority nextBlockId must be positive.",
+                "nextBlockId"
+            );
         if (root.ContainsKey("agent"))
         {
             if (
                 root["agent"] is not JsonValue agentValue
                 || !agentValue.TryGetValue<string>(out var storedAgent)
             )
-                throw SessionAuthorityErrors.Invalid("Session authority agent must be a string.", "agent");
+                throw SessionAuthorityErrors.Invalid(
+                    "Session authority agent must be a string.",
+                    "agent"
+                );
             if (storedAgent != agent)
                 throw SessionAuthorityErrors.Unsupported(
-                    "Session authority agent does not match the bound agent.", "agent");
+                    "Session authority agent does not match the bound agent.",
+                    "agent"
+                );
         }
         else if (agent != "main")
             throw SessionAuthorityErrors.Invalid(
@@ -382,7 +434,10 @@ public sealed class SessionAuthorityDocument
                 || aliases.Any(node => SessionWait.Text(node) is not { Length: > 0 })
             )
         )
-            throw SessionAuthorityErrors.Invalid("Session authority aliases must be nonempty strings.", "aliases");
+            throw SessionAuthorityErrors.Invalid(
+                "Session authority aliases must be nonempty strings.",
+                "aliases"
+            );
         if (root["childHandoffState"] is JsonObject handoff)
         {
             var boundary = RequiredString(
@@ -392,18 +447,25 @@ public sealed class SessionAuthorityDocument
             );
             if (boundary is not ("direct-user" or "report-required"))
                 throw SessionAuthorityErrors.Invalid(
-                    "Session authority childHandoffState.boundary is invalid.", "childHandoffState.boundary");
+                    "Session authority childHandoffState.boundary is invalid.",
+                    "childHandoffState.boundary"
+                );
             if (handoff["resolved"] is not JsonValue resolved || !resolved.TryGetValue<bool>(out _))
                 throw SessionAuthorityErrors.Invalid(
-                    "Session authority childHandoffState.resolved must be boolean.", "childHandoffState.resolved");
+                    "Session authority childHandoffState.resolved must be boolean.",
+                    "childHandoffState.resolved"
+                );
         }
         else if (root.ContainsKey("childHandoffState"))
             throw SessionAuthorityErrors.Invalid(
-                "Session authority childHandoffState must be an object.", "childHandoffState");
+                "Session authority childHandoffState must be an object.",
+                "childHandoffState"
+            );
         foreach (var unsupported in new[] { "indexingState", "contextFrontier" })
             if (root.ContainsKey(unsupported))
                 throw SessionAuthorityErrors.Unsupported(
-                    $"Session authority {unsupported} is unsupported.", unsupported
+                    $"Session authority {unsupported} is unsupported.",
+                    unsupported
                 );
         if (root.ContainsKey("parentSessionId"))
         {
@@ -412,18 +474,26 @@ public sealed class SessionAuthorityDocument
                 || !parentValue.TryGetValue<string>(out var parent)
             )
                 throw SessionAuthorityErrors.Invalid(
-                    "Session authority parentSessionId must be a string.", "parentSessionId");
+                    "Session authority parentSessionId must be a string.",
+                    "parentSessionId"
+                );
         }
 
         var nextMessageSeq = RequiredSafeInteger(root, "nextMessageSeq", "Session authority");
         if (nextMessageSeq < 1)
-            throw SessionAuthorityErrors.Invalid("Session authority nextMessageSeq must be positive.", "nextMessageSeq");
+            throw SessionAuthorityErrors.Invalid(
+                "Session authority nextMessageSeq must be positive.",
+                "nextMessageSeq"
+            );
     }
 
     private static string RequiredString(JsonObject value, string property, string label) =>
         value[property] is JsonValue node && node.TryGetValue<string>(out var result)
             ? result
-            : throw SessionAuthorityErrors.Invalid($"{label}.{property} must be a string.", $"{label}.{property}");
+            : throw SessionAuthorityErrors.Invalid(
+                $"{label}.{property} must be a string.",
+                $"{label}.{property}"
+            );
 
     private static void ValidateStats(JsonObject stats)
     {
@@ -434,7 +504,9 @@ public sealed class SessionAuthorityDocument
                 _ = ReadFiniteNumber(
                     stats[field]
                         ?? throw SessionAuthorityErrors.Invalid(
-                            "Session authority stats numbers cannot be null.", "stats"),
+                            "Session authority stats numbers cannot be null.",
+                            "stats"
+                        ),
                     $"Session authority stats.{field}"
                 );
         ValidateCost(stats, "totalCost");
@@ -443,7 +515,9 @@ public sealed class SessionAuthorityDocument
         var usage =
             stats["lastUsage"] as JsonObject
             ?? throw SessionAuthorityErrors.Invalid(
-                "Session authority stats.lastUsage must be an object or null.", "stats.lastUsage");
+                "Session authority stats.lastUsage must be an object or null.",
+                "stats.lastUsage"
+            );
         foreach (
             var field in new[] { "cachedTokens", "inputTokens", "reasoningTokens", "outputTokens" }
         )
@@ -451,7 +525,9 @@ public sealed class SessionAuthorityDocument
                 _ = ReadFiniteNumber(
                     usage[field]
                         ?? throw SessionAuthorityErrors.Invalid(
-                            "Session authority usage numbers cannot be null.", "usage"),
+                            "Session authority usage numbers cannot be null.",
+                            "usage"
+                        ),
                     $"Session authority stats.lastUsage.{field}"
                 );
         ValidateCost(usage, "cost");
@@ -483,7 +559,8 @@ public sealed class SessionAuthorityDocument
                 continue;
             if (!ordinaryTypes.Contains(type))
                 throw SessionAuthorityErrors.Unsupported(
-                    $"Session authority queue[{index}].type is unsupported.", $"queue[{index}].type"
+                    $"Session authority queue[{index}].type is unsupported.",
+                    $"queue[{index}].type"
                 );
             var hasParts = item["parts"] is JsonArray parts && parts.Count > 0;
             if (item.ContainsKey("parts") && item["parts"] is not JsonArray)
@@ -564,7 +641,8 @@ public sealed class SessionAuthorityDocument
             || Math.Truncate(numeric) != numeric
         )
             throw SessionAuthorityErrors.Invalid(
-                $"{label}.{property} must be a non-negative safe integer.", label == "Session authority" ? property : $"{label}.{property}"
+                $"{label}.{property} must be a non-negative safe integer.",
+                label == "Session authority" ? property : $"{label}.{property}"
             );
         return checked((long)numeric);
     }
@@ -576,7 +654,10 @@ public sealed class SessionAuthorityDocument
             || !TryReadNumber(node, out var result)
             || !double.IsFinite(result)
         )
-            throw SessionAuthorityErrors.Invalid($"{label}.{property} must be a finite number.", $"{label}.{property}");
+            throw SessionAuthorityErrors.Invalid(
+                $"{label}.{property} must be a finite number.",
+                $"{label}.{property}"
+            );
         return result;
     }
 
