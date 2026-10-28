@@ -126,6 +126,10 @@ internal sealed partial class SessionCatalog
             value["nextMessageSeq"] = max + 1;
         }
         value["sessionStateVersion"] = 1;
+        // Null is the historical no-parent value. The Main catalog overlay supplies
+        // current topology, including a parent that differs from this stale copy.
+        if (value["parentSessionId"] is null)
+            value.Remove("parentSessionId");
         // Main supplies the binding; old JSON copies never override catalog identity.
         value["agent"] = agent;
         SessionAuthorityDocument.Validate(value, id, agent);

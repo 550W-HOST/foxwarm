@@ -126,6 +126,7 @@ internal static class CompactCandidateBuilder
     )
     {
         var seqCounts = RawSequenceCounts(history);
+        var unsequencedExchanges = UnsequencedExchangeMembers(history);
         var split = inContext ? history.Count : Split(history, keepPercent, seqCounts);
         var older = history.Take(split).ToArray();
         var blockCounts = new Dictionary<long, int>();
@@ -193,6 +194,13 @@ internal static class CompactCandidateBuilder
             var message = older[index];
             var meta = Meta(message);
             var seq = Number(meta?["seq"]);
+            if (unsequencedExchanges.Contains(index))
+            {
+                segment++;
+                priorKind = null;
+                previousSeq = previousBlockEnd = null;
+                continue;
+            }
             var preservedBlock = Number(meta?["preservedFromBlockId"]);
             if (preservedBlock is > 0)
             {
@@ -411,6 +419,32 @@ internal static class CompactCandidateBuilder
             policies,
             inContext
         );
+    }
+
+    private static HashSet<int> UnsequencedExchangeMembers(IReadOnlyList<JsonObject> history)
+    {
+        var members = new HashSet<int>();
+        for (var start = 0; start < history.Count; start++)
+        {
+            if (Role(history[start]) != "model" || !Calls(history[start]))
+                continue;
+            var end = start;
+            for (var next = start + 1; next < history.Count; next++)
+            {
+                var row = history[next];
+                if (Meta(row)?["contextBlock"] is not null
+                    || Role(row) != "tool" && !Transparent(row))
+                    break;
+                if (Role(row) == "tool")
+                    end = next;
+            }
+            if (end > start && Enumerable.Range(start, end - start + 1)
+                .Any(index => Number(Meta(history[index])?["seq"]) is not > 0))
+                for (var index = start; index <= end; index++)
+                    members.Add(index);
+            start = end;
+        }
+        return members;
     }
 
     private static Dictionary<long, int> RawSequenceCounts(IReadOnlyList<JsonObject> history)

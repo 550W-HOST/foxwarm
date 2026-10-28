@@ -184,6 +184,10 @@ public sealed class SessionAuthorityDocument
     internal static void ValidateMessage(JsonObject message, long? expectedSeq, string label)
     {
         var role = ValidateMessageContent(message, label);
+        // Active Source history can predate Archive metadata. Reading or saving it does
+        // not assign an identity; only newly appended Archive records require one.
+        if (message["__meta"] is null && expectedSeq is null)
+            return;
         var meta =
             message["__meta"] as JsonObject
             ?? throw SessionAuthorityErrors.Invalid(
@@ -242,16 +246,20 @@ public sealed class SessionAuthorityDocument
         {
             if (meta.ContainsKey("contextBlock"))
                 throw SessionAuthorityErrors.Invalid($"{label} contextBlock must be an object.");
-            var seq = RequiredSafeInteger(meta, "seq", $"{label}.__meta");
-            if (seq == 0 || expectedSeq is not null && seq != expectedSeq)
-                throw SessionAuthorityErrors.Invalid($"{label} seq is invalid.");
+            if (meta["seq"] is not null || expectedSeq is not null)
+            {
+                var seq = RequiredSafeInteger(meta, "seq", $"{label}.__meta");
+                if (seq == 0 || expectedSeq is not null && seq != expectedSeq)
+                    throw SessionAuthorityErrors.Invalid($"{label} seq is invalid.");
+            }
             if (
                 meta.ContainsKey("preservedFromBlockId")
                 && RequiredSafeInteger(meta, "preservedFromBlockId", $"{label}.__meta") == 0
             )
                 throw SessionAuthorityErrors.Invalid($"{label} preservedFromBlockId is invalid.");
         }
-        _ = RequiredFiniteNumber(meta, "timestamp", $"{label}.__meta");
+        if (meta["timestamp"] is not null || expectedSeq is not null)
+            _ = RequiredFiniteNumber(meta, "timestamp", $"{label}.__meta");
     }
 
     internal static void Validate(JsonObject root, string sessionId, string agent)

@@ -286,6 +286,8 @@ internal sealed partial class SessionCatalog
             authority.Remove(key);
             Copy(main, authority, key);
         }
+        if (authority["parentSessionId"] is null)
+            authority.Remove("parentSessionId");
         if (authority["meta"] is JsonObject meta)
             meta.Remove("lastChannel");
     }

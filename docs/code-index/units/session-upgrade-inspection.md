@@ -32,3 +32,5 @@ Existing SQLite databases use ordinary read-only connections with live WAL visib
 ## Evidence
 
 `SessionUpgradeInspectionTests` uses Source-produced catalog/Worker state, actual `performSessionWorkerHandback`, complete cold/required member inspection, fresh roots, legacy candidates, identity conflicts and inline images. It verifies retained authority bytes and durable mailbox/catalog rows rather than pinning SQLite sidecar bytes. `scripts/source-upgrade.test.js` executes the actual staged Core through source promotion, proving warning selection, active-Worker/global-Catalog rejection, unchanged prior selection on rejection, and preserved mailbox input. Ordinary startup and native-exec recipient recovery are covered by the [bootstrap tests](./session-manager-bootstrap.md).
+
+`LegacyHistoryAuthorityTests` verifies that Source-readable history lacking message metadata and stale null-parent copies pass this same inspection without rewriting authority; ordinary admission/save and first Catalog migration share the result.
