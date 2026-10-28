@@ -5,8 +5,9 @@ This is the entry point for the project map and repository-specific index conven
 ## Reading and changing the code
 
 - Start with the entry relevant to the task. Use this overview for unfamiliar architecture; familiar work may start at a module, thread, or unit without traversing every layer.
-- Identify the governing contracts and their rationale before choosing an implementation. Confirmed design decisions and supported compatibility contracts constrain changes; source and tests show actual behavior. Report a discrepancy rather than rewriting a contract to match an accidental implementation.
-- For translation or replacement, trace the relevant original caller path from entry to observable effects and compare it with the new path. Index summaries and tests written only for the new implementation do not establish parity.
+- Identify the governing goals and constraints before choosing an implementation. Record how a selected design serves those requirements, then describe its implementation. A design may have several governing constraints; link their existing owners rather than creating another decision tree. An expressly required implementation choice is itself a constraint.
+- Keep a decision's level separate from its provenance: a direct requirement, an approved derived design, an engineering choice, and observed behavior are different evidence. Approval of a descendant does not silently waive its parent. Recover the actual scope of approval and later corrections when they conflict; revise the implementation or reconsider the derived design, and leave an unresolved product choice in `Open Questions`.
+- Supported persisted-data and external compatibility contracts also constrain changes. Source and tests establish behavior, not human approval. For translation or replacement, trace the original caller through its observable effects and compare the new path; index summaries and new-only tests do not establish parity.
 - Put important constraints and their rationale near the beginning of their owning page, before implementation detail. Each decision has one canonical owner; other pages provide a short summary and link. Unconfirmed proposals belong in `Open Questions`, not among effective decisions.
 
 ## Behavior entry points

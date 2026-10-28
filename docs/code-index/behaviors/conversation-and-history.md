@@ -22,7 +22,7 @@ A memory-backed Session uses a retained system-prompt snapshot, not a fresh scan
 | Source/action | What the model can receive | What it does not do |
 | --- | --- | --- |
 | Default memory selection | Framework guidance followed by inherited/current Agent memory, with applicable Session/model filtering. | Does not insert another Agent's conversation or copy its whole workspace. |
-| Explicit `systemPromptFiles` | Replaces default memory-file selection in listed order. An explicit empty list selects no memory files; omission keeps defaults. Catalog and generated directory/recall guidance remain. | Not an extra-file append to default memory, or a bypass of target-Agent path restrictions. |
+| Explicit `systemPromptFiles` | Replaces default memory-file selection in listed order. An explicit empty list selects no memory files; omission keeps defaults. Catalog and generated directory/recall guidance remain. | Not an extra-file append to default memory. Current isolated-target path restrictions have a [separate unresolved scope](#custom-prompt-files-and-legacy-isolation). |
 | Skill catalog in the snapshot | Names, descriptions, and winning sources so the Agent can choose relevant instructions. | Not the full skill bodies, an eager read of resources, or a grant of tool capabilities. |
 | `skill` with `action: "load"` | The resolved entry document and a bounded listing of supporting resource paths, through the ordinary tool-result path. | Does not automatically load those resources or attach the full skill permanently to every future prompt. |
 | Read a resource or historical evidence | The selected content returned by that authorized operation. | Not a memory-file write or reinsertion of archived messages into active history. |
@@ -116,3 +116,9 @@ Continuous pages reuse current Session/alias/access-identity authorization and e
 - [Chat synchronization and viewport](../units/webui-chat.md) and [Timeline](../modules/webui-timeline.md) locate the separate source and renderer responsibilities.
 - `packages/webui/test/continuousHistory.test.mjs` covers projection, preserved-row overrides, and true CTX membership; `test/app-e2e/conversationHistory.e2e.mjs` covers the real command-to-Chat path, paging, clear/delete, and reading-position behavior.
 - `src/channels/webuiContinuousHistory.test.ts` covers bounded route reads, access, aliases/fork caps, and historical image access. `src/session/historyCompactPlanRetry.test.ts` covers active-authoritative compaction, clear, and block-ID continuity. Use these entry points for the relevant behavior regressions.
+
+## Open Questions
+
+### Custom prompt files and legacy isolation
+
+**Unconfirmed broader restriction:** custom prompt sources were selected to support arbitrary Main-host file paths, with Agent-directory confinement when an isolated Agent creates the Session through tools. Current snapshot builders instead use the destination Agent's isolation metadata to confine every custom read, including later refreshes and administrator-created selections. This is current behavior, not evidence that trusted administrator creation was intended to have the same limit. Resolve creator authority and later adoption under the [legacy-isolation migration](../modules/tools-and-permissions.md#d-tools-legacy-isolation-deprecation) before changing the guard. Existing isolated-tool restrictions remain operative; do not add persisted permission machinery merely to preserve the broader implementation assumption.

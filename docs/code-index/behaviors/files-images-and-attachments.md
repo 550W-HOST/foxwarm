@@ -47,14 +47,14 @@ A source **strictly larger than 32 MiB** or **strictly above `64 * 1024 * 1024` 
 | Existing canonical image with an adjacent valid attachment descriptor | Only the provider clone changes the image descriptor to a file descriptor, preserving original name, Node, and path. The visible/history image remains an image. |
 | Existing reference-only image | The provider gets an omission note with the actual image ID and `image_write_to_file` guidance. No internal blob path, fabricated file locator, or automatic cross-Node copy is supplied. |
 
-The model can explicitly save a reference-only original by ID to an authorized file destination; target transfer limits still apply. The policy does not introduce a second attachment store or rewrite old history. Same-concrete generated-image native replay is the separate exception below. Canonical owner: [oversized vision as file](../threads/image-blob-lifecycle.md#d-image-oversized-vision-as-file).
+The model can explicitly save a reference-only original by ID to an authorized file destination; target transfer limits still apply. The policy does not introduce a second attachment store or rewrite old history. Eligible generated-image native replay is the separate exception below. Canonical owner: [oversized vision as file](../threads/image-blob-lifecycle.md#d-image-oversized-vision-as-file).
 
 ## Generated images retain replay identity
 
 A completed provider-hosted generated image enters the same canonical blob lifecycle. History, request journals, response diagnostics, and WebUI transport retain only references and safe native metadata, not another base64 copy.
 
-- The exact concrete Responses model that produced it may replay the verified original bytes as its native generated-image call for later editing. That replay bypasses ordinary-vision optimization.
-- Another concrete model/protocol receives an honest bounded no-image-content note and local-ID save/crop guidance, not a fabricated native call or silently substituted visual input. That placeholder path does not require the original image bytes; eligibility must be decided before loading bytes needed only for native replay. The current hydration conflict is recorded under [Open Questions](#open-questions).
+- A compatible Responses destination may replay verified original bytes as the native generated-image call for later editing. The maintained host uses the captured [native-history compatibility projection](../units/model-configuration.md#native-history-compatibility); without declarations, this is exact concrete identity. Retained TypeScript remains exact-concrete-only. Native replay bypasses ordinary-vision optimization.
+- An incompatible model/protocol receives an honest bounded no-image-content note and local-ID save/crop guidance, not a fabricated native call or silently substituted visual input. That placeholder path does not require the original image bytes; eligibility must be decided before loading bytes needed only for native replay. The maintained host applies that admission before hydration. A retained TypeScript limitation is recorded under [Open Questions](#open-questions).
 - Missing or corrupt required original bytes fail locally rather than silently regenerating an image or treating an edit request as if the image were present.
 - Using the image later as an ordinary tool image is ordinary vision input, with that path's optimization and oversize policy; native provenance is not copied into the tool image.
 
@@ -87,7 +87,7 @@ Publication receipts, immutable revisions, access checks, original downloads, an
 
 ## Open Questions
 
-- **Known limitation:** `hydrateMessagesForProvider` currently reads referenced originals before deciding that an incompatible generated assistant image will become a text-only placeholder. Missing bytes can therefore fail that request even though no image bytes could be sent. This conflicts with the eligibility distinction above; it does not weaken the required-original failure for native replay.
+- **Retained TypeScript limitation:** `hydrateMessagesForProvider` reads referenced originals before deciding that an incompatible generated assistant image will become a text-only placeholder. Missing bytes can therefore fail that request even though no image bytes could be sent. This conflicts with the eligibility distinction above; it does not weaken the required-original failure for native replay.
 
 ## Retention and limits
 

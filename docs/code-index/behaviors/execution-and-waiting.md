@@ -57,7 +57,7 @@ Native tool data, a bounded model/browser receipt, and a turn-control signal hav
 
 Limiting presentation must preserve the operation's success/error classification. Large successful output must not become a sibling error just because it was shortened: an actual sibling error can suppress the [explicit wait](#explicit-wait-ends-an-otherwise-finished-turn). A preview or saved-output locator does not itself change execution status. The [output guard](../modules/tools-and-permissions.md#d-tools-structured-output-guard) owns the bounded envelope and full-output storage.
 
-Wait and handoff authority comes from the executed control operation, not control-looking fields in returned application data. Script return values and stdout do not establish a wait; [normal ToolScript completion](automation-and-scheduled-work.md#end-the-callers-turn-deliberately) applies its separate trusted last-host-call rule. The current external-result control limitation is recorded under [Open Questions](#open-questions).
+Wait and handoff authority comes from the executed control operation, not control-looking fields in returned application data. Script return values and stdout do not establish a wait; [normal ToolScript completion](automation-and-scheduled-work.md#end-the-callers-turn-deliberately) applies its separate trusted last-host-call rule. The maintained host uses [separately typed trusted receipts](../threads/tools-permissions-and-exec.md#outbound-mcp-values-and-trusted-control). The retained TypeScript result-folding limitation is recorded under [Open Questions](#open-questions).
 
 ## Explicit wait ends an otherwise-finished turn
 
@@ -73,7 +73,9 @@ Use a wait when no useful reply or tool work remains, and declare where progress
 | `waitForInput: true` | Declares external/user input as a real progress source. It does not prevent other ordinary activity from waking the Session. |
 | `wakeIfNoActivityAfterSeconds: n` | A positive, one-shot fallback wake, not a polling interval and not cancellation of the dependency. Can accompany a source or stand alone. |
 
-The two Session-list modes are mutually exclusive. Session/exec sources are validated under current access and ownership rules; an arbitrary ID is not a subscription capability. With `waitExecIds`, omitting the fallback gives a 600-second wake. Explicit `null` disables that default; `waitForInput:true` also avoids adding it implicitly. An explicit positive fallback still applies. Pure Session barriers and input-only waits have no automatic deadline. The old model-facing `timeoutSeconds` argument is not accepted; reading legacy persisted state is a separate compatibility contract.
+The two nonempty Session-list modes are mutually exclusive. Empty optional lists have an omission-equivalent input contract, so `waitAllSessions:[]` should not invalidate another real source such as `waitForInput:true`. The current validator rejects that empty list before considering the other source; this is an implementation discrepancy, not permission to use a source-free `wait({})`.
+
+Session/exec sources are validated under current access and ownership rules; an arbitrary ID is not a subscription capability. With `waitExecIds`, omitting the fallback gives a 600-second wake. Explicit `null` disables that default; `waitForInput:true` also avoids adding it implicitly. An explicit positive fallback still applies. Pure Session barriers and input-only waits have no automatic deadline. The old model-facing `timeoutSeconds` argument is not accepted; reading legacy persisted state is a separate compatibility contract.
 
 Ordinary incoming activity can interrupt these waits. In particular, `waitAllSessions` is not an uninterruptible join: unrelated messages or timeout wake it, flush deferred reports, and supply a reminder of still-missing sources. Passive/compaction maintenance can be wait-neutral rather than fabricating progress. Replacing a barrier with deferred reports is rejected instead of dropping those messages. Clear removes the wait. Stale timeout events cannot wake a later replacement wait.
 
@@ -91,7 +93,7 @@ A completed program, a paused run, and a caller-Session wait have separate effec
 
 ## Open Questions
 
-- **Known limitation:** the current model-batch executor still reads internal control fields from object-shaped results without restricting that read to trusted control producers. Outbound MCP structured results can reach that boundary. The intended data/control separation above is not a claim that this path is already fenced; resolving it requires a runtime change, not a new return-value control protocol.
+- **Retained TypeScript limitation:** its model-batch executor still reads internal control fields from object-shaped results without restricting that read to trusted control producers. Outbound MCP structured results can reach that boundary. The intended data/control separation above is not a claim that this path is already fenced; resolving it requires a runtime change, not a new return-value control protocol.
 
 ## Change and test entry points
 

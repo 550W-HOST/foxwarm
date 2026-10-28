@@ -4,6 +4,8 @@ Files: src/session/compactPlan.ts, src/session/compactPlan.test.ts, src/session/
 
 ## Purpose
 
+This unit describes the retained TypeScript implementation. The maintained host is mapped in [Session compaction](./session-compaction.md).
+
 Defines the model-facing `submit_compact_plan` schema, candidate/policy types, compact prompt, quota calculations, plan normalization, and validation feedback, and operation-scoped arguments-file repair. It does not mutate live sessions; `src/session/history.ts` owns job execution and commit.
 
 ## Key exports
@@ -63,10 +65,16 @@ Defines the model-facing `submit_compact_plan` schema, candidate/policy types, c
 
 - `COMPACT_PLAN_TOOL_DEFINITION` exposes optional `argsFilePath` alongside direct fields without a top-level schema combinator or required direct field. Direct submissions still require `replaceAsBlocks`, which exposes an explicit direct-array-or-JSON-string union. The direct-array branch describes required block fields and nested optional `memoryFacts` and `frictionScore`; there is no top-level fact argument.
 - Its caller-facing copy explains plan submission, candidate-only ranges, preservation/removal, and per-block durable facts; schema tests assert the union and required fields rather than editorial wording.
-- The dedicated compact runtime accepts a single plan submission or, while a repair file is pending, an exact-file edit/patch. Its lifecycle and security contract is canonical in [D-context-compact-runtime-gate](../threads/context-compaction.md#d-context-compact-runtime-gate).
+- The dedicated compact runtime accepts a single plan submission or, while a repair file is pending, an exact-file edit/patch. The governing submission contract is [D-context-compact-runtime-gate](../threads/context-compaction.md#d-context-compact-runtime-gate); this reference implementation retains the narrower file mechanics below.
 - The supported block input is `replaceAsBlocks`, preferably a direct array or alternatively a JSON string encoding that array. `preserveMessages` / `removePreservedMessages` remain direct arrays. Obsolete top-level `createBlocksJson` and `createBlocks` are rejected.
 - Validated resolved operations are consumed by [src-session-history](./src-session-history.md).
 - Cross-module behavior and rationale are canonical in [context compaction and recall](../threads/context-compaction-and-recall.md).
+
+## Reference repair file semantics
+
+`CompactPlanRepairFile` stages the first rejected raw arguments, or an identified structured serialization fallback, in one private Main-side file. Later failures retain that artifact; feedback rereads its current contents with a bounded preview. Only an exact-path edit or one update patch is allowed while repair is pending, and file submission reads that invocation-bound artifact. Other file access, exec and unified calls are outside this reference gate.
+
+The artifact is bound to the transient Session and operation. Its private directory/file modes and descriptor checks cover literal/canonical path, inode/device, link count, owner and permissions; descriptor writes do not follow a substituted symlink. Existing concrete master-file authorization and legacy isolated-Agent checks apply. Repair calls stay in transient planner history. Success, cancellation, provider failure and round exhaustion best-effort close/unlink the artifact and remove its directory. This is observed reference machinery, not a requirement to recreate it in the maintained Node-routed implementation.
 
 ## Design decisions
 

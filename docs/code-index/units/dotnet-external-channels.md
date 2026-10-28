@@ -55,9 +55,15 @@ Text and photos ignore bot senders; the document path intentionally retains Sour
 
 **Telegram media storage remains eager and precedes Router authorization.** The adapter also intentionally passes its type (`telegram`), rather than a named instance ID, to the retained storage helper. Thus unauthorized media can leave stored bytes, and a named instance does not gain attachment-aware placement from a different instance binding. This is the preserved contract, not authorization-first deferred media admission. An effectively isolated bound Session stores on its existing current non-master Node or bound Node; a non-isolated selected remote execution Node does not redirect storage. Image blobs remain Main-owned.
 
-Bot API requests retain the pinned Telegraf/node-fetch policy: a 500-second request-through-headers budget, then a fresh 500-second body-consumption budget. Deadline expiry is a retryable transport error; caller or polling/shutdown cancellation is not converted into a network retry. The HTTP client has no additional whole-request deadline. File-endpoint downloads retain the separate Axios path's lack of an application deadline and remain cancellable by adapter stop. Polling's 50-second server wait and final offset-sync's five-second cancellation budget remain independent.
+Current Bot API requests use the pinned Telegraf/node-fetch implementation policy: a 500-second request-through-headers budget, then a fresh 500-second body-consumption budget. Deadline expiry is a retryable transport error; caller or polling/shutdown cancellation is not converted into a network retry. The HTTP client has no additional whole-request deadline. File-endpoint downloads retain the separate Axios path's lack of an application deadline and remain cancellable by adapter stop. Polling's 50-second server wait and final offset-sync's five-second cancellation budget remain independent.
 
 Outbound text/photo/document sends use Markdown with one plain fallback for the Source payload/parse error condition. Other sends retain at most four attempts with 5/10/10-second delays. Upload streams reopen for each actual attempt. Request-context replies schedule observed sends; explicit tools await the transport. No new chunking, outbox, ack ledger or vendor delivery guarantee is introduced.
+
+## Open Questions
+
+### Telegram timeout policy
+
+**Unconfirmed policy change:** a 100-second managed timeout for API calls and file downloads was previously accepted. The current separate 500-second API header/body budgets and deadline-free downloads followed a later Source-parity correction. Confirm both intended request budgets and their phase scope rather than treating SDK defaults or the repair's tests as the policy decision. Cancellation, polling server wait and final offset-sync budgets remain separate; choosing a request deadline does not implicitly change those contracts.
 
 ## Verification
 

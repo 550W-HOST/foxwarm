@@ -33,7 +33,7 @@ LLM owns model/provider configuration consumption, snapshot consumption, provide
 Canonical image messages remain blob-reference-only until the provider request boundary; clone-only hydration and diagnostic redaction are owned by [image blob lifecycle](../threads/image-blob-lifecycle.md).
 
 - `openai` and `openai-responses` use the Responses API; concrete models may opt into the hosted `web_search` tool, whose completed output items remain provider-owned and model-scoped.
-- Concrete Responses models may also opt into the hosted `image_generation` tool. Completed images become canonical blob-reference image parts, so the same lifecycle rule above applies; only the producing concrete model can replay an image natively, and an unsupported protocol or virtual entry rejects the enabled config before any request.
+- Concrete Responses models may also opt into the hosted `image_generation` tool. Completed images become canonical blob-reference image parts, so the same lifecycle rule above applies; the retained TypeScript path replays only on the producing concrete model. The maintained host also admits declared [native-history compatibility](../units/model-configuration.md#native-history-compatibility), subject to Responses eligibility. Unsupported protocols or virtual entries reject enabled image-generation config before a request.
 - `openai-completions` uses Chat Completions.
 - `anthropic` uses Anthropic Messages.
 - `session-hash` and `failover` resolve strict concrete leaves before provider serialization. Canonical contract: [model routing](../threads/model-routing.md).

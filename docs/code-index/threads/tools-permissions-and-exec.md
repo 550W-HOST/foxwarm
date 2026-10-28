@@ -33,6 +33,10 @@ The [outbound MCP client](../units/mcp.md) receives an actual trusted Session ow
 
 `TurnToolReceipt` remains a separately typed trusted executor result. Untrusted MCP result fields do not create send/task/wait receipts, mutate caller identity, supply local resolved paths, or trigger a control operation. Provider output formatting is a history projection; it does not replace the source value or perform MCP normalization.
 
+## Structured output guard
+
+The governing [two-stage output policy](../modules/tools-and-permissions.md#d-tools-structured-output-guard) preserves structured siblings when an oversized `output` field can be shortened on its own. Current `ToolRegistry.ExecuteAsync` bypasses model projection for native programmatic consumers, but sends ordinary results through `ToolOutputGuard.GuardAsync`. That managed guard formats and shortens the entire response in one pass, preserving only a small metadata allowlist. It can therefore omit otherwise small ordinary fields which the selected first stage would retain. Full formatted content is saved, but that does not establish equivalence of the model-facing structured result. This is an implementation discrepancy; image carriers, source values consumed by programs and success/error classification keep their separate contracts.
+
 ## Ordinary external MCP entry
 
 [Inbound MCP](../units/dotnet-inbound-mcp.md) uses verified Main-owned external contexts and concrete external-default-deny facts, not the internal Session executor or result formatter. Its five wrappers resolve real outbound MCP, bounded Session operations, existing pairing and compatible CLI external-owner effects. Strict external Session admission remains separate from ordinary best-effort WebUI input. [Explicit Session notifications/replies](../units/dotnet-mcp-notifications.md) add a separately enabled receiver and registered temporary text-only destination, without changing the external wrappers or CLI authority.

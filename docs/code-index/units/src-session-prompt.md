@@ -19,7 +19,7 @@ Builds Session system-prompt snapshots and owns persisted prompt-cache key gener
 ## Source assembly
 
 - Default memory order is the current framework source (or the existing legacy main-agent framework fallback), followed by inherited/current Agent memory in chain order and filename order. Ordinary memory files retain Session frontmatter selection before model-specific conditional filtering. Framework sources remain raw-content sources before conditional filtering.
-- Explicit `systemPromptFiles` replace default memory selection, preserve listed order, support the established absolute/home-relative/Agent-relative paths, and retain missing/non-file errors. Isolated custom memory calls the same pure `utils/agentPathAccess.checkPathAccess` guard as tool file wrappers.
+- Explicit `systemPromptFiles` replace default memory selection, preserve listed order, support the established absolute/home-relative/Agent-relative paths, and retain missing/non-file errors. Current isolated-target custom memory calls the same pure `utils/agentPathAccess.checkPathAccess` guard as tool file wrappers; [creator-versus-target scope remains unresolved](../behaviors/conversation-and-history.md#custom-prompt-files-and-legacy-isolation).
 - Skill catalog assembly calls `skills.listSkills` and keeps only the visible metadata catalog. Generated directory/recall guidance and skill instructions are not scanned for conditional-memory blocks.
 - Snapshot construction preserves existing wrappers, guidance and first-line model marker bytes. Conditional grammar/header ownership remains [src-conditional-memory](./src-conditional-memory.md).
 

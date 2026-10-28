@@ -195,8 +195,10 @@ second upload. Upload-unit tests cover tiny PNG/JPEG/generic direct bodies,
 
 ### D-qqbot-passive-reply-fallback
 
-For an adapter-selected passive QQ reply, Foxwarm follows the Tencent/OpenClaw local policy
-instead of inferring a server error: from the inbound/first-seen `msg_id`, at
+Passive reply handling combines a local age/count budget with a single proactive
+fallback for recognized server expiry. The three-minute age policy and error-code
+fallback serve late replies; the retained four-success budget is a local adapter
+choice, not a claim about a universal server quota. From the inbound/first-seen `msg_id`, at
 most four **successful passive text/image/file replies** are sent in three
 minutes. The next reply after that count or age boundary makes exactly one
 proactive attempt to the same scoped conversation. A per-`msg_id` in-process

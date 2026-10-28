@@ -32,7 +32,7 @@ Approval uses the nonzero server timeout first, otherwise CLI `--timeout` second
 
 ### D-native-cli-console-scope
 
-Confirmed October 20, 2026: the small CLI-owned controller intentionally retains selection by Session ID across refresh/reorder, keeps an eight-row window containing later selections, and rejects stale history responses by selection and connection identity. History requests retain 30 messages; the display uses the last twelve, bounded message/argument previews and a separate original draft payload.
+The CLI owns a small interactive surface for existing Node/Session operations; it does not add another Session authority or terminal framework. Selection must remain attached to the same Session through refresh/reorder, and stale responses must not replace another selection or connection. The current controller implements that with an eight-row selection window, 30-message history requests, the last twelve messages displayed, bounded previews and a separate original draft payload. Those display budgets are implementation choices under the usability and bounded-presentation goals.
 
 The pattern option is explicitly an interpreted BCL `ECMAScript | IgnoreCase | CultureInvariant` regular expression over tool names only. Empty means manual and invalid syntax fails startup. It is not arbitrary JavaScript RegExp equivalence: Unicode property patterns and inline option groups can differ. No compiled engine, regex timeout policy or match-all fallback is added.
 
