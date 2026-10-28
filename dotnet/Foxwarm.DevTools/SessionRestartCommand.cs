@@ -145,7 +145,7 @@ internal static class SessionRestartCommand
                     "load-check unexpectedly loaded active authority."
                 );
             }
-            catch (InvalidDataException error)
+            catch (SessionAuthorityUnavailableException error)
             {
                 await WriteResultAsync(
                     new JsonObject
@@ -155,6 +155,7 @@ internal static class SessionRestartCommand
                         ["startedAt"] = startedAt,
                         ["finishedAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                         ["errorType"] = error.GetType().Name,
+                        ["sessionId"] = error.SessionId,
                     }
                 );
                 return;

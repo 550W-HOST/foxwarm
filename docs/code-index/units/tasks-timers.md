@@ -44,6 +44,8 @@ The scheduler reserves one script invocation per timer ID before owner admission
 
 At normal scheduler start, the existing loaded timer snapshot supplies aggregate loaded/scheduled/inactive counts. An unavailable store reports scheduling disabled. No timer content or new persistence/statistics scan is needed for this diagnostic.
 
+Session-local recovery failures follow the [bootstrap isolation boundary](./session-manager-bootstrap.md#local-recovery-failure-boundary): healthy clocks can start while an unavailable required owner rejects timer admission without creating history or replacement authority. Existing message-timer failure semantics remain: a failed once attempt consumes its captured timer, while a failed cron delivery retains the record and previous `lastTriggeredAt`. Global startup failures still prevent service activation.
+
 ## Tests
 
 `dotnet/Foxwarm.Tests/Sessions/TaskNotificationConcurrencyTests.cs` holds real recipient save lanes across Session- and user-authored assignments, verifies unrelated reads/creates and same-Task overtaking, captured descriptions, accepted counts and revision fencing, and checks reads versus a held child creation with serialized cancellation/attachment.
@@ -57,3 +59,5 @@ At normal scheduler start, the existing loaded timer snapshot supplies aggregate
 [Public timer commands](./dotnet-command-administration.md) call the same timer CRUD/isolation/scheduler owner through its command entry, without converting human commands into generic model-policy calls. Model timer-tool authorization is unchanged.
 
 `ToolScriptTimerTests` covers real Monty firing during an in-flight provider request, foreground Stop isolation, current starter/read/host authorization, normalized replacement/ownership, self-notification provenance, quiet unattended versus correlated foreground progress, surviving-child parent deletion and shutdown settlement, pauses/timeout/manual continuation, explicit one-shot/exec completion, persisted restart, and accepted hot/cold shutdown admission. `ScriptTimerSchedulingTests` covers admission-time cron overlap, successful/failed message-to-script replacement, overdue once release, deletion and shutdown drain.
+
+`mainHostTimerLifecycle.e2e.mjs` exercises ordinary timers, cold admission, busy Stop/Continue, snapshot model drift and canonical wait deadlines through owned Main processes. Its malformed required-owner case verifies healthy HTTP/timer continuation, controlled unavailable-owner diagnostics, no timer input or Archive append for that owner, unchanged malformed JSON, failed-once consumption, failed-cron retention and preservation of unrelated timer records.

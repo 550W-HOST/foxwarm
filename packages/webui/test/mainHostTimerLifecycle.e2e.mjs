@@ -69,10 +69,31 @@ try {
   assert.equal((await fixture.api('POST', route('main') + '/message', { text: 'LIFECYCLE:wait' })).status, 202); await until(async () => (await authority('main')).meta.wait && !(await authority('main')).busy, 'real persisted canonical wait'); const waiting = (await authority('main')).meta.wait, deadline = waiting.startedAt + waiting.timeoutSeconds * 1000; await fixture.stop(); const document = JSON.parse(await readFile(timerPath, 'utf8')); document.timers.push(timer('redundant', 'main', '', { at: 1, waitTimeoutId: waiting.id, waitTimeoutSeconds: waiting.timeoutSeconds }), timer('stale', 'main', '', { at: 1, waitTimeoutId: 'old-id', waitTimeoutSeconds: 1 }), timer('malformed-internal', 'main', '', { at: 1, waitTimeoutId: 'unknown', waitTimeoutSeconds: 'unknown' })); await writeFile(timerPath, JSON.stringify(document)); const waitRequests = requests.filter(record => record.wait).length; await fixture.start()
   assert((await rows()).some(row => row?.id === 'redundant')); assert((await rows()).some(row => row?.id === 'stale')); assert((await rows()).some(row => row?.id === 'malformed-internal')); assert((await rows()).some(row => row?.id === 'unknown-internal')); if (Date.now() < deadline - 150) { await sleep(Math.min(150, deadline - Date.now() - 150)); assert.equal(requests.filter(record => record.wait).length, waitRequests) }
   await completed('main', 'DONE-WAIT-TIMEOUT'); assert(!(await rows()).some(row => ['redundant', 'stale'].includes(row?.id))); const wake = requests.filter(record => record.wait).at(-1); assert(wake.at >= deadline - 20); assert.equal(requests.filter(record => record.wait).length, waitRequests + 1)
-  // Ordinary clocks remain unarmed if any mandatory C2 owner fails startup validation.
+  // A malformed required owner remains unavailable while healthy ordinary clocks run.
   const savedCatalog = (await fixture.api('GET', '/api/sessions')).body.sessions
   await fixture.stop()
-  await seed([...savedCatalog, { ...catalogRow('mandatory-busy'), busy: true }]); await put('mandatory-busy', { busy: true }); await writeFile(join(fixture.data, 'state/sessions/mandatory-busy.json'), '{broken'); const originalTimers = await readFile(timerPath); const blocked = JSON.parse(originalTimers); blocked.timers.push(timer('barrier', 'main', 'FIRE:forbidden', { at: 1 })); await writeFile(timerPath, JSON.stringify(blocked)); const barrierRequests = requests.length;
-  await assert.rejects(() => fixture.start(), /authority|JSON|invalid|parse/i); assert.equal(requests.length, barrierRequests); assert((await rows()).some(row => row?.id === 'barrier')); await seed(savedCatalog); await writeFile(timerPath, originalTimers);
-  assert.equal(failures.length, 0, failures.join('\n')); const proof = { requests: requests.length, thousandColdMetadata: true, mandatoryStartupBarrier: true, dueExactAdmission: true, onceFailureConsumed: true, cronFailureRetained: true, offlinePlacementPreserved: true, noDowntimeReplay: true, busyStopContinue: true, rawSnapshotCatalogDrift: true, canonicalOnlyWait: true, hostPids: fixture.hostPids, home, failures }; await writeFile(join(fixture.root, 'timer-lifecycle-proof.json'), JSON.stringify(proof, null, 2)); console.log(JSON.stringify(proof))
-} finally { await writeFile(join(fixture.root, 'timer-lifecycle-resources.json'), JSON.stringify({ hostPids: fixture.hostPids, home, requests: requests.length, failures }, null, 2)); peer.closeAllConnections(); await new Promise(done => peer.close(done)); await fixture.cleanup() }
+  await seed([...savedCatalog, { ...catalogRow('mandatory-busy'), busy: true }])
+  const badFile = join(fixture.data, 'state/sessions/mandatory-busy.json')
+  await writeFile(badFile, '{broken')
+  const originalTimers = JSON.parse(await readFile(timerPath, 'utf8')), local = structuredClone(originalTimers)
+  const failedCron = timer('local-bad-cron', 'mandatory-busy', 'FIRE:unavailable', { cron: '* * * * * *', lastTriggeredAt: 7 })
+  local.timers.push(timer('local-good', 'main', 'FIRE:healthy-startup', { at: 1 }), timer('local-bad-once', 'mandatory-busy', 'FIRE:unavailable', { at: 1 }), failedCron)
+  await writeFile(timerPath, JSON.stringify(local)); const localRequests = requests.length
+  await fixture.start()
+  await completed('main', 'DONE-FIRE-healthy-startup')
+  await until(async () => !(await rows()).some(row => ['local-good', 'local-bad-once'].includes(row?.id)), 'successful and failed once delivery consume only their captured timers')
+  await until(() => fixture.output.includes('Timer delivery failed: local-bad-cron'), 'cron attempts the unavailable owner')
+  assert.equal((await fixture.api('GET', route('main') + '/state')).status, 200)
+  const unavailable = await fixture.api('GET', route('mandatory-busy') + '/history')
+  assert.equal(unavailable.status, 500); assert.equal(unavailable.body.code, 'SESSION_STATE_UNAVAILABLE')
+  assert.match(unavailable.body.error, /state\/sessions\/mandatory-busy\.json/)
+  assert.match(fixture.output, /Session recovery failed:/)
+  assert.deepEqual(requests.slice(localRequests).map(record => record.payload), ['healthy-startup'])
+  assert.equal(await readFile(badFile, 'utf8'), '{broken')
+  assert.equal(fixture.sql('SELECT COUNT(*) FROM archive_messages WHERE session_id=?', ['mandatory-busy'])[0][0], 0)
+  const afterLocal = JSON.parse(await readFile(timerPath, 'utf8'))
+  assert.deepEqual(afterLocal.timers.find(row => row?.id === 'local-bad-cron'), failedCron)
+  assert.deepEqual({ ...afterLocal, timers: afterLocal.timers.filter(row => row?.id !== 'local-bad-cron') }, originalTimers)
+  await fixture.stop()
+  assert.equal(failures.length, 0, failures.join('\n')); const proof = { requests: requests.length, thousandColdMetadata: true, mandatoryLocalFailureIsolated: true, healthyTimerContinues: true, unavailableOwnerReceivesNoTimerInput: true, dueExactAdmission: true, onceFailureConsumed: true, cronFailureRetained: true, offlinePlacementPreserved: true, noDowntimeReplay: true, busyStopContinue: true, rawSnapshotCatalogDrift: true, canonicalOnlyWait: true, hostPids: fixture.hostPids, home, failures }; await writeFile(join(fixture.root, 'timer-lifecycle-proof.json'), JSON.stringify(proof, null, 2)); console.log(JSON.stringify(proof))
+} catch (error) { console.error(fixture.output); throw error } finally { await writeFile(join(fixture.root, 'timer-lifecycle-resources.json'), JSON.stringify({ hostPids: fixture.hostPids, home, requests: requests.length, failures }, null, 2)); peer.closeAllConnections(); await new Promise(done => peer.close(done)); await fixture.cleanup() }

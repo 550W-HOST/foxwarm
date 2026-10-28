@@ -1,4 +1,4 @@
-// Retained execution placement, native cwd resolution and fail-before-effects startup.
+// Retained execution placement, native cwd resolution and Session-local recovery isolation.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
@@ -126,20 +126,36 @@ try {
     'catalog-fixture', 'upsert', fixture.data, bootSeed,
   ], { stdio: 'pipe' })
   await seedBranches('boot-seed', bootRows)
-  const bootBefore = await Promise.all(bootRows.map(row => readFile(join(sessions, row.id + '.json'), 'utf8'))), requestCount = requests.length
-  await assert.rejects(() => fixture.start(), /InvalidDataException/)
-  assert.equal(requests.length, requestCount)
-  for (let i = 0; i < bootRows.length; i++) {
-    // Earlier admitted recovery candidates may receive a normal strict save, but no input is consumed.
-    const retained = await authority(bootRows[i].id)
-    for (const [key, value] of Object.entries(JSON.parse(bootBefore[i]))) assert.deepEqual(retained[key], value)
-    assert.equal(await exists(join(fixture.work, bootRows[i].id + '-exec.txt')), false)
-    assert.equal(await exists(join(fixture.work, bootRows[i].id + '-write.txt')), false)
+  const badBefore = await readFile(join(sessions, 'mandatory-bad.json'), 'utf8'), requestCount = requests.length
+  await fixture.start()
+  await done('mandatory-good')
+  assert.equal(requests.length, requestCount + 2)
+  assert.equal((await fixture.api('GET', route('mandatory-good') + '/state')).status, 200)
+  assert.equal(await readFile(join(fixture.work, 'mandatory-good-exec.txt'), 'utf8'), 'owned-mandatory-good')
+  assert.equal(await readFile(join(fixture.work, 'mandatory-good-write.txt'), 'utf8'), 'owned-mandatory-good')
+  for (const [method, path, body] of [['GET', '/history'], ['POST', '/message', { text: 'CASE:mandatory-bad' }]]) {
+    const unavailable = await fixture.api(method, route('mandatory-bad') + path, body)
+    assert.equal(unavailable.status, 500)
+    if (method === 'GET') assert.equal(unavailable.body.code, 'SESSION_STATE_UNAVAILABLE')
+    else assert.equal(unavailable.body.status, 500) // Message ingress retains its Problem response envelope.
+    const diagnostic = method === 'GET' ? unavailable.body.error : unavailable.body.detail
+    assert.match(diagnostic, /state\/sessions\/mandatory-bad\.json/)
+    assert.match(diagnostic, /currentNode/)
   }
-  const repaired = JSON.parse(bootBefore[1]); repaired.currentNode = 'master'
+  assert.match(fixture.output, /Session recovery failed:/)
+  assert.equal(await readFile(join(sessions, 'mandatory-bad.json'), 'utf8'), badBefore)
+  assert.equal(counts.get('mandatory-bad'), undefined)
+  assert.equal(fixture.sql('SELECT COUNT(*) FROM archive_messages WHERE session_id=?', ['mandatory-bad'])[0][0], 0)
+  for (const root of [fixture.work, intended, fixture.root, relative]) {
+    assert.equal(await exists(join(root, 'mandatory-bad-exec.txt')), false)
+    assert.equal(await exists(join(root, 'mandatory-bad-write.txt')), false)
+  }
+  await fixture.stop()
+  const repaired = JSON.parse(badBefore); repaired.currentNode = 'master'
   await writeFile(join(sessions, 'mandatory-bad.json'), JSON.stringify(repaired))
   await fixture.start()
   for (const row of bootRows) await done(row.id)
+  assert.equal(counts.get('mandatory-good'), 2); assert.equal(counts.get('mandatory-bad'), 2)
   await fixture.stop(); assert.deepEqual(failures, [])
-  console.log(JSON.stringify({ ok: true, root: fixture.root, hostPids: fixture.hostPids, requests: requests.length, mandatoryGlobalFailureBeforeSiblingEffects: true, repairRetry: true, results }, null, 2))
-} finally { await fixture.cleanup(); peer.closeAllConnections(); await new Promise(done => peer.close(done)) }
+  console.log(JSON.stringify({ ok: true, root: fixture.root, hostPids: fixture.hostPids, requests: requests.length, mandatoryLocalFailureIsolated: true, noBadOwnerEffects: true, healthyQueuedWorkContinues: true, repairRetryWithoutSiblingReplay: true, results }, null, 2))
+} catch (error) { console.error(fixture.output); throw error } finally { await fixture.cleanup(); peer.closeAllConnections(); await new Promise(done => peer.close(done)) }

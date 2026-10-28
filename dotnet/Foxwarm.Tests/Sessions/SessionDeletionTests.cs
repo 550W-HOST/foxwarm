@@ -126,12 +126,24 @@ public sealed class SessionDeletionTests
         );
         var original = await File.ReadAllTextAsync(Authority(temp.Path, "grand"));
         await File.WriteAllTextAsync(Authority(temp.Path, "grand"), "broken");
+        var channels = Path.Combine(temp.Path, "data", "state", "channels.json");
+        const string bindings = """
+            {"channels":{"webui:root":{"sessionId":"root"},"webui:child":{"sessionId":"child"},"webui:grand":{"sessionId":"grand"}}}
+            """;
+        await File.WriteAllTextAsync(channels, bindings);
+        var authorityBytes = new Dictionary<string, string>();
+        foreach (var id in new[] { "root", "child", "grand" })
+            authorityBytes[id] = await File.ReadAllTextAsync(Authority(temp.Path, id));
         await using var manager = Manager(temp.Path);
         await manager.LoadAsync();
-        await Assert.ThrowsAnyAsync<InvalidDataException>(() => manager.DeleteAsync("root", true));
-        Assert.NotNull(manager.Catalog.Get("root"));
+        var failure = await Assert.ThrowsAsync<SessionAuthorityUnavailableException>(() => manager.DeleteAsync("root", true));
+        Assert.Equal("grand", failure.SessionId);
+        Assert.Equal(new[] { "child", "grand", "root" }, manager.Catalog.List().Select(row => row["id"]!.GetValue<string>()).Order());
         Assert.Equal("root", manager.Catalog.Get("child")!["parentSessionId"]!.GetValue<string>());
-        Assert.True(File.Exists(Authority(temp.Path, "root")));
+        Assert.Equal("child", manager.Catalog.Get("grand")!["parentSessionId"]!.GetValue<string>());
+        foreach (var (id, bytes) in authorityBytes)
+            Assert.Equal(bytes, await File.ReadAllTextAsync(Authority(temp.Path, id)));
+        Assert.Equal(bindings, await File.ReadAllTextAsync(channels));
         await File.WriteAllTextAsync(Authority(temp.Path, "grand"), original);
         var result = await manager.DeleteAsync("root", true);
         Assert.Equal(
@@ -139,6 +151,7 @@ public sealed class SessionDeletionTests
             result["deletedSessionIds"]!.AsArray().Select(node => node!.GetValue<string>())
         );
         Assert.Empty(manager.Catalog.List());
+        Assert.Empty(JsonNode.Parse(await File.ReadAllTextAsync(channels))!["channels"]!.AsObject());
     }
 
     [Fact]

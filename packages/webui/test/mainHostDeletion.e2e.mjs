@@ -174,15 +174,35 @@ try {
   await until(async () => (await saved('wait-sibling')).meta.wait && !(await dto('wait-sibling')).busy, 'actual persisted wait declaration')
   await fixture.stop(); const execAuthority = await readFile(fileFor('exec-bad'), 'utf8'); await unlink(fileFor('exec-bad')); await writeFile(join(fixture.work, 'exec-bad-release'), '')
   await until(() => access(badFolder.statusPath).then(() => true, () => false), 'bad recipient shell naturally finishes'); await sleep(2100)
-  const beforeFailure = records.length; await assert.rejects(fixture.start(), /InvalidDataException/); assert.equal(records.length, beforeFailure); assert((await execRecords()).some(record => record.id === badFolder.id))
-  await writeFile(fileFor('exec-bad'), execAuthority); await fixture.start(); await until(() => counts.get('exec-bad') === 3 && counts.get('wait-sibling') === 2, 'only all-validated restart resumes deadline and exec delivery')
+  const pendingArchive = audit()[0].filter(row => row.session_id === 'exec-bad')
+  await fixture.start()
+  await until(() => counts.get('wait-sibling') === 2, 'healthy deadline resumes with an unavailable exec recipient')
+  assert.equal((await fixture.api('GET', route('wait-sibling') + '/state')).status, 200)
+  for (const [method, path, body] of [['GET', '/history'], ['POST', '/message', { text: 'must not admit input without authority' }]]) {
+    const unavailable = await fixture.api(method, route('exec-bad') + path, body)
+    assert.equal(unavailable.status, 500)
+    if (method === 'GET') assert.equal(unavailable.body.code, 'SESSION_STATE_UNAVAILABLE')
+    else assert.equal(unavailable.body.status, 500) // Message ingress retains its Problem response envelope.
+    const diagnostic = method === 'GET' ? unavailable.body.error : unavailable.body.detail
+    assert.match(diagnostic, /state\/sessions\/exec-bad\.json/)
+  }
+  assert.match(fixture.output, /Session recovery failed:/)
+  await assert.rejects(readFile(fileFor('exec-bad')), { code: 'ENOENT' })
+  assert.equal(counts.get('exec-bad'), 2)
+  assert.deepEqual(audit()[0].filter(row => row.session_id === 'exec-bad'), pendingArchive)
+  assert((await execRecords()).some(record => record.id === badFolder.id)) // No failed-recipient acknowledgement.
+  await writeFile(fileFor('exec-bad'), execAuthority)
+  assert.equal((await fixture.api('GET', route('exec-bad') + '/history')).status, 200)
+  await until(() => counts.get('exec-bad') === 3, 'ordinary repaired admission receives the retained completion')
+  await until(async () => !(await execRecords()).some(record => record.id === badFolder.id), 'completion is acknowledged only after delivery')
+  assert.equal(counts.get('wait-sibling'), 2)
   await until(async () => !(await dto('exec-bad')).busy && !(await dto('wait-sibling')).busy, 'final resumed recipients idle')
   const executed = (await readFile(join(fixture.work, 'deletion-executions'), 'utf8')).trim().split('\n').sort(); assert.deepEqual(executed, ['exec-bad', 'exec-finished', 'exec-live'])
   assert.equal(await readFile(independent, 'utf8'), '{"status":"active","ownerSessionId":"root","relatedManagedSessions":["root"]}'); assert.deepEqual(errors, [])
   await writeFile(join(fixture.root, 'provider-records.json'), JSON.stringify(records.map(({ body, key, n, planning, closed }) => ({ body, key, n, planning, closed }))))
   await writeFile(join(fixture.root, 'frames.json'), JSON.stringify(frames)); await fixture.stop()
-  console.log(JSON.stringify({ ok: true, root: fixture.root, requests: records.length, hostPids: fixture.hostPids, shellPids: shells, coldSurvivors: coldBytes.size }))
-} finally {
+  console.log(JSON.stringify({ ok: true, root: fixture.root, requests: records.length, hostPids: fixture.hostPids, shellPids: shells, coldSurvivors: coldBytes.size, localRecoveryIsolation: true, missingAuthorityNotRebuilt: true, healthyDeadlineContinues: true, failedExecNotAcknowledged: true, repairedCompletionWithoutReplay: true }))
+} catch (error) { console.error(fixture.output); throw error } finally {
   await writeFile(join(fixture.root, 'owned-hosts.json'), JSON.stringify({ root: fixture.root, hostPids: fixture.hostPids, shellPids: shells })).catch(() => {})
   await writeFile(join(fixture.root, 'provider-records.json'), JSON.stringify(records.map(({ body, key, n, planning, closed }) => ({ body, key, n, planning, closed })))).catch(() => {})
   console.log('Owned deletion hosts: ' + JSON.stringify({ root: fixture.root, hostPids: fixture.hostPids, shellPids: shells }))
