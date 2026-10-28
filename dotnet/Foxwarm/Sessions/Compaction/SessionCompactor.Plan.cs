@@ -213,63 +213,45 @@ internal sealed partial class SessionCompactor
                     AppendRejectedCalls(detached, calls, prompt);
                     continue;
                 }
+                var submitted = calls[0]!;
+                var controlledPlan = ToolCallControls.Plan([submitted])[0];
+                if (controlledPlan.Preset is not null)
+                {
+                    AppendToolFeedback(detached, submitted, controlledPlan.Preset.ToJsonString());
+                    continue;
+                }
+                JsonObject repairInput = submitted;
+                var submittedPendingFile = false;
                 try
                 {
-                    if (calls[0]?["argsParseError"] is JsonNode)
-                        throw new CompactPlanInvalidException(
-                            "submit_compact_plan arguments must be valid JSON."
-                        );
-                    var args = calls[0]?["args"] as JsonObject ?? new JsonObject();
-                    if (args.ContainsKey("argsFilePath"))
+                    var args = CompactPlanInput.Arguments(controlledPlan.Call);
+                    if (CompactPlanInput.FilePath(args) is string path)
                     {
-                        if (
-                            args.Count != 1
-                            || SessionWait.Text(args["argsFilePath"]) is not string path
-                            || path.Length == 0
-                        )
-                            throw new CompactPlanInvalidException(
-                                "Supply argsFilePath alone, or direct plan fields without argsFilePath."
-                            );
-                        if (repairFile is null)
-                            throw new CompactPlanInvalidException(
-                                "No repair file is pending for this compact operation."
-                            );
                         string text;
-                        try
+                        if (repairFile is not null && path == repairFile.FilePath)
                         {
+                            submittedPendingFile = true;
                             text = await repairFile.ReadAsync(path, cancellationToken);
                         }
-                        catch (Exception readError)
-                            when (readError
-                                    is InvalidDataException
-                                        or IOException
-                                        or UnauthorizedAccessException
-                            )
+                        else
                         {
-                            throw new CompactPlanInvalidException(
-                                "The repair file could not be read: " + readError.Message
-                            );
-                        }
-                        JsonObject parsed;
-                        try
-                        {
-                            parsed =
-                                JsonNode.Parse(text) as JsonObject
-                                ?? throw new CompactPlanInvalidException(
-                                    "The repair file must contain valid JSON with a top-level object."
+                            var manager =
+                                sessions
+                                ?? throw new NotSupportedException(
+                                    "Plan file input requires a hosted SessionManager."
                                 );
-                        }
-                        catch (JsonException parseError)
-                        {
-                            throw new CompactPlanInvalidException(
-                                "The repair file must contain valid JSON: " + parseError.Message
+                            var placement = manager.ExecutionPlacement(hosted);
+                            var files = new CompactPlanFiles(
+                                manager,
+                                hosted,
+                                placement.Node,
+                                placement.Cwd,
+                                manager.IdentityWorkspace(hosted)
                             );
+                            text = await files.ReadAsync(path, cancellationToken);
                         }
-                        if (parsed.ContainsKey("argsFilePath"))
-                            throw new CompactPlanInvalidException(
-                                "The repair file must contain direct plan fields, not argsFilePath."
-                            );
-                        args = parsed;
+                        repairInput = new JsonObject { ["rawArgsText"] = text };
+                        args = CompactPlanInput.ParseFile(text);
                     }
                     var plan = CompactPlanValidator.Validate(args, candidates);
                     var messages = new JsonArray();
@@ -290,14 +272,12 @@ internal sealed partial class SessionCompactor
                 catch (CompactPlanInvalidException error)
                 {
                     prompt = PlanRejected(error.Message, repairFile);
-                    AppendRejectedCalls(detached, calls, prompt);
-                    var submittedArgs = calls[0]!["args"] as JsonObject;
-                    if (repairFile is null && submittedArgs?.ContainsKey("argsFilePath") != true)
+                    if (!submittedPendingFile)
                     {
                         try
                         {
-                            repairFile = await CompactPlanRepairFile.CreateAsync(
-                                calls[0]!,
+                            var replacement = await CompactPlanRepairFile.CreateAsync(
+                                repairInput,
                                 sessions
                                     ?? throw new NotSupportedException(
                                         "Compact repair requires a hosted SessionManager."
@@ -305,6 +285,9 @@ internal sealed partial class SessionCompactor
                                 hosted,
                                 cancellationToken
                             );
+                            if (repairFile is not null)
+                                await repairFile.DisposeAsync();
+                            repairFile = replacement;
                             prompt = PlanRejected(error.Message, repairFile);
                         }
                         catch (Exception saveError)
@@ -314,11 +297,36 @@ internal sealed partial class SessionCompactor
                                         or UnauthorizedAccessException
                                         or ArgumentException
                                         or NotSupportedException
+                                        or ToolAuthorizationDeniedException
                             )
                         {
-                            prompt = PlanRejected(saveError.Message, null);
+                            prompt =
+                                PlanRejected(error.Message, null)
+                                + " Plan file staging failed: "
+                                + saveError.Message;
                         }
                     }
+                    AppendRejectedCalls(detached, calls, prompt);
+                }
+                catch (Exception error)
+                    when (error
+                            is InvalidDataException
+                                or IOException
+                                or UnauthorizedAccessException
+                                or ArgumentException
+                                or NotSupportedException
+                                or ToolAuthorizationDeniedException
+                    )
+                {
+                    prompt = "Plan file input failed: " + error.Message;
+                    AppendRejectedCalls(
+                        detached,
+                        calls,
+                        prompt,
+                        error is ToolAuthorizationDeniedException
+                            ? "tool_authorization_denied"
+                            : "tool_io_error"
+                    );
                 }
             }
         }
@@ -335,7 +343,7 @@ internal sealed partial class SessionCompactor
     private static string RepairInstructions(CompactPlanRepairFile? repairFile) =>
         repairFile is null
             ? "Submit corrected direct plan fields with submit_compact_plan."
-            : $"Repair the JSON arguments in {JsonSerializer.Serialize(repairFile.FilePath)} using edit or apply_patch (one update only). Then call submit_compact_plan by itself with {{\"argsFilePath\":{JsonSerializer.Serialize(repairFile.FilePath)}}}. Only this exact file is available for repair; ordinary tool permissions still apply. Current file preview (beginning/end):\n{repairFile.Preview()}\n{(repairFile.StructuredFallback ? "This file was saved by serializing the provider's structured arguments." : "This file was saved from the original provider arguments.")}";
+            : $"{CompactPlanInput.RepairGuidance} Repair the JSON arguments in {JsonSerializer.Serialize(repairFile.FilePath)} (nodeId={JsonSerializer.Serialize(repairFile.Node)}, cwd={JsonSerializer.Serialize(repairFile.Cwd)}) using edit or apply_patch (one update only). Then call submit_compact_plan by itself with {{\"argsFilePath\":{JsonSerializer.Serialize(repairFile.FilePath)}}}. Only this exact file is available for repair; ordinary tool permissions still apply. Current file preview (beginning/end):\n{repairFile.Preview()}\n{(repairFile.StructuredFallback ? "This file was saved by serializing the provider's structured arguments." : "This file was saved from the original provider arguments.")}";
 
     private static string PlanRejected(string reason, CompactPlanRepairFile? repairFile) =>
         repairFile is null
@@ -373,7 +381,8 @@ internal sealed partial class SessionCompactor
     private static void AppendRejectedCalls(
         List<JsonObject> history,
         IEnumerable<JsonObject?> calls,
-        string feedback
+        string feedback,
+        string errorType = "compact_plan_invalid"
     )
     {
         var parts = new JsonArray();
@@ -393,7 +402,7 @@ internal sealed partial class SessionCompactor
                         {
                             ["error"] = new JsonObject
                             {
-                                ["type"] = "compact_plan_invalid",
+                                ["type"] = errorType,
                                 ["message"] = feedback,
                             },
                         },

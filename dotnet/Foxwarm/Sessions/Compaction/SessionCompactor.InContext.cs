@@ -8,10 +8,6 @@ internal sealed partial class SessionCompactor
 
     internal JsonObject SubmitInContext(JsonObject args, long assistantSeq, string callId)
     {
-        if (args.ContainsKey("argsFilePath"))
-            throw new CompactPlanInvalidException(
-                "In-context compaction accepts direct plan fields, not argsFilePath."
-            );
         if (hosted.Entry.HistoryMutation)
             throw new InvalidOperationException("Session history change is in progress.");
         using var admission = hosted.Entry.AdmitMutation();

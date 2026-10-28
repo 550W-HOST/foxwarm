@@ -376,31 +376,21 @@ public sealed partial class NodeFileTransferTests
         var reply = await SourceReadReply(f, file);
         Assert.Equal("\ufffd", SessionWait.Text(reply["content"]));
         Assert.Equal(1, SessionWait.Number(reply["sizeBytes"]));
-        await using var mcp = new Foxwarm.McpClient(f.Data);
-        var tools = SourceTools(f, mcp);
         var budget = new Foxwarm.ToolScript.ToolScriptDataBudget(1);
         long charged = 0;
-        var reader = typeof(SessionToolExecutor).GetMethod(
-            "ReadResidentSourceAsync",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance
-        )!;
-        var running =
-            (Task<Foxwarm.Nodes.NodeConnectionHub.TransferFile>)
-                reader.Invoke(
-                    tools,
-                    [
-                        "resident",
-                        "invalid-utf8.txt",
-                        null,
-                        new WorkspaceTools(f.Work),
-                        CancellationToken.None,
-                        new Action<long>(size =>
-                        {
-                            charged = size;
-                            budget.Charge(size);
-                        }),
-                    ]
-                )!;
+        var running = f.Manager.ReadResidentSourceAsync(
+            f.Owner,
+            "resident",
+            "invalid-utf8.txt",
+            null,
+            new WorkspaceTools(f.Work),
+            CancellationToken.None,
+            size =>
+            {
+                charged = size;
+                budget.Charge(size);
+            }
+        );
         await ReplyToSourceRead(socket, reply);
         await Assert.ThrowsAsync<Foxwarm.ToolScript.ToolScriptDataLimitException>(async () =>
             await running
