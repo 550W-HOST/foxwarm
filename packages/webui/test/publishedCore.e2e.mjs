@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 import { until } from './mainHostFixture.mjs'
+import { publishedToolOutcomes } from './publishedToolOutcomes.mjs'
 
 const payload = process.env.FOXWARM_PUBLISHED_CORE
 assert(payload, 'Set FOXWARM_PUBLISHED_CORE to an owned complete Core publish directory.')
@@ -196,16 +197,6 @@ try {
     }
   }
   const messages = qualificationHistory?.messages || []
-  const responses = messages.flatMap(row => row.parts || []).map(part => part.functionResponse).filter(Boolean)
-  const toolState = response => {
-    if (!response) return undefined
-    const result = response.response
-    const failure = result?.error
-    return {
-      id: response.tool_use_id, name: response.name, status: result?.status || (failure ? 'error' : 'completed'),
-      ...(failure ? { error: { type: failure.type, message: String(failure.message || failure).slice(0, 1500) } } : {}),
-    }
-  }
   const lastCall = messages.flatMap(row => row.parts || []).findLast(part => part.functionCall)?.functionCall
   const lastNotice = messages.findLast(row => row.__meta?.sessionNotice || row.__meta?.retry?.final)
   console.error('Published qualification diagnostics:\n' + JSON.stringify({
@@ -219,8 +210,7 @@ try {
       },
     },
     lastCall: lastCall && { id: lastCall.id, name: lastCall.name },
-    lastTool: toolState(responses.at(-1)),
-    lastToolFailure: toolState(responses.findLast(response => response.response?.error || response.response?.status === 'failed')),
+    toolOutcomes: publishedToolOutcomes(messages),
     lastNotice: lastNotice && {
       type: lastNotice.__meta.noticeType,
       text: lastNotice.parts?.map(part => part.text || '').join('').slice(0, 1500),
