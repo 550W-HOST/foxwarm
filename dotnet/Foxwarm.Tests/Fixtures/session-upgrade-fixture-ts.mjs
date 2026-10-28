@@ -19,9 +19,11 @@ const store = new SessionWorkerStore(path.join(root, 'state/session-runtime.sqli
 const catalog = new SessionCatalogStore(path.join(root, 'state/catalog.sqlite'));
 store.open();
 catalog.initializeEmpty();
-const session = { id: 'retained', agent: 'main', history: [], persistentMemorySnapshot: 'Synthetic retained prompt',
+const session = { id: 'retained', agent: 'main',
+  history: [{ role: 'user', parts: [{ text: 'Synthetic retained history.' }], __meta: { seq: 1, timestamp: 1000 } }],
+  nextMessageSeq: 2, persistentMemorySnapshot: 'Synthetic retained prompt',
   systemPromptFiles: [], stats: { totalCachedTokens: 0, totalInputTokens: 0, totalOutputTokens: 0, lastUsage: null },
-  busy: false, queue: [], meta: { lastMessageTime: 0 }, lastAppliedMailboxId: 0 };
+  busy: false, queue: [], meta: { lastMessageTime: 1000, messageCount: 1 }, lastAppliedMailboxId: 0 };
 const identity = { sessionId: session.id, incarnationId: 'synthetic-incarnation', generation: 1 };
 store.beginGeneration(session.id, identity.incarnationId);
 store.registerCandidate(session.id, identity.generation, identity.incarnationId, process.pid, 'synthetic-process-identity');
