@@ -96,8 +96,9 @@ internal sealed partial class SessionCompactor
             candidates.InContext
         );
         history.AddRange(live.History.Skip(candidates.Split));
-        history.RemoveAll(record => record.Sequence is not null
-            && CompactCandidateBuilder.Completion(record.ToJson()));
+        history.RemoveAll(record =>
+            record.Sequence is not null && CompactCandidateBuilder.Completion(record.ToJson())
+        );
         var consumed = original.History.Take(candidates.Split);
         if (candidates.InContext)
             consumed = consumed.Where(
@@ -175,7 +176,10 @@ internal sealed partial class SessionCompactor
             var row = record.ToJson();
             // These active records have no recorded Archive identity. Keep their
             // content even when ordinary numbered presentation rows expire.
-            if (record.Sequence is null && CompactCandidateBuilder.Meta(row)?["contextBlock"] is null)
+            if (
+                record.Sequence is null
+                && CompactCandidateBuilder.Meta(row)?["contextBlock"] is null
+            )
             {
                 output.Add(record);
                 continue;

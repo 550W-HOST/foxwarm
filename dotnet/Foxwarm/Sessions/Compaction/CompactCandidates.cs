@@ -432,14 +432,20 @@ internal static class CompactCandidateBuilder
             for (var next = start + 1; next < history.Count; next++)
             {
                 var row = history[next];
-                if (Meta(row)?["contextBlock"] is not null
-                    || Role(row) != "tool" && !Transparent(row))
+                if (
+                    Meta(row)?["contextBlock"] is not null
+                    || Role(row) != "tool" && !Transparent(row)
+                )
                     break;
                 if (Role(row) == "tool")
                     end = next;
             }
-            if (end > start && Enumerable.Range(start, end - start + 1)
-                .Any(index => Number(Meta(history[index])?["seq"]) is not > 0))
+            if (
+                end > start
+                && Enumerable
+                    .Range(start, end - start + 1)
+                    .Any(index => Number(Meta(history[index])?["seq"]) is not > 0)
+            )
                 for (var index = start; index <= end; index++)
                     members.Add(index);
             start = end;

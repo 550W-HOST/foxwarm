@@ -502,8 +502,11 @@ internal sealed partial class SessionCompactor
                 && candidates.Preserved.Count == 0
                 && !candidates
                     .History.Take(candidates.Split)
-                    .Any(row => CompactCandidateBuilder.Number(CompactCandidateBuilder.Meta(row)?["seq"]) is > 0
-                        && !CompactCandidateBuilder.Visible(row))
+                    .Any(row =>
+                        CompactCandidateBuilder.Number(CompactCandidateBuilder.Meta(row)?["seq"])
+                            is > 0
+                        && !CompactCandidateBuilder.Visible(row)
+                    )
         )
             return;
         run.Plan =
