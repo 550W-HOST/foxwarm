@@ -31,7 +31,10 @@ public sealed class WebUiResourceBoundaryTests
             selected.TrySetResult();
             Assert.True(resume.Wait(TimeSpan.FromSeconds(10)));
         });
-        using var heldRequest = new HttpRequestMessage(HttpMethod.Get, "api/sessions/asset-owner/history");
+        using var heldRequest = new HttpRequestMessage(
+            HttpMethod.Get,
+            "api/sessions/asset-owner/history"
+        );
         heldRequest.Headers.Add("X-Lifetime-Hold", "yes");
         var reading = f.Viewer.SendAsync(heldRequest);
         await f.LifetimeReached.Task.WaitAsync(TimeSpan.FromSeconds(10));
@@ -40,16 +43,29 @@ public sealed class WebUiResourceBoundaryTests
             if (operation == "move")
             {
                 var owner = (await f.Runtime.GetOwnerAsync("asset-owner"))!;
-                await f.Manager.MoveIdentityAsync(owner, new JsonObject { ["newSessionId"] = "moved" });
+                await f.Manager.MoveIdentityAsync(
+                    owner,
+                    new JsonObject { ["newSessionId"] = "moved" }
+                );
             }
             else
             {
-                using var response = operation == "delete"
-                    ? await f.Admin.DeleteAsync("api/sessions/asset-owner")
-                    : await f.Admin.PostAsJsonAsync("api/setup/config", new { yaml = Fixture.AppYaml("[survivor]") });
+                using var response =
+                    operation == "delete"
+                        ? await f.Admin.DeleteAsync("api/sessions/asset-owner")
+                        : await f.Admin.PostAsJsonAsync(
+                            "api/setup/config",
+                            new { yaml = Fixture.AppYaml("[survivor]") }
+                        );
                 var body = await response.Content.ReadAsStringAsync();
-                Assert.True(response.StatusCode == HttpStatusCode.OK, $"{operation}: {(int)response.StatusCode} {body}");
-                Assert.DoesNotContain("access.connections", JsonNode.Parse(body)?["notApplied"]?.ToString() ?? "");
+                Assert.True(
+                    response.StatusCode == HttpStatusCode.OK,
+                    $"{operation}: {(int)response.StatusCode} {body}"
+                );
+                Assert.DoesNotContain(
+                    "access.connections",
+                    JsonNode.Parse(body)?["notApplied"]?.ToString() ?? ""
+                );
             }
         });
         try
@@ -68,11 +84,17 @@ public sealed class WebUiResourceBoundaryTests
             resume.Set();
         }
         await changing.WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.Equal(HttpStatusCode.OK, (await f.Viewer.GetAsync("api/sessions/survivor/history")).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await f.Viewer.GetAsync("api/sessions/survivor/history")).StatusCode
+        );
         if (operation == "delete")
             Assert.Null(f.Runtime.Catalog.Get("asset-owner"));
         if (operation == "move")
-            Assert.Equal("moved", SessionCatalog.Text(f.Runtime.Catalog.Resolve("asset-owner")["sessionId"]));
+            Assert.Equal(
+                "moved",
+                SessionCatalog.Text(f.Runtime.Catalog.Resolve("asset-owner")["sessionId"])
+            );
     }
 
     private static async Task WaitForContextDisposal(HttpContext context)
@@ -311,8 +333,12 @@ public sealed class WebUiResourceBoundaryTests
         private Foxwarm.Terminal.TerminalRegistry terminals = null!;
         private HttpServer server = null!;
         private WebUiAccess? lifetimeAccess;
-        internal readonly TaskCompletionSource LifetimeReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        internal readonly TaskCompletionSource FinishLifetime = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly TaskCompletionSource LifetimeReached = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        internal readonly TaskCompletionSource FinishLifetime = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         internal HttpContext? LifetimeContext;
         internal HttpClient Admin = null!,
             Viewer = null!,
