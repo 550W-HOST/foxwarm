@@ -333,6 +333,15 @@ export const renderMarkdownSegments = (text: string): Array<Extract<MarkdownRend
   renderMarkdownSegmentsWithSanitizer(text)
 )
 
+// This parser-only wrapper groups preceding siblings, not authored nesting.
+// Expose those siblings before projecting interactive blocks so later math
+// cannot turn an already rendered artifact/Mermaid block into literal HTML.
+const assistantTopLevelTokens = (tokens: Token[]): Token[] => tokens.flatMap(token =>
+  token.type === 'displayMathPrefix' && Array.isArray(token.tokens)
+    ? assistantTopLevelTokens(token.tokens)
+    : [token],
+)
+
 export const renderAssistantMarkdownSegmentsWithSanitizer = (
   text: string,
   sanitizer?: HtmlSanitizer,
@@ -340,7 +349,7 @@ export const renderAssistantMarkdownSegmentsWithSanitizer = (
 ): MarkdownRenderSegment[] => {
   const segments: MarkdownRenderSegment[] = []
 
-  for (const [tokenIndex, token] of markdown.lexer(text).entries()) {
+  for (const [tokenIndex, token] of assistantTopLevelTokens(markdown.lexer(text)).entries()) {
     if (artifacts?.enabled && token.type === 'artifactReference') {
       if (token.reference) { segments.push({ kind: 'artifact', tokenIndex, reference: token.reference }); continue }
       if (artifacts.streaming && token.pending) continue
@@ -373,5 +382,5 @@ export const renderAssistantMarkdownSegments = (text: string, artifacts?: { enab
 /** Reuse the same top-level lexer contract for reply-tail deduplication. */
 export function assistantArtifactReferences(text: string): ArtifactReference[] {
   if (!text.includes('<foxwarm-artifact')) return []
-  return markdown.lexer(text).flatMap(token => token.type === 'artifactReference' && token.reference ? [token.reference as ArtifactReference] : [])
+  return assistantTopLevelTokens(markdown.lexer(text)).flatMap(token => token.type === 'artifactReference' && token.reference ? [token.reference as ArtifactReference] : [])
 }

@@ -807,7 +807,7 @@ const WebSearchCitationLinks = memo(function WebSearchCitationLinks({ annotation
 
   if (citations.length === 0) return null
   return (
-    <div className="my-2 flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-xs text-fw-text-muted" onClick={handleMarkdownLinkClick}>
+    <div className="my-2 flex min-w-0 max-w-full flex-col items-start gap-1 text-xs text-fw-text-muted" onClick={handleMarkdownLinkClick}>
       <span className="font-semibold">Sources:</span>
       {citations.map((citation, index) => (
         <a
@@ -817,7 +817,7 @@ const WebSearchCitationLinks = memo(function WebSearchCitationLinks({ annotation
           target="_blank"
           rel="noopener noreferrer"
           title={citation.title}
-          className="max-w-full truncate text-fw-accent underline hover:text-fw-accent dark:text-fw-accent dark:hover:text-fw-accent"
+          className="max-w-full whitespace-normal [overflow-wrap:anywhere] text-fw-accent underline hover:text-fw-accent dark:text-fw-accent dark:hover:text-fw-accent"
         >
           [{index + 1}] {citation.title}
         </a>

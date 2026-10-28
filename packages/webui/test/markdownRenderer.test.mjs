@@ -23,6 +23,7 @@ await esbuild.build({
 })
 
 const {
+  assistantArtifactReferences,
   renderAssistantMarkdownSegmentsWithSanitizer,
   renderMarkdownSegmentsWithSanitizer,
   renderMarkdownWithSanitizer,
@@ -361,4 +362,29 @@ test('mixed top-level and nested specials extract only complete top-level tokens
 
   assert.deepEqual(segments.map(segment => segment.kind), ['html', 'mermaid', 'html', 'latex'])
   assert.match(segments[2].html, /^<ul>[\s\S]*language-mermaid[\s\S]*<\/ul>\n$/)
+})
+
+
+test('later display math preserves preceding artifact identity and reference projection', () => {
+  const marker = '<foxwarm-artifact id="art_00000000000000000000000000000001" revision="1" />'
+  const prefix = 'Before figure.\n\n' + marker + '\n\n*Caption.*\n\n'
+  const formula = '\\[\nx=1\n\\]'
+  const initial = renderAssistantMarkdownSegmentsWithSanitizer(prefix, identitySanitizer, {enabled:true,streaming:true})
+  const expected = initial.find(segment => segment.kind === 'artifact')
+  assert.ok(expected)
+  for (let length = 0; length <= formula.length; length++) {
+    const text = prefix + formula.slice(0, length)
+    const segments = renderAssistantMarkdownSegmentsWithSanitizer(text, identitySanitizer, {enabled:true,streaming:true})
+    assert.deepEqual(segments.filter(segment => segment.kind === 'artifact'), [expected])
+    assert.deepEqual(assistantArtifactReferences(text), [expected.reference])
+    assert.ok(!segments.some(segment => segment.kind === 'html' && segment.html.includes('&lt;foxwarm-artifact')))
+  }
+  const complete = renderAssistantMarkdownSegmentsWithSanitizer(prefix + formula + '\n\nAfter.', identitySanitizer, {enabled:true})
+  assert.deepEqual(complete.find(segment => segment.kind === 'artifact'), expected)
+  assert.equal(complete.filter(segment => segment.kind === 'latex').length, 1)
+  for (const nested of ['> ' + marker, '    ' + marker, '```xml\n' + marker + '\n```']) {
+    const text = nested + '\n\n' + formula
+    assert.deepEqual(assistantArtifactReferences(text), [])
+    assert.ok(!renderAssistantMarkdownSegmentsWithSanitizer(text, identitySanitizer, {enabled:true}).some(segment => segment.kind === 'artifact'))
+  }
 })

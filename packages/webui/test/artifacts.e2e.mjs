@@ -146,6 +146,11 @@ test('body references interleave chart/image/React with prose, keep stream state
   frame=await innerFrame(page);assert.equal(frame._id,frameId)
   await page.evaluate(text=>window.fixture.setMessages([{role:'model',parts:[{text}],__meta:{seq:12}}]),inlineText+' More streamed prose. Final.')
   frame=await innerFrame(page);assert.equal(frame._id,frameId)
+  await page.evaluate(()=>{window.savedArtifactImage=document.querySelector('.artifact-image-preview img')})
+  await page.evaluate(text=>window.fixture.setMessages([{role:'model',parts:[{text}],__meta:{seq:12,streaming:true}}]),inlineText+'\n\n\\[\nx=1\n\\]')
+  await page.waitForSelector('.foxwarm-special-block-latex')
+  frame=await innerFrame(page);assert.equal(frame._id,frameId,'later display math must not remount the running artifact')
+  assert.equal(await page.evaluate(()=>window.savedArtifactImage===document.querySelector('.artifact-image-preview img')),true,'later display math preserves the actual image DOM')
   if(process.env.FOXWARM_E2E_SCREENSHOT_DIR){
    await mkdir(process.env.FOXWARM_E2E_SCREENSHOT_DIR,{recursive:true})
    await page.evaluate(text=>window.fixture.setMessages([{role:'model',parts:[{text}],__meta:{seq:12}}]),inlineText)
