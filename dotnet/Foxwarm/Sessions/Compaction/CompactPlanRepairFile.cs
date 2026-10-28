@@ -121,7 +121,7 @@ internal sealed class CompactPlanRepairFile : IAsyncDisposable
                         or UnauthorizedAccessException
                         or ArgumentException
                         or NotSupportedException
-                        or ToolAuthorizationDeniedException
+                        or InvalidOperationException
                         or ToolAuthorizationUnavailableException
             )
         {

@@ -12,13 +12,13 @@ internal sealed partial class SessionToolExecutor
             return (JsonObject)call.DeepClone();
         if (name != "call_tool" || call["args"] is not JsonObject wrapper)
             return null;
-        if (
-            SessionWait.Text(wrapper["toolId"]) != "builtin:submit_compact_plan"
-            && !(
-                SessionWait.Text(wrapper["source"]) == "builtin"
-                && SessionWait.Text(wrapper["name"]) == "submit_compact_plan"
-            )
-        )
+        var toolId = SessionWait.Text(wrapper["toolId"]);
+        var compactTarget = toolId is { Length: > 0 }
+            ? toolId.StartsWith("builtin:", StringComparison.Ordinal)
+                && toolId[8..].Trim() == "submit_compact_plan"
+            : SessionWait.Text(wrapper["source"])?.Trim() == "builtin"
+                && SessionWait.Text(wrapper["name"]) == "submit_compact_plan";
+        if (!compactTarget)
             return null;
         if (wrapper.ContainsKey("args") && wrapper.ContainsKey("argsJson"))
             return null; // The dispatcher owns malformed wrapper arguments.

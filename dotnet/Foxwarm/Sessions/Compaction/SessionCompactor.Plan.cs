@@ -297,6 +297,7 @@ internal sealed partial class SessionCompactor
                                         or UnauthorizedAccessException
                                         or ArgumentException
                                         or NotSupportedException
+                                        or ToolAuthorizationDeniedException
                             )
                         {
                             prompt =
