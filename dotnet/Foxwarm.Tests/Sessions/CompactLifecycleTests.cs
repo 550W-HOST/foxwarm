@@ -68,8 +68,8 @@ public sealed partial class CompactLifecycleTests
                         ? null
                         : Directory
                             .EnumerateFiles(
-                                Path.Combine(work, ".temp"),
-                                "plan.json",
+                                Path.Combine(work, "tmp"),
+                                "compact-plan-*.json",
                                 SearchOption.AllDirectories
                             )
                             .Single();
@@ -156,11 +156,11 @@ public sealed partial class CompactLifecycleTests
                     );
                 }
                 else
-                    call = FunctionCall(
-                        "submit",
-                        "submit_compact_plan",
-                        new JsonObject { ["argsFilePath"] = path! }
-                    );
+                {
+                    var otherPath = Path.Combine(work, "other-plan.json");
+                    await File.WriteAllTextAsync(otherPath, new JsonObject { ["replaceAsBlocks"] = validBlocks }.ToJsonString());
+                    call = FunctionCall("submit", "submit_compact_plan", new JsonObject { ["argsFilePath"] = otherPath });
+                }
                 if (index == 5)
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(policyPath)!);
@@ -253,7 +253,7 @@ public sealed partial class CompactLifecycleTests
             "This file was saved from the original provider arguments.",
             (await peer.RequestAt(2)).Body
         );
-        Assert.Contains("repair file must contain valid JSON", (await peer.RequestAt(3)).Body);
+        Assert.Contains("plan file must contain valid JSON", (await peer.RequestAt(3)).Body);
         Assert.Contains("Compact repair canceled", (await peer.RequestAt(4)).Body);
         Assert.Contains("invalid_tool_control_argument", (await peer.RequestAt(6)).Body);
         Assert.Contains("Compact repair failed", (await peer.RequestAt(7)).Body);
@@ -315,8 +315,8 @@ public sealed partial class CompactLifecycleTests
                     .Contains("Compact arguments file updated", StringComparison.Ordinal)
         );
         Assert.Empty(
-            Directory.EnumerateDirectories(
-                Path.Combine(manager.IdentityWorkspace(owner).ToolDirectory, ".temp"),
+            Directory.EnumerateFiles(
+                Path.Combine(manager.IdentityWorkspace(owner).ToolDirectory, "tmp"),
                 "compact-plan-*"
             )
         );
@@ -405,8 +405,8 @@ public sealed partial class CompactLifecycleTests
         await owner.Compactor.DrainAsync().WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(2, peer.RequestCount);
         Assert.Empty(
-            Directory.EnumerateDirectories(
-                Path.Combine(manager.IdentityWorkspace(owner).ToolDirectory, ".temp"),
+            Directory.EnumerateFiles(
+                Path.Combine(manager.IdentityWorkspace(owner).ToolDirectory, "tmp"),
                 "compact-plan-*"
             )
         );

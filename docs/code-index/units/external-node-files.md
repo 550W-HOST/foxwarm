@@ -1,6 +1,6 @@
 # Unit: External Node file consumers
 
-Files: `dotnet/Foxwarm/Nodes/NodeConnectionHub.Files.cs`, `dotnet/Foxwarm/Sessions/SessionManager.NodeFiles.cs`
+Files: `dotnet/Foxwarm/Nodes/NodeConnectionHub.Files.cs`, `dotnet/Foxwarm/Sessions/SessionManager.NodeFiles.cs`, `dotnet/Foxwarm/Sessions/SessionManager.FileSources.cs`
 
 ## Purpose
 
@@ -21,7 +21,7 @@ Copy/image/send use their real builtin identities, not additional ordinary `node
 
 ToolScript captures source Node/cwd before starter authorization, and binds starter paths, source-read authorization and the actual read to that capture. Omitted/current uses the invocation Node/cwd; another remote Node uses its own default, with authoritative absent cwd remaining absent. Explicit master uses Main path rules and the captured applicable owner cwd.
 
-Remote source first executes canonical programmatic `read` so official CLI approval or rejection settles before content is used. As in the Source resident adapter, a string `content` with `truncated:false`, nonnegative safe-integer `sizeBytes` and equal numeric `selectedBytes` is complete and is used directly, without rereading a possibly changed or removed file. Actual UTF-8 bytes are charged before encoding; reported sizes do not determine that charge. Incomplete, image and display-only replies retain the correlated complete-file transfer: the approved resolved path sidecar supplies its target, with captured-cwd fallback for older peers. Display output never substitutes for source content. ToolScript retains its existing materialization budget and strict UTF-8 decoding of the resulting bytes; complete text follows the Source reader's prior decoding.
+`SessionManager.ReadResidentSourceAsync` is shared by ToolScript, artifact publication and compaction plan input. Remote source first executes canonical programmatic `read` so official CLI approval or rejection settles before content is used. As in the Source resident adapter, a string `content` with `truncated:false`, nonnegative safe-integer `sizeBytes` and equal numeric `selectedBytes` is complete and is used directly, without rereading a possibly changed or removed file. Actual UTF-8 bytes are charged before encoding; reported sizes do not determine that charge. Incomplete, image and display-only replies retain the correlated complete-file transfer: the approved resolved path sidecar supplies its target, with captured-cwd fallback for older peers. Display output never substitutes for source content. ToolScript retains its existing materialization budget and strict UTF-8 decoding of the resulting bytes; complete text follows the Source reader's prior decoding.
 
 Source selection does not freeze nested tools' live-owner routing. Main source retains ordinary read policy and isolated own-Agent path restrictions; unrelated isolated remote sources are rejected. Administrator attachment ingress uses the actual target owner and staging/path checks, not a fabricated model caller.
 

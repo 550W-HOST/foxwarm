@@ -22,8 +22,8 @@ self-compaction routine.
 2. Preserve the intent, permissions, decisions, unresolved issues and identifiers
    needed to continue the work. Write a shorter source-bound summary. Leave out
    detail that can be retrieved later, while making that recall need recognizable.
-3. Submit ordinary direct plan fields to `submit_compact_plan`, with the extra
-   top-level boolean **`inContext: true`**. This opt-in field is intentionally not
+3. Supply either direct plan fields or `argsFilePath` to `submit_compact_plan`,
+   with the extra top-level boolean **`inContext: true`**. This opt-in field is intentionally not
    advertised in the tool schema. It does not change tool permissions or require
    a recorded skill load.
 
@@ -49,9 +49,10 @@ coverage quotas do not apply. Structural range checks still apply:
   previously preserved active entries and must name every exchange member.
 
 A standalone submission is easier to inspect, but ordinary foreground batches
-may contain other tools. Direct calls and `call_tool` are supported. Calls inside
-native ToolScript, timers/unattended execution and external invocation are outside
-this version. Submission applies only to the current Session.
+may contain other tools. Use `submit_compact_plan` directly when it is available
+in your tool list. `call_tool` is also supported; it is not required for this
+workflow. Calls inside native ToolScript, timers/unattended execution and external
+invocation are outside this version. Submission applies only to the current Session.
 
 ## Direct examples
 
@@ -74,9 +75,17 @@ The identifiers below are illustrative; confirm your own active sources first.
 
 To shorten active L2 block B#48, use an entry with `level: 3`,
 `sourceKind: "block"`, `sourceStart: 48`, `sourceEnd: 48` and your summary.
-The array may also be JSON-encoded as the existing tool permits. In-context
-submission uses direct fields, not `argsFilePath`; that field remains reserved
-for the dedicated compactor's own pending repair file.
+The array may also be JSON-encoded as the existing tool permits. File input uses
+the same source validation and application rules as direct input. If a rejected
+submission returns a saved plan file, correct the reported error with `edit` or
+`apply_patch` and resubmit that file instead of regenerating the plan.
+
+```json
+{
+  "inContext": true,
+  "argsFilePath": "<plan file path>"
+}
+```
 
 ## Acceptance and application
 

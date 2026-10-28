@@ -6,22 +6,6 @@ namespace Foxwarm.Tools;
 
 internal sealed partial class SessionToolExecutor
 {
-    private static string RemoteSourcePath(string file, string? cwd)
-    {
-        // Only join strings here: the Node owns normalization, home/tokens and OS path rules.
-        if (
-            string.IsNullOrWhiteSpace(cwd)
-            || file.StartsWith('/')
-            || file.StartsWith('\\')
-            || file.StartsWith('~')
-            || file.StartsWith('$')
-            || file.Length > 1 && file[1] == ':'
-        )
-            return file;
-        var separator = cwd.Contains('\\') ? "\\" : "/";
-        return cwd.TrimEnd('/', '\\') + separator + file;
-    }
-
     private sealed record ScriptScope(
         string LiteralOwner,
         ToolScriptDataBudget Budget,
@@ -150,7 +134,7 @@ internal sealed partial class SessionToolExecutor
                             new System.Text.UTF8Encoding(false, true).GetString(sourceBytes)
                         );
                     }
-                    var transferred = await ReadResidentSourceAsync(
+                    var transferred = await sessions.ReadResidentSourceAsync(hosted,
                         node,
                         file,
                         cwd,
