@@ -19,24 +19,30 @@ public sealed partial class InContextCompactTests
         var submitted = Plan(9999).ToJsonString();
         if (malformed)
             submitted = submitted[..^1];
-        await using var f = await Fixture.CreateAsync(2, (_, index, _) =>
-        {
-            if (index > 0)
-                return Task.FromResult(Final());
-            var wrapper = new JsonObject { ["argsJson"] = submitted };
-            if (toolId is not null)
-                wrapper["toolId"] = toolId;
-            else
+        await using var f = await Fixture.CreateAsync(
+            2,
+            (_, index, _) =>
             {
-                wrapper["source"] = source;
-                wrapper["name"] = "submit_compact_plan";
+                if (index > 0)
+                    return Task.FromResult(Final());
+                var wrapper = new JsonObject { ["argsJson"] = submitted };
+                if (toolId is not null)
+                    wrapper["toolId"] = toolId;
+                else
+                {
+                    wrapper["source"] = source;
+                    wrapper["name"] = "submit_compact_plan";
+                }
+                return Task.FromResult(new JsonArray(Call("unified", "call_tool", wrapper)));
             }
-            return Task.FromResult(new JsonArray(Call("unified", "call_tool", wrapper)));
-        });
+        );
         await f.RunAsync();
         var result = f.ToolResponse("unified")["response"]!;
         Assert.Equal("compact_plan_invalid", SessionWait.Text(result["error"]?["type"]));
-        Assert.Equal(submitted, await File.ReadAllTextAsync(result["argsFilePath"]!.GetValue<string>()));
+        Assert.Equal(
+            submitted,
+            await File.ReadAllTextAsync(result["argsFilePath"]!.GetValue<string>())
+        );
         Assert.Equal(0, f.Owner.Entry.Snapshot().HistoryVersion);
     }
 }

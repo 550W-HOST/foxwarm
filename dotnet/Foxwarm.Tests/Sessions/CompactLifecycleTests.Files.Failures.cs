@@ -59,10 +59,7 @@ public sealed partial class CompactLifecycleTests
                 JsonObject call;
                 if (index == 0)
                 {
-                    await File.WriteAllTextAsync(
-                        inputFile,
-                        "{\"replaceAsBlocks\":"
-                    );
+                    await File.WriteAllTextAsync(inputFile, "{\"replaceAsBlocks\":");
                     call = FunctionCall(
                         "file-first",
                         "submit_compact_plan",
@@ -71,11 +68,16 @@ public sealed partial class CompactLifecycleTests
                 }
                 else
                 {
-                    Assert.NotEmpty(Directory.EnumerateFiles(repairDirectory, "compact-plan-*.json"));
+                    Assert.NotEmpty(
+                        Directory.EnumerateFiles(repairDirectory, "compact-plan-*.json")
+                    );
                     // External provider discovery now reports a different environment; the captured Node is unavailable.
                     await File.WriteAllTextAsync(Path.Combine(target, "node-id"), "gone");
-                    call = FunctionCall("valid-after-removal", "submit_compact_plan",
-                        new JsonObject { ["replaceAsBlocks"] = blocks.DeepClone() });
+                    call = FunctionCall(
+                        "valid-after-removal",
+                        "submit_compact_plan",
+                        new JsonObject { ["replaceAsBlocks"] = blocks.DeepClone() }
+                    );
                 }
                 var payload = new JsonObject
                 {
@@ -114,9 +116,7 @@ public sealed partial class CompactLifecycleTests
                 + "\n    models: [wire]\n    asyncCompact: false\n"
         );
         var models = new HostModels(
-            new ModelConfiguration(
-                HostPaths.ForDataRoot(data, temp.Path, environment: _ => null)
-            )
+            new ModelConfiguration(HostPaths.ForDataRoot(data, temp.Path, environment: _ => null))
         );
         await using var manager = new SessionManager(data, work, options, models);
         await manager.LoadMainHostAsync();
@@ -149,10 +149,13 @@ public sealed partial class CompactLifecycleTests
         Assert.False(Directory.Exists(Path.Combine(work, "tmp")));
         Assert.Equal("fixture/target", manager.CurrentNode(owner));
     }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Staging_denial_retains_rejection_but_unavailable_policy_stops_planning(bool unavailable)
+    public async Task Staging_denial_retains_rejection_but_unavailable_policy_stops_planning(
+        bool unavailable
+    )
     {
         using var temp = new TempDirectory();
         var data = Path.Combine(temp.Path, "data");
@@ -160,53 +163,103 @@ public sealed partial class CompactLifecycleTests
         Directory.CreateDirectory(work);
         var policy = Path.Combine(data, "state", "tool-authorization.yaml");
         SessionManager? managerForPeer = null;
-        await using var peer = new ScriptedResponsesSequenceServer(2, async (index, stream, captured) =>
-        {
-            var request = JsonNode.Parse(captured.Body)!;
-            var text = request.ToJsonString();
-            var matches = Regex.Matches(string.Join("\n", request["input"]!.AsArray().OfType<JsonObject>()
-                .SelectMany(row => (row["content"] as JsonArray)?.OfType<JsonObject>() ?? [])
-                .Select(row => SessionWait.Text(row["text"]) ?? "")),
-                "^- M#(\\d+)(?:-#(\\d+))?\\s", RegexOptions.Multiline);
-            var last = matches[^1];
-            var blocks = new JsonArray(new JsonObject
+        await using var peer = new ScriptedResponsesSequenceServer(
+            2,
+            async (index, stream, captured) =>
             {
-                ["level"] = 1, ["sourceKind"] = "message",
-                ["sourceStart"] = long.Parse(matches[0].Groups[1].Value),
-                ["sourceEnd"] = long.Parse(last.Groups[2].Success ? last.Groups[2].Value : last.Groups[1].Value),
-                ["summary"] = "Corrected direct plan."
-            });
-            if (index == 1)
-            {
-                Assert.Contains("replaceAsBlocks must contain at least one block", text);
-                Assert.Contains("Plan file staging failed", text);
+                var request = JsonNode.Parse(captured.Body)!;
+                var text = request.ToJsonString();
+                var matches = Regex.Matches(
+                    string.Join(
+                        "\n",
+                        request["input"]!
+                            .AsArray()
+                            .OfType<JsonObject>()
+                            .SelectMany(row =>
+                                (row["content"] as JsonArray)?.OfType<JsonObject>() ?? []
+                            )
+                            .Select(row => SessionWait.Text(row["text"]) ?? "")
+                    ),
+                    "^- M#(\\d+)(?:-#(\\d+))?\\s",
+                    RegexOptions.Multiline
+                );
+                var last = matches[^1];
+                var blocks = new JsonArray(
+                    new JsonObject
+                    {
+                        ["level"] = 1,
+                        ["sourceKind"] = "message",
+                        ["sourceStart"] = long.Parse(matches[0].Groups[1].Value),
+                        ["sourceEnd"] = long.Parse(
+                            last.Groups[2].Success ? last.Groups[2].Value : last.Groups[1].Value
+                        ),
+                        ["summary"] = "Corrected direct plan.",
+                    }
+                );
+                if (index == 1)
+                {
+                    Assert.Contains("replaceAsBlocks must contain at least one block", text);
+                    Assert.Contains("Plan file staging failed", text);
+                }
+                if (index == 0)
+                {
+                    await File.WriteAllTextAsync(
+                        policy,
+                        unavailable
+                            ? "version: [invalid"
+                            : "version: 1\nrules: [{id: deny-plan-staging, action: deny, match: {tool: {source: node, name: write}}}]\n"
+                    );
+                    managerForPeer!.Authorization.Invalidate();
+                }
+                var output = new JsonArray(
+                    FunctionCall(
+                        "plan-" + index,
+                        "submit_compact_plan",
+                        new JsonObject
+                        {
+                            ["replaceAsBlocks"] = index == 0 ? new JsonArray() : blocks,
+                        }
+                    )
+                );
+                var payload = new JsonObject
+                {
+                    ["type"] = "response.completed",
+                    ["response"] = new JsonObject
+                    {
+                        ["id"] = "staging-" + index,
+                        ["output"] = output,
+                    },
+                };
+                await LoopbackResponsesServer.WriteResponseAsync(
+                    stream,
+                    200,
+                    "text/event-stream",
+                    Encoding.UTF8.GetBytes("data: " + payload.ToJsonString() + "\n\n")
+                );
             }
-            if (index == 0)
-            {
-                await File.WriteAllTextAsync(policy, unavailable ? "version: [invalid" : "version: 1\nrules: [{id: deny-plan-staging, action: deny, match: {tool: {source: node, name: write}}}]\n");
-                managerForPeer!.Authorization.Invalidate();
-            }
-            var output = new JsonArray(FunctionCall("plan-" + index, "submit_compact_plan",
-                new JsonObject { ["replaceAsBlocks"] = index == 0 ? new JsonArray() : blocks }));
-            var payload = new JsonObject
-            {
-                ["type"] = "response.completed",
-                ["response"] = new JsonObject { ["id"] = "staging-" + index, ["output"] = output }
-            };
-            await LoopbackResponsesServer.WriteResponseAsync(stream, 200, "text/event-stream",
-                Encoding.UTF8.GetBytes("data: " + payload.ToJsonString() + "\n\n"));
-        });
+        );
         var options = new ResponsesClientOptions(peer.BaseUri, "wire", "a/wire", "", "", 20000);
-        await using var manager = new SessionManager(data, work, options, HostModels.ForTest(options));
+        await using var manager = new SessionManager(
+            data,
+            work,
+            options,
+            HostModels.ForTest(options)
+        );
         managerForPeer = manager;
         await manager.LoadMainHostAsync();
         var owner = await manager.CreateNamedAsync("main", "denied-staging", null, null);
         owner.Registry.TriggerOverride = _ => Task.CompletedTask;
         for (var i = 0; i < 8; i++)
-            await ForkClearLifecycleTests.AppendAsync(owner, new JsonObject
-            {
-                ["role"] = "user", ["parts"] = new JsonArray(new JsonObject { ["text"] = "source " + i + new string('x', 5000) })
-            });
+            await ForkClearLifecycleTests.AppendAsync(
+                owner,
+                new JsonObject
+                {
+                    ["role"] = "user",
+                    ["parts"] = new JsonArray(
+                        new JsonObject { ["text"] = "source " + i + new string('x', 5000) }
+                    ),
+                }
+            );
         Assert.True((await owner.Compactor.StartManualAsync()).Started);
         await owner.Compactor.DrainAsync().WaitAsync(TimeSpan.FromSeconds(15));
         await owner.DrainAsync().WaitAsync(TimeSpan.FromSeconds(15));
@@ -214,6 +267,5 @@ public sealed partial class CompactLifecycleTests
         Assert.Equal(unavailable ? 0 : 1, owner.Entry.Snapshot().HistoryVersion);
         Assert.False(Directory.Exists(Path.Combine(work, "tmp")));
         Assert.Equal(unavailable ? 0 : 1, owner.Archive.ReadBlocks().Count);
-
     }
 }
