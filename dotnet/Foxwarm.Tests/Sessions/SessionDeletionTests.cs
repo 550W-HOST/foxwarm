@@ -136,9 +136,14 @@ public sealed class SessionDeletionTests
             authorityBytes[id] = await File.ReadAllTextAsync(Authority(temp.Path, id));
         await using var manager = Manager(temp.Path);
         await manager.LoadAsync();
-        var failure = await Assert.ThrowsAsync<SessionAuthorityUnavailableException>(() => manager.DeleteAsync("root", true));
+        var failure = await Assert.ThrowsAsync<SessionAuthorityUnavailableException>(() =>
+            manager.DeleteAsync("root", true)
+        );
         Assert.Equal("grand", failure.SessionId);
-        Assert.Equal(new[] { "child", "grand", "root" }, manager.Catalog.List().Select(row => row["id"]!.GetValue<string>()).Order());
+        Assert.Equal(
+            new[] { "child", "grand", "root" },
+            manager.Catalog.List().Select(row => row["id"]!.GetValue<string>()).Order()
+        );
         Assert.Equal("root", manager.Catalog.Get("child")!["parentSessionId"]!.GetValue<string>());
         Assert.Equal("child", manager.Catalog.Get("grand")!["parentSessionId"]!.GetValue<string>());
         foreach (var (id, bytes) in authorityBytes)
@@ -151,7 +156,9 @@ public sealed class SessionDeletionTests
             result["deletedSessionIds"]!.AsArray().Select(node => node!.GetValue<string>())
         );
         Assert.Empty(manager.Catalog.List());
-        Assert.Empty(JsonNode.Parse(await File.ReadAllTextAsync(channels))!["channels"]!.AsObject());
+        Assert.Empty(
+            JsonNode.Parse(await File.ReadAllTextAsync(channels))!["channels"]!.AsObject()
+        );
     }
 
     [Fact]

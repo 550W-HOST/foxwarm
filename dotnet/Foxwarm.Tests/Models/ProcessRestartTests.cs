@@ -222,7 +222,10 @@ public sealed class ProcessRestartTests
                 Assert.Equal(0, child.ExitCode);
                 output.WriteLine($"load-check {invalid} pid={child.Pid} exit={child.ExitCode}");
                 var rejected = JsonNode.Parse(await File.ReadAllTextAsync(caseResult))!;
-                Assert.Equal("SessionAuthorityUnavailableException", rejected["errorType"]!.GetValue<string>());
+                Assert.Equal(
+                    "SessionAuthorityUnavailableException",
+                    rejected["errorType"]!.GetValue<string>()
+                );
                 Assert.Equal("s", rejected["sessionId"]!.GetValue<string>());
                 Assert.Equal(invalid != "missing", File.Exists(authorityPath));
                 if (invalid == "corrupt")
@@ -230,7 +233,9 @@ public sealed class ProcessRestartTests
                 Assert.Equal(3, server.RequestCount);
                 Assert.Equal(
                     persisted.Archive.ReadMessages().Select(row => row.MessageJson),
-                    new PersistentSessionAuthorityStore(caseRoot, "s").Archive.ReadMessages().Select(row => row.MessageJson)
+                    new PersistentSessionAuthorityStore(caseRoot, "s")
+                        .Archive.ReadMessages()
+                        .Select(row => row.MessageJson)
                 );
             }
         }
