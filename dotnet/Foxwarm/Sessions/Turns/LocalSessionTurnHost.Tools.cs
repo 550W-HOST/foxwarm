@@ -245,8 +245,16 @@ public sealed partial class LocalSessionTurnHost
         {
             if (tools is SessionToolExecutor malformed)
                 malformed.BroadcastVerboseToolStart(call);
-            if (SessionWait.Text(call["name"]) == "submit_compact_plan" && tools is SessionToolExecutor compact)
-                return await compact.ExecuteAttributedAsync((JsonObject)call.DeepClone(), token, index, total);
+            if (
+                SessionWait.Text(call["name"]) == "submit_compact_plan"
+                && tools is SessionToolExecutor compact
+            )
+                return await compact.ExecuteAttributedAsync(
+                    (JsonObject)call.DeepClone(),
+                    token,
+                    index,
+                    total
+                );
             return new(UnsupportedTurnToolExecutor.ToolError("invalid_tool_arguments", error));
         }
         if (prepared is not null && tools is SessionToolExecutor executor)

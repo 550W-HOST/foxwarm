@@ -134,7 +134,8 @@ internal sealed partial class SessionToolExecutor
                             new System.Text.UTF8Encoding(false, true).GetString(sourceBytes)
                         );
                     }
-                    var transferred = await sessions.ReadResidentSourceAsync(hosted,
+                    var transferred = await sessions.ReadResidentSourceAsync(
+                        hosted,
                         node,
                         file,
                         cwd,

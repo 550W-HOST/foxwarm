@@ -125,7 +125,9 @@ internal sealed partial class SessionToolExecutor
                 boundRequests: true
             );
         else
-            bytes = (await sessions.ReadResidentSourceAsync(hosted, node, file, cwd, files, token)).Bytes;
+            bytes = (
+                await sessions.ReadResidentSourceAsync(hosted, node, file, cwd, files, token)
+            ).Bytes;
         if (bytes.Length > limit)
             throw new InvalidDataException($"Artifact exceeds {limit / 1024 / 1024} MiB");
         JsonObject document;
@@ -171,5 +173,4 @@ internal sealed partial class SessionToolExecutor
         }
         return result;
     }
-
 }

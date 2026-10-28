@@ -158,8 +158,15 @@ public sealed partial class CompactLifecycleTests
                 else
                 {
                     var otherPath = Path.Combine(work, "other-plan.json");
-                    await File.WriteAllTextAsync(otherPath, new JsonObject { ["replaceAsBlocks"] = validBlocks }.ToJsonString());
-                    call = FunctionCall("submit", "submit_compact_plan", new JsonObject { ["argsFilePath"] = otherPath });
+                    await File.WriteAllTextAsync(
+                        otherPath,
+                        new JsonObject { ["replaceAsBlocks"] = validBlocks }.ToJsonString()
+                    );
+                    call = FunctionCall(
+                        "submit",
+                        "submit_compact_plan",
+                        new JsonObject { ["argsFilePath"] = otherPath }
+                    );
                 }
                 if (index == 5)
                 {

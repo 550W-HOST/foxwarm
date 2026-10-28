@@ -235,9 +235,19 @@ internal sealed partial class SessionCompactor
                         }
                         else
                         {
-                            var manager = sessions ?? throw new NotSupportedException("Plan file input requires a hosted SessionManager.");
+                            var manager =
+                                sessions
+                                ?? throw new NotSupportedException(
+                                    "Plan file input requires a hosted SessionManager."
+                                );
                             var placement = manager.ExecutionPlacement(hosted);
-                            var files = new CompactPlanFiles(manager, hosted, placement.Node, placement.Cwd, manager.IdentityWorkspace(hosted));
+                            var files = new CompactPlanFiles(
+                                manager,
+                                hosted,
+                                placement.Node,
+                                placement.Cwd,
+                                manager.IdentityWorkspace(hosted)
+                            );
                             text = await files.ReadAsync(path, cancellationToken);
                         }
                         repairInput = new JsonObject { ["rawArgsText"] = text };
@@ -289,15 +299,33 @@ internal sealed partial class SessionCompactor
                                         or NotSupportedException
                             )
                         {
-                            prompt = PlanRejected(error.Message, null) + " Plan file staging failed: " + saveError.Message;
+                            prompt =
+                                PlanRejected(error.Message, null)
+                                + " Plan file staging failed: "
+                                + saveError.Message;
                         }
                     }
                     AppendRejectedCalls(detached, calls, prompt);
                 }
-                catch (Exception error) when (error is InvalidDataException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or ToolAuthorizationDeniedException)
+                catch (Exception error)
+                    when (error
+                            is InvalidDataException
+                                or IOException
+                                or UnauthorizedAccessException
+                                or ArgumentException
+                                or NotSupportedException
+                                or ToolAuthorizationDeniedException
+                    )
                 {
                     prompt = "Plan file input failed: " + error.Message;
-                    AppendRejectedCalls(detached, calls, prompt, error is ToolAuthorizationDeniedException ? "tool_authorization_denied" : "tool_io_error");
+                    AppendRejectedCalls(
+                        detached,
+                        calls,
+                        prompt,
+                        error is ToolAuthorizationDeniedException
+                            ? "tool_authorization_denied"
+                            : "tool_io_error"
+                    );
                 }
             }
         }

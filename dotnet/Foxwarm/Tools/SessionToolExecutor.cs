@@ -235,7 +235,6 @@ internal sealed partial class SessionToolExecutor(
             await hosted.Compactor.DiscardUnpairedInContextAsync(seq);
     }
 
-
     public void BeginTurn()
     {
         hosted.BeginLogicalTurn();

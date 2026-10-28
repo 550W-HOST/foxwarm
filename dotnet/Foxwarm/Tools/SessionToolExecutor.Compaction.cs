@@ -12,8 +12,13 @@ internal sealed partial class SessionToolExecutor
             return (JsonObject)call.DeepClone();
         if (name != "call_tool" || call["args"] is not JsonObject wrapper)
             return null;
-        if (SessionWait.Text(wrapper["toolId"]) != "builtin:submit_compact_plan"
-            && !(SessionWait.Text(wrapper["source"]) == "builtin" && SessionWait.Text(wrapper["name"]) == "submit_compact_plan"))
+        if (
+            SessionWait.Text(wrapper["toolId"]) != "builtin:submit_compact_plan"
+            && !(
+                SessionWait.Text(wrapper["source"]) == "builtin"
+                && SessionWait.Text(wrapper["name"]) == "submit_compact_plan"
+            )
+        )
             return null;
         if (wrapper.ContainsKey("args") && wrapper.ContainsKey("argsJson"))
             return null; // The dispatcher owns malformed wrapper arguments.
@@ -31,21 +36,49 @@ internal sealed partial class SessionToolExecutor
         var call = invocation.Value?.CompactCall ?? new JsonObject { ["args"] = args.DeepClone() };
         var malformed = call["argsParseError"] is not null;
         if (!malformed && !args.ContainsKey("inContext"))
-            return UnsupportedTurnToolExecutor.ToolError("unknown_tool", "submit_compact_plan is available only to the dedicated compactor.");
-        if (!malformed && args["inContext"] is JsonValue flag && flag.TryGetValue<bool>(out var enabled) && !enabled)
-            return UnsupportedTurnToolExecutor.ToolError("unknown_tool", "submit_compact_plan is available only to the dedicated compactor.");
-        if (unattended || Programmatic || foregroundBatch is not long seq || CurrentCallId.Length == 0)
-            return UnsupportedTurnToolExecutor.ToolError("compact_plan_invalid", "In-context submission requires an ordinary foreground tool batch; nested ToolScript and unattended calls are not supported.");
+            return UnsupportedTurnToolExecutor.ToolError(
+                "unknown_tool",
+                "submit_compact_plan is available only to the dedicated compactor."
+            );
+        if (
+            !malformed
+            && args["inContext"] is JsonValue flag
+            && flag.TryGetValue<bool>(out var enabled)
+            && !enabled
+        )
+            return UnsupportedTurnToolExecutor.ToolError(
+                "unknown_tool",
+                "submit_compact_plan is available only to the dedicated compactor."
+            );
+        if (
+            unattended
+            || Programmatic
+            || foregroundBatch is not long seq
+            || CurrentCallId.Length == 0
+        )
+            return UnsupportedTurnToolExecutor.ToolError(
+                "compact_plan_invalid",
+                "In-context submission requires an ordinary foreground tool batch; nested ToolScript and unattended calls are not supported."
+            );
 
-        var files = new CompactPlanFiles(sessions, hosted, ExecutionNode, ExecutionCwd,
-            Files ?? throw new NotSupportedException("This executor has no physical path resolver."));
+        var files = new CompactPlanFiles(
+            sessions,
+            hosted,
+            ExecutionNode,
+            ExecutionCwd,
+            Files ?? throw new NotSupportedException("This executor has no physical path resolver.")
+        );
         string? content = null;
         string? submittedFile = null;
         try
         {
             content = CompactPlanInput.Content(call);
             var planArgs = CompactPlanInput.Arguments(call);
-            if (planArgs["inContext"] is not JsonValue value || !value.TryGetValue<bool>(out var optIn) || !optIn)
+            if (
+                planArgs["inContext"] is not JsonValue value
+                || !value.TryGetValue<bool>(out var optIn)
+                || !optIn
+            )
                 throw new CompactPlanInvalidException("inContext must be a boolean.");
             submittedFile = CompactPlanInput.FilePath(planArgs);
             if (submittedFile is not null)
@@ -58,24 +91,52 @@ internal sealed partial class SessionToolExecutor
         }
         catch (CompactPlanInvalidException error)
         {
-            var result = UnsupportedTurnToolExecutor.ToolError("compact_plan_invalid", error.Message);
+            var result = UnsupportedTurnToolExecutor.ToolError(
+                "compact_plan_invalid",
+                error.Message
+            );
             try
             {
-                var path = submittedFile ?? await files.SaveAsync(content ?? CompactPlanInput.Content(call), token);
+                var path =
+                    submittedFile
+                    ?? await files.SaveAsync(content ?? CompactPlanInput.Content(call), token);
                 result["argsFilePath"] = path;
                 result["nodeId"] = ExecutionNode;
-                if (ExecutionCwd is not null) result["cwd"] = ExecutionCwd;
+                if (ExecutionCwd is not null)
+                    result["cwd"] = ExecutionCwd;
                 result["output"] = CompactPlanInput.RepairGuidance + "\n" + path;
             }
-            catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (ToolAuthorizationUnavailableException saveError)
             {
                 Interlocked.Exchange(ref policyUnavailable, 1);
-                result["stagingError"] = new JsonObject { ["type"] = ToolAuthorizationUnavailableException.Code, ["message"] = saveError.Message };
+                result["stagingError"] = new JsonObject
+                {
+                    ["type"] = ToolAuthorizationUnavailableException.Code,
+                    ["message"] = saveError.Message,
+                };
             }
-            catch (Exception saveError) when (saveError is InvalidDataException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or ToolAuthorizationDeniedException)
+            catch (Exception saveError)
+                when (saveError
+                        is InvalidDataException
+                            or IOException
+                            or UnauthorizedAccessException
+                            or ArgumentException
+                            or NotSupportedException
+                            or ToolAuthorizationDeniedException
+                )
             {
-                result["stagingError"] = new JsonObject { ["type"] = saveError is ToolAuthorizationDeniedException ? "tool_authorization_denied" : "tool_io_error", ["message"] = saveError.Message };
+                result["stagingError"] = new JsonObject
+                {
+                    ["type"] =
+                        saveError is ToolAuthorizationDeniedException
+                            ? "tool_authorization_denied"
+                            : "tool_io_error",
+                    ["message"] = saveError.Message,
+                };
             }
             return result;
         }
