@@ -16,6 +16,83 @@ namespace Foxwarm.Tests;
 
 public sealed class WebUiResourceBoundaryTests
 {
+    [Theory]
+    [InlineData("delete")]
+    [InlineData("move")]
+    [InlineData("scope")]
+    public async Task A_selected_request_can_finish_before_topology_or_scope_revocation_aborts_it(
+        string operation
+    )
+    {
+        var selected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var resume = new ManualResetEventSlim();
+        await using var f = await Fixture.Create(() =>
+        {
+            selected.TrySetResult();
+            Assert.True(resume.Wait(TimeSpan.FromSeconds(10)));
+        });
+        using var heldRequest = new HttpRequestMessage(HttpMethod.Get, "api/sessions/asset-owner/history");
+        heldRequest.Headers.Add("X-Lifetime-Hold", "yes");
+        var reading = f.Viewer.SendAsync(heldRequest);
+        await f.LifetimeReached.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var changing = Task.Run(async () =>
+        {
+            if (operation == "move")
+            {
+                var owner = (await f.Runtime.GetOwnerAsync("asset-owner"))!;
+                await f.Manager.MoveIdentityAsync(owner, new JsonObject { ["newSessionId"] = "moved" });
+            }
+            else
+            {
+                using var response = operation == "delete"
+                    ? await f.Admin.DeleteAsync("api/sessions/asset-owner")
+                    : await f.Admin.PostAsJsonAsync("api/setup/config", new { yaml = Fixture.AppYaml("[survivor]") });
+                var body = await response.Content.ReadAsStringAsync();
+                Assert.True(response.StatusCode == HttpStatusCode.OK, $"{operation}: {(int)response.StatusCode} {body}");
+                Assert.DoesNotContain("access.connections", JsonNode.Parse(body)?["notApplied"]?.ToString() ?? "");
+            }
+        });
+        try
+        {
+            await selected.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            // The real topology/configuration callback has captured this request. Let its
+            // HTTP pipeline finish and Kestrel dispose the context before that callback resumes.
+            f.FinishLifetime.TrySetResult();
+            using var response = await reading.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            await WaitForContextDisposal(f.LifetimeContext!);
+        }
+        finally
+        {
+            f.FinishLifetime.TrySetResult();
+            resume.Set();
+        }
+        await changing.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(HttpStatusCode.OK, (await f.Viewer.GetAsync("api/sessions/survivor/history")).StatusCode);
+        if (operation == "delete")
+            Assert.Null(f.Runtime.Catalog.Get("asset-owner"));
+        if (operation == "move")
+            Assert.Equal("moved", SessionCatalog.Text(f.Runtime.Catalog.Resolve("asset-owner")["sessionId"]));
+    }
+
+    private static async Task WaitForContextDisposal(HttpContext context)
+    {
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (true)
+        {
+            try
+            {
+                _ = context.Features;
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+            // Kestrel has no request-factory disposal notification for application middleware.
+            await Task.Delay(1, stop.Token);
+        }
+    }
+
     [Fact]
     public async Task Scope_only_install_fences_prepared_artifact_responses_but_preserves_other_identity_and_still_allowed_upload()
     {
@@ -233,6 +310,10 @@ public sealed class WebUiResourceBoundaryTests
         internal SessionRuntime Runtime = null!;
         private Foxwarm.Terminal.TerminalRegistry terminals = null!;
         private HttpServer server = null!;
+        private WebUiAccess? lifetimeAccess;
+        internal readonly TaskCompletionSource LifetimeReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly TaskCompletionSource FinishLifetime = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal HttpContext? LifetimeContext;
         internal HttpClient Admin = null!,
             Viewer = null!,
             Other = null!;
@@ -247,7 +328,7 @@ public sealed class WebUiResourceBoundaryTests
             + "}\n"
             + "    other:\n      token: synthetic-resource-other\n      surfaces:\n        webui: {sessions: [asset-owner]}\n";
 
-        internal static async Task<Fixture> Create()
+        internal static async Task<Fixture> Create(Action? beforeRequestAbort = null)
         {
             var f = new Fixture();
             var data = Path.Combine(f.temp.Path, "data");
@@ -317,6 +398,16 @@ public sealed class WebUiResourceBoundaryTests
             }
             f.terminals = new Foxwarm.Terminal.TerminalRegistry(data, default);
             f.Runtime = new SessionRuntime(f.Manager);
+            if (beforeRequestAbort is not null)
+            {
+                // Register first so its captured request can outlive dictionary removal while
+                // the ordinary HTTP server continues completing that same request.
+                f.lifetimeAccess = new WebUiAccess(f.Runtime, f.Configuration.Access)
+                {
+                    BeforeRequestAbort = beforeRequestAbort,
+                };
+                f.lifetimeAccess.Start();
+            }
             f.server = new HttpServer(
                 [],
                 0,
@@ -329,6 +420,17 @@ public sealed class WebUiResourceBoundaryTests
             f.server.App.Use(
                 async (context, next) =>
                 {
+                    if (context.Request.Headers["X-Lifetime-Hold"] == "yes")
+                    {
+                        var request = f.lifetimeAccess!.Authenticate(context)!;
+                        request.Bind("asset-owner");
+                        using var tracked = f.lifetimeAccess.Track(context, request);
+                        await next();
+                        f.LifetimeContext = context;
+                        f.LifetimeReached.TrySetResult();
+                        await f.FinishLifetime.Task;
+                        return;
+                    }
                     if (
                         context.Request.Headers["X-Publication-Hold"] == "yes"
                         && f.holds.TryGetValue(
@@ -445,6 +547,8 @@ public sealed class WebUiResourceBoundaryTests
 
         public async ValueTask DisposeAsync()
         {
+            FinishLifetime.TrySetResult();
+            lifetimeAccess?.Dispose();
             foreach (var hold in holds.Values)
                 hold.Release.TrySetResult();
             Admin?.Dispose();

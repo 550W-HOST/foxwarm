@@ -11,10 +11,13 @@ internal sealed class WebUiAccessException()
 internal sealed class WebUiAccess(SessionRuntime runtime, AccessConfiguration configuration)
     : IDisposable
 {
-    private readonly ConcurrentDictionary<HttpContext, WebUiRequest> requests = new();
+    private readonly ConcurrentDictionary<Registration, WebUiRequest> requests = new();
     private readonly ConcurrentDictionary<string, UploadOwner> uploads = new(
         StringComparer.Ordinal
     );
+
+    // Optional scheduling seam after a tracked request is selected for revocation.
+    internal Action? BeforeRequestAbort { get; init; }
 
     private sealed record UploadOwner(string IdentityId, string Token, string SessionId);
 
@@ -125,27 +128,50 @@ internal sealed class WebUiAccess(SessionRuntime runtime, AccessConfiguration co
 
     internal IDisposable Track(HttpContext context, WebUiRequest request)
     {
-        requests[context] = request;
-        return new Registration(() => requests.TryRemove(context, out _));
+        var registration = new Registration(this, context);
+        requests[registration] = request;
+        return registration;
     }
 
-    private sealed class Registration(Action dispose) : IDisposable
+    private sealed class Registration(WebUiAccess access, HttpContext context) : IDisposable
     {
-        public void Dispose() => dispose();
+        private readonly object gate = new();
+        private HttpContext? current = context;
+
+        internal void Abort()
+        {
+            lock (gate)
+                current?.Abort();
+        }
+
+        public void Dispose()
+        {
+            // Enumeration may already have captured this registration. Close its context
+            // access before middleware returns and Kestrel disposes or reuses that context.
+            lock (gate)
+                current = null;
+            access.requests.TryRemove(this, out _);
+        }
     }
 
     private void CheckBindings()
     {
-        foreach (var (context, request) in requests)
+        foreach (var (registration, request) in requests)
             if (!request.Current || !request.BindingsCurrent())
-                context.Abort();
+                Abort(registration);
+    }
+
+    private void Abort(Registration registration)
+    {
+        BeforeRequestAbort?.Invoke();
+        registration.Abort();
     }
 
     private Task Revoke(AccessChange change)
     {
-        foreach (var (context, request) in requests)
+        foreach (var (registration, request) in requests)
             if (change.WebUi.Contains(request.IdentityId))
-                context.Abort();
+                Abort(registration);
         var failures = new List<Exception>();
         foreach (var (path, owner) in uploads)
         {
