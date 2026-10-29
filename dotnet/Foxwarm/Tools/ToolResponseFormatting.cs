@@ -20,6 +20,11 @@ internal static class ToolResponseFormatting
     {
         if (value is JsonObject { Count: 1 } single && single.ContainsKey("output"))
             value = single["output"];
+        return FormatStructuredValue(value);
+    }
+
+    internal static string FormatStructuredValue(JsonNode? value)
+    {
         if (value is null)
             return "";
         if (value is JsonValue leaf)

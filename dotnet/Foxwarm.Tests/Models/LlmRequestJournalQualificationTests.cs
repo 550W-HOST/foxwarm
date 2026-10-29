@@ -237,7 +237,7 @@ public sealed class LlmRequestJournalQualificationTests
                 native.Remove("result");
             }
             var fullText = ToolResponseFormatting.FormatToolScriptExecution(native);
-            var guarded = await ToolOutputGuard.GuardAsync(native, temp.Path, "script", true);
+            var guarded = await ToolOutputGuard.GuardAsync(native, text => ToolOutputGuard.SaveLocalAsync(text, temp.Path), true);
             Assert.True(guarded!["outputTruncated"]!.GetValue<bool>());
             Assert.Equal(
                 fullText,

@@ -18,6 +18,7 @@ public sealed partial class MainLocalToolsTests
         internal SessionManager Manager = null!;
         internal SessionOwner Owner = null!;
         internal SessionToolExecutor Tools = null!;
+        internal ToolRegistry Registry = null!;
         private Foxwarm.McpClient mcp = null!;
 
         internal static async Task<Fixture> Create()
@@ -57,6 +58,7 @@ public sealed partial class MainLocalToolsTests
             var workspace = f.Manager.IdentityWorkspace(f.Owner)!;
             var toolRoot = workspace.ToolDirectory;
             var registry = SessionToolExecutor.CreateRegistry(defs, f.mcp, _ => toolRoot);
+            f.Registry = registry;
             f.Tools = new(new WorkspaceTools(toolRoot), f.Owner, f.Manager, registry);
             f.Tools.BeginTurn();
             return f;

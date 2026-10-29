@@ -79,10 +79,10 @@ public sealed class ToolScriptPresentationTests
             ["stdout"] = string.Concat(Enumerable.Repeat("x\n", 15000)),
             ["result"] = false,
         };
-        var guarded = await ToolOutputGuard.GuardAsync(shortResponse, temp.Path, "short", true);
+        var guarded = await ToolOutputGuard.GuardAsync(shortResponse, text => ToolOutputGuard.SaveLocalAsync(text, temp.Path), true);
         Assert.Same(shortResponse, guarded);
         Assert.True(
-            (await ToolOutputGuard.GuardAsync(shortResponse, temp.Path, "ordinary"))![
+            (await ToolOutputGuard.GuardAsync(shortResponse, text => ToolOutputGuard.SaveLocalAsync(text, temp.Path)))![
                 "outputTruncated"
             ]!.GetValue<bool>()
         );
@@ -93,7 +93,7 @@ public sealed class ToolScriptPresentationTests
             ["stdout"] = new string('x', 41000),
             ["result"] = false,
         };
-        var saved = await ToolOutputGuard.GuardAsync(large, temp.Path, "large", true);
+        var saved = await ToolOutputGuard.GuardAsync(large, text => ToolOutputGuard.SaveLocalAsync(text, temp.Path), true);
         Assert.Equal(
             ToolResponseFormatting.FormatToolScriptExecution(large),
             await File.ReadAllTextAsync(saved!["outputFullPath"]!.GetValue<string>())
