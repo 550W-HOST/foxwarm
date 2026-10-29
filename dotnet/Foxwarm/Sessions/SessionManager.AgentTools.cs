@@ -62,7 +62,12 @@ internal sealed partial class SessionManager
             {
                 case "move_session":
                     return (
-                        await MoveIdentityAsync(source, args, semanticCaller.Value ?? default, modelCall: true),
+                        await MoveIdentityAsync(
+                            source,
+                            args,
+                            semanticCaller.Value ?? default,
+                            modelCall: true
+                        ),
                         false
                     );
                 case "delete_session":
@@ -97,7 +102,11 @@ internal sealed partial class SessionManager
                     Keys(args, ["agentName", "rules"], ["agentName", "rules"]);
                     if (args["rules"] is not JsonArray replacement)
                         throw new InvalidDataException("rules must be an array.");
-                    await SetAgentRulesAsync(RequiredString(args, "agentName"), replacement, source);
+                    await SetAgentRulesAsync(
+                        RequiredString(args, "agentName"),
+                        replacement,
+                        source
+                    );
                     return (Output("Agent rules replaced."), false);
                 }
                 case "set_agent_isolated":
@@ -313,7 +322,9 @@ internal sealed partial class SessionManager
                         RequiredString(args, "sessionName"),
                         OptionalString(args, "displayName"),
                         forceModel,
-                        initialNode: CreationNode(args) ?? agents.DefaultNode(agentName) ?? CurrentNode(source),
+                        initialNode: CreationNode(args)
+                            ?? agents.DefaultNode(agentName)
+                            ?? CurrentNode(source),
                         inherited: (
                             SessionWait.Text(settings["childModelDefault"])
                                 ?? SessionWait.Text(settings["model"]),

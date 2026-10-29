@@ -15,8 +15,13 @@ public sealed partial class McpNotificationTests
         child.Registry.TriggerOverride = _ => Task.CompletedTask;
         await Connect(f, peer);
         Assert.Equal("receiving", State(await Notifications(f, "start", child)));
-        var destination = Target(await f.CallAsync(child, "foxwarm_session", Send(peer.Target.Id, "register")));
-        await f.Manager.SetAgentRulesAsync("main", JsonNode.Parse("""[{"tool":"mcp_notifications","action":"deny"}]""")!.AsArray());
+        var destination = Target(
+            await f.CallAsync(child, "foxwarm_session", Send(peer.Target.Id, "register"))
+        );
+        await f.Manager.SetAgentRulesAsync(
+            "main",
+            JsonNode.Parse("""[{"tool":"mcp_notifications","action":"deny"}]""")!.AsArray()
+        );
         using (var completion = new NotificationHandling(Foxwarm.McpClient.SessionMessageMethod))
         {
             Assert.Null((await Reply(peer, destination, "blocked by ancestor"))!["error"]);

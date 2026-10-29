@@ -6,12 +6,15 @@ namespace Foxwarm.Sessions;
 internal sealed partial class AgentCatalog
 {
     internal string? CreatedBy(string name) => Creator(MetadataSnapshot(), name);
+
     internal string? DefaultNode(string name)
     {
         var value = MetadataSnapshot()[name]?["defaultNode"];
         if (value is null)
             return null;
-        var node = SessionWait.Text(value) ?? throw new InvalidDataException("Agent default Node must be a string.");
+        var node =
+            SessionWait.Text(value)
+            ?? throw new InvalidDataException("Agent default Node must be a string.");
         ValidateDefaultNode(node);
         return node;
     }
@@ -25,7 +28,8 @@ internal sealed partial class AgentCatalog
             throw new InvalidDataException($"Agent '{name}' metadata must be an object.");
         if (metadata["createdBy"] is null)
             return null;
-        var parent = SessionWait.Text(metadata["createdBy"])
+        var parent =
+            SessionWait.Text(metadata["createdBy"])
             ?? throw new InvalidDataException("Agent creator must be a name or null.");
         ValidateName(parent);
         return parent;
@@ -54,9 +58,13 @@ internal sealed partial class AgentCatalog
         {
             var snapshot = MetadataSnapshot();
             return CreatorChain(name, snapshot)
-                .Select(agent => AgentRulePolicy.Parse(
-                    snapshot[agent] is JsonObject row && row.ContainsKey("rules")
-                        ? row["rules"] : new JsonArray()))
+                .Select(agent =>
+                    AgentRulePolicy.Parse(
+                        snapshot[agent] is JsonObject row && row.ContainsKey("rules")
+                            ? row["rules"]
+                            : new JsonArray()
+                    )
+                )
                 .ToArray();
         }
     }
@@ -71,11 +79,17 @@ internal sealed partial class AgentCatalog
                 return;
             if (!CreatorChain(target, snapshot).Contains(caller, StringComparer.Ordinal))
                 throw new ToolAuthorizationDeniedException(
-                    "This operation requires a Session in the delegated Agent or its creator descendants.");
+                    "This operation requires a Session in the delegated Agent or its creator descendants."
+                );
         }
     }
 
-    internal void RequireCreationSource(string caller, string source, bool conversion, bool copyMemory)
+    internal void RequireCreationSource(
+        string caller,
+        string source,
+        bool conversion,
+        bool copyMemory
+    )
     {
         if (!conversion && !copyMemory)
             return;
@@ -89,9 +103,11 @@ internal sealed partial class AgentCatalog
             var descendant = sourceChain.Contains(caller, StringComparer.Ordinal);
             var ancestor = callerChain.Contains(source, StringComparer.Ordinal);
             if (conversion && !descendant || copyMemory && !descendant && !ancestor)
-                throw new ToolAuthorizationDeniedException(conversion
-                    ? "A delegated Agent may convert only Sessions in itself or its creator descendants."
-                    : "A delegated Agent may copy memory only from itself, its creator ancestors or its descendants.");
+                throw new ToolAuthorizationDeniedException(
+                    conversion
+                        ? "A delegated Agent may convert only Sessions in itself or its creator descendants."
+                        : "A delegated Agent may copy memory only from itself, its creator ancestors or its descendants."
+                );
         }
     }
 
@@ -113,11 +129,21 @@ internal sealed partial class AgentCatalog
             return;
         var snapshot = MetadataSnapshot();
         creator ??= Creator(snapshot, name);
-        if (creator is not null && !CreatorChain(creator, snapshot).Contains(inherit, StringComparer.Ordinal))
-            throw new InvalidDataException("An Agent-created Agent may inherit only from strict creator ancestors.");
+        if (
+            creator is not null
+            && !CreatorChain(creator, snapshot).Contains(inherit, StringComparer.Ordinal)
+        )
+            throw new InvalidDataException(
+                "An Agent-created Agent may inherit only from strict creator ancestors."
+            );
     }
 
-    internal async Task SetRulesAsync(string name, JsonArray rules, Func<string>? caller = null, Func<Task>? authorize = null)
+    internal async Task SetRulesAsync(
+        string name,
+        JsonArray rules,
+        Func<string>? caller = null,
+        Func<Task>? authorize = null
+    )
     {
         _ = AgentRulePolicy.Parse(rules);
         await createGate.WaitAsync();
@@ -129,14 +155,25 @@ internal sealed partial class AgentCatalog
             if (authorize is not null)
                 await authorize();
             var callerAgent = caller?.Invoke();
-            if (callerAgent is not null && (callerAgent == name || !CreatorChain(name, next).Contains(callerAgent, StringComparer.Ordinal)))
-                throw new ToolAuthorizationDeniedException("Only strict creator ancestors may replace an Agent's rules.");
+            if (
+                callerAgent is not null
+                && (
+                    callerAgent == name
+                    || !CreatorChain(name, next).Contains(callerAgent, StringComparer.Ordinal)
+                )
+            )
+                throw new ToolAuthorizationDeniedException(
+                    "Only strict creator ancestors may replace an Agent's rules."
+                );
             var row = next[name] as JsonObject ?? new JsonObject();
             next[name] = row;
             row["rules"] = rules.DeepClone();
             try
             {
-                AtomicIndexWrite(indexPath, Payload(List().Where(id => id != "main"), next).ToJsonString());
+                AtomicIndexWrite(
+                    indexPath,
+                    Payload(List().Where(id => id != "main"), next).ToJsonString()
+                );
             }
             catch (AuthorityCommittedException)
             {
@@ -170,7 +207,10 @@ internal sealed partial class AgentCatalog
                 row["defaultNode"] = node;
             try
             {
-                AtomicIndexWrite(indexPath, Payload(List().Where(id => id != "main"), next).ToJsonString());
+                AtomicIndexWrite(
+                    indexPath,
+                    Payload(List().Where(id => id != "main"), next).ToJsonString()
+                );
             }
             catch (AuthorityCommittedException)
             {
@@ -197,6 +237,8 @@ internal sealed partial class AgentCatalog
     {
         var snapshot = MetadataSnapshot();
         if (snapshot.Any(pair => Creator(snapshot, pair.Key) == name))
-            throw new InvalidDataException($"Agent '{name}' has creator descendants. Delete them first.");
+            throw new InvalidDataException(
+                $"Agent '{name}' has creator descendants. Delete them first."
+            );
     }
 }

@@ -4,13 +4,14 @@ namespace Foxwarm.Tools;
 
 internal static class AgentToolDefinitions
 {
-    private static JsonObject LocalRules(string description) => new()
-    {
-        ["type"] = "array",
-        ["description"] = description,
-        ["maxItems"] = 256,
-        ["items"] = new JsonObject { ["type"] = "object" },
-    };
+    private static JsonObject LocalRules(string description) =>
+        new()
+        {
+            ["type"] = "array",
+            ["description"] = description,
+            ["maxItems"] = 256,
+            ["items"] = new JsonObject { ["type"] = "object" },
+        };
 
     private const string ForceModelDescription =
         "Only use when the user explicitly requests a model or effort override for this task or session. Otherwise omit this parameter to use the normal inherited defaults; an empty object also leaves them unchanged.";
@@ -291,8 +292,12 @@ internal static class AgentToolDefinitions
                             "Non-master Node to bind when creating an isolated agent."
                         ),
                         ["toolRules"] = CreationIsolationRules(),
-                        ["rules"] = LocalRules("Initial local authorization rules for the new Agent. Omit for an empty layer; ancestor rules still apply."),
-                        ["defaultNode"] = String("Default execution Node for new Sessions in this Agent. This chooses initial placement and does not grant access."),
+                        ["rules"] = LocalRules(
+                            "Initial local authorization rules for the new Agent. Omit for an empty layer; ancestor rules still apply."
+                        ),
+                        ["defaultNode"] = String(
+                            "Default execution Node for new Sessions in this Agent. This chooses initial placement and does not grant access."
+                        ),
                     },
                     "agentName"
                 )
@@ -300,11 +305,17 @@ internal static class AgentToolDefinitions
             Tool(
                 "set_agent_rules",
                 "Replace an Agent's local authorization rules. You may change only strict descendants; ancestor restrictions still apply.",
-                Parameters(new JsonObject
-                {
-                    ["agentName"] = String("Agent whose local rules to replace."),
-                    ["rules"] = LocalRules("Complete replacement rule list. An empty list removes this layer's rules. Caller selectors are not accepted."),
-                }, "agentName", "rules")
+                Parameters(
+                    new JsonObject
+                    {
+                        ["agentName"] = String("Agent whose local rules to replace."),
+                        ["rules"] = LocalRules(
+                            "Complete replacement rule list. An empty list removes this layer's rules. Caller selectors are not accepted."
+                        ),
+                    },
+                    "agentName",
+                    "rules"
+                )
             ),
             Tool(
                 "create_session",

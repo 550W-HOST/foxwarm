@@ -246,8 +246,10 @@ internal sealed partial class SessionManager
             );
     }
 
-    private ToolAuthorizationPolicy[] EffectivePolicies(string agent, ToolAuthorizationPolicy global) =>
-        new[] { global }.Concat(agents.RuleLayers(agent)).ToArray();
+    private ToolAuthorizationPolicy[] EffectivePolicies(
+        string agent,
+        ToolAuthorizationPolicy global
+    ) => new[] { global }.Concat(agents.RuleLayers(agent)).ToArray();
 
     private static AuthorizationDecision EffectiveDecision(
         IReadOnlyList<ToolAuthorizationPolicy> policies,
@@ -310,7 +312,8 @@ internal sealed partial class SessionManager
     {
         if (parent is null || agents.CreatedBy(callerAgent) is null)
             return;
-        var target = AuthorizationTarget(parent)
+        var target =
+            AuthorizationTarget(parent)
             ?? throw new InvalidDataException("Parent Session does not exist.");
         agents.RequireSessionTarget(callerAgent, target.Agent);
     }
@@ -319,17 +322,33 @@ internal sealed partial class SessionManager
     {
         if (agents.CreatedBy(callerAgent) is null)
             return;
-        var existing = AuthorizationTarget(target)
+        var existing =
+            AuthorizationTarget(target)
             ?? throw new InvalidDataException("Session does not exist.");
         agents.RequireSessionTarget(callerAgent, existing.Agent);
         RequireCreationParent(callerAgent, parent);
     }
 
     internal Task SetAgentRulesAsync(string agent, JsonArray rules, SessionOwner? caller = null) =>
-        agents.SetRulesAsync(agent, rules, caller is null ? null : () => caller.Agent, caller is null ? null : () =>
-            AuthorizeToolAsync(caller, new("set_agent_rules", "builtin", "set_agent_rules",
-                new JsonObject { ["agentName"] = agent, ["rules"] = rules.DeepClone() }),
-                null, semanticCaller.Value ?? CancellationToken.None));
+        agents.SetRulesAsync(
+            agent,
+            rules,
+            caller is null ? null : () => caller.Agent,
+            caller is null
+                ? null
+                : () =>
+                    AuthorizeToolAsync(
+                        caller,
+                        new(
+                            "set_agent_rules",
+                            "builtin",
+                            "set_agent_rules",
+                            new JsonObject { ["agentName"] = agent, ["rules"] = rules.DeepClone() }
+                        ),
+                        null,
+                        semanticCaller.Value ?? CancellationToken.None
+                    )
+        );
 
     internal string? AgentDefaultNode(string agent) => agents.DefaultNode(agent);
 
@@ -418,8 +437,16 @@ internal sealed partial class SessionManager
         var unknownNodeTargets =
             source == "builtin"
             && name is "send_file" or "image_write_to_file" or "copy_between_nodes" or "node";
-        return new[] { authorization.Load() }.Concat(layers).All(policy =>
-                ToolAuthorizationEvaluation.Visible(policy, request, unknownNode, unknownNodeTargets))
+        return new[] { authorization.Load() }
+                .Concat(layers)
+                .All(policy =>
+                    ToolAuthorizationEvaluation.Visible(
+                        policy,
+                        request,
+                        unknownNode,
+                        unknownNodeTargets
+                    )
+                )
             && IsolatedToolCompatibility.Visible(
                 Isolation(owner.Agent),
                 source,

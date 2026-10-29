@@ -129,7 +129,8 @@ internal sealed partial class MessageRouter
                     rest[1],
                     null,
                     force,
-                    initialNode: manager.AgentDefaultNode(rest[0]) ?? (owner is null ? null : manager.CurrentNode(owner)),
+                    initialNode: manager.AgentDefaultNode(rest[0])
+                        ?? (owner is null ? null : manager.CurrentNode(owner)),
                     inherited: (inheritedModel, inheritedEffort),
                     selectedFiles: flags.Files.Length == 0 ? null : flags.Files
                 );

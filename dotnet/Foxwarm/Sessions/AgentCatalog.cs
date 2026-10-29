@@ -210,13 +210,21 @@ internal sealed partial class AgentCatalog
                 );
             var previous = MetadataSnapshot()[name] as JsonObject;
             if (previous is not null && new[] { "createdBy", "rules" }.Any(previous.ContainsKey))
-                throw new InvalidDataException("Retained Agent authority reserves this name; administrator cleanup is required before reuse.");
+                throw new InvalidDataException(
+                    "Retained Agent authority reserves this name; administrator cleanup is required before reuse."
+                );
             ValidateCreatorAdmission(createdBy, MetadataSnapshot());
             _ = Foxwarm.Tools.AgentRulePolicy.Parse(rules ?? new JsonArray());
             ValidateDefaultNode(defaultNode ?? DefaultNode(name));
             ValidateInheritance(name, inherit);
-            ValidateCreatorInheritance(name, inherit ?? SessionWait.Text(previous?["inherit"]), createdBy);
-            initialMetadata = previous is null ? new JsonObject() : (JsonObject)previous.DeepClone();
+            ValidateCreatorInheritance(
+                name,
+                inherit ?? SessionWait.Text(previous?["inherit"]),
+                createdBy
+            );
+            initialMetadata = previous is null
+                ? new JsonObject()
+                : (JsonObject)previous.DeepClone();
             if (createdBy is not null)
                 initialMetadata["createdBy"] = createdBy;
             if (rules is not null)
@@ -231,15 +239,9 @@ internal sealed partial class AgentCatalog
             createdDirectory = true;
             Directory.CreateDirectory(Path.Combine(prepared, "memory"));
             if (initialMemory is not null)
-                File.WriteAllText(
-                    Path.Combine(prepared, "memory", "MEMORY.md"),
-                    initialMemory
-                );
+                File.WriteAllText(Path.Combine(prepared, "memory", "MEMORY.md"), initialMemory);
             if (initialSoul is not null)
-                File.WriteAllText(
-                    Path.Combine(prepared, "memory", "SOUL.md"),
-                    initialSoul
-                );
+                File.WriteAllText(Path.Combine(prepared, "memory", "SOUL.md"), initialSoul);
             var next = List()
                 .Where(existing => existing != "main")
                 .Append(name)
@@ -301,7 +303,9 @@ internal sealed partial class AgentCatalog
                     metadata[name] = initialMetadata.DeepClone();
                 throw new AuthorityCommittedException(
                     "Agent metadata committed, but directory publication did not complete. "
-                    + $"Prepared files remain at '{prepared}'.", error);
+                        + $"Prepared files remain at '{prepared}'.",
+                    error
+                );
             }
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
             throw;
@@ -317,13 +321,18 @@ internal sealed partial class AgentCatalog
     {
         try
         {
-            new LinuxAtomicJsonFile(Path.GetDirectoryName(path)!, Path.GetFileName(path), metadataWriteStage)
-                .WriteTextPayload(text, default);
+            new LinuxAtomicJsonFile(
+                Path.GetDirectoryName(path)!,
+                Path.GetFileName(path),
+                metadataWriteStage
+            ).WriteTextPayload(text, default);
         }
         catch (AuthorityCommittedException error)
         {
             throw new AuthorityCommittedException(
-                "Agent catalog committed before a later durability step failed.", error);
+                "Agent catalog committed before a later durability step failed.",
+                error
+            );
         }
     }
 

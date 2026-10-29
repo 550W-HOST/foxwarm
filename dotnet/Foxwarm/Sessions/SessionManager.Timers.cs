@@ -181,7 +181,10 @@ internal sealed partial class SessionManager
                     {
                         await PrepareAsync();
                         if (authorizeTool && MainTimers.Flag(row["newSession"]))
-                            agents.RequireSessionTarget(source.Agent, SessionWait.Text(row["agentName"])!);
+                            agents.RequireSessionTarget(
+                                source.Agent,
+                                SessionWait.Text(row["agentName"])!
+                            );
                         if (
                             AgentIsolated(source.Agent)
                             && MainTimers.Flag(row["newSession"])
@@ -200,7 +203,10 @@ internal sealed partial class SessionManager
                     {
                         await PrepareAsync();
                         if (authorizeTool && MainTimers.Flag(row["newSession"]))
-                            agents.RequireSessionTarget(source.Agent, SessionWait.Text(row["agentName"])!);
+                            agents.RequireSessionTarget(
+                                source.Agent,
+                                SessionWait.Text(row["agentName"])!
+                            );
                         if (
                             AgentIsolated(source.Agent)
                             && MainTimers.Flag(row["newSession"])

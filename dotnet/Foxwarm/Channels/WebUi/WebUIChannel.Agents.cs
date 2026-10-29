@@ -72,7 +72,14 @@ internal sealed partial class WebUIChannel
                         ?? throw new InvalidDataException("Agent creation needs an object.");
                     if (
                         body.Any(item =>
-                            item.Key is not ("agentId" or "inheritAgent" or "isolatedNode" or "rules" or "defaultNode")
+                            item.Key
+                                is not (
+                                    "agentId"
+                                    or "inheritAgent"
+                                    or "isolatedNode"
+                                    or "rules"
+                                    or "defaultNode"
+                                )
                         )
                         || body["agentId"] is not JsonValue agent
                         || !agent.TryGetValue<string>(out var name)
@@ -231,18 +238,37 @@ internal sealed partial class WebUIChannel
                         await JsonNode.ParseAsync(request.Body) as JsonObject
                         ?? throw new InvalidDataException("Agent update needs an object.");
                     if (
-                        body.Any(item => item.Key is not ("inheritAgent" or "isolatedNode" or "rules" or "defaultNode"))
-                        || !new[] { "inheritAgent", "isolatedNode", "rules", "defaultNode" }.Any(body.ContainsKey)
+                        body.Any(item =>
+                            item.Key
+                                is not (
+                                    "inheritAgent"
+                                    or "isolatedNode"
+                                    or "rules"
+                                    or "defaultNode"
+                                )
+                        )
+                        || !new[] { "inheritAgent", "isolatedNode", "rules", "defaultNode" }.Any(
+                            body.ContainsKey
+                        )
                     )
-                        throw new InvalidDataException("Provide inheritAgent, isolatedNode, rules or defaultNode.");
+                        throw new InvalidDataException(
+                            "Provide inheritAgent, isolatedNode, rules or defaultNode."
+                        );
                     if (!sessions.Agents().Contains(agentId))
                         return Results.NotFound(new { error = "Agent not found." });
                     if (body.ContainsKey("rules"))
-                        await sessions.SetAgentRulesAsync(agentId, body["rules"] as JsonArray
-                            ?? throw new InvalidDataException("rules must be an array."));
+                        await sessions.SetAgentRulesAsync(
+                            agentId,
+                            body["rules"] as JsonArray
+                                ?? throw new InvalidDataException("rules must be an array.")
+                        );
                     if (body.ContainsKey("defaultNode"))
-                        await sessions.SetAgentDefaultNodeAsync(agentId, body["defaultNode"] is null
-                            ? null : body["defaultNode"]!.GetValue<string>());
+                        await sessions.SetAgentDefaultNodeAsync(
+                            agentId,
+                            body["defaultNode"] is null
+                                ? null
+                                : body["defaultNode"]!.GetValue<string>()
+                        );
                     if (body.ContainsKey("isolatedNode"))
                         await sessions.SetAgentNodeAsync(
                             agentId,
@@ -262,9 +288,14 @@ internal sealed partial class WebUIChannel
                                 id = agentId,
                                 inherit = sessions.AgentInherit(agentId),
                                 inheritanceChain = sessions.AgentChain(agentId),
-                                createdBy = sessions.AgentMetadata[agentId]?["createdBy"]?.DeepClone(),
-                                rules = sessions.AgentMetadata[agentId]?["rules"]?.DeepClone() ?? new JsonArray(),
-                                defaultNode = sessions.AgentMetadata[agentId]?["defaultNode"]?.DeepClone(),
+                                createdBy = sessions
+                                    .AgentMetadata[agentId]
+                                    ?["createdBy"]?.DeepClone(),
+                                rules = sessions.AgentMetadata[agentId]?["rules"]?.DeepClone()
+                                    ?? new JsonArray(),
+                                defaultNode = sessions
+                                    .AgentMetadata[agentId]
+                                    ?["defaultNode"]?.DeepClone(),
                                 isolated = sessions.AgentIsolated(agentId),
                                 isolatedNode = sessions.RecordedIsolationNode(agentId),
                             },

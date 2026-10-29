@@ -41,12 +41,24 @@ internal static class AppConfigurationRules
     {
         if (!present)
             return;
-        if (value is not JsonObject tree || tree.Any(pair => pair.Key is not ("maxDepth" or "maxChildren")))
-            throw new InvalidDataException("app config `agentTree` accepts maxDepth and maxChildren.");
+        if (
+            value is not JsonObject tree
+            || tree.Any(pair => pair.Key is not ("maxDepth" or "maxChildren"))
+        )
+            throw new InvalidDataException(
+                "app config `agentTree` accepts maxDepth and maxChildren."
+            );
         foreach (var (key, raw) in tree)
-            if (Number(raw) is not double number || !double.IsFinite(number)
-                || number < 0 || number > int.MaxValue || number != Math.Truncate(number))
-                throw new InvalidDataException($"app config `agentTree.{key}` must be a nonnegative integer.");
+            if (
+                Number(raw) is not double number
+                || !double.IsFinite(number)
+                || number < 0
+                || number > int.MaxValue
+                || number != Math.Truncate(number)
+            )
+                throw new InvalidDataException(
+                    $"app config `agentTree.{key}` must be a nonnegative integer."
+                );
     }
 
     private static void Channels(JsonNode? value, bool present)

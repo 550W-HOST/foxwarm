@@ -197,7 +197,8 @@ internal sealed partial class SessionManager
                         inherit = AgentInherit(name),
                         inheritanceChain = AgentChain(name),
                         createdBy = agents.CreatedBy(name),
-                        ruleCount = (agents.MetadataSnapshot()[name]?["rules"] as JsonArray)?.Count ?? 0,
+                        ruleCount = (agents.MetadataSnapshot()[name]?["rules"] as JsonArray)?.Count
+                            ?? 0,
                         defaultNode = agents.DefaultNode(name),
                         isolated = AgentIsolated(name),
                         isolatedNode = RecordedIsolationNode(name),

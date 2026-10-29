@@ -149,7 +149,14 @@ internal sealed partial class SessionManager
         JsonObject args,
         CancellationToken token = default,
         bool modelCall = false
-    ) => RenameIdentityAsync(caller, args, IdentityMovePurpose.MoveSession, token, creator: modelCall ? caller : null);
+    ) =>
+        RenameIdentityAsync(
+            caller,
+            args,
+            IdentityMovePurpose.MoveSession,
+            token,
+            creator: modelCall ? caller : null
+        );
 
     private async Task<JsonObject> RenameIdentityAsync(
         SessionOwner caller,
@@ -195,11 +202,22 @@ internal sealed partial class SessionManager
                         "newAgentName is required when creating an Agent."
                     )
                 : owner.Agent;
-        if (purpose == IdentityMovePurpose.MoveSession && creator is not null
-            && agents.CreatedBy(creator.Agent) is not null && owner.Agent != targetAgent)
-            throw new ToolAuthorizationDeniedException("Delegated Agents cannot move Sessions across Agent boundaries.");
+        if (
+            purpose == IdentityMovePurpose.MoveSession
+            && creator is not null
+            && agents.CreatedBy(creator.Agent) is not null
+            && owner.Agent != targetAgent
+        )
+            throw new ToolAuthorizationDeniedException(
+                "Delegated Agents cannot move Sessions across Agent boundaries."
+            );
         if (creator is not null && create)
-            agents.RequireCreationSource(creator.Agent, owner.Agent, purpose == IdentityMovePurpose.AgentConversion, copy);
+            agents.RequireCreationSource(
+                creator.Agent,
+                owner.Agent,
+                purpose == IdentityMovePurpose.AgentConversion,
+                copy
+            );
         using var membership = BeginAgentAdmission(owner.Agent, targetAgent, caller.Agent);
         if (create && string.IsNullOrEmpty(agentName))
             throw new InvalidDataException("newAgentName is required when creating an Agent.");
@@ -440,8 +458,12 @@ internal sealed partial class SessionManager
             if (record.OwnsAgent)
             {
                 await IdentityStageAsync(operation, "before-agent-copy");
-                await agents.CreateAsync(record.OwnedAgent!,
-                    createdBy: operation.Creator, rules: operation.InitialRules, defaultNode: operation.DefaultNode);
+                await agents.CreateAsync(
+                    record.OwnedAgent!,
+                    createdBy: operation.Creator,
+                    rules: operation.InitialRules,
+                    defaultNode: operation.DefaultNode
+                );
                 if (copyMemory)
                     agents.CopyIdentityMemory(record.OldAgent, record.OwnedAgent!);
                 await IdentityStageAsync(operation, "after-agent-copy");

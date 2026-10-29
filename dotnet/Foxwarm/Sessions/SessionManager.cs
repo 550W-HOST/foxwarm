@@ -112,10 +112,19 @@ internal sealed partial class SessionManager : IAsyncDisposable
                 ? recoveringMove.OwnedAgent
                 : null,
             canonicalLayout: hostPaths is not null,
-            treeLimits: () => (
-                (int)(SessionWait.Number(models.ConfigurationOwner?.AppConfiguration["agentTree"]?["maxDepth"]) ?? 16),
-                (int)(SessionWait.Number(models.ConfigurationOwner?.AppConfiguration["agentTree"]?["maxChildren"]) ?? 128)
-            )
+            treeLimits: () =>
+                (
+                    (int)(
+                        SessionWait.Number(
+                            models.ConfigurationOwner?.AppConfiguration["agentTree"]?["maxDepth"]
+                        ) ?? 16
+                    ),
+                    (int)(
+                        SessionWait.Number(
+                            models.ConfigurationOwner?.AppConfiguration["agentTree"]?["maxChildren"]
+                        ) ?? 128
+                    )
+                )
         );
         skills = new Skills(
             agents,
