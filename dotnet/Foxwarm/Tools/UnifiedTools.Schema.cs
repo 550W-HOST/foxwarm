@@ -144,7 +144,7 @@ internal static partial class UnifiedTools
                     + (required.Contains(entry.Name, StringComparer.Ordinal) ? "" : "?")
                     + ": "
                     + (entry.Other ? other : SchemaType(entry.Schema, depth + 1))
-                    + (description.Length > 0 ? " /* " + Comment(description, 240) + " */" : "")
+                    + (description.Length > 0 ? " /* " + Comment(description) + " */" : "")
                     + (entry.Other ? " /* required; other key */" : "")
                     + ";"
             );

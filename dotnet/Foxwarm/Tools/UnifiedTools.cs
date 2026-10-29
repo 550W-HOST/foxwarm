@@ -321,8 +321,7 @@ internal static partial class UnifiedTools
                 + ", args: "
                 + type
                 + " }); /* "
-                + Comment(tool.Description, 240)
-                + (tool.Hidden ? " [hidden]" : "")
+                + Comment(tool.Description)
                 + " */";
             if (line.Length > 3000 || lines.Sum(item => item.Length + 1) + line.Length > 27_800)
             {
@@ -388,15 +387,17 @@ internal static partial class UnifiedTools
         return builder.Append('"').ToString();
     }
 
-    private static string Comment(string text, int max)
+    private static string Comment(string text, int? max = null)
     {
         text = Regex
             .Replace(Escape(text), "\\s+", " ")
             .Trim()
             .Replace("*/", "*\\/", StringComparison.Ordinal);
+        if (max is not int limit)
+            return text;
         var runes = text.EnumerateRunes().ToArray();
-        return runes.Length <= max
+        return runes.Length <= limit
             ? text
-            : string.Concat(runes.Take(max - 1).Select(rune => rune.ToString())) + "…";
+            : string.Concat(runes.Take(limit - 1).Select(rune => rune.ToString())) + "…";
     }
 }
