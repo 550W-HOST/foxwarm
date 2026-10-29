@@ -5,9 +5,6 @@ namespace Foxwarm.Nodes;
 
 internal sealed partial class NodeProviderRegistry
 {
-    private readonly object mutationGate = new();
-    private Task mutationTail = Task.CompletedTask;
-
     internal async Task<JsonObject> InspectProviderAsync(string providerId, CancellationToken token)
     {
         JsonObject description = providerId switch
@@ -75,28 +72,17 @@ internal sealed partial class NodeProviderRegistry
         JsonObject parameters,
         string sessionId,
         string agent,
-        CancellationToken token
+        CancellationToken token,
+        Func<string?, bool, Task>? authorize = null
     )
     {
+        ApprovedNodeRegistry.Mutation? mutation = null;
         if (action == "inspect")
             return await InvokeLifecycleAsync();
-        Task previous;
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        lock (mutationGate)
-        {
-            previous = mutationTail;
-            mutationTail = release.Task;
-        }
-        await previous;
-        try
-        {
-            token.ThrowIfCancellationRequested();
-            return await InvokeLifecycleAsync();
-        }
-        finally
-        {
-            release.SetResult();
-        }
+        using var scope = await native.Registry.BeginMutationAsync(token);
+        mutation = scope;
+        token.ThrowIfCancellationRequested();
+        return await InvokeLifecycleAsync();
 
         async Task<JsonObject> InvokeLifecycleAsync()
         {
@@ -123,7 +109,7 @@ internal sealed partial class NodeProviderRegistry
                 ValidateId(nodeId!);
                 // Resolve the exact namespace owner without requiring readiness.
                 var existing =
-                    await ResolveAsync(nodeId!, token)
+                    await ResolveAsync(nodeId!, token, mutation)
                     ?? throw new NodeProviderException(
                         "NODE_EXECUTION_NODE_UNAVAILABLE",
                         "Node is not available: " + nodeId,
@@ -144,15 +130,33 @@ internal sealed partial class NodeProviderRegistry
             var description = await provider.DescribeAsync(token);
             if (!description["lifecycle"]!.AsArray().Any(item => SessionWait.Text(item) == action))
                 throw Unsupported(provider.Id, action);
+            if (creating && nodeId is null)
+                native.Registry.ObserveProvider(provider.Id, await provider.ListAsync(token), mutation);
             if (creating && nodeId is not null)
             {
-                var existing = await ResolveAsync(nodeId, token);
-                if (action == "create" && existing is not null)
+                var existing = await ResolveAsync(nodeId, token, mutation);
+                if (action == "create" && (existing is not null || native.Registry.Forest().Contains(nodeId)))
                     throw new NodeProviderException(
                         "NODE_LIFECYCLE_NODE_EXISTS",
                         "Node already exists; create was not invoked."
                     );
                 // The namespace preflight makes foreign-provider ensure ownership impossible.
+            }
+            if (creating)
+            {
+                var existingIdentity = action == "ensure" && nodeId is not null && native.Registry.Forest().Contains(nodeId);
+                var target = action == "ensure" && nodeId is null ? null : existingIdentity ? nodeId : provider.ParentNode;
+                if (authorize is not null)
+                    await authorize(target, existingIdentity);
+                if (!existingIdentity && (action != "ensure" || nodeId is not null))
+                    native.Registry.RequireNewNode(nodeId, provider.ParentNode, mutation!);
+            }
+            else if (action == "destroy")
+            {
+                if (authorize is not null)
+                    await authorize(nodeId, true);
+                if (native.Registry.Forest().Subtree(nodeId!).Count != 1)
+                    throw new InvalidDataException("Node has descendants.");
             }
             var request = new JsonObject
             {
@@ -162,6 +166,7 @@ internal sealed partial class NodeProviderRegistry
             };
             if (nodeId is not null)
                 request["nodeId"] = nodeId[(provider.Id.Length + 1)..];
+            var before = native.Registry.Forest();
             var result = await provider.LifecycleAsync(action, request, token);
             var returned =
                 action == "destroy"
@@ -174,11 +179,18 @@ internal sealed partial class NodeProviderRegistry
                 );
             if (result["node"] is JsonObject descriptor)
             {
+                if (action == "create" && before.Contains(returned!))
+                    throw new NodeProviderException("NODE_LIFECYCLE_NODE_EXISTS", "Provider create returned an existing identity after its effect; inspect before retrying.");
+                if (action != "inspect")
+                    native.Registry.RecordProviderNode(provider.Id, descriptor, mutation!);
                 discovered[returned!] = (JsonObject)descriptor.DeepClone();
                 result["node"] = LifecycleDescriptor(descriptor);
             }
             if (action == "destroy")
+            {
+                native.Registry.RemoveProviderNode(nodeId!, mutation!);
                 discovered.TryRemove(nodeId!, out _);
+            }
             return result;
         }
     }
@@ -189,9 +201,10 @@ internal sealed partial class NodeProviderRegistry
             $"Node provider `{id}` does not support `{action}`."
         );
 
-    private static JsonObject LifecycleDescriptor(JsonObject descriptor)
+    private JsonObject LifecycleDescriptor(JsonObject descriptor)
     {
         var value = (JsonObject)descriptor.DeepClone();
+        value["parentNode"] = native.Registry.Forest().Parent(SessionWait.Text(value["id"])!);
         value["primitiveBackends"] = new JsonObject
         {
             ["filesystem"] = value["filesystem"]?.DeepClone(),

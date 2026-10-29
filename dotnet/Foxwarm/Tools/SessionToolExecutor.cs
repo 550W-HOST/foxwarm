@@ -907,14 +907,14 @@ internal sealed partial class SessionToolExecutor(
             owner.Manager.ExecuteNodeToolAsync(owner.Hosted, args, token, owner.Programmatic);
         handlers["node_create_auth_token"] = (owner, args, token) =>
             owner.Manager.CreateNodeAuthTokenAsync(owner.Hosted, args, token);
-        handlers["node_remove"] = (owner, args, _) =>
-            Task.FromResult(owner.Manager.RemoveNode(args));
+        handlers["node_remove"] = (owner, args, token) =>
+            owner.Manager.RemoveNodeAsync(owner.Hosted, args, token);
         handlers["node_bootstrap_info"] = (owner, args, _) =>
             Task.FromResult(owner.Manager.NodeBootstrapInfo(args));
         handlers["node_pair_list"] = (owner, args, _) =>
             Task.FromResult(owner.Manager.NodePairList(args));
         handlers["node_pair_approve"] = (owner, args, _) =>
-            owner.Manager.NodePairApproveAsync(args);
+            owner.Manager.NodePairApproveAsync(args, owner.Hosted);
         handlers["search_tools"] = (owner, args, token) =>
             UnifiedTools.SearchAsync(
                 registry,

@@ -98,9 +98,14 @@ public sealed class ProviderNodeRoutesTests
                 (await admin.GetFromJsonAsync<JsonObject>("api/nodes/offline-native"))!["id"]
             )
         );
+        var parentPath = "api/nodes/offline-native/parent";
+        var parent = await admin.PostAsJsonAsync(parentPath, new { parentNode = "fixture/target" });
+        parent.EnsureSuccessStatusCode();
+        Assert.Equal("fixture/target", SessionWait.Text((await admin.GetFromJsonAsync<JsonObject>("api/nodes/offline-native"))!["parentNode"]));
         using var scoped = new HttpClient { BaseAddress = admin.BaseAddress };
         scoped.DefaultRequestHeaders.Authorization = new("Bearer", "synthetic-provider-reader");
         Assert.Equal(HttpStatusCode.Forbidden, (await scoped.GetAsync(detailPath)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await scoped.PostAsJsonAsync(parentPath, new { parentNode = (string?)null })).StatusCode);
         using var anonymous = new HttpClient { BaseAddress = admin.BaseAddress };
         Assert.Equal(
             HttpStatusCode.Unauthorized,

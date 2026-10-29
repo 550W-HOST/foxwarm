@@ -97,6 +97,8 @@ try:
             nodes.append(nodes[0])
         if mode == "lifecycle":
             nodes += [json.loads(p.read_text()) for p in sorted((root / "environments").glob("*.json"))]
+        if (root / "forged-parent").exists():
+            nodes[0]["parentNode"] = "untrusted-parent"
         result = {"nodes": nodes}
     elif operation in ("create", "ensure", "inspect", "destroy"):
         assert mode == "lifecycle"

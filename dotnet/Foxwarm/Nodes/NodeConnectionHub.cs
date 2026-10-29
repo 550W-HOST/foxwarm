@@ -326,20 +326,28 @@ internal sealed partial class NodeConnectionHub : IDisposable
 
     internal bool Remove(string id)
     {
-        bool disconnected;
+        using var mutation = Registry.BeginMutation();
+        return RemoveNodes([id], mutation).Contains(id, StringComparer.Ordinal);
+    }
+
+    internal IReadOnlyList<string> RemoveNodes(IReadOnlyList<string> ids, ApprovedNodeRegistry.Mutation mutation)
+    {
+        string[] disconnected;
         lock (gate)
         {
-            disconnected = nodes.ContainsKey(id);
+            disconnected = ids.Where(nodes.ContainsKey).ToArray();
             try
             {
-                Registry.Remove(id);
+                Registry.RemoveNodes(ids, mutation);
             }
             catch (AuthorityCommittedException)
             {
-                Disconnect(id, "Node credentials removed");
+                foreach (var id in ids)
+                    Disconnect(id, "Node credentials removed");
                 throw;
             }
-            Disconnect(id, "Node credentials removed");
+            foreach (var id in ids)
+                Disconnect(id, "Node credentials removed");
         }
         Changed?.Invoke();
         return disconnected;
@@ -347,11 +355,12 @@ internal sealed partial class NodeConnectionHub : IDisposable
 
     internal void Rename(string oldId, string newId)
     {
+        using var mutation = Registry.BeginMutation();
         lock (gate)
         {
             try
             {
-                Registry.Rename(oldId, newId);
+                Registry.Rename(oldId, newId, mutation);
             }
             catch (AuthorityCommittedException)
             {

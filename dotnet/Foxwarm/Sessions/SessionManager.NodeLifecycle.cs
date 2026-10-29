@@ -121,6 +121,10 @@ internal sealed partial class SessionManager
                         "destroy requires exact confirmation `destroy node " + nodeId + "`."
                     );
             }
+            if (action == "ensure" && nodeId is null && agents.CreatedBy(owner.Agent) is not null)
+                throw new ToolAuthorizationDeniedException("Callers in a delegated Agent must supply ensure.nodeId before provider effects.");
+            if (action == "create")
+                RequireNodeCreationParent(owner, NodeProviders.ProviderParent(providerId));
             resultValue = await NodeProviders.LifecycleAsync(
                 action,
                 providerId,
@@ -128,7 +132,14 @@ internal sealed partial class SessionManager
                 parameters,
                 owner.Id,
                 owner.Agent,
-                token
+                token,
+                async (target, existing) =>
+                {
+                    if (!existing)
+                        RequireNodeCreationParent(owner, target);
+                    await AuthorizeToolAsync(owner, new("node", "builtin", "node", args), null, token,
+                        nodeEffects: target is null ? [] : [target]);
+                }
             );
             ExecutableNodeProvider.BoundedJson(resultValue, 128 * 1024, 12, int.MaxValue, true);
         }
@@ -210,6 +221,7 @@ internal sealed partial class SessionManager
                     summary["provider"]?.DeepClone()
                     ?? JsonValue.Create(id == "master" ? "master" : "authenticated-remote"),
                 ["type"] = summary["type"]!.DeepClone(),
+                ["parentNode"] = summary["parentNode"]?.DeepClone(),
                 ["availability"] =
                     summary["availability"]?.DeepClone()
                     ?? JsonValue.Create(

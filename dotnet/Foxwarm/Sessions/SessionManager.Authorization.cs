@@ -47,8 +47,12 @@ internal sealed partial class SessionManager
         IReadOnlyList<AuthorizationPath> paths,
         string node = "master",
         string? effectNode = null
-    ) =>
-        new(
+    )
+    {
+        var targets = source == "builtin" && name == "node"
+            ? NodeProviders.AuthorizationTargets(args)
+            : ToolAuthorizationNodeEffects.Resolve(source, name, effectNode ?? node, args);
+        return new(
             source,
             name,
             server,
@@ -60,14 +64,11 @@ internal sealed partial class SessionManager
             toolWorkspace,
             agents.AgentDirectory(owner.Agent),
             agents.MemoryDirectory(owner.Agent),
-            NodeTargets: ToolAuthorizationNodeEffects.Resolve(
-                source,
-                name,
-                effectNode ?? node,
-                args
-            ),
-            CurrentNode: CurrentNode(owner)
+            NodeTargets: targets,
+            CurrentNode: CurrentNode(owner),
+            NodeForest: targets is { Count: > 0 } ? Nodes.Registry.Forest() : null
         );
+    }
 
     private ToolAuthorizationRequest PopulateAuthorizationTargets(
         ToolAuthorizationRequest request,
@@ -138,7 +139,8 @@ internal sealed partial class SessionManager
         WorkspaceTools? files,
         CancellationToken token,
         SessionOwner? concreteTarget = null,
-        bool toolScriptSourceRead = false
+        bool toolScriptSourceRead = false,
+        IReadOnlyList<string>? nodeEffects = null
     )
     {
         owner.Entry.RequireIdentityAuthority();
@@ -231,6 +233,8 @@ internal sealed partial class SessionManager
                 : resolved.ExecutionNode,
             effectNode: resolved.ExecutionNode
         );
+        if (nodeEffects is not null)
+            request = request with { NodeTargets = nodeEffects, NodeForest = nodeEffects.Count > 0 ? Nodes.Registry.Forest() : null };
         var policies = EffectivePolicies(owner.Agent, await authorization.LoadAsync(token));
         request = PopulateEffectiveTargets(request, owner, policies, concreteTarget);
         var decision = EffectiveDecision(policies, request);
@@ -433,10 +437,12 @@ internal sealed partial class SessionManager
             && !IsMasterBrowser(source, name, targetNode)
         )
             return false;
-        var request = AuthorizationRequest(owner, source, name, server, new(), [], targetNode);
         var unknownNodeTargets =
             source == "builtin"
-            && name is "send_file" or "image_write_to_file" or "copy_between_nodes" or "node";
+            && name is "send_file" or "image_write_to_file" or "copy_between_nodes" or "node" or "node_create_auth_token" or "node_remove";
+        try
+        {
+        var request = AuthorizationRequest(owner, source, name, server, new(), [], targetNode);
         return new[] { authorization.Load() }
                 .Concat(layers)
                 .All(policy =>
@@ -455,6 +461,11 @@ internal sealed partial class SessionManager
                 unknownNode,
                 targetNode
             );
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
     }
 
     internal JsonArray ModelDefinitions(

@@ -28,6 +28,7 @@ internal sealed partial class ExecutableNodeProvider(string id, JsonObject confi
     private readonly object descriptionGate = new();
     private Task<JsonObject>? description;
     internal string Id => id;
+    internal string? ParentNode => SessionWait.Text(config["parentNode"]);
     private static readonly string[] EnvironmentKeys =
     [
         "PATH",

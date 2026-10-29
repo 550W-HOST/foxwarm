@@ -120,7 +120,8 @@ internal sealed class McpInboundSafeException(string message) : InvalidOperation
 
 internal sealed class McpExternalAuthorization(
     ToolAuthorizationAuthority authority,
-    string workspace
+    string workspace,
+    Foxwarm.Nodes.ApprovedNodeRegistry? nodes = null
 )
 {
     internal ToolAuthorizationRequest Request(
@@ -131,8 +132,10 @@ internal sealed class McpExternalAuthorization(
         string? server = null,
         string? node = null,
         IReadOnlyList<AuthorizationPath>? paths = null
-    ) =>
-        new(
+    )
+    {
+        var targets = ToolAuthorizationNodeEffects.Resolve(source, name, node, args);
+        return new(
             source,
             name,
             server,
@@ -146,8 +149,10 @@ internal sealed class McpExternalAuthorization(
             null,
             Principal: "external",
             ExternalId: context.ExternalId,
-            NodeTargets: ToolAuthorizationNodeEffects.Resolve(source, name, node, args)
+            NodeTargets: targets,
+            NodeForest: targets is { Count: > 0 } ? nodes?.Forest() : null
         );
+    }
 
     internal async Task RequireAsync(
         McpExternalContext context,

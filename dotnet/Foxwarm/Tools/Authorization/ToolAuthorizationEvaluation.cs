@@ -36,7 +36,8 @@ internal sealed record ToolAuthorizationRequest(
     string? ExternalId = null,
     string? TaskOwnerSession = null,
     IReadOnlyList<string>? NodeTargets = null,
-    string? CurrentNode = null
+    string? CurrentNode = null,
+    Foxwarm.Nodes.NodeAuthorizationForest? NodeForest = null
 );
 
 internal sealed record AuthorizationDecision(bool Allowed, JsonObject? Rule);
@@ -162,7 +163,11 @@ internal static class ToolAuthorizationEvaluation
         bool Matches(string node)
         {
             if (matcher is not JsonObject map)
-                return Pattern(matcher, node);
+                return request.NodeForest is { } forest && forest.Contains(node)
+                    ? forest.Chain(node).Any(ancestor => Pattern(matcher, ancestor))
+                    : Pattern(matcher, node);
+            if (map.ContainsKey("exact"))
+                return Scalar(map["exact"], AuthorizationFact.Of(node));
             if (map.ContainsKey("current"))
                 return request.Principal == "internal"
                     && request.CurrentNode is not null
@@ -305,11 +310,21 @@ internal static class ToolAuthorizationEvaluation
         return true;
     }
 
+    private static void ValidateNodeAncestry(ToolAuthorizationRequest request)
+    {
+        if (request.NodeForest is not { } forest || request.NodeTargets is not { } targets)
+            return;
+        foreach (var node in targets)
+            if (forest.Contains(node))
+                _ = forest.Chain(node);
+    }
+
     internal static AuthorizationDecision Evaluate(
         ToolAuthorizationPolicy policy,
         ToolAuthorizationRequest request
     )
     {
+        ValidateNodeAncestry(request);
         foreach (var rule in policy.Value["rules"]!.AsArray().OfType<JsonObject>())
         {
             var match = rule["match"]!.AsObject();
@@ -335,6 +350,8 @@ internal static class ToolAuthorizationEvaluation
         bool unknownNodeTargets = false
     )
     {
+        if (!unknownNodeTargets)
+            ValidateNodeAncestry(request);
         foreach (var rule in policy.Value["rules"]!.AsArray().OfType<JsonObject>())
         {
             var match = rule["match"]!.AsObject();
@@ -490,9 +507,13 @@ internal static class ToolAuthorizationNodeEffects
             };
             return endpoints.All(Valid) ? endpoints.Select(value => value!).ToArray() : null;
         }
+        if (name == "node_create_auth_token" && SessionWait.Text(args["parentNode"]) is string parent && Valid(parent))
+            return [parent];
+        if (name == "node_remove" && SessionWait.Text(args["nodeId"])?.Trim() is string removed && Valid(removed))
+            return [removed];
         if (
             name == "node"
-            && SessionWait.Text(args["action"])?.Trim().ToLowerInvariant() is "select" or "inspect"
+            && SessionWait.Text(args["action"])?.Trim().ToLowerInvariant() is "select" or "inspect" or "destroy"
             && !args.ContainsKey("providerId")
             && SessionWait.Text(args["nodeId"])?.Trim() is string node
             && Valid(node)

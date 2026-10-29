@@ -37,6 +37,7 @@ internal sealed partial class NodeProviderRegistry
                 throw new InvalidDataException("Node provider identity is reserved.");
             providers.Add(id, new(id, (JsonObject)raw!.DeepClone()));
         }
+        native.Registry.ConfigureProviders(configuration);
     }
 
     internal static void ValidateId(string id)
@@ -72,24 +73,55 @@ internal sealed partial class NodeProviderRegistry
 
     // Synchronous readers consume a projection only; subprocess discovery never runs under their locks.
     // Actual effects always perform fresh asynchronous exact-owner/capability resolution.
-    internal JsonArray Snapshot() =>
-        new(
-            discovered
-                .Values.OrderBy(value => SessionWait.Text(value["id"]), StringComparer.Ordinal)
-                .Select(Summary)
-                .Cast<JsonNode?>()
-                .ToArray()
-        );
+    internal JsonArray Snapshot()
+    {
+        var values = discovered.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        foreach (var record in native.Registry.ProviderRecords().OfType<JsonObject>())
+        {
+            var id = SessionWait.Text(record["nodeId"])!;
+            if (!values.ContainsKey(id) && record["descriptor"] is JsonObject descriptor)
+            {
+                var offline = (JsonObject)descriptor.DeepClone();
+                offline["availability"] = "offline";
+                values[id] = offline;
+            }
+        }
+        return new(values.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => (JsonNode?)Summary(pair.Value)).ToArray());
+    }
+
+    internal IReadOnlyList<string>? AuthorizationTargets(JsonObject args)
+    {
+        var action = SessionWait.Text(args["action"])?.Trim().ToLowerInvariant();
+        var id = SessionWait.Text(args["nodeId"])?.Trim();
+        if (action is "create" or "ensure")
+        {
+            if (action == "ensure" && id is null)
+                return null; // Retained top-level compatibility path has no pre-effect Node target.
+            if (action == "ensure" && id is not null && native.Registry.Forest().Contains(id))
+                return [id];
+            var parent = ProviderParent(SessionWait.Text(args["providerId"])?.Trim());
+            return parent is null ? null : [parent];
+        }
+        return action is "select" or "inspect" or "destroy" && id is not null && !args.ContainsKey("providerId")
+            ? [id] : null;
+    }
+
+    internal string? ProviderParent(string? providerId) =>
+        providerId is not null && providers.TryGetValue(providerId, out var provider) ? provider.ParentNode : null;
 
     internal async Task<JsonArray> ListAsync(CancellationToken token)
     {
         var values = new List<JsonObject>();
         foreach (var provider in providers.Values)
-            values.AddRange((await provider.ListAsync(token)).OfType<JsonObject>());
+        {
+            var descriptors = await provider.ListAsync(token);
+            native.Registry.ObserveProvider(provider.Id, descriptors);
+            values.AddRange(descriptors.OfType<JsonObject>());
+        }
         discovered.Clear();
         foreach (var value in values)
             discovered[value["id"]!.GetValue<string>()] = (JsonObject)value.DeepClone();
-        return new JsonArray(values.Select(Summary).Cast<JsonNode?>().ToArray());
+        return Snapshot();
     }
 
     internal static JsonObject MasterSummary(bool hasPty = false) =>
@@ -112,7 +144,7 @@ internal sealed partial class NodeProviderRegistry
                 : new JsonObject { ["vscode-fs"] = 1, ["vscode-git"] = 2 },
         };
 
-    internal async Task<JsonObject?> ResolveAsync(string id, CancellationToken token)
+    internal async Task<JsonObject?> ResolveAsync(string id, CancellationToken token, ApprovedNodeRegistry.Mutation? mutation = null)
     {
         ValidateId(id);
         // Fixed native owners never consult optional executable discovery.
@@ -140,6 +172,7 @@ internal sealed partial class NodeProviderRegistry
             discovered.TryRemove(id, out _);
             throw;
         }
+        native.Registry.ObserveProvider(provider.Id, nodes, mutation);
         var descriptor = nodes
             .OfType<JsonObject>()
             .FirstOrDefault(value => SessionWait.Text(value["id"]) == id);
@@ -200,6 +233,7 @@ internal sealed partial class NodeProviderRegistry
             ["id"] = id,
             ["nodeId"] = id,
             ["provider"] = descriptor["provider"]!.DeepClone(),
+            ["parentNode"] = native.Registry.Forest().Parent(id),
             ["type"] = descriptor["type"]!.DeepClone(),
             ["kind"] = descriptor["kind"]!.DeepClone(),
             ["displayName"] = descriptor["label"]?.DeepClone() ?? JsonValue.Create(id),

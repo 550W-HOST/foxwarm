@@ -144,13 +144,45 @@ internal sealed partial class SessionManager
         };
     }
 
-    internal JsonObject RemoveNode(JsonObject args)
+    private void RequireNodeCreationParent(SessionOwner caller, string? parent)
     {
-        ToolRegistry.Keys(args, ["nodeId"]);
+        caller.Entry.RequireIdentityAuthority();
+        if (!IsCurrentOwner(caller))
+            throw new InvalidOperationException("Node admission requires the current Session owner.");
+        if (parent is null && agents.CreatedBy(caller.Agent) is not null)
+            throw new ToolAuthorizationDeniedException("Callers in a delegated Agent must create Nodes with an authorization parent.");
+    }
+
+    internal async Task<JsonObject> RemoveNodeAsync(SessionOwner owner, JsonObject args, CancellationToken token)
+    {
+        ToolRegistry.Keys(args, ["nodeId", "cascade"]);
         var id = ToolRegistry.Text(args, "nodeId")?.Trim();
         if (string.IsNullOrEmpty(id))
             throw new InvalidDataException("nodeId is required.");
-        return new JsonObject { ["nodeId"] = id, ["disconnected"] = Nodes.Remove(id) };
+        if (args.ContainsKey("cascade") && (args["cascade"] is not JsonValue flag || !flag.TryGetValue<bool>(out _)))
+            throw new InvalidDataException("cascade must be a boolean.");
+        var cascade = args["cascade"]?.GetValue<bool>() ?? false;
+        using var mutation = await Nodes.Registry.BeginMutationAsync(token);
+        var subtree = Nodes.Registry.Forest().Subtree(id);
+        if (!cascade && subtree.Count > 1)
+            throw new InvalidDataException("Node has descendants; cascade is required.");
+        if (subtree.Any(node => node == "master" || node.Contains('/')))
+            throw new InvalidDataException("Native credential cascade cannot contain executable-provider Nodes.");
+        foreach (var member in subtree)
+        {
+            var removal = (JsonObject)args.DeepClone();
+            removal["nodeId"] = member;
+            await AuthorizeToolAsync(owner, new("node_remove", "builtin", "node_remove", removal), null, token);
+        }
+        token.ThrowIfCancellationRequested();
+        var disconnected = Nodes.RemoveNodes(subtree, mutation);
+        var result = new JsonObject { ["nodeId"] = id, ["disconnected"] = disconnected.Contains(id, StringComparer.Ordinal) };
+        if (cascade)
+        {
+            result["removedNodes"] = new JsonArray(subtree.Select(node => (JsonNode?)JsonValue.Create(node)).ToArray());
+            result["disconnectedNodes"] = new JsonArray(disconnected.Select(node => (JsonNode?)JsonValue.Create(node)).ToArray());
+        }
+        return result;
     }
 
     internal JsonObject NodeBootstrapInfo(JsonObject args)
@@ -184,13 +216,25 @@ internal sealed partial class SessionManager
         };
     }
 
-    internal async Task<JsonObject> NodePairApproveAsync(JsonObject args)
+    internal async Task<JsonObject> NodePairApproveAsync(JsonObject args, SessionOwner? caller = null)
     {
         ToolRegistry.Keys(args, ["pendingId", "nodeId"]);
+        void RequireCaller()
+        {
+            if (caller is null)
+                return;
+            caller.Entry.RequireIdentityAuthority();
+            if (!IsCurrentOwner(caller))
+                throw new InvalidOperationException("Pairing approval requires the current Session owner.");
+            if (agents.CreatedBy(caller.Agent) is not null)
+                throw new ToolAuthorizationDeniedException("Callers in a delegated Agent must use node_create_auth_token with parentNode instead of root pairing approval.");
+        }
+        RequireCaller();
         var result = await Nodes.ApproveAsync(
             ToolRegistry.Text(args, "pendingId")
                 ?? throw new InvalidDataException("pendingId is required."),
-            ToolRegistry.Text(args, "nodeId")
+            ToolRegistry.Text(args, "nodeId"),
+            RequireCaller
         );
         return new() { ["output"] = result.ToJsonString() };
     }

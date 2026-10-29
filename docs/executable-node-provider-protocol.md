@@ -195,7 +195,11 @@ Lifecycle requests retain the authorized Main control-plane envelope:
 
 Create/ensure route by configured provider ID; inspect/destroy resolve the exact existing Node. Create/ensure/inspect return `node` using the list descriptor shape; destroy returns exact `nodeId`. Optional fields are `effect`, `dataRetention` and bounded plain-JSON `details`. Declare supported actions in `describe.lifecycle`; unsupported actions fail explicitly.
 
-Core checks global identity, retains the existing Main mutation lane, requires exact destroy confirmation, and does not infer deletion, erasure, isolation or lease guarantees. Create/ensure do not select the Node, create an Agent or assign work. Destroy does not acquire a new busy-exec restriction or implicitly kill commands: subsequent polls report the provider's actual finished/lost behavior.
+Provider configuration may declare `nodeProviders.<id>.parentNode`, an existing Main-owned authorization parent. It is startup-only administrator configuration, not a provider descriptor or lifecycle parameter. `parentNode` is not added to the external request/response protocol. Core records the trusted relationship and preserves referenced offline identities in its existing Node registry.
+
+CreatedBy-bearing internal callers must give an explicit `ensure.nodeId`; Core then authorizes the existing identity or configured parent for a fresh one before effects. Top-level callers retain optional IDs. Omitted-ID ensure cannot establish a Node-subtree target before the provider runs; non-subtree policy still applies. Core does not infer identity from opaque options. Existing returned identities keep their stored parent, and create cannot return an existing identity as fresh. Provider destroy is refused while a Node has descendants; native credential cascade does not destroy provider resources.
+
+Core checks global identity, retains Main-owned mutation ordering, requires exact destroy confirmation, and does not infer deletion, erasure, isolation or lease guarantees. Create/ensure do not select the Node, create an Agent or assign work. Destroy does not acquire a new busy-exec restriction or implicitly kill commands: subsequent polls report the provider's actual finished/lost behavior.
 
 ## Bounds and failure handling
 

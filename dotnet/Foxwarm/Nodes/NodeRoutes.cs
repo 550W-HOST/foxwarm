@@ -130,7 +130,7 @@ internal static class NodeRoutes
         {
             // Validate command inputs before reserving an identity, without reading pairing credentials.
             var input = CommandInput(body, configuredBaseUrl);
-            var created = hub.Registry.Create(input.Id);
+            var created = hub.Registry.Create(input.Id, Text(body, "parentNode"));
             var commands = bootstrap.Commands(
                 input.Url,
                 input.Id,
@@ -166,6 +166,15 @@ internal static class NodeRoutes
                     context.Request.RouteValues["nodeId"]!.ToString()!,
                     Required(body, "nodeId")
                 );
+                return Task.FromResult(new JsonObject { ["success"] = true });
+            }
+        );
+        MapPost(
+            app,
+            "/api/nodes/{nodeId}/parent",
+            (body, context) =>
+            {
+                hub.Registry.SetParent(context.Request.RouteValues["nodeId"]!.ToString()!, Text(body, "parentNode"));
                 return Task.FromResult(new JsonObject { ["success"] = true });
             }
         );

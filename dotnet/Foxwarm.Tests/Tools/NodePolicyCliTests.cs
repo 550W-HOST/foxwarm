@@ -432,6 +432,17 @@ public sealed class NodePolicyCliTests
                     )
                 )["isError"]!.GetValue<bool>()
             );
+            f.Manager.Nodes.Registry.Create("authorization-parent");
+            f.Manager.Nodes.Registry.SetParent("official", "authorization-parent");
+            await f.Manager.SetAgentRulesAsync("main", JsonNode.Parse("""[{"tool":"read","action":"deny"}]""")!.AsArray());
+            await f.PolicyAsync("version: 1\nrules: [{action: allow, externalId: alpha, node: authorization-parent}]\n");
+            var subtreeRead = await InboundMcpFixture.ConcreteAsync(external, "node:official/read",
+                new JsonObject { ["filePath"] = Path.Combine(cliCwd, "selected.txt") });
+            Assert.False(subtreeRead["isError"]?.GetValue<bool>() == true, subtreeRead.ToJsonString());
+            Assert.Contains("selected", subtreeRead.ToJsonString());
+            await f.PolicyAsync("version: 1\nrules: [{action: allow, externalId: alpha, node: {exact: authorization-parent}}]\n");
+            Assert.True((await InboundMcpFixture.ConcreteAsync(external, "node:official/read",
+                new JsonObject { ["filePath"] = Path.Combine(cliCwd, "selected.txt") }))["isError"]!.GetValue<bool>());
         }
         finally
         {

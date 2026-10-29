@@ -22,7 +22,7 @@ internal sealed class McpInboundCatalog
         mcp = manager.OutboundMcp;
         ChannelRegistry = manager.ChannelRegistry;
         nodes = manager.Nodes;
-        authorization = new(manager.Authorization, manager.ToolWorkspace);
+        authorization = new(manager.Authorization, manager.ToolWorkspace, nodes.Registry);
         sessions = new(new SessionRuntime(manager), authorization);
         externalNodes = new(nodes, authorization);
     }

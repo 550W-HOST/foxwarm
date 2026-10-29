@@ -77,6 +77,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
         this.root = Path.GetFullPath(root);
         diagnostics = new(this.root);
         Nodes = new(this.root);
+        Nodes.Registry.ConfigureLimits(() => (
+            (int)(SessionWait.Number(models.ConfigurationOwner?.AppConfiguration["nodeTree"]?["maxDepth"]) ?? 16),
+            (int)(SessionWait.Number(models.ConfigurationOwner?.AppConfiguration["nodeTree"]?["maxChildren"]) ?? 256)
+        ));
         NodeProviders = new(
             Nodes,
             models.ConfigurationOwner?.AppConfiguration["nodeProviders"] as JsonObject,

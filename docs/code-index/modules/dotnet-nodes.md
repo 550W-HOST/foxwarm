@@ -6,7 +6,7 @@ Main-owned generic registry, executable-provider file/process primitives, Sessio
 
 This module connects existing CLI/browser/Android Node protocol clients to the .NET host. Optional lifecycle requests go to configured providers; Core itself supplies no provisioning driver or OS isolation. Fixed Code/PTY services use advertised authenticated capabilities, not model-tool dispatch. Whole-file consumers use the generic registry, retaining the existing CLI transfer protocol for resident Nodes. Remote exec authority is transient and bounded; the client owns its process and pending replay. [Remote Node integration](../threads/remote-node-compatibility.md#net-external-node-integration) owns the canonical connected contract and remaining phase boundaries.
 
-Executable registry/files, persistent provider exec and optional lifecycle are connected. Discovery and lifecycle authority are canonical in [provider lifecycle](../threads/tool-dispatch-node-execution.md#d-dispatch-node-provider-lifecycle). Session Worker hosting and managed controllers remain excluded; see [delivery scope](../overview.md#d-dotnet-delivery-scope).
+Main-owned [authorization forests](../behaviors/nodes-workspaces-and-permissions.md#node-authorization-forests) connect native registry and configured provider ancestry without expanding incoming Node access. Executable registry/files, persistent provider exec and optional lifecycle are connected. Discovery and lifecycle authority are canonical in [provider lifecycle](../threads/tool-dispatch-node-execution.md#d-dispatch-node-provider-lifecycle). Session Worker hosting and managed controllers remain excluded; see [delivery scope](../overview.md#d-dotnet-delivery-scope).
 
 ## Units
 

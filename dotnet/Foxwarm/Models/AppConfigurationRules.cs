@@ -19,7 +19,8 @@ internal static class AppConfigurationRules
             HttpUrl(app["url"], "app config `url`");
         Channels(app["channels"], app.ContainsKey("channels"));
         Llm(app["llm"]);
-        AgentTree(app["agentTree"], app.ContainsKey("agentTree"));
+        Tree(app["agentTree"], app.ContainsKey("agentTree"), "agentTree");
+        Tree(app["nodeTree"], app.ContainsKey("nodeTree"), "nodeTree");
         NodeProviders(app["nodeProviders"], app.ContainsKey("nodeProviders"));
         SessionWorkers(app["sessionWorkers"], app.ContainsKey("sessionWorkers"));
         Boolean(app["dbWorkers"], "app config `dbWorkers`", app.ContainsKey("dbWorkers"));
@@ -37,7 +38,7 @@ internal static class AppConfigurationRules
         );
     }
 
-    private static void AgentTree(JsonNode? value, bool present)
+    private static void Tree(JsonNode? value, bool present, string name)
     {
         if (!present)
             return;
@@ -46,7 +47,7 @@ internal static class AppConfigurationRules
             || tree.Any(pair => pair.Key is not ("maxDepth" or "maxChildren"))
         )
             throw new InvalidDataException(
-                "app config `agentTree` accepts maxDepth and maxChildren."
+                $"app config `{name}` accepts maxDepth and maxChildren."
             );
         foreach (var (key, raw) in tree)
             if (
@@ -57,7 +58,7 @@ internal static class AppConfigurationRules
                 || number != Math.Truncate(number)
             )
                 throw new InvalidDataException(
-                    $"app config `agentTree.{key}` must be a nonnegative integer."
+                    $"app config `{name}.{key}` must be a nonnegative integer."
                 );
     }
 
@@ -150,7 +151,7 @@ internal static class AppConfigurationRules
                 throw new InvalidDataException(
                     $"app config `nodeProviders.{id}.type` must be `executable`."
                 );
-            var allowed = new HashSet<string>(["type", "command", "args", "timeoutSeconds"]);
+            var allowed = new HashSet<string>(["type", "command", "args", "timeoutSeconds", "parentNode"]);
             var unknown = provider
                 .Select(pair => pair.Key)
                 .FirstOrDefault(key => !allowed.Contains(key));
@@ -158,6 +159,13 @@ internal static class AppConfigurationRules
                 throw new InvalidDataException(
                     $"app config `nodeProviders.{id}` has unsupported field `{unknown}`."
                 );
+            if (provider.ContainsKey("parentNode"))
+            {
+                var parent = Text(provider["parentNode"]);
+                if (parent is null || parent.Length == 0 || parent != parent.Trim())
+                    throw new InvalidDataException($"app config `nodeProviders.{id}.parentNode` must be an exact Node ID.");
+                Foxwarm.Nodes.NodeProviderRegistry.ValidateId(parent);
+            }
             ExactText(
                 provider["command"],
                 $"app config `nodeProviders.{id}.command`",

@@ -12,11 +12,19 @@ internal sealed partial class SessionManager
         CancellationToken token
     )
     {
-        ToolRegistry.Keys(args, ["nodeId", "filePath"]);
+        ToolRegistry.Keys(args, ["nodeId", "filePath", "parentNode"]);
         var id = (ToolRegistry.Text(args, "nodeId") ?? "").Trim();
         if (id.Length == 0)
             throw new InvalidDataException("node_create_auth_token nodeId is required.");
         var path = WorkspaceTools.PrivateNodeTokenPath(ToolRegistry.Text(args, "filePath") ?? "");
+        var parent = ToolRegistry.Text(args, "parentNode");
+        if (parent is not null && (parent.Length == 0 || parent != parent.Trim()))
+            throw new InvalidDataException("parentNode must be an exact Node ID.");
+        using var mutation = await Nodes.Registry.BeginMutationAsync(token);
+        RequireNodeCreationParent(owner, parent);
+        await AuthorizeToolAsync(owner, new("node_create_auth_token", "builtin", "node_create_auth_token", args),
+            new WorkspaceTools(AgentDirectory(owner.Agent)), token);
+        Nodes.Registry.RequireNewNode(Foxwarm.Nodes.ApprovedNodeRegistry.ValidateId(id, true), parent, mutation);
         token.ThrowIfCancellationRequested();
         var options = new FileStreamOptions
         {
@@ -32,7 +40,7 @@ internal sealed partial class SessionManager
         JsonObject created;
         try
         {
-            created = Nodes.Registry.Create(id);
+            created = Nodes.Registry.Create(id, parent, mutation);
         }
         catch (Exception error)
         {

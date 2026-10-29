@@ -888,6 +888,24 @@ var APP_CONFIG_SCHEMA = {
       },
       description: "Startup-only shared WebUI and inbound MCP identities. Declare each surface explicitly and restart after changes."
     },
+    agentTree: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        maxDepth: { type: "integer", minimum: 0, maximum: 2147483647, default: 16 },
+        maxChildren: { type: "integer", minimum: 0, maximum: 2147483647, default: 128 }
+      },
+      description: "Admission limits for Agent creator trees. Roots have depth zero; children are counted directly."
+    },
+    nodeTree: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        maxDepth: { type: "integer", minimum: 0, maximum: 2147483647, default: 16 },
+        maxChildren: { type: "integer", minimum: 0, maximum: 2147483647, default: 256 }
+      },
+      description: "Admission limits for Node authorization forests. Roots have depth zero; children are counted directly."
+    },
     nodeProviders: {
       type: "object",
       propertyNames: { pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
@@ -899,7 +917,8 @@ var APP_CONFIG_SCHEMA = {
           type: { const: "executable", description: "Trusted one-shot executable Node provider adapter." },
           command: { type: "string", minLength: 1, maxLength: 4096, pattern: "^\\S(?:.*\\S)?$" },
           args: { type: "array", maxItems: 64, items: { type: "string", maxLength: 4096 } },
-          timeoutSeconds: { type: "integer", minimum: 1, maximum: 300, default: 90 }
+          timeoutSeconds: { type: "integer", minimum: 1, maximum: 300, default: 90 },
+          parentNode: { type: "string", pattern: "^(?:[A-Za-z0-9._:-]{1,128}|[A-Za-z0-9][A-Za-z0-9._:-]{0,63}/[A-Za-z0-9][A-Za-z0-9._:-]{0,127})$" }
         }
       },
       description: "Startup-only trusted Node providers. Requires restart."

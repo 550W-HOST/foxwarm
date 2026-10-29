@@ -239,11 +239,19 @@ internal sealed record ToolAuthorizationPolicy(JsonObject Value)
     {
         if (node is not JsonObject map)
             return IdentityPattern(node);
-        Fields(map, "current", "provider");
+        Fields(map, "current", "provider", "exact");
         if (map.Count != 1)
             throw new InvalidDataException(
-                "Node matcher requires exactly one of current or provider."
+                "Node matcher requires exactly one of current, provider or exact."
             );
+        if (map.ContainsKey("exact"))
+        {
+            var exact = IdentityPattern(map["exact"]);
+            var identities = exact is JsonArray exactValues ? exactValues.ToArray() : [exact];
+            if (identities.Any(value => String(value).Contains('*')))
+                throw new InvalidDataException("Node exact matcher requires literal Node IDs.");
+            return new JsonObject { ["exact"] = exact };
+        }
         if (map.ContainsKey("current"))
         {
             if (!Boolean(map["current"]))
