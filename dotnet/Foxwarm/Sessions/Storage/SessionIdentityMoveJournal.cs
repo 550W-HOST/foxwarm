@@ -120,14 +120,29 @@ internal sealed class SessionIdentityMoveJournal(string root)
         bool? published = null;
         if (row["agentDirectoryPublished"] is not null)
         {
-            if (row["agentDirectoryPublished"] is not JsonValue flag || !flag.TryGetValue<bool>(out var value))
-                throw new InvalidDataException("Identity move has invalid Agent publication evidence.");
+            if (
+                row["agentDirectoryPublished"] is not JsonValue flag
+                || !flag.TryGetValue<bool>(out var value)
+            )
+                throw new InvalidDataException(
+                    "Identity move has invalid Agent publication evidence."
+                );
             published = value;
         }
-        if (row["ownedAgentPreparation"] is not null && preparation is null
-            || row["previousAgentMetadata"] is not null && row["previousAgentMetadata"] is not JsonObject
-            || !ownsAgent && (preparation is not null || row["previousAgentMetadata"] is not null || published is not null))
-            throw new InvalidDataException("Identity move has invalid Agent preparation ownership.");
+        if (
+            row["ownedAgentPreparation"] is not null && preparation is null
+            || row["previousAgentMetadata"] is not null
+                && row["previousAgentMetadata"] is not JsonObject
+            || !ownsAgent
+                && (
+                    preparation is not null
+                    || row["previousAgentMetadata"] is not null
+                    || published is not null
+                )
+        )
+            throw new InvalidDataException(
+                "Identity move has invalid Agent preparation ownership."
+            );
         if (preparation is not null)
             AgentCatalog.ValidatePreparationName(preparation);
         return new(

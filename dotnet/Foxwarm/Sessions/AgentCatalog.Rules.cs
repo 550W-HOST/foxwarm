@@ -119,7 +119,10 @@ internal sealed partial class AgentCatalog
         var limits = treeLimits();
         if (chain.Length > limits.MaxDepth)
             throw new InvalidDataException("Agent tree depth limit exceeded.");
-        if (snapshot.Count(pair => Exists(pair.Key) && Creator(snapshot, pair.Key) == creator) >= limits.MaxChildren)
+        if (
+            snapshot.Count(pair => Exists(pair.Key) && Creator(snapshot, pair.Key) == creator)
+            >= limits.MaxChildren
+        )
             throw new InvalidDataException("Agent direct-child limit exceeded.");
     }
 

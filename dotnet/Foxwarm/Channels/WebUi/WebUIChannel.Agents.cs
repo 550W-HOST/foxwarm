@@ -86,15 +86,31 @@ internal sealed partial class WebUIChannel
                         || !agent.TryGetValue<string>(out var name)
                     )
                         return Results.BadRequest(new { error = "agentId is required." });
-                    if (body.ContainsKey("restore") && (body["restore"] is not JsonValue restoreValue
-                        || !restoreValue.TryGetValue<bool>(out _)))
+                    if (
+                        body.ContainsKey("restore")
+                        && (
+                            body["restore"] is not JsonValue restoreValue
+                            || !restoreValue.TryGetValue<bool>(out _)
+                        )
+                    )
                         throw new InvalidDataException("restore must be a boolean.");
                     if (SessionCatalog.Flag(body["restore"]))
                     {
                         if (body.Any(pair => pair.Key is not ("agentId" or "restore")))
-                            throw new InvalidDataException("Restoration does not accept metadata overrides.");
+                            throw new InvalidDataException(
+                                "Restoration does not accept metadata overrides."
+                            );
                         await sessions.RestoreRetainedAgentAsync(name.Trim());
-                        return Results.Json(new { success = true, agentId = name.Trim(), sessionId = (string?)null, restored = true }, statusCode: 201);
+                        return Results.Json(
+                            new
+                            {
+                                success = true,
+                                agentId = name.Trim(),
+                                sessionId = (string?)null,
+                                restored = true,
+                            },
+                            statusCode: 201
+                        );
                     }
                     var inherit = body["inheritAgent"] is null
                         ? null
@@ -171,13 +187,26 @@ internal sealed partial class WebUIChannel
                                 error = "Agent deletion requires confirmAgentId to match the target Agent.",
                             }
                         );
-                    if (body!.ContainsKey("retainedOnly") && (body["retainedOnly"] is not JsonValue retainedValue
-                        || !retainedValue.TryGetValue<bool>(out _)))
+                    if (
+                        body!.ContainsKey("retainedOnly")
+                        && (
+                            body["retainedOnly"] is not JsonValue retainedValue
+                            || !retainedValue.TryGetValue<bool>(out _)
+                        )
+                    )
                         throw new InvalidDataException("retainedOnly must be a boolean.");
                     if (SessionCatalog.Flag(body["retainedOnly"]))
                     {
                         await sessions.CleanupRetainedAgentAsync(agentId);
-                        return Results.Ok(new { success = true, agentId, retainedRecordRemoved = true, deletedSessions = Array.Empty<string>() });
+                        return Results.Ok(
+                            new
+                            {
+                                success = true,
+                                agentId,
+                                retainedRecordRemoved = true,
+                                deletedSessions = Array.Empty<string>(),
+                            }
+                        );
                     }
                     var deleted = await sessions.DeleteAgentAsync(agentId);
                     return Results.Ok(

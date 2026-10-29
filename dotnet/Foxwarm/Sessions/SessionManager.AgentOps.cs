@@ -162,8 +162,11 @@ internal sealed partial class SessionManager
             }
             catch (AuthorityCommittedException error)
             {
-                throw new CommittedSessionCreationException(null,
-                    $"Restoration of Agent '{name}' committed metadata but did not complete; no Session was created. {error.Message}", error);
+                throw new CommittedSessionCreationException(
+                    null,
+                    $"Restoration of Agent '{name}' committed metadata but did not complete; no Session was created. {error.Message}",
+                    error
+                );
             }
             TopologyChanged?.Invoke();
         }

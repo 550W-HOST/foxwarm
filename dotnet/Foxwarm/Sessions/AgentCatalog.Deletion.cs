@@ -68,6 +68,7 @@ internal sealed partial class AgentCatalog
             createGate.Release();
         }
     }
+
     internal async Task RemoveRetainedAsync(string name)
     {
         ValidateName(name);
@@ -75,7 +76,9 @@ internal sealed partial class AgentCatalog
         try
         {
             if (Directory.Exists(SourceDirectory(name)))
-                throw new InvalidDataException("Retained-record cleanup requires an absent Agent directory.");
+                throw new InvalidDataException(
+                    "Retained-record cleanup requires an absent Agent directory."
+                );
             RequireNoCreatorChildren(name);
             var next = MetadataSnapshot();
             if (!next.Remove(name))
@@ -91,7 +94,10 @@ internal sealed partial class AgentCatalog
             }
             try
             {
-                AtomicIndexWrite(indexPath, Payload(List().Where(id => id is not "main" && id != name), next).ToJsonString());
+                AtomicIndexWrite(
+                    indexPath,
+                    Payload(List().Where(id => id is not "main" && id != name), next).ToJsonString()
+                );
             }
             catch (AuthorityCommittedException)
             {
@@ -105,5 +111,4 @@ internal sealed partial class AgentCatalog
             createGate.Release();
         }
     }
-
 }

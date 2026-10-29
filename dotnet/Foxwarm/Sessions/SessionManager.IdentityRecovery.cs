@@ -95,13 +95,21 @@ internal sealed partial class SessionManager
                     throw new InvalidDataException(
                         "Owned identity destination contains another Main lifetime; preserve its directory."
                     );
-                if (backward && record.OwnsAgent && record.OwnedAgentPreparation is not null
-                    && record.AgentDirectoryPublished is null)
+                if (
+                    backward
+                    && record.OwnsAgent
+                    && record.OwnedAgentPreparation is not null
+                    && record.AgentDirectoryPublished is null
+                )
                 {
                     // A still-prepared directory was never renamed to the final destination.
                     // Persist that ownership distinction before cleanup can remove the evidence.
                     var prepared = agents.PreparationPath(record.OwnedAgentPreparation);
-                    record = record with { AgentDirectoryPublished = !Directory.Exists(prepared) && !File.Exists(prepared) };
+                    record = record with
+                    {
+                        AgentDirectoryPublished =
+                            !Directory.Exists(prepared) && !File.Exists(prepared),
+                    };
                     IdentityJournal.Write(record);
                 }
                 // Direction is persisted before any reversal. The audit transaction never merges competing branches.
@@ -154,6 +162,11 @@ internal sealed partial class SessionManager
             throw new InvalidDataException(
                 "Owned destination contains another Main lifetime; its directory cannot be removed."
             );
-        await agents.RemoveIdentityOwnedAsync(record.OwnedAgent, record.OwnedAgentPreparation, record.PreviousAgentMetadata, record.AgentDirectoryPublished ?? true);
+        await agents.RemoveIdentityOwnedAsync(
+            record.OwnedAgent,
+            record.OwnedAgentPreparation,
+            record.PreviousAgentMetadata,
+            record.AgentDirectoryPublished ?? true
+        );
     }
 }

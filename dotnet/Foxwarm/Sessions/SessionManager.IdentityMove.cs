@@ -310,8 +310,17 @@ internal sealed partial class SessionManager
                     "A pending identity move requires recovery before another move can start."
                 );
             token.ThrowIfCancellationRequested();
-            if (create && (agents.Exists(targetAgent) || Directory.Exists(agents.SourceDirectory(targetAgent)) || File.Exists(agents.SourceDirectory(targetAgent))))
-                throw new InvalidDataException("Destination Agent already exists or its directory is reserved.");
+            if (
+                create
+                && (
+                    agents.Exists(targetAgent)
+                    || Directory.Exists(agents.SourceDirectory(targetAgent))
+                    || File.Exists(agents.SourceDirectory(targetAgent))
+                )
+            )
+                throw new InvalidDataException(
+                    "Destination Agent already exists or its directory is reserved."
+                );
             owner.Entry.RequireIdentityAuthority();
             if (owner.Id != old || !IsCurrentOwner(owner))
                 throw new InvalidOperationException(
@@ -662,7 +671,9 @@ internal sealed partial class SessionManager
                     details["targetAgentDirectory"] = agents.SourceDirectory(record.OwnedAgent!);
                     details["agentMetadataPath"] = Path.Combine(root, "state", "agents.json");
                     if (record.OwnedAgentPreparation is not null)
-                        details["agentPreparationDirectory"] = agents.PreparationPath(record.OwnedAgentPreparation);
+                        details["agentPreparationDirectory"] = agents.PreparationPath(
+                            record.OwnedAgentPreparation
+                        );
                 }
                 details["rollbackErrors"] = new JsonArray(
                     errors.Select(error => (JsonNode?)JsonValue.Create(error.Message)).ToArray()

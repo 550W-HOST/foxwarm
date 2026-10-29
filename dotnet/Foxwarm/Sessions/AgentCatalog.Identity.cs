@@ -4,7 +4,12 @@ namespace Foxwarm.Sessions;
 
 internal sealed partial class AgentCatalog
 {
-    internal async Task RemoveIdentityOwnedAsync(string name, string? preparationName = null, JsonObject? previousMetadata = null, bool removePublishedDirectory = true)
+    internal async Task RemoveIdentityOwnedAsync(
+        string name,
+        string? preparationName = null,
+        JsonObject? previousMetadata = null,
+        bool removePublishedDirectory = true
+    )
     {
         ValidateName(name);
         if (name == "main")
@@ -19,7 +24,9 @@ internal sealed partial class AgentCatalog
                 if (Directory.Exists(prepared))
                 {
                     if ((File.GetAttributes(prepared) & FileAttributes.ReparsePoint) != 0)
-                        throw new InvalidDataException($"Owned Agent preparation '{prepared}' is a symbolic link; cleanup remains pending.");
+                        throw new InvalidDataException(
+                            $"Owned Agent preparation '{prepared}' is a symbolic link; cleanup remains pending."
+                        );
                     Directory.Delete(prepared, true);
                 }
             }
@@ -48,8 +55,11 @@ internal sealed partial class AgentCatalog
                 }
                 try
                 {
-                    AtomicIndexWrite(indexPath,
-                        Payload(List().Where(id => id is not "main" && id != name), next).ToJsonString());
+                    AtomicIndexWrite(
+                        indexPath,
+                        Payload(List().Where(id => id is not "main" && id != name), next)
+                            .ToJsonString()
+                    );
                 }
                 catch (AuthorityCommittedException)
                 {
