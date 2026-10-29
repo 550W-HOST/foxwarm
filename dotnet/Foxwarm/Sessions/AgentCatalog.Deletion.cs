@@ -14,6 +14,7 @@ internal sealed partial class AgentCatalog
                     "Cannot delete the main Agent in this retained workspace layout because its folder is shared. No Sessions or files were deleted."
                 );
         }
+        RequireNoCreatorChildren(name);
         if (!Directory.Exists(SourceDirectory(name)))
             throw new InvalidDataException($"Agent \"{name}\" not found.");
     }
@@ -27,6 +28,7 @@ internal sealed partial class AgentCatalog
         await createGate.WaitAsync();
         try
         {
+            RequireNoCreatorChildren(name);
             if (beforeStage is not null)
                 await beforeStage(name, "directory");
             Directory.Delete(SourceDirectory(name), recursive: true);

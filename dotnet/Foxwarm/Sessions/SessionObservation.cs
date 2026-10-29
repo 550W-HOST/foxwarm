@@ -283,6 +283,7 @@ internal sealed partial class SessionManager
                     );
                 requestedParent = SessionGoal.Trim(requestedParent);
             }
+            RequireCreationParent(source.Agent, requestedParent);
             var change = ChangePresentation(catalog =>
                 catalog.SetParent(targetId, requestedParent)
             );

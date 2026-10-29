@@ -14,6 +14,7 @@ internal sealed partial class AgentCatalog
     private readonly bool canonicalLayout;
     private readonly SemaphoreSlim createGate = new(1, 1);
     private readonly object stateGate = new();
+    private readonly Func<(int MaxDepth, int MaxChildren)> treeLimits;
     private JsonObject metadata = new();
     private readonly HashSet<string> known = new(StringComparer.Ordinal) { "main" };
 
@@ -22,9 +23,11 @@ internal sealed partial class AgentCatalog
         string workspaceRoot,
         string? recoveringOwnedAgent = null,
         bool canonicalLayout = false,
-        bool createDirectories = true
+        bool createDirectories = true,
+        Func<(int MaxDepth, int MaxChildren)>? treeLimits = null
     )
     {
+        this.treeLimits = treeLimits ?? (() => (16, 128));
         this.workspaceRoot = Path.GetFullPath(workspaceRoot);
         this.canonicalLayout = canonicalLayout;
         agentRoot = canonicalLayout
@@ -180,7 +183,10 @@ internal sealed partial class AgentCatalog
         string name,
         string? initialMemory = null,
         string? inherit = null,
-        string? initialSoul = null
+        string? initialSoul = null,
+        string? createdBy = null,
+        JsonArray? rules = null,
+        string? defaultNode = null
     )
     {
         ValidateName(name);
@@ -190,23 +196,41 @@ internal sealed partial class AgentCatalog
         var directory = Path.Combine(agentRoot, name);
         var createdDirectory = false;
         var committed = false;
+        JsonObject? initialMetadata = null;
+        Monitor.Enter(stateGate);
         try
         {
             if (Exists(name) || Directory.Exists(directory) || File.Exists(directory))
                 throw new InvalidDataException(
                     $"Agent '{name}' already exists or its directory is reserved."
                 );
+            var previous = MetadataSnapshot()[name] as JsonObject;
+            if (previous is not null && new[] { "createdBy", "rules" }.Any(previous.ContainsKey))
+                throw new InvalidDataException("Retained Agent authority reserves this name; administrator cleanup is required before reuse.");
+            ValidateCreatorAdmission(createdBy, MetadataSnapshot());
+            _ = Foxwarm.Tools.AgentRulePolicy.Parse(rules ?? new JsonArray());
+            ValidateDefaultNode(defaultNode ?? DefaultNode(name));
             ValidateInheritance(name, inherit);
+            ValidateCreatorInheritance(name, inherit ?? SessionWait.Text(previous?["inherit"]), createdBy);
+            initialMetadata = previous is null ? new JsonObject() : (JsonObject)previous.DeepClone();
+            if (createdBy is not null)
+                initialMetadata["createdBy"] = createdBy;
+            if (rules is not null)
+                initialMetadata["rules"] = rules.DeepClone();
+            if (defaultNode is not null)
+                initialMetadata["defaultNode"] = defaultNode;
+            if (inherit is not null)
+                initialMetadata["inherit"] = inherit;
             Directory.CreateDirectory(directory);
             createdDirectory = true;
             Directory.CreateDirectory(Path.Combine(directory, "memory"));
             if (initialMemory is not null)
-                await File.WriteAllTextAsync(
+                File.WriteAllText(
                     Path.Combine(directory, "memory", "MEMORY.md"),
                     initialMemory
                 );
             if (initialSoul is not null)
-                await File.WriteAllTextAsync(
+                File.WriteAllText(
                     Path.Combine(directory, "memory", "SOUL.md"),
                     initialSoul
                 );
@@ -216,8 +240,8 @@ internal sealed partial class AgentCatalog
                 .Order(StringComparer.Ordinal)
                 .ToArray();
             var nextMetadata = MetadataSnapshot();
-            if (inherit is not null)
-                nextMetadata[name] = new JsonObject { ["inherit"] = inherit };
+            if (initialMetadata.Count > 0)
+                nextMetadata[name] = initialMetadata.DeepClone();
             var payload = Payload(next, nextMetadata);
             AtomicIndexWrite(indexPath, payload.ToJsonString());
             committed = true;
@@ -225,8 +249,8 @@ internal sealed partial class AgentCatalog
             {
                 if (!canonicalLayout)
                     known.Add(name);
-                if (inherit is not null)
-                    metadata[name] = new JsonObject { ["inherit"] = inherit };
+                if (initialMetadata is { Count: > 0 })
+                    metadata[name] = initialMetadata.DeepClone();
             }
         }
         catch (AuthorityCommittedException)
@@ -235,8 +259,8 @@ internal sealed partial class AgentCatalog
             {
                 if (!canonicalLayout)
                     known.Add(name);
-                if (inherit is not null)
-                    metadata[name] = new JsonObject { ["inherit"] = inherit };
+                if (initialMetadata is { Count: > 0 })
+                    metadata[name] = initialMetadata.DeepClone();
             }
             throw;
         }
@@ -248,6 +272,7 @@ internal sealed partial class AgentCatalog
         }
         finally
         {
+            Monitor.Exit(stateGate);
             createGate.Release();
         }
     }

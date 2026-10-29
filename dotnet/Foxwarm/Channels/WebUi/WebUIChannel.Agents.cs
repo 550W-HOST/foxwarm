@@ -72,7 +72,7 @@ internal sealed partial class WebUIChannel
                         ?? throw new InvalidDataException("Agent creation needs an object.");
                     if (
                         body.Any(item =>
-                            item.Key is not ("agentId" or "inheritAgent" or "isolatedNode")
+                            item.Key is not ("agentId" or "inheritAgent" or "isolatedNode" or "rules" or "defaultNode")
                         )
                         || body["agentId"] is not JsonValue agent
                         || !agent.TryGetValue<string>(out var name)
@@ -85,10 +85,14 @@ internal sealed partial class WebUIChannel
                         return Results.BadRequest(
                             new { error = "An isolated Agent cannot be used as an inherit source." }
                         );
+                    if (body.ContainsKey("rules") && body["rules"] is not JsonArray)
+                        throw new InvalidDataException("rules must be an array.");
                     var created = await sessions.CreateAgentAsync(
                         name.Trim(),
                         inherit: string.IsNullOrEmpty(inherit) ? null : inherit,
-                        isolatedNode: body["isolatedNode"]?.GetValue<string>()
+                        isolatedNode: body["isolatedNode"]?.GetValue<string>(),
+                        rules: body["rules"] as JsonArray,
+                        defaultNode: body["defaultNode"]?.GetValue<string>()
                     );
                     if (created.MainSessionId is not null)
                         runtime.ChangePresentation(catalog =>
@@ -227,12 +231,18 @@ internal sealed partial class WebUIChannel
                         await JsonNode.ParseAsync(request.Body) as JsonObject
                         ?? throw new InvalidDataException("Agent update needs an object.");
                     if (
-                        body.Any(item => item.Key is not ("inheritAgent" or "isolatedNode"))
-                        || !body.ContainsKey("inheritAgent") && !body.ContainsKey("isolatedNode")
+                        body.Any(item => item.Key is not ("inheritAgent" or "isolatedNode" or "rules" or "defaultNode"))
+                        || !new[] { "inheritAgent", "isolatedNode", "rules", "defaultNode" }.Any(body.ContainsKey)
                     )
-                        throw new InvalidDataException("Provide inheritAgent and/or isolatedNode.");
+                        throw new InvalidDataException("Provide inheritAgent, isolatedNode, rules or defaultNode.");
                     if (!sessions.Agents().Contains(agentId))
                         return Results.NotFound(new { error = "Agent not found." });
+                    if (body.ContainsKey("rules"))
+                        await sessions.SetAgentRulesAsync(agentId, body["rules"] as JsonArray
+                            ?? throw new InvalidDataException("rules must be an array."));
+                    if (body.ContainsKey("defaultNode"))
+                        await sessions.SetAgentDefaultNodeAsync(agentId, body["defaultNode"] is null
+                            ? null : body["defaultNode"]!.GetValue<string>());
                     if (body.ContainsKey("isolatedNode"))
                         await sessions.SetAgentNodeAsync(
                             agentId,
@@ -252,6 +262,9 @@ internal sealed partial class WebUIChannel
                                 id = agentId,
                                 inherit = sessions.AgentInherit(agentId),
                                 inheritanceChain = sessions.AgentChain(agentId),
+                                createdBy = sessions.AgentMetadata[agentId]?["createdBy"]?.DeepClone(),
+                                rules = sessions.AgentMetadata[agentId]?["rules"]?.DeepClone() ?? new JsonArray(),
+                                defaultNode = sessions.AgentMetadata[agentId]?["defaultNode"]?.DeepClone(),
                                 isolated = sessions.AgentIsolated(agentId),
                                 isolatedNode = sessions.RecordedIsolationNode(agentId),
                             },
@@ -433,7 +446,8 @@ internal sealed partial class WebUIChannel
                         body["agentName"]?.GetValue<string>(),
                         body["displayName"]?.GetValue<string>(),
                         body["message"]?.GetValue<string>(),
-                        body["forceModel"] as JsonObject
+                        body["forceModel"] as JsonObject,
+                        userInitiated: true
                     );
                     return Results.Ok(
                         new

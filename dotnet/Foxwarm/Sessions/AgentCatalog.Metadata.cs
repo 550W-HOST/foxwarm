@@ -61,6 +61,7 @@ internal sealed partial class AgentCatalog
             throw new InvalidDataException($"Inherited Agent '{inherit}' does not exist.");
         if (InheritanceChain(inherit).Contains(name, StringComparer.Ordinal))
             throw new InvalidDataException("Circular Agent inheritance is not allowed.");
+        ValidateCreatorInheritance(name, inherit);
     }
 
     internal async Task SetInheritAsync(string name, string? inherit)

@@ -38,13 +38,16 @@ internal sealed partial class SessionManager
         string? initialModel = null,
         string? initialNode = null,
         bool inheritMemory = false,
-        string? sourceSessionId = null
+        string? sourceSessionId = null,
+        SessionOwner? creator = null,
+        JsonArray? rules = null,
+        string? defaultNode = null
     )
     {
         await EnsureIdentityStartupAsync();
         if (!accepting)
             throw new InvalidOperationException("Host is shutting down.");
-        using var membership = BeginAgentAdmission(agentName);
+        using var membership = BeginAgentAdmission(creator is null ? [agentName] : [agentName, creator.Agent]);
         RequireAgentCreation(agentName);
         isolatedNode = string.IsNullOrWhiteSpace(isolatedNode) ? null : isolatedNode.Trim();
         if (isolatedNode is not null)
@@ -58,7 +61,7 @@ internal sealed partial class SessionManager
             // Do not hold the target creation key while entering another lifetime's creation owner.
             if (createMainSession && await IdReservedAsync(mainId))
                 throw new InvalidDataException("Agent main Session ID is already reserved.");
-            sourceSession = await ResolveAgentCreationSourceAsync(sourceSessionId);
+            sourceSession = await ResolveAgentCreationSourceAsync(sourceSessionId, creator);
         }
         var gate = CreationKey(mainId);
         await gate.WaitAsync();
@@ -70,7 +73,7 @@ internal sealed partial class SessionManager
                 throw new InvalidDataException("Agent main Session ID is already reserved.");
             try
             {
-                await agents.CreateAsync(agentName, initialMemory, inherit, initialSoul);
+                await agents.CreateAsync(agentName, initialMemory, inherit, initialSoul, creator?.Agent, rules, defaultNode);
             }
             catch (AuthorityCommittedException error)
             {
@@ -100,6 +103,7 @@ internal sealed partial class SessionManager
                     ),
                     null,
                     initialNode: initialNode
+                        ?? defaultNode
                         ?? (sourceSession is null ? null : CurrentNode(sourceSession)),
                     childDefaults: (
                         SessionWait.Text(source?["childModelDefault"]),
@@ -124,11 +128,13 @@ internal sealed partial class SessionManager
         }
     }
 
-    private async Task<SessionOwner> ResolveAgentCreationSourceAsync(string id)
+    private async Task<SessionOwner> ResolveAgentCreationSourceAsync(string id, SessionOwner? creator = null)
     {
         var existing = await GetExistingAsync(id);
         if (existing is not null)
             return existing;
+        if (creator is not null)
+            agents.RequireSessionTarget(creator.Agent, SessionIdentity.Agent(id));
         using var operation = TrackCreation();
         var gate = CreationKey(id);
         await gate.WaitAsync();
@@ -144,7 +150,7 @@ internal sealed partial class SessionManager
                     null,
                     null,
                     exactId: id,
-                    initialNode: "master"
+                    initialNode: agents.DefaultNode(SessionIdentity.Agent(id)) ?? "master"
                 );
         }
         finally
@@ -206,7 +212,8 @@ internal sealed partial class SessionManager
         JsonObject? forceModel,
         bool fork = false,
         string? taskId = null,
-        string? initialNode = null
+        string? initialNode = null,
+        bool userInitiated = false
     )
     {
         if (
@@ -217,6 +224,8 @@ internal sealed partial class SessionManager
                 "Child suffix must use only letters, numbers, hyphens and underscores."
             );
         targetAgent ??= parent.Agent;
+        if (!userInitiated)
+            agents.RequireSessionTarget(parent.Agent, targetAgent);
         using var membership = BeginAgentAdmission(parent.Agent, targetAgent);
         AgentCatalog.ValidateName(targetAgent);
         if (!agents.Exists(targetAgent))
@@ -273,7 +282,7 @@ internal sealed partial class SessionManager
                     forceModel,
                     candidate,
                     targetAgent == parent.Agent ? AgentMemory.Selection(parentEnvelope) : null,
-                    initialNode: initialNode ?? CurrentNode(parent)
+                    initialNode: initialNode ?? agents.DefaultNode(targetAgent) ?? CurrentNode(parent)
                 );
                 try
                 {
@@ -499,7 +508,8 @@ internal sealed partial class SessionManager
             throw new InvalidDataException($"Session ID '{id}' is already reserved.");
         if (parentId is not null && Find(parentId) is null)
             throw new InvalidDataException("Parent Session does not exist.");
-        var selectedNode = BoundNode(agentName) ?? (timerCreation ? timerNode : initialNode);
+        var selectedNode = BoundNode(agentName)
+            ?? (timerCreation ? agents.DefaultNode(agentName) ?? timerNode : initialNode ?? agents.DefaultNode(agentName));
         if (selectedNode is null && agentName != "main")
         {
             var main = await GetExistingAsync(SessionIdentity.Build(agentName, "main"));

@@ -111,7 +111,11 @@ internal sealed partial class SessionManager : IAsyncDisposable
             recoveringMove is { OwnsAgent: true, Phase: "rolling-back" }
                 ? recoveringMove.OwnedAgent
                 : null,
-            canonicalLayout: hostPaths is not null
+            canonicalLayout: hostPaths is not null,
+            treeLimits: () => (
+                (int)(SessionWait.Number(models.ConfigurationOwner?.AppConfiguration["agentTree"]?["maxDepth"]) ?? 16),
+                (int)(SessionWait.Number(models.ConfigurationOwner?.AppConfiguration["agentTree"]?["maxChildren"]) ?? 128)
+            )
         );
         skills = new Skills(
             agents,

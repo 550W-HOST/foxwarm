@@ -18,6 +18,9 @@ internal sealed partial class SessionManager
     )
     {
         internal readonly SessionOwner Owner = owner;
+        internal string? Creator;
+        internal JsonArray? InitialRules;
+        internal string? DefaultNode;
         internal SessionIdentityMoveRecord Record = record;
         internal readonly string[] Claims = claims;
         internal readonly TaskCompletionSource Finished = new(
@@ -144,14 +147,18 @@ internal sealed partial class SessionManager
     internal Task<JsonObject> MoveIdentityAsync(
         SessionOwner caller,
         JsonObject args,
-        CancellationToken token = default
-    ) => RenameIdentityAsync(caller, args, IdentityMovePurpose.MoveSession, token);
+        CancellationToken token = default,
+        bool modelCall = false
+    ) => RenameIdentityAsync(caller, args, IdentityMovePurpose.MoveSession, token, creator: modelCall ? caller : null);
 
     private async Task<JsonObject> RenameIdentityAsync(
         SessionOwner caller,
         JsonObject args,
         IdentityMovePurpose purpose,
-        CancellationToken token = default
+        CancellationToken token = default,
+        JsonArray? initialRules = null,
+        string? defaultNode = null,
+        SessionOwner? creator = null
     )
     {
         ToolRegistry.Keys(
@@ -188,7 +195,10 @@ internal sealed partial class SessionManager
                         "newAgentName is required when creating an Agent."
                     )
                 : owner.Agent;
-        using var membership = BeginAgentAdmission(owner.Agent, targetAgent);
+        if (purpose == IdentityMovePurpose.MoveSession && creator is not null
+            && agents.CreatedBy(creator.Agent) is not null && owner.Agent != targetAgent)
+            throw new ToolAuthorizationDeniedException("Delegated Agents cannot move Sessions across Agent boundaries.");
+        using var membership = BeginAgentAdmission(owner.Agent, targetAgent, caller.Agent);
         if (create && string.IsNullOrEmpty(agentName))
             throw new InvalidDataException("newAgentName is required when creating an Agent.");
         if (!create && string.IsNullOrEmpty(name))
@@ -247,6 +257,8 @@ internal sealed partial class SessionManager
                     "parentSessionId must be a nonempty existing Session ID."
                 );
             parent = Catalog.ValidateIdentityParent(old, raw);
+            if (creator is not null)
+                RequireCreationParent(creator.Agent, parent);
         }
         var previousParent = owner.Metadata().ParentSessionId;
         using var accepted = TrackCreation();
@@ -311,7 +323,12 @@ internal sealed partial class SessionManager
                 .Concat(parent is null ? [] : new[] { parent })
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
-            operation = new(owner, record, claims);
+            operation = new(owner, record, claims)
+            {
+                Creator = creator?.Agent,
+                InitialRules = initialRules,
+                DefaultNode = defaultNode,
+            };
             lock (lifecycle)
             {
                 RequireIdentityAction(claims);
@@ -421,7 +438,8 @@ internal sealed partial class SessionManager
             if (record.OwnsAgent)
             {
                 await IdentityStageAsync(operation, "before-agent-copy");
-                await agents.CreateAsync(record.OwnedAgent!);
+                await agents.CreateAsync(record.OwnedAgent!,
+                    createdBy: operation.Creator, rules: operation.InitialRules, defaultNode: operation.DefaultNode);
                 if (copyMemory)
                     agents.CopyIdentityMemory(record.OldAgent, record.OwnedAgent!);
                 await IdentityStageAsync(operation, "after-agent-copy");

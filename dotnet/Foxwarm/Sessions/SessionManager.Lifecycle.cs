@@ -136,8 +136,11 @@ internal sealed partial class SessionManager
                 foreach (var field in new[] { "systemPromptFiles", "verbose", "currentNode" })
                     if (original.AuthorityEnvelope.ContainsKey(field))
                         envelope[field] = original.AuthorityEnvelope[field]?.DeepClone();
-                if (initialNode is not null)
-                    envelope["currentNode"] = initialNode;
+                var selectedNode = BoundNode(parent.Agent) ?? initialNode ?? agents.DefaultNode(parent.Agent);
+                if (selectedNode is not null)
+                {
+                    envelope["currentNode"] = selectedNode;
+                }
                 if (displayName is not null)
                     envelope["displayName"] = displayName;
                 if (settings.Model is not null)

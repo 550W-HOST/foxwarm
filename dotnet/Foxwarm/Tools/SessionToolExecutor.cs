@@ -833,6 +833,7 @@ internal sealed partial class SessionToolExecutor(
                 "refresh_session_snapshot",
                 "skill",
                 "set_agent_inherit",
+                "set_agent_rules",
                 "session",
                 "view_session",
                 "set_session_child_model",
@@ -960,6 +961,7 @@ internal sealed partial class SessionToolExecutor(
                         or "create_agent"
                         or "create_session"
                         or "set_agent_inherit"
+                        or "set_agent_rules"
                         or "artifact"
                         or "mcp_config"
                         or "mcp_notifications"

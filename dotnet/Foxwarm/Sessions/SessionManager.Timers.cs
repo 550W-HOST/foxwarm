@@ -164,6 +164,8 @@ internal sealed partial class SessionManager
                 : MainTimers.UpdateRow(existing, args, target);
             if (MainTimers.Flag(row["newSession"]))
             {
+                if (authorizeTool)
+                    agents.RequireSessionTarget(source.Agent, SessionWait.Text(row["agentName"])!);
                 var agent = SessionWait.Text(row["agentName"])!;
                 if (!agents.Exists(agent) || !Directory.Exists(agents.AgentDirectory(agent)))
                     throw new InvalidDataException("Timer target Agent does not exist: " + agent);
@@ -178,6 +180,8 @@ internal sealed partial class SessionManager
                     async () =>
                     {
                         await PrepareAsync();
+                        if (authorizeTool && MainTimers.Flag(row["newSession"]))
+                            agents.RequireSessionTarget(source.Agent, SessionWait.Text(row["agentName"])!);
                         if (
                             AgentIsolated(source.Agent)
                             && MainTimers.Flag(row["newSession"])
@@ -195,6 +199,8 @@ internal sealed partial class SessionManager
                     async () =>
                     {
                         await PrepareAsync();
+                        if (authorizeTool && MainTimers.Flag(row["newSession"]))
+                            agents.RequireSessionTarget(source.Agent, SessionWait.Text(row["agentName"])!);
                         if (
                             AgentIsolated(source.Agent)
                             && MainTimers.Flag(row["newSession"])

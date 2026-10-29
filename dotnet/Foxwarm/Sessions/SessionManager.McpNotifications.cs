@@ -52,7 +52,9 @@ internal sealed partial class SessionManager
                 receptionArgs,
                 []
             );
-            if (!ToolAuthorizationEvaluation.Evaluate(authorization.Load(), request).Allowed)
+            var policies = EffectivePolicies(owner.Agent, authorization.Load());
+            request = PopulateEffectiveTargets(request, owner, policies);
+            if (!EffectiveDecision(policies, request).Allowed)
                 throw new ToolAuthorizationDeniedException(
                     "MCP notification reception is not permitted."
                 );

@@ -19,6 +19,7 @@ internal static class AppConfigurationRules
             HttpUrl(app["url"], "app config `url`");
         Channels(app["channels"], app.ContainsKey("channels"));
         Llm(app["llm"]);
+        AgentTree(app["agentTree"], app.ContainsKey("agentTree"));
         NodeProviders(app["nodeProviders"], app.ContainsKey("nodeProviders"));
         SessionWorkers(app["sessionWorkers"], app.ContainsKey("sessionWorkers"));
         Boolean(app["dbWorkers"], "app config `dbWorkers`", app.ContainsKey("dbWorkers"));
@@ -34,6 +35,18 @@ internal static class AppConfigurationRules
             "app config `handoffConfirmation`",
             app.ContainsKey("handoffConfirmation")
         );
+    }
+
+    private static void AgentTree(JsonNode? value, bool present)
+    {
+        if (!present)
+            return;
+        if (value is not JsonObject tree || tree.Any(pair => pair.Key is not ("maxDepth" or "maxChildren")))
+            throw new InvalidDataException("app config `agentTree` accepts maxDepth and maxChildren.");
+        foreach (var (key, raw) in tree)
+            if (Number(raw) is not double number || !double.IsFinite(number)
+                || number < 0 || number > int.MaxValue || number != Math.Truncate(number))
+                throw new InvalidDataException($"app config `agentTree.{key}` must be a nonnegative integer.");
     }
 
     private static void Channels(JsonNode? value, bool present)

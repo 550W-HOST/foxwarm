@@ -62,7 +62,7 @@ internal sealed partial class SessionManager
             {
                 case "move_session":
                     return (
-                        await MoveIdentityAsync(source, args, semanticCaller.Value ?? default),
+                        await MoveIdentityAsync(source, args, semanticCaller.Value ?? default, modelCall: true),
                         false
                     );
                 case "delete_session":
@@ -91,6 +91,14 @@ internal sealed partial class SessionManager
                         Output(DeleteToolText(RequiredString(args, "sessionId"), result)),
                         false
                     );
+                }
+                case "set_agent_rules":
+                {
+                    Keys(args, ["agentName", "rules"], ["agentName", "rules"]);
+                    if (args["rules"] is not JsonArray replacement)
+                        throw new InvalidDataException("rules must be an array.");
+                    await SetAgentRulesAsync(RequiredString(args, "agentName"), replacement, source);
+                    return (Output("Agent rules replaced."), false);
                 }
                 case "set_agent_isolated":
                 {
@@ -132,10 +140,19 @@ internal sealed partial class SessionManager
                             "convertSession",
                             "isolatedNode",
                             "toolRules",
+                            "rules",
+                            "defaultNode",
                         ],
                         ["agentName"]
                     );
                     var nameValue = RequiredString(args, "agentName");
+                    if (args.ContainsKey("rules") && args["rules"] is not JsonArray)
+                        throw new InvalidDataException("rules must be an array.");
+                    var localRules = args["rules"] as JsonArray;
+                    _ = AgentRulePolicy.Parse(localRules ?? new JsonArray());
+                    var defaultNode = OptionalString(args, "defaultNode");
+                    if (defaultNode is not null)
+                        Foxwarm.Nodes.NodeProviderRegistry.ValidateId(defaultNode);
                     var createMain = OptionalBool(args, "createMainSession") ?? true;
                     var convert = OptionalBool(args, "convertSession") ?? false;
                     if (convert && !createMain)
@@ -168,7 +185,7 @@ internal sealed partial class SessionManager
                             );
                         var selectedSource = sourceId is null
                             ? source
-                            : await ResolveAgentCreationSourceAsync(sourceId);
+                            : await ResolveAgentCreationSourceAsync(sourceId, source);
                         // Agent conversion is authorized for a nonisolated caller above. Source
                         // enters identity rename directly, not ordinary move_session isolation policy.
                         await RenameIdentityAsync(
@@ -181,7 +198,10 @@ internal sealed partial class SessionManager
                                 ["createAgentInheritMemory"] = copyMemory,
                             },
                             IdentityMovePurpose.AgentConversion,
-                            semanticCaller.Value ?? default
+                            semanticCaller.Value ?? default,
+                            initialRules: localRules,
+                            defaultNode: defaultNode,
+                            creator: source
                         );
                         mainId = selectedSource.Id;
                     }
@@ -195,8 +215,11 @@ internal sealed partial class SessionManager
                             initialModel: SessionWait.Text(
                                 source.Entry.Snapshot().AuthorityEnvelope["model"]
                             ),
-                            initialNode: CurrentNode(source),
-                            inheritMemory: copyMemory
+                            initialNode: defaultNode ?? CurrentNode(source),
+                            inheritMemory: copyMemory,
+                            creator: source,
+                            rules: localRules,
+                            defaultNode: defaultNode
                         );
                         mainId = created.MainSessionId;
                     }
@@ -211,6 +234,7 @@ internal sealed partial class SessionManager
                             isolatedNode is not null,
                             rules
                         );
+
                     if (inherit is not null)
                         await SetAgentInheritAsync(nameValue, inherit);
                     if (mainId is not null && (inherit is not null || isolatedNode is not null))
@@ -273,6 +297,7 @@ internal sealed partial class SessionManager
                             "systemPromptFiles must be an array of strings."
                         );
                     var agentName = RequiredString(args, "agentName");
+                    agents.RequireSessionTarget(source.Agent, agentName);
                     var selection = AgentMemory.NormalizeSelection(args["systemPromptFiles"]);
                     if (selection is not null)
                         await AuthorizePromptFilesAsync(
@@ -281,13 +306,14 @@ internal sealed partial class SessionManager
                             selection,
                             semanticCaller.Value ?? default
                         );
+                    RequireCreationParent(source.Agent, OptionalString(args, "parentSessionId"));
                     var settings = source.Entry.Snapshot().AuthorityEnvelope;
                     var created = await CreateNamedAsync(
                         agentName,
                         RequiredString(args, "sessionName"),
                         OptionalString(args, "displayName"),
                         forceModel,
-                        initialNode: CreationNode(args) ?? CurrentNode(source),
+                        initialNode: CreationNode(args) ?? agents.DefaultNode(agentName) ?? CurrentNode(source),
                         inherited: (
                             SessionWait.Text(settings["childModelDefault"])
                                 ?? SessionWait.Text(settings["model"]),

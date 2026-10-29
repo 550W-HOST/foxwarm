@@ -18,7 +18,10 @@ internal sealed record AgentListEntry(
     int SessionCount,
     int ActiveSessionCount,
     int QueuedSessionCount,
-    int ToolRuleCount
+    int ToolRuleCount,
+    string? CreatedBy,
+    int RuleCount,
+    string? DefaultNode
 );
 
 internal sealed record AgentMemoryManifest(string MemoryRoot, IReadOnlyList<AgentMemoryFile> Files);
@@ -103,7 +106,11 @@ internal sealed partial class SessionManager
                         ? $" [isolated{(row.IsolatedNode is null ? "" : ":" + row.IsolatedNode)}]"
                         : ""
                 )
-                + $" [tool rules:{row.ToolRuleCount}]\n";
+                + $" [tool rules:{row.ToolRuleCount}]"
+                + (row.CreatedBy is null ? "" : $" [created by: {row.CreatedBy}]")
+                + $" [local rules:{row.RuleCount}]"
+                + (row.DefaultNode is null ? "" : $" [default Node: {row.DefaultNode}]")
+                + "\n";
         }
         return result.TrimEnd();
     }
@@ -144,7 +151,10 @@ internal sealed partial class SessionManager
                     owned.Total,
                     owned.Active,
                     owned.Queued,
-                    isolation.Rules.Count
+                    isolation.Rules.Count,
+                    agents.CreatedBy(name),
+                    (agents.MetadataSnapshot()[name]?["rules"] as JsonArray)?.Count ?? 0,
+                    agents.DefaultNode(name)
                 );
             })
             .ToArray();
@@ -186,6 +196,9 @@ internal sealed partial class SessionManager
                         id = name,
                         inherit = AgentInherit(name),
                         inheritanceChain = AgentChain(name),
+                        createdBy = agents.CreatedBy(name),
+                        ruleCount = (agents.MetadataSnapshot()[name]?["rules"] as JsonArray)?.Count ?? 0,
+                        defaultNode = agents.DefaultNode(name),
                         isolated = AgentIsolated(name),
                         isolatedNode = RecordedIsolationNode(name),
                         sessionCount = owned.Total,

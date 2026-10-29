@@ -13,6 +13,7 @@ internal static class IsolatedToolCompatibility
         "create_agent",
         "list_agents",
         "set_agent_inherit",
+        "set_agent_rules",
         "set_agent_isolated",
         "move_session",
         "create_session",

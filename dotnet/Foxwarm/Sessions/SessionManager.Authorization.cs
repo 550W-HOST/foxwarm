@@ -231,7 +231,45 @@ internal sealed partial class SessionManager
                 : resolved.ExecutionNode,
             effectNode: resolved.ExecutionNode
         );
-        var policy = await authorization.LoadAsync(token);
+        var policies = EffectivePolicies(owner.Agent, await authorization.LoadAsync(token));
+        request = PopulateEffectiveTargets(request, owner, policies, concreteTarget);
+        var decision = EffectiveDecision(policies, request);
+        if (!decision.Allowed)
+            throw new ToolAuthorizationDeniedException(
+                SessionWait.Text(decision.Rule?["reason"])
+                    ?? $"Tool authorization rule denies {resolved.Source} capability `{resolved.Name}`."
+            );
+        IsolatedToolCompatibility.Check(Isolation(owner.Agent), request, AuthorizationTarget);
+        if (!IsCurrentOwner(owner))
+            throw new InvalidOperationException(
+                "Tool source is no longer the current Session owner."
+            );
+    }
+
+    private ToolAuthorizationPolicy[] EffectivePolicies(string agent, ToolAuthorizationPolicy global) =>
+        new[] { global }.Concat(agents.RuleLayers(agent)).ToArray();
+
+    private static AuthorizationDecision EffectiveDecision(
+        IReadOnlyList<ToolAuthorizationPolicy> policies,
+        ToolAuthorizationRequest request
+    )
+    {
+        foreach (var policy in policies)
+        {
+            var decision = ToolAuthorizationEvaluation.Evaluate(policy, request);
+            if (!decision.Allowed)
+                return decision;
+        }
+        return new(true, null);
+    }
+
+    private ToolAuthorizationRequest PopulateEffectiveTargets(
+        ToolAuthorizationRequest request,
+        SessionOwner owner,
+        IReadOnlyList<ToolAuthorizationPolicy> policies,
+        SessionOwner? concreteTarget = null
+    )
+    {
         if (concreteTarget is not null)
         {
             if (!IsCurrentOwner(concreteTarget))
@@ -248,10 +286,10 @@ internal sealed partial class SessionManager
                 ),
             };
         }
-        else if (ToolAuthorizationEvaluation.NeedsTarget(policy, request))
+        else if (policies.Any(policy => ToolAuthorizationEvaluation.NeedsTarget(policy, request)))
             request = PopulateAuthorizationTargets(request, owner);
         if (
-            ToolAuthorizationEvaluation.NeedsTaskTarget(policy, request)
+            policies.Any(policy => ToolAuthorizationEvaluation.NeedsTaskTarget(policy, request))
             && SessionWait.Text(request.Args["taskId"]) is string taskId
         )
         {
@@ -265,18 +303,26 @@ internal sealed partial class SessionManager
                     : SessionWait.Text(Catalog.Resolve(taskOwner)["sessionId"]),
             };
         }
-        var decision = ToolAuthorizationEvaluation.Evaluate(policy, request);
-        if (!decision.Allowed)
-            throw new ToolAuthorizationDeniedException(
-                SessionWait.Text(decision.Rule?["reason"])
-                    ?? $"Tool authorization rule denies {resolved.Source} capability `{resolved.Name}`."
-            );
-        IsolatedToolCompatibility.Check(Isolation(owner.Agent), request, AuthorizationTarget);
-        if (!IsCurrentOwner(owner))
-            throw new InvalidOperationException(
-                "Tool source is no longer the current Session owner."
-            );
+        return request;
     }
+
+    private void RequireCreationParent(string callerAgent, string? parent)
+    {
+        if (parent is null || agents.CreatedBy(callerAgent) is null)
+            return;
+        var target = AuthorizationTarget(parent)
+            ?? throw new InvalidDataException("Parent Session does not exist.");
+        agents.RequireSessionTarget(callerAgent, target.Agent);
+    }
+
+    internal Task SetAgentRulesAsync(string agent, JsonArray rules, SessionOwner? caller = null) =>
+        agents.SetRulesAsync(agent, rules, caller?.Agent, caller is null ? null : () =>
+            AuthorizeToolAsync(caller, new("set_agent_rules", "builtin", "set_agent_rules",
+                new JsonObject { ["agentName"] = agent, ["rules"] = rules.DeepClone() }),
+                null, semanticCaller.Value ?? CancellationToken.None));
+
+    internal Task SetAgentDefaultNodeAsync(string agent, string? node) =>
+        agents.SetDefaultNodeAsync(agent, node);
 
     private async Task AuthorizePromptFilesAsync(
         SessionOwner source,
@@ -320,6 +366,15 @@ internal sealed partial class SessionManager
         string? selectedNode = null
     )
     {
+        ToolAuthorizationPolicy[] layers;
+        try
+        {
+            layers = agents.RuleLayers(owner.Agent);
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
         if (name == "call_tool" && source == "builtin")
             return true;
         if (
@@ -351,12 +406,8 @@ internal sealed partial class SessionManager
         var unknownNodeTargets =
             source == "builtin"
             && name is "send_file" or "image_write_to_file" or "copy_between_nodes" or "node";
-        return ToolAuthorizationEvaluation.Visible(
-                authorization.Load(),
-                request,
-                unknownNode,
-                unknownNodeTargets
-            )
+        return new[] { authorization.Load() }.Concat(layers).All(policy =>
+                ToolAuthorizationEvaluation.Visible(policy, request, unknownNode, unknownNodeTargets))
             && IsolatedToolCompatibility.Visible(
                 Isolation(owner.Agent),
                 source,
