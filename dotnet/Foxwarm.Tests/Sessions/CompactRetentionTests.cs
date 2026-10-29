@@ -76,7 +76,10 @@ public sealed partial class CompactRetentionTests
         Assert.Equal(9, exchange.End);
         Assert.Equal(candidates.Items[0].Segment, exchange.Segment);
         Assert.DoesNotContain(candidates.Items, item => item.Start == 12);
-        Assert.NotEqual(exchange.Segment, candidates.Items.Single(item => item.Start == 17).Segment);
+        Assert.NotEqual(
+            exchange.Segment,
+            candidates.Items.Single(item => item.Start == 17).Segment
+        );
         Assert.Equal(
             candidates.Items.Single(item => item.Start == 17).Segment,
             candidates.Items.Single(item => item.Start == 21).Segment
@@ -136,7 +139,9 @@ public sealed partial class CompactRetentionTests
         };
         Assert.Equal(new long[] { 7 }, CompactPlanValidator.Validate(args, candidates).Preserve);
         args["replaceAsBlocks"] = new JsonArray(Block(2, 9));
-        Assert.Throws<CompactPlanInvalidException>(() => CompactPlanValidator.Validate(args, candidates));
+        Assert.Throws<CompactPlanInvalidException>(() =>
+            CompactPlanValidator.Validate(args, candidates)
+        );
     }
 
     [Fact]
@@ -230,7 +235,9 @@ public sealed partial class CompactRetentionTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Sparse_exchange_members_use_active_order_in_both_persisted_response_shapes(bool separateResponses)
+    public void Sparse_exchange_members_use_active_order_in_both_persisted_response_shapes(
+        bool separateResponses
+    )
     {
         var call = Row("model", 3, Call("first"));
         call["parts"]!.AsArray().Add(Call("second"));
@@ -248,12 +255,18 @@ public sealed partial class CompactRetentionTests
         Assert.Equal(end, exchange.End);
         Assert.Equal(separateResponses ? 4 : 3, exchange.HistoryEnd);
         Assert.Equal(3, candidates.Items.Count);
-        var plan = CompactPlanValidator.Validate(new JsonObject
-        {
-            ["replaceAsBlocks"] = new JsonArray(Block(1, 25)),
-            ["preserveMessages"] = new JsonArray(9),
-        }, candidates);
-        Assert.Equal(separateResponses ? new long[] { 3, 7, 9, 15 } : new long[] { 3, 7, 9 }, plan.Preserve.Order());
+        var plan = CompactPlanValidator.Validate(
+            new JsonObject
+            {
+                ["replaceAsBlocks"] = new JsonArray(Block(1, 25)),
+                ["preserveMessages"] = new JsonArray(9),
+            },
+            candidates
+        );
+        Assert.Equal(
+            separateResponses ? new long[] { 3, 7, 9, 15 } : new long[] { 3, 7, 9 },
+            plan.Preserve.Order()
+        );
     }
 
     [Theory]

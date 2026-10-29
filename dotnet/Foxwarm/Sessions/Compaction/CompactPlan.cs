@@ -192,8 +192,8 @@ internal static class CompactPlanValidator
                 .Items.ToList()
                 .FindIndex(candidate =>
                     candidate.Kind == "message"
-                    && candidates.History
-                        .Skip(candidate.HistoryStart)
+                    && candidates
+                        .History.Skip(candidate.HistoryStart)
                         .Take(candidate.HistoryEnd - candidate.HistoryStart + 1)
                         .Any(row => Number(CompactCandidateBuilder.Meta(row)?["seq"]) == seq)
                 );
@@ -210,9 +210,11 @@ internal static class CompactPlanValidator
                     $"preserveMessages contains msg#{seq}, but that message is not covered by any created message-source block."
                 );
             var candidate = candidates.Items[index];
-            foreach (var row in candidates.History
-                .Skip(candidate.HistoryStart)
-                .Take(candidate.HistoryEnd - candidate.HistoryStart + 1))
+            foreach (
+                var row in candidates
+                    .History.Skip(candidate.HistoryStart)
+                    .Take(candidate.HistoryEnd - candidate.HistoryStart + 1)
+            )
                 if (Number(CompactCandidateBuilder.Meta(row)?["seq"]) is long member)
                     preserve.Add(member);
         }
