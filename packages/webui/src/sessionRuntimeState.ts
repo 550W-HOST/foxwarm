@@ -23,6 +23,7 @@ export interface SessionRuntimeState {
   since?: number
   note?: string
   retry?: SessionRuntimeRetryDetails
+  processing?: true
   stopping?: true
   compaction?: SessionRuntimeCompactionDetails
   queueLength: number

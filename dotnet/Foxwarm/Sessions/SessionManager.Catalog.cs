@@ -151,7 +151,8 @@ internal sealed partial class SessionManager
         var context = ExecutionPlacement(owner);
         var runtime = owner.RuntimeSnapshot(meta);
         var active =
-            meta.Busy
+            runtime["processing"]?.GetValue<bool>() == true
+            || meta.Busy
             || meta.Stopping
             || meta.QueueLength > 0
             || meta.Wait is not null

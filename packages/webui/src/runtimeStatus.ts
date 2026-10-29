@@ -84,5 +84,6 @@ export function getRuntimeStatusView(runtime: SessionRuntimeState | undefined, f
   if (state === 'running-tool' && runtime) { const tool = describeRuntimeTool(runtime); return { kind: 'tool', tone: 'special', label: tool.label, details: [...tool.details, ...details] } }
   if (state === 'waiting' && runtime) { const wait = describeRuntimeWaiting(runtime); return { kind: 'waiting', tone: 'warning', label: wait.label, details: [...wait.details, ...details] } }
   if (compact) return { kind: 'compact', tone: 'muted', label: 'Compacting in background…', secondary: true, details }
+  if (state === 'idle' && runtime?.processing) return { kind: 'unknown', tone: 'muted', label: 'Running…', details }
   return null
 }

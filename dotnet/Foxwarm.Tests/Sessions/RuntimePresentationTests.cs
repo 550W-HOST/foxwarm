@@ -6,7 +6,7 @@ using Foxwarm.Tools;
 
 namespace Foxwarm.Tests;
 
-public sealed class RuntimePresentationTests
+public sealed partial class RuntimePresentationTests
 {
     [Fact]
     public async Task Completed_foreground_retry_does_not_reappear_during_next_input_preparation()
@@ -315,7 +315,8 @@ public sealed class RuntimePresentationTests
         internal ProviderFixture(
             string root,
             PersistentSessionAuthorityStore store,
-            Action? onResponse = null
+            Action? onResponse = null,
+            bool journal = false
         )
         {
             var work = Path.Combine(root, "work");
@@ -339,7 +340,10 @@ public sealed class RuntimePresentationTests
                     onResponse?.Invoke();
                 })
             );
-            var requests = new ModelRequestOwner(http, options, new ModelRouting());
+            var requests = new ModelRequestOwner(
+                http, options, new ModelRouting(),
+                journal: journal ? new LlmRequestJournalStore(root) : null
+            );
             var chat = new SessionChatService(
                 requests,
                 options,

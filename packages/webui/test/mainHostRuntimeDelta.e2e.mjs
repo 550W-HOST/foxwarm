@@ -72,7 +72,7 @@ const create = async (name, parentSessionId) => {
   return result.body.sessionId
 }
 const send = (id, value, extra = {}) => fixture.api('POST', route(id) + '/message', { text: value, ...extra })
-const settled = id => until(async () => !(await history(id)).session.busy, 'actual idle ' + id)
+const settled = id => until(async () => { const state = (await history(id)).session; return !state.busy && !state.runtimeState.processing }, 'actual idle ' + id)
 async function turn(id, key, calls, payload = '') {
   if (calls) scripts.set(key, calls)
   assert.equal((await send(id, 'CASE:' + key + (payload ? ' ' + payload : ''), key === 'normal' ? { clientMessageId: 'composer-normal' } : {})).status, 202)
@@ -139,10 +139,14 @@ try {
   await projections(source, state => { assert.equal(state.retry?.attempt, 1); assert.equal(state.retry?.retryAt, retry.retryAt) })
   await page.waitForFunction(() => document.body.innerText.includes('Retrying'))
   await until(() => held.has('retry'), 'physical next attempt held')
-  await projections(source, state => { assert.equal(state.state, 'requesting-model'); assert.equal(state.retry, undefined) })
+  await projections(source, state => { assert.equal(state.state, 'requesting-model'); assert.equal(state.processing, true); assert.equal(state.retry, undefined) })
   // Real App Stop acknowledges before request completion and settles from actual owner state.
+  const stopFramesAt = sourceFrames.length
   await page.waitForSelector('[aria-label="Stop session"]'); await page.click('[aria-label="Stop session"]')
   await settled(source); await until(() => sourceFrames.some(frame => frame.event?.feedback?.action === 'stop' && frame.event.feedback.status === 'accepted'), 'App correlated Stop')
+  assert(sourceFrames.slice(stopFramesAt).some(frame => frame.type === 'session-state' && !frame.session.busy && frame.session.runtimeState.processing), 'committed idle retains exact-owner processing until cleanup')
+  await projections(source, state => { assert.equal(state.state, 'idle'); assert.equal(state.processing, undefined) })
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-processing-status-slot] button')].some(button => button.textContent === 'Continue'))
   const continueAt = Date.now(); await control(source, '/continue', 'accepted', 'continue'); assert(Date.now() - continueAt < 1500)
   await until(() => requests.some(row => row.key === 'retry' && !row.planning && row.n === 2), 'continued physical request')
   await control(source, '/continue', 'noop', 'continue'); await control(source, '/stop', 'accepted', 'stop'); await settled(source)

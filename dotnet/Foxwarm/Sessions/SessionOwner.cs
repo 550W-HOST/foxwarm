@@ -173,16 +173,21 @@ internal sealed partial class SessionOwner
             }
             finally
             {
-                ClearDraft();
-                var failures = Entry.BackgroundProcessorFailureCount;
-                if (failures != lastReportedFailureCount)
+                try
                 {
-                    lastReportedFailureCount = failures;
-                    if (Entry.LastBackgroundProcessorFailure is { } failure)
-                        await PresentFailureAsync(failure, durable: false);
+                    var failures = Entry.BackgroundProcessorFailureCount;
+                    if (failures != lastReportedFailureCount)
+                    {
+                        lastReportedFailureCount = failures;
+                        if (Entry.LastBackgroundProcessorFailure is { } failure)
+                            await PresentFailureAsync(failure, durable: false);
+                    }
                 }
-                Emit(SessionEventKind.StateChanged);
-                running.TryRemove(index, out _);
+                finally
+                {
+                    running.TryRemove(index, out _);
+                    Emit(SessionEventKind.StateChanged);
+                }
             }
         }
         var task = ExecuteAsync();

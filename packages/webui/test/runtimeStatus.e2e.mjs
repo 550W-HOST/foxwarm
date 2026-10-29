@@ -29,18 +29,21 @@ before(async () => {
         ['retry', active('requesting-model', {retry: {attempt: 1, nextAttempt: 2, maxAttempts: 6, retryAt: Date.now()+60000, reason: 'Temporary connection error'}})],
         ['stopping', active('running-tool', {stopping: true})],
         ['interrupted', active('idle')],
+        ['processing', active('idle', {processing: true})],
         ['error', active('idle')],
         ['failed', active('llm-failed')],
         ['unknown', active('requesting-model', {active: {phase: 'unknown'}, note: 'The current phase is unavailable.'})],
       ]
       function Fixture() {
         const [pending, setPending] = useState(null)
+        const [processing, setProcessing] = useState(true)
+        window.fixture.setProcessing = setProcessing
         window.fixture.setPending = setPending
         return <main className="p-6 mx-auto max-w-5xl">
           <h1 className="text-lg font-medium mb-2">Runtime status</h1>
           <div className="runtime-examples grid grid-cols-1 gap-x-12 gap-y-2">
             {examples.map(([id, state]) => <div key={id} data-example={id} className="min-w-0">
-              <ProcessingStatus sessionBusy={state.busy} runtimeState={state} sessionQueueLength={0} turnIncomplete={id==='interrupted'||id==='error'||id==='failed'} loading={false}
+              <ProcessingStatus sessionBusy={state.busy} runtimeState={id==='processing'?{...state,processing:processing||undefined}:state} sessionQueueLength={0} turnIncomplete={id==='processing'||id==='interrupted'||id==='error'||id==='failed'} loading={false}
                 isMobile={innerWidth<768} timelineView="conversation" pendingControl={id==='tool'?pending:null}
                 failure={id==='error'?{title:'Request failed',details:'The connection closed before the response completed.'}:null}
                 onContinue={() => window.fixture.continues++} onCancelCompaction={() => window.fixture.cancels++} />
@@ -130,6 +133,22 @@ test('settled failure has no live motion and exposes Continue by keyboard withou
   assert.equal(state.animations, 0)
   await page.focus('[data-example="failed"] button')
   await page.keyboard.press('Enter')
+  assert.equal(await page.evaluate(() => window.fixture.continues), 1)
+ } finally { await page.close() }
+})
+
+
+test('retained processing with idle history withholds Interrupted and Continue until settlement', async () => {
+ const page = await open()
+ try {
+  const selector = '[data-example="processing"]'
+  assert.equal(await page.$eval(selector + ' [data-runtime-presentation]', el => el.dataset.runtimePresentation), 'unknown')
+  assert.equal(await page.$eval(selector, el => el.textContent), 'Running…')
+  assert.equal(await page.$(selector + ' button'), null)
+  await page.evaluate(() => window.fixture.setProcessing(false))
+  await page.waitForFunction(() => document.querySelector('[data-example="processing"]').textContent.includes('Continue'))
+  assert.match(await page.$eval(selector, el => el.textContent), /Interrupted/)
+  await page.click(selector + ' button')
   assert.equal(await page.evaluate(() => window.fixture.continues), 1)
  } finally { await page.close() }
 })

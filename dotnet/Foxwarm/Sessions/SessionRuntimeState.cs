@@ -171,13 +171,18 @@ internal sealed partial class SessionOwner
     {
         meta ??= Metadata();
         lock (runtimeGate)
-            return SessionRuntimeState.Build(
+        {
+            var runtime = SessionRuntimeState.Build(
                 meta,
                 ToolActive,
                 Compacting,
                 foregroundRuntime,
                 compactRuntime
             );
+            if (Processing)
+                runtime["processing"] = true;
+            return runtime;
+        }
     }
 
     internal void BeginModelAttempt()

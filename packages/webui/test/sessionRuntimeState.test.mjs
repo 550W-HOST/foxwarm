@@ -59,3 +59,14 @@ test('LLM failure is inactive and has one danger summary even during independent
   assert.equal(getSessionRuntimeTone(session), 'danger')
   assert.equal(getSessionRuntimeSummary(session), 'Request failed')
 })
+
+
+test('processing changes the idle summary without changing active or idle-notification classification', async () => {
+  const { isSessionRuntimeActive, getSessionRuntimeTone } = await import(pathToFileURL(bundledPath).href)
+  const session = { busy: false, runtimeState: runtimeState('idle', { processing: true }) }
+  assert.equal(getSessionRuntimeSummary(session), 'Running…')
+  assert.equal(getSessionRuntimeTone(session), 'muted')
+  assert.equal(isSessionRuntimeActive(session), false)
+  assert.equal(getRuntimeStateSummary(runtimeState('llm-failed', { processing: true })), 'Request failed')
+  assert.equal(getRuntimeStateSummary(runtimeState('waiting', { processing: true })), 'Waiting')
+})

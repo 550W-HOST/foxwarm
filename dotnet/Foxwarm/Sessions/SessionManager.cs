@@ -581,8 +581,12 @@ internal sealed partial class SessionManager : IAsyncDisposable
             await MaybeRefreshStaleAsync(hosted);
         };
         registry.OnTurnCompleted = (_, result) => hosted.Compactor.AutoAfterTurnAsync(result);
-        registry.OnProcessorFinalizing = (_, error, interrupted, suspended) =>
-            FinishChannelTurnAsync(hosted, error, interrupted, suspended);
+        registry.OnProcessorFinalizing = async (_, error, interrupted, suspended) =>
+        {
+            // Retire this run's draft before a queued successor can claim the processor.
+            hosted.ClearDraft();
+            await FinishChannelTurnAsync(hosted, error, interrupted, suspended);
+        };
         registry.OnBeforeContinuation = (_, result, consume, token) =>
             hosted.Compactor.BeforeContinuationAsync(result, consume, token);
         registry.OnSafePoint = _ => hosted.Compactor.SafePointAsync();

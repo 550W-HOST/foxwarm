@@ -43,7 +43,7 @@ const ProcessingStatus = memo(function ProcessingStatus({ sessionBusy, runtimeSt
 
   let view: RuntimeStatusView | null = getRuntimeStatusView(runtimeState, sessionBusy, now)
   const state = runtimeState?.state || (sessionBusy ? 'requesting-model' : 'idle')
-  const continuable = isRuntimeStateInactiveName(state) && turnIncomplete && !loading
+  const continuable = isRuntimeStateInactiveName(state) && !runtimeState?.processing && turnIncomplete && !loading
   const interrupted = state === 'idle' && continuable
   if (interrupted) view = { kind: failure ? 'error' : 'interrupted', tone: failure ? 'danger' : 'warning', label: failure?.title || 'Interrupted', details: failure?.details ? [['Error', failure.details]] : [] }
   if (loading && !view) view = { kind: 'request', tone: 'accent', label: 'Sending…', details: [] }
