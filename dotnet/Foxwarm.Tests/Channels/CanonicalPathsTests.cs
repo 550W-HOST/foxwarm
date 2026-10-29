@@ -497,26 +497,17 @@ public sealed class CanonicalPathsTests
         journal.Write(
             new("rolling-back", "old", "claimed/main", "main", [], true, "claimed", 1000)
         );
+        var sourceBefore = await File.ReadAllBytesAsync(journal.AuthorityPath("old"));
         await using var recovered = Manager();
-        await recovered.LoadMainHostAsync();
-        Assert.Equal("old", (await recovered.RequiredAsync("old")).Id);
-        Assert.Contains("unindexed", recovered.Agents());
-        await Assert.ThrowsAsync<InvalidDataException>(() =>
-            recovered.RequiredAsync("unindexed/main")
-        );
-        Assert.False(Directory.Exists(Path.Combine(paths.AgentsRoot, "claimed")));
-        Assert.False(
-            JsonNode
-                .Parse(
-                    await File.ReadAllTextAsync(
-                        Path.Combine(paths.DataRoot, "state", "agents.json")
-                    )
-                )!
-                .AsObject()
-                .ContainsKey("claimed")
-        );
+        var error = await Assert.ThrowsAsync<AgentIdentityCleanupException>(() => recovered.LoadMainHostAsync());
+        Assert.Contains(Path.Combine(paths.AgentsRoot, "claimed"), error.Paths);
+        Assert.Equal(sourceBefore, await File.ReadAllBytesAsync(journal.AuthorityPath("old")));
+        Assert.NotNull(recovered.Catalog.Get("old"));
+        Assert.Null(recovered.Catalog.Get("unindexed/main"));
+        Assert.True(Directory.Exists(Path.Combine(paths.AgentsRoot, "claimed")));
+        Assert.True(JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(paths.DataRoot, "state", "agents.json")))!.AsObject().ContainsKey("claimed"));
         Assert.Equal("ordinary unowned directory", await File.ReadAllTextAsync(unrelated));
-        Assert.False(File.Exists(journal.FilePath));
+        Assert.True(File.Exists(journal.FilePath));
     }
 
     [Fact]

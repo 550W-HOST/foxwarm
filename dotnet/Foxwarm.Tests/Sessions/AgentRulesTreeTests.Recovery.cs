@@ -28,7 +28,7 @@ public sealed partial class AgentRulesTreeTests
     [InlineData(true, true, false)]
     [InlineData(false, true, true)]
     [InlineData(true, true, true)]
-    public async Task Conversion_compensates_owned_publication_and_preparation_without_touching_foreign_paths(
+    public async Task Conversion_deletes_verified_owned_paths_and_reports_foreign_publication_blockers(
         bool canonical,
         bool blockDirectory,
         bool directoryBlocker
@@ -112,41 +112,31 @@ public sealed partial class AgentRulesTreeTests
         ).Response;
         MetadataWriteHook(manager, null);
         Denied(result);
-        Assert.True(result["rolledBack"]!.GetValue<bool>(), result.ToJsonString());
         Assert.False(result["identityCommitted"]!.GetValue<bool>());
         Assert.Equal(sourceId, source.Id);
-        Assert.Equal(
-            history,
-            source.Entry.Snapshot().History.Select(row => row.ToJson().ToJsonString())
-        );
-        Assert.Equal(
-            snapshot,
-            source.Entry.Snapshot().AuthorityEnvelope["persistentMemorySnapshot"]?.ToJsonString()
-        );
-        Assert.Null(manager.AgentMetadata["converted"]);
-        Assert.Equal(directoryBlocker, Directory.Exists(Path.Combine(root, "converted")));
-        Assert.Equal(
-            new[] { unrelated },
-            Directory
-                .GetDirectories(root)
-                .Where(path =>
-                    Path.GetFileName(path).StartsWith(".create-", StringComparison.Ordinal)
-                )
-        );
-        Assert.Equal(
-            "foreign-preparation",
-            await File.ReadAllTextAsync(Path.Combine(unrelated, "foreign.txt"))
-        );
+        Assert.Equal(history, source.Entry.Snapshot().History.Select(row => row.ToJson().ToJsonString()));
+        Assert.Equal(snapshot, source.Entry.Snapshot().AuthorityEnvelope["persistentMemorySnapshot"]?.ToJsonString());
+        Assert.Equal("foreign-preparation", await File.ReadAllTextAsync(Path.Combine(unrelated, "foreign.txt")));
         if (blockDirectory)
-            Assert.Equal(
-                "foreign-blocker",
-                await File.ReadAllTextAsync(
-                    directoryBlocker
-                        ? Path.Combine(root, "converted", "keep")
-                        : Path.Combine(root, "converted")
-                )
-            );
-        Assert.Null(new SessionIdentityMoveJournal(temp.Path).Read());
+        {
+            Assert.True(result["recoveryRequired"]!.GetValue<bool>());
+            Assert.True(result["manualInterventionRequired"]!.GetValue<bool>());
+            Assert.Null(result["rolledBack"]);
+            Assert.NotNull(manager.AgentMetadata["converted"]);
+            var intent = new SessionIdentityMoveJournal(temp.Path).Read()!;
+            var prepared = AgentCatalogOf(manager).PreparationPath(intent.OwnedAgentPreparation!);
+            Assert.True(Directory.Exists(prepared));
+            Assert.Equal(intent.OwnedAgentPreparation, await File.ReadAllTextAsync(Path.Combine(prepared, AgentCatalog.IdentityProofFileName)));
+            Assert.Equal("foreign-blocker", await File.ReadAllTextAsync(directoryBlocker ? Path.Combine(root, "converted", "keep") : Path.Combine(root, "converted")));
+        }
+        else
+        {
+            Assert.True(result["rolledBack"]!.GetValue<bool>(), result.ToJsonString());
+            Assert.Null(manager.AgentMetadata["converted"]);
+            Assert.False(Directory.Exists(Path.Combine(root, "converted")));
+            Assert.Equal(new[] { unrelated }, Directory.GetDirectories(root).Where(path => Path.GetFileName(path).StartsWith(".create-", StringComparison.Ordinal)));
+            Assert.Null(new SessionIdentityMoveJournal(temp.Path).Read());
+        }
     }
 
     [Theory]
@@ -229,6 +219,7 @@ public sealed partial class AgentRulesTreeTests
             new JsonObject { ["converted"] = previous.DeepClone() }.ToJsonString()
         );
         string? prepared = null;
+        var savedPreparation = Path.Combine(temp.Path, "saved-preparation");
         string? sourceId = null;
         var foreign = Path.Combine(temp.Path, "foreign");
         Directory.CreateDirectory(foreign);
@@ -267,7 +258,7 @@ public sealed partial class AgentRulesTreeTests
                     var intent = new SessionIdentityMoveJournal(temp.Path).Read()!;
                     prepared = AgentCatalogOf(manager)
                         .PreparationPath(intent.OwnedAgentPreparation!);
-                    Directory.Delete(prepared, true);
+                    Directory.Move(prepared, savedPreparation);
                     Directory.CreateSymbolicLink(prepared, foreign);
                     Directory.CreateDirectory(Path.Combine(paths.AgentsRoot, "converted"));
                     File.WriteAllText(
@@ -294,8 +285,9 @@ public sealed partial class AgentRulesTreeTests
             Assert.Equal(sourceId, source.Id);
             Assert.Equal("unowned", await File.ReadAllTextAsync(Path.Combine(foreign, "keep")));
             Directory.Delete(prepared!); // Explicit repair of the substituted link, then ordinary startup recovery.
-            Directory.CreateDirectory(prepared!);
-            await File.WriteAllTextAsync(Path.Combine(prepared!, "owned"), "owned preparation");
+            Directory.Move(savedPreparation, prepared!);
+            Assert.Equal("unowned blocker", await File.ReadAllTextAsync(Path.Combine(paths.AgentsRoot, "converted", "keep")));
+            Directory.Delete(Path.Combine(paths.AgentsRoot, "converted"), true); // Explicit removal of the test-owned foreign blocker.
         }
         await using var reopened = new SessionManager(
             temp.Path,
@@ -317,10 +309,7 @@ public sealed partial class AgentRulesTreeTests
             )
         );
         Assert.Equal("unowned", await File.ReadAllTextAsync(Path.Combine(foreign, "keep")));
-        Assert.Equal(
-            "unowned blocker",
-            await File.ReadAllTextAsync(Path.Combine(paths.AgentsRoot, "converted", "keep"))
-        );
+        Assert.False(Directory.Exists(Path.Combine(paths.AgentsRoot, "converted")));
     }
 
     [Fact]
@@ -448,4 +437,113 @@ public sealed partial class AgentRulesTreeTests
         );
         Assert.Equal("unowned", await File.ReadAllTextAsync(Path.Combine(foreign, "keep")));
     }
+    [Fact]
+    public async Task Failure_before_preparation_preserves_foreign_final_directory_and_retains_manual_intervention()
+    {
+        await using var f = await Fixture();
+        var child = await ChildAgent(f, "child");
+        var source = child.Entry.Snapshot().History;
+        var final = Path.Combine(f.Work, "agents", "never-prepared");
+        f.Manager.BeforeIdentityStage = (_, stage) =>
+        {
+            if (stage == "before-agent-copy")
+            {
+                Directory.CreateDirectory(final);
+                File.WriteAllText(Path.Combine(final, "unowned"), "foreign final before preparation");
+                throw new IOException("synthetic failure before preparation");
+            }
+            return Task.CompletedTask;
+        };
+        var result = await f.ToolAsync("create_agent", new JsonObject { ["agentName"] = "never-prepared", ["convertSession"] = true }, child);
+        Denied(result);
+        Assert.True(result!["manualInterventionRequired"]!.GetValue<bool>());
+        Assert.True(result["recoveryRequired"]!.GetValue<bool>());
+        Assert.Null(result["rolledBack"]);
+        Assert.Contains(final, result["residualPaths"]!.ToJsonString());
+        var intent = new SessionIdentityMoveJournal(f.Data).Read()!;
+        Assert.Null(intent.AgentDirectoryPublished);
+        Assert.False(Directory.Exists(AgentCatalogOf(f.Manager).PreparationPath(intent.OwnedAgentPreparation!)));
+        Assert.Equal("foreign final before preparation", await File.ReadAllTextAsync(Path.Combine(final, "unowned")));
+        Assert.Equal("child/main", child.Id);
+        Assert.Equal(source.Select(row => row.ToJson().ToJsonString()), child.Entry.Snapshot().History.Select(row => row.ToJson().ToJsonString()));
+    }
+
+    [Theory]
+    [InlineData("dangling-link")]
+    [InlineData("file")]
+    public async Task Unverified_preparation_entry_never_reports_complete_cleanup(string kind)
+    {
+        await using var f = await Fixture();
+        var final = Path.Combine(f.Work, "agents", "interrupted");
+        string? prepared = null;
+        var armed = true;
+        MetadataWriteHook(f.Manager, stage =>
+        {
+            if (!armed || stage != AtomicJsonWriteStage.AfterRenameBeforeDirectorySync) return;
+            armed = false;
+            var intent = new SessionIdentityMoveJournal(f.Data).Read()!;
+            prepared = AgentCatalogOf(f.Manager).PreparationPath(intent.OwnedAgentPreparation!);
+            Directory.Delete(prepared, true);
+            if (kind == "dangling-link") Directory.CreateSymbolicLink(prepared, Path.Combine(f.Temp.Path, "absent-target"));
+            else File.WriteAllText(prepared, "unverified file");
+            Directory.CreateDirectory(final);
+            File.WriteAllText(Path.Combine(final, "keep"), "unowned blocker");
+        });
+        var result = await f.ToolAsync("create_agent", new JsonObject { ["agentName"] = "interrupted", ["convertSession"] = true });
+        MetadataWriteHook(f.Manager, null);
+        Denied(result);
+        Assert.True(result!["recoveryRequired"]!.GetValue<bool>());
+        Assert.True(result["manualInterventionRequired"]!.GetValue<bool>());
+        Assert.Null(result["rolledBack"]);
+        Assert.Contains(prepared!, result["residualPaths"]!.ToJsonString());
+        Assert.NotNull(new SessionIdentityMoveJournal(f.Data).Read());
+        _ = File.GetAttributes(prepared!); // Includes a dangling link; do not follow its target.
+        if (kind == "dangling-link") Assert.NotNull(new DirectoryInfo(prepared!).LinkTarget);
+        else Assert.Equal("unverified file", await File.ReadAllTextAsync(prepared!));
+        Assert.Equal("unowned blocker", await File.ReadAllTextAsync(Path.Combine(final, "keep")));
+    }
+
+    [Fact]
+    public async Task Successful_conversion_verifies_intent_bound_proof_then_removes_only_its_marker()
+    {
+        await using var f = await Fixture();
+        var final = Path.Combine(f.Work, "agents", "converted");
+        f.Manager.BeforeIdentityStage = async (_, stage) =>
+        {
+            if (stage != "after-agent-copy") return;
+            var intent = new SessionIdentityMoveJournal(f.Data).Read()!;
+            Assert.Equal(intent.OwnedAgentPreparation, await File.ReadAllTextAsync(Path.Combine(final, AgentCatalog.IdentityProofFileName)));
+            await File.WriteAllTextAsync(Path.Combine(final, "retained.txt"), "owned content survives success");
+        };
+        Successful(await f.ToolAsync("create_agent", new JsonObject { ["agentName"] = "converted", ["convertSession"] = true }));
+        Assert.False(File.Exists(Path.Combine(final, AgentCatalog.IdentityProofFileName)));
+        Assert.Equal("owned content survives success", await File.ReadAllTextAsync(Path.Combine(final, "retained.txt")));
+        Assert.Null(new SessionIdentityMoveJournal(f.Data).Read());
+    }
+
+    [Fact]
+    public async Task A_different_intents_marker_does_not_authorize_directory_deletion()
+    {
+        await using var f = await Fixture();
+        var final = Path.Combine(f.Work, "agents", "converted");
+        var foreignProof = ".create-" + Guid.NewGuid().ToString("N");
+        f.Manager.BeforeIdentityStage = async (_, stage) =>
+        {
+            if (stage != "after-agent-copy") return;
+            await File.WriteAllTextAsync(Path.Combine(final, AgentCatalog.IdentityProofFileName), foreignProof);
+            await File.WriteAllTextAsync(Path.Combine(final, "keep"), "unverified directory data");
+            throw new IOException("synthetic proof replacement");
+        };
+        var sourceId = f.Owner.Id;
+        var result = await f.ToolAsync("create_agent", new JsonObject { ["agentName"] = "converted", ["convertSession"] = true });
+        Denied(result);
+        Assert.True(result!["manualInterventionRequired"]!.GetValue<bool>());
+        Assert.Null(result["rolledBack"]);
+        Assert.Contains(final, result["residualPaths"]!.ToJsonString());
+        Assert.Equal(foreignProof, await File.ReadAllTextAsync(Path.Combine(final, AgentCatalog.IdentityProofFileName)));
+        Assert.Equal("unverified directory data", await File.ReadAllTextAsync(Path.Combine(final, "keep")));
+        Assert.Equal(sourceId, f.Owner.Id);
+        Assert.NotNull(new SessionIdentityMoveJournal(f.Data).Read());
+    }
+
 }

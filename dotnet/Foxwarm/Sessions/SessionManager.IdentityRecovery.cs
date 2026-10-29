@@ -95,23 +95,8 @@ internal sealed partial class SessionManager
                     throw new InvalidDataException(
                         "Owned identity destination contains another Main lifetime; preserve its directory."
                     );
-                if (
-                    backward
-                    && record.OwnsAgent
-                    && record.OwnedAgentPreparation is not null
-                    && record.AgentDirectoryPublished is null
-                )
-                {
-                    // A still-prepared directory was never renamed to the final destination.
-                    // Persist that ownership distinction before cleanup can remove the evidence.
-                    var prepared = agents.PreparationPath(record.OwnedAgentPreparation);
-                    record = record with
-                    {
-                        AgentDirectoryPublished =
-                            !Directory.Exists(prepared) && !File.Exists(prepared),
-                    };
-                    IdentityJournal.Write(record);
-                }
+                if (backward && record.OwnsAgent)
+                    agents.ValidateIdentityOwnedPaths(record.OwnedAgent!, record.OwnedAgentPreparation);
                 // Direction is persisted before any reversal. The audit transaction never merges competing branches.
                 IdentityJournal.MoveArtifacts(from, to, record.Version);
                 SqliteArchiveIdentityMove.Rename(ArchiveDatabase, from, to);
@@ -127,8 +112,13 @@ internal sealed partial class SessionManager
                 deletionChannels.RewriteIdentity(from, to);
                 if (!backward)
                     await archiveIdentities.CommitRenameAsync(record.OldId, record.NewId);
-                if (backward && record.OwnsAgent)
-                    await RemoveMoveOwnedAgentAsync(record, metadata);
+                if (record.OwnsAgent)
+                {
+                    if (backward)
+                        await RemoveMoveOwnedAgentAsync(record, metadata);
+                    else
+                        await agents.CompleteIdentityOwnedAsync(record.OwnedAgent!, record.OwnedAgentPreparation);
+                }
                 IdentityJournal.Clear();
             }
             await archiveIdentities.InitializeAsync(Catalog);
@@ -165,8 +155,7 @@ internal sealed partial class SessionManager
         await agents.RemoveIdentityOwnedAsync(
             record.OwnedAgent,
             record.OwnedAgentPreparation,
-            record.PreviousAgentMetadata,
-            record.AgentDirectoryPublished ?? true
+            record.PreviousAgentMetadata
         );
     }
 }

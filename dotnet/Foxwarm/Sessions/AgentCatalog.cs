@@ -272,8 +272,12 @@ internal sealed partial class AgentCatalog
                 initialMetadata["inherit"] = inherit;
             // Dot-prefixed preparation is not Agent membership. Persist authority before
             // publishing the final directory so restart cannot discover an unrestricted child.
+            if (IdentityEntry(prepared) is not null)
+                throw new AgentIdentityCleanupException([prepared]);
             Directory.CreateDirectory(prepared);
             createdDirectory = true;
+            if (preparationName is not null)
+                WriteIdentityProof(prepared, preparationName);
             Directory.CreateDirectory(Path.Combine(prepared, "memory"));
             if (initialMemory is not null)
                 File.WriteAllText(Path.Combine(prepared, "memory", "MEMORY.md"), initialMemory);
@@ -327,7 +331,13 @@ internal sealed partial class AgentCatalog
             {
                 try
                 {
-                    Directory.Delete(prepared, recursive: true);
+                    if (preparationName is null)
+                        Directory.Delete(prepared, recursive: true);
+                    else
+                    {
+                        _ = IdentityCleanupDirectories(name, preparationName);
+                        Directory.Delete(prepared, recursive: true);
+                    }
                 }
                 catch (Exception cleanup)
                 {
