@@ -18,7 +18,11 @@ internal sealed partial class ContextPreviewRenderer
     private readonly List<string> warnings = [];
     private bool Active => literal is not null || include is not null || exclude is not null;
 
-    internal ContextPreviewRenderer(JsonObject options, int defaultBudget = 6000, bool externalRead = false)
+    internal ContextPreviewRenderer(
+        JsonObject options,
+        int defaultBudget = 6000,
+        bool externalRead = false
+    )
     {
         this.externalRead = externalRead;
         parts = new HashSet<string>(["text", "tools", "images"], StringComparer.Ordinal);
@@ -163,7 +167,11 @@ internal sealed partial class ContextPreviewRenderer
                     item.DrillDown is { Length: > 0 } drill
                         ? "Archive original: " + drill
                         : "Narrow the range or increase previewLength/toolDetail."
-                            + (externalRead ? " Archive originals are not available through this endpoint." : "")
+                            + (
+                                externalRead
+                                    ? " Archive originals are not available through this endpoint."
+                                    : ""
+                            )
                 )
                 + "]";
         }
@@ -398,7 +406,11 @@ internal sealed partial class ContextPreviewRenderer
                     drill is { Length: > 0 }
                         ? "Omitted Archive original(s): " + drill
                         : "Narrow the range or raise previewLength."
-                            + (externalRead ? " Archive originals are not available through this endpoint." : "")
+                            + (
+                                externalRead
+                                    ? " Archive originals are not available through this endpoint."
+                                    : ""
+                            )
                 )
                 + "]";
         }

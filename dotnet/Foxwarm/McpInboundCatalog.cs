@@ -226,8 +226,18 @@ internal sealed class McpInboundCatalog
         {
             Keys(
                 args,
-                "action", "sessionId", "start", "before", "count", "historyVersion",
-                "parts", "previewLength", "contentFilter", "includeRegex", "excludeRegex", "toolDetail"
+                "action",
+                "sessionId",
+                "start",
+                "before",
+                "count",
+                "historyVersion",
+                "parts",
+                "previewLength",
+                "contentFilter",
+                "includeRegex",
+                "excludeRegex",
+                "toolDetail"
             );
             return await sessions.ReadAsync(context, Text(args, "sessionId", true)!, args, token);
         }
