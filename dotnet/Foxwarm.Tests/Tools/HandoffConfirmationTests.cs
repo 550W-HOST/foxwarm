@@ -38,26 +38,48 @@ public sealed partial class HandoffConfirmationTests
     [Fact]
     public void Short_nonprefixed_content_requires_review_and_exact_terminal_consent()
     {
-        foreach (var review in new[] { Review(), Review("\nOriginal review.\n"), Review(" Original review. ") })
+        foreach (
+            var review in new[]
+            {
+                Review(),
+                Review("\nOriginal review.\n"),
+                Review(" Original review. "),
+            }
+        )
             HandoffConfirmation.Validate(Args(review));
-        foreach (var invalid in new JsonNode?[]
-        {
-            null, JsonValue.Create(true), JsonValue.Create(1), JsonValue.Create(""),
-            JsonValue.Create("Reviewed, but do not send."),
-            JsonValue.Create("I confirm this handoff should proceed."),
-            JsonValue.Create(Review(" \r\n\ufeff")),
-            JsonValue.Create(Review(HandoffConfirmation.Placeholder)),
-            JsonValue.Create(Review(" \n" + HandoffConfirmation.Placeholder + "\n ")),
-            JsonValue.Create(Review() + "\n"),
-            JsonValue.Create(Review() + " Actually, cancel this handoff."),
-            JsonValue.Create(Review().ToLowerInvariant()),
-            JsonValue.Create("Reviewed. I have completed the check, found no issue, and confirm this inter-agent handoff should proceed.")
-        })
+        foreach (
+            var invalid in new JsonNode?[]
+            {
+                null,
+                JsonValue.Create(true),
+                JsonValue.Create(1),
+                JsonValue.Create(""),
+                JsonValue.Create("Reviewed, but do not send."),
+                JsonValue.Create("I confirm this handoff should proceed."),
+                JsonValue.Create(Review(" \r\n\ufeff")),
+                JsonValue.Create(Review(HandoffConfirmation.Placeholder)),
+                JsonValue.Create(Review(" \n" + HandoffConfirmation.Placeholder + "\n ")),
+                JsonValue.Create(Review() + "\n"),
+                JsonValue.Create(Review() + " Actually, cancel this handoff."),
+                JsonValue.Create(Review().ToLowerInvariant()),
+                JsonValue.Create(
+                    "Reviewed. I have completed the check, found no issue, and confirm this inter-agent handoff should proceed."
+                ),
+            }
+        )
             Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(Args(invalid)));
         var missing = Args(Review());
         missing.Remove("handoffConfirmation");
         Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(missing));
-        foreach (var recall in new JsonNode?[] { null, JsonValue.Create(true), JsonValue.Create(" \r\n\ufeff"), JsonValue.Create(HandoffConfirmation.RecallPlaceholder) })
+        foreach (
+            var recall in new JsonNode?[]
+            {
+                null,
+                JsonValue.Create(true),
+                JsonValue.Create(" \r\n\ufeff"),
+                JsonValue.Create(HandoffConfirmation.RecallPlaceholder),
+            }
+        )
         {
             var args = Args(Review());
             args["handoffRecall"] = recall;
@@ -68,8 +90,10 @@ public sealed partial class HandoffConfirmationTests
         Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(wrongOrder));
         var lateRecall = new JsonObject
         {
-            ["sessionId"] = "target", ["message"] = "task", ["handoffRecall"] = Recall(),
-            ["handoffConfirmation"] = Review()
+            ["sessionId"] = "target",
+            ["message"] = "task",
+            ["handoffRecall"] = Recall(),
+            ["handoffConfirmation"] = Review(),
         };
         Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(lateRecall));
     }
@@ -78,12 +102,19 @@ public sealed partial class HandoffConfirmationTests
     public void Enabled_schemas_require_ordered_review_fields_and_disabled_schemas_omit_them()
     {
         Assert.False(HandoffConfirmation.Enabled(new JsonObject()));
-        foreach (var definition in AgentToolDefinitions.Definitions().Where(item => HandoffConfirmation.Handoff(SessionWait.Text(item["name"]))))
+        foreach (
+            var definition in AgentToolDefinitions
+                .Definitions()
+                .Where(item => HandoffConfirmation.Handoff(SessionWait.Text(item["name"])))
+        )
         foreach (var enabled in new[] { false, true })
         {
             var concrete = HandoffConfirmation.Definition(definition, enabled);
             var properties = concrete["parameters"]!["properties"]!.AsObject();
-            var required = concrete["parameters"]!["required"]!.AsArray().Select(SessionWait.Text).ToArray();
+            var required = concrete["parameters"]!["required"]!
+                .AsArray()
+                .Select(SessionWait.Text)
+                .ToArray();
             Assert.Equal(enabled, properties.ContainsKey("handoffRecall"));
             Assert.Equal(enabled, properties.ContainsKey("handoffConfirmation"));
             Assert.Equal(enabled, required.Contains("handoffRecall"));
@@ -93,8 +124,14 @@ public sealed partial class HandoffConfirmationTests
                 var keys = properties.Select(pair => pair.Key).ToArray();
                 Assert.True(Array.IndexOf(keys, "handoffRecall") < Array.IndexOf(keys, "message"));
                 Assert.Equal("handoffConfirmation", keys.Last());
-                var modelKeys = ToolCallControls.ForModel(concrete)["parameters"]!["properties"]!.AsObject().Select(pair => pair.Key).ToArray();
-                Assert.Equal(new[] { "handoffConfirmation", "__cancelTool", "__cancelAllToolsThisTurn" }, modelKeys.TakeLast(3));
+                var modelKeys = ToolCallControls.ForModel(concrete)["parameters"]!["properties"]!
+                    .AsObject()
+                    .Select(pair => pair.Key)
+                    .ToArray();
+                Assert.Equal(
+                    new[] { "handoffConfirmation", "__cancelTool", "__cancelAllToolsThisTurn" },
+                    modelKeys.TakeLast(3)
+                );
             }
         }
     }
@@ -259,8 +296,7 @@ public sealed partial class HandoffConfirmationTests
                     .Where(value => value is not null);
                 Assert.Equal(
                     enabled,
-                    string.Join('\n', text)
-                        .Contains("handoffRecall", StringComparison.Ordinal)
+                    string.Join('\n', text).Contains("handoffRecall", StringComparison.Ordinal)
                 );
             }
         }

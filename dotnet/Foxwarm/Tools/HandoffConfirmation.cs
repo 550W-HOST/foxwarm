@@ -96,10 +96,7 @@ internal static class HandoffConfirmation
                 "Inter-agent handoff recall must include the caller's recalled context instead of an empty value or the documented placeholder."
             );
         var text = SessionWait.Text(args["handoffConfirmation"]);
-        if (
-            text is null
-            || !text.EndsWith(Suffix, StringComparison.Ordinal)
-        )
+        if (text is null || !text.EndsWith(Suffix, StringComparison.Ordinal))
             throw new InvalidDataException(
                 "Inter-agent handoff confirmation must end with the exact sentence: “I confirm this handoff should proceed.”"
             );
