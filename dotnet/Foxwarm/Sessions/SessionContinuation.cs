@@ -257,7 +257,8 @@ public static class SessionContinuation
         return responses.Count == calls.Length
             && responses.Values.All(response =>
                 Property(Property(response, "response"), "error").ValueKind
-                    is JsonValueKind.Undefined or JsonValueKind.Null
+                    is JsonValueKind.Undefined
+                        or JsonValueKind.Null
             )
             && byId.Values.Any(TerminalCall);
     }

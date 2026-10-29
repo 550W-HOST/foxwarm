@@ -87,28 +87,50 @@ public sealed partial class TerminalBatchErrorTests
                     Assert.Equal(index, results.Length);
                     Assert.Equal(
                         firstCalls.Select(call => call!["call_id"]!.ToString()),
-                        results[0].Select(part => part!["functionResponse"]!["tool_use_id"]!.ToString())
+                        results[0]
+                            .Select(part => part!["functionResponse"]!["tool_use_id"]!.ToString())
                     );
-                    Assert.Equal(mode.StartsWith("failed-send") ? 2 : 1, results[0].Count(part => part!["functionResponse"]!["response"]?["error"] is not null));
-                    var wireResults = requests[index]["input"]!.AsArray()
+                    Assert.Equal(
+                        mode.StartsWith("failed-send") ? 2 : 1,
+                        results[0]
+                            .Count(part =>
+                                part!["functionResponse"]!["response"]?["error"] is not null
+                            )
+                    );
+                    var wireResults = requests[index]["input"]!
+                        .AsArray()
                         .OfType<JsonObject>()
                         .Where(item => SessionWait.Text(item["type"]) == "function_call_output")
                         .ToArray();
                     Assert.Equal(
                         firstCalls.Select(call => call!["call_id"]!.ToString()),
-                        wireResults.Take(firstCalls.Count).Select(item => item["call_id"]!.ToString())
+                        wireResults
+                            .Take(firstCalls.Count)
+                            .Select(item => item["call_id"]!.ToString())
                     );
-                    Assert.All(wireResults, item => Assert.NotEmpty(item["output"]!.ToJsonString()));
+                    Assert.All(
+                        wireResults,
+                        item => Assert.NotEmpty(item["output"]!.ToJsonString())
+                    );
                 }
                 await Respond(
                     stream,
                     index == 0 ? (JsonArray)firstCalls.DeepClone()
-                    : index == 1 ? new JsonArray(Call("follow-up", "read", new() { ["filePath"] = Path.Combine(f.Work, "known.txt") }))
-                    : new JsonArray(Final())
+                        : index == 1
+                            ? new JsonArray(
+                                Call(
+                                    "follow-up",
+                                    "read",
+                                    new() { ["filePath"] = Path.Combine(f.Work, "known.txt") }
+                                )
+                            )
+                        : new JsonArray(Final())
                 );
             }
         );
-        await using var fixture = await ScriptFixture.Create(suppliedOptions: Options(peer.BaseUri));
+        await using var fixture = await ScriptFixture.Create(
+            suppliedOptions: Options(peer.BaseUri)
+        );
         f = fixture;
         await File.WriteAllTextAsync(Path.Combine(f.Work, "known.txt"), "follow-up content");
         var target = await f.Manager.CreateNamedAsync("main", "recipient", null, null);
@@ -138,21 +160,35 @@ public sealed partial class TerminalBatchErrorTests
         JsonObject control = mode switch
         {
             "wait" => Call("control", "wait", new() { ["waitForInput"] = true }),
-            "script-wait" => Call("control", "run_script", new()
-            {
-                ["code"] = "return call_tool('run_script', {'code':\"call_tool('wait', {'waitForInput':True})\\nreturn 42\"})",
-            }),
-            "script-finish" => Call("control", "run_script", new()
-            {
-                ["code"] = "call_tool('send_to_session', args)\nreturn {'__toolLoopControl':{'stopCurrentTurn':True}}",
-                ["args"] = sendArgs,
-            }),
-            "child-wait" or "child-finish" => Call("control", "create_child_session", new()
-            {
-                ["suffix"] = "worker",
-                ["taskId"] = taskId,
-                ["afterSend"] = after,
-            }),
+            "script-wait" => Call(
+                "control",
+                "run_script",
+                new()
+                {
+                    ["code"] =
+                        "return call_tool('run_script', {'code':\"call_tool('wait', {'waitForInput':True})\\nreturn 42\"})",
+                }
+            ),
+            "script-finish" => Call(
+                "control",
+                "run_script",
+                new()
+                {
+                    ["code"] =
+                        "call_tool('send_to_session', args)\nreturn {'__toolLoopControl':{'stopCurrentTurn':True}}",
+                    ["args"] = sendArgs,
+                }
+            ),
+            "child-wait" or "child-finish" => Call(
+                "control",
+                "create_child_session",
+                new()
+                {
+                    ["suffix"] = "worker",
+                    ["taskId"] = taskId,
+                    ["afterSend"] = after,
+                }
+            ),
             _ => errorFirst
                 ? Unified("control", "send_to_session", sendArgs)
                 : Call("control", "send_to_session", sendArgs),
@@ -161,16 +197,28 @@ public sealed partial class TerminalBatchErrorTests
         firstCalls = errorFirst ? new JsonArray(failed, control) : new JsonArray(control, failed);
         if (mode == "mixed")
         {
-            firstCalls.Insert(1, Unified("finish", "send_to_session", new()
-            {
-                ["sessionId"] = target.Id,
-                ["message"] = "second once-only delivery",
-                ["afterSend"] = "finish",
-            }));
+            firstCalls.Insert(
+                1,
+                Unified(
+                    "finish",
+                    "send_to_session",
+                    new()
+                    {
+                        ["sessionId"] = target.Id,
+                        ["message"] = "second once-only delivery",
+                        ["afterSend"] = "finish",
+                    }
+                )
+            );
             firstCalls.Insert(2, Call("explicit-wait", "wait", new() { ["waitForInput"] = true }));
         }
-        await f.Owner.Entry.SaveLane.AdmitAsync(QueueItem.UserText("handle the entire batch"), SaveKind.Strict);
-        await f.Owner.Registry.Runner.ProcessQueueAsync(f.Owner.Id).WaitAsync(TimeSpan.FromSeconds(20));
+        await f.Owner.Entry.SaveLane.AdmitAsync(
+            QueueItem.UserText("handle the entire batch"),
+            SaveKind.Strict
+        );
+        await f
+            .Owner.Registry.Runner.ProcessQueueAsync(f.Owner.Id)
+            .WaitAsync(TimeSpan.FromSeconds(20));
         Assert.Equal(3, peer.RequestCount);
         Assert.Null(f.Owner.WaitSnapshot());
         Assert.Null(f.Owner.Entry.Snapshot().Meta["wait"]);
@@ -182,7 +230,10 @@ public sealed partial class TerminalBatchErrorTests
             var child = f.Manager.Find(childId)!;
             Assert.NotNull(child);
             Assert.Single(child.Entry.Snapshot().Queue);
-            var task = await f.Manager.Tasks.ExecuteAsync(new JsonObject { ["action"] = "get", ["taskId"] = taskId }, f.Owner.Id);
+            var task = await f.Manager.Tasks.ExecuteAsync(
+                new JsonObject { ["action"] = "get", ["taskId"] = taskId },
+                f.Owner.Id
+            );
             Assert.Equal(childId, SessionWait.Text(task.Payload["task"]!["ownerSessionId"]));
             Assert.Equal(childId, SessionWait.Text(task.Payload["task"]!["attachedSessionId"]));
         }
