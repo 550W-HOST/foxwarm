@@ -719,7 +719,10 @@ public sealed class ImagePipelineTests
             ["business"] = new JsonObject { ["data"] = "opaque" },
             ["inlineDataItems"] = new JsonArray(image),
         };
-        var guarded = await Foxwarm.Tools.ToolOutputGuard.GuardAsync(response, temp.Path, "large");
+        var guarded = await Foxwarm.Tools.ToolOutputGuard.GuardAsync(
+            response,
+            text => Foxwarm.Tools.ToolOutputGuard.SaveLocalAsync(text, temp.Path)
+        );
         Assert.NotNull(guarded!["inlineDataItems"]);
         Assert.False(Directory.Exists(Path.Combine(temp.Path, ".temp", "tool-output")));
         var message = Message(
@@ -752,8 +755,7 @@ public sealed class ImagePipelineTests
         };
         var trimmed = await Foxwarm.Tools.ToolOutputGuard.GuardAsync(
             largeText,
-            temp.Path,
-            "large-text"
+            text => Foxwarm.Tools.ToolOutputGuard.SaveLocalAsync(text, temp.Path)
         );
         Assert.NotNull(trimmed!["inlineData"]);
         Assert.True(trimmed["outputTruncated"]!.GetValue<bool>());

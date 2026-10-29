@@ -255,7 +255,7 @@ internal sealed partial class NodeProviderRegistry
         return new(provider, node);
     }
 
-    private async Task<ITargetFileOperations> FileOperationsAsync(
+    internal async Task<ITargetFileOperations> FileOperationsAsync(
         string node,
         bool write,
         string? cwd,
