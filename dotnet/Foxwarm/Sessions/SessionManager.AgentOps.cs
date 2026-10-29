@@ -182,8 +182,8 @@ internal sealed partial class SessionManager
     )
     {
         var existing = await GetExistingAsync(id);
-        // An existing selected source supplies defaults only. Conversion and memory copying
-        // separately validate content/identity transfer through RequireCreationSource.
+        // Without conversion or memory copying, an existing selected source supplies only defaults.
+        // Content and identity transfers are checked separately through RequireCreationSource.
         if (existing is not null)
             return existing;
         if (creator is not null)
