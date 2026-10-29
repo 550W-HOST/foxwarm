@@ -21,8 +21,11 @@ internal sealed partial class SessionToolExecutor
             if (node != "master" && sessions.NodeProviders.Online(node))
             {
                 var capabilities = sessions.NodeProviders.Definitions(node);
-                if (!new[] { "read", "write" }.All(name => capabilities.Any(tool =>
-                    SessionWait.Text(tool?["name"]) == name)))
+                if (
+                    !new[] { "read", "write" }.All(name =>
+                        capabilities.Any(tool => SessionWait.Text(tool?["name"]) == name)
+                    )
+                )
                     // Capability limits do not remove an otherwise authorized Main spool.
                     node = "master";
             }
