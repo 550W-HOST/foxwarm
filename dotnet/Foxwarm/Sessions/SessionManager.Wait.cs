@@ -153,6 +153,8 @@ internal sealed partial class SessionManager
             || array.Any(value => string.IsNullOrWhiteSpace(SessionWait.Text(value)))
         )
             throw new InvalidDataException($"{key} must contain nonempty string IDs.");
+        if (array.Count == 0)
+            return null;
         var ids = array
             .Select(value => SessionWait.Text(value)!.Trim())
             .Distinct(StringComparer.Ordinal)
