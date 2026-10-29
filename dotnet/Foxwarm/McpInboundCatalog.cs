@@ -224,15 +224,12 @@ internal sealed class McpInboundCatalog
         }
         if (action == "read")
         {
-            Keys(args, "action", "sessionId", "start", "count", "previewLength");
-            return await sessions.ReadAsync(
-                context,
-                Text(args, "sessionId", true)!,
-                Offset(args, false),
-                Integer(args, "count", 1, 50) ?? 10,
-                Integer(args, "previewLength", 1000, 20000) ?? 6000,
-                token
+            Keys(
+                args,
+                "action", "sessionId", "start", "before", "count", "historyVersion",
+                "parts", "previewLength", "contentFilter", "includeRegex", "excludeRegex", "toolDetail"
             );
+            return await sessions.ReadAsync(context, Text(args, "sessionId", true)!, args, token);
         }
         if (action != "send")
             throw new McpInboundSafeException("Invalid Session action arguments.");

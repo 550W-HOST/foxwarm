@@ -54,6 +54,16 @@ For send/read, use an exact internal Session ID, not `<main>` or `<parent>`. Ses
 
 `foxwarm_discover` accepts `sources: ["node"]`, `["mcp"]`, or `["builtin"]` (or combinations). Builtin discovery currently supports `node_pair_list` and `node_pair_approve` only. Do not infer that arbitrary internal builtins are exposed. Node selection does not grant Node tool permission, and approving pairing grants trust rather than tool access.
 
+## Read a Session
+
+Call `foxwarm_session` with `action: "read"` and the permitted exact `sessionId`. Omit `start` and `before` to read the latest 10 eligible source records in chronological order. Use `start` to read forward (negative indices count from the end), or exclusive `before` to read backward; do not combine them. `count: 0` returns execution state and page information only. Read count has no separate 50-record ceiling; list remains bounded to 1–50 entries.
+
+The result retains `sessionId`, `start`, `count`, `total`, `executionState`, and `preview`, with exclusive `end` and `historyVersion` for navigation. `count` is the actual selected source-record count, before text filters and preview truncation. Use the preview's callable older/newer descriptors with their returned `historyVersion`. A `stale_history_boundary` result means the active range changed structurally; follow its fresh read instruction. Appended records do not invalidate an existing boundary.
+
+`parts: ["text", "tools", "images"]` selects included content before counting. Literal `contentFilter` and case-insensitive `includeRegex`/`excludeRegex` then filter only that selected page. An empty filtered page does not establish absence elsewhere. `toolDetail` supports `names` (default), `snippets`, and `full`. Omitted or zero `previewLength` uses 6,000 characters; other numeric values are floored and clamped to 1,000–20,000 independently of record count. These read options reject on list/send.
+
+Navigation invokes this external tool, not internal `view_session` or `recall`. Archive originals are unavailable through this endpoint; narrowing the active range or raising the preview/tool detail can reveal more of the current content. Read does not return raw history, queued input, or prompt snapshots.
+
 ## Supported environments and retained results
 
 - First-party CLI Nodes must negotiate protocol v3 and advertise external-owner support.

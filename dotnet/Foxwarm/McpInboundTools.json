@@ -118,7 +118,7 @@
   },
   {
     "name": "foxwarm_session",
-    "description": "List Foxwarm Sessions, read a Session's recent messages, or send it a message. A successful send confirms that the message was queued, not that the Session has read or answered it.",
+    "description": "List Foxwarm Sessions, read a Session's current conversation and execution state, or send it a message. Read defaults to the latest 10 visible records. A successful send confirms that the message was queued, not that the Session has read or answered it.",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
@@ -133,7 +133,7 @@
             "read",
             "send"
           ],
-          "description": "list shows Sessions; read returns a bounded message preview; send queues a message for an exact Session."
+          "description": "list shows a bounded Session catalog; read returns current conversation and execution state; send queues a message for an exact Session."
         },
         "sessionId": {
           "type": "string",
@@ -141,19 +141,17 @@
         },
         "start": {
           "type": "integer",
-          "description": "Zero-based offset for list or read. A negative read offset counts from the end. Omit to list from the beginning or read the latest messages."
+          "description": "Zero-based offset for list, or active-history index to read forward from. Negative read indices count from the end. Omit start and before to read the newest page; do not combine them."
         },
         "count": {
           "type": "integer",
-          "minimum": 1,
-          "maximum": 50,
-          "description": "Maximum entries to return. Defaults to 20 for list and 10 for read."
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Maximum entries for list (default 20, range 1–50), or visible source records for read after applying parts (default 10; 0 returns only execution state and page information). Read selection ends at the available history boundary; text filters can leave fewer matches."
         },
         "previewLength": {
-          "type": "integer",
-          "minimum": 1000,
-          "maximum": 20000,
-          "description": "Total character budget for the read preview. Omit to use the normal preview budget."
+          "type": "number",
+          "description": "Total character budget for the read preview. Omit or use 0 for the default; other values are bounded to 1,000–20,000."
         },
         "message": {
           "type": "string",
@@ -162,6 +160,51 @@
         "allowReply": {
           "type": "boolean",
           "description": "Allow the receiving Session to send an explicit reply through the client's active Foxwarm notification connection. Omitted or false does not provide a reply destination."
+        },
+        "before": {
+          "type": "integer",
+          "description": "Exclusive active-history index to read backward from. Use the value returned for the older page; do not combine with start. Applies to read only.",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "historyVersion": {
+          "type": "integer",
+          "description": "History version returned by an earlier read. Supply with start or before to detect a structurally changed range. Applies to read only.",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "parts": {
+          "type": "array",
+          "description": "Content to show: text, tools, or images. Defaults to all three. Hiding tools preserves commentary in mixed messages; text and images belonging to tool results stay with tools. Applies to read only.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "text",
+              "tools",
+              "images"
+            ]
+          }
+        },
+        "contentFilter": {
+          "type": "string",
+          "description": "Keep selected records containing this literal text, ignoring case. Searches the included content of the selected page, not the entire history. Applies to read only."
+        },
+        "includeRegex": {
+          "type": "string",
+          "description": "Keep selected records whose included content matches this regular expression, ignoring case. Applies to read only."
+        },
+        "excludeRegex": {
+          "type": "string",
+          "description": "Exclude selected records whose included content matches this regular expression, ignoring case. Applies to read only."
+        },
+        "toolDetail": {
+          "type": "string",
+          "description": "Tool display detail: names (default) groups names and counts; snippets adds short argument/result excerpts; full expands them within the response budget. Applies to read only.",
+          "enum": [
+            "names",
+            "snippets",
+            "full"
+          ]
         }
       }
     }

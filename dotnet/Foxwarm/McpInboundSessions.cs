@@ -75,22 +75,19 @@ internal sealed class McpInboundSessions(
     internal async Task<JsonObject> ReadAsync(
         McpExternalContext context,
         string requested,
-        long? start,
-        int count,
-        int previewLength,
+        JsonObject options,
         CancellationToken token
     )
     {
         context.Require();
         var id = Exact(requested);
-        var args = new JsonObject
-        {
-            ["sessionId"] = id,
-            ["count"] = count,
-            ["previewLength"] = previewLength,
-        };
-        if (start is not null)
-            args["start"] = start;
+        var args = (JsonObject)options.DeepClone();
+        args.Remove("action");
+        args["sessionId"] = id;
+        if (!args.ContainsKey("count"))
+            args["count"] = 10;
+        if (!args.ContainsKey("previewLength"))
+            args["previewLength"] = 6000;
         var permission = authorization.Request(context, "builtin", "view_session", args);
         await authorization.RequireAsync(context, permission, token);
         var owner =
@@ -98,42 +95,43 @@ internal sealed class McpInboundSessions(
             ?? throw new McpInboundSafeException("Session is unavailable.");
         if (owner.Id != id || Exact(requested) != id)
             throw new McpInboundSafeException("Session is unavailable.");
-        var history = owner.History();
-        var metadata = owner.Metadata();
-        var actualStart = start is null
-            ? Math.Max(0, history.Count - count)
-            : (int)
-                Math.Clamp(
-                    start < 0 ? (long)history.Count + start.Value : start.Value,
-                    0,
-                    history.Count
-                );
-        var messages = history.Skip(actualStart).Take(count).ToArray();
-        var state = SessionWait.Text(owner.RuntimeSnapshot(metadata)["state"]);
-        var preview = new ContextPreviewRenderer(args).Render(
-            id,
-            "",
-            history.Count,
-            actualStart,
-            messages
-        );
+        ContextPreviewRenderer renderer;
+        SessionViewPage page;
+        try
+        {
+            renderer = new ContextPreviewRenderer(args, externalRead: true);
+            page = owner.ViewPage(args, renderer);
+        }
+        catch (InvalidDataException error)
+        {
+            throw new McpInboundSafeException(error.Message);
+        }
+        var preview = page.Stale
+            ? "The active range changed structurally. Read a fresh page: "
+                + renderer.LiveCall(new JsonObject { ["sessionId"] = id })
+            : renderer.RenderLive(id, page, args);
         authorization.Require(context, permission);
         if (Exact(requested) != id || !ReferenceEquals(runtime.Owner(id), owner))
             throw new McpInboundSafeException("Session is unavailable.");
-        return new JsonObject
+        var result = new JsonObject
         {
             ["sessionId"] = id,
-            ["start"] = actualStart,
-            ["count"] = messages.Length,
-            ["total"] = history.Count,
+            ["start"] = page.Begin,
+            ["end"] = page.End,
+            ["count"] = page.Messages.Length,
+            ["total"] = page.Total,
+            ["historyVersion"] = page.HistoryVersion,
             ["executionState"] = new JsonObject
             {
-                ["state"] = state,
-                ["busy"] = metadata.Busy,
-                ["queueLength"] = metadata.QueueLength,
+                ["state"] = page.Runtime["state"]?.DeepClone(),
+                ["busy"] = page.Runtime["busy"]?.DeepClone(),
+                ["queueLength"] = page.Runtime["queueLength"]?.DeepClone(),
             },
             ["preview"] = preview,
         };
+        if (page.Stale)
+            result["error"] = "stale_history_boundary";
+        return result;
     }
 
     internal async Task<JsonObject> SendAsync(

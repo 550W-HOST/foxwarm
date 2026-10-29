@@ -115,6 +115,26 @@ Each row below describes a separate rule. Put the listed fields under `match` al
 
 Session-list permission exposes a bounded global catalog, not a list filtered by separate per-Session read permissions. Pairing approval grants trust to a Node and should be reserved for an operator. It does not automatically grant permission to call that Node's tools.
 
+## Read a Session
+
+After granting `builtin:view_session` for the exact target, call:
+
+```js
+const result = await client.callTool({
+  name: 'foxwarm_session',
+  arguments: { action: 'read', sessionId: 'existing-session-id' },
+});
+const page = result.structuredContent;
+```
+
+Read defaults to the newest 10 eligible source records in chronological order. Use `start` to read forward, including negative indices from the end, or exclusive `before` to read backward. Do not combine them. The preview includes callable `foxwarm_session` older/newer descriptors that retain your options and `historyVersion`. Pass that version when continuing an existing range. A result with `error: 'stale_history_boundary'` includes a fresh read instruction after a structural history change; appending messages does not invalidate existing boundaries.
+
+The result contains `sessionId`, `start`, exclusive `end`, `count`, `total`, `historyVersion`, `executionState`, and bounded text `preview`. `count` reports selected source records before text filters or preview truncation. Read accepts nonnegative safe-integer counts without a separate 50-record ceiling; `count: 0` returns only execution state and page information. Session list remains bounded to 1–50 entries.
+
+Optional `parts` selects `text`, `tools`, and/or `images` before records are counted. Literal `contentFilter` and case-insensitive `includeRegex`/`excludeRegex` apply only to the selected page, so an empty match set does not establish absence in older history. `toolDetail` is `names` by default, with `snippets` and `full` available. Omitted or zero `previewLength` uses 6,000 characters; other numeric values are floored and clamped to 1,000–20,000. Read-only options are rejected for list/send.
+
+This endpoint does not expose Archive originals, internal `recall`, raw history, prompt snapshots, or queued input. Narrow the active range or increase preview length/tool detail to inspect more of the current content.
+
 ## Send work to a Session
 
 After granting a send rule for the target, call:

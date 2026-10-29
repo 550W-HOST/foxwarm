@@ -8,6 +8,7 @@ namespace Foxwarm;
 internal sealed partial class ContextPreviewRenderer
 {
     private readonly int budget;
+    private readonly bool externalRead;
     private readonly string detail;
     private readonly HashSet<string> parts;
     private readonly string? literal;
@@ -17,8 +18,9 @@ internal sealed partial class ContextPreviewRenderer
     private readonly List<string> warnings = [];
     private bool Active => literal is not null || include is not null || exclude is not null;
 
-    internal ContextPreviewRenderer(JsonObject options, int defaultBudget = 6000)
+    internal ContextPreviewRenderer(JsonObject options, int defaultBudget = 6000, bool externalRead = false)
     {
+        this.externalRead = externalRead;
         parts = new HashSet<string>(["text", "tools", "images"], StringComparer.Ordinal);
         if (options.ContainsKey("parts"))
         {
@@ -161,6 +163,7 @@ internal sealed partial class ContextPreviewRenderer
                     item.DrillDown is { Length: > 0 } drill
                         ? "Archive original: " + drill
                         : "Narrow the range or increase previewLength/toolDetail."
+                            + (externalRead ? " Archive originals are not available through this endpoint." : "")
                 )
                 + "]";
         }
@@ -235,19 +238,36 @@ internal sealed partial class ContextPreviewRenderer
         };
     }
 
+    internal string LiveCall(JsonObject args)
+    {
+        if (!externalRead)
+            return "view_session(" + EcmaJson.Stringify(args) + ")";
+        var external = (JsonObject)args.DeepClone();
+        external["action"] = "read";
+        return "foxwarm_session(" + EcmaJson.Stringify(external) + ")";
+    }
+
     internal string RenderLive(string sessionId, SessionViewPage page, JsonObject options)
     {
         var items = page.Messages.Select(row => Item(row.Message, row.Index, sessionId)).ToArray();
-        var older = (JsonObject)options.DeepClone();
-        older["sessionId"] = sessionId;
-        older.Remove("start");
-        older["before"] = page.Begin;
-        older["count"] = page.Count;
-        older["historyVersion"] = page.HistoryVersion;
-        var navigation =
+        JsonObject Navigation(bool older)
+        {
+            var args = (JsonObject)options.DeepClone();
+            args["sessionId"] = sessionId;
+            args.Remove(older ? "start" : "before");
+            args[older ? "before" : "start"] = older ? page.Begin : page.End;
+            args["count"] = page.Count;
+            args["historyVersion"] = page.HistoryVersion;
+            return args;
+        }
+        var navigation = new List<string>
+        {
             page.Begin > 0 && page.Count > 0
-                ? "Older: view_session(" + EcmaJson.Stringify(older) + ")"
-                : "No older eligible page.";
+                ? "Older: " + LiveCall(Navigation(true))
+                : "No older eligible page.",
+        };
+        if (externalRead && page.End < page.Total && page.Count > 0)
+            navigation.Add("Newer: " + LiveCall(Navigation(false)));
         return RenderItems(
             items,
             $"Session `{sessionId}` · active indices [{page.Begin},{page.End}) of {page.Total}; historyVersion:{page.HistoryVersion}.\n"
@@ -256,7 +276,7 @@ internal sealed partial class ContextPreviewRenderer
             page.Count == 0 ? "Header only."
                 : items.Length == 0 ? "No eligible content in this range."
                 : "No selected records matched these page filters; older history was not searched.",
-            [navigation]
+            navigation
         );
     }
 
@@ -337,7 +357,8 @@ internal sealed partial class ContextPreviewRenderer
                 var remaining = available - used - titleReserve;
                 var action =
                     notice.Contains("recall(", StringComparison.Ordinal)
-                    || notice.Contains("view_session(", StringComparison.Ordinal);
+                    || notice.Contains("view_session(", StringComparison.Ordinal)
+                    || notice.Contains("foxwarm_session(", StringComparison.Ordinal);
                 if (action && notice.Length + 1 > remaining)
                     Append(
                         "[Navigation exceeds this preview budget; rerun with previewLength:20000 or shorter page filters.]",
@@ -377,6 +398,7 @@ internal sealed partial class ContextPreviewRenderer
                     drill is { Length: > 0 }
                         ? "Omitted Archive original(s): " + drill
                         : "Narrow the range or raise previewLength."
+                            + (externalRead ? " Archive originals are not available through this endpoint." : "")
                 )
                 + "]";
         }

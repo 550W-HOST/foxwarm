@@ -195,7 +195,8 @@ internal sealed partial class ContextPreviewRenderer
         var visibility = Visibility(message);
         string? drill = null;
         if (
-            sessionId is not null
+            !externalRead
+            && sessionId is not null
             && (block is not null || SessionWait.Number(meta?["seq"]) is not null)
         )
             drill = ArchiveDrill(
@@ -212,7 +213,7 @@ internal sealed partial class ContextPreviewRenderer
             SourceIndex: sourceIndex,
             DrillDown: drill,
             UnfoldedBody: string.Join('\n', body),
-            ArchiveSession: sessionId,
+            ArchiveSession: externalRead ? null : sessionId,
             Sequence: (long?)SessionWait.Number(meta?["seq"]),
             EndSequence: (long?)SessionWait.Number(meta?["seq"])
         );
