@@ -9,9 +9,12 @@ public sealed class UnifiedToolSearchTests
 {
     private const string Prefix = "discovery_fixture_";
     private static readonly string Description = new string('x', 300) + " tool tail 雪\n*/\u202e";
-    private static readonly string ParameterDescription = new string('y', 300) + " parameter tail 🦊\t*/\u0001";
-    private static readonly string DisplayDescription = new string('x', 300) + " tool tail 雪\\u000a*\\/\\u202e";
-    private static readonly string DisplayParameterDescription = new string('y', 300) + " parameter tail 🦊\\u0009*\\/\\u0001";
+    private static readonly string ParameterDescription =
+        new string('y', 300) + " parameter tail 🦊\t*/\u0001";
+    private static readonly string DisplayDescription =
+        new string('x', 300) + " tool tail 雪\\u000a*\\/\\u202e";
+    private static readonly string DisplayParameterDescription =
+        new string('y', 300) + " parameter tail 🦊\\u0009*\\/\\u0001";
 
     private static void Register(ToolRegistry registry, int count)
     {
@@ -38,7 +41,8 @@ public sealed class UnifiedToolSearchTests
                 },
                 "builtin",
                 index == 0,
-                (_, args, _) => Task.FromResult(new JsonObject { ["output"] = args["value"]!.DeepClone() })
+                (_, args, _) =>
+                    Task.FromResult(new JsonObject { ["output"] = args["value"]!.DeepClone() })
             );
     }
 
@@ -46,7 +50,9 @@ public sealed class UnifiedToolSearchTests
     [InlineData(null)]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task Complete_escaped_descriptions_preserve_schema_defaults_overrides_and_first_ten_cap(bool? includeSchema)
+    public async Task Complete_escaped_descriptions_preserve_schema_defaults_overrides_and_first_ten_cap(
+        bool? includeSchema
+    )
     {
         using var temp = new TempDirectory();
         await using var mcp = new Foxwarm.McpClient(temp.Path);
@@ -59,9 +65,17 @@ public sealed class UnifiedToolSearchTests
         var output = ordinary["output"]!.GetValue<string>();
         Assert.Contains("Found 12 tool(s); 12 total match(es).", output);
         Assert.DoesNotContain("[hidden]", output);
-        var declarations = output.Split('\n').Where(line => line.StartsWith("call_tool(")).ToArray();
+        var declarations = output
+            .Split('\n')
+            .Where(line => line.StartsWith("call_tool("))
+            .ToArray();
         Assert.Equal(12, declarations.Length);
-        var native = await UnifiedTools.SearchAsync(registry, args, default, budget: new ToolScriptDataBudget());
+        var native = await UnifiedTools.SearchAsync(
+            registry,
+            args,
+            default,
+            budget: new ToolScriptDataBudget()
+        );
         var rows = native["tools"]!.AsArray();
         Assert.Equal(12, rows.Count);
         for (var index = 0; index < rows.Count; index++)
@@ -74,7 +88,12 @@ public sealed class UnifiedToolSearchTests
             Assert.Equal(index != 0, rows[index]!["hidden"]!.GetValue<bool>());
             Assert.Equal(schemaIncluded, rows[index]!.AsObject().ContainsKey("inputSchema"));
             if (schemaIncluded)
-                Assert.Equal(ParameterDescription, rows[index]!["inputSchema"]!["properties"]!["value"]!["description"]!.GetValue<string>());
+                Assert.Equal(
+                    ParameterDescription,
+                    rows[index]!["inputSchema"]!["properties"]!["value"]![
+                        "description"
+                    ]!.GetValue<string>()
+                );
         }
         Assert.Single(registry.ModelDefinitions());
         Assert.Equal(Prefix + "00", registry.ModelDefinitions()[0]!["name"]!.GetValue<string>());
@@ -118,12 +137,19 @@ public sealed class UnifiedToolSearchTests
         {
             var rows = result[key]!.AsArray();
             Assert.Equal(2, rows.Count);
-            Assert.All(rows, row => Assert.Equal(key != "disabled", row!.AsObject().ContainsKey("inputSchema")));
+            Assert.All(
+                rows,
+                row => Assert.Equal(key != "disabled", row!.AsObject().ContainsKey("inputSchema"))
+            );
             Assert.Equal(Description, rows[1]!["description"]!.GetValue<string>());
             Assert.True(rows[1]!["hidden"]!.GetValue<bool>());
         }
         Assert.Equal("called", result["effect"]!["output"]!.GetValue<string>());
-        Assert.False(f.Registry.Entries.Single(entry => entry.Definition["name"]!.GetValue<string>() == Prefix + "01").DefaultInject);
+        Assert.False(
+            f.Registry.Entries.Single(entry =>
+                entry.Definition["name"]!.GetValue<string>() == Prefix + "01"
+            ).DefaultInject
+        );
 
         await f.Manager.Authorization.InstallAsync(
             System.Text.Encoding.UTF8.GetBytes(
@@ -137,7 +163,8 @@ public sealed class UnifiedToolSearchTests
             "run_script",
             new JsonObject
             {
-                ["code"] = "return call_tool('search_tools', {'query': 'discovery_fixture_', 'sources': ['builtin']})['tools']",
+                ["code"] =
+                    "return call_tool('search_tools', {'query': 'discovery_fixture_', 'sources': ['builtin']})['tools']",
             }
         );
         Assert.True(nativeFiltered["error"] is null, nativeFiltered.ToJsonString());
