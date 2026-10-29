@@ -6,6 +6,7 @@ import { build } from './browserFixtureBundle.mjs'
 import puppeteer from 'puppeteer-core'
 
 const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
+const timelineEntry = new URL('../src/components/ChatTimeline.tsx', import.meta.url).pathname
 const toolEntry = new URL('../src/components/ToolTimelineItems.tsx', import.meta.url).pathname
 const assetsDirectory = new URL('../dist/assets/', import.meta.url)
 
@@ -19,6 +20,7 @@ async function buildFixtureBundle() {
     import React from 'react'
     import { createRoot } from 'react-dom/client'
     import { InterleavedToolGroup, ToolCallsBlock } from ${JSON.stringify(toolEntry)}
+    import ChatTimeline from ${JSON.stringify(timelineEntry)}
     import { BUILTIN_THEMES, initializeThemeRuntime, setThemeSelection } from './src/theme/index'
 
     initializeThemeRuntime()
@@ -62,7 +64,7 @@ async function buildFixtureBundle() {
           node: 'remote-a', forceModel: { modelId: 'openai/gpt-5.6-sol', effort: 'high' },
           message: 'Start the assigned work.', afterSend: 'wait',
         } },
-        response: { tool_use_id: 'child-call', name: 'create_child_session', response: { output: 'created' } },
+        response: { tool_use_id: 'child-call', name: 'create_child_session', response: { output: 'Child session created: \`agent/child\`' } },
       },
       malformedPatch: {
         call: { id: 'malformed-patch', name: 'apply_patch', args: {}, argsParseError: 'Invalid tool arguments JSON', rawArgsText: '<img src=x onerror=window.rawXss=1>\\n{not-json' },
@@ -88,6 +90,17 @@ async function buildFixtureBundle() {
       const nextMsg = { role: 'tool', parts: [{ functionResponse: fixture.response }] }
       createRoot(document.getElementById(id)).render(React.createElement(InterleavedToolGroup, { msg, nextMsg, messageKeyPrefix: id, onOpenCodeFile }))
     }
+    const timelineRoot = createRoot(document.getElementById('timeline'))
+    const timelineMessages = [
+      { role: 'model', parts: [{ functionCall: { id: 'timeline-call', name: 'exec', args: { command: 'printf selectable-command' } } }], __meta: { seq: 1 } },
+      { role: 'tool', parts: [{ functionResponse: { tool_use_id: 'timeline-call', name: 'exec', response: { output: 'Selectable result text\\n' + 'More result lines\\n'.repeat(12) } } }], __meta: { seq: 2 } },
+      { role: 'model', parts: [{ text: 'Finished.' }], __meta: { seq: 3 } },
+    ]
+    window.renderFixtureTimeline = (timelineView, updated = false) => timelineRoot.render(React.createElement(ChatTimeline, {
+      sessionId: 'fixture/' + timelineView,
+      messages: updated ? [...timelineMessages, { role: 'user', parts: [{ text: 'Next input' }], __meta: { seq: 4 } }] : timelineMessages,
+      timelineView, isMobile: false, showUsageBadge: false, showTimeDividers: false, onOpenCodeFile,
+    }))
     const noResult = { role: 'model', parts: [{ functionCall: { id: 'wait-call', name: 'wait', args: { reason: longResult, timeoutSeconds: 0 } } }], __meta: { timestamp: Date.now() } }
     createRoot(document.getElementById('noResult')).render(React.createElement(ToolCallsBlock, { msg: noResult }))
   `
@@ -183,6 +196,7 @@ async function readCollapseTargetState(id) {
       toggleCursor: getComputedStyle(toggle).cursor,
       argsCursor: args ? getComputedStyle(args).cursor : null,
       resultCursor: result ? getComputedStyle(result).cursor : null,
+      resultTextCursor: result?.firstElementChild ? getComputedStyle(result.firstElementChild).cursor : null,
       toggleColor: getComputedStyle(toggle).color,
       summaryColor: summary ? getComputedStyle(summary).color : null,
       cardHasPointerClass: card.classList.contains('cursor-pointer'),
@@ -195,15 +209,16 @@ async function readCollapseTargetState(id) {
 
 function assertCollapseTargetState(state, expanded) {
   assert.equal(state.expanded, expanded)
-  assert.notEqual(state.cardCursor, 'pointer')
-  assert.notEqual(state.headerCursor, 'pointer')
+  assert.equal(state.cardCursor === 'pointer', !expanded)
+  assert.equal(state.headerCursor === 'pointer', !expanded)
   assert.equal(state.toggleCursor, 'pointer')
-  assert.equal(state.cardHasPointerClass, false)
+  assert.equal(state.cardHasPointerClass, !expanded)
   assert.equal(state.headerHasPointerClass, false)
   assert.equal(state.toggleHasPointerClass, true)
   assert.equal(state.toggleHasTextHoverClass, false)
   if (state.argsCursor !== null) assert.notEqual(state.argsCursor, 'pointer')
-  if (state.resultCursor !== null) assert.notEqual(state.resultCursor, 'pointer')
+  if (state.resultCursor !== null) assert.equal(state.resultCursor === 'pointer', !expanded)
+  if (state.resultTextCursor !== null) assert.equal(state.resultTextCursor === 'pointer', !expanded)
 }
 
 async function assertHeaderHoverKeepsTextColor(id) {
@@ -215,9 +230,43 @@ async function assertHeaderHoverKeepsTextColor(id) {
   assert.equal(hovered.summaryColor, before.summaryColor)
 }
 
-async function clickWithoutToggling(selector, expectedExpanded) {
-  await page.$eval(selector, (element) => element.click())
-  assert.equal(await page.$eval('#exec', root => !!root.querySelector('.foxwarm-tool-call-args')), expectedExpanded)
+async function waitForCardTransitions() {
+  await page.waitForFunction(() => [...document.querySelectorAll('.foxwarm-tool-card, [data-tool-group]')].every(node => !node.style.height))
+}
+
+// Hit a painted surface at real pointer coordinates, rather than dispatching a DOM click.
+async function clickSurface(selector, { x = 0.5, y = 0.5 } = {}) {
+  await waitForCardTransitions()
+  const element = await page.$(selector)
+  await element.scrollIntoView()
+  const point = await element.evaluate((node, { x, y }) => {
+    const rect = node.getBoundingClientRect()
+    const point = { x: rect.left + rect.width * x, y: rect.top + rect.height * y }
+    const hit = document.elementFromPoint(point.x, point.y)
+    return { ...point, hit: hit?.outerHTML.slice(0, 300), onSurface: node === hit || node.contains(hit) }
+  }, { x, y })
+  assert.equal(point.onSurface, true, `pointer hits ${selector}: ${JSON.stringify(point)}`)
+  await page.mouse.click(point.x, point.y)
+}
+
+async function selectText(selector) {
+  await waitForCardTransitions()
+  await page.$eval(selector, node => node.scrollIntoView({ block: 'center' }))
+  const points = await page.$eval(selector, node => {
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT)
+    const text = walker.nextNode()
+    const range = document.createRange()
+    range.setStart(text, 0)
+    range.setEnd(text, Math.min(text.length, 12))
+    const rect = range.getBoundingClientRect()
+    window.getSelection().removeAllRanges()
+    return { x: rect.left + 1, end: rect.right - 1, y: rect.top + rect.height / 2 }
+  })
+  await page.mouse.move(points.x, points.y)
+  await page.mouse.down()
+  await page.mouse.move(points.end, points.y, { steps: 12 })
+  await page.mouse.up()
+  assert.ok((await page.evaluate(() => window.getSelection().toString())).length > 3, 'native pointer drag selects text')
 }
 
 function assertCollapsed(state) {
@@ -253,7 +302,7 @@ before(async () => {
   const bundle = await buildFixtureBundle()
   server = createServer((_request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-  response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{width:100%;padding:12px}.fixture{width:100%;min-width:0}</style></head><body><main>${['exec', 'edit', 'error', 'send', 'sendAlias', 'child', 'malformedPatch', 'malformedExec', 'rawNoError', 'rawMissing', 'noResult'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
+  response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>${css}</style><style>html,body{margin:0;width:100%;overflow-x:hidden}main{width:100%;padding:12px}.fixture{width:100%;min-width:0}</style></head><body><main>${['exec', 'edit', 'error', 'send', 'sendAlias', 'child', 'malformedPatch', 'malformedExec', 'rawNoError', 'rawMissing', 'noResult', 'timeline'].map(id => `<div id="${id}" class="fixture"></div>`).join('')}</main><script>${bundle}</script></body></html>`)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   fixtureUrl = `http://127.0.0.1:${server.address().port}`
@@ -381,7 +430,7 @@ test('send_to_session To prefixes inherit ordinary call text in collapsed and ex
       assert.equal(collapsed.aliasText, expected.alias)
       assert.match(collapsed.text, /^To/)
 
-      await page.click(`#${id} .foxwarm-tool-header-toggle`)
+      await page.click(`#${id} .foxwarm-tool-tag`)
       const expanded = await readTo(id, true)
       assert.equal(expanded.prefixColor, expanded.containerColor, `${id} expanded To inherits foreground`)
       assert.equal(expanded.linkHref, expected.href)
@@ -401,28 +450,96 @@ test('create_child_session identifies task assignments and shows supplied creati
   }
 })
 
-test('only the top tool header row advertises and handles collapse toggling', async () => {
+test('collapsed native cards expand across their non-action surface and expanded content stays selectable', async () => {
   for (const fixture of [
     { width: 900, height: 800 },
     { width: 390, height: 760, style: '550a', dark: true },
   ]) {
     await mountFixture(fixture)
-    assertCollapseTargetState(await readCollapseTargetState('exec'), false)
-    await assertHeaderHoverKeepsTextColor('exec')
+    const expanded = async () => !!(await page.$('#exec .foxwarm-tool-call-args'))
+    for (const [selector, point] of [
+      ['#exec .foxwarm-tool-result-preview .cursor-text', { x: 0.25, y: 0.1 }],
+      ['#exec .foxwarm-tool-card', { x: 0.99, y: 0.99 }],
+      ['#exec .foxwarm-tool-header', { x: 0.5, y: 0.01 }],
+      ['#exec .foxwarm-tool-header-toggle', {}],
+    ]) {
+      const collapsed = await readCollapseTargetState('exec')
+      await assertHeaderHoverKeepsTextColor('exec')
+      await clickSurface(selector, point)
+      await page.waitForSelector('#exec .foxwarm-tool-call-args', { timeout: 3000 })
+      assertCollapseTargetState(collapsed, false)
+      assertCollapseTargetState(await readCollapseTargetState('exec'), true)
+      await assertHeaderHoverKeepsTextColor('exec')
+      await page.click('#exec .foxwarm-tool-header-toggle')
+      assert.equal(await expanded(), false)
+    }
 
-    await clickWithoutToggling('#exec .foxwarm-tool-card', false)
-    await clickWithoutToggling('#exec .foxwarm-tool-header', false)
-    await clickWithoutToggling('#exec .foxwarm-tool-result-preview', false)
+    await page.click('#exec [aria-label="Expand exec tool"]')
+    await selectText('#exec .foxwarm-tool-call-args')
+    assert.equal(await expanded(), true)
+    await selectText('#exec .foxwarm-tool-result-content')
+    assert.equal(await expanded(), true)
+    await clickSurface('#exec .foxwarm-tool-card', { x: 0.99, y: 0.99 })
+    await clickSurface('#exec .foxwarm-tool-header', { x: 0.99, y: 0.99 })
+    assert.equal(await expanded(), true, 'expanded padding does not collapse')
+    await page.click('#exec [aria-label="Collapse exec tool"]')
+    assert.equal(await expanded(), false)
+  }
+})
 
-    await page.click('#exec .foxwarm-tool-header-toggle')
-    assertCollapseTargetState(await readCollapseTargetState('exec'), true)
-    await assertHeaderHoverKeepsTextColor('exec')
+test('Code, JSON, links, and diff actions keep their own behavior without toggling the card', async () => {
+  await mountFixture({ width: 900, height: 800 })
+  for (const selector of ['#send .foxwarm-tool-call-summary a', '#child .foxwarm-tool-result-preview a']) {
+    await page.click(selector)
+    assert.equal(await page.evaluate(() => location.hash), '#session/agent%2Fchild')
+    assert.equal(await page.$('#send .foxwarm-tool-call-args, #child .foxwarm-tool-call-args'), null, 'session links navigate without expanding')
+  }
+  await page.click('#edit .foxwarm-tool-code-open')
+  assert.equal(await page.evaluate(() => window.openedCodePaths.length), 1)
+  assert.equal(await page.$('#edit .foxwarm-tool-call-args'), null)
+  await page.hover('#edit .foxwarm-tool-header-toggle')
+  await page.click('#edit button[title="JSON"]')
+  await page.waitForSelector('[data-json-inspector-dialog]')
+  assert.equal(await page.$('#edit .foxwarm-tool-call-args'), null)
+  await page.click('[data-json-inspector-dialog] button[title="Close"]')
+  assert.equal(await page.$('#edit .foxwarm-tool-call-args'), null, 'portal close does not expand the card')
+  await page.click('#edit .foxwarm-tool-result-preview')
+  await page.waitForSelector('#edit .foxwarm-tool-call-args')
+  await page.click('#edit button[title="Split"]')
+  assert.ok(await page.$('#edit .foxwarm-tool-call-args'))
+  await page.click('#edit .foxwarm-tool-code-open')
+  assert.equal(await page.evaluate(() => window.openedCodePaths.length), 2)
+  assert.ok(await page.$('#edit .foxwarm-tool-call-args'))
+})
 
-    await clickWithoutToggling('#exec .foxwarm-tool-header', true)
-    await clickWithoutToggling('#exec .foxwarm-tool-call-args', true)
-    await clickWithoutToggling('#exec .foxwarm-tool-result-content', true)
-
-    await page.click('#exec .foxwarm-tool-header-toggle')
-    assertCollapseTargetState(await readCollapseTargetState('exec'), false)
+test('Detailed and expanded-group member result clicks use the Timeline manual disclosure owner', async () => {
+  await mountFixture({ width: 900, height: 800 })
+  const card = '#timeline .foxwarm-tool-card:not(.foxwarm-tool-group-card)'
+  for (const view of ['detailed', 'grouped']) {
+    await page.evaluate(view => window.renderFixtureTimeline(view), view)
+    if (view === 'grouped') {
+      await page.waitForSelector('#timeline [aria-label="Expand tool group"]')
+      await page.click('#timeline [aria-label="Expand tool group"]')
+    }
+    await page.waitForSelector(`${card} .foxwarm-tool-result-preview`)
+    assert.equal(await page.$eval(`${card} .foxwarm-tool-result-preview .cursor-text`, node => getComputedStyle(node).cursor), 'pointer')
+    await clickSurface(`${card} .foxwarm-tool-result-preview`, { x: 0.3, y: 0.1 })
+    await page.waitForSelector(`${card} .foxwarm-tool-call-args`)
+    await selectText(`${card} .foxwarm-tool-call-args`)
+    await selectText(`${card} .foxwarm-tool-result-content`)
+    assert.ok(await page.$(`${card} .foxwarm-tool-call-args`))
+    if (view === 'grouped' && process.env.FOXWARM_E2E_SCREENSHOT_PATH) await page.screenshot({ path: process.env.FOXWARM_E2E_SCREENSHOT_PATH })
+    await page.evaluate(view => window.renderFixtureTimeline(view, true), view)
+    await page.waitForFunction(() => document.querySelector('#timeline').textContent.includes('Next input'))
+    assert.ok(await page.$(`${card} .foxwarm-tool-call-args`), 'ordinary Timeline updates retain the manual choice')
+    if (view === 'grouped') {
+      await page.click('#timeline [aria-label="Collapse tool group"]')
+      await page.waitForSelector('#timeline [aria-label="Expand tool group"]')
+      await page.click('#timeline [aria-label="Expand tool group"]')
+      await page.waitForSelector(`${card} .foxwarm-tool-call-args`)
+    }
+    await page.click(`${card} .foxwarm-tool-header-toggle`)
+    await page.waitForSelector(`${card} .foxwarm-tool-result-preview`)
+    assert.equal(await page.$(`${card} .foxwarm-tool-call-args`), null)
   }
 })
