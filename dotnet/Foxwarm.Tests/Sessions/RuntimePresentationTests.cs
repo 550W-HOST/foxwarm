@@ -341,7 +341,9 @@ public sealed partial class RuntimePresentationTests
                 })
             );
             var requests = new ModelRequestOwner(
-                http, options, new ModelRouting(),
+                http,
+                options,
+                new ModelRouting(),
                 journal: journal ? new LlmRequestJournalStore(root) : null
             );
             var chat = new SessionChatService(

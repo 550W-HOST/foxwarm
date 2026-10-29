@@ -35,7 +35,9 @@ public sealed partial class RuntimePresentationTests
             Assert.True(owner.RuntimeSnapshot()["processing"]!.GetValue<bool>());
             Assert.Equal("llm-failed", owner.RuntimeSnapshot()["state"]!.GetValue<string>());
             Assert.True(owner.BuildDto()["runtimeState"]!["processing"]!.GetValue<bool>());
-            await Assert.ThrowsAsync<InvalidOperationException>(() => owner.StartProcessing(retry: true));
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                owner.StartProcessing(retry: true)
+            );
             Assert.True(owner.Processing);
         }
         finally
@@ -53,18 +55,31 @@ public sealed partial class RuntimePresentationTests
     {
         using var temp = new TempDirectory();
         var store = new PersistentSessionAuthorityStore(temp.Path, "s");
-        var firstFinalizing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var secondRequest = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseSecond = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstFinalizing = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseFirst = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var secondRequest = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var releaseSecond = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var attempts = 0;
-        using var fixture = new ProviderFixture(temp.Path, store, () =>
-        {
-            if (Interlocked.Increment(ref attempts) != 2)
-                return;
-            secondRequest.TrySetResult();
-            releaseSecond.Task.WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
-        }, journal: true);
+        using var fixture = new ProviderFixture(
+            temp.Path,
+            store,
+            () =>
+            {
+                if (Interlocked.Increment(ref attempts) != 2)
+                    return;
+                secondRequest.TrySetResult();
+                releaseSecond.Task.WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();
+            },
+            journal: true
+        );
         var owner = fixture.Owner;
         var finalizations = 0;
         owner.Registry.OnProcessorFinalizing = async (_, _, _, _) =>
@@ -90,7 +105,10 @@ public sealed partial class RuntimePresentationTests
         {
             await firstFinalizing.Task.WaitAsync(TimeSpan.FromSeconds(5));
             owner.Registry.TriggerOverride = _ => Task.CompletedTask;
-            await owner.Registry.Ingress.EnqueueAsync(owner.Id, QueueItem.UserText("queued successor"));
+            await owner.Registry.Ingress.EnqueueAsync(
+                owner.Id,
+                QueueItem.UserText("queued successor")
+            );
             Task? successor = null;
             owner.Registry.TriggerOverride = _ =>
             {
