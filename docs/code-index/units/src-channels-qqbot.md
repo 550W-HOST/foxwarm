@@ -195,6 +195,8 @@ second upload. Upload-unit tests cover tiny PNG/JPEG/generic direct bodies,
 
 ### D-qqbot-passive-reply-fallback
 
+**Mixed provenance under [adapter-owned passive context](../modules/channels.md#d-channel-conversation-latest-passive-context).** The three-minute local age check and recognized-error proactive fallback were directly selected. The four-success local budget is an engineering mechanism, not a universal QQ quota; current server responses retain their own meaning.
+
 Passive reply handling combines a local age/count budget with a single proactive
 fallback for recognized server expiry. The three-minute age policy and error-code
 fallback serve late replies; the retained four-success budget is a local adapter

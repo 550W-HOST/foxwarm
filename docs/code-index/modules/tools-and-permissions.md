@@ -74,11 +74,15 @@ Tool resolution across builtin, MCP, and generic Node sources is documented in [
 
 ### D-tools-legacy-isolation-deprecation
 
+**Directly selected migration direction, not completed removal.** Generic policy must eventually separate tool authorization from [environment isolation](../behaviors/nodes-workspaces-and-permissions.md#authority-has-several-independent-boundaries). Current guards remain operative until their replacement/retirement is decided; implementation history does not make every legacy guard a permanent product constraint.
+
 [2026-10-10] The legacy Agent `isolated` authorization mode is deprecated and planned for removal. The current invariants above still describe implemented behavior; deprecation does not itself disable existing guards or migrate an installation. Generic tool authorization is the migration direction, not a permanent second layer alongside legacy isolation.
 
 The isolated-like rule generator provides a conservative migration baseline, not a requirement to reproduce every legacy behavior. During removal, remaining differences require explicit decisions: express a boundary through generic policy, retain an independent invariant, or retire the old restriction. No removal date or complete migration contract is established by this decision.
 
 ### D-tools-unified-discovery
+
+**Derived interface design; requested and adopted to reduce tool-catalog duplication and keep [schemas stable](./llm.md#d-llm-stable-tool-schema).** Search locates a concrete capability and a single invocation interface reaches it. Consolidation is not an authorization shortcut: [resolved-target policy](../threads/tool-dispatch-authorization.md#d-dispatch-resolved-target) still owns the operation.
 
 Less frequently used builtins, MCP tools, and node tools are discovered through `search_tools` and invoked through `call_tool`. Direct provider calls, unified calls, and ToolScript nested calls share the canonical resolved-operation boundary in [D-dispatch-resolved-target](../threads/tool-dispatch-authorization.md#d-dispatch-resolved-target).
 
@@ -88,9 +92,13 @@ Agent-level authorization and filtered discovery are canonical in [D-dispatch-ex
 
 ### D-tools-write-parent-policy
 
+**Selected side-effect constraint for [environment-local file operations](../behaviors/nodes-workspaces-and-permissions.md#paths-belong-to-an-environment-and-an-operation).** Parent creation and replacement must follow the requested flags. Filesystem helpers implement that behavior; a convenience retry cannot silently create directories or overwrite unrelated content.
+
 Normal writes attempt the real filesystem operation first. Missing/non-directory parent diagnostics are fallback error enrichment, preserving normal symlink behavior while requiring explicit directory creation.
 
 ### D-tools-structured-output-guard
+
+**Directly selected algorithmic constraint under the [program/presentation/control boundary](../behaviors/execution-and-waiting.md#tool-values-presentation-and-turn-controls-have-different-consumers).** The two-stage order preserves useful structured siblings before falling back to a whole-result summary. Artifact naming and local size budgets are implementation choices; saving the full value does not excuse an incorrect model-facing projection.
 
 Output guarding keeps long tool results usable without flooding model context. The selected two-stage design first shortens an oversized top-level `output` while retaining its other fields, then checks the complete formatted response and replaces it with a bounded summary only if it is still oversized. Each shortened source remains available through a full-output file locator. This preserves ordinary structured siblings when shortening `output` alone is sufficient; a whole-response summary is the fallback, not the first step. Its [observable result/control boundary](../behaviors/execution-and-waiting.md#tool-values-presentation-and-turn-controls-have-different-consumers) requires success/error classification to survive that projection; null or absent errors must not become manufactured errors. The retained TypeScript guard implements both stages. The maintained host currently guards the whole formatted response directly; its [implementation discrepancy](../threads/tools-permissions-and-exec.md#structured-output-guard) needs a runtime correction rather than treating that simplification as a revised requirement.
 
@@ -104,9 +112,13 @@ Control and handoff tools return minimal success signals rather than echoing arg
 
 ### D-tools-schema-validity
 
+**Independent provider-protocol constraint.** Advertised tools must serialize as valid schemas for the actual consuming provider. Schema projection implements [stable declarations](../modules/llm.md#d-llm-stable-tool-schema); local shape checks or a permissive test peer cannot establish wire compatibility.
+
 Default model-facing tool properties have concrete schema shapes accepted by strict providers. Runtime validation handles argument alternatives that JSON Schema cannot express cleanly.
 
 ### D-tools-resource-action-consolidation
+
+**Derived interface design within [unified discovery](#d-tools-unified-discovery) and [stable tool schemas](../modules/llm.md#d-llm-stable-tool-schema).** Grouping resource operations reduces duplicate entry points. The selected action surface does not require retaining obsolete internal aliases; real persisted automation and external callers remain separate compatibility evidence.
 
 [2026-08-01, updated 2026-08-20] Keep the default model-facing namespace compact by grouping closely related operations under singular resource tools: `session` owns status/list/update-display-name, `skill` owns list/load, and `node` owns list/select/create/ensure/inspect/destroy. Do not add parallel `sandbox` or `node_resource` tools; provider-neutral lifecycle authority is canonical in [D-dispatch-generic-node-providers](../threads/tool-dispatch-node-execution.md#d-dispatch-generic-node-providers). The display-name action is exactly `update-display-name`; the earlier `rename` action and removed standalone tool name are not retained as aliases. Keep action-specific arguments flat in the shared schema. A successful display-name update reports both the previous and resulting values, using `unset` for no display name and an explicit unchanged result for no-op calls. `start_toolscript_run` is the narrow exception to removed-name handling: it remains hidden and callable only for documented user-ToolScript compatibility, while current guidance uses `run_script({ mode: "background" })`. MCP configuration/listing is discoverable through `search_tools`/`call_tool` rather than injected by default.
 

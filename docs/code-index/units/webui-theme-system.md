@@ -66,9 +66,13 @@ Defines the portable, browser-local WebUI theme contract, built-in registry, per
 
 ### D-webui-theme-manifest-safety
 
+**Directly requested portability goal with an approved declarative design.** Themes must travel as data rather than executable styling packages. Semantic tokens and bounded treatments implement that scope; version validation also protects existing import/export consumers.
+
 [2026-09-03] Portable themes are declarative data, not executable styling packages. A manifest must be versioned, strictly validated, complete for light and dark, and limited to documented semantic tokens and bounded treatment options. Arbitrary CSS, selectors, scripts, and remote assets are outside the contract.
 
 ### D-webui-theme-runtime-parity
+
+**Directly selected constraint on [portable theme data](#d-webui-theme-manifest-safety).** Built-ins must exercise the same machinery as imported packages. Shared projection and treatment recipes implement that constraint; a hardcoded theme-ID branch would defeat the portability goal even if it fixed one preview.
 
 [2026-09-03] Built-in and imported themes use the same manifest validation, resolution, CSS-variable projection, component-treatment path, and renderer adapters. A component must not test for `foxwarm.550a` or another theme ID to decide how to render.
 
@@ -78,9 +82,13 @@ Defines the portable, browser-local WebUI theme contract, built-in registry, per
 
 ### D-webui-theme-local-ownership
 
+**Governing persistence constraint; browser-local ownership was selected for [portable themes](#d-webui-theme-manifest-safety).** Theme choices remain separate from instance/Agent configuration. Local storage and selection migration implement that lifetime; visual customization does not authorize server or Session state changes.
+
 [2026-09-03] Theme packages and the current selection remain browser-local preferences. They are not instance configuration, server data, or Agent state.
 
 ### D-webui-theme-final-surfaces
+
+**Derived renderer design for [portable manifests](#d-webui-theme-manifest-safety) and [runtime parity](#d-webui-theme-runtime-parity).** Treatment-owned final colors prevent double composition. Named built-in palettes reflect selected visual designs; individual CSS values are mechanisms. The [current V3 chrome contract](#d-webui-theme-v3-chrome) supersedes earlier version-stage descriptions, without changing existing selection identity.
 
 [2026-09-03] Surface composition is treatment-owned. Standard treatment retains its established component opacity layers. Console treatment treats named Tool status, Reasoning, and System surface pairs as final colors because a portable console manifest may already encode intentional translucency; applying the standard opacity layer again would make those cards depend incorrectly on their parent background. Neutral console cards use the bounded treatment-level panel/hover pair rather than adding a manifest field or branching on a theme ID. Console Reasoning must use `reasoningSurface`/`reasoningSurfaceStrong`, not generic panel/hover aliases, so imported themes can choose a distinct reasoning palette.
 
@@ -95,5 +103,7 @@ Defines the portable, browser-local WebUI theme contract, built-in registry, per
 [2026-09-04] Built-in Default System/Event tag text must not reuse `systemAccent`, whose direction and contrast are intentionally suitable for low-emphasis thread lines rather than compact label text. Keep the existing standard System tag background, derive its foreground with a bounded `info`/`systemText` mix, and use `infoBorder`. The wiring remains portable because it depends only on semantic tokens, but custom manifests determine the derived contrast and the validator's warnings remain advisory; this decision does not promise AA for every legal token combination. Console treatment retains its separate exact override.
 
 ### D-webui-theme-v3-chrome
+
+**Selected schema extension for independently controllable application chrome.** It serves [portable theme parity](#d-webui-theme-runtime-parity) without recoloring ordinary content. Version rejection and browser preference migration have different consumers: accepting the new design does not permit deleting older user files.
 
 [2026-10-14] V3 explicitly requires separate Sidebar, tab-strip, workbench-header, status-bar, and filled-accent foreground roles. Chrome bindings must not recolor ordinary cards, and pastel accent fills must not borrow a foreground also used on neutral surfaces. Built-ins and imported packages use identical projection. V1/V2 portable packages fail visibly; only browser-local selection preferences migrate, and older custom files remain preserved.

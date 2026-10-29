@@ -4,6 +4,8 @@ For developers and Agents changing messaging adapters, conversation bindings, tr
 
 ## Which identity or binding should I change?
 
+**Governing identity distinction; directly selected as channels gained multiple connections and bindings.** Protocol type, configured instance, platform conversation and attached Session are different identities. Routing/configuration designs below must preserve the intended target instead of inferring it from a similarly named field.
+
 | Identity | Meaning |
 | --- | --- |
 | Channel type | Adapter/platform family, such as Telegram, Matrix, QQ Bot, Weixin, or WeWork. |

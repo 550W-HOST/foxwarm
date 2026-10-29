@@ -36,4 +36,6 @@ Focused tests cover omitted configuration, surface-specific authentication, dupl
 
 ### D-config-shared-access-identities
 
+**Selected identity configuration design; proposed and approved for shared MCP/WebUI entry identities.** It serves [independent authentication and tool authority](../behaviors/nodes-workspaces-and-permissions.md#authority-has-several-independent-boundaries) and [scoped browser Sessions](../modules/webui.md#d-webui-identity-session-scope). Surface-specific grants share identity data without making their scopes interchangeable or narrowing administrator authority.
+
 [2026-10-08] Replace the unused separate inbound MCP identity block and persisted WebUI guest-token store with one top-level `access.identities.<identityId>` map. Each identity declares one token and one or both entry surfaces: `webui: { sessions: [...] }` and `mcp: {}`. Surface declaration is an entry-point capability, not a permission tier. The HTTP/WebUI instance token remains a superuser and is not automatically a valid MCP identity. WebUI exact bindings and Agent scopes use the canonical [WebUI Session scope contract](../modules/webui.md#d-webui-identity-session-scope); MCP still requires Bearer-only transport and its existing concrete tool policy.

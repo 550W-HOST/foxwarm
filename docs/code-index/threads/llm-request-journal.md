@@ -57,6 +57,8 @@ suffixes are not persisted.
 
 ### D-llm-request-journal-canonical-boundary
 
+**Selected evidence design; proposed and approved for reproducible request diagnostics and later analysis.** It serves [attempt attribution](./model-routing.md#d-model-routing-concrete-attribution) and preserves the canonical request before transport hydration. Real stored journal records independently constrain readers; the journal does not authorize replaying uncertain external effects or persisting duplicate image bytes.
+
 [2026-08-03, updated 2026-09-08] Foxwarm durably records each provider-neutral LLM request before the first provider send using content-addressed prompt, tool-schema, and canonical-message objects plus a bounded checkpoint/delta manifest. The same narrow journal covers normal turns and every current one-shot/side/compact caller. Physical attempts record concrete routing and semantic-payload hashes, while successful assistant rows link to the request identity.
 
 The request prompt is the first attempt's effective system prompt, so attempt 1 cannot carry a differing prompt override. A later attempt whose effective prompt differs stores only an optional reference to another existing content-addressed prompt object; attempts without that reference inherit the request prompt. Reconstruction exposes each attempt's effective prompt and fails closed when an override reference is present but empty, missing, malformed, or points to the wrong object kind. This additive record shape preserves old attempts and does not store raw provider payloads.

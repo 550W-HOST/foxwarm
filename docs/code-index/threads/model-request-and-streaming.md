@@ -45,6 +45,8 @@ Raw request/response/error/stream diagnostics remain a separate best-effort debu
 
 ## D-model-usage-cost
 
+**Directly requested observable accounting, implemented by a derived pricing/aggregation design.** It depends on [concrete attempt attribution](./model-routing.md#d-model-routing-concrete-attribution) and provider-reported usage, not token estimates. Pricing resolution and stored cost fields make the calculation reproducible; old records without prices are not evidence for invented historical costs.
+
 [2026-10-25] Model-configured token prices and saved cost estimates use fixed USD. A concrete model may supply the complete optional `pricing: { cached, input, output }` block; each rate is a finite nonnegative USD price per million tokens. Named providers put it on individual model objects; a concrete provider without a model list may put it on its own leaf. Virtual routes and root defaults have no pricing inheritance. The supported Models YAML editor uses the shared schema and the ordinary validated configuration installation lane.
 
 For example, fictional rates for one named leaf are configured as:

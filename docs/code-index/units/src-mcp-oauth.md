@@ -74,4 +74,6 @@ Real loopback AS/SDK resource fixtures cover pre-registration, CIMD and DCR, sta
 
 ### D-mcp-outbound-instance-oauth
 
+**Selected credential-ownership design with external OAuth protocol constraints.** Outbound connection credentials belong to the configured instance/server connection, not each Session that uses [authorized MCP capabilities](../threads/tool-dispatch-mcp.md#d-dispatch-mcp-live-configuration). Callback/storage mechanics implement that ownership; they do not create an inbound identity or broaden tool grants.
+
 [2026-10-14, initial implementation; Setup entry later withdrawn as noted above] Administrators originally configured OAuth through Setup Authorizations and explicitly share the selected named server's third-party account with the instance. Existing callers use it only through their original tool permissions; they keep independent remote MCP contexts. Use startup `config.url` for public callback and client metadata URLs. Provide outbound OAuth before any inbound consent/scopes service, keep current 2025 MCP transports, and do not add generic users, roles or a credential-vault interface.

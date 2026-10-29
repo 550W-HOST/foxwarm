@@ -18,6 +18,8 @@ Part of the [tool dispatch](./tool-dispatch.md) thread. Covers the live MCP conf
 
 ### D-dispatch-mcp-inbound-bridge
 
+**Selected external capability design under [independent authority boundaries](../behaviors/nodes-workspaces-and-permissions.md#authority-has-several-independent-boundaries).** Authenticated external identities may use the supported MCP surface without becoming fabricated internal Agents. Ephemeral execution contexts and compatible CLI-tool projection implement that boundary; actual protocol clients independently constrain transport behavior.
+
 [2026-09-19] An enabled inbound MCP endpoint registers `foxwarm_discover`, `foxwarm_call`, `foxwarm_node`, `foxwarm_exec_result` and `foxwarm_session` only after their concrete source owners are implemented.
 
 Discovery uses canonical `mcp:server/tool` and `node:nodeId/tool` IDs, plus only `builtin:node_pair_list` and `builtin:node_pair_approve`, with unified ranking and deterministic order, the live Main MCP registry, and compatible first-party CLI Node descriptors. It includes only potentially visible concrete tools under the ordered generic rule for the verified external identity and generated transport context ID. A conditional rule may make a tool discoverable; every call authorizes the exact source, target, full arguments and applicable execution path facts again. The `builtin:node` policy sees the normalized action arguments and truthful Node facts: list has no unique target Node, status uses the actually selected current Node, and select uses its validated requested Node; a master-only allow cannot select a different Node. Exec-result listing/query rechecks original `node:.../exec` arguments and exact live context ownership. MCP wrappers are not authorization identities; a guessed ID cannot bypass exact policy, enabled-server/tool checks or Node protocol/capability gates. The dedicated Session wrapper resolves only bounded list/read/send to existing builtin permissions.
@@ -30,9 +32,13 @@ The Session wrapper uses exact existing `builtin:session` list, `builtin:view_se
 
 ### D-dispatch-mcp-live-configuration
 
+**Derived lifecycle design for [validated live installation](../units/src-config.md#d-config-live-install).** Connection generations/pools adopt the installed MCP configuration without attributing old work to a new identity. The mechanism must preserve already-started work and explicit failure scope rather than silently replaying calls.
+
 [2026-08-01, updated 2026-08-19] The first managed/runtime MCP configuration read establishes one authoritative in-memory snapshot. Subsequent MCP listing, discovery, and calls read that snapshot rather than rereading the backing file. `mcp_config` mutations must persist successfully before replacing the live snapshot, become visible to subsequent MCP operations immediately, and require no Foxwarm restart. Manual backing-file edits do not alter the live snapshot; do not add file watching or an agent-facing manual reload path. Optional per-server `timeoutSeconds` is bounded to finite 1-3600 seconds and applies only to tool calls through SDK request options; zero canonically clears the field and omission preserves the SDK default.
 
 ### D-dispatch-mcp-explicit-notifications
+
+**Directly selected communication capability, separate from ordinary tool results.** Explicit MCP notifications/replies serve [intentional message delivery](../behaviors/collaboration-and-tasks.md#do-i-need-a-child-a-task-or-a-message). Transport subscriptions and reply metadata implement that route; returning a value is not itself an inter-Session send.
 
 [2026-10-10] MCP message reception is explicitly enabled for the current trusted internal Session and one configured Streamable HTTP server through discoverable `mcp_notifications` start/stop/status. It has no remote-controlled target Session parameter and is not injected by default. Start succeeds only after the actual GET stream is ready and both peers support the Foxwarm experimental version-1 capability. Ordinary HTTP discovery/calls already reuse that exact Session/server connection; start enables local reception without rebuilding its existing remote context. Internal Session owners and verified external-context owners occupy distinct caller/server bindings. No owner is supplied from untrusted tool arguments.
 

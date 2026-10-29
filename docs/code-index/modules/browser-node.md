@@ -18,6 +18,8 @@ Extension tools use short names within their Node namespace. They operate shared
 
 ### D-browser-node-tab-policy
 
+**Derived sharing and approval design under [caller authority](../behaviors/nodes-workspaces-and-permissions.md#authority-has-several-independent-boundaries).** Tab/page grants identify what an operation may observe or change. Origin, document and membership checks implement those permissions; broad browser host permission alone does not establish an admitted page operation.
+
 Sharing resolves from an explicit live tab rule, then the nearest matching hostname rule, then the current shared window, then Off. Ask/Auto share basic metadata; Off discloses none. Ask gates each targeted page operation, including JavaScript. Positive direct-tab grants are origin-bound; explicit Off applies to the live tab across navigation. Tab/window IDs live only in browser-session storage. Persistent site rules include subdomains. Sharing a window dynamically includes current/new/moved-in HTTP(S) tabs; moving out removes only its window-derived grant. Clearing a tab rule restores inheritance.
 
 Approval shows the actual Agent, Session, page and action. Document, current sharing, membership, cancellation and deadline are checked at approval/execution and before releasing page results. Navigation, revocation, moves and Stop invalidate pending work. Sharing edits also cancel in-flight targetless listings so an earlier settings read cannot authorize metadata first observed after revocation. Per-tab operations use bounded transient ordering, without durable queues, replay or selector reconstruction.
@@ -31,6 +33,8 @@ Approval shows the actual Agent, Session, page and action. Document, current sha
 On Chrome/Chromium, debugger permission and Chrome's visible debugging banner are part of the cooperative product. Background operations never deliberately activate a tab/window. Keep an admitted attachment between snapshot and action; navigation/detach invalidate refs. User banner Cancel or unexpected detach stops the extension and never causes automatic reattachment. Same-tab human editing can race native input; no transaction or simultaneous-edit reliability guarantee is made. Browser/enterprise restrictions and complex frames remain outside the first qualified top-document path.
 
 ### D-browser-node-connection-intent
+
+**Derived connection-state design for the selected [browser Node capability](#d-browser-node-distinct-tools).** User connection intent and temporary transport loss have different meanings. Stored intent/reconnect mechanics implement that distinction; browser wake or a transient disconnect is not a new user authorization.
 
 Stop persists disabled intent; startup, reconnect and alarms respect it. Forget additionally deletes credentials/bootstrap secret. Credentials bind to the normalized Main address including deployment path; a changed target requires fresh pairing, and retired pairing replies cannot install credentials. A transient network failure may reconnect only while enabled. There is no legacy Browser settings or old-tool migration path.
 

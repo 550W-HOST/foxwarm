@@ -68,17 +68,25 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 
 ### D-code-official-workbench
 
+**Directly selected product/implementation constraint.** Official Code for the Web replaces a bespoke file-editor workspace; this choice constrains the integration, not just its appearance. Browser extensions and optional asset packaging implement it under [workbench resource lifetimes](../behaviors/workbench-and-chat.md#mounted-visible-and-running-are-independent).
+
 Use official Code for the Web with browser extensions, not a Monaco clone or server-side Node extension host. Keep optional official workbench assets/caches separate from the ordinary WebUI bundle and source repository.
 
 ### D-code-real-path-uri
+
+**Selected namespace design with real external/persisted URI consumers.** It serves [environment-local path meaning](../behaviors/nodes-workspaces-and-permissions.md#paths-belong-to-an-environment-and-an-operation). Node authority and real paths remain visible; managed drive conversion is a boundary adaptation, not a rewrite of native Session cwd or a promise of UNC support.
 
 Represent node identity in URI authority and retain the absolute slash-based path as URI path; do not invent opaque workspace-root IDs. Windows Main presents an absolute native drive path as `/C:/...` within the unchanged `foxwarm://node+master/...` URI. The normalized Code root `/C:` also denotes the mapped drive root, since the existing slash-based consumers remove a trailing separator. Only local Code filesystem/Git/terminal dispatch converts those representations back to a fully qualified native path; ordinary native `C:` remains drive-relative, not an absolute Session/tool cwd. Native Session cwd and ordinary tool metadata remain unchanged; WebUI Code actions normalize native drive targets at presentation. Remote POSIX paths and legacy URI readers retain their existing namespace. UNC and device-path mapping are not supported by this drive-only adaptation.
 
 ### D-code-persistent-workspace
 
+**Derived integration design; adopted for [independent mounted/visible/running lifetimes](../behaviors/workbench-and-chat.md#mounted-visible-and-running-are-independent).** One workspace and a stable iframe preserve editor state through ordinary layout changes. Visibility admission and explicit Close implement the selected resource behavior, not arbitrary remount heuristics.
+
 Embedded Code uses one persistent multi-root workspace and an iframe that starts on first actual Code-tab visibility in an expanded pane of the displayed workbench surface, not merely because a restored or logically active Code tab exists. Once started, ordinary tab switching, hiding the workbench, and collapse of the owning pane preserve the same iframe and background workbench state. Collapse hides and pointer-disables the frame while its slot is unavailable, including when Code is an inactive tab; expansion reuses the existing frame. Explicit Code-tab close destroys the iframe and resets its bridge lifecycle so reopening creates a fresh frame. New folders/requests use a fixed bridge instead of reloading/replacing it.
 
 ### D-code-fixed-remote-services
+
+**Derived transport design under [ordinary administrator/Node authority](../behaviors/workbench-and-chat.md#code-and-terminal-do-not-inherit-arbitrary-chat-authority).** Existing official clients independently constrain service versions and namespaces. Fixed authenticated services implement Code operations without fabricating model credentials or a Session principal.
 
 Filesystem, Git, PTY, and helper behavior use authenticated fixed versioned services, not model tools or shell credentials. The .NET [service transport](../units/external-node-services.md) and [terminal router](../units/terminal.md#remote-router) implement the existing official-client boundary without a fabricated Session/model principal. Remote Git responses and helper requests use the captured authenticated Node namespace; peer identity fields never become Master path or control authority. Missing/old service versions reject without fallback.
 
@@ -92,9 +100,13 @@ Code commands for the Foxwarm app and data folders obtain `BASE_DIR` and the res
 
 ### D-code-terminal-lifecycle
 
+**Directly selected resource-lifetime constraint.** Reconnection should reattach rather than kill backend work; explicit Close owns termination. It serves [surface/resource separation](../behaviors/workbench-and-chat.md#mounted-visible-and-running-are-independent). Keepalive pings are a transport mechanism, not an idle-kill or backend liveness policy.
+
 Page/extension reload and terminal WebSocket close detach backend terminals; only explicit user close kills them. Matching terminals reattach after reload. An authenticated, successfully attached terminal stream receives a server-originated WebSocket protocol ping every 30 seconds so idle browser connections remain active through intermediaries. This ping is transport keepalive only: it is not a PTY idle timeout, liveness ledger, or backend lifecycle signal.
 
 ### D-code-read-only-scm
+
+**Directly selected feature boundary within [official Code integration](#d-code-official-workbench).** Review and diff are the product scope. Git commands and immutable detail views implement that scope; reuse of a general Git library does not authorize staging, pushing or another credential surface.
 
 SCM and commit details support status/review/diff only. They do not add staging, commit, push, branch, credential, watcher, blame, or history-graph behavior.
 

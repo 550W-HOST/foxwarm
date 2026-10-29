@@ -119,6 +119,8 @@ Canonical contract: [context compaction and recall](./context-compaction-and-rec
 
 ### D-lifecycle-prefix-lineage
 
+**Derived design; adopted for [prefix reuse](./conditional-memory-snapshots.md#d-memory-request-prefix-stability).** Keep the saved lineage separate from Session identity so forks and compaction do not discard useful cache affinity. The stored key is an implementation of that lineage; the independently selected outbound WebSocket scope below does not redefine it.
+
 Persisted prompt-cache keys follow the model-facing prefix, not session identity. Forks and same-prefix side/compact-planning requests reuse the stored key; fresh non-fork sessions and clear operations use a fresh key; successful compaction preserves it. Only the final provider-facing `openai-ws` request key has the Session-identity/scoped derivation defined by [D-model-routing-openai-ws-prompt-cache-key](./model-routing.md#d-model-routing-openai-ws-prompt-cache-key); it does not change this persisted lineage.
 
 ### D-lifecycle-model-effort-inheritance
@@ -131,6 +133,8 @@ A manual fork remains visible to the parent even with no child instruction. The 
 
 ### D-lifecycle-creation-origin
 
+**Directly selected semantic distinction.** A user fork preserves context provenance without inventing a delegated assignment or fabricated assistant acknowledgment. Creation notices implement [fresh/fork lifetime behavior](../behaviors/sessions-and-agents.md#use-an-existing-lifetime-start-fresh-or-fork) and [real handoffs](../behaviors/collaboration-and-tasks.md#do-i-need-a-child-a-task-or-a-message) separately.
+
 [2026-10-14] User-created forks (`/fork`, `/session fork`, and the WebUI fork API) retain parent relationships and inherited history/prompt/cache/archive lineage, but their opening identifies a manual user fork and explains that the parent link records context provenance, not a work assignment or reporting requirement. They keep the structured Session identity boundary. `/fork` preserves its parent channel binding and independently queues the complete raw multiline initial message as `type: 'user'` through owner-aware durable ingress, not `sendToSession`; consumed input establishes the existing direct-user handoff boundary. With no initial message, neither the child nor an idle parent is automatically triggered. `/session fork` still switches the channel binding, and the WebUI API does not acquire a new attachment or parent notification contract. A later real parent handoff can establish a report-required boundary normally; no permanent creation-role field or history-based role inference is added.
 
 Framework creation paths do not fabricate a model/assistant acknowledgment of understanding or waiting, including ordinary forked children and task-linked children. Fresh/model-created children keep their applicable task/parent guidance. Inherited history remains unchanged, including existing model rows; existing history and Archive are not rewritten. Necessary synthetic tool responses that complete inherited tool-call pairs, structured user/system identity notices, actual provider replies, command replies, and transport acknowledgments retain their own behavior.
@@ -140,6 +144,8 @@ Framework creation paths do not fabricate a model/assistant acknowledgment of un
 Startup loads lightweight metadata stubs and hydrates per-session history only when a session is accessed.
 
 ### D-lifecycle-archived-id-reservation
+
+**Integrity constraint supported by retained Session/Archive identity.** One ID must not merge evidence from different lifetimes under [historical retention](../behaviors/conversation-and-history.md#four-things-that-are-not-interchangeable). Reservation, aliases and move-recovery records are derived mechanisms; current journals/locks do not establish a general requirement for transaction machinery elsewhere.
 
 An internal session ID identifies one lifetime while its durable archive remains retained. Identity checks use exact persisted strings; compatibility IDs are not trimmed or silently normalized. A non-reentrant process-wide lock spans reservation check through strict live commit for every supported in-process creator and internal-ID mover. Public entry points never inherit an ambient bypass token: nested work uses explicit private unlocked helpers, so asynchronous descendants from callbacks queue normally after the current owner. This is a single-master-writer boundary, not a distributed lock for multiple processes sharing one data directory. Automatic allocation skips live IDs, aliases, and archive-only IDs, including timer sessions and both guest-agent modes. Explicit creation and any move/rename that changes the internal ID reject an archive-only target with the stable `SESSION_ID_ARCHIVED` code; they never combine old archive records with a new generation. Hydration of an existing persisted live lifetime is not new allocation and remains allowed even though that same ID has archive records. Display-name and other metadata-only changes do not allocate an internal ID and do not perform this check. If an agent is deleted while its main-session archive remains, recreating the same agent main session is rejected rather than inventing a different hidden main ID.
 

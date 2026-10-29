@@ -46,6 +46,8 @@ Safe timeout/snapshot suspension is canonical in [D-toolscript-safe-timeout](../
 
 ### D-toolscript-one-run-model
 
+**Derived execution design; adopted for [composable authorized programs](../behaviors/automation-and-scheduled-work.md#execute-a-program-using-authorized-tools).** Foreground, background and continuation refer to one run rather than separate execution products. Run identifiers/snapshots implement that continuity; no form gains wider authority.
+
 One persisted engine implements both modes. The observable initial-slice, pause and caller-wait distinctions are canonical in [ToolScript and scheduled work](../behaviors/automation-and-scheduled-work.md#end-the-callers-turn-deliberately).
 
 ### D-toolscript-agent-pause
@@ -54,13 +56,19 @@ ToolScript exposes `ask_agent`, not a separate direct-user prompt primitive. The
 
 ### D-toolscript-history-boundary
 
+**Directly selected presentation boundary for [native script values](../behaviors/execution-and-waiting.md#tool-values-presentation-and-turn-controls-have-different-consumers).** Keep nested activity inspectable without pretending every inner call was an outer model call. Persisted activity metadata and lean rendering implement visibility, not another canonical conversation.
+
 Nested calls remain observable in presentation metadata and run diagnostics without separate outer-session tool calls. The lean result projection is canonical in [D-dispatch-toolscript-execution-projection](../threads/tool-dispatch-node-execution.md#d-dispatch-toolscript-execution-projection).
 
 ### D-toolscript-managed-controller
 
+**Retained TypeScript capability, not a current managed-host requirement.** The earlier orchestration design used explicit primitives; later [delivery-scope decisions](../overview.md#d-dotnet-delivery-scope) exclude Session Worker hosting and managed ToolScript/controllers from C#. The reference mechanics below must not be used to infer missing managed work or reopen the paused product scope.
+
 Managed-session orchestration is available through explicit host primitives. The runtime does not depend on source-rewrite macros or a second controller framework.
 
 ### D-toolscript-minimal-host-api
+
+**Selected API design under [ordinary tool authorization](../behaviors/automation-and-scheduled-work.md#execute-a-program-using-authorized-tools).** Reusing discovery and invocation prevents a parallel capability surface. The minimal host API is the chosen composition mechanism, not permission to bypass tool policy through Python helpers.
 
 The host API stays small and composable. Tool discovery remains the agent's responsibility through the normal Foxwarm tool surfaces rather than a ToolScript-only discovery helper.
 

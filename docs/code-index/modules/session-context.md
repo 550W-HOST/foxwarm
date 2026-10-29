@@ -63,6 +63,8 @@ Active history authority is canonical in [D-context-active-history-authority](..
 
 ### D-session-context-best-effort-index
 
+**Governing failure distinction with a directly selected optional-service boundary.** Durable [Archive evidence](../threads/archive-and-recall.md#d-context-sqlite-archive-authority) must not be undone by [optional Vector work](../threads/archive-and-recall.md#d-context-optional-vector). Queueing, retries and checkpoints implement derived indexing, not a second commit authority.
+
 Archive durability does not depend on vector availability. Backfill and compact-fact embedding may be disabled, lag, or fail without pretending that source archive data was lost. Optional/default-disabled behavior is canonical in [D-context-optional-vector](../threads/archive-and-recall.md#d-context-optional-vector).
 
 ## Open questions

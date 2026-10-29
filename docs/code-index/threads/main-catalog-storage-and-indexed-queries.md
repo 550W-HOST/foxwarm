@@ -199,6 +199,8 @@ known value until catalog invalidation refetches the affected windows.
 
 ### D-main-catalog-indexed-boundary
 
+**Derived design; proposed and approved for bounded metadata queries without hydrating Session authority.** It serves [separate restart authorities](../behaviors/persistence-and-recovery.md#identify-the-authority-before-interpreting-a-restart) and the [exact-owner semantic path](./session-ownership-and-persistence.md#normal-producer-to-consumer-path). Catalog indexing is a query/metadata mechanism, not approval to consolidate active history into SQLite.
+
 [2026-08-10] `state/catalog.sqlite` is the single always-Main-owned catalog for
 indexed identity, topology, lifecycle, counters, and presentation projections.
 High-frequency exact lookup, mutation, counting, recovery selection, and page

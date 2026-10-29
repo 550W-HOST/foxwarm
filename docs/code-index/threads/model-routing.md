@@ -122,15 +122,21 @@ Virtual routing remains a `providerType` contract. `session-hash` and `failover`
 
 ### D-model-routing-leaf-only
 
+**Derived design; proposed and approved for [virtual selection versus concrete execution](../behaviors/models-and-requests.md#selection-is-not-execution-identity).** Concrete-only targets keep health, effort and attribution unambiguous. Leaf validation is the chosen graph design, not a provider-protocol requirement; recursive routing would need a new product choice rather than an incidental resolver change.
+
 Version 1 virtual targets are strict concrete leaves. Canonical identity is the actual qualified expansion key, not a reconstruction from the raw model ID. Reject nesting and canonical duplicates rather than defining recursive health, attribution, or cycle semantics implicitly.
 
 [2026-08-18] A non-empty provider string is only syntax sugar for `{ providerType: 'session-hash', targets: [trimmedString] }` at the canonical provider-expansion boundary. The alias key remains a normal virtual model key and inherits all existing single-target session-hash resolution, validation, fingerprint, effort, context, compaction, display, default-selection, and attribution behavior. Empty targets, unknown/self targets, virtual-to-virtual nesting, and canonical duplicates remain rejected by the existing leaf-only graph rules; no recursive alias or second runtime alias mechanism is introduced.
 
 ### D-model-routing-prefix-hash
 
+**Derived routing design; SHA-256 rendezvous hashing was proposed and approved for [stable prefix lineage](./session-lifecycle.md#d-lifecycle-prefix-lineage) and [virtual selection](../behaviors/models-and-requests.md#selection-is-not-execution-identity).** Rendezvous hashing supplies stable target affinity without depending on target order. Its approval is scoped to this affinity algorithm and its real routing consumer, not unrelated artifact fingerprinting.
+
 Session hashing uses stable SHA-256 rendezvous hashing namespaced by the virtual key and driven by prompt-cache prefix lineage. Target ordering does not affect hash selection.
 
 ### D-model-routing-openai-ws-prompt-cache-key
+
+**Mixed provenance: directly selected request-scope separation, with engineering-selected encoding.** Session-based hashing, shared awaited-compaction scope, the plain separator and BTW suffix were explicitly chosen. SHA-256 encoding and the background compact suffix implement that choice. It serves collision-free independent request scopes without changing [persisted prefix lineage](./session-lifecycle.md#d-lifecycle-prefix-lineage) or claiming a universal provider concurrency restriction.
 
 [2026-09-13] Only a selected concrete `openai-ws` request derives its provider-facing `prompt_cache_key` from Session identity. Normal turns and synchronous/awaited compact planning use lowercase-hex `SHA256(session.id)`. Actual background compact planning uses `SHA256(session.id + '--compact-plan')`, and BTW uses `SHA256(session.id + '--btw')`; the separator is the literal two-character string `--`. Retries recompute the same value. A request without a Session ID keeps the existing request-stable low-level fallback rather than hashing a shared default.
 
@@ -138,9 +144,13 @@ Derivation occurs after virtual/concrete selection inside the complete request-p
 
 ### D-model-routing-outer-attempts
 
+**Derived design; selected to keep one bounded request budget under [routing/retry behavior](../behaviors/models-and-requests.md#routing-and-retry-change-the-attempted-request-not-the-saved-selection).** Each physical attempt consumes that shared budget. The current default and legacy field name are configuration/compatibility details, not reasons to add retry loops inside virtual providers.
+
 [Retry behavior](../behaviors/models-and-requests.md#routing-and-retry-change-the-attempted-request-not-the-saved-selection) has one bounded physical-attempt budget. The LLM outer loop selects/rebuilds each concrete plan; virtual providers contain no retry loop. Compatibility surfaces retain `maxRetries` for the total-attempt count, currently six by default.
 
 ### D-model-routing-effort
+
+**Selected cross-provider setting design; proposed and approved.** It serves [explicit model/effort selection](../behaviors/sessions-and-agents.md#prospective-model-and-effort-are-a-pair) without multiplying model entries. Provider mappings implement that choice under their wire contracts; raw unset/default and explicit `none` must remain distinct across persistence and UI.
 
 [2026-08-11] Model effort is one provider-neutral request setting with canonical values `none`, `low`, `medium`, `high`, `xhigh`, and `max`. Concrete provider/model configuration owns `{ allowed, default }`; omission allows all values and defaults to `high`. A model-level allowed list replaces the provider list, while a virtual model derives the ordered union of its concrete leaves and cannot define its own request override.
 
@@ -151,6 +161,8 @@ The requested effort is captured once per selected-model snapshot; explicit owne
 [2026-08-11, updated 2026-08-25] Public effort controls extend the existing model surfaces instead of creating a model-by-effort matrix or parallel APIs/tools. Commands and HTTP settings accept model and effort together, distinguish omission from explicit unset/default, and return canonical post-update state. The existing child-settings tool clears effort only through property-presence `effort:"default"|"unset"`; legacy `clear:true` remains model-only, rejects a simultaneous supplied model, and may accompany an independent effort update. The compact Chat selector shows current and future-child effort controls beside the existing model rows; options are limited to the selected/effective model's allowed set, while trigger/status text shows derived effective values without storing defaults. Virtual unset is displayed as per-leaf defaulting, and stale raw overrides remain visibly selected but disabled with the backend-authoritative effective fallback until the user chooses a valid recovery value. Model-list capability payloads expose a concrete default or `null` for virtual per-leaf defaulting. Model-facing Session creation requires the explicit optional object `forceModel: { modelId?, effort? }`: omission and `{}` preserve inheritance/default behavior, `modelId` uses configured-model normalization, effort-only forcing applies atomically to the inherited/resolved model, and the removed top-level `model`/`effort` keys have no compatibility reader. Shared `/status`/`session(status)` output reports raw and effective current/child effort.
 
 ### D-model-routing-live-session-selection
+
+**Derived implementation of directly requested [live adoption behavior](../behaviors/models-and-requests.md#switching-takes-effect-at-an-adoption-boundary).** Capturing an effective baseline and adopting it at the next attempt makes the change visible without fabricating a setter event or resetting retries. The metadata and owner ordering below are mechanisms, not another configuration authority.
 
 [2026-10-16] [Selection adoption behavior](../behaviors/models-and-requests.md#switching-takes-effect-at-an-adoption-boundary) owns effective-change notices, coalescing, missing-key fallback and in-flight limits. This anchor retains exact-owner persistence and retry/Worker ordering; setters themselves do not enqueue notices or start work.
 
@@ -164,6 +176,8 @@ Worker selection settings keep the existing serialized owner lane cooperatively 
 
 ### D-model-routing-failover-health
 
+**Engineering design for the selected [single outer retry loop](#d-model-routing-outer-attempts).** Generation-scoped health prevents completion from an older request/configuration from steering a newer one. Process-local counters and cooldown machinery implement that goal; they do not introduce durable routing history or a second authority.
+
 Failover health is process-local, configuration-fingerprinted, generation-scoped, and completion-ordered. Activation happens once per independent outer request; detached retries retain local failover semantics but cannot reactivate or mutate a newer configuration. Success resets one target, cooldown expiry starts a fresh streak, and final-target failure always ends that request while only an active generation resets global route state.
 
 ### D-model-routing-usable-response
@@ -172,9 +186,13 @@ Failover health is process-local, configuration-fingerprinted, generation-scoped
 
 ### D-model-routing-concrete-attribution
 
+**Governing attribution constraint; directly selected.** It makes [selection versus execution](../behaviors/models-and-requests.md#selection-is-not-execution-identity) observable and supplies evidence for usage, replay and diagnostics. Persisted IDs name actual completed attempts; upstream aliases and later mutable settings cannot stand in for them.
+
 Configured selection surfaces retain the virtual key. Successful results and provider-generated assistant history record the canonical concrete Foxwarm leaf that actually succeeded in the existing `modelId`; when and only when the resolved route was virtual, they also record its resolved models-config key as optional `virtualModelKey`. Resolve that key at routing time rather than inferring it later from mutable session selection. Do not substitute upstream vendor-reported model aliases, duplicate the concrete identity under a new field, or annotate user, tool, synthetic, failed, or legacy messages.
 
 ### D-model-routing-history-reasoning-compatibility
+
+**Selected projection design; later declared model/provider compatibility was proposed and approved.** It serves [conversation-preserving model switching](../behaviors/models-and-requests.md#switching-preserves-conversation-but-filters-provider-sensitive-history) under [truthful source attribution](#d-model-routing-concrete-attribution). Attempt-local filtering implements provider admission without rewriting canonical history; the compatibility declaration is not configuration inheritance or cross-protocol conversion.
 
 [2026-08-11, updated 2026-10-28] Provider-generated historical reasoning artifacts are sent when the historical model message has no concrete source identity (legacy/unknown) or its persisted canonical concrete `modelId` is compatible with the selected concrete destination under the request-captured catalog [projection](../units/model-configuration.md#native-history-compatibility). Without declarations this retains exact-ID behavior. An incompatible source removes thinking text, redacted thinking data, reasoning summaries/encrypted content/signatures, and message-scoped opaque provider fields from an attempt-local clone while preserving ordinary text, system content, images, tool calls, tool results, and their ordering. A model message left with reasoning alone is omitted from that attempt payload.
 

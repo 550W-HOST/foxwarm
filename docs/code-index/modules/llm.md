@@ -71,6 +71,8 @@ Canonical compact behavior: [context compaction and recall](../threads/context-c
 
 ### D-llm-stable-tool-schema
 
+**Derived constraint; directly selected to support [request-prefix stability](../threads/conditional-memory-snapshots.md#d-memory-request-prefix-stability).** Restrict special execution paths at dispatch rather than varying their advertised schema solely because the request is compact or an aside. [Hosted declarations](../units/model-responses.md#d-responses-hosted-tool-purpose) and the [compact gate](../threads/context-compaction.md#d-context-compact-runtime-gate) implement distinct parts of that design.
+
 Normal turns, side requests, and compact planning keep one model-facing tool schema when their prompt prefix/schema lineage is shared. Runtime gates enforce special-flow restrictions.
 
 ### D-llm-system-wrappers
@@ -78,6 +80,8 @@ Normal turns, side requests, and compact planning keep one model-facing tool sch
 New provider serialization uses canonical Foxwarm wrappers. Compatibility readers may recognize old persisted headers without generating new legacy forms.
 
 ### D-llm-shared-response-format
+
+**Derived design; selected for consistent tool-result presentation.** It serves the [value/presentation/control distinction](../behaviors/execution-and-waiting.md#tool-values-presentation-and-turn-controls-have-different-consumers). Shared formatting is a serialization mechanism; it must not flatten native program inputs or alter success/error semantics to simplify a provider adapter.
 
 Structured tool values remain structured until provider serialization, where one shared formatter produces text for all provider protocols.
 

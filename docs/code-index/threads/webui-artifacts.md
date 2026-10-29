@@ -2,11 +2,15 @@
 
 ## D-artifact-modules
 
+**Engineering representation for reusable interactive/visual outputs.** Modules and revisions serve [published application data](../behaviors/files-images-and-attachments.md#published-content-is-application-data), not another Session instruction source. The module representation is a derived implementation with existing published consumers.
+
 [2026-10-18] Interactive content uses a common versioned envelope, immutable resource snapshots and a frontend host, with separate trusted modules for image snapshot/preview, chart validation/rendering and React preparation/sandboxing. Skills teach authoring and publication; they do not install renderers or grant execution authority. Adding a module registers a validator, preparation adapter and lazy renderer rather than adding content-type branches throughout ChatTimeline. Protocol version, module schema version and artifact revision are independent.
 
 Implementation: [shared contract](../units/shared-artifacts.md), [TypeScript Main publication](../units/src-artifacts.md), [WebUI rendering](../units/webui-artifacts.md). Managed Main publication is mapped in [managed artifacts](../units/dotnet-artifacts.md); both producers use the same validators, raster metadata operation, data-only React compiler and unchanged WebUI consumer.
 
 ## D-artifact-publication
+
+**Engineering publication design under [artifact modules](#d-artifact-modules) and [caller authority](../behaviors/nodes-workspaces-and-permissions.md#authority-has-several-independent-boundaries).** Immutable prepared/published versions make references stable; publication and display are separate effects. Revision validation is not approval to execute arbitrary host code.
 
 [2026-10-18] The Main-owned `artifact` tool prepares or publishes a size-bounded, self-contained JSON manifest or raster image from an authorized source Node into `state/artifacts`. Main and primitive Provider ingestion enforce the bound while reading; resident CLI ingestion retains its existing complete-read path and applies the artifact size check afterwards. Source identity is reconstructed by the existing fenced management service. Data and source files are snapshots, not live paths. React compilation is completed before publication. A successful structured receipt identifies the exact Session, artifact ID and immutable revision; arbitrary Markdown/code fences and file writes do not publish runnable content.
 
@@ -23,6 +27,8 @@ Every HTTP read rechecks Session access and stored ownership. IDs are not bearer
 Images accept PNG/JPEG/GIF/WebP files, bound to 12 MiB, 40 megapixels and bounded animation frames/decoded size. Verified raster metadata and immutable content-addressed binary resources are stored separately. Blobs are completely linked before their revision becomes visible; an interrupted write may leave an unreferenced blob but cannot block the next revision. Authorized resource reads verify size/hash and safe MIME without leaking source paths. Images appear as borderless prose figures with no card background, title bar or inline toolbar. Image clicks reuse the existing full-screen preview, which retains download controls; image downloads return original image bytes. Chart and React card chrome is unchanged. SVG/HTML and external image URLs are not accepted by this module.
 
 ## D-artifact-execution
+
+**Engineering execution boundary for the [published-content surface](../behaviors/files-images-and-attachments.md#published-content-is-application-data).** Interactive content runs through the bounded preview path, not with the parent application's authority. Sandbox/import restrictions constrain this preview consumer; they do not establish complete network isolation.
 
 [2026-10-18] Charts accept a closed Vega-Lite subset with bounded embedded data, no external URLs, authored expressions/signals or arbitrary transforms. Generated expressions use the Vega interpreter, and a rejecting loader prohibits external chart loads. Host-side controls provide recent-row filtering, trailing means and layer visibility; metrics use the full snapshot or their explicit trailing window. Unsmoothed values and nulls remain distinguishable.
 

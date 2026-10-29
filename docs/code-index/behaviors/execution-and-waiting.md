@@ -4,6 +4,8 @@ For developers and Agents changing shell execution, turn controls, or explicit w
 
 ## Exec waits for a process; it does not lease its lifetime
 
+**Governing lifetime constraint; directly requested.** A tool wait may finish or be interrupted while its process continues. Foreground/background exec, completion events and log inspection derive from that separation; transport timeouts must not silently become process termination.
+
 [2026-09-06; interruption clarified 2026-10-11]
 
 `exec` launches a shell command in the selected execution environment. Persistent-exec paths retain captured output in a log. It is not the interactive Terminal/PTY surface. `timeout` bounds foreground waiting: the default is 15 seconds, with a minimum of 1 and a maximum of 60 seconds. Requests above 60 are clamped with a warning. The command is not killed when that wait expires. This separation lets the Agent regain control while long-running work continues.
@@ -53,6 +55,8 @@ WebUI control acknowledgement confirms receipt, not settled runtime state. Stop 
 
 ## Tool values, presentation, and turn controls have different consumers
 
+**Governing consumer boundaries with distinct bases.** Direct decisions require native program values and bounded useful model presentation; existing authorization semantics require control to come from trusted handlers. Output formatting and typed receipts are separate derived mechanisms; neither arbitrary result fields nor display truncation may change the other consumer's semantics.
+
 Native tool data, a bounded model/browser receipt, and a turn-control signal have different consumers. [Programmatic execution](automation-and-scheduled-work.md#what-does-the-program-consume-and-what-does-the-model-receive) owns what a script receives, exposes through print/return, or retains only for inspection. Complete-data/source predicates and producer budgets remain at [programmatic tool data](../threads/tool-dispatch-node-execution.md#d-dispatch-programmatic-tool-data), not at the readable preview boundary.
 
 Limiting presentation must preserve the operation's success/error classification. Large successful output must not become a sibling error just because it was shortened: an actual sibling error can suppress the [explicit wait](#explicit-wait-ends-an-otherwise-finished-turn). A preview or saved-output locator does not itself change execution status. The [output guard](../modules/tools-and-permissions.md#d-tools-structured-output-guard) owns the bounded envelope and full-output storage.
@@ -60,6 +64,8 @@ Limiting presentation must preserve the operation's success/error classification
 Wait and handoff authority comes from the executed control operation, not control-looking fields in returned application data. Script return values and stdout do not establish a wait; [normal ToolScript completion](automation-and-scheduled-work.md#end-the-callers-turn-deliberately) applies its separate trusted last-host-call rule. The maintained host uses [separately typed trusted receipts](../threads/tools-permissions-and-exec.md#outbound-mcp-values-and-trusted-control). The retained TypeScript result-folding limitation is recorded under [Open Questions](#open-questions).
 
 ## Explicit wait ends an otherwise-finished turn
+
+**Selected control contract; directly requested.** Wait for a real source of progress rather than busy-polling or declaring a source-free stop. Source lists and fallbacks implement that purpose. The empty-list accommodation is a confirmed input rule, while the [handoff/finish distinction](./collaboration-and-tasks.md#is-sending-a-report-the-same-as-ending-the-current-turn) has separate delivery semantics.
 
 `wait` registers Session wait state and returns; it does not hold the tool invocation open until work completes. Its stop-turn request takes effect after the current tool batch. A sibling error can suppress an ordinary explicit wait's stop request, in which case that exact wait is cleared so the Agent can handle the error.
 

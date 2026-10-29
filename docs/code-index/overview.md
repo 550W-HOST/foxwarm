@@ -155,6 +155,8 @@ Optional remote and compatibility components:
 
 ## D-dotnet-delivery-scope
 
+**Governing scope constraint; directly selected and later narrowed/extended by explicit choices.** Preserve supported persisted data and external Node contracts while replacing the Main implementation. Excluded Worker/controller features are not incomplete parity milestones; approved generic Provider capability is not approval to publish instance-specific drivers. The module links below locate implementation, not further product authorization.
+
 [2026-10-19] Session Worker hosting and managed ToolScript/controller execution remain intentional .NET delivery exclusions. Generic executable Node Provider implementation is now in scope: the current implementation connects registry/discovery, qualified placement, file/process primitives, optional provider lifecycle and their consumers through the existing Main authorization and persistent exec owners. Existing authenticated external Node connection, execution and credentials remain supported. The TypeScript compatibility implementations and shared protocols remain real reference/external boundaries. Current implementation ownership is mapped in [Nodes and executable providers](./modules/dotnet-nodes.md).
 
 ## Maintaining this index

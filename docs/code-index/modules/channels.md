@@ -76,6 +76,8 @@ Keep adapter type, configured instance, conversation target, and actual sender a
 
 ### D-channel-multiple-instances
 
+**Selected configuration design for independently addressable channel connections.** It serves [channel/instance/binding identity](../behaviors/channels-and-replies.md#which-identity-or-binding-should-i-change). Instance IDs and adapter factories implement that distinction; type names alone do not identify a connection or conversation.
+
 One adapter type may have multiple configured instances. Runtime constructs each from the canonical config object plus instance ID.
 
 ### D-channel-managed-reload
@@ -88,11 +90,15 @@ Session broadcast has no aggregate failure promise. It dispatches to eligible ch
 
 ### D-channel-ordinary-text-progress
 
+**Directly selected delivery behavior.** Ordinary intermediate text should reach attached conversations as progress while [canonical input and presentation remain distinct](../behaviors/channels-and-replies.md#is-progress-another-reply-or-another-model-input). Adapter throttling/editing is a derived mechanism, not a new model input or evidence of final completion.
+
 [2026-09-01, updated 2026-09-06] The observable enablement, cadence, target exclusions, silent wait and delivery consequences are owned by [Channel progress](../behaviors/channels-and-replies.md#is-progress-another-reply-or-another-model-input).
 
 Main's transient coordinator is keyed by turn, configured instance and conversation. It consumes only provider-neutral top-level tool start/finish facts, storing bounded sanitized names/counts/running IDs. Sanitization preserves underscores while removing controls/Channel markup. Fixed non-sliding timers and independent target baselines determine standalone summaries versus prepends; terminal cleanup flushes only pending unreported activity and reload/TTL fences remove stale timers. It writes no Session history, Archive, catalog or recovery state. Delivery failure does not poison the semantic turn. Explicit tool-owned sends/files/typing bypass decoration; QQ/WeWork resolve passive context inside the adapter. The silent-tool matcher is the exact builtin `wait`, not an alias or suffix match. Detailed scheduled/in-flight cleanup races remain in [Channel core](../units/src-channel-core.md#runtime-behavior).
 
 ### D-channel-conversation-latest-passive-context
+
+**Directly selected ownership boundary for passive replies.** Each adapter resolves its latest eligible conversation context under [ordinary reply routing](../behaviors/channels-and-replies.md#where-should-the-agents-ordinary-reply-go). Historical QueueSource metadata remains evidence about input, not a command to deliver output to an old platform reply target.
 
 [2026-09-21] [Latest passive-context behavior](../behaviors/channels-and-replies.md#why-can-a-newer-inbound-message-change-where-a-passive-reply-appears) is adapter-local per instance/conversation; no Router, queue, Worker RPC or tool-context receipt fields select automatic replies.
 
@@ -134,6 +140,8 @@ an existing callback stream card. There is no retry, outbox, resume, receipt,
 or cross-route duplicate-delivery mechanism.
 
 ### D-channel-file-descriptor
+
+**Selected cross-channel representation under [separate file-delivery authority](../behaviors/files-images-and-attachments.md#preview-download-and-delivery-have-separate-authority).** Adapter-local descriptors preserve the source needed by the actual transport. Descriptor shape is a shared protocol mechanism; a successful preparation or WebUI reference is not proof that every channel transmitted bytes.
 
 [2026-08-15] Current inbound attachment context uses one self-closing metadata line with ordered, XML-escaped attributes: images write `<foxwarm-image name="..." node="..." path="..." />`; generic files write `<foxwarm-file name="..." node="..." path="..." mime="..." />`. Every attribute uses the shared Foxwarm attribute normalization/escaping boundary, so quotes, ampersands, angle brackets, controls, and newlines cannot alter the tag grammar. A caption/body remains ordinary text before the descriptor with the existing blank-line separation. The descriptor reports node plus path without prescribing a tool or assuming every file is text. WebUI optimistic previews use the same tag formatter but omit node/path until canonical server reconciliation rather than exposing the temporary upload spool. Existing persisted bracket descriptors require no special handling: they remain ordinary message text and are neither parsed nor migrated.
 

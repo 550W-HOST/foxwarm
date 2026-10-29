@@ -22,11 +22,15 @@ HTTP/WebUI or command ingress
 
 ## Active JSON authority
 
+**Selected authority constraint; per-Session JSON with full-file streaming writes was directly retained instead of SQLite consolidation.** It serves [active-history authority](./context-compaction-and-recall.md#d-context-active-history-authority) and the [separate restart authorities](../behaviors/persistence-and-recovery.md#identify-the-authority-before-interpreting-a-restart). Streaming serialization is an allocation optimization inside the existing commit contract, not a new journal or recovery format.
+
 [Session authority JSON](../units/session-authority-json.md) owns the current active `history` array and queue, message counters, wait declaration, busy/stopping state, model/settings fields, memory snapshot, persisted child-handoff boundary, and other validated semantic state. Legacy Goal values are read-compatible migration inputs; production Goal writers/reminders are retired and a valid legacy Goal is migrated during the owning SaveLane save, including best-effort admission and strict identity pre-save. `SessionAuthorityDocument` rejects unsupported worker/frontier/catalog-only shapes instead of silently accepting them. `PersistentSessionAuthorityStore.PrepareAuthorityState` removes catalog-only fields and prepares detached envelope, metadata, and queue values. `SessionAuthorityDocument.WriteTo` validates immutable history records and streams their original JSON values into the complete authority file.
 
 If the authority file is missing while Archive rows exist, `PersistentSessionAuthorityStore.LoadAsync` throws an integrity error: Archive is not a substitute source for active Session history. If no authority and no Archive rows exist, the store returns `null`; the caller then decides whether this is a permitted new lifetime. `SessionManager.Admission` rejects an already catalog-registered/member lifetime with `Cataloged Session authority is missing` and preserves existing identity reservations rather than creating an empty Session.
 
 ## Ordered save lane
+
+**Derived ownership design.** Serialization implements the [active authority](#active-json-authority) contract and the directly selected requirement that admitted input survive busy turns. Existing hot-first and strict callers establish different failure semantics; the save lane is not a blanket promise that every returned operation was durably committed.
 
 [Save-lane core](../units/session-save-lane-core.md) appends every operation to one tail. A failed best-effort operation is swallowed and recorded; it does not poison later strict work. Identity mutations, display/settings changes, memory snapshots, canonical history append, compaction, queue admission, wait transitions, fork/clear, and retry notices enter this lane or an operation that is explicitly nested in it. A retired lane rejects new work after draining its predecessor.
 
@@ -35,6 +39,8 @@ The turn path claims `SessionEntry.TryClaimProcessor`, marks busy, prepares cano
 Stop/dequeue has an intentional immediate path: `SessionControl.StopAsync` reaches `SessionEntry.BeginStop`, records stopping state, and cancels the current CTS before the save tail completes. Later finalization persists the result and must not let an older snapshot overwrite the stop/queue outcome. Dequeue and safe-point finalization still use the owner/save-lane ordering; stop is not reduced to an in-memory-only flag or falsely described as waiting for persistence before taking effect.
 
 ## Canonical append ordering and errors
+
+**Derived persistence design with independent data-integrity obligations.** Archive-first publication and pre/post-rename classification preserve [immutable retained evidence](./archive-and-recall.md#d-context-sqlite-archive-authority) alongside [active JSON authority](#active-json-authority). These are selected commit mechanics for real stored data. They do not make tool effects, external delivery and history publication one transaction.
 
 1. `SessionSaveLane.CommitCanonicalAppendAsync` prepares the next history snapshot and the exact appended message rows while holding the lane order.
 2. `PersistentSessionAuthorityStore.CommitCanonicalAppendAsync` validates the bound snapshot, calls `SqliteArchiveMessageStore.WriteMessages`, and retains the exact list of rows newly inserted by this operation.

@@ -10,6 +10,8 @@ The observable source/adoption choices and refresh rationale are owned by [worki
 
 ### D-memory-request-prefix-stability
 
+**Governing constraint; directly requested.** Preserve reusable leading prompt content across related requests. The snapshot, planner-prefix and tool-declaration designs below serve this goal; matching their current implementations is not a reason to introduce new prefix variation. The constraint concerns local request construction, not a promise about a provider's cache accounting.
+
 [2026-10-27] Keep memory-backed leading instructions stable so ordinary and dedicated compaction requests can share a prefix extending into older history. With unchanged base instructions and a matching concrete memory snapshot, ordinary, compact, and detached BTW requests compose the same base instructions plus snapshot bytes. Node selection, working directory, and connection status must not inject request-time text into this prefix or become snapshot inputs. Model-identity changes and the lifecycle refreshes below retain their existing effects.
 
 Dedicated compaction takes the unchanged older history prefix at the complete-exchange boundary and appends its planning instruction afterward. Provider normalization still applies, including adjacent same-role merging; the planning instruction can extend the final user item. BTW likewise appends its side request after copied history. These request suffixes do not rewrite leading instructions.
@@ -53,6 +55,8 @@ Exact request and attempt prompt durability is owned by [canonical LLM request j
 ## Design Decisions
 
 ### D-conditional-memory-concrete-snapshot-identity
+
+**Derived design; proposed and approved for model-dependent memory.** It serves both [prefix stability](#d-memory-request-prefix-stability) and [truthful concrete attribution](./model-routing.md#d-model-routing-concrete-attribution): select instructions for the model actually attempted, then reuse matching bytes. The marker/resolver is the chosen mechanism, not permission to perform another routing decision. [Conditional-memory implementation](../units/conditional-memory.md) and the source-assembly units above locate the maintained and reference paths.
 
 [2026-09-08] Conditional memory matches the canonical concrete model identity selected for the physical provider attempt, not the configured virtual alias or the unqualified upstream model string. One narrow prompt resolver runs after existing leaf selection and before request-plan construction. Matching snapshots remain byte-stable; mismatches rebuild and persist only at the existing authority boundary.
 

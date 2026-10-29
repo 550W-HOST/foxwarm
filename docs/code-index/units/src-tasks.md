@@ -110,6 +110,8 @@ TaskStore persists a unique legacy Session mapping plus per-task visible-message
 
 ### D-tasks-small-session-owned-work
 
+**Selected service design under the directly requested [lightweight work-tracking scope](../behaviors/collaboration-and-tasks.md#do-i-need-a-child-a-task-or-a-message).** The single action surface and creator/owner distinction were adopted for that scope. Persistence, child attachment and notifications implement it without making delivery and task mutation one atomic external transaction.
+
 [2026-10-06] Use one builtin with create/list/get/claim/assign/update/complete/cancel actions for explicit Session-coordinated work, not a scheduling, review or workspace platform. Actor/creator identity comes from ToolContext; an explicit owner is a catalog-resolved assignee. ParentTaskId is immutable and may reference only an existing task at creation, so the supported interface cannot construct self-links or cycles. Task fields and progress stay in the task store, not Session.history/Archive. Completion notification uses ordinary inter-session delivery; attached-child completion resolves the existing handoff boundary. No separate notification transport or scheduler is introduced.
 
 ### D-task-list-scopes
@@ -117,5 +119,7 @@ TaskStore persists a unique legacy Session mapping plus per-task visible-message
 [2026-10-09] Model-facing `list` defaults to tasks created by or assigned to the current Session, with explicit `owned`, `current-agent` and `all` scopes. `owned` filters only the canonical current owner, preserving the creator-or-owner default. Current-Agent membership comes from Session catalog Agent metadata, not Session ID naming. The authenticated WebUI list route retains its global listing behavior.
 
 ### D-task-note-notification-opt-in
+
+**Directly selected notification boundary for [Task communication](../behaviors/collaboration-and-tasks.md#when-does-a-task-change-notify-or-start-a-session).** Saving progress need not wake its recipient. Shared postcommit delivery is the mechanism; it does not convert a silent note into a handoff or authorize automatic self-notification.
 
 [2026-10-10] [Task notification behavior](../behaviors/collaboration-and-tasks.md#when-does-a-task-change-notify-or-start-a-session) owns explicit note/comment opt-in and self/unowned skips. Both entry points use the shared postcommit helper; WebUI forwards its checkbox value explicitly.
