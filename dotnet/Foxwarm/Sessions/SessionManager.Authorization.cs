@@ -221,12 +221,17 @@ internal sealed partial class SessionManager
                     or "apply_patch_memory"
                 ? MemoryTools.AuthorizationFacts(this, owner, resolved.Name, resolved.Args)
             : [];
-        if (nodeEffects is null && resolved is { Source: "builtin", Name: "node" }
+        if (
+            nodeEffects is null
+            && resolved is { Source: "builtin", Name: "node" }
             && SessionWait.Text(resolved.Args["action"])?.Trim().ToLowerInvariant() == "ensure"
-            && resolved.Args.ContainsKey("nodeId"))
+            && resolved.Args.ContainsKey("nodeId")
+        )
             nodeEffects = await NodeProviders.EnsureAuthorizationTargetsAsync(
                 RequiredNodeArgument(resolved.Args, "providerId", 64).Trim(),
-                RequiredNodeArgument(resolved.Args, "nodeId", 193, exact: true), token);
+                RequiredNodeArgument(resolved.Args, "nodeId", 193, exact: true),
+                token
+            );
         var request = AuthorizationRequest(
             owner,
             resolved.Source,

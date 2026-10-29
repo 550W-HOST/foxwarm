@@ -225,7 +225,9 @@ internal sealed partial class NodeProviderRegistry
     private void RequireAuthorizationAncestry(string id)
     {
         if (!HasAuthorizationAncestry(id))
-            throw new InvalidOperationException("Node authorization metadata is not admitted: " + id);
+            throw new InvalidOperationException(
+                "Node authorization metadata is not admitted: " + id
+            );
     }
 
     internal async Task RefreshAsync(string id, CancellationToken token)

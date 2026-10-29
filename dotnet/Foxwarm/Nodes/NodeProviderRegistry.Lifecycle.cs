@@ -66,7 +66,10 @@ internal sealed partial class NodeProviderRegistry
             );
 
     internal async Task<IReadOnlyList<string>> EnsureAuthorizationTargetsAsync(
-        string providerId, string nodeId, CancellationToken token)
+        string providerId,
+        string nodeId,
+        CancellationToken token
+    )
     {
         var provider = CreationProvider("ensure", providerId, nodeId);
         if (!native.Registry.Forest().Contains(nodeId))
@@ -77,10 +80,15 @@ internal sealed partial class NodeProviderRegistry
             _ = await ResolveAsync(nodeId, token, mutation);
         }
         return native.Registry.Forest().Contains(nodeId) ? [nodeId]
-            : provider.ParentNode is string parent ? [parent] : [];
+            : provider.ParentNode is string parent ? [parent]
+            : [];
     }
 
-    private ExecutableNodeProvider CreationProvider(string action, string providerId, string? nodeId)
+    private ExecutableNodeProvider CreationProvider(
+        string action,
+        string providerId,
+        string? nodeId
+    )
     {
         if (providerId is "master" or "authenticated-remote")
             throw Unsupported(providerId, action);
@@ -91,7 +99,8 @@ internal sealed partial class NodeProviderRegistry
             if (!nodeId.StartsWith(provider.Id + "/", StringComparison.Ordinal))
                 throw new NodeProviderException(
                     "NODE_LIFECYCLE_INVALID_NODE_ID",
-                    "Requested Node must belong to the selected provider namespace.");
+                    "Requested Node must belong to the selected provider namespace."
+                );
         }
         return provider;
     }
@@ -249,7 +258,9 @@ internal sealed partial class NodeProviderRegistry
             value["primitiveBackends"]!["exec"] = value["exec"]!.DeepClone();
         value.Remove("filesystem");
         value.Remove("exec");
-        value["tools"] = HasAuthorizationAncestry(SessionWait.Text(value["id"])!) ? DefinitionsFor(descriptor) : new JsonArray();
+        value["tools"] = HasAuthorizationAncestry(SessionWait.Text(value["id"])!)
+            ? DefinitionsFor(descriptor)
+            : new JsonArray();
         return value;
     }
 }

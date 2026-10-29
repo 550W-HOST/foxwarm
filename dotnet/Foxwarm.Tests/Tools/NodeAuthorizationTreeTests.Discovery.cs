@@ -14,17 +14,23 @@ public sealed partial class NodeAuthorizationTreeTests
         var root = Path.Combine(f.Target, "fs", "root");
         Directory.CreateDirectory(root);
         await File.WriteAllTextAsync(Path.Combine(root, "secret.txt"), "subtree-protected-content");
-        await f.Policy("""
+        await f.Policy(
+            """
             version: 1
             rules:
             - {tool: [read, exec], node: {exact: fixture/target}, action: allow}
             - {tool: [read, exec], node: parent, action: deny}
-            """);
+            """
+        );
         var args = Lifecycle("create", "fixture/newcomer");
         args["parameters"] = Obj("""{"block":true}""");
         var creation = f.Call("node", args);
-        var read = Obj("""{"toolId":"node:fixture/newcomer/read","args":{"filePath":"secret.txt"}}""");
-        var exec = Obj("""{"toolId":"node:fixture/newcomer/exec","args":{"command":"printf ran > race-exec.txt; printf subtree-exec-proof","timeout":1}}""");
+        var read = Obj(
+            """{"toolId":"node:fixture/newcomer/read","args":{"filePath":"secret.txt"}}"""
+        );
+        var exec = Obj(
+            """{"toolId":"node:fixture/newcomer/exec","args":{"command":"printf ran > race-exec.txt; printf subtree-exec-proof","timeout":1}}"""
+        );
         try
         {
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
@@ -33,9 +39,15 @@ public sealed partial class NodeAuthorizationTreeTests
             Assert.False(f.Manager.Nodes.Registry.Forest().Contains("fixture/newcomer"));
             // List, direct capability refresh, and read-only inspect all observe the real environment.
             // None may publish executable capabilities without its admitted authorization ancestry.
-            Success(await f.Call("node", Obj("""{"action":"list"}"""), reader)
-                .WaitAsync(TimeSpan.FromSeconds(2)));
-            var inspected = await f.Call("node", Obj("""{"action":"inspect","nodeId":"fixture/newcomer"}"""), reader)
+            Success(
+                await f.Call("node", Obj("""{"action":"list"}"""), reader)
+                    .WaitAsync(TimeSpan.FromSeconds(2))
+            );
+            var inspected = await f.Call(
+                    "node",
+                    Obj("""{"action":"inspect","nodeId":"fixture/newcomer"}"""),
+                    reader
+                )
                 .WaitAsync(TimeSpan.FromSeconds(2));
             Success(inspected);
             Assert.Empty(inspected!["node"]!["tools"]!.AsArray());
@@ -48,19 +60,36 @@ public sealed partial class NodeAuthorizationTreeTests
             Assert.False(File.Exists(Path.Combine(root, "race-exec.txt")));
             var copy = new JsonObject
             {
-                ["sourceNode"] = "fixture/newcomer", ["sourcePath"] = "secret.txt",
-                ["targetNode"] = "master", ["targetPath"] = Path.Combine(f.Work, "unadmitted-copy.txt"),
+                ["sourceNode"] = "fixture/newcomer",
+                ["sourcePath"] = "secret.txt",
+                ["targetNode"] = "master",
+                ["targetPath"] = Path.Combine(f.Work, "unadmitted-copy.txt"),
             };
             Denied(await f.Call("copy_between_nodes", copy, reader));
             Assert.False(File.Exists(Path.Combine(f.Work, "unadmitted-copy.txt")));
             Assert.False(f.Manager.Nodes.Registry.Forest().Contains("fixture/newcomer"));
             // Both actual file contents and an actual command effect remain available on a known,
             // independently permitted endpoint while the other identity's receipt is blocked.
-            var knownRead = await f.Call("call_tool", Obj("""{"toolId":"node:fixture/target/read","args":{"filePath":"secret.txt"}}"""), reader);
+            var knownRead = await f.Call(
+                "call_tool",
+                Obj("""{"toolId":"node:fixture/target/read","args":{"filePath":"secret.txt"}}"""),
+                reader
+            );
             Success(knownRead);
             Assert.Contains("subtree-protected-content", knownRead!.ToJsonString());
-            Success(await f.Call("call_tool", Obj("""{"toolId":"node:fixture/target/exec","args":{"command":"printf permitted > admitted-control.txt","timeout":1}}"""), reader));
-            Assert.Equal("permitted", await File.ReadAllTextAsync(Path.Combine(root, "admitted-control.txt")));
+            Success(
+                await f.Call(
+                    "call_tool",
+                    Obj(
+                        """{"toolId":"node:fixture/target/exec","args":{"command":"printf permitted > admitted-control.txt","timeout":1}}"""
+                    ),
+                    reader
+                )
+            );
+            Assert.Equal(
+                "permitted",
+                await File.ReadAllTextAsync(Path.Combine(root, "admitted-control.txt"))
+            );
             Assert.False(creation.IsCompleted);
         }
         finally
@@ -88,22 +117,30 @@ public sealed partial class NodeAuthorizationTreeTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task First_explicit_existing_ensure_uses_its_exact_identity_grant_without_manual_inventory_and_fresh_ensure_still_requires_its_parent(bool unified)
+    public async Task First_explicit_existing_ensure_uses_its_exact_identity_grant_without_manual_inventory_and_fresh_ensure_still_requires_its_parent(
+        bool unified
+    )
     {
         if (!OperatingSystem.IsLinux())
             return;
         await using var f = await Fixture.Create(provider: true);
         var delegated = await f.Child();
-        await f.Policy("""
+        await f.Policy(
+            """
             version: 1
             rules:
             - {tool: node, args: {action: ensure}, node: {exact: fixture/target}, action: allow}
             - {tool: node, args: {action: ensure}, action: deny}
-            """);
+            """
+        );
         Assert.False(f.Manager.Nodes.Registry.Forest().Contains("fixture/target"));
         var ensure = Lifecycle("ensure", "fixture/target");
         var result = unified
-            ? await f.Call("call_tool", new JsonObject { ["toolId"] = "builtin:node", ["args"] = ensure }, delegated)
+            ? await f.Call(
+                "call_tool",
+                new JsonObject { ["toolId"] = "builtin:node", ["args"] = ensure },
+                delegated
+            )
             : await f.Call("node", ensure, delegated);
         Success(result);
         Assert.Equal("parent", f.Manager.Nodes.Registry.Forest().Parent("fixture/target"));
@@ -112,16 +149,23 @@ public sealed partial class NodeAuthorizationTreeTests
         Denied(await f.Call("node", Lifecycle("ensure", "fixture/fresh"), delegated));
         Assert.Single(await f.Effects());
         Assert.False(f.Manager.Nodes.Registry.Forest().Contains("fixture/fresh"));
-        await f.Manager.SetAgentRulesAsync("main", Rules("""[{"tool":"node","args":{"action":"ensure"},"node":{"exact":"fixture/target"},"action":"deny"}]"""));
+        await f.Manager.SetAgentRulesAsync(
+            "main",
+            Rules(
+                """[{"tool":"node","args":{"action":"ensure"},"node":{"exact":"fixture/target"},"action":"deny"}]"""
+            )
+        );
         Denied(await f.Call("node", ensure, delegated));
         Assert.Single(await f.Effects());
         await f.Manager.SetAgentRulesAsync("main", new JsonArray());
-        await f.Policy("""
+        await f.Policy(
+            """
             version: 1
             rules:
             - {tool: node, args: {action: ensure}, node: parent, action: allow}
             - {tool: node, args: {action: ensure}, action: deny}
-            """);
+            """
+        );
         Success(await f.Call("node", Lifecycle("ensure", "fixture/fresh"), delegated));
         Assert.Equal(2, (await f.Effects()).Length);
         Assert.Equal("parent", f.Manager.Nodes.Registry.Forest().Parent("fixture/fresh"));
