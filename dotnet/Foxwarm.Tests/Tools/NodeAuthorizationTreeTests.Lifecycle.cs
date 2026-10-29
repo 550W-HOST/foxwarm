@@ -262,7 +262,6 @@ public sealed partial class NodeAuthorizationTreeTests
         );
         Assert.Throws<InvalidDataException>(() => restartedNative.Registry.Remove("parent"));
         restartedNative.Registry.Remove("child");
-        _ = new NodeProviderRegistry(restartedNative, new JsonObject());
         Assert.False(restartedNative.Registry.Forest().Contains("fixture/target"));
         restartedNative.Registry.Remove("parent");
         restartedNative.Registry.Create("parent");

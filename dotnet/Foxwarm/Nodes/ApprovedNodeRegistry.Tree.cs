@@ -169,6 +169,8 @@ internal sealed partial class ApprovedNodeRegistry
             foreach (var (id, raw) in ProviderNodes(next).ToArray())
             {
                 var provider = SessionWait.Text(raw?["provider"])!;
+                if (!parents.ContainsKey(provider))
+                    raw!["absent"] = true;
                 if (
                     parents.TryGetValue(provider, out var parent)
                     && SessionWait.Text(raw?["parentNode"]) != parent
@@ -178,7 +180,7 @@ internal sealed partial class ApprovedNodeRegistry
                     changed.Add(id);
                 }
             }
-            PruneAbsent(next, id => !parents.ContainsKey(id[..id.IndexOf('/')]));
+            PruneAbsent(next, id => SessionCatalog.Flag(ProviderNodes(next)[id]?["absent"]));
             foreach (var id in changed.Where(id => ProviderNodes(next).ContainsKey(id)))
                 RequireAdmission(
                     next,
@@ -244,12 +246,13 @@ internal sealed partial class ApprovedNodeRegistry
                         ["parentNode"] = parent,
                     };
                 }
+                records[id]!.AsObject().Remove("absent");
                 records[id]!["descriptor"] = descriptor.DeepClone();
             }
-            PruneAbsent(
-                next,
-                id => id.StartsWith(provider + "/", StringComparison.Ordinal) && !seen.Contains(id)
-            );
+            foreach (var (id, record) in records)
+                if (id.StartsWith(provider + "/", StringComparison.Ordinal) && !seen.Contains(id))
+                    record!["absent"] = true;
+            PruneAbsent(next, id => SessionCatalog.Flag(records[id]?["absent"]));
             if (!JsonNode.DeepEquals(next, data))
                 Change(
                     document =>
@@ -281,6 +284,7 @@ internal sealed partial class ApprovedNodeRegistry
                         ["parentNode"] = parent,
                     };
                 }
+                ProviderNodes(next)[id]!.AsObject().Remove("absent");
                 ProviderNodes(next)[id]!["descriptor"] = descriptor.DeepClone();
                 return true;
             },

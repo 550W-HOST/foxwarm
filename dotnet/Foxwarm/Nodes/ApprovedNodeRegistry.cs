@@ -102,6 +102,8 @@ internal sealed partial class ApprovedNodeRegistry
         {
             var next = (JsonObject)data.DeepClone();
             var result = apply(next);
+            if (topology)
+                PruneAbsent(next, id => SessionCatalog.Flag(ProviderNodes(next)[id]?["absent"]));
             try
             {
                 file.WritePayload(next);
