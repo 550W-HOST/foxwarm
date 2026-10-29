@@ -16,14 +16,20 @@ internal static class WaitToolDefinitions
             var items = new JsonObject { ["type"] = "string", ["description"] = itemDescription };
             if (session)
                 items["pattern"] = ".*\\S.*";
-            return new JsonObject
+            var array = new JsonObject
             {
                 ["type"] = "array",
                 ["description"] = description,
                 ["uniqueItems"] = true,
-                ["minItems"] = minimum,
+                ["minItems"] = 0,
                 ["items"] = items,
             };
+            if (minimum > 1)
+                array["anyOf"] = new JsonArray(
+                    new JsonObject { ["maxItems"] = 0 },
+                    new JsonObject { ["minItems"] = minimum }
+                );
+            return array;
         }
         return new JsonObject
         {
@@ -52,19 +58,19 @@ internal static class WaitToolDefinitions
                             "Resume after this many seconds if nothing else has resumed the session. Set to null to disable the automatic 600-second fallback for waitExecIds.",
                     },
                     ["waitAllSessions"] = Array(
-                        "Session IDs from which you need responses before continuing the dependent work. Use this only when every listed session must respond. Cannot be combined with waitAnySessions.",
+                        "Session IDs from which you need responses before continuing the dependent work. Use this only when every listed session must respond. Empty lists are treated as omitted. Cannot be combined with a nonempty waitAnySessions list.",
                         2,
                         "Session ID.",
                         true
                     ),
                     ["waitAnySessions"] = Array(
-                        "Session IDs from which you expect a response. Use this when a response from any one of them is enough to continue.",
+                        "Session IDs from which you expect a response. Use this when a response from any one of them is enough to continue. Empty lists are treated as omitted.",
                         1,
                         "Session ID.",
                         true
                     ),
                     ["waitExecIds"] = Array(
-                        "Background executions whose completion you are waiting for. Use an active execId owned by this session or agent, or one whose completion is already queued. Use the execId returned by exec, not a process ID or file path. When wakeIfNoActivityAfterSeconds is omitted, this wait also wakes after 600 seconds; set it to null to wait indefinitely.",
+                        "Background executions whose completion you are waiting for. Use an active execId owned by this session or agent, or one whose completion is already queued. Use the execId returned by exec, not a process ID or file path. Empty lists are treated as omitted. If wakeIfNoActivityAfterSeconds is omitted and waitForInput is not true, a nonempty list adds a 600-second fallback wake. Set wakeIfNoActivityAfterSeconds to null to disable that default.",
                         1,
                         "Execution ID returned by exec."
                     ),
