@@ -719,7 +719,10 @@ public sealed class ImagePipelineTests
             ["business"] = new JsonObject { ["data"] = "opaque" },
             ["inlineDataItems"] = new JsonArray(image),
         };
-        var guarded = await Foxwarm.Tools.ToolOutputGuard.GuardAsync(response, text => Foxwarm.Tools.ToolOutputGuard.SaveLocalAsync(text, temp.Path));
+        var guarded = await Foxwarm.Tools.ToolOutputGuard.GuardAsync(
+            response,
+            text => Foxwarm.Tools.ToolOutputGuard.SaveLocalAsync(text, temp.Path)
+        );
         Assert.NotNull(guarded!["inlineDataItems"]);
         Assert.False(Directory.Exists(Path.Combine(temp.Path, ".temp", "tool-output")));
         var message = Message(

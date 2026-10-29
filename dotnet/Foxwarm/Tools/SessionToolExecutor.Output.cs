@@ -19,7 +19,12 @@ internal sealed partial class SessionToolExecutor
             try
             {
                 await sessions.AuthorizeNodeFileAsync(
-                    hosted, node, Path.Combine(workspace, ".temp", "tool-output", name), "read", files, token
+                    hosted,
+                    node,
+                    Path.Combine(workspace, ".temp", "tool-output", name),
+                    "read",
+                    files,
+                    token
                 );
             }
             catch (ToolAuthorizationDeniedException)
@@ -40,9 +45,20 @@ internal sealed partial class SessionToolExecutor
             // Match ordinary provider file tools: paths remain target-owned and use the captured cwd.
             var placement = sessions.ExecutionPlacement(hosted);
             var cwd = placement.Node == node ? placement.Cwd : null;
-            var operations = await sessions.NodeProviders.FileOperationsAsync(node, true, cwd, token);
+            var operations = await sessions.NodeProviders.FileOperationsAsync(
+                node,
+                true,
+                cwd,
+                token
+            );
             hosted.Entry.RequireIdentityAuthority();
-            await TargetFileContent.WriteAsync(operations, path, Encoding.UTF8.GetBytes(text), false, token);
+            await TargetFileContent.WriteAsync(
+                operations,
+                path,
+                Encoding.UTF8.GetBytes(text),
+                false,
+                token
+            );
             return new(path, node, true, cwd);
         }
         var saved = await sessions.WriteNodeFileAsync(

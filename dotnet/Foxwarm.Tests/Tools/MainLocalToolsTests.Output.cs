@@ -12,13 +12,22 @@ public sealed partial class MainLocalToolsTests
         var output = string.Concat(Enumerable.Range(1, 5000).Select(i => $"entry-{i:D5}\n"));
         var native = new JsonObject { ["output"] = output, ["resultId"] = "result-42" };
         f.Registry.Register(
-            new JsonObject { ["name"] = "large_result" }, "builtin", false,
+            new JsonObject { ["name"] = "large_result" },
+            "builtin",
+            false,
             (_, _, _) => Task.FromResult((JsonObject)native.DeepClone())
         );
         foreach (var unified in new[] { false, true })
         {
             var result = unified
-                ? await f.Call("call_tool", new JsonObject { ["toolId"] = "builtin:large_result", ["args"] = new JsonObject() })
+                ? await f.Call(
+                    "call_tool",
+                    new JsonObject
+                    {
+                        ["toolId"] = "builtin:large_result",
+                        ["args"] = new JsonObject(),
+                    }
+                )
                 : await f.Call("large_result", new JsonObject());
             Assert.Null(result["error"]);
             Assert.Equal("result-42", result["resultId"]!.GetValue<string>());
@@ -26,29 +35,43 @@ public sealed partial class MainLocalToolsTests
             Assert.True(ToolResponseFormatting.Format(result).Length <= 40_000);
             var path = result["outputFullPath"]!.GetValue<string>();
             Assert.Equal(output, await File.ReadAllTextAsync(path));
-            var read = await f.Call("call_tool", new JsonObject
-            {
-                ["toolId"] = "node:master/read",
-                ["args"] = new JsonObject { ["filePath"] = path, ["startLine"] = 5000, ["endLine"] = 5000 },
-            });
+            var read = await f.Call(
+                "call_tool",
+                new JsonObject
+                {
+                    ["toolId"] = "node:master/read",
+                    ["args"] = new JsonObject
+                    {
+                        ["filePath"] = path,
+                        ["startLine"] = 5000,
+                        ["endLine"] = 5000,
+                    },
+                }
+            );
             Assert.Null(read["error"]);
             Assert.Contains("entry-05000", read["output"]!.GetValue<string>());
         }
-        var script = await f.Call("run_script", new JsonObject
-        {
-            ["code"] = "value = call_tool('builtin:large_result', {})\nreturn {'length': len(value['output']), 'resultId': value['resultId'], 'guarded': 'outputTruncated' in value}",
-        });
+        var script = await f.Call(
+            "run_script",
+            new JsonObject
+            {
+                ["code"] =
+                    "value = call_tool('builtin:large_result', {})\nreturn {'length': len(value['output']), 'resultId': value['resultId'], 'guarded': 'outputTruncated' in value}",
+            }
+        );
         Assert.Null(script["error"]);
         Assert.Equal(output.Length, script["result"]!["length"]!.GetValue<int>());
         Assert.Equal("result-42", script["result"]!["resultId"]!.GetValue<string>());
         Assert.False(script["result"]!["guarded"]!.GetValue<bool>());
-        var outer = await f.Call("run_script", new JsonObject
-        {
-            ["code"] = "return call_tool('builtin:large_result', {})",
-        });
+        var outer = await f.Call(
+            "run_script",
+            new JsonObject { ["code"] = "return call_tool('builtin:large_result', {})" }
+        );
         Assert.Null(outer["error"]);
         Assert.True(ToolResponseFormatting.FormatToolScriptExecution(outer).Length <= 40_000);
-        var originalPresentation = await File.ReadAllTextAsync(outer["outputFullPath"]!.GetValue<string>());
+        var originalPresentation = await File.ReadAllTextAsync(
+            outer["outputFullPath"]!.GetValue<string>()
+        );
         Assert.StartsWith("--- return ---\n", originalPresentation);
         Assert.Contains("result-42", originalPresentation);
         Assert.Contains("entry-05000", originalPresentation);
@@ -65,16 +88,20 @@ public sealed partial class MainLocalToolsTests
         await File.WriteAllTextAsync(Path.Combine(root, ".temp"), "not a directory");
         var effects = 0;
         f.Registry.Register(
-            new JsonObject { ["name"] = "large_effect" }, "builtin", false,
+            new JsonObject { ["name"] = "large_effect" },
+            "builtin",
+            false,
             (_, _, _) =>
             {
                 effects++;
-                return Task.FromResult(new JsonObject
-                {
-                    ["output"] = new string('x', 50_000),
-                    ["status"] = "effect-completed",
-                    ["error"] = toolFailed ? "original effect error" : null,
-                });
+                return Task.FromResult(
+                    new JsonObject
+                    {
+                        ["output"] = new string('x', 50_000),
+                        ["status"] = "effect-completed",
+                        ["error"] = toolFailed ? "original effect error" : null,
+                    }
+                );
             }
         );
         var result = await f.Call("large_effect", new JsonObject());

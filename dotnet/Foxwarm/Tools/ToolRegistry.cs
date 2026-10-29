@@ -247,7 +247,13 @@ internal sealed class ToolRegistry(
         }
         return await ToolOutputGuard.GuardAsync(
             result,
-            text => owner.SaveToolOutputAsync(text, resolved.ExecutionNode, workspace(owner.Hosted), cancellationToken),
+            text =>
+                owner.SaveToolOutputAsync(
+                    text,
+                    resolved.ExecutionNode,
+                    workspace(owner.Hosted),
+                    cancellationToken
+                ),
             owner.ToolScriptExecution
         );
     }

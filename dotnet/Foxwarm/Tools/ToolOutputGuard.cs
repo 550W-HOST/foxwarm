@@ -6,7 +6,14 @@ namespace Foxwarm.Tools;
 internal static class ToolOutputGuard
 {
     private const int CharLimit = 40_000;
-    internal sealed record SavedOutput(string Path, string Node, bool Relative = false, string? Cwd = null);
+
+    internal sealed record SavedOutput(
+        string Path,
+        string Node,
+        bool Relative = false,
+        string? Cwd = null
+    );
+
     internal static async Task<JsonNode?> GuardAsync(
         JsonNode? response,
         Func<string, Task<SavedOutput>> save,
@@ -98,9 +105,10 @@ internal static class ToolOutputGuard
         bool toolScriptExecution
     )
     {
-        string Format(JsonNode? value) => toolScriptExecution
-            ? ToolResponseFormatting.FormatToolScriptExecution(value)
-            : ToolResponseFormatting.Format(value);
+        string Format(JsonNode? value) =>
+            toolScriptExecution
+                ? ToolResponseFormatting.FormatToolScriptExecution(value)
+                : ToolResponseFormatting.Format(value);
         var originalText = Format(response);
         var result = response;
         try
@@ -123,9 +131,16 @@ internal static class ToolOutputGuard
             var complete = await save(originalText);
             return Summary(response, originalText, complete, null);
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException
-            or InvalidOperationException or NotSupportedException or TimeoutException
-            or OperationCanceledException or ToolAuthorizationUnavailableException)
+        catch (Exception error)
+            when (error
+                    is IOException
+                        or UnauthorizedAccessException
+                        or InvalidOperationException
+                        or NotSupportedException
+                        or TimeoutException
+                        or OperationCanceledException
+                        or ToolAuthorizationUnavailableException
+            )
         {
             // Saving a presentation artifact must not turn a successful tool effect into an error.
             return Summary(response, originalText, null, error.Message);
@@ -140,14 +155,31 @@ internal static class ToolOutputGuard
     )
     {
         var result = new JsonObject();
-        foreach (var key in new[]
-        {
-            "error", "status", "runId", "continuationId", "waitingReason", "question",
-            "cancelled", "fullPath", "filePath", "node", "nodeId", "offset", "nextOffset",
-            "totalBytes", "exitCode",
-        })
-            if (response is JsonObject obj && obj.TryGetPropertyValue(key, out var value)
-                && (value is null || value.ToJsonString().Length <= 2000))
+        foreach (
+            var key in new[]
+            {
+                "error",
+                "status",
+                "runId",
+                "continuationId",
+                "waitingReason",
+                "question",
+                "cancelled",
+                "fullPath",
+                "filePath",
+                "node",
+                "nodeId",
+                "offset",
+                "nextOffset",
+                "totalBytes",
+                "exitCode",
+            }
+        )
+            if (
+                response is JsonObject obj
+                && obj.TryGetPropertyValue(key, out var value)
+                && (value is null || value.ToJsonString().Length <= 2000)
+            )
                 result[key] = value?.DeepClone();
         var notice = saved is not null
             ? Location(saved)
@@ -181,11 +213,13 @@ internal static class ToolOutputGuard
 
     private static string Location(SavedOutput saved) =>
         $"Tool output truncated; complete output on Node {saved.Node}: {saved.Path}. Use read on that Node to inspect it."
-        + (saved.Relative
-            ? saved.Cwd is null
-                ? " This path uses the Node's default directory; the Session cwd was unset when saved."
-                : $" This path is relative to Session cwd {saved.Cwd} at save time; use read with that cwd."
-            : "");
+        + (
+            saved.Relative
+                ? saved.Cwd is null
+                    ? " This path uses the Node's default directory; the Session cwd was unset when saved."
+                    : $" This path is relative to Session cwd {saved.Cwd} at save time; use read with that cwd."
+                : ""
+        );
 
     private static string Excerpt(string text, int limit, string notice)
     {
@@ -202,16 +236,26 @@ internal static class ToolOutputGuard
         return head + $"\n[{notice}]\n" + tail;
     }
 
-    internal static async Task<SavedOutput> SaveLocalAsync(string text, string workspace, string? fileName = null)
+    internal static async Task<SavedOutput> SaveLocalAsync(
+        string text,
+        string workspace,
+        string? fileName = null
+    )
     {
         var directory = Path.Combine(workspace, ".temp", "tool-output");
         var parent = Path.GetDirectoryName(directory)!;
-        if (Directory.Exists(parent) && (File.GetAttributes(parent) & FileAttributes.ReparsePoint) != 0)
+        if (
+            Directory.Exists(parent)
+            && (File.GetAttributes(parent) & FileAttributes.ReparsePoint) != 0
+        )
             throw new IOException("Tool output parent cannot be a symbolic link.");
         Directory.CreateDirectory(directory);
         if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
             throw new IOException("Tool output directory cannot be a symbolic link.");
-        var file = Path.Combine(directory, fileName ?? ("result-" + Guid.NewGuid().ToString("N") + ".txt"));
+        var file = Path.Combine(
+            directory,
+            fileName ?? ("result-" + Guid.NewGuid().ToString("N") + ".txt")
+        );
         await File.WriteAllTextAsync(file, text, new UTF8Encoding(false));
         return new(file, "master");
     }
