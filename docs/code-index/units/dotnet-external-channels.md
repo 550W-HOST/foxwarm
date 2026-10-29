@@ -59,11 +59,11 @@ Current Bot API requests use the pinned Telegraf/node-fetch implementation polic
 
 Outbound text/photo/document sends use Markdown with one plain fallback for the Source payload/parse error condition. Other sends retain at most four attempts with 5/10/10-second delays. Upload streams reopen for each actual attempt. Request-context replies schedule observed sends; explicit tools await the transport. No new chunking, outbox, ack ledger or vendor delivery guarantee is introduced.
 
-## Open Questions
+## Policy decisions
 
 ### Telegram timeout policy
 
-**Unconfirmed policy change:** a 100-second managed timeout for API calls and file downloads was previously accepted. The current separate 500-second API header/body budgets and deadline-free downloads followed a later Source-parity correction. Confirm both intended request budgets and their phase scope rather than treating SDK defaults or the repair's tests as the policy decision. Cancellation, polling server wait and final offset-sync budgets remain separate; choosing a request deadline does not implicitly change those contracts.
+**Selected implementation policy.** [2026-10-29] Keep the current separate 500-second API header/body budgets and stop-cancellable downloads without a fixed application deadline. A 100-second managed timeout for both API calls and downloads had previously been accepted; the later Source-parity correction changed that implementation. The current decision retains the resulting behavior after reviewing this history. Exact timeout values remain implementation defaults. Cancellation, polling server wait and final offset-sync budgets are independent contracts.
 
 ## Verification
 
