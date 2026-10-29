@@ -85,7 +85,7 @@ async function control(id, command, status, action) {
   const result = await send(id, command, { controlRequestId: requestId })
   assert.notEqual(result.status, 400, JSON.stringify(result))
   const event = await until(() => frames.find(frame => frame.sessionId === id && frame.event?.requestId === requestId), 'correlated ' + command)
-  assert.equal(event.event.type, 'session-control-feedback'); assert.equal(event.event.feedback.action, action); assert.equal(event.event.feedback.status, status)
+  assert.equal(event.event.type, 'session-control-feedback'); assert.equal(event.event.feedback.action, action); assert.equal(event.event.feedback.status, status, JSON.stringify(event.event.feedback))
   return result
 }
 async function projections(id, check) {
@@ -144,6 +144,7 @@ try {
   await page.waitForSelector('[aria-label="Stop session"]'); await page.click('[aria-label="Stop session"]')
   await settled(source); await until(() => sourceFrames.some(frame => frame.event?.feedback?.action === 'stop' && frame.event.feedback.status === 'accepted'), 'App correlated Stop')
   const continueAt = Date.now(); await control(source, '/continue', 'accepted', 'continue'); assert(Date.now() - continueAt < 1500)
+  await until(() => requests.some(row => row.key === 'retry' && !row.planning && row.n === 2), 'continued physical request')
   await control(source, '/continue', 'noop', 'continue'); await control(source, '/stop', 'accepted', 'stop'); await settled(source)
   // Actual complete tool batch: resolved wrapper identity, bounded preview and outer script ownership.
   await writeFile(join(fixture.work, 'read.txt'), 'actual file')
@@ -219,7 +220,11 @@ try {
   const authorityPath = join(fixture.data, 'state/sessions', source + '.json'), backup = authorityPath + '.held'
   await rename(authorityPath, backup); await mkdir(authorityPath)
   held.get('authority').complete([text('cannot commit')])
-  await until(() => sourceFrames.some(frame => frame.message?.__meta?.temporary && frame.message?.__meta?.sessionNotice?.source === 'session'), 'temporary typed authority failure')
+  // The first notice precedes the independent strict busy-release save and its rollback.
+  await until(() => {
+    const notice = sourceFrames.findIndex(frame => frame.message?.__meta?.temporary && frame.message?.__meta?.sessionNotice?.source === 'session')
+    return notice >= 0 && sourceFrames.slice(notice + 1).some(frame => frame.type === 'session-state' && frame.session.busy)
+  }, 'temporary typed authority failure and strict finalization state')
   assert((await history(source)).session.busy, 'Failed strict finalization retains its busy checkpoint; presentation does not fabricate settlement.')
   await rm(authorityPath, { recursive: true }); await rename(backup, authorityPath)
   for (const client of clients) client.terminate()
