@@ -57,7 +57,7 @@ internal sealed class McpInboundCatalog
             ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = text }),
         };
 
-    private static JsonObject Result(JsonNode? value)
+    internal static JsonObject Result(JsonNode? value)
     {
         if (value is JsonObject obj && obj["content"] is JsonArray)
             return obj;

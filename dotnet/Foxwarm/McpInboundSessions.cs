@@ -130,7 +130,12 @@ internal sealed class McpInboundSessions(
             ["preview"] = preview,
         };
         if (page.Stale)
+        {
             result["error"] = "stale_history_boundary";
+            var error = McpInboundCatalog.Result(result);
+            error["isError"] = true;
+            return error;
+        }
         return result;
     }
 

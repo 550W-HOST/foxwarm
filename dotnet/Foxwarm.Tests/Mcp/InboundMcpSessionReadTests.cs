@@ -104,7 +104,10 @@ public sealed class InboundMcpSessionReadTests
         Assert.Equal(15, status["end"]!.GetValue<int>());
         Assert.DoesNotContain("later append", Preview(status));
         await f.Target.Entry.SaveLane.DeleteMessagesAsync(1);
-        var stale = Value(await Call(client, older));
+        var staleResult = await Call(client, older);
+        Assert.True(staleResult["isError"]!.GetValue<bool>());
+        var stale = staleResult["structuredContent"]!.AsObject();
+        Assert.Equal(stale.ToJsonString(), staleResult["content"]![0]!["text"]!.GetValue<string>());
         Assert.Equal("stale_history_boundary", stale["error"]!.GetValue<string>());
         Assert.NotEqual(
             page["historyVersion"]!.GetValue<long>(),

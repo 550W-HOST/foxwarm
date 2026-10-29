@@ -127,7 +127,7 @@ const result = await client.callTool({
 const page = result.structuredContent;
 ```
 
-Read defaults to the newest 10 eligible source records in chronological order. Use `start` to read forward, including negative indices from the end, or exclusive `before` to read backward. Do not combine them. The preview includes callable `foxwarm_session` older/newer descriptors that retain your options and `historyVersion`. Pass that version when continuing an existing range. A result with `error: 'stale_history_boundary'` includes a fresh read instruction after a structural history change; appending messages does not invalidate existing boundaries.
+Read defaults to the newest 10 eligible source records in chronological order. Use `start` to read forward, including negative indices from the end, or exclusive `before` to read backward. Do not combine them. The preview includes callable `foxwarm_session` older/newer descriptors that retain your options and `historyVersion`. Pass that version when continuing an existing range. A result with MCP `isError: true` and structured `error: 'stale_history_boundary'` retains page/version information and includes a fresh read instruction after a structural history change; appending messages does not invalidate existing boundaries.
 
 The result contains `sessionId`, `start`, exclusive `end`, `count`, `total`, `historyVersion`, `executionState`, and bounded text `preview`. `count` reports selected source records before text filters or preview truncation. Read accepts nonnegative safe-integer counts without a separate 50-record ceiling; `count: 0` returns only execution state and page information. Session list remains bounded to 1–50 entries.
 
