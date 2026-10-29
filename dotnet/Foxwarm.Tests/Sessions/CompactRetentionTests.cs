@@ -3,7 +3,7 @@ using Foxwarm.Sessions;
 
 namespace Foxwarm.Tests;
 
-public sealed class CompactRetentionTests
+public sealed partial class CompactRetentionTests
 {
     private static JsonObject Row(string role, long seq, JsonObject part, long? preserved = null) =>
         new()
@@ -53,50 +53,90 @@ public sealed class CompactRetentionTests
         };
 
     [Fact]
-    public void Forward_gap_admits_complete_exchange_and_ignored_notice_advances_the_next_segment()
+    public void Sparse_adjacent_candidates_share_a_range_but_a_real_notice_starts_the_next_segment()
     {
         JsonObject[] history =
         [
             Row("user", 1, Text()),
             Row("model", 4, Call("real")),
-            Row("tool", 5, Response("real")),
+            Row("tool", 9, Response("real")),
             Row(
                 "user",
-                6,
+                12,
                 new JsonObject
                 {
                     ["system"] = "<foxwarm-system kind=\"session-boundary\" event=\"notice\" />",
                 }
             ),
-            Row("user", 7, Text()),
-            Row("model", 8, Text()),
+            Row("user", 17, Text()),
+            Row("model", 21, Text()),
         ];
         var candidates = CompactCandidateBuilder.Build(history, keepPercent: 0);
         var exchange = Assert.Single(candidates.Items, item => item.Start == 4);
-        Assert.Equal(5, exchange.End);
-        Assert.DoesNotContain(candidates.Items, item => item.Start == 6);
-        Assert.NotEqual(exchange.Segment, candidates.Items.Single(item => item.Start == 7).Segment);
+        Assert.Equal(9, exchange.End);
+        Assert.Equal(candidates.Items[0].Segment, exchange.Segment);
+        Assert.DoesNotContain(candidates.Items, item => item.Start == 12);
+        Assert.NotEqual(exchange.Segment, candidates.Items.Single(item => item.Start == 17).Segment);
         Assert.Equal(
-            candidates.Items.Single(item => item.Start == 7).Segment,
-            candidates.Items.Single(item => item.Start == 8).Segment
+            candidates.Items.Single(item => item.Start == 17).Segment,
+            candidates.Items.Single(item => item.Start == 21).Segment
         );
         var plan = CompactPlanValidator.Validate(
             new JsonObject
             {
-                ["replaceAsBlocks"] = new JsonArray(Block(4, 5), Block(7, 8)),
-                ["preserveMessages"] = new JsonArray(5),
+                ["replaceAsBlocks"] = new JsonArray(Block(1, 9), Block(17, 21)),
+                ["preserveMessages"] = new JsonArray(9),
             },
             candidates
         );
-        Assert.Equal(new long[] { 4, 5 }, plan.Preserve.Order().ToArray());
+        Assert.Equal(new long[] { 4, 9 }, plan.Preserve.Order().ToArray());
+        Assert.Throws<CompactPlanInvalidException>(() =>
+            CompactPlanValidator.Validate(
+                new JsonObject
+                {
+                    ["replaceAsBlocks"] = new JsonArray(Block(1, 9)),
+                    ["preserveMessages"] = new JsonArray(5),
+                },
+                candidates
+            )
+        );
+        Assert.Throws<CompactPlanInvalidException>(() =>
+            CompactPlanValidator.Validate(
+                new JsonObject { ["replaceAsBlocks"] = new JsonArray(Block(1, 21)) },
+                candidates
+            )
+        );
         var quotaOnly = new JsonObject
         {
-            ["replaceAsBlocks"] = new JsonArray(Block(4, 5)),
+            ["replaceAsBlocks"] = new JsonArray(Block(4, 9)),
             ["preserveMessages"] = new JsonArray(4),
         };
         Assert.Throws<CompactPlanInvalidException>(() =>
             CompactPlanValidator.Validate(quotaOnly, candidates)
         );
+    }
+
+    [Fact]
+    public void Preserve_selection_uses_actual_candidate_membership_after_a_reversed_row()
+    {
+        JsonObject[] history =
+        [
+            Row("user", 1, Text()),
+            Row("model", 2, Call("real")),
+            Row("tool", 9, Response("real")),
+            Row("user", 6, Text()),
+            Row("user", 7, Text()),
+        ];
+        var candidates = CompactCandidateBuilder.Build(history, inContext: true);
+        Assert.DoesNotContain(candidates.Items, item => item.Start == 6);
+        var args = new JsonObject
+        {
+            ["replaceAsBlocks"] = new JsonArray(Block(7, 7)),
+            ["preserveMessages"] = new JsonArray(7),
+        };
+        Assert.Equal(new long[] { 7 }, CompactPlanValidator.Validate(args, candidates).Preserve);
+        args["replaceAsBlocks"] = new JsonArray(Block(2, 9));
+        Assert.Throws<CompactPlanInvalidException>(() => CompactPlanValidator.Validate(args, candidates));
     }
 
     [Fact]
@@ -188,9 +228,39 @@ public sealed class CompactRetentionTests
     }
 
     [Theory]
-    [InlineData("gap")]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Sparse_exchange_members_use_active_order_in_both_persisted_response_shapes(bool separateResponses)
+    {
+        var call = Row("model", 3, Call("first"));
+        call["parts"]!.AsArray().Add(Call("second"));
+        var response = Row("tool", 9, Response("first"));
+        var history = new List<JsonObject> { Row("user", 1, Text()), call, Display(7), response };
+        if (separateResponses)
+            history.Add(Row("tool", 15, Response("second")));
+        else
+            response["parts"]!.AsArray().Add(Response("second"));
+        history.Add(Display(20));
+        history.Add(Row("user", 25, Text()));
+        var candidates = CompactCandidateBuilder.Build(history, keepPercent: 0);
+        var exchange = Assert.Single(candidates.Items, item => item.Start == 3);
+        var end = separateResponses ? 15 : 9;
+        Assert.Equal(end, exchange.End);
+        Assert.Equal(separateResponses ? 4 : 3, exchange.HistoryEnd);
+        Assert.Equal(3, candidates.Items.Count);
+        var plan = CompactPlanValidator.Validate(new JsonObject
+        {
+            ["replaceAsBlocks"] = new JsonArray(Block(1, 25)),
+            ["preserveMessages"] = new JsonArray(9),
+        }, candidates);
+        Assert.Equal(separateResponses ? new long[] { 3, 7, 9, 15 } : new long[] { 3, 7, 9 }, plan.Preserve.Order());
+    }
+
+    [Theory]
+    [InlineData("nonmonotonic")]
     [InlineData("duplicate")]
     [InlineData("boundary")]
+    [InlineData("content")]
     [InlineData("block")]
     [InlineData("preserved")]
     [InlineData("no-response")]
@@ -209,11 +279,14 @@ public sealed class CompactRetentionTests
         };
         switch (barrier)
         {
-            case "gap":
+            case "nonmonotonic":
                 notice["__meta"]!["seq"] = 30;
                 break;
             case "duplicate":
                 history.Add(Row("user", 3, Text()));
+                break;
+            case "content":
+                notice["modelVisible"] = true;
                 break;
             case "boundary":
                 history[2] = Row(
@@ -272,40 +345,40 @@ public sealed class CompactRetentionTests
         [
             Row("model", 10, Call("real"), 1),
             Display(11, 1),
-            Row("tool", 12, Response("real"), 1),
-            Row("tool", 13, Response("other"), 1),
+            Row("tool", 19, Response("real"), 1),
+            Row("tool", 23, Response("other"), 1),
         ];
         var candidates = CompactCandidateBuilder.Build(history, inContext: true);
         Assert.Equal(0, CompactCandidateBuilder.Split(history, .5));
         Assert.Equal(
-            new long[] { 10, 12 },
+            new long[] { 10, 19 },
             candidates.Preserved.Single(item => item.Seq == 10).Exchange
         );
         Assert.Equal(
-            new long[] { 10, 12 },
-            candidates.Preserved.Single(item => item.Seq == 12).Exchange
+            new long[] { 10, 19 },
+            candidates.Preserved.Single(item => item.Seq == 19).Exchange
         );
         Assert.Equal(
-            new long[] { 13 },
-            candidates.Preserved.Single(item => item.Seq == 13).Exchange
+            new long[] { 23 },
+            candidates.Preserved.Single(item => item.Seq == 23).Exchange
         );
         Assert.DoesNotContain(candidates.Preserved, item => item.Seq == 11);
         var args = new JsonObject { ["replaceAsBlocks"] = new JsonArray() };
-        foreach (var member in new long[] { 10, 12 })
+        foreach (var member in new long[] { 10, 19 })
         {
             args["removePreservedMessages"] = new JsonArray(member);
             Assert.Throws<CompactPlanInvalidException>(() =>
                 CompactPlanValidator.Validate(args, candidates)
             );
         }
-        args["removePreservedMessages"] = new JsonArray(10, 12);
+        args["removePreservedMessages"] = new JsonArray(10, 19);
         Assert.Equal(
-            new long[] { 10, 12 },
+            new long[] { 10, 19 },
             CompactPlanValidator.Validate(args, candidates).Remove.Order()
         );
         history[1]["modelVisible"] = true;
         Assert.Equal(2, CompactCandidateBuilder.Split(history, .5));
         var visible = CompactCandidateBuilder.Build(history, inContext: true);
-        Assert.Equal(new long[] { 12 }, visible.Preserved.Single(item => item.Seq == 12).Exchange);
+        Assert.Equal(new long[] { 19 }, visible.Preserved.Single(item => item.Seq == 19).Exchange);
     }
 }

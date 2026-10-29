@@ -301,15 +301,12 @@ internal static class CompactCandidateBuilder
                 previousSeq = Role(message) == "tool" ? null : seq;
                 continue;
             }
-            if (previousSeq is not null && seq != previousSeq + 1)
+            if (previousSeq is not null && seq <= previousSeq)
             {
                 segment++;
                 priorKind = null;
-                if (seq <= previousSeq)
-                {
-                    previousSeq = Role(message) == "tool" ? null : seq;
-                    continue;
-                }
+                previousSeq = Role(message) == "tool" ? null : seq;
+                continue;
             }
             if (Transparent(message))
             {
@@ -484,7 +481,7 @@ internal static class CompactCandidateBuilder
                 || !preserved && Number(meta?["preservedFromBlockId"]) is > 0
                 || seq is null
                 || seqCounts.GetValueOrDefault(seq.Value) != 1
-                || seq != walkedSeq + 1
+                || seq <= walkedSeq
                 || Role(row) != "tool" && !Transparent(row)
             )
                 break;
@@ -514,7 +511,7 @@ internal static class CompactCandidateBuilder
             if (
                 seq is null
                 || seqCounts.GetValueOrDefault(seq.Value) != 1
-                || seq != previousSeq + 1
+                || seq <= previousSeq
                 || meta?["contextBlock"] is not null
                 || index < currentIndex && !Transparent(row)
             )

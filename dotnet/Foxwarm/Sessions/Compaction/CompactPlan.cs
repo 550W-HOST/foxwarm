@@ -186,12 +186,16 @@ internal static class CompactPlanValidator
                 )
             );
         }
-        foreach (var seq in preserve)
+        foreach (var seq in preserve.ToArray())
         {
             var index = candidates
                 .Items.ToList()
                 .FindIndex(candidate =>
-                    candidate.Kind == "message" && candidate.Start <= seq && seq <= candidate.End
+                    candidate.Kind == "message"
+                    && candidates.History
+                        .Skip(candidate.HistoryStart)
+                        .Take(candidate.HistoryEnd - candidate.HistoryStart + 1)
+                        .Any(row => Number(CompactCandidateBuilder.Meta(row)?["seq"]) == seq)
                 );
             if (index < 0)
                 throw new CompactPlanInvalidException(
@@ -199,20 +203,18 @@ internal static class CompactPlanValidator
                 );
             if (
                 operations.All(op =>
-                    op.Kind != "message" || seq < op.First.Start || seq > op.Last.End
+                    op.Kind != "message" || index < op.CandidateStart || index > op.CandidateEnd
                 )
             )
                 throw new CompactPlanInvalidException(
                     $"preserveMessages contains msg#{seq}, but that message is not covered by any created message-source block."
                 );
-        }
-        foreach (var seq in preserve.ToArray())
-        {
-            var candidate = candidates.Items.First(item =>
-                item.Kind == "message" && item.Start <= seq && seq <= item.End
-            );
-            for (var member = candidate.Start; member <= candidate.End; member++)
-                preserve.Add(member);
+            var candidate = candidates.Items[index];
+            foreach (var row in candidates.History
+                .Skip(candidate.HistoryStart)
+                .Take(candidate.HistoryEnd - candidate.HistoryStart + 1))
+                if (Number(CompactCandidateBuilder.Meta(row)?["seq"]) is long member)
+                    preserve.Add(member);
         }
         foreach (var seq in remove)
         {
