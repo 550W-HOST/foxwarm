@@ -131,9 +131,30 @@ try {
   assert.equal((await history(continued)).filter(row => row.role === 'user' && row.parts.some(part => part.text === 'INTERRUPT-ME' || part.system?.includes('\nINTERRUPT-ME\n</foxwarm-message>'))).length, 1)
   assert.equal(await readFile(join(dataRoot, 'agents', 'team', 'once.txt'), 'utf8'), 'one-effect')
 
-  // Handoff wait still survives a sibling error and a child result releases the same parent processor.
+  // A successful child creation survives its sibling error, but the handoff wait is suppressed.
+  const releaseErrorChild = signal(); holds.push(releaseErrorChild)
+  const errorChild = 'team/handoff-error_error-child'
+  const handoffError = await create('handoff-error', [[call('error-birth', 'create_child_session', { suffix: 'error-child', message: 'ERROR-WORK', afterSend: 'wait' }), call('handoff-sibling-error', 'nonexistent_tool', {})], body => {
+    assert.deepEqual(body.input.filter(item => item.type === 'function_call_output').map(item => item.call_id), ['error-birth', 'handoff-sibling-error'])
+    return [text('HANDOFF-ERROR-HANDLED')]
+  }, body => { assert(messageText(body).includes('ERROR-CHILD-RESULT')); return [text('ERROR-CHILD-RECEIVED')] }])
+  plans.set(errorChild, [async () => { await releaseErrorChild.promise; return [call('error-child-report', 'send_to_session', { sessionId: handoffError, message: 'ERROR-CHILD-RESULT', afterSend: 'finish' })] }])
+  await send(handoffError, 'HANDLE-HANDOFF-ERROR'); await final(handoffError, 'HANDOFF-ERROR-HANDLED')
+  await until(() => counts.get(errorChild) === 1, 'committed child is still active')
+  assert.equal(counts.get(handoffError), 2); assert.equal((await authority(handoffError)).meta.wait, undefined)
+  const errorRows = await history(handoffError)
+  const errorPair = errorRows.find(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'error-birth'))
+  assert.deepEqual(errorPair.parts.map(part => part.functionResponse.tool_use_id), ['error-birth', 'handoff-sibling-error'])
+  assert.equal(errorPair.parts[0].functionResponse.response.error, undefined); assert(errorPair.parts[1].functionResponse.response.error)
+  releaseErrorChild.release(); await final(handoffError, 'ERROR-CHILD-RECEIVED'); await idle(errorChild)
+  const completedErrorRows = await history(handoffError)
+  assert.equal(completedErrorRows.flatMap(row => row.parts || []).filter(part => part.functionCall?.id === 'error-birth').length, 1)
+  assert.equal(completedErrorRows.flatMap(row => row.parts || []).filter(part => part.system?.includes('ERROR-CHILD-RESULT')).length, 1)
+  assert.equal(counts.get(errorChild), 1); assert.equal(counts.get(handoffError), 3)
+
+  // An all-success handoff really waits; a child result releases the same parent processor.
   const releaseChild = signal(); holds.push(releaseChild)
-  const slow = await create('slow', [[call('birth', 'create_child_session', { suffix: 'slow-child', message: 'DO-WORK', afterSend: 'wait' }), call('sibling-error', 'nonexistent_tool', {})], [text('SLOW-PARENT-DONE')]])
+  const slow = await create('slow', [[call('birth', 'create_child_session', { suffix: 'slow-child', message: 'DO-WORK', afterSend: 'wait' })], [text('SLOW-PARENT-DONE')]])
   plans.set('team/slow_slow-child', [async () => { await releaseChild.promise; return [call('slow-report', 'send_to_session', { sessionId: slow, message: 'SLOW-RESULT', afterSend: 'finish' })] }])
   await page.evaluate(id => { location.hash = '#session/' + encodeURIComponent(id) }, slow)
   await send(slow, 'DELEGATE'); await waiting(slow)
@@ -253,7 +274,7 @@ try {
   for (const [id, count] of archive) assert.equal((await history(id)).length, count, id)
   assert.equal(errors.length, 0, errors.join('\n')); await stopHost()
   console.log(JSON.stringify({ result: 'ok', firstPid, secondPid, thirdPid: host.child.pid, requests: requests.length,
-    originalContinue: true, noEffectReplay: true, slowAndFastHandoff: true, explicitSiblingError: true,
+    originalContinue: true, noEffectReplay: true, slowAndFastHandoff: true, handoffSiblingError: true, explicitSiblingError: true,
     strictWaitAllBeforeAfterRename: true, deferredRestart: true, timedRestart: true, actualExecWake: true,
     unrelatedWake: true, staleTimerQuiet: true, perDeclarationQuiescenceRestart: true, archiveRows: archive.reduce((sum, row) => sum + row[1], 0) }))
 } catch (error) {

@@ -192,7 +192,25 @@ try {
     assert(!JSON.stringify(await saved(actor)).includes(secret)); assert(!JSON.stringify((await fixture.api('GET', route(actor) + '/history')).body).includes(secret)); assert(!JSON.stringify(requests).includes(secret)); assert(!fixture.output.includes(secret))
     assert(!clients.some(client => client.output.includes(secret)))
   }
-  assert.equal((await fixture.api('DELETE', route(actor))).status, 200)
+  // busy:false is published before the foreground processor finishes settling.
+  // Retry only the existing busy-delete receipt within the fixture's normal drain bound.
+  let deletion, deleteProjection, deleteAttempts = 0
+  try {
+    await until(async () => {
+      const before = await saved(actor)
+      deleteProjection = { busy: before.busy, queueLength: before.queue.length, currentNode: before.currentNode }
+      deletion = await fixture.api('DELETE', route(actor)); deleteAttempts++
+      if (deletion.status === 409 && deletion.body.code === 'SESSION_DELETE_BUSY') {
+        deleteProjection.runtime = (await fixture.api('GET', route(actor) + '/state')).body.session?.runtimeState
+        return false
+      }
+      assert.equal(deletion.status, 200, JSON.stringify({ deletion, deleteProjection, deleteAttempts }))
+      return true
+    }, 'consumer foreground delete drain')
+  } catch (error) {
+    throw new Error(error.message + '\nLast consumer DELETE: ' + JSON.stringify({ deletion, deleteProjection, deleteAttempts }), { cause: error })
+  }
+  console.log(JSON.stringify({ consumerDeleteAttempts: deleteAttempts, deletion }))
   await fixture.stop()
   console.log('Real private credential/authentication, original picker/binding/busy/persistence, official Shell and local process durations passed.')
 } finally {

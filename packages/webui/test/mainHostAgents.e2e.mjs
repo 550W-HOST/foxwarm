@@ -122,15 +122,23 @@ try {
           output = [call('child-read', 'read', { filePath: 'memory/MEMORY.md' }),
             call('child-write', 'write', { filePath: 'child-work.txt', content: 'BETA-WORK' }),
             call('child-exec', 'exec', { command: 'pwd', timeout: 2 })]
+        } else if (previousCalls.some(item => item.call_id === 'report')) {
+          assert.deepEqual(body.input.filter(item => item.type === 'function_call_output' && ['report', 'child-error'].includes(item.call_id)).map(item => item.call_id), ['report', 'child-error'])
+          output = [text('CHILD-ERROR-HANDLED')]
         } else output = [call('report', 'send_to_session', {
           sessionId: '<parent>', message: 'CHILD-REPORT: BETA-WORK', afterSend: 'finish',
         }), call('child-error', 'nonexistent_tool', {})]
       } else if (latest.includes('ALPHA-SECOND'))
         output = previousCalls.some(item => item.call_id === 'second-pwd') ? [text('SECOND-DONE')] :
           [call('second-pwd', 'exec', { command: 'pwd', timeout: 2 })]
-      else if (latest.includes('ALPHA-SEND-OTHER')) output = [call('other-send', 'send_to_session', {
-        sessionId: betaId, message: 'BETA-NONPARENT', afterSend: 'finish',
-      }), call('other-error', 'nonexistent_tool', {})]
+      else if (latest.includes('ALPHA-SEND-OTHER')) {
+        if (previousCalls.some(item => item.call_id === 'other-send')) {
+          assert.deepEqual(body.input.filter(item => item.type === 'function_call_output' && ['other-send', 'other-error'].includes(item.call_id)).map(item => item.call_id), ['other-send', 'other-error'])
+          output = [text('OTHER-ERROR-HANDLED')]
+        } else output = [call('other-send', 'send_to_session', {
+          sessionId: betaId, message: 'BETA-NONPARENT', afterSend: 'finish',
+        }), call('other-error', 'nonexistent_tool', {})]
+      }
       else if (latest.includes('BETA-NONPARENT')) output = [text('BETA-RECEIVED-NONPARENT')]
       else if (latest.includes('BETA-SAME')) output = [text('BETA-SAME-DONE')]
       else if (latest.includes('BETA-REFRESH')) output = [text('BETA-REFRESH-DONE')]
@@ -268,12 +276,18 @@ try {
   releaseChild()
   await until(async () => (await history(childId)).some(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'report')),
     'child report and error batch')
+  await finished(childId, 'CHILD-ERROR-HANDLED')
+  assert.equal(counts.get(childId), 3, 'Child handles the sibling error without replaying the report')
   assert.equal((await request('GET', `/api/sessions/${encodeURIComponent(parentId)}/state`)).body.session.busy, true)
   assert.equal((await request('GET', `/api/sessions/${encodeURIComponent(parentId)}/state`)).body.session.queueLength, 1)
   assert.equal(counts.get(parentId), 2, 'parent must not start second processor while provider is held')
   const childRows = await history(childId)
   assert(childRows.some(row => row.parts?.some(part => part.functionCall?.id === 'child-error')))
-  assert(childRows.some(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'child-error')))
+  assert(valueOf(childRows, 'child-error').error)
+  assert.equal(valueOf(childRows, 'report').error, undefined)
+  const childPair = childRows.find(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'report'))
+  assert.deepEqual(childPair.parts.map(part => part.functionResponse.tool_use_id), ['report', 'child-error'])
+  for (const id of ['child-read', 'child-write', 'child-exec', 'report', 'child-error']) assert.equal(childRows.flatMap(row => row.parts || []).filter(part => part.functionCall?.id === id).length, 1, id + ' is not replayed')
   assert.equal((await readFile(join(dataRoot, 'agents', 'beta', 'child-work.txt'), 'utf8')), 'BETA-WORK')
   assert.match(valueOf(childRows, 'child-exec').output, /agents\/beta/)
   assert.match(valueOf(childRows, 'child-read').output, /BETA-V1/)
@@ -297,7 +311,7 @@ try {
   releaseParent(); await finished(parentId, 'PARENT-GOT-REPORT')
   assert.equal(counts.get(parentId), 3)
   await until(async () => page.evaluate(id => !document.querySelector(`[data-session-id="${id}"] [data-descendant-activity]`)
-    && !!document.querySelector(`[data-session-id="${id}"]`), parentId), 'child finish removes busy badge')
+    && !!document.querySelector(`[data-session-id="${id}"]`), parentId), 'child error-handling completion removes busy badge')
   assert(outgoing.some(frame => frame.type === 'set-subscriptions' && frame.sessionListActive === true && frame.sessionIds.length > 0))
   assert(incoming.some(frame => frame.type === 'session-list-delta' && frame.sessions.some(row => row.id === parentId)))
   const beforeReconnect = incoming.filter(frame => frame.type === 'subscriptions-applied').length
@@ -328,14 +342,20 @@ try {
   const leaf = requests.filter(item => item.id === childId && item.latest.includes('BETA-LEAF')).at(-1)
   assert(leaf.instructions.includes('<foxwarm-current-model model-id="local-a/one" />'))
   assert(leaf.instructions.includes('BETA-V3') && !leaf.instructions.includes('FRAME-B-ONLY'))
-  // Other-Agent non-parent delivery, plus finish after sibling tool error in the same paired row.
+  // Other-Agent non-parent delivery commits once; its sibling error continues the sender.
   await send(secondId, 'ALPHA-SEND-OTHER')
   await until(async () => (await history(secondId)).some(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'other-error')),
-    'other-Agent sibling error paired after finish')
+    'other-Agent sibling error paired with delivery')
+  await finished(secondId, 'OTHER-ERROR-HANDLED')
+  const otherRows = await history(secondId)
+  const otherPair = otherRows.find(row => row.parts?.some(part => part.functionResponse?.tool_use_id === 'other-send'))
+  assert.deepEqual(otherPair.parts.map(part => part.functionResponse.tool_use_id), ['other-send', 'other-error'])
+  assert.equal(valueOf(otherRows, 'other-send').error, undefined); assert(valueOf(otherRows, 'other-error').error)
+  assert.equal(otherRows.flatMap(row => row.parts || []).filter(part => part.functionCall?.id === 'other-send').length, 1)
   await finished(betaId, 'BETA-RECEIVED-NONPARENT')
   assert.equal((await history(betaId)).flatMap(row => row.parts || []).filter(part => part.system?.includes('BETA-NONPARENT')).length, 1)
-  assert.equal(requests.filter(item => item.id === secondId && item.latest.includes('ALPHA-SEND-OTHER')).length, 1,
-    'finish must not send another provider request')
+  assert.equal(requests.filter(item => item.id === secondId && item.latest.includes('ALPHA-SEND-OTHER')).length, 2,
+    'Sibling error must reach a sender continuation after delivery')
   const archiveRowsFor = id => Number(execFileSync('python3', ['-c',
     'import sqlite3,sys; db=sqlite3.connect(sys.argv[1]); print(db.execute("SELECT COUNT(*) FROM archive_messages WHERE session_id=?", (sys.argv[2],)).fetchone()[0])',
     join(dataRoot, 'state', 'archive-store.sqlite'), id], { encoding: 'utf8' }).trim())

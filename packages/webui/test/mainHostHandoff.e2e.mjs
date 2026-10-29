@@ -43,6 +43,12 @@ const provider = createServer(async (request, output) => {
       assert(input.includes(prefix)); assert(input.includes(placeholder)); assert(input.includes(recallPrefix)); assert(input.includes(recallPlaceholder)); childReports++
       calls = [tool('report-' + key, 'send_to_session', confirmed({ sessionId: '<parent>', message: 'HAND-TASK:result-' + key, afterSend: 'finish' }))]
     }
+    if (key === 'finish-with-error' && !calls) {
+      const ids = ['finish-bad-review', 'finish-valid', 'finish-sibling']
+      const outputs = body.input.filter(item => item.type === 'function_call_output' && ids.includes(item.call_id))
+      assert.deepEqual(outputs.map(item => item.call_id), ids, 'Error handling sees the complete ordered batch')
+      assert(outputs.every(item => item.output), 'Every completed sibling reaches the continuation')
+    }
     output.writeHead(200, { 'content-type': 'text/event-stream' })
     const emit = value => output.write('data: ' + JSON.stringify(value) + '\n\n')
     emit({ type: 'response.created', response: { id: 'handoff-' + requests.length } })
@@ -96,7 +102,13 @@ try {
   assert.equal(fork.promptCacheKey, parent.promptCacheKey); assert.equal(fork.persistentMemorySnapshot, parent.persistentMemorySnapshot); assert(JSON.stringify(fork.history).includes('report-fork-report'))
   for (const id of ['parent_active', 'parent_forked']) { const value = await saved(id); const calls = value.history.flatMap(row => row.parts || []).filter(part => part.functionCall?.name === 'send_to_session'); assert(calls.length); assert(value.history.flatMap(row => row.parts || []).some(part => part.functionResponse?.tool_use_id?.startsWith('report-'))) }
   await run('finish-with-error', [tool('finish-bad-review', 'create_child_session', { suffix: 'finish-bad-review' }), wrapped('finish-valid', 'send_to_session', confirmed({ sessionId: 'recipient', message: 'HAND-TASK:recipient-finish', afterSend: 'finish' })), tool('finish-sibling', 'write', { filePath: 'finish-sibling.txt', content: 'complete batch' })])
-  assert((await response('parent', 'finish-bad-review')).response.error); assert.equal((await response('parent', 'finish-valid')).response.error, undefined); assert.equal(await readFile(join(fixture.work, 'finish-sibling.txt'), 'utf8'), 'complete batch'); assert.equal(countTask('finish-with-error'), 1)
+  assert((await response('parent', 'finish-bad-review')).response.error); assert.equal((await response('parent', 'finish-valid')).response.error, undefined); assert.equal(await readFile(join(fixture.work, 'finish-sibling.txt'), 'utf8'), 'complete batch'); assert.equal(countTask('finish-with-error'), 2)
+  const finishRows = (await history('parent')).messages
+  assert(finishRows.some(row => row.parts?.some(part => part.text === 'DONE-finish-with-error')), 'Sibling error continues the model after successful delivery')
+  for (const id of ['finish-bad-review', 'finish-valid', 'finish-sibling']) assert.equal(finishRows.flatMap(row => row.parts || []).filter(part => part.functionCall?.id === id).length, 1, id + ' is not replayed')
+  await idle('recipient')
+  assert.equal((await history('recipient')).messages.flatMap(row => row.parts || []).filter(part => part.system?.includes('HAND-TASK:recipient-finish')).length, 1)
+  assert.equal(countTask('recipient-finish'), 1)
   const humanPrefix = (await saved('parent')).history
   const humanFork = await fixture.api('POST', route('parent') + '/fork', { suffix: 'human-fork' }); assert.equal(humanFork.status, 200)
   const humanHistory = (await saved('parent_human-fork')).history
