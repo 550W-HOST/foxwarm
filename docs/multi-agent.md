@@ -31,15 +31,17 @@ Foxwarm 把 **agent**、**session**、**child session** 明确区分开来，这
 create_child_session({
   suffix: 'analysis',
   fork: true,
+  handoffRecall: '<briefly consider what to say and which existing rules apply>',
   message: 'Review the latest diff and summarize risks.',
-  confirmation: 'Before performing this inter-agent handoff, have I checked that it is necessary, accurate, self-contained, appropriately scoped, and compliant with the communication rules?\nI checked that this review assignment is necessary, scoped to the latest diff, and contains the context and reporting requirements the child needs.\nI have completed the check, found no issue, and confirm this inter-agent handoff should proceed.'
+  handoffConfirmation: '<briefly and honestly check whether this handoff should proceed>\nI confirm this handoff should proceed.'
 })
 
 create_child_session({
   suffix: 'test',
   fork: true,
+  handoffRecall: '<briefly consider what to say and which existing rules apply>',
   message: 'Run smoke tests in the test environment.',
-  confirmation: 'Before performing this inter-agent handoff, have I checked that it is necessary, accurate, self-contained, appropriately scoped, and compliant with the communication rules?\nI checked that this test assignment is necessary, limited to smoke tests, and gives the child the required environment and reporting context.\nI have completed the check, found no issue, and confirm this inter-agent handoff should proceed.'
+  handoffConfirmation: '<briefly and honestly check whether this handoff should proceed>\nI confirm this handoff should proceed.'
 })
 ```
 
@@ -48,8 +50,9 @@ create_child_session({
 ```ts
 send_to_session({
   sessionId: 'main_analysis',
+  handoffRecall: '<briefly consider what to say and which existing rules apply>',
   message: 'Check README and docs for outdated branding.',
-  confirmation: 'Before performing this inter-agent handoff, have I checked that it is necessary, accurate, self-contained, appropriately scoped, and compliant with the communication rules?\nI checked that this follow-up is necessary, targets the correct existing child, and is scoped to README and documentation branding.\nI have completed the check, found no issue, and confirm this inter-agent handoff should proceed.'
+  handoffConfirmation: '<briefly and honestly check whether this handoff should proceed>\nI confirm this handoff should proceed.'
 })
 ```
 
@@ -67,6 +70,7 @@ send_to_session({
 {
   suffix: string,
   fork?: boolean,
+  handoffRecall?: string,
   message?: string,
   afterSend?: 'continue' | 'finish' | 'wait',
   node?: string,
@@ -74,7 +78,7 @@ send_to_session({
     modelId?: string,
     effort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max',
   },
-  confirmation: string,
+  handoffConfirmation?: string,
 }
 ```
 
@@ -84,30 +88,32 @@ send_to_session({
 - `afterSend` 控制初始消息成功发送后的行为：`continue` 继续当前回合（默认），`finish` 结束并进入 idle，`wait` 结束并等待 child 后续活动；`wait` 需要非空 `message`
 - `node` 可让 child session 绑定到特定 node
 - 只有明确需要覆盖继承/default 行为时才传 `forceModel`；`forceModel: {}` 等同于不覆盖
-- `handoffConfirmation: true` 时，`confirmation` 必须严格使用工具 schema 指定的前缀、你自己写的非空 review、后缀，并且是参数对象的最后一个属性；不要原样复制 placeholder。默认 `false` 时该属性可省略；以上带 confirmation 的示例在两种模式下均可调用
+- Keep handoffRecall before message and handoffConfirmation last. Briefly recall the relevant rules and what to say, then honestly check the handoff. End the confirmation with “I confirm this handoff should proceed.” only if it should proceed; otherwise omit or cancel the call.
 
 ### `send_to_session`
 
 ```ts
 {
   sessionId: string,
+  handoffRecall?: string,
   message: string,
   afterSend?: 'continue' | 'finish' | 'wait',
-  confirmation: string,
+  handoffConfirmation?: string,
 }
 ```
 
 用于跨 session 协作、测试交接、结果回报等。
-`handoffConfirmation: true` 时，`confirmation` 的格式与末位属性要求和 `create_child_session` 相同；默认 `false` 时可省略。
+Keep handoffRecall before message and handoffConfirmation last. Briefly recall the relevant rules and what to say, then honestly check the handoff. End the confirmation with “I confirm this handoff should proceed.” only if it should proceed; otherwise omit or cancel the call.
 
 Child 完成任务并向 Parent 发送最终报告时，应使用 `finish`：
 
 ```ts
 send_to_session({
   sessionId: 'main_analysis',
+  handoffRecall: '<briefly consider what to say and which existing rules apply>',
   message: 'Review complete.',
   afterSend: 'finish',
-  confirmation: 'Before performing this inter-agent handoff, have I checked that it is necessary, accurate, self-contained, appropriately scoped, and compliant with the communication rules?\nI checked that this final report is necessary, accurate, self-contained, directed to the correct parent, and complete for the assigned review.\nI have completed the check, found no issue, and confirm this inter-agent handoff should proceed.',
+  handoffConfirmation: '<briefly and honestly check whether this handoff should proceed>\nI confirm this handoff should proceed.',
 })
 ```
 

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json.Nodes;
 using Foxwarm.Models;
 using Foxwarm.Sessions;
@@ -6,7 +5,7 @@ using Foxwarm.Tools;
 
 namespace Foxwarm.Tests;
 
-public sealed class HandoffConfirmationTests
+public sealed partial class HandoffConfirmationTests
 {
     [Fact]
     public void NoActionSignalUsesAnyTextPartAndAcceptsLegacyAndBracketedMarkers()
@@ -21,11 +20,11 @@ public sealed class HandoffConfirmationTests
 
     private static string Review(
         string middle = "The recipient needs this result to complete the assigned work."
-    ) => HandoffConfirmation.Prefix + middle + HandoffConfirmation.Suffix;
+    ) => middle + "\nI confirm this handoff should proceed.";
 
     private static string Recall(
         string middle = "The recipient needs the applicable rules, request, and bounded scope."
-    ) => HandoffConfirmation.RecallPrefix + middle;
+    ) => middle;
 
     private static JsonObject Args(JsonNode? review) =>
         new()
@@ -36,144 +35,68 @@ public sealed class HandoffConfirmationTests
             ["handoffConfirmation"] = review,
         };
 
-    private static JsonObject SyntheticDefinition =>
-        Obj(
-            """{"name":"send_to_session","description":"Synthetic handoff operation.","parameters":{"type":"object","properties":{"sessionId":{"type":"string"},"message":{"type":"string"},"afterSend":{"type":"string"}},"required":["sessionId","message"]}}"""
-        );
+    [Fact]
+    public void Short_nonprefixed_content_requires_review_and_exact_terminal_consent()
+    {
+        foreach (var review in new[] { Review(), Review("\nOriginal review.\n"), Review(" Original review. ") })
+            HandoffConfirmation.Validate(Args(review));
+        foreach (var invalid in new JsonNode?[]
+        {
+            null, JsonValue.Create(true), JsonValue.Create(1), JsonValue.Create(""),
+            JsonValue.Create("Reviewed, but do not send."),
+            JsonValue.Create("I confirm this handoff should proceed."),
+            JsonValue.Create(Review(" \r\n\ufeff")),
+            JsonValue.Create(Review(HandoffConfirmation.Placeholder)),
+            JsonValue.Create(Review(" \n" + HandoffConfirmation.Placeholder + "\n ")),
+            JsonValue.Create(Review() + "\n"),
+            JsonValue.Create(Review() + " Actually, cancel this handoff."),
+            JsonValue.Create(Review().ToLowerInvariant()),
+            JsonValue.Create("Reviewed. I have completed the check, found no issue, and confirm this inter-agent handoff should proceed.")
+        })
+            Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(Args(invalid)));
+        var missing = Args(Review());
+        missing.Remove("handoffConfirmation");
+        Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(missing));
+        foreach (var recall in new JsonNode?[] { null, JsonValue.Create(true), JsonValue.Create(" \r\n\ufeff"), JsonValue.Create(HandoffConfirmation.RecallPlaceholder) })
+        {
+            var args = Args(Review());
+            args["handoffRecall"] = recall;
+            Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(args));
+        }
+        var wrongOrder = Args(Review());
+        wrongOrder["afterSend"] = "continue";
+        Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(wrongOrder));
+        var lateRecall = new JsonObject
+        {
+            ["sessionId"] = "target", ["message"] = "task", ["handoffRecall"] = Recall(),
+            ["handoffConfirmation"] = Review()
+        };
+        Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(lateRecall));
+    }
 
     [Fact]
-    public async Task Actual_source_protocol_startup_normalizer_schema_order_and_child_instruction_are_preserved()
+    public void Enabled_schemas_require_ordered_review_fields_and_disabled_schemas_omit_them()
     {
-        var args = new JsonArray(
-            Args(null),
-            Args(true),
-            Args(1),
-            Args(""),
-            Args(Review()),
-            Args(Review("\nOriginal review.\n")),
-            Args(Review("\r\nOriginal review.\r\n")),
-            Args(Review(" Original review. ")),
-            Args(Review("")),
-            Args(Review(" \r\n\ufeff")),
-            Args(Review(HandoffConfirmation.Placeholder)),
-            Args(Review(" \n" + HandoffConfirmation.Placeholder + "\n ")),
-            Args(Review("Original review. " + HandoffConfirmation.Placeholder)),
-            Args(" " + Review()),
-            Args(Review() + "\n"),
-            Args(Review().ToLowerInvariant()),
-            Args(Review("\u0085"))
-        );
-        var wrongOrder = Args(Review());
-        wrongOrder["messageAfter"] = "later";
-        args.Add(wrongOrder);
-        var flags = new JsonArray(
-            new JsonObject(),
-            Obj("""{"handoffConfirmation":false}"""),
-            Obj("""{"handoffConfirmation":true}"""),
-            Obj("""{"handoffConfirmation":null}"""),
-            Obj("""{"handoffConfirmation":"true"}"""),
-            Obj("""{"handoffConfirmation":0}"""),
-            Obj("""{"handoffConfirmation":[]}"""),
-            Obj("""{"handoffConfirmation":{}}""")
-        );
-        var input = new JsonObject
-        {
-            ["args"] = args.DeepClone(),
-            ["flags"] = flags.DeepClone(),
-            ["definition"] = SyntheticDefinition,
-        };
-        var repo =
-            Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
-            ?? throw new InvalidOperationException("Owned source fixture root is required.");
-        using var process = Process.Start(
-            new ProcessStartInfo("node")
-            {
-                WorkingDirectory = repo,
-                ArgumentList =
-                {
-                    Path.Combine(
-                        repo,
-                        "dotnet",
-                        "Foxwarm.Tests",
-                        "Fixtures",
-                        "handoff-confirmation-fixture-ts.mjs"
-                    ),
-                },
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            }
-        )!;
-        await process.StandardInput.WriteAsync(input.ToJsonString());
-        process.StandardInput.Close();
-        var output = await process.StandardOutput.ReadToEndAsync();
-        var error = await process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        Assert.True(process.ExitCode == 0, error);
-        var expected = Obj(output);
-        var actualErrors = new JsonArray(
-            args.Select(value =>
-                {
-                    try
-                    {
-                        HandoffConfirmation.Validate(value!.AsObject());
-                        return (JsonNode?)null;
-                    }
-                    catch (InvalidDataException exception)
-                    {
-                        return (JsonNode?)JsonValue.Create(exception.Message);
-                    }
-                })
-                .ToArray()
-        );
-        Assert.True(JsonNode.DeepEquals(expected["validations"], actualErrors));
-        var actualFlags = new JsonArray(
-            flags
-                .Select(value =>
-                {
-                    try
-                    {
-                        return (JsonNode?)
-                            JsonValue.Create(HandoffConfirmation.Enabled(value!.AsObject()));
-                    }
-                    catch (InvalidDataException exception)
-                    {
-                        return new JsonObject { ["error"] = exception.Message };
-                    }
-                })
-                .ToArray()
-        );
-        Assert.True(JsonNode.DeepEquals(expected["flags"], actualFlags));
-        var actualSchemas = new JsonArray();
+        Assert.False(HandoffConfirmation.Enabled(new JsonObject()));
+        foreach (var definition in AgentToolDefinitions.Definitions().Where(item => HandoffConfirmation.Handoff(SessionWait.Text(item["name"]))))
         foreach (var enabled in new[] { false, true })
         {
-            var concrete = HandoffConfirmation.Definition(SyntheticDefinition, enabled);
-            var model = ToolCallControls.ForModel(concrete);
-            JsonObject Shape(JsonObject definition) =>
-                new()
-                {
-                    ["properties"] = new JsonArray(
-                        definition["parameters"]!["properties"]!
-                            .AsObject()
-                            .Select(pair => (JsonNode?)JsonValue.Create(pair.Key))
-                            .ToArray()
-                    ),
-                    ["required"] =
-                        definition["parameters"]!["required"]?.DeepClone() ?? new JsonArray(),
-                };
-            actualSchemas.Add(
-                new JsonObject { ["concrete"] = Shape(concrete), ["model"] = Shape(model) }
-            );
+            var concrete = HandoffConfirmation.Definition(definition, enabled);
+            var properties = concrete["parameters"]!["properties"]!.AsObject();
+            var required = concrete["parameters"]!["required"]!.AsArray().Select(SessionWait.Text).ToArray();
+            Assert.Equal(enabled, properties.ContainsKey("handoffRecall"));
+            Assert.Equal(enabled, properties.ContainsKey("handoffConfirmation"));
+            Assert.Equal(enabled, required.Contains("handoffRecall"));
+            Assert.Equal(enabled, required.Contains("handoffConfirmation"));
+            if (enabled)
+            {
+                var keys = properties.Select(pair => pair.Key).ToArray();
+                Assert.True(Array.IndexOf(keys, "handoffRecall") < Array.IndexOf(keys, "message"));
+                Assert.Equal("handoffConfirmation", keys.Last());
+                var modelKeys = ToolCallControls.ForModel(concrete)["parameters"]!["properties"]!.AsObject().Select(pair => pair.Key).ToArray();
+                Assert.Equal(new[] { "handoffConfirmation", "__cancelTool", "__cancelAllToolsThisTurn" }, modelKeys.TakeLast(3));
+            }
         }
-        Assert.True(JsonNode.DeepEquals(expected["schemas"], actualSchemas));
-        Assert.Equal(
-            expected["instructions"]![0]!.GetValue<string>(),
-            SessionBoundary.Completion("source-parent", false)
-        );
-        Assert.Equal(
-            expected["instructions"]![1]!.GetValue<string>(),
-            SessionBoundary.Completion("source-parent", true)
-        );
     }
 
     [Fact]
@@ -337,7 +260,7 @@ public sealed class HandoffConfirmationTests
                 Assert.Equal(
                     enabled,
                     string.Join('\n', text)
-                        .Contains(HandoffConfirmation.Prefix, StringComparison.Ordinal)
+                        .Contains("handoffRecall", StringComparison.Ordinal)
                 );
             }
         }

@@ -11,7 +11,7 @@ The workflow binds one worker to an already-online remote or sandbox Node. It do
 
 ## Choose the right mechanism
 
-- **Remote execution only:** `create_child_session({"suffix":"worker","node":"node-id","confirmation":"Before performing this inter-agent handoff, have I checked that it is necessary, accurate, self-contained, appropriately scoped, and compliant with the communication rules?\n<replace this with your own non-empty review; do not copy this placeholder verbatim>\nI have completed the check, found no issue, and confirm this inter-agent handoff should proceed."})` sets that session's `currentNode`. When the current tool schema requires `confirmation`, keep it last and replace the placeholder; when the property is absent from the schema, it may be omitted. This does not make the session isolated.
+- **Remote execution only:** `create_child_session({"suffix":"worker","node":"node-id","handoffRecall":"<briefly consider what to say and which existing rules apply>","handoffConfirmation":"<briefly and honestly check whether this handoff should proceed>\nI confirm this handoff should proceed."})` sets that session's `currentNode`. Keep handoffRecall before message and handoffConfirmation last. Briefly recall the relevant rules and what to say, then honestly check the handoff. End the confirmation with “I confirm this handoff should proceed.” only if it should proceed; otherwise omit or cancel the call. When these properties are absent from the schema, they may be omitted. This does not make the session isolated.
 - **Risk containment:** create a separate agent with `isolatedNode`, then create a session under that agent with the current coordinator as its explicit parent.
 - **VM-grade security or exclusivity:** not provided by this workflow. Agent binding does not reserve a Node or provide an OS/network sandbox.
 
@@ -26,6 +26,10 @@ Isolation is agent-level. All sessions belonging to one isolated agent share its
 - `inheritAgent` — optional existing agent whose durable memory should be inherited, using the same no-length-cap safe-name convention. Omit unless needed.
 - `parentSessionId` — optional assertion of the exact current ToolScript owner; normally omit.
 - `dryRun` — defaults to `true`.
+- `handoffRecall` — Put this before message. Briefly consider what to say and which existing rules apply.
+- `handoffConfirmation` — Put this last. Briefly and honestly check whether this handoff should proceed. Only if it should, end with the exact sentence: “I confirm this handoff should proceed.” Otherwise omit or cancel the call.
+
+Supply both handoffRecall and handoffConfirmation for installations that require handoff review; omit both otherwise. The helper forwards your review and does not generate approval. Invalid supplied reviews fail before creation. A missing required review is reported by the send tool through the existing partial-failure path.
 
 ## Bundled ToolScript
 
@@ -71,7 +75,7 @@ The initial message is intentionally more complete than the raw task. It contain
 - a work-only-in-the-assigned-environment constraint;
 - no Node selection/lifecycle or child-session actions;
 - no commit/push/restart/deploy unless the verbatim task explicitly requires that exact action;
-- an exact final-report instruction using `send_to_session({sessionId:"<parent>",message:"...",afterSend:"finish",confirmation:"Before performing this inter-agent handoff, have I checked that it is necessary, accurate, self-contained, appropriately scoped, and compliant with the communication rules?\n<replace this with your own non-empty review; do not copy this placeholder verbatim>\nI have completed the check, found no issue, and confirm this inter-agent handoff should proceed."})`, with `confirmation` last;
+- an exact final-report instruction using `send_to_session({sessionId:"<parent>",handoffRecall:"<briefly consider what to say and which existing rules apply>",message:"...",afterSend:"finish",handoffConfirmation:"<briefly and honestly check whether this handoff should proceed>\nI confirm this handoff should proceed."})`, with `handoffConfirmation` last;
 - required report fields: changed files/diff, validation, blockers, unresolved questions, and remaining working-tree changes, without assuming a commit exists.
 
 Do not add parent-only scheduling, autonomy, phase progression, or “ask the user” instructions to the worker brief.

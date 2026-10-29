@@ -18,8 +18,9 @@ def load_main(tool_mock):
 
 class ToolMock:
     def __init__(self, fail_stage=None, leave_agent_on_create_failure=False,
-                 isolated_coordinator=False, listing_override=None, extra_agents=None):
+                 isolated_coordinator=False, listing_override=None, extra_agents=None, require_handoff=False):
         self.calls = []
+        self.require_handoff = require_handoff
         self.fail_stage = fail_stage
         self.leave_agent_on_create_failure = leave_agent_on_create_failure
         self.isolated_coordinator = isolated_coordinator
@@ -65,6 +66,8 @@ class ToolMock:
                 raise RuntimeError("create session failed")
             return 'Session "tmp-worker-1/task" created'
         if tool_id == "builtin:send_to_session":
+            if self.require_handoff and ("handoffRecall" not in args or "handoffConfirmation" not in args):
+                raise RuntimeError("Inter-agent handoff review is required")
             if self.fail_stage == "send_task":
                 raise RuntimeError("send failed")
             return "Message sent"
@@ -202,6 +205,68 @@ class CreateIsolatedWorkerTests(unittest.TestCase):
         self.assertIn(args["task"], result["plan"]["handoff"]["message"])
         self.assertEqual(result["plan"]["worker"]["parentSessionId"], "main")
         self.assertEqual(result["plan"]["worker"]["isolatedNode"], "worker-node-1")
+
+    def test_optional_review_is_forwarded_unchanged_in_send_argument_order(self):
+        mock = ToolMock()
+        args = self.existing_args(False)
+        args["handoffRecall"] = "  The worker needs the assigned Node and verbatim task.  "
+        args["handoffConfirmation"] = "The scoped assignment is needed.\nI confirm this handoff should proceed."
+        result = load_main(mock)(args)
+        self.assertEqual(result["status"], "completed")
+        tool, sent = mock.calls[-1]
+        self.assertEqual(tool, "builtin:send_to_session")
+        self.assertEqual(list(sent), ["sessionId", "handoffRecall", "message", "handoffConfirmation"])
+        self.assertEqual(sent["handoffRecall"], args["handoffRecall"])
+        self.assertEqual(sent["handoffConfirmation"], args["handoffConfirmation"])
+        self.assertNotIn("confirmation", sent)
+        self.assertIn(args["task"], sent["message"])
+        self.assertNotIn(args["handoffRecall"], sent["message"])
+        self.assertNotIn(args["handoffConfirmation"], sent["message"])
+
+    def test_invalid_supplied_review_fails_before_any_creation(self):
+        valid = {
+            "handoffRecall": "The worker needs the task and environment.",
+            "handoffConfirmation": "The assignment is useful. I confirm this handoff should proceed.",
+        }
+        invalid = [
+            {"handoffRecall": valid["handoffRecall"]},
+            {"handoffConfirmation": valid["handoffConfirmation"]},
+            {**valid, "handoffRecall": " "},
+            {**valid, "handoffRecall": True},
+            {**valid, "handoffRecall": " \ufeff "},
+            {**valid, "handoffRecall": "<briefly consider what to say and which existing rules apply>"},
+            {**valid, "handoffConfirmation": None},
+            {**valid, "handoffConfirmation": "Reviewed but blocked."},
+            {**valid, "handoffConfirmation": "I confirm this handoff should proceed."},
+            {**valid, "handoffConfirmation": " \ufeff I confirm this handoff should proceed."},
+            {**valid, "handoffConfirmation": "<briefly and honestly check whether this handoff should proceed>\nI confirm this handoff should proceed."},
+            {**valid, "handoffConfirmation": valid["handoffConfirmation"] + " Cancel."},
+            {**valid, "handoffConfirmation": valid["handoffConfirmation"] + "\n"},
+            {**valid, "handoffConfirmation": "Reviewed. I have completed the check, found no issue, and confirm this inter-agent handoff should proceed."},
+        ]
+        for review in invalid:
+            with self.subTest(review=review):
+                mock = ToolMock()
+                with self.assertRaises(ValueError):
+                    load_main(mock)({**self.existing_args(False), **review})
+                self.assertEqual(mock.calls, [])
+
+    def test_no_review_apply_retains_plain_send_and_send_rejection_reports_resources(self):
+        for fail_stage in [None, "send_task"]:
+            with self.subTest(fail_stage=fail_stage):
+                mock = ToolMock(require_handoff=fail_stage is not None)
+                result = load_main(mock)(self.existing_args(False))
+                self.assertEqual(list(mock.calls[-1][1]), ["sessionId", "message"])
+                if fail_stage:
+                    self.assertEqual(result["status"], "partial_failure")
+                    self.assertEqual(result["failedStage"], "send_task")
+                    self.assertIn("handoff review is required", result["error"])
+                    self.assertEqual(result["completedStages"], ["create_agent", "create_session"])
+                    self.assertEqual(result["survivingResources"], {
+                        "nodeId": "worker-node-1", "agentName": "tmp-worker-1", "sessionId": "tmp-worker-1/task",
+                    })
+                else:
+                    self.assertEqual(result["status"], "completed")
 
     def test_existing_node_partial_failures_report_only_created_resources(self):
         for stage, leaves_agent, completed, resources in [

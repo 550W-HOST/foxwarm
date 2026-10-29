@@ -813,12 +813,10 @@ public sealed class ToolScriptTimerTests
         {
             ["sessionId"] = ownerId,
             ["handoffRecall"] =
-                HandoffConfirmation.RecallPrefix
-                + "\nThe requested monitor reports an actionable condition to its owner.",
+                "The requested monitor reports an actionable condition to its owner.",
             ["message"] = "condition reached",
             ["handoffConfirmation"] =
-                HandoffConfirmation.Prefix
-                + "\nThis notification reports the requested condition, not an acknowledgement.\n"
+                "This notification reports the requested condition, not an acknowledgement.\n"
                 + HandoffConfirmation.Suffix,
         };
         var done = await Call(

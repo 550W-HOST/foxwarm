@@ -344,9 +344,7 @@ internal static class AgentToolDefinitions
                         ["displayName"] = String(
                             "Display name for the new child session. This does not change its session ID."
                         ),
-                        ["handoffRecall"] = String(
-                            "Put handoffRecall before message. Start with the exact opening sentence required for a handoff, then write the actual applicable communication rules, the user's request, and the scope this child needs."
-                        ),
+                        ["handoffRecall"] = String(HandoffConfirmation.RecallDescription),
                         ["message"] = String(
                             "Optional initial instruction. With taskId, add only information not already in the task; it is delivered with the assignment."
                         ),
@@ -360,9 +358,7 @@ internal static class AgentToolDefinitions
                             "Node for the new child session. Omit to inherit the parent's current Node. An isolated target agent uses its bound Node."
                         ),
                         ["forceModel"] = ForceModel(),
-                        ["handoffConfirmation"] = String(
-                            "Put handoffConfirmation last. Use the exact required opening and closing sentences with your own specific review."
-                        ),
+                        ["handoffConfirmation"] = String(HandoffConfirmation.Description),
                     },
                     "suffix"
                 )
@@ -376,9 +372,7 @@ internal static class AgentToolDefinitions
                         ["sessionId"] = String(
                             "Target Session ID. <main> selects this agent's main session; <parent> selects this session's direct parent and requires one to exist. Access is subject to session permissions."
                         ),
-                        ["handoffRecall"] = String(
-                            "Put handoffRecall before message. Start with the exact opening sentence required for a handoff, then write the actual applicable communication rules, the user's request, and the scope this recipient needs."
-                        ),
+                        ["handoffRecall"] = String(HandoffConfirmation.RecallDescription),
                         ["message"] = String("Message to deliver."),
                         ["afterSend"] = Choice(
                             "What this session does after successful delivery: continue (default), finish the turn without waiting, or wait for a response. Other incoming activity can also resume a waiting session. If any tool in the same batch returns an error, the session continues instead of waiting or finishing.",
@@ -386,9 +380,7 @@ internal static class AgentToolDefinitions
                             "finish",
                             "wait"
                         ),
-                        ["handoffConfirmation"] = String(
-                            "Put handoffConfirmation last. Use the exact required opening and closing sentences with your own specific review."
-                        ),
+                        ["handoffConfirmation"] = String(HandoffConfirmation.Description),
                     },
                     "sessionId",
                     "message"

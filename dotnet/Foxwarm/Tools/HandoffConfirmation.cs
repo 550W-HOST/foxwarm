@@ -5,28 +5,16 @@ namespace Foxwarm.Tools;
 
 internal static class HandoffConfirmation
 {
-    internal const string RecallPrefix =
-        "Before composing this inter-agent handoff, have I recalled the applicable communication rules, the user's actual request, and the scope this recipient needs?";
     internal const string RecallPlaceholder =
-        "<write the actual applicable rules, request, and recipient scope recalled for this handoff>";
-    internal const string Prefix =
-        "Before sending this inter-agent handoff, have I honestly checked that it is necessary, actionable, and not merely acknowledgement, duplication, or inherited-rule repetition; if I found that it should not be sent, did I omit or cancel it instead?";
-    internal const string Placeholder = "<write the specific honest review for this handoff>";
-    internal const string Suffix =
-        "I have completed the check, found no issue, and confirm this inter-agent handoff should proceed.";
+        "<briefly consider what to say and which existing rules apply>";
+    internal const string Placeholder =
+        "<briefly and honestly check whether this handoff should proceed>";
+    internal const string Suffix = "I confirm this handoff should proceed.";
     internal const string ErrorCode = "invalid_inter_agent_handoff_confirmation";
-    private const string RecallDescription =
-        "Put handoffRecall before message. Start with the exact opening sentence below, then write the actual applicable communication rules, the user's actual request, and the scope this recipient needs. Replace the placeholder with this handoff's own recalled context.\n\n"
-        + RecallPrefix
-        + "\n"
-        + RecallPlaceholder;
-    private const string Description =
-        "Put handoffConfirmation last in the arguments. Write an honest review of the proposed handoff using the exact opening and closing sentences below. Replace the placeholder with your own specific review. If the handoff should not proceed, omit it or cancel with __cancelTool=true instead of approving it to satisfy the check.\n\nFor a handoff that should proceed, use: "
-        + Prefix
-        + "\n"
-        + Placeholder
-        + "\n"
-        + Suffix;
+    internal const string RecallDescription =
+        "Put this before message. Briefly consider what to say and which existing rules apply.";
+    internal const string Description =
+        "Put this last. Briefly and honestly check whether this handoff should proceed. Only if it should, end with the exact sentence: “I confirm this handoff should proceed.” Otherwise omit or cancel the call.";
 
     internal static bool Enabled(JsonObject app)
     {
@@ -102,25 +90,20 @@ internal static class HandoffConfirmation
     internal static void Validate(JsonObject args)
     {
         var recall = SessionWait.Text(args["handoffRecall"]);
-        if (recall is null || !recall.StartsWith(RecallPrefix, StringComparison.Ordinal))
-            throw new InvalidDataException(
-                "Inter-agent handoff recall must start with the exact required opening sentence and include the applicable recalled context."
-            );
-        var recalled = SessionGoal.Trim(recall[RecallPrefix.Length..]);
+        var recalled = SessionGoal.Trim(recall ?? "");
         if (recalled.Length == 0 || recalled == RecallPlaceholder)
             throw new InvalidDataException(
-                "Inter-agent handoff recall must include the caller's actual recalled context instead of the documented placeholder."
+                "Inter-agent handoff recall must include the caller's recalled context instead of an empty value or the documented placeholder."
             );
         var text = SessionWait.Text(args["handoffConfirmation"]);
         if (
             text is null
-            || !text.StartsWith(Prefix, StringComparison.Ordinal)
             || !text.EndsWith(Suffix, StringComparison.Ordinal)
         )
             throw new InvalidDataException(
-                "Inter-agent handoff confirmation must contain the exact required prefix and suffix separated by a non-empty review."
+                "Inter-agent handoff confirmation must end with the exact sentence: “I confirm this handoff should proceed.”"
             );
-        var review = SessionGoal.Trim(text[Prefix.Length..^Suffix.Length]);
+        var review = SessionGoal.Trim(text[..^Suffix.Length]);
         if (review.Length == 0)
             throw new InvalidDataException(
                 "Inter-agent handoff confirmation review must be non-empty."
@@ -149,8 +132,8 @@ internal static class HandoffConfirmation
     }
 
     internal static string GuidanceArgument(string parentSessionId) =>
-        $"handoffRecall: \"{RecallPrefix}\\n{RecallPlaceholder}\", sessionId: `{parentSessionId}`, message: \"...\", afterSend: \"finish\", handoffConfirmation: \"{Prefix}\\n{Placeholder}\\n{Suffix}\"";
+        $"handoffRecall: \"{RecallPlaceholder}\", sessionId: `{parentSessionId}`, message: \"...\", afterSend: \"finish\", handoffConfirmation: \"{Placeholder}\\n{Suffix}\"";
 
     internal const string Guidance =
-        " The recall must be before message and both review fields must use this handoff's own content; handoffConfirmation must be the final argument property. If the handoff should not be sent, omit it or cancel it instead of adding approval text.";
+        " Keep handoffRecall before message and handoffConfirmation last. Briefly recall the relevant rules and what to say, then honestly check the handoff. End the confirmation with “I confirm this handoff should proceed.” only if it should proceed; otherwise omit or cancel the call.";
 }

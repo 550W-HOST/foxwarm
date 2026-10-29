@@ -132,7 +132,7 @@ That means:
 Node selection and isolation are also separate:
 
 - a session's `currentNode` selects where ordinary runtime tools execute
-- `create_child_session({ suffix: "worker", node: "node-id", confirmation: "Before performing this inter-agent handoff, have I checked that it is necessary, accurate, self-contained, appropriately scoped, and compliant with the communication rules?\n<replace this with your own non-empty review; do not copy this placeholder verbatim>\nI have completed the check, found no issue, and confirm this inter-agent handoff should proceed." })` sets `currentNode` but does not make the child isolated. Keep and complete `confirmation` only when the current tool schema requires it; otherwise it may be omitted
+- `create_child_session({ suffix: "worker", node: "node-id", handoffRecall: "<briefly consider what to say and which existing rules apply>", handoffConfirmation: "<briefly and honestly check whether this handoff should proceed>\nI confirm this handoff should proceed." })` sets `currentNode` but does not make the child isolated. Keep handoffRecall before message and handoffConfirmation last. Briefly recall the relevant rules and what to say, then honestly check the handoff. End the confirmation with “I confirm this handoff should proceed.” only if it should proceed; otherwise omit or cancel the call.
 - isolation is agent-level; an isolated agent binds all of its sessions to one non-master node and narrows their permissions
 
 If different workers need different real isolation boundaries, use different

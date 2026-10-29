@@ -3,13 +3,25 @@ import re
 
 _NODE_ID_RE = r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}"
 _SAFE_NAME_RE = r"[A-Za-z0-9_-]+"
-_HANDOFF_CONFIRMATION_PREFIX = "Before performing this inter-agent handoff, have I checked that it is necessary, accurate, self-contained, appropriately scoped, and compliant with the communication rules?"
-_HANDOFF_REVIEW_PLACEHOLDER = "<replace this with your own non-empty review; do not copy this placeholder verbatim>"
-_HANDOFF_CONFIRMATION_SUFFIX = "I have completed the check, found no issue, and confirm this inter-agent handoff should proceed."
+_HANDOFF_RECALL_PLACEHOLDER = "<briefly consider what to say and which existing rules apply>"
+_HANDOFF_REVIEW_PLACEHOLDER = "<briefly and honestly check whether this handoff should proceed>"
+_HANDOFF_CONFIRMATION_SUFFIX = "I confirm this handoff should proceed."
+_REVIEW_WHITESPACE = "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
 
 
-def _handoff_confirmation(review):
-    return f"{_HANDOFF_CONFIRMATION_PREFIX}\n{review}\n{_HANDOFF_CONFIRMATION_SUFFIX}"
+def _handoff_review(args):
+    if "handoffRecall" not in args and "handoffConfirmation" not in args:
+        return None
+    recall = args.get("handoffRecall")
+    confirmation = args.get("handoffConfirmation")
+    if not isinstance(recall, str) or not recall.strip(_REVIEW_WHITESPACE) or recall.strip(_REVIEW_WHITESPACE) == _HANDOFF_RECALL_PLACEHOLDER:
+        raise ValueError("handoffRecall must contain recalled context")
+    if not isinstance(confirmation, str) or not confirmation.endswith(_HANDOFF_CONFIRMATION_SUFFIX):
+        raise ValueError("handoffConfirmation must end with I confirm this handoff should proceed.")
+    review = confirmation[:-len(_HANDOFF_CONFIRMATION_SUFFIX)].strip(_REVIEW_WHITESPACE)
+    if not review or review == _HANDOFF_REVIEW_PLACEHOLDER:
+        raise ValueError("handoffConfirmation must contain a non-empty review before the terminal sentence")
+    return recall, confirmation
 
 
 def _required_text(args, key):
@@ -150,12 +162,13 @@ def _handoff_message(node_id, task):
     lines.extend([
         "",
         "When finished, report exactly to the parent with:",
-        'send_to_session({sessionId: "<parent>", message: "...", afterSend: "finish", confirmation: "'
-        + _HANDOFF_CONFIRMATION_PREFIX
-        + '\\n' + _HANDOFF_REVIEW_PLACEHOLDER + '\\n'
+        'send_to_session({sessionId: "<parent>", handoffRecall: "'
+        + _HANDOFF_RECALL_PLACEHOLDER
+        + '", message: "...", afterSend: "finish", handoffConfirmation: "'
+        + _HANDOFF_REVIEW_PLACEHOLDER + '\\n'
         + _HANDOFF_CONFIRMATION_SUFFIX
         + '"})',
-        "When the current tool schema requires confirmation, it must be the final argument property; replace the placeholder with your own review and do not copy it verbatim. When the schema omits confirmation, the property may be omitted; the shown form remains accepted in both modes.",
+        "Keep handoffRecall before message and handoffConfirmation last. Briefly recall the relevant rules and what to say, then honestly check the handoff. End the confirmation with “I confirm this handoff should proceed.” only if it should proceed; otherwise omit or cancel the call.",
         "The report must include changed files and a diff summary, validation commands/results, blockers or unresolved questions, and whether working-tree changes remain. Do not assume or claim that a commit exists.",
     ])
     return "\n".join(lines)
@@ -189,6 +202,8 @@ def main(args):
     dry_run = args.get("dryRun", True)
     if not isinstance(dry_run, bool):
         raise ValueError("dryRun must be true or false")
+
+    handoff_review = _handoff_review(args)
 
     status = call_tool({"toolId": "builtin:session", "args": {}})
     if not isinstance(status, str):
@@ -313,13 +328,13 @@ def main(args):
         }
 
     try:
-        send_confirmation = _handoff_confirmation(
-            "I checked that this isolated-worker assignment is necessary, accurately targets the created session, contains the complete scoped brief, and follows the parent-child communication rules."
-        )
-        call_tool({
-            "toolId": "builtin:send_to_session",
-            "args": {"sessionId": session_id, "message": handoff, "confirmation": send_confirmation},
-        })
+        send_args = {"sessionId": session_id}
+        if handoff_review is not None:
+            send_args["handoffRecall"] = handoff_review[0]
+        send_args["message"] = handoff
+        if handoff_review is not None:
+            send_args["handoffConfirmation"] = handoff_review[1]
+        call_tool({"toolId": "builtin:send_to_session", "args": send_args})
         completed.append("send_to_session")
     except Exception as error:
         return {
