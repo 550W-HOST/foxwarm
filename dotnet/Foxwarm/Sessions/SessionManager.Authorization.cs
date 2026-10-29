@@ -295,7 +295,10 @@ internal sealed partial class SessionManager
                     "read",
                     "node",
                     "read",
-                    new JsonObject { ["filePath"] = memory.ResolveSelectedPath(targetAgent, reference) }
+                    new JsonObject
+                    {
+                        ["filePath"] = memory.ResolveSelectedPath(targetAgent, reference),
+                    }
                 ),
                 files,
                 token
