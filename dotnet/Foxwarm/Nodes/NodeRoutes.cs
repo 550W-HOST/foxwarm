@@ -174,7 +174,10 @@ internal static class NodeRoutes
             "/api/nodes/{nodeId}/parent",
             (body, context) =>
             {
-                hub.Registry.SetParent(context.Request.RouteValues["nodeId"]!.ToString()!, Text(body, "parentNode"));
+                hub.Registry.SetParent(
+                    context.Request.RouteValues["nodeId"]!.ToString()!,
+                    Text(body, "parentNode")
+                );
                 return Task.FromResult(new JsonObject { ["success"] = true });
             }
         );

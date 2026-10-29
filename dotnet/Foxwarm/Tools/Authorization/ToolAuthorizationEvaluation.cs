@@ -507,13 +507,24 @@ internal static class ToolAuthorizationNodeEffects
             };
             return endpoints.All(Valid) ? endpoints.Select(value => value!).ToArray() : null;
         }
-        if (name == "node_create_auth_token" && SessionWait.Text(args["parentNode"]) is string parent && Valid(parent))
+        if (
+            name == "node_create_auth_token"
+            && SessionWait.Text(args["parentNode"]) is string parent
+            && Valid(parent)
+        )
             return [parent];
-        if (name == "node_remove" && SessionWait.Text(args["nodeId"])?.Trim() is string removed && Valid(removed))
+        if (
+            name == "node_remove"
+            && SessionWait.Text(args["nodeId"])?.Trim() is string removed
+            && Valid(removed)
+        )
             return [removed];
         if (
             name == "node"
-            && SessionWait.Text(args["action"])?.Trim().ToLowerInvariant() is "select" or "inspect" or "destroy"
+            && SessionWait.Text(args["action"])?.Trim().ToLowerInvariant()
+                is "select"
+                    or "inspect"
+                    or "destroy"
             && !args.ContainsKey("providerId")
             && SessionWait.Text(args["nodeId"])?.Trim() is string node
             && Valid(node)

@@ -14,11 +14,13 @@ internal sealed partial class ApprovedNodeRegistry
     internal sealed class Mutation(ApprovedNodeRegistry owner) : IDisposable
     {
         private ApprovedNodeRegistry? current = owner;
+
         internal void Require(ApprovedNodeRegistry expected)
         {
             if (!ReferenceEquals(current, expected))
                 throw new InvalidOperationException("Node mutation scope is no longer active.");
         }
+
         public void Dispose() => Interlocked.Exchange(ref current, null)?.mutations.Release();
     }
 
@@ -36,9 +38,11 @@ internal sealed partial class ApprovedNodeRegistry
 
     private Mutation? TryBeginMutation() => mutations.Wait(0) ? new(this) : null;
 
-    internal void ConfigureLimits(Func<(int MaxDepth, int MaxChildren)> limits) => treeLimits = limits;
+    internal void ConfigureLimits(Func<(int MaxDepth, int MaxChildren)> limits) =>
+        treeLimits = limits;
 
-    private static JsonObject ProviderNodes(JsonObject document) => document["providerNodes"]!.AsObject();
+    private static JsonObject ProviderNodes(JsonObject document) =>
+        document["providerNodes"]!.AsObject();
 
     private static Dictionary<string, string?> Parents(JsonObject document)
     {
@@ -48,7 +52,10 @@ internal sealed partial class ApprovedNodeRegistry
             if (record is not JsonObject value)
                 throw new InvalidDataException("Invalid Node authorization record: " + id);
             var parent = SessionWait.Text(value["parentNode"]);
-            if (value["parentNode"] is not null && (parent is null || parent.Length == 0 || parent != parent.Trim()))
+            if (
+                value["parentNode"] is not null
+                && (parent is null || parent.Length == 0 || parent != parent.Trim())
+            )
                 throw new InvalidDataException("Invalid Node authorization parent: " + id);
             if (parent is not null)
                 NodeProviderRegistry.ValidateId(parent);
@@ -64,7 +71,8 @@ internal sealed partial class ApprovedNodeRegistry
     }
 
     private static bool Reserved(JsonObject document, string id) =>
-        Parents(document).ContainsKey(id) || Parents(document).Values.Contains(id, StringComparer.Ordinal);
+        Parents(document).ContainsKey(id)
+        || Parents(document).Values.Contains(id, StringComparer.Ordinal);
 
     private static void RequireFresh(JsonObject document, string id)
     {
@@ -78,7 +86,12 @@ internal sealed partial class ApprovedNodeRegistry
             throw new InvalidDataException("Node has descendants.");
     }
 
-    private void RequireAdmission(JsonObject document, string id, string? parent, bool changed = false)
+    private void RequireAdmission(
+        JsonObject document,
+        string id,
+        string? parent,
+        bool changed = false
+    )
     {
         var parents = Parents(document);
         if (parent is not null)
@@ -86,8 +99,13 @@ internal sealed partial class ApprovedNodeRegistry
             NodeProviderRegistry.ValidateId(parent);
             if (!parents.ContainsKey(parent))
                 throw new InvalidDataException("Authorization parent Node not found: " + parent);
-            if (Pending(document).Any(pair => SessionWait.Text(pair.Value?["approvedNodeId"]) == parent))
-                throw new InvalidDataException("An unclaimed pairing cannot be an authorization parent.");
+            if (
+                Pending(document)
+                    .Any(pair => SessionWait.Text(pair.Value?["approvedNodeId"]) == parent)
+            )
+                throw new InvalidDataException(
+                    "An unclaimed pairing cannot be an authorization parent."
+                );
         }
         var oldParent = parents.GetValueOrDefault(id);
         var existing = parents.ContainsKey(id);
@@ -121,10 +139,13 @@ internal sealed partial class ApprovedNodeRegistry
     {
         NodeProviderRegistry.ValidateId(id);
         if (id == "master" || id.Contains('/'))
-            throw new InvalidDataException("Native administration changes approved Nodes only; provider parents use configuration.");
+            throw new InvalidDataException(
+                "Native administration changes approved Nodes only; provider parents use configuration."
+            );
         Change(next =>
         {
-            var record = Approved(next)[id] as JsonObject
+            var record =
+                Approved(next)[id] as JsonObject
                 ?? throw new InvalidDataException("Approved Node not found.");
             RequireAdmission(next, id, parent);
             record["parentNode"] = parent;
@@ -136,7 +157,10 @@ internal sealed partial class ApprovedNodeRegistry
     internal void ConfigureProviders(JsonObject? configuration)
     {
         var parents = (configuration ?? new()).ToDictionary(
-            pair => pair.Key, pair => SessionWait.Text(pair.Value?["parentNode"]), StringComparer.Ordinal);
+            pair => pair.Key,
+            pair => SessionWait.Text(pair.Value?["parentNode"]),
+            StringComparer.Ordinal
+        );
         using var mutation = BeginMutation();
         lock (gate)
         {
@@ -145,7 +169,10 @@ internal sealed partial class ApprovedNodeRegistry
             foreach (var (id, raw) in ProviderNodes(next).ToArray())
             {
                 var provider = SessionWait.Text(raw?["provider"])!;
-                if (parents.TryGetValue(provider, out var parent) && SessionWait.Text(raw?["parentNode"]) != parent)
+                if (
+                    parents.TryGetValue(provider, out var parent)
+                    && SessionWait.Text(raw?["parentNode"]) != parent
+                )
                 {
                     raw!["parentNode"] = parent;
                     changed.Add(id);
@@ -153,13 +180,21 @@ internal sealed partial class ApprovedNodeRegistry
             }
             PruneAbsent(next, id => !parents.ContainsKey(id[..id.IndexOf('/')]));
             foreach (var id in changed.Where(id => ProviderNodes(next).ContainsKey(id)))
-                RequireAdmission(next, id, SessionWait.Text(ProviderNodes(next)[id]?["parentNode"]), changed: true);
+                RequireAdmission(
+                    next,
+                    id,
+                    SessionWait.Text(ProviderNodes(next)[id]?["parentNode"]),
+                    changed: true
+                );
             if (!JsonNode.DeepEquals(next, data))
-                Change(document =>
-                {
-                    document["providerNodes"] = next["providerNodes"]!.DeepClone();
-                    return true;
-                }, mutation);
+                Change(
+                    document =>
+                    {
+                        document["providerNodes"] = next["providerNodes"]!.DeepClone();
+                        return true;
+                    },
+                    mutation
+                );
         }
         providerParents = parents;
     }
@@ -190,7 +225,10 @@ internal sealed partial class ApprovedNodeRegistry
         {
             var next = (JsonObject)data.DeepClone();
             var records = ProviderNodes(next);
-            var seen = descriptors.OfType<JsonObject>().Select(value => SessionWait.Text(value["id"])!).ToHashSet(StringComparer.Ordinal);
+            var seen = descriptors
+                .OfType<JsonObject>()
+                .Select(value => SessionWait.Text(value["id"])!)
+                .ToHashSet(StringComparer.Ordinal);
             foreach (var descriptor in descriptors.OfType<JsonObject>())
             {
                 var id = SessionWait.Text(descriptor["id"])!;
@@ -199,44 +237,67 @@ internal sealed partial class ApprovedNodeRegistry
                     RequireFresh(next, id);
                     var parent = providerParents.GetValueOrDefault(provider);
                     RequireAdmission(next, id, parent);
-                    records[id] = new JsonObject { ["nodeId"] = id, ["provider"] = provider, ["parentNode"] = parent };
+                    records[id] = new JsonObject
+                    {
+                        ["nodeId"] = id,
+                        ["provider"] = provider,
+                        ["parentNode"] = parent,
+                    };
                 }
                 records[id]!["descriptor"] = descriptor.DeepClone();
             }
-            PruneAbsent(next, id => id.StartsWith(provider + "/", StringComparison.Ordinal) && !seen.Contains(id));
+            PruneAbsent(
+                next,
+                id => id.StartsWith(provider + "/", StringComparison.Ordinal) && !seen.Contains(id)
+            );
             if (!JsonNode.DeepEquals(next, data))
-                Change(document =>
-                {
-                    document["providerNodes"] = next["providerNodes"]!.DeepClone();
-                    return true;
-                }, scope);
+                Change(
+                    document =>
+                    {
+                        document["providerNodes"] = next["providerNodes"]!.DeepClone();
+                        return true;
+                    },
+                    scope
+                );
         }
     }
 
     internal void RecordProviderNode(string provider, JsonObject descriptor, Mutation mutation)
     {
         mutation.Require(this);
-        Change(next =>
-        {
-            var id = SessionWait.Text(descriptor["id"])!;
-            if (!ProviderNodes(next).ContainsKey(id))
+        Change(
+            next =>
             {
-                RequireFresh(next, id);
-                var parent = providerParents.GetValueOrDefault(provider);
-                RequireAdmission(next, id, parent);
-                ProviderNodes(next)[id] = new JsonObject { ["nodeId"] = id, ["provider"] = provider, ["parentNode"] = parent };
-            }
-            ProviderNodes(next)[id]!["descriptor"] = descriptor.DeepClone();
-            return true;
-        }, mutation);
+                var id = SessionWait.Text(descriptor["id"])!;
+                if (!ProviderNodes(next).ContainsKey(id))
+                {
+                    RequireFresh(next, id);
+                    var parent = providerParents.GetValueOrDefault(provider);
+                    RequireAdmission(next, id, parent);
+                    ProviderNodes(next)[id] = new JsonObject
+                    {
+                        ["nodeId"] = id,
+                        ["provider"] = provider,
+                        ["parentNode"] = parent,
+                    };
+                }
+                ProviderNodes(next)[id]!["descriptor"] = descriptor.DeepClone();
+                return true;
+            },
+            mutation
+        );
     }
 
-    internal void RemoveProviderNode(string id, Mutation mutation) => Change(next =>
-    {
-        RequireNoChildren(next, id);
-        ProviderNodes(next).Remove(id);
-        return true;
-    }, mutation);
+    internal void RemoveProviderNode(string id, Mutation mutation) =>
+        Change(
+            next =>
+            {
+                RequireNoChildren(next, id);
+                ProviderNodes(next).Remove(id);
+                return true;
+            },
+            mutation
+        );
 
     internal JsonArray ProviderRecords()
     {
@@ -249,7 +310,9 @@ internal sealed partial class ApprovedNodeRegistry
 internal sealed class NodeAuthorizationForest(IReadOnlyDictionary<string, string?> parents)
 {
     internal IEnumerable<string> Ids => parents.Keys;
+
     internal bool Contains(string id) => parents.ContainsKey(id);
+
     internal string? Parent(string id) => parents.GetValueOrDefault(id);
 
     internal IReadOnlyList<string> Chain(string id)
@@ -262,7 +325,9 @@ internal sealed class NodeAuthorizationForest(IReadOnlyDictionary<string, string
             if (!seen.Add(current))
                 throw new InvalidDataException("Node authorization ancestry contains a cycle.");
             if (!parents.TryGetValue(current, out var parent))
-                throw new InvalidDataException("Node authorization ancestor is missing: " + current);
+                throw new InvalidDataException(
+                    "Node authorization ancestor is missing: " + current
+                );
             result.Add(current);
             if (parent is null)
                 return result;

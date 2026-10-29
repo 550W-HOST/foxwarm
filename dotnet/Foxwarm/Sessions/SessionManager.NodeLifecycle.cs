@@ -122,7 +122,9 @@ internal sealed partial class SessionManager
                     );
             }
             if (action == "ensure" && nodeId is null && agents.CreatedBy(owner.Agent) is not null)
-                throw new ToolAuthorizationDeniedException("Callers in a delegated Agent must supply ensure.nodeId before provider effects.");
+                throw new ToolAuthorizationDeniedException(
+                    "Callers in a delegated Agent must supply ensure.nodeId before provider effects."
+                );
             if (action == "create")
                 RequireNodeCreationParent(owner, NodeProviders.ProviderParent(providerId));
             resultValue = await NodeProviders.LifecycleAsync(
@@ -137,8 +139,13 @@ internal sealed partial class SessionManager
                 {
                     if (!existing)
                         RequireNodeCreationParent(owner, target);
-                    await AuthorizeToolAsync(owner, new("node", "builtin", "node", args), null, token,
-                        nodeEffects: target is null ? [] : [target]);
+                    await AuthorizeToolAsync(
+                        owner,
+                        new("node", "builtin", "node", args),
+                        null,
+                        token,
+                        nodeEffects: target is null ? [] : [target]
+                    );
                 }
             );
             ExecutableNodeProvider.BoundedJson(resultValue, 128 * 1024, 12, int.MaxValue, true);

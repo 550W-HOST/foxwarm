@@ -49,9 +49,10 @@ internal sealed partial class SessionManager
         string? effectNode = null
     )
     {
-        var targets = source == "builtin" && name == "node"
-            ? NodeProviders.AuthorizationTargets(args)
-            : ToolAuthorizationNodeEffects.Resolve(source, name, effectNode ?? node, args);
+        var targets =
+            source == "builtin" && name == "node"
+                ? NodeProviders.AuthorizationTargets(args)
+                : ToolAuthorizationNodeEffects.Resolve(source, name, effectNode ?? node, args);
         return new(
             source,
             name,
@@ -234,7 +235,11 @@ internal sealed partial class SessionManager
             effectNode: resolved.ExecutionNode
         );
         if (nodeEffects is not null)
-            request = request with { NodeTargets = nodeEffects, NodeForest = nodeEffects.Count > 0 ? Nodes.Registry.Forest() : null };
+            request = request with
+            {
+                NodeTargets = nodeEffects,
+                NodeForest = nodeEffects.Count > 0 ? Nodes.Registry.Forest() : null,
+            };
         var policies = EffectivePolicies(owner.Agent, await authorization.LoadAsync(token));
         request = PopulateEffectiveTargets(request, owner, policies, concreteTarget);
         var decision = EffectiveDecision(policies, request);
@@ -439,28 +444,34 @@ internal sealed partial class SessionManager
             return false;
         var unknownNodeTargets =
             source == "builtin"
-            && name is "send_file" or "image_write_to_file" or "copy_between_nodes" or "node" or "node_create_auth_token" or "node_remove";
+            && name
+                is "send_file"
+                    or "image_write_to_file"
+                    or "copy_between_nodes"
+                    or "node"
+                    or "node_create_auth_token"
+                    or "node_remove";
         try
         {
-        var request = AuthorizationRequest(owner, source, name, server, new(), [], targetNode);
-        return new[] { authorization.Load() }
-                .Concat(layers)
-                .All(policy =>
-                    ToolAuthorizationEvaluation.Visible(
-                        policy,
-                        request,
-                        unknownNode,
-                        unknownNodeTargets
+            var request = AuthorizationRequest(owner, source, name, server, new(), [], targetNode);
+            return new[] { authorization.Load() }
+                    .Concat(layers)
+                    .All(policy =>
+                        ToolAuthorizationEvaluation.Visible(
+                            policy,
+                            request,
+                            unknownNode,
+                            unknownNodeTargets
+                        )
                     )
-                )
-            && IsolatedToolCompatibility.Visible(
-                Isolation(owner.Agent),
-                source,
-                name,
-                server,
-                unknownNode,
-                targetNode
-            );
+                && IsolatedToolCompatibility.Visible(
+                    Isolation(owner.Agent),
+                    source,
+                    name,
+                    server,
+                    unknownNode,
+                    targetNode
+                );
         }
         catch (InvalidDataException)
         {

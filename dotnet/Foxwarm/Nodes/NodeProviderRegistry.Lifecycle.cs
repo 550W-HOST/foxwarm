@@ -131,11 +131,18 @@ internal sealed partial class NodeProviderRegistry
             if (!description["lifecycle"]!.AsArray().Any(item => SessionWait.Text(item) == action))
                 throw Unsupported(provider.Id, action);
             if (creating && nodeId is null)
-                native.Registry.ObserveProvider(provider.Id, await provider.ListAsync(token), mutation);
+                native.Registry.ObserveProvider(
+                    provider.Id,
+                    await provider.ListAsync(token),
+                    mutation
+                );
             if (creating && nodeId is not null)
             {
                 var existing = await ResolveAsync(nodeId, token, mutation);
-                if (action == "create" && (existing is not null || native.Registry.Forest().Contains(nodeId)))
+                if (
+                    action == "create"
+                    && (existing is not null || native.Registry.Forest().Contains(nodeId))
+                )
                     throw new NodeProviderException(
                         "NODE_LIFECYCLE_NODE_EXISTS",
                         "Node already exists; create was not invoked."
@@ -144,8 +151,14 @@ internal sealed partial class NodeProviderRegistry
             }
             if (creating)
             {
-                var existingIdentity = action == "ensure" && nodeId is not null && native.Registry.Forest().Contains(nodeId);
-                var target = action == "ensure" && nodeId is null ? null : existingIdentity ? nodeId : provider.ParentNode;
+                var existingIdentity =
+                    action == "ensure"
+                    && nodeId is not null
+                    && native.Registry.Forest().Contains(nodeId);
+                var target =
+                    action == "ensure" && nodeId is null ? null
+                    : existingIdentity ? nodeId
+                    : provider.ParentNode;
                 if (authorize is not null)
                     await authorize(target, existingIdentity);
                 if (!existingIdentity && (action != "ensure" || nodeId is not null))
@@ -180,7 +193,10 @@ internal sealed partial class NodeProviderRegistry
             if (result["node"] is JsonObject descriptor)
             {
                 if (action == "create" && before.Contains(returned!))
-                    throw new NodeProviderException("NODE_LIFECYCLE_NODE_EXISTS", "Provider create returned an existing identity after its effect; inspect before retrying.");
+                    throw new NodeProviderException(
+                        "NODE_LIFECYCLE_NODE_EXISTS",
+                        "Provider create returned an existing identity after its effect; inspect before retrying."
+                    );
                 if (action != "inspect")
                     native.Registry.RecordProviderNode(provider.Id, descriptor, mutation!);
                 discovered[returned!] = (JsonObject)descriptor.DeepClone();

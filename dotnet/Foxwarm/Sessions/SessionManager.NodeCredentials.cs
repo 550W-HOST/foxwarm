@@ -22,9 +22,17 @@ internal sealed partial class SessionManager
             throw new InvalidDataException("parentNode must be an exact Node ID.");
         using var mutation = await Nodes.Registry.BeginMutationAsync(token);
         RequireNodeCreationParent(owner, parent);
-        await AuthorizeToolAsync(owner, new("node_create_auth_token", "builtin", "node_create_auth_token", args),
-            new WorkspaceTools(AgentDirectory(owner.Agent)), token);
-        Nodes.Registry.RequireNewNode(Foxwarm.Nodes.ApprovedNodeRegistry.ValidateId(id, true), parent, mutation);
+        await AuthorizeToolAsync(
+            owner,
+            new("node_create_auth_token", "builtin", "node_create_auth_token", args),
+            new WorkspaceTools(AgentDirectory(owner.Agent)),
+            token
+        );
+        Nodes.Registry.RequireNewNode(
+            Foxwarm.Nodes.ApprovedNodeRegistry.ValidateId(id, true),
+            parent,
+            mutation
+        );
         token.ThrowIfCancellationRequested();
         var options = new FileStreamOptions
         {

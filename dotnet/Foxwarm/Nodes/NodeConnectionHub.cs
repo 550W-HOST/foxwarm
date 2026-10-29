@@ -330,7 +330,10 @@ internal sealed partial class NodeConnectionHub : IDisposable
         return RemoveNodes([id], mutation).Contains(id, StringComparer.Ordinal);
     }
 
-    internal IReadOnlyList<string> RemoveNodes(IReadOnlyList<string> ids, ApprovedNodeRegistry.Mutation mutation)
+    internal IReadOnlyList<string> RemoveNodes(
+        IReadOnlyList<string> ids,
+        ApprovedNodeRegistry.Mutation mutation
+    )
     {
         string[] disconnected;
         lock (gate)

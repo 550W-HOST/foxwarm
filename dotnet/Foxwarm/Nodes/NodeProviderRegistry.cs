@@ -75,7 +75,11 @@ internal sealed partial class NodeProviderRegistry
     // Actual effects always perform fresh asynchronous exact-owner/capability resolution.
     internal JsonArray Snapshot()
     {
-        var values = discovered.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        var values = discovered.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value,
+            StringComparer.Ordinal
+        );
         foreach (var record in native.Registry.ProviderRecords().OfType<JsonObject>())
         {
             var id = SessionWait.Text(record["nodeId"])!;
@@ -86,7 +90,12 @@ internal sealed partial class NodeProviderRegistry
                 values[id] = offline;
             }
         }
-        return new(values.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => (JsonNode?)Summary(pair.Value)).ToArray());
+        return new(
+            values
+                .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .Select(pair => (JsonNode?)Summary(pair.Value))
+                .ToArray()
+        );
     }
 
     internal IReadOnlyList<string>? AuthorizationTargets(JsonObject args)
@@ -102,12 +111,18 @@ internal sealed partial class NodeProviderRegistry
             var parent = ProviderParent(SessionWait.Text(args["providerId"])?.Trim());
             return parent is null ? null : [parent];
         }
-        return action is "select" or "inspect" or "destroy" && id is not null && !args.ContainsKey("providerId")
-            ? [id] : null;
+        return
+            action is "select" or "inspect" or "destroy"
+            && id is not null
+            && !args.ContainsKey("providerId")
+            ? [id]
+            : null;
     }
 
     internal string? ProviderParent(string? providerId) =>
-        providerId is not null && providers.TryGetValue(providerId, out var provider) ? provider.ParentNode : null;
+        providerId is not null && providers.TryGetValue(providerId, out var provider)
+            ? provider.ParentNode
+            : null;
 
     internal async Task<JsonArray> ListAsync(CancellationToken token)
     {
@@ -144,7 +159,11 @@ internal sealed partial class NodeProviderRegistry
                 : new JsonObject { ["vscode-fs"] = 1, ["vscode-git"] = 2 },
         };
 
-    internal async Task<JsonObject?> ResolveAsync(string id, CancellationToken token, ApprovedNodeRegistry.Mutation? mutation = null)
+    internal async Task<JsonObject?> ResolveAsync(
+        string id,
+        CancellationToken token,
+        ApprovedNodeRegistry.Mutation? mutation = null
+    )
     {
         ValidateId(id);
         // Fixed native owners never consult optional executable discovery.

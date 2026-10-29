@@ -59,7 +59,8 @@ internal sealed partial class ApprovedNodeRegistry
                     ? approved.DeepClone()
                     : new JsonObject();
                 loaded["providerNodes"] = loaded["providerNodes"] is JsonObject providerNodes
-                    ? providerNodes.DeepClone() : new JsonObject();
+                    ? providerNodes.DeepClone()
+                    : new JsonObject();
                 loaded["pendingPairings"] = loaded["pendingPairings"] is JsonObject pending
                     ? pending.DeepClone()
                     : new JsonObject();
@@ -208,48 +209,54 @@ internal sealed partial class ApprovedNodeRegistry
     {
         id = ValidateId(id, true);
         Cleanup(mutation: mutation);
-        return Change(next =>
-        {
-            RequireFresh(next, id);
-            RequireAdmission(next, id, parentNode);
-            var auth = Token();
-            Approved(next)[id] = new JsonObject
+        return Change(
+            next =>
             {
-                ["nodeId"] = id,
-                ["parentNode"] = parentNode,
-                ["nodeType"] = "cli-node",
-                ["displayName"] = id,
-                ["tokenHash"] = Hash(auth),
-                ["createdAt"] = Now,
-                ["updatedAt"] = Now,
-            };
-            return new JsonObject { ["nodeId"] = id, ["authToken"] = auth };
-        }, mutation);
+                RequireFresh(next, id);
+                RequireAdmission(next, id, parentNode);
+                var auth = Token();
+                Approved(next)[id] = new JsonObject
+                {
+                    ["nodeId"] = id,
+                    ["parentNode"] = parentNode,
+                    ["nodeType"] = "cli-node",
+                    ["displayName"] = id,
+                    ["tokenHash"] = Hash(auth),
+                    ["createdAt"] = Now,
+                    ["updatedAt"] = Now,
+                };
+                return new JsonObject { ["nodeId"] = id, ["authToken"] = auth };
+            },
+            mutation
+        );
     }
 
     internal JsonObject Request(JsonObject input, JsonObject protocol)
     {
         Cleanup();
-        return Change(next =>
-        {
-            var record = new JsonObject
+        return Change(
+            next =>
             {
-                ["id"] =
-                    "pair_"
-                    + Now
-                    + "_"
-                    + Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant(),
-                ["requestedName"] = input["requestedName"]?.DeepClone(),
-                ["nodeType"] = input["nodeType"]!.DeepClone(),
-                ["capabilities"] = input["capabilities"]!.DeepClone(),
-                ["nodeProtocol"] = protocol["client"]!.DeepClone(),
-                ["legacyProtocol"] = protocol["legacyClient"]!.DeepClone(),
-                ["requestedAt"] = Now,
-                ["updatedAt"] = Now,
-            };
-            Pending(next)[record["id"]!.GetValue<string>()] = record;
-            return Safe(record);
-        }, topology: false);
+                var record = new JsonObject
+                {
+                    ["id"] =
+                        "pair_"
+                        + Now
+                        + "_"
+                        + Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant(),
+                    ["requestedName"] = input["requestedName"]?.DeepClone(),
+                    ["nodeType"] = input["nodeType"]!.DeepClone(),
+                    ["capabilities"] = input["capabilities"]!.DeepClone(),
+                    ["nodeProtocol"] = protocol["client"]!.DeepClone(),
+                    ["legacyProtocol"] = protocol["legacyClient"]!.DeepClone(),
+                    ["requestedAt"] = Now,
+                    ["updatedAt"] = Now,
+                };
+                Pending(next)[record["id"]!.GetValue<string>()] = record;
+                return Safe(record);
+            },
+            topology: false
+        );
     }
 
     internal JsonObject Approve(string pendingId, string? id, Action? beforeMutation = null)
@@ -311,11 +318,16 @@ internal sealed partial class ApprovedNodeRegistry
         Cleanup();
         lock (gate)
         {
-            var match = Pending(data).FirstOrDefault(pair => pair.Value is JsonObject record
-                && record["approvedAuthToken"] is not null
-                && SessionWait.Text(record["nodeType"]) == nodeType
-                && SessionWait.Text(record["requestedName"]) == name);
-            return match.Key is null ? null : Change(next => ClaimCore(next, match.Key), topology: false);
+            var match = Pending(data)
+                .FirstOrDefault(pair =>
+                    pair.Value is JsonObject record
+                    && record["approvedAuthToken"] is not null
+                    && SessionWait.Text(record["nodeType"]) == nodeType
+                    && SessionWait.Text(record["requestedName"]) == name
+                );
+            return match.Key is null
+                ? null
+                : Change(next => ClaimCore(next, match.Key), topology: false);
         }
     }
 
@@ -323,7 +335,11 @@ internal sealed partial class ApprovedNodeRegistry
 
     private static JsonObject? ClaimCore(JsonObject next, string id)
     {
-        if (Pending(next)[id] is not JsonObject record || record["approvedAuthToken"] is null || PairingExpired(record, Now))
+        if (
+            Pending(next)[id] is not JsonObject record
+            || record["approvedAuthToken"] is null
+            || PairingExpired(record, Now)
+        )
             return null;
         var result = new JsonObject
         {
@@ -352,77 +368,96 @@ internal sealed partial class ApprovedNodeRegistry
     internal void Remove(string id, Mutation? mutation = null) => RemoveNodes([id], mutation);
 
     internal void RemoveNodes(IReadOnlyList<string> ids, Mutation? mutation = null) =>
-        Change(next =>
-        {
-            var removing = ids.ToHashSet(StringComparer.Ordinal);
-            foreach (var id in ids)
+        Change(
+            next =>
             {
-                ValidateId(id);
-                if (!Approved(next).ContainsKey(id))
-                    throw new InvalidDataException("Approved Node not found.");
-                if (Parents(next).Any(pair => pair.Value == id && !removing.Contains(pair.Key)))
-                    throw new InvalidDataException("Node has descendants.");
-            }
-            foreach (var id in ids)
-                Approved(next).Remove(id);
-            foreach (var pair in Pending(next).ToArray())
-                if (SessionWait.Text(pair.Value?["approvedNodeId"]) is string approved && removing.Contains(approved))
-                    Pending(next).Remove(pair.Key);
-            return true;
-        }, mutation);
+                var removing = ids.ToHashSet(StringComparer.Ordinal);
+                foreach (var id in ids)
+                {
+                    ValidateId(id);
+                    if (!Approved(next).ContainsKey(id))
+                        throw new InvalidDataException("Approved Node not found.");
+                    if (Parents(next).Any(pair => pair.Value == id && !removing.Contains(pair.Key)))
+                        throw new InvalidDataException("Node has descendants.");
+                }
+                foreach (var id in ids)
+                    Approved(next).Remove(id);
+                foreach (var pair in Pending(next).ToArray())
+                    if (
+                        SessionWait.Text(pair.Value?["approvedNodeId"]) is string approved
+                        && removing.Contains(approved)
+                    )
+                        Pending(next).Remove(pair.Key);
+                return true;
+            },
+            mutation
+        );
 
     internal void Rename(string oldId, string newId, Mutation? mutation = null) =>
-        Change(next =>
-        {
-            ValidateId(oldId);
-            ValidateId(newId, true);
-            var record =
-                Approved(next)[oldId] as JsonObject
-                ?? throw new InvalidDataException("Approved Node not found.");
-            RequireFresh(next, newId);
-            RequireNoChildren(next, oldId);
-            if (SessionWait.Text(record["parentNode"]) is not null)
-                throw new InvalidDataException("Detach the Node through administration before renaming it.");
-            var moved = (JsonObject)record.DeepClone();
-            moved["nodeId"] = newId;
-            if (SessionWait.Text(moved["displayName"]) == oldId)
-                moved["displayName"] = newId;
-            moved["updatedAt"] = Now;
-            Approved(next).Remove(oldId);
-            Approved(next)[newId] = moved;
-            foreach (var value in Pending(next).Select(pair => pair.Value).OfType<JsonObject>())
-                if (SessionWait.Text(value["approvedNodeId"]) == oldId)
-                    value["approvedNodeId"] = newId;
-            return true;
-        }, mutation);
+        Change(
+            next =>
+            {
+                ValidateId(oldId);
+                ValidateId(newId, true);
+                var record =
+                    Approved(next)[oldId] as JsonObject
+                    ?? throw new InvalidDataException("Approved Node not found.");
+                RequireFresh(next, newId);
+                RequireNoChildren(next, oldId);
+                if (SessionWait.Text(record["parentNode"]) is not null)
+                    throw new InvalidDataException(
+                        "Detach the Node through administration before renaming it."
+                    );
+                var moved = (JsonObject)record.DeepClone();
+                moved["nodeId"] = newId;
+                if (SessionWait.Text(moved["displayName"]) == oldId)
+                    moved["displayName"] = newId;
+                moved["updatedAt"] = Now;
+                Approved(next).Remove(oldId);
+                Approved(next)[newId] = moved;
+                foreach (var value in Pending(next).Select(pair => pair.Value).OfType<JsonObject>())
+                    if (SessionWait.Text(value["approvedNodeId"]) == oldId)
+                        value["approvedNodeId"] = newId;
+                return true;
+            },
+            mutation
+        );
 
     internal void Touch(string id, string auth, JsonObject input, JsonObject compatibility) =>
-        Change(next =>
-        {
-            var record =
-                Approved(next)[id] as JsonObject
-                ?? throw new InvalidDataException("Node credentials were removed.");
-            if (ExpiredHandoff(next, id))
-                throw new InvalidDataException("Node pairing credentials have expired.");
-            if (!Equal(SessionWait.Text(record["tokenHash"]) ?? "", Hash(auth)))
-                throw new InvalidDataException("Node credentials were replaced.");
-            record["nodeType"] = input["nodeType"]!.DeepClone();
-            record["capabilities"] = input["capabilities"]!.DeepClone();
-            record["nodeProtocol"] = compatibility["client"]!.DeepClone();
-            record["protocolCompatibility"] = compatibility.DeepClone();
-            record["lastSeenAt"] = Now;
-            record["updatedAt"] = Now;
-            return true;
-        }, topology: false);
+        Change(
+            next =>
+            {
+                var record =
+                    Approved(next)[id] as JsonObject
+                    ?? throw new InvalidDataException("Node credentials were removed.");
+                if (ExpiredHandoff(next, id))
+                    throw new InvalidDataException("Node pairing credentials have expired.");
+                if (!Equal(SessionWait.Text(record["tokenHash"]) ?? "", Hash(auth)))
+                    throw new InvalidDataException("Node credentials were replaced.");
+                record["nodeType"] = input["nodeType"]!.DeepClone();
+                record["capabilities"] = input["capabilities"]!.DeepClone();
+                record["nodeProtocol"] = compatibility["client"]!.DeepClone();
+                record["protocolCompatibility"] = compatibility.DeepClone();
+                record["lastSeenAt"] = Now;
+                record["updatedAt"] = Now;
+                return true;
+            },
+            topology: false
+        );
 
     private static bool PairingExpired(JsonNode value, long now) =>
-        SessionWait.Number(value["approvedAt"] ?? value["requestedAt"] ?? value["updatedAt"]) is double start
-        && start > 0 && now - start > PairingTtl;
+        SessionWait.Number(value["approvedAt"] ?? value["requestedAt"] ?? value["updatedAt"])
+            is double start
+        && start > 0
+        && now - start > PairingTtl;
 
     // Cleanup may wait for an external mutation; credential validity never waits for cleanup.
     private static bool ExpiredHandoff(JsonObject document, string id) =>
-        Pending(document).Any(pair => SessionWait.Text(pair.Value?["approvedNodeId"]) == id
-            && PairingExpired(pair.Value!, Now));
+        Pending(document)
+            .Any(pair =>
+                SessionWait.Text(pair.Value?["approvedNodeId"]) == id
+                && PairingExpired(pair.Value!, Now)
+            );
 
     internal void Cleanup(long? timestamp = null, Mutation? mutation = null)
     {
@@ -440,20 +475,23 @@ internal sealed partial class ApprovedNodeRegistry
                 .ToArray();
             if (ids.Length == 0)
                 return;
-            Change(next =>
-            {
-                foreach (var id in ids)
+            Change(
+                next =>
                 {
-                    var record = Pending(next)[id]!;
-                    if (SessionWait.Text(record["approvedNodeId"]) is string approved)
+                    foreach (var id in ids)
                     {
-                        RequireNoChildren(next, approved);
-                        Approved(next).Remove(approved);
+                        var record = Pending(next)[id]!;
+                        if (SessionWait.Text(record["approvedNodeId"]) is string approved)
+                        {
+                            RequireNoChildren(next, approved);
+                            Approved(next).Remove(approved);
+                        }
+                        Pending(next).Remove(id);
                     }
-                    Pending(next).Remove(id);
-                }
-                return true;
-            }, mutation);
+                    return true;
+                },
+                mutation
+            );
             foreach (var id in ids)
                 Expired?.Invoke(id);
         }

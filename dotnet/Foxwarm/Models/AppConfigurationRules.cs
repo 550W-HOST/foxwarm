@@ -151,7 +151,13 @@ internal static class AppConfigurationRules
                 throw new InvalidDataException(
                     $"app config `nodeProviders.{id}.type` must be `executable`."
                 );
-            var allowed = new HashSet<string>(["type", "command", "args", "timeoutSeconds", "parentNode"]);
+            var allowed = new HashSet<string>([
+                "type",
+                "command",
+                "args",
+                "timeoutSeconds",
+                "parentNode",
+            ]);
             var unknown = provider
                 .Select(pair => pair.Key)
                 .FirstOrDefault(key => !allowed.Contains(key));
@@ -163,7 +169,9 @@ internal static class AppConfigurationRules
             {
                 var parent = Text(provider["parentNode"]);
                 if (parent is null || parent.Length == 0 || parent != parent.Trim())
-                    throw new InvalidDataException($"app config `nodeProviders.{id}.parentNode` must be an exact Node ID.");
+                    throw new InvalidDataException(
+                        $"app config `nodeProviders.{id}.parentNode` must be an exact Node ID."
+                    );
                 Foxwarm.Nodes.NodeProviderRegistry.ValidateId(parent);
             }
             ExactText(
