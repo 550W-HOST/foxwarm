@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Channels;
 using Foxwarm.Sessions;
@@ -6,8 +7,12 @@ namespace Foxwarm.Tests;
 
 public sealed partial class SessionCreationParityTests
 {
-    [Fact]
-    public async Task Selected_prompt_files_follow_target_isolation_before_creation_and_keep_bound_Node_precedence()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Selected_prompt_admission_uses_creator_read_authority_not_destination_isolation(
+        bool unified
+    )
     {
         await using var f = await ExternalChannelFixture.CreateAsync();
         RegisterAgentTools(f);
@@ -15,93 +20,112 @@ public sealed partial class SessionCreationParityTests
         await f.Manager.CreateAgentAsync("restricted", false, isolatedNode: "prompt-bound");
         var directory = f.Manager.AgentDirectory("restricted");
         var outside = Path.Combine(f.Data, "outside.md");
-        await File.WriteAllTextAsync(outside, "synthetic outside prompt marker");
+        await File.WriteAllTextAsync(outside, "outside selected prompt");
         await File.WriteAllTextAsync(
             Path.Combine(directory, "selected.md"),
-            "target prompt marker"
+            "target selected prompt"
         );
-        var sibling = directory + "-sibling";
-        Directory.CreateDirectory(sibling);
-        await File.WriteAllTextAsync(Path.Combine(sibling, "selected.md"), "sibling prompt marker");
-        var initial = f.Manager.Catalog.List().Select(row => SessionWait.Text(row["id"])).ToArray();
-        foreach (
-            var path in new[]
-            {
-                outside,
-                Path.Combine(f.Data, "missing.md"),
-                Path.Combine(sibling, "selected.md"),
-            }
-        )
+
+        async Task<JsonNode?> Create(string name, string path, SessionOwner? creator = null)
         {
-            var response = await f.ToolAsync(
-                "create_session",
-                new JsonObject
-                {
-                    ["agentName"] = "restricted",
-                    ["sessionName"] = "rejected",
-                    ["systemPromptFiles"] = new JsonArray(path),
-                }
+            var args = new JsonObject
+            {
+                ["agentName"] = "restricted",
+                ["sessionName"] = name,
+                ["node"] = "master",
+                ["systemPromptFiles"] = new JsonArray(path),
+            };
+            return unified
+                ? await f.ToolAsync(
+                    "call_tool",
+                    new JsonObject { ["toolId"] = "builtin:create_session", ["args"] = args },
+                    creator
+                )
+                : await f.ToolAsync("create_session", args, creator);
+        }
+        // A full-access creator may select outside files for an isolated, remotely bound target.
+        Successful(await Create("outside-allowed", outside));
+        var admitted = await f.Manager.RequiredAsync("restricted/outside-allowed");
+        Assert.Equal("prompt-bound", f.Manager.CurrentNode(admitted));
+        Assert.Contains(
+            "outside selected prompt",
+            admitted.Entry.Snapshot().AuthorityEnvelope["persistentMemorySnapshot"]!.ToString()
+        );
+        Successful(await Create("relative-allowed", "memory/../selected.md"));
+        Assert.Contains(
+            "target selected prompt",
+            (await f.Manager.RequiredAsync("restricted/relative-allowed"))
+                .Entry.Snapshot()
+                .AuthorityEnvelope["persistentMemorySnapshot"]!.ToString()
+        );
+
+        await f.Manager.CreateAgentAsync("creator", false);
+        var creator = await f.Manager.CreateNamedAsync("creator", "main", null, null);
+        var ownFile = Path.Combine(f.Manager.AgentDirectory("creator"), "selected.md");
+        await File.WriteAllTextAsync(ownFile, "creator-owned prompt");
+        await f.Manager.Authorization.InstallAsync(
+            Encoding.UTF8.GetBytes(
+                """
+                version: 1
+                rules:
+                - id: creator-read-scope
+                  action: deny
+                  match:
+                    agent: creator
+                    tool: {source: node, name: read}
+                    path: {anyNotWithin: '${agent.dir}'}
+                """
+            ),
+            default
+        );
+        Successful(await Create("creator-owned", ownFile, creator));
+        var initial = f.Manager.Catalog.List().Select(row => SessionWait.Text(row["id"])).ToArray();
+        foreach (var path in new[] { outside, "selected.md", Path.Combine(f.Data, "missing.md") })
+        {
+            var denied = await Create("denied", path, creator);
+            Assert.Contains(
+                "Tool authorization rule denies node capability `read`",
+                denied!["error"]!["message"]!.GetValue<string>()
             );
-            Assert.Contains("can only access agents/restricted/", response!["error"]!.ToString());
             Assert.Equal(
                 initial,
                 f.Manager.Catalog.List().Select(row => SessionWait.Text(row["id"])).ToArray()
             );
-            Assert.Null(await f.Manager.GetExistingAsync("restricted/rejected"));
+            Assert.Null(await f.Manager.GetExistingAsync("restricted/denied"));
             Assert.False(
-                File.Exists(
-                    Path.Combine(f.Data, "state", "sessions", "restricted", "rejected.json")
-                )
+                File.Exists(Path.Combine(f.Data, "state", "sessions", "restricted", "denied.json"))
             );
         }
-        async Task<SessionOwner> Create(string agent, string name, string path)
-        {
-            var response = await f.ToolAsync(
-                "create_session",
-                new JsonObject
-                {
-                    ["agentName"] = agent,
-                    ["sessionName"] = name,
-                    ["node"] = "master",
-                    ["systemPromptFiles"] = new JsonArray(path),
-                }
-            );
-            Assert.True(
-                response is JsonObject && response["error"] is null,
-                response?.ToJsonString()
-            );
-            return await f.Manager.RequiredAsync(agent == "main" ? name : agent + "/" + name);
-        }
-        var owned = await Create("restricted", "owned", "memory/../selected.md");
-        Assert.Equal("prompt-bound", f.Manager.CurrentNode(owned));
-        var ownedDisk = JsonNode.Parse(
-            await File.ReadAllTextAsync(owned.AuthorityStore.AuthorityPath)
-        )!;
-        Assert.Contains("target prompt marker", ownedDisk["persistentMemorySnapshot"]!.ToString());
-        Assert.DoesNotContain(
-            "synthetic outside prompt marker",
-            ownedDisk["persistentMemorySnapshot"]!.ToString()
+        // Selection does not bypass the independent structural prohibition on isolated creators.
+        var isolatedDenied = await Create("isolated-denied", "selected.md", admitted);
+        Assert.Equal("tool_authorization_denied", isolatedDenied!["error"]!["type"]!.ToString());
+        Assert.Null(f.Manager.Catalog.Get("restricted/isolated-denied"));
+
+        // Admission is not a target's ongoing read permission: ordinary refresh keeps the selection.
+        await File.WriteAllTextAsync(outside, "updated admitted prompt");
+        Successful(
+            await f.ToolAsync(
+                "refresh_session_snapshot",
+                new JsonObject { ["sessionId"] = admitted.Id }
+            )
         );
-        var unrestricted = await Create("main", "outside-allowed", outside);
-        var outsideDisk = JsonNode.Parse(
-            await File.ReadAllTextAsync(unrestricted.AuthorityStore.AuthorityPath)
-        )!;
         Assert.Contains(
-            "synthetic outside prompt marker",
-            outsideDisk["persistentMemorySnapshot"]!.ToString()
+            "updated admitted prompt",
+            admitted.Entry.Snapshot().AuthorityEnvelope["persistentMemorySnapshot"]!.ToString()
         );
     }
 
     [Fact]
-    public async Task Session_create_command_uses_the_same_target_prompt_file_boundary_without_changing_binding()
+    public async Task Session_create_command_uses_operator_authority_even_when_attached_to_an_isolated_Agent()
     {
         await using var f = await ExternalChannelFixture.CreateAsync(
             new JsonObject { ["alpha"] = ExternalChannelFixture.Channel() }
         );
         f.Manager.Nodes.Registry.Create("prompt-bound");
         await f.Manager.CreateAgentAsync("restricted", false, isolatedNode: "prompt-bound");
+        var attached = await f.Manager.CreateNamedAsync("restricted", "main", null, null);
         var outside = Path.Combine(f.Data, "outside.md");
-        await File.WriteAllTextAsync(outside, "synthetic command outside marker");
+        await File.WriteAllTextAsync(outside, "command outside prompt");
         var replies = new List<string>();
         var source = new ExternalChannelContext(
             "alpha",
@@ -115,24 +139,42 @@ public sealed partial class SessionCreationParityTests
                 return Task.CompletedTask;
             }
         );
-        f.Manager.AttachChannel(source.Target, f.Owner);
+        f.Manager.AttachChannel(source.Target, attached);
         await f.Router.HandleExternalMessageAsync(
             source,
             new([
                 new JsonObject
                 {
-                    ["text"] =
-                        $"/session create restricted rejected --system-prompt-file {outside}",
+                    ["text"] = $"/session create restricted allowed --system-prompt-file {outside}",
                 },
             ])
         );
+        var created = await f.Manager.RequiredAsync("restricted/allowed");
+        Assert.Equal(
+            created.Id,
+            SessionWait.Text(f.Manager.ChannelBinding(source.Target)?["sessionId"])
+        );
+        Assert.Contains(
+            "command outside prompt",
+            created.Entry.Snapshot().AuthorityEnvelope["persistentMemorySnapshot"]!.ToString()
+        );
+        Assert.Equal("prompt-bound", f.Manager.CurrentNode(created));
         Assert.Contains(
             replies,
-            text => text.Contains("can only access agents/restricted/", StringComparison.Ordinal)
+            text => text.Contains("Created session", StringComparison.Ordinal)
         );
-        Assert.Null(f.Manager.Catalog.Get("restricted/rejected"));
+        await f.Router.HandleExternalMessageAsync(
+            source,
+            new([
+                new JsonObject
+                {
+                    ["text"] = "/session create restricted missing --system-prompt-file missing.md",
+                },
+            ])
+        );
+        Assert.Null(f.Manager.Catalog.Get("restricted/missing"));
         Assert.Equal(
-            f.Owner.Id,
+            created.Id,
             SessionWait.Text(f.Manager.ChannelBinding(source.Target)?["sessionId"])
         );
     }
