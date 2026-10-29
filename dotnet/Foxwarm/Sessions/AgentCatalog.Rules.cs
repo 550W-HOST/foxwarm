@@ -119,7 +119,7 @@ internal sealed partial class AgentCatalog
         var limits = treeLimits();
         if (chain.Length > limits.MaxDepth)
             throw new InvalidDataException("Agent tree depth limit exceeded.");
-        if (snapshot.Count(pair => Creator(snapshot, pair.Key) == creator) >= limits.MaxChildren)
+        if (snapshot.Count(pair => Exists(pair.Key) && Creator(snapshot, pair.Key) == creator) >= limits.MaxChildren)
             throw new InvalidDataException("Agent direct-child limit exceeded.");
     }
 
@@ -238,7 +238,7 @@ internal sealed partial class AgentCatalog
         var snapshot = MetadataSnapshot();
         if (snapshot.Any(pair => Creator(snapshot, pair.Key) == name))
             throw new InvalidDataException(
-                $"Agent '{name}' has creator descendants. Delete them first."
+                $"Agent '{name}' has creator descendants. Remove live descendants or explicitly clean retained records first."
             );
     }
 }

@@ -188,15 +188,18 @@ internal sealed partial class AgentCatalog
         string? initialSoul = null,
         string? createdBy = null,
         JsonArray? rules = null,
-        string? defaultNode = null
+        string? defaultNode = null,
+        string? preparationName = null,
+        bool restoreRetained = false,
+        Action<bool>? publication = null
     )
     {
         ValidateName(name);
-        if (name == "main")
+        if (name == "main" && (!restoreRetained || !canonicalLayout))
             throw new InvalidDataException("The main Agent already exists.");
+        var directory = SourceDirectory(name);
+        var prepared = PreparationPath(preparationName ?? ".create-" + Guid.NewGuid().ToString("N"));
         await createGate.WaitAsync();
-        var directory = Path.Combine(agentRoot, name);
-        var prepared = Path.Combine(agentRoot, ".create-" + Guid.NewGuid().ToString("N"));
         var createdDirectory = false;
         var publishedDirectory = false;
         var committed = false;
@@ -204,14 +207,27 @@ internal sealed partial class AgentCatalog
         Monitor.Enter(stateGate);
         try
         {
-            if (Exists(name) || Directory.Exists(directory) || File.Exists(directory))
+            if ((!restoreRetained && Exists(name)) || Directory.Exists(directory) || File.Exists(directory))
                 throw new InvalidDataException(
                     $"Agent '{name}' already exists or its directory is reserved."
                 );
             var previous = MetadataSnapshot()[name] as JsonObject;
-            if (previous is not null && new[] { "createdBy", "rules" }.Any(previous.ContainsKey))
+            if (restoreRetained)
+            {
+                if (previous is null)
+                    throw new InvalidDataException("No retained Agent metadata exists for this name.");
+                if (initialMemory is not null || inherit is not null || initialSoul is not null
+                    || createdBy is not null || rules is not null || defaultNode is not null)
+                    throw new InvalidDataException("Restoration does not accept metadata overrides.");
+                createdBy = Creator(MetadataSnapshot(), name);
+                inherit = SessionWait.Text(previous["inherit"]);
+                rules = previous.ContainsKey("rules")
+                    ? previous["rules"] as JsonArray ?? throw new InvalidDataException("Retained Agent rules must be an array.")
+                    : null;
+            }
+            if (!restoreRetained && previous is not null && new[] { "createdBy", "rules" }.Any(previous.ContainsKey))
                 throw new InvalidDataException(
-                    "Retained Agent authority reserves this name; administrator cleanup is required before reuse."
+                    "This name has retained Agent authority. Use administrator restoration or explicit retained-record cleanup."
                 );
             ValidateCreatorAdmission(createdBy, MetadataSnapshot());
             _ = Foxwarm.Tools.AgentRulePolicy.Parse(rules ?? new JsonArray());
@@ -314,7 +330,21 @@ internal sealed partial class AgentCatalog
         {
             Monitor.Exit(stateGate);
             createGate.Release();
+            publication?.Invoke(publishedDirectory);
         }
+    }
+
+    internal static void ValidatePreparationName(string name)
+    {
+        if (!name.StartsWith(".create-", StringComparison.Ordinal)
+            || !Guid.TryParseExact(name[8..], "N", out _))
+            throw new InvalidDataException("Invalid owned Agent preparation name.");
+    }
+
+    internal string PreparationPath(string name)
+    {
+        ValidatePreparationName(name);
+        return Path.Combine(agentRoot, name);
     }
 
     private void AtomicIndexWrite(string path, string text)

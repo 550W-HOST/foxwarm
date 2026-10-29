@@ -68,4 +68,42 @@ internal sealed partial class AgentCatalog
             createGate.Release();
         }
     }
+    internal async Task RemoveRetainedAsync(string name)
+    {
+        ValidateName(name);
+        await createGate.WaitAsync();
+        try
+        {
+            if (Directory.Exists(SourceDirectory(name)))
+                throw new InvalidDataException("Retained-record cleanup requires an absent Agent directory.");
+            RequireNoCreatorChildren(name);
+            var next = MetadataSnapshot();
+            if (!next.Remove(name))
+                throw new InvalidDataException("No retained Agent metadata exists for this name.");
+            void Publish()
+            {
+                lock (stateGate)
+                {
+                    if (name != "main")
+                        known.Remove(name);
+                    metadata = next;
+                }
+            }
+            try
+            {
+                AtomicIndexWrite(indexPath, Payload(List().Where(id => id is not "main" && id != name), next).ToJsonString());
+            }
+            catch (AuthorityCommittedException)
+            {
+                Publish();
+                throw;
+            }
+            Publish();
+        }
+        finally
+        {
+            createGate.Release();
+        }
+    }
+
 }

@@ -1,8 +1,10 @@
+using System.Text.Json.Nodes;
+
 namespace Foxwarm.Sessions;
 
 internal sealed partial class AgentCatalog
 {
-    internal async Task RemoveIdentityOwnedAsync(string name)
+    internal async Task RemoveIdentityOwnedAsync(string name, string? preparationName = null, JsonObject? previousMetadata = null, bool removePublishedDirectory = true)
     {
         ValidateName(name);
         if (name == "main")
@@ -11,7 +13,17 @@ internal sealed partial class AgentCatalog
         try
         {
             var directory = SourceDirectory(name);
-            if (Directory.Exists(directory))
+            if (preparationName is not null)
+            {
+                var prepared = PreparationPath(preparationName);
+                if (Directory.Exists(prepared))
+                {
+                    if ((File.GetAttributes(prepared) & FileAttributes.ReparsePoint) != 0)
+                        throw new InvalidDataException($"Owned Agent preparation '{prepared}' is a symbolic link; cleanup remains pending.");
+                    Directory.Delete(prepared, true);
+                }
+            }
+            if (removePublishedDirectory && Directory.Exists(directory))
             {
                 if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
                     throw new InvalidDataException(
@@ -22,16 +34,29 @@ internal sealed partial class AgentCatalog
             if (Exists(name) || MetadataSnapshot().ContainsKey(name))
             {
                 var next = MetadataSnapshot();
-                next.Remove(name);
-                AtomicIndexWrite(
-                    indexPath,
-                    Payload(List().Where(id => id is not "main" && id != name), next).ToJsonString()
-                );
-                lock (stateGate)
+                if (previousMetadata is null)
+                    next.Remove(name);
+                else
+                    next[name] = previousMetadata.DeepClone();
+                void Publish()
                 {
-                    known.Remove(name);
-                    metadata = next;
+                    lock (stateGate)
+                    {
+                        known.Remove(name);
+                        metadata = next;
+                    }
                 }
+                try
+                {
+                    AtomicIndexWrite(indexPath,
+                        Payload(List().Where(id => id is not "main" && id != name), next).ToJsonString());
+                }
+                catch (AuthorityCommittedException)
+                {
+                    Publish();
+                    throw;
+                }
+                Publish();
             }
         }
         finally

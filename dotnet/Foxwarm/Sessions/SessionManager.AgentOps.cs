@@ -145,12 +145,42 @@ internal sealed partial class SessionManager
         }
     }
 
+    internal async Task RestoreRetainedAgentAsync(string name)
+    {
+        await EnsureIdentityStartupAsync();
+        RequireAgentCreation(name);
+        using var lifetime = TrackCreation();
+        var creator = agents.CreatedBy(name);
+        using var membership = BeginAgentAdmission(creator is null ? [name] : [name, creator]);
+        var gate = CreationKey(SessionIdentity.Build(name, "main"));
+        await gate.WaitAsync();
+        try
+        {
+            try
+            {
+                await agents.CreateAsync(name, restoreRetained: true);
+            }
+            catch (AuthorityCommittedException error)
+            {
+                throw new CommittedSessionCreationException(null,
+                    $"Restoration of Agent '{name}' committed metadata but did not complete; no Session was created. {error.Message}", error);
+            }
+            TopologyChanged?.Invoke();
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     private async Task<SessionOwner> ResolveAgentCreationSourceAsync(
         string id,
         SessionOwner? creator = null
     )
     {
         var existing = await GetExistingAsync(id);
+        // An existing selected source supplies defaults only. Conversion and memory copying
+        // separately validate content/identity transfer through RequireCreationSource.
         if (existing is not null)
             return existing;
         if (creator is not null)

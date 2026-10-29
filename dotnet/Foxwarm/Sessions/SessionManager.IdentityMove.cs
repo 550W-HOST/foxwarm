@@ -202,6 +202,8 @@ internal sealed partial class SessionManager
                         "newAgentName is required when creating an Agent."
                     )
                 : owner.Agent;
+        if (purpose == IdentityMovePurpose.MoveSession && creator is not null)
+            agents.RequireSessionTarget(creator.Agent, owner.Agent);
         if (
             purpose == IdentityMovePurpose.MoveSession
             && creator is not null
@@ -308,6 +310,8 @@ internal sealed partial class SessionManager
                     "A pending identity move requires recovery before another move can start."
                 );
             token.ThrowIfCancellationRequested();
+            if (create && (agents.Exists(targetAgent) || Directory.Exists(agents.SourceDirectory(targetAgent)) || File.Exists(agents.SourceDirectory(targetAgent))))
+                throw new InvalidDataException("Destination Agent already exists or its directory is reserved.");
             owner.Entry.RequireIdentityAuthority();
             if (owner.Id != old || !IsCurrentOwner(owner))
                 throw new InvalidOperationException(
@@ -332,7 +336,9 @@ internal sealed partial class SessionManager
                 aliases,
                 create,
                 create ? targetAgent : null,
-                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                OwnedAgentPreparation: create ? ".create-" + Guid.NewGuid().ToString("N") : null,
+                PreviousAgentMetadata: create ? AgentMetadata[targetAgent] as JsonObject : null
             );
             var children = Catalog
                 .IdentityChildren(old)
@@ -462,7 +468,13 @@ internal sealed partial class SessionManager
                     record.OwnedAgent!,
                     createdBy: operation.Creator,
                     rules: operation.InitialRules,
-                    defaultNode: operation.DefaultNode
+                    defaultNode: operation.DefaultNode,
+                    preparationName: record.OwnedAgentPreparation,
+                    publication: published =>
+                    {
+                        record = record with { AgentDirectoryPublished = published };
+                        operation.Record = record;
+                    }
                 );
                 if (copyMemory)
                     agents.CopyIdentityMemory(record.OldAgent, record.OwnedAgent!);
@@ -534,7 +546,10 @@ internal sealed partial class SessionManager
         catch (Exception failure)
         {
             details["identityCommitted"] = committed;
+            if (record.OwnsAgent)
+                details["agentDirectoryPublished"] = record.AgentDirectoryPublished;
             details["error"] = failure.Message;
+            details["failure"] = failure.Message;
             if (committed)
                 throw new SessionIdentityMoveException(
                     "Identity move committed, but a later step failed.",
@@ -642,6 +657,13 @@ internal sealed partial class SessionManager
                     pendingIdentityReservations.Add(record.NewId);
                 }
                 details["recoveryRequired"] = true;
+                if (record.OwnsAgent)
+                {
+                    details["targetAgentDirectory"] = agents.SourceDirectory(record.OwnedAgent!);
+                    details["agentMetadataPath"] = Path.Combine(root, "state", "agents.json");
+                    if (record.OwnedAgentPreparation is not null)
+                        details["agentPreparationDirectory"] = agents.PreparationPath(record.OwnedAgentPreparation);
+                }
                 details["rollbackErrors"] = new JsonArray(
                     errors.Select(error => (JsonNode?)JsonValue.Create(error.Message)).ToArray()
                 );

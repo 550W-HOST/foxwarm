@@ -10,6 +10,32 @@ internal sealed partial class SessionManager
     internal Task<string[]> DeleteAgentFromCommandAsync(string name) =>
         DeleteAgentCoreAsync(name, command: true);
 
+    internal async Task CleanupRetainedAgentAsync(string name)
+    {
+        AgentCatalog.ValidateName(name);
+        await EnsureIdentityStartupAsync();
+        RequireAgentCreation(name);
+        using var lifetime = TrackCreation();
+        var pending = ClaimAgentRemoval(name);
+        try
+        {
+            await Task.WhenAll(pending);
+            if (Catalog.List().Any(row => SessionCatalog.Text(row["agent"]) == name))
+                throw new InvalidDataException("Retained-record cleanup cannot remove metadata used by a Session.");
+            var inheritedBy = agents.MetadataSnapshot().Where(pair => pair.Key != name
+                && SessionCatalog.Text(pair.Value?["inherit"]) == name).Select(pair => pair.Key).ToArray();
+            if (inheritedBy.Length > 0)
+                throw new InvalidOperationException($"Agent '{name}' is inherited by: {string.Join(", ", inheritedBy)}.");
+            await agents.RemoveRetainedAsync(name);
+            TopologyChanged?.Invoke();
+        }
+        finally
+        {
+            lock (lifecycle)
+                removingAgents.Remove(name);
+        }
+    }
+
     private async Task<string[]> DeleteAgentCoreAsync(string name, bool command)
     {
         await EnsureIdentityStartupAsync();

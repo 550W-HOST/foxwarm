@@ -113,4 +113,64 @@ public sealed class AgentRulesTreeHttpTests
             await server.App.DisposeAsync();
         }
     }
+    [Fact]
+    public async Task Explicit_administrator_restore_preserves_authority_without_reviving_deleted_Sessions_and_cleanup_checks_references()
+    {
+        await using var f = await ExternalChannelFixture.CreateAsync();
+        await f.Manager.CreateAgentAsync("parent", creator: f.Owner);
+        var parent = await f.Manager.RequiredAsync("parent/main");
+        var rules = JsonNode.Parse("""[{"tool":"skill","action":"deny"}]""")!.AsArray();
+        await f.Manager.CreateAgentAsync("child", creator: parent, rules: rules, defaultNode: "offline");
+        var childId = "child/main";
+        var oldMemory = Path.Combine(f.Manager.AgentDirectory("child"), "memory", "MEMORY.md");
+        await File.WriteAllTextAsync(oldMemory, "deleted memory is not restored");
+        var metadata = f.Manager.AgentMetadata["child"]!.DeepClone();
+        var router = new Foxwarm.MessageRouter(new SessionRuntime(f.Manager));
+        await router.HandleMessageAsync(new Foxwarm.ChannelContext(f.Owner.Id, "webui"), new Foxwarm.ChannelMessage("/agent delete child --confirm", null));
+        Assert.DoesNotContain("child", f.Manager.Agents());
+        await f.Configuration.Access.ApplyAsync(AccessConfiguration.Normalize(JsonNode.Parse("""{"identities":{"limited":{"token":"synthetic-retained-limited","surfaces":{"webui":{"sessions":["parent/*"]}}}}}""")!));
+        await using var terminals = new Foxwarm.Terminal.TerminalRegistry(f.Data, default);
+        var server = new HttpServer([], 0, "synthetic-retained-admin", null, f.Manager, terminals, webUiEnabled: true);
+        var runtime = new SessionRuntime(f.Manager);
+        new WebUIChannel(f.Manager, runtime, router, terminals, server.Downloads).Register(server.App);
+        await server.App.StartAsync();
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri(server.App.Urls.Single()) };
+            client.DefaultRequestHeaders.Authorization = new("Bearer", "synthetic-retained-limited");
+            Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsJsonAsync("/api/agents", new { agentId = "child", restore = true })).StatusCode);
+            var scopedDelete = new HttpRequestMessage(HttpMethod.Delete, "/api/agents/child") { Content = JsonContent.Create(new { confirmAgentId = "child", retainedOnly = true }) };
+            Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(scopedDelete)).StatusCode);
+            client.DefaultRequestHeaders.Authorization = new("Bearer", "synthetic-retained-admin");
+            Assert.False((await client.PostAsJsonAsync("/api/agents", new { agentId = "child" })).IsSuccessStatusCode);
+            Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/agents", new JsonObject { ["agentId"] = "child", ["restore"] = true, ["rules"] = new JsonArray() })).StatusCode);
+            var restored = await client.PostAsJsonAsync("/api/agents", new { agentId = "child", restore = true });
+            Assert.Equal(HttpStatusCode.Created, restored.StatusCode);
+            var result = await restored.Content.ReadFromJsonAsync<JsonObject>();
+            Assert.Null(result!["sessionId"]);
+            Assert.Equal(HttpStatusCode.BadRequest, (await client.PutAsJsonAsync("/api/agents/child", new JsonObject { ["restore"] = true, ["rules"] = new JsonArray() })).StatusCode);
+            Assert.True(JsonNode.DeepEquals(metadata, f.Manager.AgentMetadata["child"]));
+            Assert.Null(await f.Manager.GetExistingAsync(childId));
+            await Assert.ThrowsAsync<InvalidDataException>(() => f.Manager.CreateNamedAsync("child", "main", null, null));
+            Assert.False(File.Exists(oldMemory));
+            var fresh = await f.Manager.CreateNamedAsync("child", "fresh", null, null);
+            Assert.Equal("offline", f.Manager.CurrentNode(fresh));
+            await Assert.ThrowsAsync<ToolAuthorizationDeniedException>(() => f.Manager.AuthorizeToolAsync(fresh,
+                new("skill", "builtin", "skill", new JsonObject { ["action"] = "list" }), null, default));
+            await f.Manager.DeleteAgentFromCommandAsync("child");
+            // Parent deletion stays blocked until its retained child record is explicitly cleaned.
+            var parentDeletion = await client.SendAsync(new HttpRequestMessage(HttpMethod.Delete, "/api/agents/parent") { Content = JsonContent.Create(new { confirmAgentId = "parent" }) });
+            Assert.False(parentDeletion.IsSuccessStatusCode);
+            var cleanup = await client.SendAsync(new HttpRequestMessage(HttpMethod.Delete, "/api/agents/child") { Content = JsonContent.Create(new { confirmAgentId = "child", retainedOnly = true }) });
+            Assert.Equal(HttpStatusCode.OK, cleanup.StatusCode);
+            Assert.Null(f.Manager.AgentMetadata["child"]);
+            Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(new HttpRequestMessage(HttpMethod.Delete, "/api/agents/parent") { Content = JsonContent.Create(new { confirmAgentId = "parent" }) })).StatusCode);
+        }
+        finally
+        {
+            await server.App.StopAsync();
+            await server.App.DisposeAsync();
+        }
+    }
+
 }

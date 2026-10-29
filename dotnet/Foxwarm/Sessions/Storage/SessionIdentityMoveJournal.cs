@@ -11,7 +11,10 @@ internal sealed record SessionIdentityMoveRecord(
     bool OwnsAgent,
     string? OwnedAgent,
     long CreatedAt,
-    int Version = 2
+    int Version = 2,
+    string? OwnedAgentPreparation = null,
+    JsonObject? PreviousAgentMetadata = null,
+    bool? AgentDirectoryPublished = null
 )
 {
     internal string TargetAgent => SessionIdentity.Agent(NewId);
@@ -30,6 +33,9 @@ internal sealed record SessionIdentityMoveRecord(
             ["ownsTargetAgentDirectory"] = OwnsAgent,
             ["targetAgentName"] = OwnedAgent,
             ["createdAt"] = CreatedAt,
+            ["ownedAgentPreparation"] = OwnedAgentPreparation,
+            ["previousAgentMetadata"] = PreviousAgentMetadata?.DeepClone(),
+            ["agentDirectoryPublished"] = AgentDirectoryPublished,
         };
 }
 
@@ -110,6 +116,20 @@ internal sealed class SessionIdentityMoveJournal(string root)
             throw new InvalidDataException(
                 "Identity move intent cannot prove ownership of its destination directory."
             );
+        var preparation = SessionCatalog.Text(row["ownedAgentPreparation"]);
+        bool? published = null;
+        if (row["agentDirectoryPublished"] is not null)
+        {
+            if (row["agentDirectoryPublished"] is not JsonValue flag || !flag.TryGetValue<bool>(out var value))
+                throw new InvalidDataException("Identity move has invalid Agent publication evidence.");
+            published = value;
+        }
+        if (row["ownedAgentPreparation"] is not null && preparation is null
+            || row["previousAgentMetadata"] is not null && row["previousAgentMetadata"] is not JsonObject
+            || !ownsAgent && (preparation is not null || row["previousAgentMetadata"] is not null || published is not null))
+            throw new InvalidDataException("Identity move has invalid Agent preparation ownership.");
+        if (preparation is not null)
+            AgentCatalog.ValidatePreparationName(preparation);
         return new(
             phase,
             old,
@@ -119,7 +139,10 @@ internal sealed class SessionIdentityMoveJournal(string root)
             ownsAgent,
             owned,
             (long)(SessionCatalog.Number(row["createdAt"]) ?? 0),
-            (int)version!.Value
+            (int)version!.Value,
+            preparation,
+            (JsonObject?)row["previousAgentMetadata"]?.DeepClone(),
+            published
         );
     }
 
