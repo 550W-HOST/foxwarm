@@ -12,6 +12,14 @@ import { WebSocket } from 'ws'
 import { writeModelFixture } from './mainModelFixture.mjs'
 import { waitForWebUiReady } from './webuiReadiness.mjs'
 
+const startedAt = Date.now()
+let currentStage
+function stage(name) {
+  currentStage = name
+  console.error(JSON.stringify({ fixture: 'mainHostCode', stage: name, elapsedMs: Date.now() - startedAt }))
+}
+stage('owned fixture preparation')
+
 const workbenchDir = resolve('dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web')
 await access(join(workbenchDir, 'out/vs/workbench/workbench.web.main.internal.js'))
 const options = { env: {} }, owned = await createHostFixture('code', options)
@@ -85,6 +93,7 @@ async function frameText(page, pattern) {
   return null
 }
 try {
+  stage('host startup and App login')
   await owned.start(); assert.equal((await owned.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'main' })).status, 200); assert.equal((await owned.api('POST', '/api/sessions/main/cwd', { cwd: owned.work })).status, 200); const page = await owned.openApp()
   await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('.foxwarm-chat-root')
   assert.equal(await page.evaluate(() => document.querySelector('meta[name="foxwarm-host"]')?.content), 'dotnet')
@@ -92,23 +101,28 @@ try {
   const loginCookie = (await page.cookies()).find(cookie => cookie.name === 'foxwarm_token'); assert.equal(loginCookie.httpOnly, false); assert.equal(loginCookie.value, owned.token); assert.equal(loginCookie.secure, declaredMode === 'https'); assert.equal(loginCookie.path, declaredMode ? '/published/main/' : '/')
   page.on('pageerror', error => browserErrors.push(error.message))
   page.on('response', response => { if (response.url().includes('/vscode-web/')) codeResponses.push({ url: response.url(), status: response.status() }) })
+  stage('native tool turn')
   await page.evaluate(() => window.foxwarmTest.sendMessage('CODE-TURN'))
   await until(async () => { if (failures.length) throw new Error(failures.join('\n')); const state = await authority(); return !state.busy && state.history.some(row => row.parts?.some(part => part.text?.includes('CODE-TURN-DONE'))) }, 'native turn')
   const state = await authority(), native = state.history.flatMap(row => row.parts || []).find(part => part.functionResponse?.tool_use_id === 'code-read').functionResponse
   assert.equal(native.__meta.resolvedPaths[0].resolved, join(owned.work, 'notes.txt'))
+  stage('embedded workbench file and selection')
   await page.waitForSelector('button[title="Open notes.txt in Code"]'); await page.click('button[title="Open notes.txt in Code"]')
   let code = await codeFrame(page); await code.waitForSelector('.editor-instance .view-lines', { timeout: 40000 })
   await code.waitForFunction(() => document.querySelector('.editor-instance .view-lines')?.textContent.replaceAll('\u00a0', ' ').includes('selected second'))
   await page.evaluate(() => { document.querySelector('iframe[src*="vscode-web"]').dataset.codeProof = 'same-frame' })
   await code.waitForFunction(() => [...document.querySelectorAll('.statusbar-item')].some(item => item.textContent.replaceAll('\u00a0', ' ').includes('(30 selected)')))
+  stage('official Code terminal and helper')
   await palette(code, 'Foxwarm: New Terminal')
   await until(async () => (await owned.api('GET', '/api/terminals')).body.terminals.length === 1, 'official Code terminal backend', 30000)
   await code.waitForSelector('.xterm-screen canvas', { timeout: 30000 }); await code.click('.xterm-screen'); await code.page().keyboard.type("printf 'CODE-PTY\\n' > ui-pty.txt"); await code.page().keyboard.press('Enter')
   await until(async () => (await readFile(join(owned.work, 'ui-pty.txt'), 'utf8').catch(() => '')) === 'CODE-PTY\n', 'official Code keyboard reached PTY', 30000)
   await code.click('.xterm-screen'); await code.page().keyboard.type("code --goto notes.txt:2:1"); await code.page().keyboard.press('Enter'); await code.waitForFunction(() => document.body.innerText.includes('Ln 2, Col 1'))
+  stage('official Code file save')
   // Editing uses Code's real model, browser FS provider and authenticated write route.
   await code.click('.editor-instance .view-lines'); await page.keyboard.down('Control'); await page.keyboard.press('End'); await page.keyboard.up('Control'); await page.keyboard.type('\nCode saved line'); await page.keyboard.down('Control'); await page.keyboard.press('S'); await page.keyboard.up('Control')
   await until(async () => (await readFile(join(owned.work, 'notes.txt'), 'utf8')).includes('Code saved line'), 'actual Code save')
+  stage('persistent workspace root commands')
   await palette(code, 'Foxwarm: Open Foxwarm data folder')
   await until(() => workspaceHas(owned.data), 'data workspace command')
   code = await codeFrame(page); await code.waitForFunction(() => document.body.innerText.includes('Foxwarm Data'))
@@ -116,6 +130,7 @@ try {
   const roots = (await owned.api('GET', '/api/vscode-web/fs/workspace-roots')).body
   await until(() => workspaceHas(roots.roots.app.path), 'app workspace command')
   assert.equal(await page.evaluate(() => document.querySelector('iframe[src*="vscode-web"]').dataset.codeProof), 'same-frame')
+  stage('commit details and immutable diffs')
   // Clicking the real marker is the commit bridge producer, not a direct test-only command.
   await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('button[title="Open commit details in Code"]'); await page.click('button[title="Open commit details in Code"]')
   const detailsFrame = await until(() => frameText(page, /rename and binary fixture[\s\S]*Changed files/), 'real SCM commit webview', 45000)
@@ -130,6 +145,7 @@ try {
   await (await rootDetails.$('button.file:not([disabled])')).click(); code = await codeFrame(page)
   await code.waitForFunction(() => document.body.innerText.includes('old.txt'))
   await until(() => codeResponses.some(row => row.url.includes('/api/vscode-web/git/content') && row.url.includes('ref=' + rootCommit)), 'root immutable file content')
+  stage('official webview sidebar, Chat and Setup')
   // Original Foxwarm sidebar and Setup run in the actual official webview bootstrap.
   await palette(code, 'View: Show Foxwarm')
   let sidebar = await until(() => page.frames().find(frame => new URL(frame.url() || 'about:blank').searchParams.get('foxwarmEmbed') === 'sidebar'), 'actual nested Foxwarm sidebar', 30000)
@@ -142,6 +158,7 @@ try {
   await sidebar.evaluate(() => [...document.querySelectorAll('button')].find(item => item.textContent.trim() === 'Open setup').click())
   const setup = await until(() => page.frames().find(frame => new URL(frame.url() || 'about:blank').searchParams.get('foxwarmEmbed') === 'setup'), 'actual nested Setup editor', 30000)
   await setup.waitForFunction(() => document.body.innerText.includes('Models') && document.body.innerText.includes('Setup'))
+  stage('original App terminal and cwd')
   await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('[data-workbench-status-bar] button[aria-label="Toggle terminal"]')
   const appTerminalsBefore = (await owned.api('GET', '/api/terminals')).body.terminals
   await page.click('[data-workbench-status-bar] button[aria-label="Toggle terminal"]')
@@ -158,6 +175,7 @@ try {
     return appCwd.body.terminal.cwd === dirname(owned.work)
   }, 'original App cwd tracking', 30000)
   const persistedTabId = await until(async () => page.evaluate(id => { try { const saved = JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4') || '{}'); const state = saved.state || saved; return Object.entries(state.tabsById || {}).find(([, tab]) => tab.terminalId === id && !tab.createMode)?.[0] || false } catch { return false } }, appTerminal.id), 'original App terminal tab persistence', 30000)
+  stage('original App terminal reload and close')
   await page.reload({ waitUntil: 'domcontentloaded' }); await waitForWebUiReady(page); await page.waitForFunction(() => window.foxwarmTest?.switchToSession); await page.evaluate(id => { window.location.hash = '#tab/' + encodeURIComponent(id) }, persistedTabId); await page.waitForSelector('.xterm-screen, .xterm-rows', { timeout: 30000 })
   const appAfterReload = await owned.api('GET', `/api/terminals/${encodeURIComponent(appTerminal.id)}`); assert.equal(appAfterReload.body.terminal.pid, appTerminal.pid); assert.equal(appAfterReload.body.terminal.cwd, dirname(owned.work))
   const terminalClose = '[data-workbench-tab-close="' + persistedTabId + '"], [data-tab-id="' + persistedTabId + '"] button[title="Close tab"]'
@@ -166,6 +184,7 @@ try {
   await until(async () => (await owned.api('GET', `/api/terminals/${encodeURIComponent(appTerminal.id)}`)).status === 404, 'original App explicit terminal close', 30000)
   await page.reload({ waitUntil: 'domcontentloaded' }); await waitForWebUiReady(page); await page.waitForFunction(() => window.foxwarmTest?.switchToSession)
   await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('.foxwarm-chat-root')
+  stage('workbench and workspace restore')
   await page.click('button[title="Open notes.txt in Code"]'); code = await codeFrame(page); await code.waitForSelector('.monaco-workbench', { timeout: 30000 })
   const persisted = JSON.parse(await readFile(join(owned.data, 'state/vscode-web/foxwarm.code-workspace'), 'utf8')); assert(persisted.folders.length >= 3); assert.equal(persisted.settings['yaml.schemaStore.enable'], false)
   assert.equal((await owned.api('GET', '/api/vscode-web/git/commit?workspace=' + encodeURIComponent(owned.work) + '&id=' + rootCommit)).body.comparison.mode, 'empty-tree')
@@ -176,24 +195,30 @@ try {
     if (!option.checked) option.click()
   })
   await page.click('button[aria-label="Open code options"]')
+  stage('standalone Code popup')
   const popupReady = once(page, 'popup'); await page.click('.foxwarm-chat-root button[title="Code"]'); const [popup] = await popupReady; extraPage = popup; popup.on('pageerror', error => browserErrors.push(error.message))
   await popup.waitForSelector('.monaco-workbench', { timeout: 30000 }); const configuration = await popup.evaluate(() => JSON.parse(document.querySelector('#vscode-workbench-web-configuration').getAttribute('data-settings')))
   assert.equal(configuration.folderUri.authority, 'node+master'); assert.equal(resolve(decodeURIComponent(configuration.folderUri.path)), owned.work); assert(!configuration.workspaceUri)
+  stage('standalone config navigation')
   const rawApp = await readFile(roots.configFiles.app.path, 'utf8')
   const configUrl = new URL(popup.url()); configUrl.searchParams.set('openFilePath', roots.configFiles.app.path); configUrl.searchParams.set('openFileNodeId', 'master')
   await popup.goto(configUrl.toString(), { waitUntil: 'domcontentloaded' }); await popup.waitForSelector('.tab[aria-label*="config.yaml"]'); await popup.click('.tab[aria-label*="config.yaml"]'); await popup.waitForFunction(() => document.querySelector('.editor-instance .view-lines')?.textContent.includes('maxOutput'), { timeout: 30000 })
+  stage('official YAML diagnostics and advisory save')
   await popup.click('.editor-instance .view-lines'); await popup.keyboard.down('Control'); await popup.keyboard.press('A'); await popup.keyboard.up('Control'); await popup.keyboard.type('llm:\n  maxOutput: "invalid"\n')
   await popup.waitForSelector('.squiggly-error', { timeout: 30000 }); await popup.keyboard.down('Control'); await popup.keyboard.press('S'); await popup.keyboard.up('Control')
   await until(async () => (await readFile(roots.configFiles.app.path, 'utf8')).includes('invalid'), 'human raw YAML save remains advisory')
+  stage('unchanged startup config and YAML restoration')
   await page.evaluate(() => window.foxwarmTest.sendMessage('CONFIG-CAPTURE'))
   await until(() => requests.length === 3, 'unchanged startup app config after Code save'); assert.equal(requests[2].max_output_tokens, 713)
   await popup.click('.editor-instance .view-lines'); await popup.keyboard.down('Control'); await popup.keyboard.press('A'); await popup.keyboard.up('Control'); await popup.keyboard.sendCharacter(rawApp.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n')); await popup.keyboard.down('Control'); await popup.keyboard.press('S'); await popup.keyboard.up('Control')
   await until(async () => (await readFile(roots.configFiles.app.path, 'utf8')).replaceAll('\r\n', '\n') === rawApp.replaceAll('\r\n', '\n'), 'restore owned YAML fixture')
+  stage('standalone popup close')
   await popup.close()
   if (!declaredMode) {
   // Bootstrap preserves a public prefix without trusting forwarded headers.
   // A stripping proxy keeps relative assets and authenticated writes on its prefix.
   // Ordinary Origin headers do not replace the token/cookie boundary.
+  stage('prefixed workbench and authenticated file writes')
   prefixProxy = createServer((request, response) => {
     if (!request.url.startsWith('/fixture/')) { response.writeHead(404); response.end(); return }
     const headers = { ...request.headers, host: new URL(owned.origin).host }; delete headers['x-forwarded-host']; delete headers['x-forwarded-proto']
@@ -212,6 +237,7 @@ try {
   assert.equal(await readFile(prefixWrite, 'utf8'), 'authenticated prefix write')
   assert((await readFile(join(owned.work, 'notes.txt'), 'utf8')).includes('Code saved line')); await prefixed.close(); await new Promise(done => prefixProxy.close(done)); prefixProxy = null
   } else {
+    stage('declared proxy image and queued input')
     await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('.foxwarm-chat-root')
     const bytes = await sharp({ create: { width: 3, height: 2, channels: 4, background: { r: 190, g: 20, b: 80, alpha: 1 } } }).png().toBuffer()
     await page.type('[role="textbox"][aria-label="Message"]', 'PUBLIC-IMAGE')
@@ -241,6 +267,7 @@ try {
       socket.on('unexpected-response', (_, response) => { resolve(response.statusCode); response.resume() })
       socket.on('open', () => { socket.close(); resolve(101) }); socket.on('error', reject)
     })
+    stage('declared proxy authentication boundary')
     for (const foreign of ['null', 'not an origin', owned.origin, 'https://foreign.invalid', publicOrigin + ', ' + publicOrigin]) {
       for (const path of ['/api/sessions', blobPath, '/download?path=' + encodeURIComponent(join(owned.work, 'notes.txt')), '/vscode-web/', '/vscode-web/static/out/nls.messages.js']) {
         assert.equal((await probe(path, foreign)).status, 200)
@@ -255,14 +282,21 @@ try {
     assert.equal((await probe('/api/sessions', 'https://foreign.invalid', 'GET', { host: new URL(options.publicRoot).host, 'x-forwarded-host': new URL(options.publicRoot).host, 'x-forwarded-proto': declaredMode })).status, 200)
     const presentation = await probe('/vscode-web/', publicOrigin, 'GET', { host: 'untrusted.invalid', 'x-forwarded-host': 'untrusted.invalid', 'x-forwarded-proto': 'http' }); assert.equal(presentation.status, 200); assert(!presentation.text.includes('untrusted.invalid'))
     // Same stored credentials work after a real clean restart; no token or config reload.
+    stage('declared proxy clean restart')
     const tokenBefore = await readFile(join(owned.data, 'state/token'), 'utf8'); await owned.stop(); await owned.start(); await page.reload({ waitUntil: 'domcontentloaded' }); await waitForWebUiReady(page); await page.waitForFunction(() => window.foxwarmTest?.switchToSession)
     assert.equal(await readFile(join(owned.data, 'state/token'), 'utf8'), tokenBefore); assert(!await page.$('#token'))
     assert.equal(await page.evaluate(async path => (await fetch(location.pathname + path.slice(1))).status, blobPath), 200)
     assert(proxyUpgrades > 0, 'Actual browser realtime must traverse the prefix proxy.')
     assert.equal(await page.evaluate(async file => (await fetch(location.pathname + 'download?path=' + encodeURIComponent(file))).status, join(owned.work, 'notes.txt')), 200)
   }
+  stage('final effects and host shutdown')
   assert.equal(git('rev-parse', 'HEAD'), commit); assert.equal(requests.length, declaredMode ? 6 : 3)
   assert(!codeResponses.some(row => row.status >= 500), JSON.stringify(codeResponses.filter(row => row.status >= 500)))
   await owned.stop(); console.log(JSON.stringify({ status: 'passed', requests: requests.length, codeRequests: codeResponses.length, browserErrors, roots, folders: persisted.folders.length, prefixedWorkbench: !declaredMode, originHeaderIsNotAuthentication: Boolean(declaredMode), declaredMode, proxyUpgrades }))
-} catch (error) { console.error(JSON.stringify({ browserErrors, failedRequests: [...new Map(codeResponses.filter(row => row.status >= 500).map(row => [row.url, row])).values()], host: owned.output, frames: await Promise.all([...(appPage?.frames() || []), ...(extraPage?.isClosed() ? [] : extraPage?.frames() || [])].map(async frame => ({ url: frame.url(), text: await frame.evaluate(() => document.body.innerText.slice(0, 1800)).catch(() => '') }))) })); throw error }
+} catch (error) {
+  // Cached frame URLs remain available when the initiating browser operation cannot respond.
+  const path = url => new URL(url || 'about:blank').pathname.slice(0, 256)
+  console.error(JSON.stringify({ stage: currentStage, browserErrors: browserErrors.slice(-8).map(value => value.slice(0, 512)), failedRequests: codeResponses.filter(row => row.status >= 500).slice(-8).map(row => ({ path: path(row.url), status: row.status })), host: owned.output, frames: [...(appPage?.frames() || []), ...(extraPage?.isClosed() ? [] : extraPage?.frames() || [])].slice(-16).map(frame => ({ path: path(frame.url()) })) }))
+  throw error
+}
 finally { releaseHold(); await owned.cleanup(); if (declaredProxy) { declaredProxy.closeAllConnections(); await new Promise(done => declaredProxy.close(done)) } if (prefixProxy) await new Promise(done => prefixProxy.close(done)); await new Promise(done => peer.close(done)) }

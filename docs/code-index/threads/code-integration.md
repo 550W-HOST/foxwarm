@@ -118,6 +118,10 @@ Only strict standalone model-authored markers outside code fences produce click-
 
 Dynamic public-path ownership is canonical in [D-webui-dynamic-base-path](../modules/webui.md#d-webui-dynamic-base-path).
 
+## Verification
+
+`packages/webui/test/mainHostCode.e2e.mjs` exercises the original App, official workbench and browser extensions through file edits, terminal effects, immutable commit views, embedded leaf views, workspace restoration, advisory YAML diagnostics and prefixed authenticated writes. Static stage labels and elapsed times survive whole-file interruption in the existing runner log. Failure projection uses bounded cached frame paths without query strings or browser evaluation, so collecting diagnostics cannot wait on an unresponsive renderer. Assertion and runner deadlines remain independent of that projection.
+
 ## Open questions
 
 - Cross-origin credential exchange for a future isolated webview host remains undesigned.
