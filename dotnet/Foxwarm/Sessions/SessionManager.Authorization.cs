@@ -278,6 +278,33 @@ internal sealed partial class SessionManager
             );
     }
 
+    private async Task AuthorizePromptFilesAsync(
+        SessionOwner source,
+        string targetAgent,
+        IReadOnlyList<string> selection,
+        CancellationToken token
+    )
+    {
+        // Prompt sources live on Main regardless of the new Session's execution Node.
+        // Authorize the selecting caller once; lifecycle rebuilds reuse the admitted selection.
+        var files = new WorkspaceTools(AgentDirectory(source.Agent));
+        foreach (var reference in selection)
+            await AuthorizeToolAsync(
+                source,
+                new(
+                    "read",
+                    "node",
+                    "read",
+                    new JsonObject
+                    {
+                        ["filePath"] = memory.ResolveSelectedPath(targetAgent, reference),
+                    }
+                ),
+                files,
+                token
+            );
+    }
+
     // This exception reaches generic policy and the existing exact isolated capability check.
     // It does not grant selection, exec, file export or any other off-bound-Node authority.
     private static bool IsMasterBrowser(string source, string name, string node) =>

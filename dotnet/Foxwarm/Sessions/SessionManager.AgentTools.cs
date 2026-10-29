@@ -272,9 +272,18 @@ internal sealed partial class SessionManager
                         throw new InvalidDataException(
                             "systemPromptFiles must be an array of strings."
                         );
+                    var agentName = RequiredString(args, "agentName");
+                    var selection = AgentMemory.NormalizeSelection(args["systemPromptFiles"]);
+                    if (selection is not null)
+                        await AuthorizePromptFilesAsync(
+                            source,
+                            agentName,
+                            selection,
+                            semanticCaller.Value ?? default
+                        );
                     var settings = source.Entry.Snapshot().AuthorityEnvelope;
                     var created = await CreateNamedAsync(
-                        RequiredString(args, "agentName"),
+                        agentName,
                         RequiredString(args, "sessionName"),
                         OptionalString(args, "displayName"),
                         forceModel,
@@ -285,7 +294,7 @@ internal sealed partial class SessionManager
                             SessionWait.Text(settings["childEffortDefault"])
                                 ?? SessionWait.Text(settings["effort"])
                         ),
-                        selectedFiles: AgentMemory.NormalizeSelection(args["systemPromptFiles"]),
+                        selectedFiles: selection,
                         parentSessionId: OptionalString(args, "parentSessionId")
                     );
                     return (

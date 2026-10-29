@@ -1,7 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json.Nodes;
-using Foxwarm.Tools;
 
 namespace Foxwarm.Sessions;
 
@@ -51,30 +50,10 @@ internal sealed partial class AgentMemory
         CancellationToken token
     )
     {
-        var agentDirectory = agents.AgentDirectory(agentName);
-        var restrictToAgentDirectory = IsolatedToolCompatibility
-            .Metadata(agents.MetadataSnapshot()[agentName])
-            .Isolated;
         foreach (var reference in selection)
         {
             token.ThrowIfCancellationRequested();
-            var expanded =
-                reference == "~" ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
-                : reference.StartsWith("~/", StringComparison.Ordinal)
-                || reference.StartsWith("~\\", StringComparison.Ordinal)
-                    ? Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                        reference[2..]
-                    )
-                : reference;
-            var path = Path.GetFullPath(expanded, agentDirectory);
-            if (
-                restrictToAgentDirectory
-                && !ToolAuthorizationEvaluation.Within(path, agentDirectory)
-            )
-                throw new InvalidDataException(
-                    $"Isolated agent session can only access agents/{agentName}/ on master."
-                );
+            var path = ResolveSelectedPath(agentName, reference);
             if (!RegularSelectedFile(path))
                 throw new InvalidDataException(
                     $"systemPromptFiles entry '{reference}' must resolve to an existing ordinary file."
@@ -92,6 +71,20 @@ internal sealed partial class AgentMemory
                     ConditionalMemory.FilterConditionalMemorySource(body, modelId)
                 );
         }
+    }
+
+    internal string ResolveSelectedPath(string agentName, string reference)
+    {
+        var expanded =
+            reference == "~" ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+            : reference.StartsWith("~/", StringComparison.Ordinal)
+            || reference.StartsWith("~\\", StringComparison.Ordinal)
+                ? Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    reference[2..]
+                )
+            : reference;
+        return Path.GetFullPath(expanded, agents.AgentDirectory(agentName));
     }
 
     private static bool RegularSelectedFile(string path)

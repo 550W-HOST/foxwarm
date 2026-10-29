@@ -787,10 +787,10 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
     <div data-tool-header-tone={tagTone} className={`foxwarm-tool-header min-w-0 ${toolHeaderToneClasses[tagTone]}`}>
       <div
         className={`foxwarm-tool-header-toggle cursor-pointer ${THREAD_CARD_HEADER_ROW_CLASS}`}
-        onClick={(e) => {
+        onClick={expanded ? (e) => {
           e.stopPropagation()
           toggle()
-        }}
+        } : undefined}
       >
         <ToolTag toolCall={!!call || !!primaryResponse} name={primaryName} label={primaryLabel} tone={tagTone} className="foxwarm-tool-tag" />
         <div className="foxwarm-tool-call-header relative flex min-w-0 flex-1 items-center self-stretch">
@@ -812,7 +812,11 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
     <div
       ref={heightRef}
       data-search-tool-index={toolIndex}
-      className={`foxwarm-tool-card foxwarm-tool-tone-${tagTone} min-w-0 max-w-full text-xs relative group pl-2 ${toolSurfaceToneClasses[tagTone]} ${hasBody ? 'pb-1' : ''}`}
+      className={`foxwarm-tool-card foxwarm-tool-tone-${tagTone} min-w-0 max-w-full text-xs relative group pl-2 ${toolSurfaceToneClasses[tagTone]} ${hasBody ? 'pb-1' : ''} ${!expanded ? 'cursor-pointer [&_.cursor-text]:cursor-pointer' : ''}`}
+      onClick={!expanded ? (event) => {
+        if ((event.target as Element).closest('a, button')) return
+        toggle()
+      } : undefined}
     >
       <ThreadLineButton
         expanded={expanded}

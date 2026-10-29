@@ -151,7 +151,7 @@ const cases: Array<{ name: string; messages: ContinuationMessage[]; incomplete: 
       { functionResponse: { tool_use_id: 'duplicate-call', name: 'read', response: { output: 'ok' } } },
     ] },
   ], incomplete: true },
-  { name: 'failed ordinary sibling still completes a successful handoff terminal batch', messages: [
+  { name: 'failed ordinary sibling leaves a successful handoff batch incomplete', messages: [
     { role: 'model', parts: [
       { functionCall: { id: 'read-before-handoff', name: 'read', args: {} } },
       { functionCall: { id: 'successful-handoff', name: 'send_to_session', args: { sessionId: 'child', message: 'go', afterSend: 'wait' } } },
@@ -160,7 +160,7 @@ const cases: Array<{ name: string; messages: ContinuationMessage[]; incomplete: 
       { functionResponse: { tool_use_id: 'read-before-handoff', name: 'read', response: { error: 'read failed' } } },
       { functionResponse: { tool_use_id: 'successful-handoff', name: 'send_to_session', response: { output: 'sent' } } },
     ] },
-  ], incomplete: false },
+  ], incomplete: true },
   { name: 'an older terminal batch cannot complete the nearest ordinary batch', messages: [
     callMessage('old-terminal', 'wait'),
     toolMessage('old-terminal', 'wait'),
@@ -182,3 +182,41 @@ for (const fixture of cases) {
     assert.equal(isSessionTurnIncomplete(fixture.messages), fixture.incomplete);
   });
 }
+
+for (const [name, args] of [
+  ['wait', {}],
+  ['send_to_session', { afterSend: 'finish' }],
+  ['create_child_session', { afterSend: 'wait' }],
+] as const) {
+  for (const errorFirst of [false, true]) {
+    test(`${name} with a ${errorFirst ? 'preceding' : 'following'} error remains continuable after interruption`, () => {
+      const calls = [callMessage('terminal', name, args).parts[0], callMessage('failure', 'read').parts[0]];
+      const results = [toolMessage('terminal', name).parts[0], toolMessage('failure', 'read', { error: false }).parts[0]];
+      if (errorFirst) {
+        calls.reverse();
+        results.reverse();
+      }
+      assert.equal(isSessionTurnIncomplete([
+        { role: 'model', parts: calls },
+        { role: 'tool', parts: results },
+        displayOnly(),
+        compactCompleted(),
+      ]), true);
+    });
+  }
+}
+
+test('nested business errors and nonzero exec status do not suppress a terminal completion', () => {
+  assert.equal(isSessionTurnIncomplete([
+    { role: 'model', parts: [
+      callMessage('handled', 'run_script').parts[0],
+      callMessage('nonzero', 'exec').parts[0],
+      callMessage('terminal', 'send_to_session', { afterSend: 'finish' }).parts[0],
+    ] },
+    { role: 'tool', parts: [
+      toolMessage('handled', 'run_script', { status: 'completed', result: { error: 'handled' } }).parts[0],
+      toolMessage('nonzero', 'exec', { exitCode: 7, error: null }).parts[0],
+      toolMessage('terminal', 'send_to_session').parts[0],
+    ] },
+  ]), false);
+});
