@@ -323,7 +323,7 @@ internal static partial class UnifiedTools
                 + " }); /* "
                 + Comment(tool.Description)
                 + " */";
-            if (line.Length > 3000 || lines.Sum(item => item.Length + 1) + line.Length > 27_800)
+            if (lines.Sum(item => item.Length + 1) + line.Length > 27_800)
             {
                 omitted++;
                 continue;
