@@ -106,11 +106,24 @@ public sealed class UnifiedToolSearchTests
         await using var mcp = new Foxwarm.McpClient(temp.Path);
         var registry = new ToolRegistry(mcp, _ => temp.Path);
         var definition = HandoffConfirmation.Definition(
-            AgentToolDefinitions.Definitions().OfType<JsonObject>().Single(item => item["name"]!.GetValue<string>() == "create_child_session"),
+            AgentToolDefinitions
+                .Definitions()
+                .OfType<JsonObject>()
+                .Single(item => item["name"]!.GetValue<string>() == "create_child_session"),
             true
         );
-        registry.Register(definition, "builtin", true, (_, _, _) => throw new InvalidOperationException("Discovery must not invoke the tool."));
-        var args = new JsonObject { ["sources"] = new JsonArray("builtin"), ["query"] = "create_child_session", ["limit"] = 1 };
+        registry.Register(
+            definition,
+            "builtin",
+            true,
+            (_, _, _) => throw new InvalidOperationException("Discovery must not invoke the tool.")
+        );
+        var args = new JsonObject
+        {
+            ["sources"] = new JsonArray("builtin"),
+            ["query"] = "create_child_session",
+            ["limit"] = 1,
+        };
         var ordinary = await UnifiedTools.SearchAsync(registry, args, default);
         var output = ordinary["output"]!.GetValue<string>();
         Assert.Contains("Found 1 tool(s); 1 total match(es).", output);
@@ -121,8 +134,15 @@ public sealed class UnifiedToolSearchTests
                 Assert.Contains(description.GetValue<string>().Replace("\n", "\\u000a"), output);
         Assert.Contains("handoffRecall: string", output);
         Assert.Contains("handoffConfirmation: string", output);
-        var native = await UnifiedTools.SearchAsync(registry, args, default, budget: new ToolScriptDataBudget());
-        Assert.True(JsonNode.DeepEquals(definition["parameters"], native["tools"]![0]!["inputSchema"]));
+        var native = await UnifiedTools.SearchAsync(
+            registry,
+            args,
+            default,
+            budget: new ToolScriptDataBudget()
+        );
+        Assert.True(
+            JsonNode.DeepEquals(definition["parameters"], native["tools"]![0]!["inputSchema"])
+        );
     }
 
     [Fact]
@@ -133,20 +153,36 @@ public sealed class UnifiedToolSearchTests
         var registry = new ToolRegistry(mcp, _ => temp.Path);
         var description = new string('z', 5000) + " complete tail";
         Register(registry, 12, description);
-        var args = new JsonObject { ["sources"] = new JsonArray("builtin"), ["query"] = Prefix + "00", ["limit"] = 1 };
+        var args = new JsonObject
+        {
+            ["sources"] = new JsonArray("builtin"),
+            ["query"] = Prefix + "00",
+            ["limit"] = 1,
+        };
         var single = await UnifiedTools.SearchAsync(registry, args, default);
-        Assert.Contains("Found 1 tool(s); 1 total match(es).", single["output"]!.GetValue<string>());
+        Assert.Contains(
+            "Found 1 tool(s); 1 total match(es).",
+            single["output"]!.GetValue<string>()
+        );
         Assert.Contains(description, single["output"]!.GetValue<string>());
         args.Remove("query");
         args["limit"] = 200;
         var broad = await UnifiedTools.SearchAsync(registry, args, default);
         var output = broad["output"]!.GetValue<string>();
-        var declarations = output.Split('\n').Where(line => line.StartsWith("call_tool(")).ToArray();
+        var declarations = output
+            .Split('\n')
+            .Where(line => line.StartsWith("call_tool("))
+            .ToArray();
         Assert.InRange(declarations.Length, 1, 11);
         Assert.All(declarations, declaration => Assert.Contains(description, declaration));
         Assert.Contains("selected tool(s) omitted by declaration/output limits.", output);
         Assert.True(output.Length <= 32000);
-        var native = await UnifiedTools.SearchAsync(registry, args, default, budget: new ToolScriptDataBudget());
+        var native = await UnifiedTools.SearchAsync(
+            registry,
+            args,
+            default,
+            budget: new ToolScriptDataBudget()
+        );
         Assert.Equal(12, native["tools"]!.AsArray().Count);
     }
 
