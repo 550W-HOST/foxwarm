@@ -63,6 +63,8 @@ internal sealed partial class SessionManager
                 throw new InvalidDataException("Agent main Session ID is already reserved.");
             sourceSession = await ResolveAgentCreationSourceAsync(sourceSessionId, creator);
         }
+        if (creator is not null)
+            agents.RequireCreationSource(creator.Agent, sourceSession?.Agent ?? "main", conversion: false, copyMemory: inheritMemory);
         var gate = CreationKey(mainId);
         await gate.WaitAsync();
         try
@@ -79,7 +81,7 @@ internal sealed partial class SessionManager
             {
                 throw new CommittedSessionCreationException(
                     null,
-                    $"Agent '{agentName}' catalog was committed, but its final durability step failed; no main Session was created.",
+                    $"Agent '{agentName}' metadata was committed, but creation did not complete; no main Session was created. {error.Message}",
                     error
                 );
             }

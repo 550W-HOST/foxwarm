@@ -37,6 +37,10 @@ public sealed partial class AgentRulesTreeTests
             Successful(await f.ToolAsync("session", new JsonObject { ["action"] = "update-parent", ["parentSessionId"] = parent }, child));
             Assert.Equal(parent, child.Metadata().ParentSessionId);
         }
+        var alias = grand.Id;
+        await f.Manager.MoveIdentityAsync(grand, new JsonObject { ["newSessionId"] = "renamed-parent" });
+        Successful(await f.ToolAsync("session", new JsonObject { ["action"] = "update-parent", ["parentSessionId"] = alias }, child));
+        Assert.Equal(grand.Id, child.Metadata().ParentSessionId);
         Successful(await f.ToolAsync("session", new JsonObject { ["action"] = "update-parent", ["parentSessionId"] = null }, child));
         Assert.Null(child.Metadata().ParentSessionId);
         // A model in a top-level Agent retains arbitrary existing parent and cross-Agent creation paths.
@@ -140,6 +144,9 @@ public sealed partial class AgentRulesTreeTests
         Assert.Equal("updated-offline", f.Manager.CurrentNode(automatic));
         Successful(await f.ToolAsync("create_session", new JsonObject { ["agentName"] = "placed", ["sessionName"] = "tool-default" }));
         Assert.Equal("updated-offline", f.Manager.CurrentNode(await f.Manager.RequiredAsync("placed/tool-default")));
+        var router = new Foxwarm.MessageRouter(new SessionRuntime(f.Manager));
+        await router.HandleMessageAsync(new Foxwarm.ChannelContext(f.Owner.Id, "webui"), new Foxwarm.ChannelMessage("/session create placed command-default", null));
+        Assert.Equal("updated-offline", f.Manager.CurrentNode(await f.Manager.RequiredAsync("placed/command-default")));
         var explicitMain = await f.Manager.CreateNamedAsync("placed", "explicit", null, null, initialNode: "master");
         Assert.Equal("master", f.Manager.CurrentNode(explicitMain));
         var fork = await f.Manager.ForkAsync(main, "fork");

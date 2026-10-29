@@ -198,6 +198,8 @@ internal sealed partial class SessionManager
         if (purpose == IdentityMovePurpose.MoveSession && creator is not null
             && agents.CreatedBy(creator.Agent) is not null && owner.Agent != targetAgent)
             throw new ToolAuthorizationDeniedException("Delegated Agents cannot move Sessions across Agent boundaries.");
+        if (creator is not null && create)
+            agents.RequireCreationSource(creator.Agent, owner.Agent, purpose == IdentityMovePurpose.AgentConversion, copy);
         using var membership = BeginAgentAdmission(owner.Agent, targetAgent, caller.Agent);
         if (create && string.IsNullOrEmpty(agentName))
             throw new InvalidDataException("newAgentName is required when creating an Agent.");
@@ -258,7 +260,7 @@ internal sealed partial class SessionManager
                 );
             parent = Catalog.ValidateIdentityParent(old, raw);
             if (creator is not null)
-                RequireCreationParent(creator.Agent, parent);
+                RequireParentChange(creator.Agent, owner.Id, parent);
         }
         var previousParent = owner.Metadata().ParentSessionId;
         using var accepted = TrackCreation();

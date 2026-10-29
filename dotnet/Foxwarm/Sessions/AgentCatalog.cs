@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Foxwarm.Sessions;
@@ -15,6 +14,7 @@ internal sealed partial class AgentCatalog
     private readonly SemaphoreSlim createGate = new(1, 1);
     private readonly object stateGate = new();
     private readonly Func<(int MaxDepth, int MaxChildren)> treeLimits;
+    private readonly Action<AtomicJsonWriteStage>? metadataWriteStage;
     private JsonObject metadata = new();
     private readonly HashSet<string> known = new(StringComparer.Ordinal) { "main" };
 
@@ -24,10 +24,12 @@ internal sealed partial class AgentCatalog
         string? recoveringOwnedAgent = null,
         bool canonicalLayout = false,
         bool createDirectories = true,
-        Func<(int MaxDepth, int MaxChildren)>? treeLimits = null
+        Func<(int MaxDepth, int MaxChildren)>? treeLimits = null,
+        Action<AtomicJsonWriteStage>? metadataWriteStage = null
     )
     {
         this.treeLimits = treeLimits ?? (() => (16, 128));
+        this.metadataWriteStage = metadataWriteStage;
         this.workspaceRoot = Path.GetFullPath(workspaceRoot);
         this.canonicalLayout = canonicalLayout;
         agentRoot = canonicalLayout
@@ -194,7 +196,9 @@ internal sealed partial class AgentCatalog
             throw new InvalidDataException("The main Agent already exists.");
         await createGate.WaitAsync();
         var directory = Path.Combine(agentRoot, name);
+        var prepared = Path.Combine(agentRoot, ".create-" + Guid.NewGuid().ToString("N"));
         var createdDirectory = false;
+        var publishedDirectory = false;
         var committed = false;
         JsonObject? initialMetadata = null;
         Monitor.Enter(stateGate);
@@ -221,17 +225,19 @@ internal sealed partial class AgentCatalog
                 initialMetadata["defaultNode"] = defaultNode;
             if (inherit is not null)
                 initialMetadata["inherit"] = inherit;
-            Directory.CreateDirectory(directory);
+            // Dot-prefixed preparation is not Agent membership. Persist authority before
+            // publishing the final directory so restart cannot discover an unrestricted child.
+            Directory.CreateDirectory(prepared);
             createdDirectory = true;
-            Directory.CreateDirectory(Path.Combine(directory, "memory"));
+            Directory.CreateDirectory(Path.Combine(prepared, "memory"));
             if (initialMemory is not null)
                 File.WriteAllText(
-                    Path.Combine(directory, "memory", "MEMORY.md"),
+                    Path.Combine(prepared, "memory", "MEMORY.md"),
                     initialMemory
                 );
             if (initialSoul is not null)
                 File.WriteAllText(
-                    Path.Combine(directory, "memory", "SOUL.md"),
+                    Path.Combine(prepared, "memory", "SOUL.md"),
                     initialSoul
                 );
             var next = List()
@@ -243,8 +249,18 @@ internal sealed partial class AgentCatalog
             if (initialMetadata.Count > 0)
                 nextMetadata[name] = initialMetadata.DeepClone();
             var payload = Payload(next, nextMetadata);
-            AtomicIndexWrite(indexPath, payload.ToJsonString());
+            AuthorityCommittedException? durabilityFailure = null;
+            try
+            {
+                AtomicIndexWrite(indexPath, payload.ToJsonString());
+            }
+            catch (AuthorityCommittedException error)
+            {
+                durabilityFailure = error;
+            }
             committed = true;
+            Directory.Move(prepared, directory);
+            publishedDirectory = true;
             lock (stateGate)
             {
                 if (!canonicalLayout)
@@ -252,6 +268,8 @@ internal sealed partial class AgentCatalog
                 if (initialMetadata is { Count: > 0 })
                     metadata[name] = initialMetadata.DeepClone();
             }
+            if (durabilityFailure is not null)
+                throw durabilityFailure;
         }
         catch (AuthorityCommittedException)
         {
@@ -264,10 +282,28 @@ internal sealed partial class AgentCatalog
             }
             throw;
         }
-        catch
+        catch (Exception error)
         {
-            if (createdDirectory && !committed)
-                Directory.Delete(directory, recursive: true);
+            if (createdDirectory && !publishedDirectory && !committed)
+            {
+                try
+                {
+                    Directory.Delete(prepared, recursive: true);
+                }
+                catch (Exception cleanup)
+                {
+                    error = new AggregateException(error, cleanup);
+                }
+            }
+            if (committed)
+            {
+                if (initialMetadata is { Count: > 0 })
+                    metadata[name] = initialMetadata.DeepClone();
+                throw new AuthorityCommittedException(
+                    "Agent metadata committed, but directory publication did not complete. "
+                    + $"Prepared files remain at '{prepared}'.", error);
+            }
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
             throw;
         }
         finally
@@ -277,46 +313,17 @@ internal sealed partial class AgentCatalog
         }
     }
 
-    private static void AtomicIndexWrite(string path, string text)
+    private void AtomicIndexWrite(string path, string text)
     {
-        var parent = Path.GetDirectoryName(path)!;
-        Directory.CreateDirectory(parent);
-        var temporary = path + ".tmp-" + Guid.NewGuid().ToString("N");
-        var renamed = false;
         try
         {
-            using (
-                var file = new FileStream(
-                    temporary,
-                    FileMode.CreateNew,
-                    FileAccess.Write,
-                    FileShare.None
-                )
-            )
-            {
-                var bytes = new UTF8Encoding(false).GetBytes(text);
-                file.Write(bytes);
-                file.Flush(true);
-            }
-            File.Move(temporary, path, overwrite: true);
-            renamed = true;
-            _ = LinuxAtomicJsonFile.LinuxDirectorySync.Sync(parent);
+            new LinuxAtomicJsonFile(Path.GetDirectoryName(path)!, Path.GetFileName(path), metadataWriteStage)
+                .WriteTextPayload(text, default);
         }
-        catch (Exception error)
+        catch (AuthorityCommittedException error)
         {
-            if (!renamed)
-            {
-                try
-                {
-                    File.Delete(temporary);
-                }
-                catch { }
-                throw;
-            }
             throw new AuthorityCommittedException(
-                "Agent catalog committed before a later durability step failed.",
-                error
-            );
+                "Agent catalog committed before a later durability step failed.", error);
         }
     }
 

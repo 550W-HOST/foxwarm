@@ -147,4 +147,31 @@ public sealed partial class AgentRulesTreeTests
         Assert.Equal("native effect", await File.ReadAllTextAsync(path));
     }
 
+    [Fact]
+    public async Task Prepared_directories_are_not_membership_and_failed_authority_write_leaves_no_published_child()
+    {
+        using var temp = new TempDirectory();
+        var work = Path.Combine(temp.Path, "agents");
+        var catalog = new AgentCatalog(temp.Path, work, canonicalLayout: true);
+        await catalog.CreateAsync("root");
+        var index = Path.Combine(temp.Path, "state", "agents.json");
+        File.Delete(index);
+        Directory.CreateDirectory(index);
+        await Assert.ThrowsAnyAsync<IOException>(() => catalog.CreateAsync("child", createdBy: "root",
+            rules: Rules("""[{"action":"deny"}]"""), initialMemory: "owned preparation"));
+        Assert.False(catalog.Exists("child"));
+        Assert.Null(catalog.MetadataSnapshot()["child"]);
+        Assert.Equal(new[] { "root" }, Directory.GetDirectories(work).Select(Path.GetFileName));
+        Directory.Delete(index);
+        // This is the durable layout after metadata commit but before final directory publication.
+        Directory.CreateDirectory(Path.Combine(work, ".create-interrupted", "memory"));
+        await File.WriteAllTextAsync(index, """{"child":{"createdBy":"root","rules":[{"action":"deny"}]}}""");
+        var reopened = new AgentCatalog(temp.Path, work, canonicalLayout: true);
+        Assert.DoesNotContain("child", reopened.List());
+        Assert.DoesNotContain(".create-interrupted", reopened.List());
+        Assert.Throws<InvalidDataException>(() => reopened.RuleLayers("child"));
+        Assert.Equal("root", reopened.CreatedBy("child"));
+        await Assert.ThrowsAsync<InvalidDataException>(() => reopened.CreateAsync("child"));
+    }
+
 }

@@ -71,7 +71,27 @@ internal sealed partial class AgentCatalog
                 return;
             if (!CreatorChain(target, snapshot).Contains(caller, StringComparer.Ordinal))
                 throw new ToolAuthorizationDeniedException(
-                    "A delegated Agent may create Sessions only in itself or its descendants.");
+                    "This operation requires a Session in the delegated Agent or its creator descendants.");
+        }
+    }
+
+    internal void RequireCreationSource(string caller, string source, bool conversion, bool copyMemory)
+    {
+        if (!conversion && !copyMemory)
+            return;
+        lock (stateGate)
+        {
+            var snapshot = MetadataSnapshot();
+            var callerChain = CreatorChain(caller, snapshot);
+            if (Creator(snapshot, caller) is null)
+                return;
+            var sourceChain = CreatorChain(source, snapshot);
+            var descendant = sourceChain.Contains(caller, StringComparer.Ordinal);
+            var ancestor = callerChain.Contains(source, StringComparer.Ordinal);
+            if (conversion && !descendant || copyMemory && !descendant && !ancestor)
+                throw new ToolAuthorizationDeniedException(conversion
+                    ? "A delegated Agent may convert only Sessions in itself or its creator descendants."
+                    : "A delegated Agent may copy memory only from itself, its creator ancestors or its descendants.");
         }
     }
 
@@ -97,7 +117,7 @@ internal sealed partial class AgentCatalog
             throw new InvalidDataException("An Agent-created Agent may inherit only from strict creator ancestors.");
     }
 
-    internal async Task SetRulesAsync(string name, JsonArray rules, string? caller = null, Func<Task>? authorize = null)
+    internal async Task SetRulesAsync(string name, JsonArray rules, Func<string>? caller = null, Func<Task>? authorize = null)
     {
         _ = AgentRulePolicy.Parse(rules);
         await createGate.WaitAsync();
@@ -108,7 +128,8 @@ internal sealed partial class AgentCatalog
             var next = MetadataSnapshot();
             if (authorize is not null)
                 await authorize();
-            if (caller is not null && (caller == name || !CreatorChain(name, next).Contains(caller, StringComparer.Ordinal)))
+            var callerAgent = caller?.Invoke();
+            if (callerAgent is not null && (callerAgent == name || !CreatorChain(name, next).Contains(callerAgent, StringComparer.Ordinal)))
                 throw new ToolAuthorizationDeniedException("Only strict creator ancestors may replace an Agent's rules.");
             var row = next[name] as JsonObject ?? new JsonObject();
             next[name] = row;

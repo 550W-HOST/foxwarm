@@ -315,11 +315,23 @@ internal sealed partial class SessionManager
         agents.RequireSessionTarget(callerAgent, target.Agent);
     }
 
+    private void RequireParentChange(string callerAgent, string target, string? parent)
+    {
+        if (agents.CreatedBy(callerAgent) is null)
+            return;
+        var existing = AuthorizationTarget(target)
+            ?? throw new InvalidDataException("Session does not exist.");
+        agents.RequireSessionTarget(callerAgent, existing.Agent);
+        RequireCreationParent(callerAgent, parent);
+    }
+
     internal Task SetAgentRulesAsync(string agent, JsonArray rules, SessionOwner? caller = null) =>
-        agents.SetRulesAsync(agent, rules, caller?.Agent, caller is null ? null : () =>
+        agents.SetRulesAsync(agent, rules, caller is null ? null : () => caller.Agent, caller is null ? null : () =>
             AuthorizeToolAsync(caller, new("set_agent_rules", "builtin", "set_agent_rules",
                 new JsonObject { ["agentName"] = agent, ["rules"] = rules.DeepClone() }),
                 null, semanticCaller.Value ?? CancellationToken.None));
+
+    internal string? AgentDefaultNode(string agent) => agents.DefaultNode(agent);
 
     internal Task SetAgentDefaultNodeAsync(string agent, string? node) =>
         agents.SetDefaultNodeAsync(agent, node);

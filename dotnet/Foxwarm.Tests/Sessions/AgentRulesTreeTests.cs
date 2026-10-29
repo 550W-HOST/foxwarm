@@ -67,10 +67,20 @@ public sealed partial class AgentRulesTreeTests
         await using var f = await Fixture();
         await f.Manager.CreateAgentAsync("selected-source");
         var source = await f.Manager.RequiredAsync("selected-source/main");
-        var initial = Rules("""[{"action":"deny","tool":"exec"}]""");
+        var initial = Rules("""[{"action":"deny","tool":"skill"}]""");
         foreach (var convert in new[] { false, true })
         {
             var name = convert ? "converted" : "fresh";
+            var observedInitialAuthority = false;
+            void ObserveInitial()
+            {
+                var published = f.Manager.AgentMetadata[name]!;
+                Assert.Equal("main", SessionWait.Text(published["createdBy"]));
+                Assert.True(JsonNode.DeepEquals(initial, published["rules"]));
+                observedInitialAuthority = true;
+            }
+            f.Manager.BeforeCreationPublication = id => { if (id == name + "/main") ObserveInitial(); return Task.CompletedTask; };
+            f.Manager.BeforeIdentityStage = (_, stage) => { if (convert && stage == "after-agent-copy") ObserveInitial(); return Task.CompletedTask; };
             Successful(await f.ToolAsync("create_agent", new JsonObject
             {
                 ["agentName"] = name,
@@ -79,12 +89,13 @@ public sealed partial class AgentRulesTreeTests
                 ["rules"] = initial.DeepClone(),
                 ["defaultNode"] = "offline-default",
             }));
+            Assert.True(observedInitialAuthority);
             var metadata = f.Manager.AgentMetadata[name]!;
             Assert.Equal("main", SessionWait.Text(metadata["createdBy"]));
             Assert.True(JsonNode.DeepEquals(initial, metadata["rules"]));
             Assert.Equal("offline-default", SessionWait.Text(metadata["defaultNode"]));
             var target = await f.Manager.RequiredAsync(name + "/main");
-            Denied(await f.ToolAsync("exec", new JsonObject { ["command"] = "echo must-not-run" }, target));
+            Denied(await f.ToolAsync("skill", new JsonObject { ["action"] = "list" }, target));
         }
         Assert.Null(f.Manager.AgentMetadata["selected-source"]?["createdBy"]);
         var disk = JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(f.Data, "state", "agents.json")))!;
@@ -112,6 +123,10 @@ public sealed partial class AgentRulesTreeTests
         Assert.False(f.Manager.ToolVisible(grand, "node", "exec", node: "master"));
         await f.Manager.SetAgentRulesAsync("child", Rules("""[{"action":"deny","tool":"skill"}]"""));
         Assert.False(f.Manager.ToolVisible(grand, "builtin", "skill"));
+        Assert.DoesNotContain(f.Manager.ModelDefinitions(grand), item => SessionWait.Text(item?["name"]) == "skill");
+        var discovered = await f.ToolAsync("search_tools", new JsonObject { ["query"] = "skill", ["sources"] = new JsonArray("builtin") }, grand);
+        Successful(discovered);
+        Assert.DoesNotContain("builtin:skill", discovered!["output"]!.GetValue<string>());
         Denied(await f.ToolAsync("skill", new JsonObject { ["action"] = "list" }, grand));
         await f.Manager.SetAgentRulesAsync("child", new JsonArray());
         Assert.True(f.Manager.ToolVisible(grand, "builtin", "skill"));
