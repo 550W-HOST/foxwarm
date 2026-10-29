@@ -549,7 +549,10 @@ internal sealed partial class SessionManager
                 details["identityCommitted"] = true;
                 await IdentityStageAsync(operation, "after-alias-commit");
                 if (record.OwnsAgent)
-                    await agents.CompleteIdentityOwnedAsync(record.OwnedAgent!, record.OwnedAgentPreparation);
+                    await agents.CompleteIdentityOwnedAsync(
+                        record.OwnedAgent!,
+                        record.OwnedAgentPreparation
+                    );
                 IdentityJournal.Clear();
                 unresolvedIdentityMove = null;
             });
@@ -565,7 +568,9 @@ internal sealed partial class SessionManager
             {
                 details["manualInterventionRequired"] = true;
                 details["recoveryRequired"] = true;
-                details["residualPaths"] = new JsonArray(manualFailure.Paths.Select(path => (JsonNode?)JsonValue.Create(path)).ToArray());
+                details["residualPaths"] = new JsonArray(
+                    manualFailure.Paths.Select(path => (JsonNode?)JsonValue.Create(path)).ToArray()
+                );
             }
             if (committed)
                 throw new SessionIdentityMoveException(
@@ -674,11 +679,17 @@ internal sealed partial class SessionManager
                     pendingIdentityReservations.Add(record.NewId);
                 }
                 details["recoveryRequired"] = true;
-                var unverified = errors.OfType<AgentIdentityCleanupException>().SelectMany(error => error.Paths).Distinct(StringComparer.Ordinal).ToArray();
+                var unverified = errors
+                    .OfType<AgentIdentityCleanupException>()
+                    .SelectMany(error => error.Paths)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
                 if (unverified.Length > 0)
                 {
                     details["manualInterventionRequired"] = true;
-                    details["residualPaths"] = new JsonArray(unverified.Select(path => (JsonNode?)JsonValue.Create(path)).ToArray());
+                    details["residualPaths"] = new JsonArray(
+                        unverified.Select(path => (JsonNode?)JsonValue.Create(path)).ToArray()
+                    );
                 }
                 if (record.OwnsAgent)
                 {

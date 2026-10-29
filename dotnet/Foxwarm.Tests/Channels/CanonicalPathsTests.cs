@@ -499,13 +499,24 @@ public sealed class CanonicalPathsTests
         );
         var sourceBefore = await File.ReadAllBytesAsync(journal.AuthorityPath("old"));
         await using var recovered = Manager();
-        var error = await Assert.ThrowsAsync<AgentIdentityCleanupException>(() => recovered.LoadMainHostAsync());
+        var error = await Assert.ThrowsAsync<AgentIdentityCleanupException>(() =>
+            recovered.LoadMainHostAsync()
+        );
         Assert.Contains(Path.Combine(paths.AgentsRoot, "claimed"), error.Paths);
         Assert.Equal(sourceBefore, await File.ReadAllBytesAsync(journal.AuthorityPath("old")));
         Assert.NotNull(recovered.Catalog.Get("old"));
         Assert.Null(recovered.Catalog.Get("unindexed/main"));
         Assert.True(Directory.Exists(Path.Combine(paths.AgentsRoot, "claimed")));
-        Assert.True(JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(paths.DataRoot, "state", "agents.json")))!.AsObject().ContainsKey("claimed"));
+        Assert.True(
+            JsonNode
+                .Parse(
+                    await File.ReadAllTextAsync(
+                        Path.Combine(paths.DataRoot, "state", "agents.json")
+                    )
+                )!
+                .AsObject()
+                .ContainsKey("claimed")
+        );
         Assert.Equal("ordinary unowned directory", await File.ReadAllTextAsync(unrelated));
         Assert.True(File.Exists(journal.FilePath));
     }

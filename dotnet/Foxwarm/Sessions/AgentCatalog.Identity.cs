@@ -8,9 +8,18 @@ internal sealed partial class AgentCatalog
 
     private static FileAttributes? IdentityEntry(string path)
     {
-        try { return File.GetAttributes(path); }
-        catch (FileNotFoundException) { return null; }
-        catch (DirectoryNotFoundException) { return null; }
+        try
+        {
+            return File.GetAttributes(path);
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return null;
+        }
     }
 
     private static bool IdentityProofMatches(string directory, string? proof)
@@ -22,7 +31,8 @@ internal sealed partial class AgentCatalog
             var marker = Path.Combine(directory, IdentityProofFileName);
             var attributes = IdentityEntry(marker);
             return attributes is not null
-                && (attributes.Value & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0
+                && (attributes.Value & (FileAttributes.Directory | FileAttributes.ReparsePoint))
+                    == 0
                 && new FileInfo(marker).Length == proof.Length
                 && string.Equals(File.ReadAllText(marker), proof, StringComparison.Ordinal);
         }
@@ -34,7 +44,14 @@ internal sealed partial class AgentCatalog
 
     private static void WriteIdentityProof(string directory, string proof)
     {
-        using (var file = new FileStream(Path.Combine(directory, IdentityProofFileName), FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        using (
+            var file = new FileStream(
+                Path.Combine(directory, IdentityProofFileName),
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None
+            )
+        )
         {
             file.Write(System.Text.Encoding.UTF8.GetBytes(proof));
             file.Flush(flushToDisk: true);
@@ -54,11 +71,14 @@ internal sealed partial class AgentCatalog
             var attributes = IdentityEntry(path);
             if (attributes is null)
                 continue;
-            if ((attributes.Value & FileAttributes.Directory) == 0
+            if (
+                (attributes.Value & FileAttributes.Directory) == 0
                 || (attributes.Value & FileAttributes.ReparsePoint) != 0
-                || !IdentityProofMatches(path, preparationName))
+                || !IdentityProofMatches(path, preparationName)
+            )
                 unverified.Add(path);
-            else present.Add(path);
+            else
+                present.Add(path);
         }
         if (unverified.Count > 0)
             throw new AgentIdentityCleanupException(unverified.ToArray());
@@ -99,7 +119,11 @@ internal sealed partial class AgentCatalog
                 }
                 try
                 {
-                    AtomicIndexWrite(indexPath, Payload(List().Where(id => id is not "main" && id != name), next).ToJsonString());
+                    AtomicIndexWrite(
+                        indexPath,
+                        Payload(List().Where(id => id is not "main" && id != name), next)
+                            .ToJsonString()
+                    );
                 }
                 catch (AuthorityCommittedException)
                 {
@@ -109,7 +133,10 @@ internal sealed partial class AgentCatalog
                 Publish();
             }
         }
-        finally { createGate.Release(); }
+        finally
+        {
+            createGate.Release();
+        }
     }
 
     internal async Task CompleteIdentityOwnedAsync(string name, string? preparationName)
@@ -124,8 +151,11 @@ internal sealed partial class AgentCatalog
                 throw new AgentIdentityCleanupException([prepared]);
             var directory = SourceDirectory(name);
             var attributes = IdentityEntry(directory);
-            if (attributes is null || (attributes.Value & FileAttributes.Directory) == 0
-                || (attributes.Value & FileAttributes.ReparsePoint) != 0)
+            if (
+                attributes is null
+                || (attributes.Value & FileAttributes.Directory) == 0
+                || (attributes.Value & FileAttributes.ReparsePoint) != 0
+            )
                 throw new AgentIdentityCleanupException([directory]);
             var marker = Path.Combine(directory, IdentityProofFileName);
             if (IdentityEntry(marker) is null)
@@ -135,7 +165,10 @@ internal sealed partial class AgentCatalog
             File.Delete(marker);
             LinuxAtomicJsonFile.LinuxDirectorySync.Sync(directory);
         }
-        finally { createGate.Release(); }
+        finally
+        {
+            createGate.Release();
+        }
     }
 
     internal void CopyIdentityMemory(string sourceAgent, string targetAgent)
@@ -171,7 +204,10 @@ internal sealed partial class AgentCatalog
 }
 
 internal sealed class AgentIdentityCleanupException(string[] paths)
-    : IOException("Agent identity cleanup requires manual intervention. Unverified paths: " + string.Join(", ", paths.Select(path => "'" + path + "'")))
+    : IOException(
+        "Agent identity cleanup requires manual intervention. Unverified paths: "
+            + string.Join(", ", paths.Select(path => "'" + path + "'"))
+    )
 {
     internal string[] Paths { get; } = paths;
 }

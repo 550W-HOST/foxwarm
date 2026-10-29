@@ -96,7 +96,10 @@ internal sealed partial class SessionManager
                         "Owned identity destination contains another Main lifetime; preserve its directory."
                     );
                 if (backward && record.OwnsAgent)
-                    agents.ValidateIdentityOwnedPaths(record.OwnedAgent!, record.OwnedAgentPreparation);
+                    agents.ValidateIdentityOwnedPaths(
+                        record.OwnedAgent!,
+                        record.OwnedAgentPreparation
+                    );
                 // Direction is persisted before any reversal. The audit transaction never merges competing branches.
                 IdentityJournal.MoveArtifacts(from, to, record.Version);
                 SqliteArchiveIdentityMove.Rename(ArchiveDatabase, from, to);
@@ -117,7 +120,10 @@ internal sealed partial class SessionManager
                     if (backward)
                         await RemoveMoveOwnedAgentAsync(record, metadata);
                     else
-                        await agents.CompleteIdentityOwnedAsync(record.OwnedAgent!, record.OwnedAgentPreparation);
+                        await agents.CompleteIdentityOwnedAsync(
+                            record.OwnedAgent!,
+                            record.OwnedAgentPreparation
+                        );
                 }
                 IdentityJournal.Clear();
             }

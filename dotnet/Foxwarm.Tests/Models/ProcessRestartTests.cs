@@ -392,7 +392,16 @@ public sealed class ProcessRestartTests
                     recovered["memory"]!.GetValue<string>()
                 );
                 Assert.False(recovered["pending"]!.GetValue<bool>());
-                Assert.False(File.Exists(Path.Combine(root + "-workspace", "agents", "copied", AgentCatalog.IdentityProofFileName)));
+                Assert.False(
+                    File.Exists(
+                        Path.Combine(
+                            root + "-workspace",
+                            "agents",
+                            "copied",
+                            AgentCatalog.IdentityProofFileName
+                        )
+                    )
+                );
                 Assert.Equal(
                     expectedId == "copied/main",
                     recovered["copiedAgent"]!.GetValue<bool>()
@@ -408,7 +417,6 @@ public sealed class ProcessRestartTests
             }
         }
     }
-
 
     [Fact]
     public async Task Before_copy_interruption_preserves_unverified_final_directory_and_fences_recovery_until_manual_cleanup()
@@ -428,7 +436,9 @@ public sealed class ProcessRestartTests
             var marker = Path.Combine(final, "unowned.txt");
             await File.WriteAllTextAsync(marker, "foreign final path while process stopped");
             var rejected = Path.Combine(temp.Path, "rejected.json");
-            using (var recovery = StartRestartHarness("identity-recover", root, rejected, null, null))
+            using (
+                var recovery = StartRestartHarness("identity-recover", root, rejected, null, null)
+            )
             {
                 var stderr = recovery.StandardError.ReadToEndAsync();
                 var stdout = recovery.StandardOutput.ReadToEndAsync();
@@ -439,7 +449,10 @@ public sealed class ProcessRestartTests
             Assert.False(File.Exists(rejected));
             Assert.True(File.Exists(Path.Combine(root, "state", "session-id-move-pending.json")));
             Assert.Null(new SessionIdentityMoveJournal(root).Read()!.AgentDirectoryPublished);
-            Assert.Equal("foreign final path while process stopped", await File.ReadAllTextAsync(marker));
+            Assert.Equal(
+                "foreign final path while process stopped",
+                await File.ReadAllTextAsync(marker)
+            );
             Directory.Delete(final, true); // Explicit intervention on the test-owned foreign path; no proof is invented.
             var completed = Path.Combine(temp.Path, "completed.json");
             await RunHarnessAsync("identity-recover", root, completed, temp.Path, null, null);
@@ -452,7 +465,11 @@ public sealed class ProcessRestartTests
         }
         finally
         {
-            if (!child.HasExited) { child.Kill(); await child.WaitForExitAsync(); }
+            if (!child.HasExited)
+            {
+                child.Kill();
+                await child.WaitForExitAsync();
+            }
         }
     }
 
