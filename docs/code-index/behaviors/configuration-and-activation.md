@@ -4,6 +4,8 @@ For developers and Agents changing Setup, configuration tools, or reload behavio
 
 ## Supported saves install a complete validated candidate
 
+**Selected configuration contract; directly clarified for supported live saves.** Validate and persist the candidate before applying the affected runtime settings. Installer coordination implements that behavior while existing connections and in-flight work keep their separately defined lifetimes; file persistence and every downstream runtime effect are not one transaction.
+
 WebUI Setup and `set_config` share one serialized Main-owned installer for `config`, `models`, and `tool-rules`. Setup supplies edited text or builds a candidate from a section form; the tool reads a complete regular-file candidate on Main. A tool candidate's location is not the active configuration location, and selecting a remote execution Node does not make that file a remote candidate; [operation placement](nodes-workspaces-and-permissions.md#selection-routes-operations-not-the-whole-session) remains independent.
 
 The tool must be allowed by the current authorization policy both to install that target and to read the candidate through Main's file capability. Those checks run before reading and again at installation admission. A candidate cannot grant permission to install itself. Supported saves validate before replacement, retain the submitted bytes rather than redumping YAML, and replace the target through a synced same-directory temporary file. Schema-valid configuration is not proof that a provider credential works or an external service is reachable.

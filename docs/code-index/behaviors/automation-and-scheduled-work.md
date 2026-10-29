@@ -4,6 +4,8 @@ For developers and Agents changing programmatic tool use, script results/continu
 
 ## Execute a program using authorized tools
 
+**Governing capability and authority constraints; directly selected.** Let a program compose existing tools and consume native values while retaining the caller's normal permissions. The VM, run records and display projection are derived mechanisms; executing code inside ToolScript does not grant direct host filesystem/process authority.
+
 `run_script` executes supplied code or a file-backed program in the constrained ToolScript VM. Its `args`/`argsJson` supplies the program's input. Filesystem, process, and other host effects go through authorized tool calls; loading a skill or running a script does not enable otherwise denied tools.
 
 A file source's Node selects where source is read, not where the VM or every nested operation executes. Nested tools independently resolve their actual Node, cwd, paths, and authorization. Source must come from a proven complete authorized read or complete-transfer fallback, not a shortened display excerpt. A complete programmatic read can be used directly without another transfer. Exact completeness and transport rules remain at [authorized file source](../units/src-toolscript.md#d-toolscript-authorized-file-source), with placement at [Nodes and workspaces](nodes-workspaces-and-permissions.md#selection-routes-operations-not-the-whole-session).
@@ -59,6 +61,8 @@ The last-host-call rule exists so the caller cannot enter wait while the script 
 Wait source validation, sibling-error cleanup, fallback timing and ordinary incoming wakes remain at [explicit Session wait](execution-and-waiting.md#explicit-wait-ends-an-otherwise-finished-turn). A normally completed explicit script forwards its trusted terminal effects to that same outer batch settlement; outer sibling errors suppress them without interpreting already handled nested results as new framework errors. Script return values and stdout do not establish trusted control authority. The current external-result control limitation remains explicit at [execution Open Questions](execution-and-waiting.md#open-questions), not a supported return-value protocol.
 
 ## Schedule a message or execute a quiet script
+
+**Selected capability distinction; quiet owner-bound script timers were directly requested.** Reuse ordinary authorized ToolScript without waking a model or appending conversation when only script work is needed. Scheduler records and restart rules implement that purpose; timer delivery is not evidence of a completed model turn.
 
 Timer tools are discoverable rather than injected into every default tool schema. Registration creates a persisted schedule, not proof that the later action ran. The target defaults to the calling Session; timer access is still authorized. Scheduling for a new Session and scheduling a script for the current owner are different actions:
 

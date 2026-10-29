@@ -5,6 +5,8 @@ Secondary files: `dotnet/Foxwarm.Tests/Sessions/CanonicalNotificationOwnershipTe
 
 ## Purpose
 
+**Implementation owner.** Implements the [ordered save lane](../threads/session-ownership-and-persistence.md#ordered-save-lane) and [commit/failure boundary](../threads/session-ownership-and-persistence.md#canonical-append-ordering-and-errors). Caller-specific admission and already-committed effects constrain changes; a convenient helper abstraction cannot strengthen or weaken their guarantees implicitly.
+
 Serializes all persistence operations for one `SessionEntry` through a task tail. It is the owner-side ordering boundary, not a second state authority.
 
 ## Stable methods and callers

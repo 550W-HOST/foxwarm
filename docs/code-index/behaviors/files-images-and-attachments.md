@@ -25,6 +25,8 @@ Scoped WebUI uploads bind the temporary upload to the authenticated identity and
 
 ## Original image, provider input, and browser preview are not the same object
 
+**Governing data constraint; directly requested.** Retain the original while allowing cheaper provider input and useful browser previews. Storage, optimization and replay designs must keep those consumers separate; a derived cache or provider transform cannot replace the retained source.
+
 The canonical image preserves original bytes and MIME, including supported HEIC/HEIF originals. Image IDs identify images in a Session's available history/archive; they are not paths, URLs, blob credentials, or proof that the current model received pixels.
 
 | Representation | Contract |
@@ -61,6 +63,8 @@ A completed provider-hosted generated image enters the same canonical blob lifec
 After a normal assistant append succeeds, successfully generated images are automatically delivered best-effort through eligible normal Channel attachments with file capability, even when the response has no text or continues with tools. Send-only and unsupported attachments are skipped. Delivery failure does not roll back history or rerun generation; there is no persisted delivery outbox or older-history replay sweep. This post-commit delivery is distinct from a model deciding to call `send_file`; destination selection follows [Channels and replies](channels-and-replies.md#where-should-the-agents-ordinary-reply-go). See [generated image replay and delivery](../threads/image-blob-lifecycle.md#d-image-generated-output-replay) and [tool image references](../units/src-tool-utils.md#d-tool-result-image-reference).
 
 ## Preview, download, and delivery have separate authority
+
+**Governing access distinction with independent security consumers.** Seeing an authorized reference, obtaining a download capability and delivering a file are separate operations. The chosen signature/descriptor designs implement those operations without granting arbitrary filesystem access or converting cached presentation into a delivery receipt.
 
 Draft and timeline attachments use a grid plus compact FILE references at authored text positions. Images, tool images, generated images, and delivered reply images share the full-screen modal viewer: fit without cropping, actual-size scrolling, Download, Close, focus restoration, and touch inspection. Opening the viewer does not navigate away, alter the draft/history, or grant file access. Only PNG/JPEG/GIF/WebP render inline; other formats are download-only/unavailable. A queued MIME placeholder is shown as Queued, not as prose or a made-up image URL. See [attachment presentation](../threads/webui-attachment-presentation.md).
 

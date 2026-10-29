@@ -82,6 +82,8 @@ The operator-facing deployment/configuration workflow is documented by the singl
 
 ### D-node-credential-hash
 
+**Security and persisted-credential contract, independently supported by authenticated Node consumers.** It constrains [Node authority](../behaviors/nodes-workspaces-and-permissions.md#authority-has-several-independent-boundaries). Credential verification/storage is an implementation boundary with a real security consumer, not a rationale for adding unrelated artifact fingerprints.
+
 Persist approved authentication tokens only as hashes on the master; return plaintext once through the approved pending claim.
 
 ### D-node-session-event-scope
@@ -89,6 +91,8 @@ Persist approved authentication tokens only as hashes on the master; return plai
 The authenticated node ID is mandatory input to master-side session-event authorization. Client-provided target data cannot bypass current-node or isolated-agent binding checks; the only remote-exec exception is the signed, exec-scoped grant owned by [D-node-thread-remote-exec-completion](../threads/node-communication.md#d-node-thread-remote-exec-completion).
 
 ### D-node-isolation-boundary
+
+**Governing distinction; directly selected.** Environment isolation and [tool authorization](../behaviors/nodes-workspaces-and-permissions.md#authority-has-several-independent-boundaries) solve different problems. A Node/Provider supplies the execution environment; an Agent flag, role label or selected Node alone cannot prove an OS/network sandbox.
 
 `currentNode` is execution routing. `agent.isolatedNode` is the isolation boundary inherited by that agent's sessions. Pairing/binding does not imply node exclusivity or environment virtualization.
 

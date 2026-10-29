@@ -4,6 +4,8 @@ For developers and Agents changing execution placement, filesystem access, or No
 
 ## Selection routes operations, not the whole Session
 
+**Governing placement constraint; directly selected.** A Node is an execution environment for supported capabilities, not a replacement Session owner or a permission identity. Provider composition and authenticated transports implement that distinction while Session history/control stay with their exact owner.
+
 Session conversation and [turn ownership](messages-and-turns.md#which-boundary-am-i-observing) do not move to a remote Node when `currentNode` changes. Placement follows the resolved operation:
 
 | Operation | Observable placement |
@@ -27,6 +29,8 @@ Agent-bound isolation restricts selection independently. The model cannot use se
 
 ## Paths belong to an environment and an operation
 
+**Governing interpretation constraint with real caller compatibility.** Resolve paths in the environment and base directory promised by the particular operation. The shared path/file primitives implement those meanings; a selected Node or convenient host filesystem API must not reinterpret another endpoint's path.
+
 A useful file locator is **Node plus path**, with the relevant base directory when the path is relative. The same spelling on two Nodes need not refer to the same bytes. A Session cwd is neither file ownership nor an authorization boundary. Multiple Sessions may share a Node and directory; selection creates no lease or worktree.
 
 | Path situation | Consequence |
@@ -43,6 +47,8 @@ The differing transfer bases are implemented behavior, not a universal relative-
 Updating an existing native file through overwrite, exact edit, or patch Update retains its existing permission bits. Configuration and Session-authority installers have separate replacement contracts; this native-file rule does not make ordinary updates atomic. File operations retain ordinary filesystem consequences: `write` protects existing files unless overwrite is explicit and creates missing parents only with `createDirs`; exact `edit` requires one match. Multi-file patches apply sequentially and may leave earlier operations applied when a later one fails. Cross-Node copy may leave a partial destination after failure. Shared semantics do not add transactions, rollback, or permission to overwrite. See [shared file semantics](../threads/tool-dispatch-node-execution.md#d-dispatch-shared-file-semantics).
 
 ## Authority has several independent boundaries
+
+**Governing constraints with distinct bases.** Direct product decisions keep administrator operation targets separate from scoped identities and internal tool policy; authenticated transports and retained access data independently constrain who can act. Node selection, Agent inheritance and process placement are not grants of authority. Designs below must evaluate their actual caller and effect rather than invent a universal principal rule.
 
 | Boundary | What it decides | What it does not establish |
 | --- | --- | --- |

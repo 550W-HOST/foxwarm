@@ -35,6 +35,8 @@ Provides pure parsing and formatting primitives for model-conditional memory sou
 
 ### D-conditional-memory-bounded-source-grammar
 
+**Implementation design for the requested conditional-memory feature.** The grammar serves [concrete snapshot identity and stable reuse](../threads/conditional-memory-snapshots.md#d-conditional-memory-concrete-snapshot-identity). Its parsing and literal-fallback rules are the selected source representation, not a general template engine or a security guarantee; the runtime owner decides when those source bodies are adopted.
+
 [2026-09-08] Conditional memory is a small source-body grammar rather than a general template language. Only complete, nonnested full-line `foxwarm-if` pairs outside fenced Markdown are evaluated. Malformed or unsupported markup remains ordinary literal prompt text because the feature is behavioral prompt selection, not an authorization or confidentiality boundary.
 
 Model conditions use exact case-sensitive canonical concrete identities with literal `*` wildcards. Generated snapshots carry one deterministic first-line current-model header with no time-varying metadata; header identity is stored in the prompt text rather than a separate persisted metadata field. Runtime identity, persistence, and refresh decisions are canonical in [D-conditional-memory-concrete-snapshot-identity](../threads/conditional-memory-snapshots.md#d-conditional-memory-concrete-snapshot-identity).

@@ -105,6 +105,8 @@ A slice timeout pauses only at a host-call checkpoint with a persisted pending r
 
 ### D-toolscript-owner-bound-run
 
+**Derived ownership design for [one logical run](../modules/scripting.md#d-toolscript-one-run-model) under [caller authority](../threads/tool-dispatch-authorization.md#d-dispatch-generic-tool-authorization).** Saved run identity and owner checks prevent continuation from silently adopting another Session's effects. Snapshot formats are implementation/persistence contracts, not independent orchestration goals.
+
 A run and its snapshot belong to one session. Cross-session inspection/resume is rejected, while managed-session access requires explicit leases.
 
 ### D-toolscript-unknown-call-diagnostic
@@ -116,6 +118,8 @@ Unknown external calls are not described as supported host APIs. The runtime lis
 [2026-08-03] Every new run persists the Monty engine version and snapshot-format identity. Continuation accepts only an exact current-format match because Monty snapshots are version-specific. An incompatible waiting run becomes a clearly failed historical record without attempting conversion or deleting its snapshot; completed historical records remain readable. Before terminalizing an incompatible controller, Foxwarm best-effort releases its managed leases; failed release references are retained so a later terminal `cancel_toolscript_run` call can retry cleanup.
 
 ### D-toolscript-os-effects-through-tools
+
+**Governing implementation constraint; directly selected.** ToolScript OS effects must remain within the [authorized-tool composition model](../behaviors/automation-and-scheduled-work.md#execute-a-program-using-authorized-tools). Runtime bridge/helper choices implement that boundary; language compatibility does not justify exposing an unrestricted alternate OS API.
 
 [2026-08-03] Foxwarm does not expose Monty OS functions or filesystem mounts. All filesystem, environment, clock, and process effects must pass through `call_tool` so normal session, node, path, and isolation checks remain authoritative.
 
@@ -133,6 +137,8 @@ Unknown external calls are not described as supported host APIs. The runtime lis
 
 ### D-toolscript-authorized-file-source
 
+**Selected source-input design under [ordinary tool authorization](../threads/tool-dispatch-authorization.md#d-dispatch-generic-tool-authorization) and [endpoint-local paths](../behaviors/nodes-workspaces-and-permissions.md#paths-belong-to-an-environment-and-an-operation).** A file selector locates code; it does not move the VM or change execution authority. The read and run boundaries below implement that distinction.
+
 [2026-10-15] `run_script` and the hidden compatibility starter accept `node` plus `filePath`. Omitted, blank, or `current` Node selectors use the Session's selected Node at invocation; explicit `master` reads Main. Source selection does not move the Monty VM, mutate the Session Node/cwd, or alter nested tools' default Node. Nonblank inline code still wins over filePath, but an explicit Node selector with inline code is rejected. Inline execution retains the existing master builtin-policy target without acquiring a fictional file source.
 
 A file-backed starter is authorized as its own builtin against the actual source `targetNode` and source-aware filePath facts, then independently requires that Node's canonical `read` permission and existing structural restrictions before loading any source. Main source paths reuse Agent/cwd/home/token resolution and generic realpath containment; only this source entry trims surrounding path whitespace, identically for authorization and I/O. Remote path facts retain exact Node identity without imposing Main containment on an opaque namespace. Optional-source discovery remains conservative for explicit permitted Nodes.
@@ -146,5 +152,7 @@ Legacy CLI peers without resolved-path metadata retain target-native absolute/ro
 Completed builtin send subcalls retain a bounded `sessionMessage` presentation record on their existing UI activity metadata. A local delivery callback records the actual destination without changing the script-visible result, control or send semantics; exact-target post-actions provide the existing Worker fallback. See [Session communication presentation](../threads/session-communication-presentation.md).
 
 ### D-toolscript-terminal-session-wait
+
+**Selected terminal-control design; the last-host-call rule was directly clarified.** It serves [explicit waiting](../behaviors/execution-and-waiting.md#explicit-wait-ends-an-otherwise-finished-turn) without treating returned dictionaries as control. Host-call order and trusted receipts implement the rule; finishing a script does not itself mean waiting or finishing the caller.
 
 Observable semantics and rationale are owned by [ToolScript completion](../behaviors/automation-and-scheduled-work.md#end-the-callers-turn-deliberately). The execution-scoped hook and dedicated checkpoint field above connect to existing Main/Worker owner context, dispatcher, timer/liveness services and outer batch cleanup; they add no controller or background scheduler.

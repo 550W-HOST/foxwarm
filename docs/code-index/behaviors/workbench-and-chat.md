@@ -24,6 +24,8 @@ Preview is a reuse policy, not an unsaved Session or disposable history. Canonic
 
 ## Mounted, visible, and running are independent
 
+**Governing lifetime distinction; directly clarified for tabs, Code and Terminal.** Hiding/rearranging a surface must not silently recreate its component or terminate its backend work. Stable hosts, visibility admission and explicit Close handling are derived mechanisms; their DOM or layout implementation is not another resource owner.
+
 A pane can have several tab records but show only its active tab. Desktop split panes may show several Chats at once. Each mounted Chat owns its own synchronization/subscription, while the page shares the physical realtime transport. A list/status update is not a replacement for that Chat's exact runtime state.
 
 | Surface | When genuinely hidden/inactive/collapsed | When merely moved/resized while visible |
@@ -48,6 +50,8 @@ Explicit navigation activates/expands the target and reveals its tab even when i
 Popout windows do not mount/persist the full Workbench or synchronize state back; closing them does not restore the source tab. Setup/Agents popout warns about unsaved component state. Chat can restore its browser-persisted draft metadata, but page-memory Files are not transferred. Terminal popout is unavailable before a backend terminal ID exists. URLs preserve the current deployment path; authentication tokens do not travel in popup target parameters. Popup and Code-embedded leaf roots have their own lifetimes and do not acquire Workbench pane controls.
 
 ## Chat follows user intent, not incoming token volume
+
+**Governing interaction constraint; directly requested and repeatedly clarified.** Reading and explicit navigation outrank passive output/reflow. Follow latches, anchors and disclosure measurement implement that intent; tests of a geometry workaround cannot replace the user's selected behavior.
 
 Follow is a reader state, not a runtime state. At the actual bottom, new content follows. Explicit upward navigation detaches follow; downward scrolling while still away from the bottom stays detached. Token growth, disclosure animation, image/layout growth, and viewport resizing must not override that intent. Rejoin happens at the actual bottom or through the explicit latest/bottom action.
 

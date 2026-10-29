@@ -130,6 +130,8 @@ These are selected runtime overrides, not an environment-to-YAML migration. Test
 
 ### D-config-one-resolution-path
 
+**Derived consistency design for [validated configuration installation](../behaviors/configuration-and-activation.md#supported-saves-install-a-complete-validated-candidate).** Shared resolution keeps startup, tools and UI from inventing different effective values. Reader aliases and defaults follow real configuration consumers, not a second configuration authority.
+
 Server, setup, and one-shot model CLI use the same config/path/model resolution code. A UI or CLI writer validates through current readers instead of maintaining a second schema.
 
 ### D-config-selected-env-overrides
@@ -137,6 +139,8 @@ Server, setup, and one-shot model CLI use the same config/path/model resolution 
 Environment support is limited to explicit path/data-root overrides. It does not imply general `.env` import or automatic migration into YAML.
 
 ### D-config-read-old-write-current
+
+**Independent persisted/external configuration compatibility constraint.** Existing supported files must remain readable while writers use the current shape. This constrains [one resolution path](#d-config-one-resolution-path); it does not require permanent runtime aliases for unused internal names or automatic rewriting of raw YAML.
 
 Persisted external configuration keeps narrow legacy readers while generated setup output uses current `providers`/`models` fields.
 
@@ -169,6 +173,8 @@ The mutable models configuration has one active location: `<data-root>/state/mod
 [2026-09-04] Top-level `handoffConfirmation` accepts only a boolean and defaults to `false`. It is resolved once at startup and requires restart to change. `true` enables the exact inter-agent `handoffRecall` / `handoffConfirmation` contract and its schema/reminder guidance; omission or `false` disables only that review requirement. Model tool-call cancellation controls remain enabled in both modes.
 
 ### D-config-live-install
+
+**Derived installer design; proposed and approved for [live supported saves](../behaviors/configuration-and-activation.md#supported-saves-install-a-complete-validated-candidate).** Tool/UI entry points share validation, exact-byte publication and scope-specific application under existing authorization. Candidate parsing and apply receipts are mechanisms; direct file edits do not acquire installer side effects automatically.
 
 [2026-10-10] WebUI Setup and the hidden discoverable Main-management `set_config({ target, filePath })` share the serialized Main-owned configuration installer. Targets are `config`, `models`, and `tool-rules`; the tool reads one complete master-side regular-file candidate under the current setter and `node:master/read` permissions, then repeats those permissions at installation admission. Invalid candidates do not change files or live snapshots. All targets use a synced same-directory temporary file and atomic replacement, preserving raw bytes rather than parsing and redumping them. Weixin login and structured Models edits run their complete read/merge/build inside the same installation queue, after prior saves finish applying. Structured Models keeps its existing provider-set replacement contract: providers absent from the submitted form are removed, while the submitted providers inherit their latest retained overrides and custom fields, and top-level extension fields are preserved. Weixin edits preserve the latest unrelated app settings and channels; raw full-document saves retain complete replacement semantics. Structured Models compatibility generates YAML and uses this same validation/install path. Policy limits remain policy-specific; there is no new app/models limit borrowed from tool rules.
 

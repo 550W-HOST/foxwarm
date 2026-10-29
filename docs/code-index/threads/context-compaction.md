@@ -2,6 +2,8 @@
 
 ## Overview
 
+**Governing design constraint; directly requested.** Use recursive, same-level summaries with retrievable origins to retain useful long-running context within a bounded model window. Candidate and planner designs serve that purpose under [active-history authority](./context-compaction-and-recall.md#d-context-active-history-authority) and retained Archive evidence; they must not make the Archive a second working history.
+
 Owns what a compaction plan may summarize and what it records: triggers, response-only tool-result pruning, candidate ranges, planner input and submission, block metadata, and the compact-completion marker. Snapshot jobs, commit safety, cancellation, and scheduling are in [compaction lifecycle](./compaction-lifecycle.md). Archive storage, lineage, and recall are in [archive and recall](./archive-and-recall.md). The active-history authority contract is in the parent [thread](./context-compaction-and-recall.md#d-context-active-history-authority).
 
 ## Triggers and tool-response pruning
@@ -39,6 +41,8 @@ Configuration defaults: `compactBlockLevelMinTokens=3000`, `compactBlockLevelFor
 
 ### D-context-historical-tool-response-pruning
 
+**Selected derived design for [bounded working context](#overview).** Response-only pruning was approved as a cheaper first step; truthful recall footers additionally require [source-backed evidence](./archive-and-recall.md#d-context-source-backed-recall). Its Archive proof belongs to pruning alone. The later layered planner consumes the resulting active text without inheriting that proof requirement.
+
 [2026-08-13, clarified 2026-08-16] At the existing provider-usage automatic compaction trigger, dry-run one coherent response-only pruning pass over the complete active-history snapshot. Eligibility is limited to oversized historical function responses wholly inside the ordinary oldest/compactable region; never prune function-call arguments, split an atomic call/response group, or touch the protected recent/current tail. Before exposing a recall footer, prove exactly one positive-seq row in the complete active snapshot, exactly one effective immutable archive record at that seq, and byte-semantic equality after the approved transient-provenance normalization; missing, duplicate, conflicting, inherited-identity-conflicting, or offline-edited provenance is nonprunable. Revalidate those exact archive identities at commit. Archive reads validate only and never reconstruct active history. Each rewritten response uses the complete provider-visible `formatToolResponsePayload` envelope and keeps an approximately 500-character Unicode-safe, line-aware head and tail. Prefer an existing non-small top-level `output`, `content`, or `error` key as the bounded excerpt carrier, preserve the other small meaningful siblings under their original keys, and use `output` only when no suitable carrier exists. Also retain the function-response identity and only small fixed path/node/run/status/hash/location-style metadata. Its deterministic footer names the exact `msg#N` recall target and tool identity. Once committed, the pruned projection is ordinary authoritative active history and remains eligible for later layered compaction without another Archive comparison; only the pruning operation owns the Archive proof that makes its recall footer truthful.
 
 [2026-10-09] Commit automatic pruning only when the resulting Session estimate is strictly below 60% of the plan's pre-pruning estimate. The commit re-estimates the proposed history, including any appended suffix, against that fixed cap. This gate rejects marginal prefix rewrites; it measures relative estimated reduction, not the complete provider prompt or a guaranteed percentage of the model context window. Success satisfies that trigger and does not immediately layer-compact; failure leaves the original history unchanged and proceeds with ordinary layered compaction. Commit uses exact-prefix compatibility with appended-suffix retention and the existing authority persistence/resync failure boundary; it adds no revision, cooldown, pass counter, override map, sidecar, or repeated loop. Manual `/compact tools` uses the same response-only primitive without the relative reduction gate, avoids persistence/history-version changes on true no-op, and returns inspected/touched/pruned/token-saving estimates. Successful manual or automatic pruning preserves `promptCacheKey`; `/clear` remains the rotation boundary.
@@ -61,9 +65,13 @@ The diagnostics use ordinary Session-history and Archive persistence and the exi
 
 ### D-context-compact-planner-prefix
 
+**Derived design; directly selected to preserve [request-prefix reuse](./conditional-memory-snapshots.md#d-memory-request-prefix-stability), subject to [active-history authority](./context-compaction-and-recall.md#d-context-active-history-authority).** Copy the actual older working prefix rather than synthesize a cleaner candidate-only prompt. The complete job snapshot and complete-exchange split implement those two constraints together.
+
 [2026-10-01] The temporary compact planner starts with the active-history prefix before the force-kept recent tail, at the existing complete tool-exchange boundary. Preserve every prefix entry in order, including blocks, protected entries, and previously preserved raw messages; do not rebuild input from candidates or archive data. Planning instructions and retry exchanges append only to this detached prefix, keeping force-kept recent history out of the planning input. The complete job snapshot remains authoritative for candidate/range metadata, compatible commit validation, and retention of the unchanged tail plus a concurrently appended suffix. This changes neither persistent Session/fork identity nor request settings, sequence counters, history version, prompt-cache lineage, or awaited/background request scope. A zero keep fraction exposes the complete prefix; a split with no older items remains a no-op.
 
 ### D-context-compact-runtime-gate
+
+**Derived design for directly requested file-based correction and general file submission.** Node routing is the engineering choice that makes those operations available through existing authorized file capabilities. It serves economical plan repair under the [shared schema](../modules/llm.md#d-llm-stable-tool-schema), [ordinary authorization](./tool-dispatch-authorization.md#d-dispatch-generic-tool-authorization), and [active-source authority](./context-compaction-and-recall.md#d-context-active-history-authority). Artifact lifecycle and dispatch details below are mechanisms, not additional product restrictions.
 
 The goal is to submit and correct a compact plan without repeatedly regenerating a large argument object. File input is another representation of the same plan, not a separate validator or an authorization bypass. Normal and compact requests retain the same model-facing tool definitions under [request-prefix stability](./conditional-memory-snapshots.md#d-memory-request-prefix-stability); execution eligibility is checked separately.
 
@@ -75,9 +83,13 @@ The maintained implementation, failure classifications and supported call paths 
 
 ### D-context-hard-candidate-policy
 
+**Mixed level: directly selected coverage constraints, implemented by derived candidate guards.** The configured fractions and level thresholds serve [layered summarization](#overview) while retaining recent context. Atomic groups and legal segments implement supported preservation; their presence in a validator does not settle the [unresolved numeric-gap restriction](#raw-sequence-gaps-and-active-history).
+
 Raw and block candidate quotas are computed after visibility, atomic grouping, and protection barriers. A plan may accumulate coverage across legal segments but one operation cannot cross a segment.
 
 ### D-context-preserved-raw
+
+**Directly selected preservation constraint for [layered summarization](#overview).** Some wording must survive verbatim rather than through a new summary. The marked active entries and whole-exchange handling implement that choice under [active-history authority](./context-compaction-and-recall.md#d-context-active-history-authority); removing a preserved projection never erases its retained source.
 
 `preserveMessages` keeps exact raw wording immediately after a new summary block. `removePreservedMessages` removes only those marked active-history entries; archive messages and blocks remain immutable.
 
@@ -92,6 +104,8 @@ Raw and block candidate quotas are computed after visibility, atomic grouping, a
 - This field adds no automatic optimization, memory/skill edits, UI scoring controls, separate storage/indexes, or logging/events. Candidate quotas, commit compatibility, lineage, token controls, and compact triggers remain unchanged; durable facts still use `memoryFacts`.
 
 ### D-context-block-associated-memory-facts
+
+**Directly selected representation constraint for facts discovered during [summarization](#overview).** Per-block association and framework-appended summary text avoid requiring the planner to write each fact twice. This keeps [source-backed recall](./archive-and-recall.md#d-context-source-backed-recall) and fork limits meaningful. The exact storage encoding, caps/deduplication and derived Vector rows are engineering mechanisms, not a second authoritative memory store.
 
 Durable compact facts belong only in the `memoryFacts` array of their matching `replaceAsBlocks` entry.
 

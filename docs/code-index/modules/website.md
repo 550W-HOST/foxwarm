@@ -27,6 +27,8 @@ Owns the static public project homepage, user documentation, root installer down
 
 ### D-website-independent-static-site
 
+**Derived delivery design; the separate static website/build proposal was approved.** It serves public documentation/downloads without coupling them to a running instance API. Root installer sources and real download consumers constrain published copies; framework/version pins and CI artifact transport are implementation choices, not deployment authority for an installation.
+
 [2026-09-11] The public homepage and user documentation use one independent Astro/Starlight package deployed as a static GitHub Pages artifact at the custom-domain root. A custom homepage owns product orientation while Starlight owns `/docs/`; concise user guides are canonical website content, with links to deeper repository references. Installer files remain canonical at repository root and are copied byte-exact into the site output. This keeps website tooling out of runtime dependency/build requirements, avoids a committed `gh-pages` build branch, and prevents the documentation host from being confused with a hosted Foxwarm service.
 
 ## Integration notes

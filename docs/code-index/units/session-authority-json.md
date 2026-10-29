@@ -4,6 +4,8 @@ Files: `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityDocument.cs`, `dotnet/Fo
 
 ## Purpose
 
+**Implementation owner.** Implements the selected [per-Session JSON authority](../threads/session-ownership-and-persistence.md#active-json-authority) and its real persisted-format compatibility. DTO fields and streaming writer structure below describe the mechanism, not independent product requirements.
+
 Defines and durably writes the active per-Session JSON authority. `SessionAuthorityDocument` validates the supported semantic shape before any write; `LinuxAtomicJsonFile` performs temp-file write, file fsync, rename, and directory-sync classification.
 
 ## Stable symbols and callers

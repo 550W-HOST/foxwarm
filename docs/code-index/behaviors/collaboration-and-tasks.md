@@ -4,6 +4,8 @@ For developers and Agents changing delegation, shared Tasks, or inter-session co
 
 ## Do I need a child, a Task, or a message?
 
+**Governing product distinction; directly selected.** Track work with lightweight Tasks, use Sessions for conversations/execution, and use messages for communication. Assignment must not silently create a scheduling, approval or workspace-management platform. The stores and handoff transitions below are derived mechanisms for that scope.
+
 | Action | Creates or changes | Does not imply |
 | --- | --- | --- |
 | Create a fresh child | A new Session with the caller as its actual parent, fresh conversation context, and an optional initial assignment/message. | A new Agent, a Task, an isolated execution environment, or permission to use every tool. |

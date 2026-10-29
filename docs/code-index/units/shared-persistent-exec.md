@@ -71,9 +71,13 @@ Generated Windows scripts use UTF-8 with BOM for PowerShell 5.1. The wrapper exp
 
 ### D-persistent-exec-process-operations
 
+**Derived persistence/lifecycle design for [shared exec semantics](../modules/shared-utilities.md#d-shared-exec-contract).** Stable exec identity, captures and process operations let callers inspect work after a foreground wait ends. Current artifact layout and process adapters implement that contract; restoring a record must not replay a command.
+
 `ProcessOperations` remains the small native syscall seam, not a remote-environment API. `NativeExecBackend` owns native shell/artifact/cwd mechanics. A separate Core-owned `ExecBackend` bridge lets the same manager consume generic external start/poll and target file primitives without moving registry, wait, formatting or delivery responsibility into the external provider.
 
 ### D-persistent-exec-completion-event-retention
+
+**Derived event-retention design for [real-source waiting](../behaviors/execution-and-waiting.md#explicit-wait-ends-an-otherwise-finished-turn) and [independent process lifetime](../behaviors/execution-and-waiting.md#exec-waits-for-a-process-it-does-not-lease-its-lifetime).** Keep completion evidence usable by its owner even when foreground observation has ended. Retention bookkeeping is not proof that an unknown process is dead.
 
 Measure tracking age from persisted `startedAt`. At ages at or below 24 hours, preserve normal observation and acknowledged delivery. At strictly greater ages, remove tracking before queries or delivery. Do not kill the command or delete its output/status/scripts. Recovery marks entries for notification, then applies the same expiration path.
 

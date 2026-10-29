@@ -4,6 +4,8 @@ For developers and Agents changing durable state, restart behavior, or failure h
 
 ## Identify the authority before interpreting a restart
 
+**Governing data-integrity boundary.** Direct decisions preserve separate active Session, historical Archive, catalog and derived-index roles; existing stored data independently constrains their readers. Recovery mechanisms must use the appropriate authority rather than treating whichever copy is available as interchangeable.
+
 | State | Durable meaning | What must not be inferred |
 | --- | --- | --- |
 | Per-Session JSON | Full semantic Session authority: active history, queue, wait/managed metadata, prompt/cache state, settings, provenance, and Worker mailbox cursor where present. | A catalog stub's empty history is an empty conversation, or Archive should be used to repair missing active authority. |
@@ -49,6 +51,8 @@ Session workers retain their separate generation/incarnation fencing and drain/h
 Message-timer versus quiet-script invocation and its observable completion/wake behavior are owned by [scheduled work](automation-and-scheduled-work.md#schedule-a-message-or-execute-a-quiet-script); schedule persistence entry points remain in [timers](../units/src-timers.md). Task commit/notification outcomes are owned by [collaboration and Tasks](collaboration-and-tasks.md#when-does-a-task-change-notify-or-start-a-session); notification bookkeeping remains in [Tasks](../units/src-tasks.md#actions). Compatible/incompatible VM snapshots and owner checks remain in [ToolScript](../units/src-toolscript.md#behavior). Exec's retention and uncertain-start boundaries remain in [persistent exec](../units/shared-persistent-exec.md#shared-tracking-and-provider-observations).
 
 ## Unknown outcomes require evidence, not automatic repetition
+
+**Governing effect boundary supported by real external and persisted consumers.** Loss of a response cannot prove that an operation did not commit. Error classification and resynchronization implement that distinction; neither retries nor rollback machinery may be inferred merely from a failed caller return.
 
 A lost reply can occur after an effect, after its state commit, or before either. Distinguish these cases instead of relabeling all of them as “failed, safe to retry.”
 

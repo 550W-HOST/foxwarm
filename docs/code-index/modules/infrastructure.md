@@ -75,6 +75,8 @@ Speech recognition is integrated as an external service boundary: Foxwarm sends 
 
 ### D-infrastructure-external-data
 
+**Governing deployment/data constraint; directly selected separation of installation code and owned data.** It supports [persistent authority](../behaviors/persistence-and-recovery.md#identify-the-authority-before-interpreting-a-restart) across code updates. The data-root resolver and startup variables are mechanisms; building or replacing code does not authorize replacing live state.
+
 Program code and mutable user data have separate ownership. Installations may place data outside the checkout, and runtime path resolution must consistently honor the selected data root.
 
 ### D-infrastructure-template-ownership

@@ -57,9 +57,13 @@ Durable JSON semantics are canonical in [src-utils](../units/src-utils.md#d-disk
 
 ### D-shared-write-first
 
+**Derived implementation using the filesystem's established write guarantees.** It serves the selected [write side-effect policy](./tools-and-permissions.md#d-tools-write-parent-policy). Filesystem write modes and existing errors avoid redundant preflight races; this does not establish transaction or rollback semantics for multi-file operations.
+
 Attempt the requested write using atomic filesystem flags before parent diagnostics; this preserves valid symlinked parent behavior while still producing friendly errors.
 
 ### D-shared-exec-contract
+
+**Shared implementation contract for the directly selected [process/foreground lifetime](../behaviors/execution-and-waiting.md#exec-waits-for-a-process-it-does-not-lease-its-lifetime).** Main and Node wrappers retain real platform/authorization differences while reusing the same supported exec semantics. Sharing code does not create stronger cancellation, output-completeness or termination guarantees.
 
 Cwd validation and timeout clamping are shared. Timeout warnings remain separate metadata so output truncation cannot erase them.
 

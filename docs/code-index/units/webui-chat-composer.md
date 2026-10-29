@@ -120,6 +120,8 @@ The administrator routes reuse generic topology and Node validation plus exact-o
 
 ### D-composer-inline-streaming-transcription
 
+**Directly selected input experience: transcribe into the existing draft while recording.** It serves ordinary [draft-to-input ownership](../behaviors/files-images-and-attachments.md#from-draft-to-retained-input), not a separate conversation sender. Socket/audio-generation guards and partial/final replacement implement that experience; cancellation must not overwrite a newer draft or pretend partial text is a successful final.
+
 [2026-09-27] Microphone speech appears directly as ordinary draft text at the caret captured when recording begins; after clicking the microphone, use the current Session's retained editor caret, or append at the draft end when no valid caret exists. A selected range stays intact and speech is inserted at its focus edge. Streaming callbacks provide a complete current hypothesis, so each partial and the final revise only this recording's text at that fixed position, including repeats and shorter hypotheses, without trimming or rewriting neighboring text or atomic blocks. One recording contributes at most one undo step and keeps previous editor history. During recording and finalization, manual draft editing, attachments, and submission are unavailable; stopping the microphone remains available. A failed/empty final or cancellation retains any partial text already entered as an ordinary Session draft. Session changes cancel the old stream and fence late callbacks by generation and exact Session. The dedicated audio-upload control and separate live-preview panel are removed; the ordinary file-attachment path and server-side transcription endpoint remain separate.
 
 ### D-composer-model-filter

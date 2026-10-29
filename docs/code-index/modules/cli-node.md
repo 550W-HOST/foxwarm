@@ -51,6 +51,8 @@ Auto-approve flags are TUI options implemented by the TUI's `toolCallInterceptor
 
 ### D-cli-node-one-client
 
+**Directly selected client-shape constraint under [generic Node capability placement](../behaviors/nodes-workspaces-and-permissions.md#selection-routes-operations-not-the-whole-session).** One client exposes supported optional capabilities instead of separate overlapping Node products. Packaging and capability negotiation implement that scope without claiming unavailable services.
+
 Connection, authentication, tool/service transport, file transfer, heartbeat, trigger, and session RPC share one `NodeClient`; the TUI supplies policy through the interceptor.
 
 ### D-cli-node-standard-proxy

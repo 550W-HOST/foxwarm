@@ -4,6 +4,8 @@ For developers and Agents changing history, working instructions, or Chat. This 
 
 ## Four things that are not interchangeable
 
+**Governing requirements; directly requested.** Keep historical originals retrievable after clear/deletion, let active context evolve independently, and distinguish reusable Agent instructions from conversation state. The storage, compaction and display designs linked below implement those separate lifetimes; their current file or cache layout is not the requirement.
+
 | Surface | What it represents | What reading it changes |
 | --- | --- | --- |
 | Active history | The Session's current ordered messages, including retained raw rows, CTX summaries, and display-only notices. Model requests use its model-visible content, together with the system prompt and other request inputs. | Inspection does not restore older originals into context. |
@@ -30,6 +32,8 @@ A memory-backed Session uses a retained system-prompt snapshot, not a fresh scan
 Ongoing Agent inheritance selects reusable sources for later snapshots. One-time memory copying initializes independent files and does not keep them synchronized. Ongoing inheritance rejects self/cyclic relationships and isolated source Agents; copying is a separate choice, not an implicit inheritance relationship or permission grant. Skill resolution uses local over inherited over global sources, with the first matching name winning. A directory containing `SKILL.md` is a skill boundary; nested documents are resources, not automatically additional catalog entries. Exact source order, filtering, and resource bounds remain in [prompt assembly](../units/src-session-prompt.md#source-assembly) and [skills](../units/src-skills.md#behavior).
 
 ### When do changed instructions reach the model?
+
+**Derived adoption policy; directly selected to preserve [stable prompt prefixes](../threads/conditional-memory-snapshots.md#d-memory-request-prefix-stability).** Editing a source must not force every Session to rebuild. Explicit refresh and meaningful lifecycle/model changes adopt instructions through the existing owner; the adopted inactivity cutoff and refresh scopes specify the policy, while refresh helpers implement it.
 
 [2026-09-08; selective inheritance refresh clarified 2026-09-09] A file edit, knowledge of that edit in the current conversation, and rebuilding the system-prompt prefix are distinct effects. Rebuilding needlessly can lose prompt-cache reuse. Ordinary edits therefore do not require an immediate snapshot refresh: current edit context can already convey the change; another Session can receive a concise change message. Use an authorized explicit target refresh when its prompt must be rebuilt now, for a snapshot test, or when explicitly requested.
 
@@ -61,6 +65,8 @@ Internally `historyMode` selects the data source and `timelineView` selects rend
 Conversation normally leaves ordinary assistant text visible and collapses technical work into Activity. Commentary and inter-agent-message preferences can change what is folded. Those render-only details, Search disclosure, and per-request statistics belong to the [Timeline contract](../modules/webui-timeline.md#d-webui-timeline-view); they do not change which history is authoritative. An expanded Activity is not proof that the current turn completed.
 
 ## Conversation is an active-backed projection
+
+**Selected product design; directly clarified after the initial continuous-history proposal.** Readability must follow surviving active/CTX membership without exposing compact summaries as ordinary Conversation text. It serves the [history/context distinction](#four-things-that-are-not-interchangeable); paging and membership-cache strategies are implementations of that projection, not permission to show every archived row.
 
 The projection contract clarified on 2026-10-21 follows representation, not the smallest or largest retained sequence number:
 
@@ -118,6 +124,8 @@ Continuous pages reuse current Session/alias/access-identity authorization and e
 - `src/channels/webuiContinuousHistory.test.ts` covers bounded route reads, access, aliases/fork caps, and historical image access. `src/session/historyCompactPlanRetry.test.ts` covers active-authoritative compaction, clear, and block-ID continuity. Use these entry points for the relevant behavior regressions.
 
 ## Custom prompt files and legacy isolation
+
+**Directly selected authority constraint under [independent caller boundaries](./nodes-workspaces-and-permissions.md#authority-has-several-independent-boundaries).** Creation-time admission and later snapshot reuse implement the selecting caller's authority; path resolution and memory readers remain the mechanisms for the admitted sources.
 
 [2026-10-29] Custom prompt-file admission follows the creator's authority, not the destination Agent's isolation metadata. Runtime-Agent `create_session` checks the selecting caller's existing Main-host file-read authority before creation, including when a virtual model defers snapshot materialization. Generic tool authorization and legacy structural restrictions remain independent: an isolated caller cannot use the currently prohibited creation tool. Authenticated operator commands and direct administrator creation do not borrow the attached or destination Agent's restrictions. The current HTTP Session-creation route does not accept prompt-file selection.
 

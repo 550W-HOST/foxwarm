@@ -16,6 +16,8 @@ Responsive, independent token entry before the authenticated application. The ex
 
 ## D-login-cookie-ownership
 
+**Browser/API compatibility constraint with explicitly retained ownership.** The login frontend owns the normal credential cookie; the backend verifies requests through existing authentication. This serves [deployment-relative WebUI access](../modules/webui.md#d-webui-dynamic-base-path). Replacing the host implementation does not authorize a second cookie writer or changed login route semantics.
+
 [2026-10-19] Browser cookie scope follows the actual visible login directory. The configured public URL is not the only valid entry: one instance must support both direct root access and a reverse-proxy base path under the same configuration, including a proxy that strips its prefix. After successful `POST ./api/auth` validation, the existing frontend writes `foxwarm_token` at `location.pathname.replace(/[^/]+$/, '') || '/'`, with a 365-day max-age (31,536,000 seconds), SameSite=Strict and Secure only on HTTPS. The validation endpoint returns JSON only: it does not create, renew or delete cookies, nor infer the pre-proxy path from public URL configuration, Referer or forwarding headers. This keeps cookie ownership at the browser, which knows the address actually used.
 
 An existing same-name/domain/path HttpOnly cookie blocks script replacement. The .NET host retains valid old raw/derived cookie reads, but does not automatically migrate browser storage through backend path inference. The separate native Desktop cookie is owned by [host runtime](./host-runtime.md#desktop-boundary), not this frontend flow.

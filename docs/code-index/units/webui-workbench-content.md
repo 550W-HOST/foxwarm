@@ -30,6 +30,8 @@ App builds one stable host per admitted tab, keyed by tab ID rather than pane ID
 
 ### D-workbench-stable-content
 
+**Derived design; adopted to satisfy [independent mounted/visible/running lifetimes](../behaviors/workbench-and-chat.md#mounted-visible-and-running-are-independent).** Stable content hosts preserve resource identity across layout changes. Positioning, resize hooks and clipping implement that continuity; they cannot redefine Chat reading intent or convert hide/collapse into Close.
+
 [2026-10-13] Layout chrome and content instances have separate owners. App admits content by tab/layout/presentation facts, not by the availability of a DOM slot. Its tab-keyed content list has stable React ancestry beside the changing desktop/mobile shell inside the same DND context, with one fixed portal target. A visible tab therefore retains its component, DOM, subscriptions, loaded Timeline range/disclosures/scroll intent, draft, iframe browsing context, or Terminal attachment through splits, last-sibling normalization, cross-pane tab moves, and whole-pane docking. A temporary slot unregister/register only changes geometry; it is not Close or semantic hiding. Pane identity only updates projected props/context, never the content or error-boundary key.
 
 [Mounted/visible/running behavior](../behaviors/workbench-and-chat.md#mounted-visible-and-running-are-independent) owns the per-surface lifetime table. App admission encodes semantic hiding separately from temporary slot loss, and releases Close/popout/preview instances through existing resource paths. Popup/embedded roots do not share the full host. Code bridge ownership stays in App so an initial request can queue before lazy iframe creation.

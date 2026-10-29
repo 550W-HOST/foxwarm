@@ -2,6 +2,8 @@
 
 ## Producer to consumer path
 
+**Implementation flow, not one combined control authority.** It realizes [lightweight Tasks](../behaviors/collaboration-and-tasks.md#do-i-need-a-child-a-task-or-a-message), [scheduled message/script work](../behaviors/automation-and-scheduled-work.md#schedule-a-message-or-execute-a-quiet-script), and [explicit waits](../behaviors/execution-and-waiting.md#explicit-wait-ends-an-otherwise-finished-turn). Each retains its own persistence, notification and failure semantics; shared owner services do not make their effects transactional together.
+
 ```text
 WebUI/task tool/timer creation or Session wait request
   -> SessionManager.Tasks/Timers/Wait

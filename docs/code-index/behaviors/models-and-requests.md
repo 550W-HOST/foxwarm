@@ -4,6 +4,8 @@ For developers and Agents changing model selection, provider requests, or reques
 
 ## Selection is not execution identity
 
+**Governing distinction; directly requested for virtual routing and trustworthy attribution.** A saved choice expresses intent; a concrete attempt records what ran. Routing, conditional instructions, usage and replay designs must preserve both without replacing historical evidence with a later configuration value.
+
 | Identity | What a human or runtime Agent can infer |
 | --- | --- |
 | Selected model key | The Session's requested configuration entry, possibly a virtual route. It is not necessarily the concrete model used by any particular attempt. |
@@ -37,6 +39,8 @@ There is one outer attempt budget, six total attempts by default, not six retrie
 A progressing stream need not finish within a fixed short total duration. Watchdogs distinguish first useful progress and later inactivity; pings or arbitrary transport bytes do not necessarily count. [Request behavior](../units/src-llm.md#request-behavior) owns protocol-specific timeout and stop-reason rules. A request that failed locally after an upstream operation may have consumed provider resources; neither retry diagnostics nor persisted usage is a complete billing ledger.
 
 ## Switching takes effect at an adoption boundary
+
+**Selected behavior; directly clarified for live model changes.** Adopt a changed selection at a real request boundary while keeping the conversation and remaining attempt budget. Notices, captured catalogs and effective-setting metadata implement that behavior; they do not retroactively retarget an in-flight request.
 
 Saving settings and adopting request configuration are separate actions. Model/Node setters do not wake an idle or waiting Session and do not insert speculative switch notices. Normal authoritative attempts compare the canonical concrete model and Node actually adopted with the preceding adopted configuration, before preparing the provider-visible history. This informs the next attempt about effective changes, including automatic failover and missing-key fallback, without narrating every UI edit.
 

@@ -125,11 +125,15 @@ Logs tab identity, bounded display and popout semantics are documented in [WebUI
 
 ### D-workbench-tab-navigation
 
+**Directly selected navigation behavior under [the workbench surface model](../behaviors/workbench-and-chat.md#tabs-select-surfaces-panes-arrange-them).** Explicit tab activation must remain distinguishable from manual strip scrolling. Reveal logic and persisted layout implement that distinction rather than treating every measurement as new navigation.
+
 [2026-10-14] A tab strip reveals its selected tab when that target first becomes available, the active tab changes, or App explicitly requests tab navigation. Explicit navigation to an already-selected offscreen tab still reveals it. App passes a transient, non-persisted request through the pane; ordinary pane focus synchronizes focus and routing without making that request.
 
 Manual wheel/range scrolling remains in place through Session metadata updates, tab-array reconstruction, split-size publication, and closing an inactive tab. Selecting or moving a tab with activation, restoring a strip, and closing an active tab to its fallback retain navigation reveal. Native keyboard focus may scroll its target into view; this is distinct from pane focus or background metadata. The overflow range isolates mouse-down from pane activation without suppressing native focus or range interaction.
 
 ### D-workbench-pane-collapse
+
+**Directly selected layout operation under [resource lifetime separation](../behaviors/workbench-and-chat.md#mounted-visible-and-running-are-independent).** Collapse hides layout space without invoking tab/resource Close. Store normalization and header controls implement that effect; restoring geometry does not authorize component recreation.
 
 The pane toolbar exposes Collapse only when the workbench has multiple panes. Collapse uses a horizontal minimize line; Expand keeps its direction-aware expansion icon and remains available for a collapsed pane even when it is the only pane, including a persisted collapsed root or a pane left after its siblings close; clicking a collapsed tab also expands it. A pane's direct parent split sets the direction: row splits use a narrow vertical tab list, column splits use a horizontal tab bar, and a single root pane defaults to the horizontal bar. Fixed-pixel panel constraints release space to siblings; expansion restores the pane's recorded size after the panel library applies its new constraints. Separator dragging does not silently collapse panes. Stored split sizes are not overwritten while a direct child pane is collapsed, so reload retains a reasonable expansion size. Live Group defaults are reseeded only when the child topology changes, not on every size publication. When all direct children are collapsed panes, compact chrome is rendered without a resizable Group rather than forcing a tab bar to fill the empty space.
 
