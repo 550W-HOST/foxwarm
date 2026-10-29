@@ -351,7 +351,7 @@ internal static class AgentToolDefinitions
                             "Optional initial instruction. With taskId, add only information not already in the task; it is delivered with the assignment."
                         ),
                         ["afterSend"] = Choice(
-                            "What this session does after creation and any initial delivery: continue (default), finish the turn without waiting, or wait for a reply. Waiting requires taskId or a nonempty message; other incoming activity can also resume the session.",
+                            "What this session does after creation and any initial delivery: continue (default), finish the turn without waiting, or wait for a reply. Waiting requires taskId or a nonempty message; other incoming activity can also resume the session. If any tool in the same batch returns an error, the session continues instead of waiting or finishing.",
                             "continue",
                             "finish",
                             "wait"
@@ -381,7 +381,7 @@ internal static class AgentToolDefinitions
                         ),
                         ["message"] = String("Message to deliver."),
                         ["afterSend"] = Choice(
-                            "What this session does after successful delivery: continue (default), finish the turn without waiting, or wait for a response. Other incoming activity can also resume a waiting session.",
+                            "What this session does after successful delivery: continue (default), finish the turn without waiting, or wait for a response. Other incoming activity can also resume a waiting session. If any tool in the same batch returns an error, the session continues instead of waiting or finishing.",
                             "continue",
                             "finish",
                             "wait"

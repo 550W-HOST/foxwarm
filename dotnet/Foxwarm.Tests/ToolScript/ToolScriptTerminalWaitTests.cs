@@ -455,6 +455,7 @@ public sealed class ToolScriptTerminalWaitTests
 
     [Theory]
     [InlineData("normal")]
+    [InlineData("batch-error")]
     [InlineData("later")]
     [InlineData("old")]
     [InlineData("denied")]
@@ -544,10 +545,12 @@ public sealed class ToolScriptTerminalWaitTests
             Assert.NotNull(done["error"]);
         else
             Assert.True(SessionWait.Text(done["result"]) == "kept", done.ToJsonString());
-        Assert.Equal(mode == "normal", f.Owner.WaitSnapshot() is not null);
+        Assert.Equal(mode is "normal" or "batch-error", f.Owner.WaitSnapshot() is not null);
         Assert.Equal(
             mode == "normal" ? TurnBatchEnding.Suspended : TurnBatchEnding.Continue,
-            await tools.CompleteBatchAsync(Batch(done), false)
+            await tools.CompleteBatchAsync(Batch(done, mode == "batch-error"), false)
         );
+        if (mode == "batch-error")
+            Assert.Null(f.Owner.WaitSnapshot());
     }
 }

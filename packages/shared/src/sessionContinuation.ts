@@ -182,11 +182,9 @@ function isTerminalToolCompletion(messages: readonly ContinuationMessage[], mess
     responsesById.set(id, response);
   }
 
-  return calls.some(call => {
-    if (typeof call.id !== 'string') return false;
-    const response = responsesById.get(call.id);
-    return !!response && isTerminalCompletionCall(call) && hasSuccessfulResponse(response);
-  });
+  if (!responses.every(hasSuccessfulResponse)) return false;
+
+  return calls.some(isTerminalCompletionCall);
 }
 
 /**

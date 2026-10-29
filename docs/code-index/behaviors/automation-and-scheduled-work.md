@@ -56,7 +56,7 @@ The exec's script-facing result supplies real structured status/identity; this e
 
 The last-host-call rule exists so the caller cannot enter wait while the script still has later host work to perform. Nested scripts share this boundary: an inner completion cannot arm a caller wait while its parent can still call tools. A wake resumes the Session's ordinary turn; it does not resume execution after the script's completed return. Actual script checkpoints resume saved VM state through `continue_script` instead.
 
-Wait source validation, sibling-error cleanup, fallback timing and ordinary incoming wakes remain at [explicit Session wait](execution-and-waiting.md#explicit-wait-ends-an-otherwise-finished-turn). Script return values and stdout do not establish trusted control authority. The current external-result control limitation remains explicit at [execution Open Questions](execution-and-waiting.md#open-questions), not a supported return-value protocol.
+Wait source validation, sibling-error cleanup, fallback timing and ordinary incoming wakes remain at [explicit Session wait](execution-and-waiting.md#explicit-wait-ends-an-otherwise-finished-turn). A normally completed explicit script forwards its trusted terminal effects to that same outer batch settlement; outer sibling errors suppress them without interpreting already handled nested results as new framework errors. Script return values and stdout do not establish trusted control authority. The current external-result control limitation remains explicit at [execution Open Questions](execution-and-waiting.md#open-questions), not a supported return-value protocol.
 
 ## Schedule a message or execute a quiet script
 

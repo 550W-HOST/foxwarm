@@ -41,7 +41,7 @@ These control the current Session turn, not all work launched by the Agent:
 
 Bare Stop does not cancel compaction. If the main run is awaiting synchronous automatic compaction, that compact finishes before ordinary Stop finalization. Standalone compaction is not a main run that bare Stop can stop.
 
-Continue is available only for an idle, interrupted current turn, never an actively waiting Session or a completed answer. The exact owner revalidates committed history before claiming the turn. An unfinished tool exchange, a user/system input without completion, or a current retry failure can leave a turn continuable; complete paired terminal handoffs are not interrupted answers. Temporary streams, queued previews, historical viewer rows, and viewport position never establish availability. The [shared continuation classifier](../units/shared-session-continuation.md) owns the precise rules. There is no public `/retry` alias. A lost Continue control response can mean the resumed turn already committed/delivered; report unknown outcome and inspect history rather than automatically issuing it again.
+Continue is available only for an idle, interrupted current turn, never an actively waiting Session or a completed answer. The exact owner revalidates committed history before claiming the turn. An unfinished tool exchange, a user/system input without completion, or a current retry failure can leave a turn continuable; complete paired terminal handoffs without batch errors are not interrupted answers. A handoff whose terminal action was suppressed by an error remains continuable if later interrupted. Temporary streams, queued previews, historical viewer rows, and viewport position never establish availability. The [shared continuation classifier](../units/shared-session-continuation.md) owns the precise rules. There is no public `/retry` alias. A lost Continue control response can mean the resumed turn already committed/delivered; report unknown outcome and inspect history rather than automatically issuing it again.
 
 ### Cancellation receipts must describe what is known
 
@@ -61,7 +61,11 @@ Wait and handoff authority comes from the executed control operation, not contro
 
 ## Explicit wait ends an otherwise-finished turn
 
-`wait` registers Session wait state and returns; it does not hold the tool invocation open until work completes. Its stop-turn request takes effect after the current tool batch. A sibling error can suppress an ordinary explicit wait's stop request, in which case that exact wait is cleared so the Agent can handle the error.
+`wait` registers Session wait state and returns; it does not hold the tool invocation open until work completes. Its stop-turn request takes effect after the current tool batch.
+
+[2026-10-29] In the maintained runtime, any non-null top-level tool-response `error` in the complete batch suppresses that batch's terminal controls: explicit `wait`, `afterSend:"wait"`, and `afterSend:"finish"`, including mixed controls. The complete ordered call/result exchange is committed before the model continues to handle the error. The executor consumes pending controls, clears only explicit wait tokens created by that batch, and does not arm a handoff wait. Successful delivery, child creation and Task effects remain committed and are not replayed. A failed handoff supplies no successful terminal effect.
+
+This rule uses the existing tool-error classification, not a scan of script return values, stdout or nonzero exec status. Successful controls keep their existing queue/fast-reply behavior. User Stop, unavailable authorization and fatal persistence failures retain their independent handling.
 
 Use a wait when no useful reply or tool work remains, and declare where progress can come from. `reason` explains a wait but is not a progress source by itself.
 

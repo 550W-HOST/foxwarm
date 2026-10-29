@@ -273,12 +273,13 @@ internal sealed partial class SessionToolExecutor(
             handoffTargets.Clear();
             throw new ToolAuthorizationUnavailableException();
         }
-        if (!stopping && handoff && hosted.WaitSnapshot() is null)
+        if (!errors && !stopping && handoff && hosted.WaitSnapshot() is null)
             await sessions.StartHandoffWaitAsync(hosted, handoffTargets);
         handoffTargets.Clear();
         var ending =
-            finish ? TurnBatchEnding.Finished
-            : !stopping && (handoff || explicitStop && !errors) ? TurnBatchEnding.Suspended
+            errors ? TurnBatchEnding.Continue
+            : finish ? TurnBatchEnding.Finished
+            : !stopping && (handoff || explicitStop) ? TurnBatchEnding.Suspended
             : TurnBatchEnding.Continue;
         if (
             foregroundBatch is not null

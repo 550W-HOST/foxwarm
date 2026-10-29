@@ -255,12 +255,11 @@ public static class SessionContinuation
             }
         }
         return responses.Count == calls.Length
-            && byId.Any(pair =>
-                TerminalCall(pair.Value)
-                && Property(Property(responses[pair.Key], "response"), "error").ValueKind
-                    is JsonValueKind.Undefined
-                        or JsonValueKind.Null
-            );
+            && responses.Values.All(response =>
+                Property(Property(response, "response"), "error").ValueKind
+                    is JsonValueKind.Undefined or JsonValueKind.Null
+            )
+            && byId.Values.Any(TerminalCall);
     }
 
     public static bool IsIncomplete(IReadOnlyList<JsonObject> messages) =>
