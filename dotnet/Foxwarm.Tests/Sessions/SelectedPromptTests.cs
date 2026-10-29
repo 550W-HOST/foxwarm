@@ -6,7 +6,7 @@ namespace Foxwarm.Tests;
 public sealed class SelectedPromptTests
 {
     [Fact]
-    public async Task Isolated_selected_paths_keep_Source_normalization_and_symlink_semantics()
+    public async Task Admitted_selected_paths_do_not_reapply_destination_isolation_or_realpath_confinement()
     {
         using var temp = new TempDirectory();
         var work = Path.Combine(temp.Path, "work");
@@ -28,10 +28,13 @@ public sealed class SelectedPromptTests
         Assert.Contains("synthetic symlink marker", allowed);
         var outsideLink = Path.Combine(temp.Path, "outside-link.md");
         File.CreateSymbolicLink(outsideLink, Path.Combine(directory, "inside-link.md"));
-        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
-            memory.BuildAsync("restricted", "restricted/child", "a/wire", selection: [outsideLink])
+        var external = await memory.BuildAsync(
+            "restricted",
+            "restricted/child",
+            "a/wire",
+            selection: [outsideLink]
         );
-        Assert.Contains("can only access agents/restricted/", error.Message);
+        Assert.Contains("synthetic symlink marker", external);
         var empty = await memory.BuildAsync(
             "restricted",
             "restricted/child",
