@@ -65,6 +65,37 @@ internal sealed partial class NodeProviderRegistry
                 "Node provider is not configured: " + id
             );
 
+    internal async Task<IReadOnlyList<string>> EnsureAuthorizationTargetsAsync(
+        string providerId, string nodeId, CancellationToken token)
+    {
+        var provider = CreationProvider("ensure", providerId, nodeId);
+        if (!native.Registry.Forest().Contains(nodeId))
+        {
+            // Effectful ensure already participates in this mutation lane. Resolve its actual
+            // identity before the outer policy can misclassify a first inventory as fresh.
+            using var mutation = await native.Registry.BeginMutationAsync(token);
+            _ = await ResolveAsync(nodeId, token, mutation);
+        }
+        return native.Registry.Forest().Contains(nodeId) ? [nodeId]
+            : provider.ParentNode is string parent ? [parent] : [];
+    }
+
+    private ExecutableNodeProvider CreationProvider(string action, string providerId, string? nodeId)
+    {
+        if (providerId is "master" or "authenticated-remote")
+            throw Unsupported(providerId, action);
+        var provider = RequiredProvider(providerId);
+        if (nodeId is not null)
+        {
+            ValidateId(nodeId);
+            if (!nodeId.StartsWith(provider.Id + "/", StringComparison.Ordinal))
+                throw new NodeProviderException(
+                    "NODE_LIFECYCLE_INVALID_NODE_ID",
+                    "Requested Node must belong to the selected provider namespace.");
+        }
+        return provider;
+    }
+
     internal async Task<JsonObject> LifecycleAsync(
         string action,
         string? providerId,
@@ -91,18 +122,7 @@ internal sealed partial class NodeProviderRegistry
             if (creating)
             {
                 // Fixed providers expose inspection only; provisioning stays with their existing owners.
-                if (providerId is "master" or "authenticated-remote")
-                    throw Unsupported(providerId, action);
-                provider = RequiredProvider(providerId!);
-                if (nodeId is not null)
-                {
-                    ValidateId(nodeId);
-                    if (!nodeId.StartsWith(provider.Id + "/", StringComparison.Ordinal))
-                        throw new NodeProviderException(
-                            "NODE_LIFECYCLE_INVALID_NODE_ID",
-                            "Requested Node must belong to the selected provider namespace."
-                        );
-                }
+                provider = CreationProvider(action, providerId!, nodeId);
             }
             else
             {
@@ -199,7 +219,7 @@ internal sealed partial class NodeProviderRegistry
                     );
                 if (action != "inspect")
                     native.Registry.RecordProviderNode(provider.Id, descriptor, mutation!);
-                discovered[returned!] = (JsonObject)descriptor.DeepClone();
+                PublishDescriptor(descriptor);
                 result["node"] = LifecycleDescriptor(descriptor);
             }
             if (action == "destroy")
@@ -229,7 +249,7 @@ internal sealed partial class NodeProviderRegistry
             value["primitiveBackends"]!["exec"] = value["exec"]!.DeepClone();
         value.Remove("filesystem");
         value.Remove("exec");
-        value["tools"] = DefinitionsFor(descriptor);
+        value["tools"] = HasAuthorizationAncestry(SessionWait.Text(value["id"])!) ? DefinitionsFor(descriptor) : new JsonArray();
         return value;
     }
 }

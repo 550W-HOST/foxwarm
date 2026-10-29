@@ -96,7 +96,9 @@ try:
         if mode == "duplicate":
             nodes.append(nodes[0])
         if mode == "lifecycle":
-            nodes += [json.loads(p.read_text()) for p in sorted((root / "environments").glob("*.json"))]
+            environments = [json.loads(p.read_text()) for p in sorted((root / "environments").glob("*.json"))]
+            ensured = {node["id"] for node in environments}
+            nodes = [node for node in nodes if node["id"] not in ensured] + environments
         if (root / "forged-parent").exists():
             nodes[0]["parentNode"] = "untrusted-parent"
         result = {"nodes": nodes}

@@ -135,7 +135,7 @@ internal sealed partial class NodeProviderRegistry
         }
         discovered.Clear();
         foreach (var value in values)
-            discovered[value["id"]!.GetValue<string>()] = (JsonObject)value.DeepClone();
+            PublishDescriptor(value);
         return Snapshot();
     }
 
@@ -196,10 +196,36 @@ internal sealed partial class NodeProviderRegistry
             .OfType<JsonObject>()
             .FirstOrDefault(value => SessionWait.Text(value["id"]) == id);
         if (descriptor is not null)
-            discovered[id] = (JsonObject)descriptor.DeepClone();
+            PublishDescriptor(descriptor);
         else
             discovered.TryRemove(id, out _);
         return descriptor;
+    }
+
+    // Discovery/inspection may finish while a lifecycle receipt still owns admission.
+    // Only identities with trusted ancestry become executable capability projections.
+    private bool HasAuthorizationAncestry(string id)
+    {
+        var forest = native.Registry.Forest();
+        if (!forest.Contains(id))
+            return false;
+        _ = forest.Chain(id);
+        return true;
+    }
+
+    private void PublishDescriptor(JsonObject descriptor)
+    {
+        var id = SessionWait.Text(descriptor["id"])!;
+        if (HasAuthorizationAncestry(id))
+            discovered[id] = (JsonObject)descriptor.DeepClone();
+        else
+            discovered.TryRemove(id, out _);
+    }
+
+    private void RequireAuthorizationAncestry(string id)
+    {
+        if (!HasAuthorizationAncestry(id))
+            throw new InvalidOperationException("Node authorization metadata is not admitted: " + id);
     }
 
     internal async Task RefreshAsync(string id, CancellationToken token)
@@ -285,6 +311,7 @@ internal sealed partial class NodeProviderRegistry
     internal async Task<ProviderExecBackend> AdmitExecAsync(string node, CancellationToken token)
     {
         var descriptor = await ResolveAsync(node, token);
+        RequireAuthorizationAncestry(node);
         if (
             descriptor is null
             || SessionWait.Text(descriptor["availability"]) != "ready"
@@ -318,6 +345,7 @@ internal sealed partial class NodeProviderRegistry
         var descriptor =
             await ResolveAsync(node, token)
             ?? throw new InvalidOperationException("Node is unavailable: " + node);
+        RequireAuthorizationAncestry(node);
         if (
             SessionWait.Text(descriptor["availability"]) != "ready"
             || write && SessionWait.Text(descriptor["filesystem"]) != "read-write"
