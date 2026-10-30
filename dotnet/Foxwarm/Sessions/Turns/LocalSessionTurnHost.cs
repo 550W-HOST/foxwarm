@@ -116,7 +116,10 @@ public sealed partial class LocalSessionTurnHost
                 );
             if (tools is ITurnToolControl control)
                 control.BeginTurn();
-            if (entry.ExternalTurn is { } external && entry.WithState(state => ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope)))
+            if (
+                entry.ExternalTurn is { } external
+                && entry.WithState(state => ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope))
+            )
                 return await external(this, registered.Token).ConfigureAwait(false);
             for (var iteration = 0; iteration < maxToolIterations; iteration++)
             {
@@ -438,13 +441,9 @@ public sealed partial class LocalSessionTurnHost
         );
         var finalText = string.Join(
             "",
-            parts
-                .Select(part => SessionWait.Text(part?["text"]))
-                .Where(text => text is not null)
+            parts.Select(part => SessionWait.Text(part?["text"])).Where(text => text is not null)
         );
-        var hasLeadingQueue = entry.WithState(state =>
-            state.Queue.Any(SessionCompactor.Ordinary)
-        );
+        var hasLeadingQueue = entry.WithState(state => state.Queue.Any(SessionCompactor.Ordinary));
         if (!hasLeadingQueue && noAction)
             await entry.SaveLane.ResolveChildHandoffAsync().ConfigureAwait(false);
         var parent = ParentSessionId();
@@ -458,8 +457,7 @@ public sealed partial class LocalSessionTurnHost
             await entry
                 .SaveLane.QueueChildReminderAsync(
                     parent,
-                    tools is SessionToolExecutor toolMode
-                        && toolMode.HandoffConfirmationEnabled
+                    tools is SessionToolExecutor toolMode && toolMode.HandoffConfirmationEnabled
                 )
                 .ConfigureAwait(false);
     }
@@ -692,13 +690,20 @@ public sealed partial class LocalSessionTurnHost
         if (startsForeground)
             stagedMeta.Remove("llmFailed");
         var stagedEnvelope = (JsonObject)state.AuthorityEnvelope.DeepClone();
-        if (externalRuntime is not null) stagedEnvelope["externalRuntime"] = externalRuntime.DeepClone();
+        if (externalRuntime is not null)
+            stagedEnvelope["externalRuntime"] = externalRuntime.DeepClone();
         if (ClaudeRuntimeState.IsExternal(stagedEnvelope))
         {
-            var latestUser = SessionWait.Number(state.AuthorityEnvelope["externalRuntime"]?["lastUserSeq"]) ?? 0;
+            var latestUser =
+                SessionWait.Number(state.AuthorityEnvelope["externalRuntime"]?["lastUserSeq"]) ?? 0;
             foreach (var message in canonicalMessages)
-                if (SessionWait.Text(message["role"]) == "user") latestUser = Math.Max(latestUser, SessionWait.Number(message["__meta"]?["seq"]) ?? 0);
-            if (latestUser > 0) stagedEnvelope["externalRuntime"]!["lastUserSeq"] = latestUser;
+                if (SessionWait.Text(message["role"]) == "user")
+                    latestUser = Math.Max(
+                        latestUser,
+                        SessionWait.Number(message["__meta"]?["seq"]) ?? 0
+                    );
+            if (latestUser > 0)
+                stagedEnvelope["externalRuntime"]!["lastUserSeq"] = latestUser;
         }
         if (usage is not null)
         {
@@ -767,7 +772,10 @@ public sealed partial class LocalSessionTurnHost
                 live.Meta["messageCount"] = live.History.Count;
                 if (startsForeground)
                     live.Meta.Remove("llmFailed");
-                if (ClaudeRuntimeState.IsExternal(stagedEnvelope)) live.AuthorityEnvelope["externalRuntime"] = stagedEnvelope["externalRuntime"]!.DeepClone();
+                if (ClaudeRuntimeState.IsExternal(stagedEnvelope))
+                    live.AuthorityEnvelope["externalRuntime"] = stagedEnvelope[
+                        "externalRuntime"
+                    ]!.DeepClone();
                 if (usage is not null)
                     live.AuthorityEnvelope["stats"] = stagedEnvelope["stats"]!.DeepClone();
                 if (stagedEnvelope["childHandoffState"] is null)

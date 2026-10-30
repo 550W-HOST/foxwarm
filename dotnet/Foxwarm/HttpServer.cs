@@ -337,8 +337,15 @@ internal sealed class HttpServer
         app.Lifetime.ApplicationStarted.Register(() =>
         {
             var bound = new Uri(app.Urls.First());
-            var localHost = bindAddress is "0.0.0.0" or "::" or "127.0.0.1" ? "127.0.0.1" : bindAddress;
-            sessions.RuntimeMcpEndpoint = new UriBuilder("http", localHost, bound.Port, address.Prefix.ToString() + "/runtime/mcp").Uri;
+            var localHost = bindAddress is "0.0.0.0" or "::" or "127.0.0.1"
+                ? "127.0.0.1"
+                : bindAddress;
+            sessions.RuntimeMcpEndpoint = new UriBuilder(
+                "http",
+                localHost,
+                bound.Port,
+                address.Prefix.ToString() + "/runtime/mcp"
+            ).Uri;
         });
         if (port == 0 || desktop)
             app.Lifetime.ApplicationStarted.Register(() =>

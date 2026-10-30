@@ -280,7 +280,13 @@ internal sealed partial class SessionManager
                 "Child suffix must use only letters, numbers, hyphens and underscores."
             );
         runtime = ClaudeRuntimeState.ValidateSelection(JsonValue.Create(runtime), present: true);
-        if (fork && (runtime != "foxwarm" || ClaudeRuntimeState.IsExternal(parent.Entry.Snapshot().AuthorityEnvelope)))
+        if (
+            fork
+            && (
+                runtime != "foxwarm"
+                || ClaudeRuntimeState.IsExternal(parent.Entry.Snapshot().AuthorityEnvelope)
+            )
+        )
             throw new InvalidDataException("Claude Code Session forks are not supported.");
         targetAgent ??= parent.Agent;
         if (!userInitiated)
@@ -359,13 +365,15 @@ internal sealed partial class SessionManager
                         {
                             ["role"] = "user",
                             ["parts"] = new JsonArray(new JsonObject { ["system"] = system }),
-                            ["__meta"] = new JsonObject
-                            {
-                                ["timestamp"] = time,
-                            },
+                            ["__meta"] = new JsonObject { ["timestamp"] = time },
                         };
                         return LocalSessionTurnHost.PrepareCanonicalAppend(
-                            state, [message], [], updateLastMessageTime: false, finalizing: false, () => time
+                            state,
+                            [message],
+                            [],
+                            updateLastMessageTime: false,
+                            finalizing: false,
+                            () => time
                         );
                     });
                     child.Entry.InvokeCommitted(child.Entry.Snapshot());
@@ -503,8 +511,16 @@ internal sealed partial class SessionManager
         var snapshot = session.Entry.Snapshot();
         if (ClaudeRuntimeState.IsExternal(snapshot.AuthorityEnvelope))
         {
-            var externalModel = SessionWait.Text(snapshot.AuthorityEnvelope["externalRuntime"]?["model"]);
-            var externalMemory = await memory.BuildAsync(session.Agent, session.Id, externalModel ?? "", selection: AgentMemory.Selection(snapshot.AuthorityEnvelope), externalRuntime: true);
+            var externalModel = SessionWait.Text(
+                snapshot.AuthorityEnvelope["externalRuntime"]?["model"]
+            );
+            var externalMemory = await memory.BuildAsync(
+                session.Agent,
+                session.Id,
+                externalModel ?? "",
+                selection: AgentMemory.Selection(snapshot.AuthorityEnvelope),
+                externalRuntime: true
+            );
             await session.Entry.SaveLane.CommitMemorySnapshotAsync(externalMemory);
             return ClaudeRuntimeState.Kind;
         }
@@ -550,7 +566,9 @@ internal sealed partial class SessionManager
     {
         runtime = ClaudeRuntimeState.ValidateSelection(JsonValue.Create(runtime), present: true);
         if (runtime == ClaudeRuntimeState.Kind && forceModel is not null)
-            throw new InvalidDataException("forceModel is not supported for Claude Code Sessions; Claude Code manages its model.");
+            throw new InvalidDataException(
+                "forceModel is not supported for Claude Code Sessions; Claude Code manages its model."
+            );
         using var membership = BeginAgentAdmission(agentName);
         if (!accepting)
             throw new InvalidOperationException("Host is shutting down.");
@@ -581,17 +599,24 @@ internal sealed partial class SessionManager
             id,
             async () =>
             {
-                var (model, effort) = runtime == ClaudeRuntimeState.Kind ? (null, null) : ValidateModelSettings(
-                    inherited,
-                    forceModel,
-                    preserveInheritedModel: agentMainCreation
-                );
+                var (model, effort) =
+                    runtime == ClaudeRuntimeState.Kind
+                        ? (null, null)
+                        : ValidateModelSettings(
+                            inherited,
+                            forceModel,
+                            preserveInheritedModel: agentMainCreation
+                        );
                 if (timerCreation)
                     model = inherited?.Model;
-                var selectedModel = runtime == ClaudeRuntimeState.Kind || models.All.Count == 0 ? null : models.Resolve(model);
+                var selectedModel =
+                    runtime == ClaudeRuntimeState.Kind || models.All.Count == 0
+                        ? null
+                        : models.Resolve(model);
                 var snapshotModel =
                     selectedModel is null || selectedModel.IsVirtual ? null : selectedModel.Key;
-                if (runtime == ClaudeRuntimeState.Kind) snapshotModel = "";
+                if (runtime == ClaudeRuntimeState.Kind)
+                    snapshotModel = "";
                 var snapshotText = snapshotModel is null
                     ? ""
                     : await memory.BuildAsync(
@@ -612,7 +637,10 @@ internal sealed partial class SessionManager
                     if (runtime == ClaudeRuntimeState.Kind)
                     {
                         state.AuthorityEnvelope["runtime"] = runtime;
-                        state.AuthorityEnvelope["externalRuntime"] = new JsonObject { ["status"] = "new" };
+                        state.AuthorityEnvelope["externalRuntime"] = new JsonObject
+                        {
+                            ["status"] = "new",
+                        };
                     }
                     if (parentId is not null)
                         state.AuthorityEnvelope["parentSessionId"] = parentId;

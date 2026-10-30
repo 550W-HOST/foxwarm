@@ -18,7 +18,10 @@ internal static class WebUiContract
         models = models.Capture();
         var rawModel = SessionWait.Text(snapshot.AuthorityEnvelope["model"]);
         var rawEffort = SessionWait.Text(snapshot.AuthorityEnvelope["effort"]);
-        var model = ClaudeRuntimeState.IsExternal(snapshot.AuthorityEnvelope) || models.All.Count == 0 ? null : models.Resolve(rawModel);
+        var model =
+            ClaudeRuntimeState.IsExternal(snapshot.AuthorityEnvelope) || models.All.Count == 0
+                ? null
+                : models.Resolve(rawModel);
         var allowed = model?.AllowedEfforts ?? HostModels.Efforts;
         var defaultEffort = model is null ? "high" : model.DefaultEffort;
         var effectiveEffort =
@@ -70,8 +73,13 @@ internal static class WebUiContract
         )
             result[key] = value?.DeepClone();
         var external = snapshot.AuthorityEnvelope["externalRuntime"]?.DeepClone() as JsonObject;
-        if (external is not null) external["canContinue"] = ClaudeRuntimeState.CanContinue(snapshot.AuthorityEnvelope);
-        SessionPresentation.ApplyExternalRuntime(result, SessionWait.Text(snapshot.AuthorityEnvelope["runtime"]) ?? "foxwarm", external);
+        if (external is not null)
+            external["canContinue"] = ClaudeRuntimeState.CanContinue(snapshot.AuthorityEnvelope);
+        SessionPresentation.ApplyExternalRuntime(
+            result,
+            SessionWait.Text(snapshot.AuthorityEnvelope["runtime"]) ?? "foxwarm",
+            external
+        );
         return result;
     }
 

@@ -53,7 +53,11 @@ public sealed class SessionEntry
                 identityLoss.Cancel();
         }
     }
-    internal Func<LocalSessionTurnHost, CancellationToken, Task<ChatResult>>? ExternalTurn { get; set; }
+    internal Func<
+        LocalSessionTurnHost,
+        CancellationToken,
+        Task<ChatResult>
+    >? ExternalTurn { get; set; }
     internal Action? RevokeExternalRun { get; set; }
     internal bool HasProcessor => Volatile.Read(ref processorClaim) != 0;
     internal Action<JsonObject, bool>? ToolProgress { get; set; }

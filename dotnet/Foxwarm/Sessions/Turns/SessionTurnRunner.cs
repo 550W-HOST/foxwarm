@@ -160,7 +160,11 @@ public sealed class SessionTurnRunner
                         throw new SessionContinuationUnavailableException(
                             "Session is waiting and cannot be continued manually."
                         );
-                    if (ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope) ? !ClaudeRuntimeState.CanContinue(state.AuthorityEnvelope) : !SessionContinuation.IsIncomplete(state.History))
+                    if (
+                        ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope)
+                            ? !ClaudeRuntimeState.CanContinue(state.AuthorityEnvelope)
+                            : !SessionContinuation.IsIncomplete(state.History)
+                    )
                         throw new SessionContinuationUnavailableException();
                 });
             var host = hosts.For(entry);
@@ -268,10 +272,23 @@ public sealed class SessionTurnRunner
                 }
                 catch (Exception error)
                 {
-                    if (closing && entry.WithState(state => ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope))) { interrupted = true; break; }
+                    if (
+                        closing
+                        && entry.WithState(state =>
+                            ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope)
+                        )
+                    )
+                    {
+                        interrupted = true;
+                        break;
+                    }
                     // The current turn does not auto-retry a chat failure, but an HTTP host
                     // must be able to report its terminal outcome rather than imply success.
-                    failed = error is Foxwarm.Models.ModelPreparationException || entry.WithState(state => ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope));
+                    failed =
+                        error is Foxwarm.Models.ModelPreparationException
+                        || entry.WithState(state =>
+                            ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope)
+                        );
                     llmFailed =
                         error
                             is Foxwarm.Models.ModelRequestException
@@ -378,7 +395,12 @@ public sealed class SessionTurnRunner
     {
         return entry.WithState(state =>
         {
-            return (IReadOnlyList<QueueItem>)(ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope) ? state.Queue.Where(SessionCompactor.Ordinary).Take(1) : state.Queue.Where(SessionCompactor.Ordinary)).ToArray();
+            return (IReadOnlyList<QueueItem>)
+                (
+                    ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope)
+                        ? state.Queue.Where(SessionCompactor.Ordinary).Take(1)
+                        : state.Queue.Where(SessionCompactor.Ordinary)
+                ).ToArray();
         });
     }
 

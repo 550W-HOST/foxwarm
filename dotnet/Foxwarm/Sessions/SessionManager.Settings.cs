@@ -21,7 +21,8 @@ internal sealed partial class SessionManager
         );
         var id = OptionalString(args, "sessionId") ?? source.Id;
         var owner = await RequiredAsync(id);
-        if (!child) ClaudeRuntimeState.RequireFoxwarm(owner, "Foxwarm context settings");
+        if (!child)
+            ClaudeRuntimeState.RequireFoxwarm(owner, "Foxwarm context settings");
         var clear = OptionalBool(args, "clear") == true;
         var patch = new JsonObject();
         var action = "status";

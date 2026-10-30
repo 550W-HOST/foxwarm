@@ -22,13 +22,20 @@ internal sealed partial class SessionToolExecutor(
         ?? (workspace is WorkspaceTools ? sessions.IdentityWorkspace(hosted) : null);
 
     internal ClaudeRuntimeRun? ExternalRun { get; set; }
+
     internal async Task AuthorizeAsync(ResolvedTool resolved, CancellationToken token)
     {
         void RequireRuntime()
         {
-            if (ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope) && !unattended)
+            if (
+                ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope)
+                && !unattended
+            )
             {
-                (ExternalRun ?? throw new InvalidOperationException("No current external runtime run.")).Require();
+                (
+                    ExternalRun
+                    ?? throw new InvalidOperationException("No current external runtime run.")
+                ).Require();
                 ClaudeRuntimeToolSupport.Require(hosted, sessions, resolved);
             }
         }

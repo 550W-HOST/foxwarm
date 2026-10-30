@@ -21,33 +21,76 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
             Directory.CreateDirectory(f.Cwd);
             f.previousConfig = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
             // The assembly serializes tests. Only this controlled child sees this owned synthetic account directory.
-            Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", Path.Combine(f.Temp.Path, "cli-config"));
+            Environment.SetEnvironmentVariable(
+                "CLAUDE_CONFIG_DIR",
+                Path.Combine(f.Temp.Path, "cli-config")
+            );
             f.configured = true;
-            var root = Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT") ?? throw new InvalidOperationException("FOXWARM_TS_ROOT is required for the controlled peer and installed MCP SDK.");
+            var root =
+                Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")
+                ?? throw new InvalidOperationException(
+                    "FOXWARM_TS_ROOT is required for the controlled peer and installed MCP SDK."
+                );
             var launcher = Path.Combine(f.Temp.Path, "claude-peer");
-            await File.WriteAllTextAsync(launcher, "#!/bin/sh\nexec node '" + root.Replace("'", "'\\''") + "/dotnet/Foxwarm.Tests/Mcp/Fixtures/claude-runtime-peer.mjs' \"$@\"\n");
-            if (!OperatingSystem.IsLinux()) throw new PlatformNotSupportedException();
-            File.SetUnixFileMode(launcher, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            await File.WriteAllTextAsync(
+                launcher,
+                "#!/bin/sh\nexec node '"
+                    + root.Replace("'", "'\\''")
+                    + "/dotnet/Foxwarm.Tests/Mcp/Fixtures/claude-runtime-peer.mjs' \"$@\"\n"
+            );
+            if (!OperatingSystem.IsLinux())
+                throw new PlatformNotSupportedException();
+            File.SetUnixFileMode(
+                launcher,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            );
             await f.PeerAsync(peer ?? new JsonObject());
             var app = InboundMcpFixture.App();
-            app["claudeCode"] = new JsonObject { ["executable"] = launcher, ["workingDirectory"] = f.Cwd, ["credentialLifetimeSeconds"] = 1 };
+            app["claudeCode"] = new JsonObject
+            {
+                ["executable"] = launcher,
+                ["workingDirectory"] = f.Cwd,
+                ["credentialLifetimeSeconds"] = 1,
+            };
             f.Main = await InboundMcpFixture.CreateAsync(appConfiguration: app);
             var agentMemory = Path.Combine(f.Main.Manager.AgentDirectory("main"), "memory");
             Directory.CreateDirectory(agentMemory);
-            await File.WriteAllTextAsync(Path.Combine(agentMemory, "RULES.md"), "Owned runtime instruction.\n");
-            f.Owner = await f.Main.Manager.CreateNamedAsync("main", "external", null, null, runtime: "claude-code");
+            await File.WriteAllTextAsync(
+                Path.Combine(agentMemory, "RULES.md"),
+                "Owned runtime instruction.\n"
+            );
+            f.Owner = await f.Main.Manager.CreateNamedAsync(
+                "main",
+                "external",
+                null,
+                null,
+                runtime: "claude-code"
+            );
             f.Owner.Registry.TriggerOverride = _ => Task.CompletedTask;
             return f;
         }
-        catch { await f.DisposeAsync(); throw; }
+        catch
+        {
+            await f.DisposeAsync();
+            throw;
+        }
     }
-    internal Task PeerAsync(JsonObject settings) => File.WriteAllTextAsync(Path.Combine(Cwd, "peer.json"), settings.ToJsonString());
+
+    internal Task PeerAsync(JsonObject settings) =>
+        File.WriteAllTextAsync(Path.Combine(Cwd, "peer.json"), settings.ToJsonString());
+
     internal async Task RunAsync(string? text = "input")
     {
-        if (text is not null) await Owner.Registry.Ingress.EnqueueAsync(Owner.Id, QueueItem.UserText(text));
+        if (text is not null)
+            await Owner.Registry.Ingress.EnqueueAsync(Owner.Id, QueueItem.UserText(text));
         await Owner.Registry.Runner.ProcessQueueAsync(Owner.Id).WaitAsync(TimeSpan.FromSeconds(30));
     }
-    internal JsonObject[] Lines(string name) => File.ReadAllLines(Path.Combine(Cwd, name)).Select(line => JsonNode.Parse(line)!.AsObject()).ToArray();
+
+    internal JsonObject[] Lines(string name) =>
+        File.ReadAllLines(Path.Combine(Cwd, name))
+            .Select(line => JsonNode.Parse(line)!.AsObject())
+            .ToArray();
+
     internal async Task ReadyAsync()
     {
         var file = Path.Combine(Cwd, "ready");
@@ -55,13 +98,17 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
         using var watcher = new FileSystemWatcher(Cwd, "ready") { EnableRaisingEvents = true };
         watcher.Created += (_, _) => ready.TrySetResult();
         watcher.Changed += (_, _) => ready.TrySetResult();
-        if (File.Exists(file)) return;
+        if (File.Exists(file))
+            return;
         await ready.Task.WaitAsync(TimeSpan.FromSeconds(20));
     }
+
     public async ValueTask DisposeAsync()
     {
-        if (Main is not null) await Main.DisposeAsync();
-        if (configured) Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", previousConfig);
+        if (Main is not null)
+            await Main.DisposeAsync();
+        if (configured)
+            Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", previousConfig);
         Temp.Dispose();
     }
 }

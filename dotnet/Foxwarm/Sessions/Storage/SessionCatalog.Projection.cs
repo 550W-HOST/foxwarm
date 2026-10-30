@@ -199,7 +199,8 @@ internal sealed partial class SessionCatalog
         {
             result["runtime"] = ClaudeRuntimeState.Kind;
             var external = new JsonObject();
-            foreach (var key in new[] { "status", "model", "authMethod", "lastResult" }) Copy(raw["externalRuntime"] as JsonObject, external, key);
+            foreach (var key in new[] { "status", "model", "authMethod", "lastResult" })
+                Copy(raw["externalRuntime"] as JsonObject, external, key);
             external["canContinue"] = ClaudeRuntimeState.CanContinue(raw);
             result["externalRuntime"] = external;
         }

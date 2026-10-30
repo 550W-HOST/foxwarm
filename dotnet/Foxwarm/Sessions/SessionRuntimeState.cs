@@ -55,7 +55,12 @@ internal static class SessionRuntimeState
             {
                 ["state"] = "requesting-model",
                 ["note"] = "Claude Code is running on Main.",
-                ["active"] = new JsonObject { ["phase"] = "external-runtime", ["runtime"] = meta.Runtime, ["modelKey"] = meta.Model },
+                ["active"] = new JsonObject
+                {
+                    ["phase"] = "external-runtime",
+                    ["runtime"] = meta.Runtime,
+                    ["modelKey"] = meta.Model,
+                },
             };
         var result = Build(
             meta.Busy,
@@ -69,7 +74,11 @@ internal static class SessionRuntimeState
             compaction,
             meta.LlmFailed
         );
-        if (meta.Runtime == ClaudeRuntimeState.Kind && !meta.Busy && SessionWait.Text(meta.ExternalRuntime?["status"]) == "interrupted")
+        if (
+            meta.Runtime == ClaudeRuntimeState.Kind
+            && !meta.Busy
+            && SessionWait.Text(meta.ExternalRuntime?["status"]) == "interrupted"
+        )
             result["note"] = "Claude Code was interrupted. Continue or send a new message.";
         return result;
     }

@@ -78,7 +78,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         HandoffConfirmationEnabled = models.HandoffConfirmationEnabled;
         this.root = Path.GetFullPath(root);
         var runtimeFiles = Path.Combine(this.root, "state", "runtime-runs");
-        if (Directory.Exists(runtimeFiles)) Directory.Delete(runtimeFiles, recursive: true);
+        if (Directory.Exists(runtimeFiles))
+            Directory.Delete(runtimeFiles, recursive: true);
         diagnostics = new(this.root);
         Nodes = new(this.root);
         Nodes.Registry.ConfigureLimits(() =>
@@ -436,7 +437,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await executor.ReconcileNowAsync();
         executor.StartReconciliation();
         foreach (var owner in sessions.Values)
-            if (!ClaudeRuntimeState.Interrupted(owner.Entry.Snapshot().AuthorityEnvelope) && owner.Registry.HasRunnableWork(owner.Entry))
+            if (
+                !ClaudeRuntimeState.Interrupted(owner.Entry.Snapshot().AuthorityEnvelope)
+                && owner.Registry.HasRunnableWork(owner.Entry)
+            )
                 _ = owner.StartProcessing();
     }
 
@@ -505,7 +509,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private void BindMutations(SessionOwner owner)
     {
         owner.Entry.MutationAdmission = () => BeginOwnerMutation(owner);
-        owner.Entry.ExternalTurn = (host, token) => new ClaudeSessionDriver(this, owner, host).RunAsync(token);
+        owner.Entry.ExternalTurn = (host, token) =>
+            new ClaudeSessionDriver(this, owner, host).RunAsync(token);
         owner.Entry.RevokeExternalRun = () => RuntimeCredentials.Revoke(owner);
         owner.Entry.ToolProgress = (call, start) => ChannelToolProgress(owner, call, start);
         owner.Entry.StructuredProgress = progress => ChannelStructuredProgress(owner, progress);
@@ -613,7 +618,10 @@ internal sealed partial class SessionManager : IAsyncDisposable
             catch (Exception error) when (error is IOException or InvalidOperationException) { }
             await MaybeRefreshStaleAsync(hosted);
         };
-        registry.OnTurnCompleted = (_, result) => ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope) ? Task.CompletedTask : hosted.Compactor.AutoAfterTurnAsync(result);
+        registry.OnTurnCompleted = (_, result) =>
+            ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope)
+                ? Task.CompletedTask
+                : hosted.Compactor.AutoAfterTurnAsync(result);
         registry.OnProcessorFinalizing = async (_, error, interrupted, suspended) =>
         {
             // Retire this run's draft before a queued successor can claim the processor.
@@ -621,9 +629,17 @@ internal sealed partial class SessionManager : IAsyncDisposable
             await FinishChannelTurnAsync(hosted, error, interrupted, suspended);
         };
         registry.OnBeforeContinuation = (_, result, consume, token) =>
-            ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope) ? Task.CompletedTask : hosted.Compactor.BeforeContinuationAsync(result, consume, token);
-        registry.OnSafePoint = _ => ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope) ? Task.CompletedTask : hosted.Compactor.SafePointAsync();
-        registry.OnRetrySafePoint = _ => ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope) ? Task.CompletedTask : hosted.Compactor.SafePointAsync(propagateFailure: true);
+            ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope)
+                ? Task.CompletedTask
+                : hosted.Compactor.BeforeContinuationAsync(result, consume, token);
+        registry.OnSafePoint = _ =>
+            ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope)
+                ? Task.CompletedTask
+                : hosted.Compactor.SafePointAsync();
+        registry.OnRetrySafePoint = _ =>
+            ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope)
+                ? Task.CompletedTask
+                : hosted.Compactor.SafePointAsync(propagateFailure: true);
         registry.HasCompletedCompact = _ => hosted.Compactor.HasCompletedJob;
         registry.TriggerOverride = _ =>
             Accepting && !IsDeletionClaimed(hosted.Id) && !hosted.Entry.Retired

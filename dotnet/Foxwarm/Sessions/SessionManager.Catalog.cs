@@ -108,7 +108,9 @@ internal sealed partial class SessionManager
             SessionCatalog.Flag(row["archived"]),
             SessionCatalog.Flag(row["pinned"]),
             SessionCatalog.Number(row["sidebarOrder"]),
-            T(row["runtime"]) == ClaudeRuntimeState.Kind ? T(row["externalRuntime"]?["model"]) : T(row["model"]),
+            T(row["runtime"]) == ClaudeRuntimeState.Kind
+                ? T(row["externalRuntime"]?["model"])
+                : T(row["model"]),
             T(row["effort"]),
             SessionCatalog.Number(row["stats"]?["totalCachedTokens"]) ?? 0,
             SessionCatalog.Number(row["stats"]?["totalInputTokens"]) ?? 0,

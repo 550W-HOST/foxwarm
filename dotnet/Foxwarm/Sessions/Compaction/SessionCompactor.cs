@@ -137,7 +137,7 @@ internal sealed partial class SessionCompactor
         lock (gate)
         {
             ClaudeRuntimeState.RequireFoxwarm(hosted, "Foxwarm context compaction");
-        if (hosted.Entry.HistoryMutation)
+            if (hosted.Entry.HistoryMutation)
                 return null;
             if (active is not null)
                 return null;

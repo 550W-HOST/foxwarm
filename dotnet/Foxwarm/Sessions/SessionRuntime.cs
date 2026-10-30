@@ -270,7 +270,8 @@ internal sealed partial class SessionOwner
             static bool Flag(JsonNode? node) =>
                 node is JsonValue value && value.TryGetValue<bool>(out var flag) && flag;
             var external = envelope["externalRuntime"]?.DeepClone() as JsonObject;
-            if (external is not null) external["canContinue"] = ClaudeRuntimeState.CanContinue(envelope);
+            if (external is not null)
+                external["canContinue"] = ClaudeRuntimeState.CanContinue(envelope);
             return new SessionMetadata(
                 Id,
                 Agent,
@@ -290,7 +291,9 @@ internal sealed partial class SessionOwner
                 && order.TryGetValue<double>(out var rawOrder)
                     ? rawOrder
                     : null,
-                ClaudeRuntimeState.IsExternal(envelope) ? Text(envelope["externalRuntime"]?["model"]) : Text(envelope["model"]),
+                ClaudeRuntimeState.IsExternal(envelope)
+                    ? Text(envelope["externalRuntime"]?["model"])
+                    : Text(envelope["model"]),
                 Text(envelope["effort"]),
                 Number(envelope["stats"]?["totalCachedTokens"]),
                 Number(envelope["stats"]?["totalInputTokens"]),

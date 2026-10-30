@@ -334,7 +334,10 @@ internal sealed partial class SessionManager
                         ),
                         selectedFiles: selection,
                         parentSessionId: OptionalString(args, "parentSessionId"),
-                        runtime: ClaudeRuntimeState.ValidateSelection(args["runtime"], args.ContainsKey("runtime"))
+                        runtime: ClaudeRuntimeState.ValidateSelection(
+                            args["runtime"],
+                            args.ContainsKey("runtime")
+                        )
                     );
                     return (
                         Output($"Created Session {created.Id} under Agent {created.Agent}."),
@@ -390,7 +393,10 @@ internal sealed partial class SessionManager
                             OptionalBool(args, "fork") ?? false,
                             taskId,
                             initialNode,
-                            runtime: ClaudeRuntimeState.ValidateSelection(args["runtime"], args.ContainsKey("runtime"))
+                            runtime: ClaudeRuntimeState.ValidateSelection(
+                                args["runtime"],
+                                args.ContainsKey("runtime")
+                            )
                         );
                         child = created.Child;
                         delivered = created.Delivered;
@@ -413,7 +419,10 @@ internal sealed partial class SessionManager
                                         OptionalBool(args, "fork") ?? false,
                                         taskId,
                                         initialNode,
-                                        runtime: ClaudeRuntimeState.ValidateSelection(args["runtime"], args.ContainsKey("runtime"))
+                                        runtime: ClaudeRuntimeState.ValidateSelection(
+                                            args["runtime"],
+                                            args.ContainsKey("runtime")
+                                        )
                                     )
                                 ).Child,
                             initialMessage

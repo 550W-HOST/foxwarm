@@ -12,8 +12,13 @@ public sealed partial class SessionSaveLane
             var prepared = entry.WithState(state =>
             {
                 var snapshot = state.Snapshot();
-                if (ClaudeRuntimeState.IsExternal(snapshot.AuthorityEnvelope) && patch.Any(p => p.Key is "model" or "effort" or "compactThresholdTokens"))
-                    throw new InvalidOperationException("Model and context settings are managed by Claude Code for this Session.");
+                if (
+                    ClaudeRuntimeState.IsExternal(snapshot.AuthorityEnvelope)
+                    && patch.Any(p => p.Key is "model" or "effort" or "compactThresholdTokens")
+                )
+                    throw new InvalidOperationException(
+                        "Model and context settings are managed by Claude Code for this Session."
+                    );
                 var envelope = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
                 var desired = patch.Any(pair => SessionModelSettings.Fields.Contains(pair.Key))
                     ? SessionModelSettings.Normalize(envelope, patch, models)

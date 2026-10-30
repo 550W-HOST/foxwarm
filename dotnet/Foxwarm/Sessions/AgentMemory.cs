@@ -104,7 +104,8 @@ internal sealed partial class AgentMemory(AgentCatalog agents, Skills skills)
         }
         var directory = $"--- DIRECTORIES ---\n- agent_folder: {agents.AgentDirectory(agentName)}";
         var bodyText = blocks.ToString().Trim();
-        if (externalRuntime) return bodyText.Length == 0 ? directory : bodyText + "\n\n" + directory;
+        if (externalRuntime)
+            return bodyText.Length == 0 ? directory : bodyText + "\n\n" + directory;
         return ConditionalMemory.BuildCurrentModelSnapshot(
             concreteModelId,
             bodyText.Length == 0 ? directory : bodyText + "\n\n" + directory

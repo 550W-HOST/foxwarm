@@ -72,7 +72,8 @@ internal sealed partial class SessionOwner
 
     public async Task<JsonObject> UpdateSettingsAsync(JsonObject patch, bool child)
     {
-        if (!child) ClaudeRuntimeState.RequireFoxwarm(this, "Model changes");
+        if (!child)
+            ClaudeRuntimeState.RequireFoxwarm(this, "Model changes");
         var allowed = child
             ? new[] { "model", "clear", "childEffortDefault" }
             : ["model", "clear", "effort"];
@@ -531,7 +532,11 @@ internal sealed partial class SessionOwner
             return;
         lock (draftGate)
         {
-            if (externalStream is not null ? SessionWait.Text(draft?["streamId"]) != externalStream : draft?["llmRequestId"]?.GetValue<string>() != requestId)
+            if (
+                externalStream is not null
+                    ? SessionWait.Text(draft?["streamId"]) != externalStream
+                    : draft?["llmRequestId"]?.GetValue<string>() != requestId
+            )
                 return;
             FlushDraftLocked();
             draft = emittedDraft = null;

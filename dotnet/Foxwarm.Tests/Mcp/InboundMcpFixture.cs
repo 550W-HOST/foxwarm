@@ -81,7 +81,10 @@ internal sealed class InboundMcpFixture : IAsyncDisposable
         {
             Directory.CreateDirectory(Path.Combine(f.Data, "state"));
             Directory.CreateDirectory(f.Work);
-            File.WriteAllText(Path.Combine(f.Data, "state", "config.yaml"), (appConfiguration ?? App()).ToJsonString());
+            File.WriteAllText(
+                Path.Combine(f.Data, "state", "config.yaml"),
+                (appConfiguration ?? App()).ToJsonString()
+            );
             File.WriteAllText(
                 Path.Combine(f.Data, "state", "models.yaml"),
                 "{\"default\":\"local\",\"providers\":{\"local\":{\"providerType\":\"openai-responses\",\"baseUrl\":\"http://127.0.0.1:1\",\"models\":[\"wire\"]}}}"
@@ -110,7 +113,13 @@ internal sealed class InboundMcpFixture : IAsyncDisposable
             if (webUiEnabled)
             {
                 var runtime = new SessionRuntime(f.Manager);
-                new Foxwarm.Channels.WebUi.WebUIChannel(f.Manager, runtime, new MessageRouter(runtime), f.Terminals, f.Server.Downloads).Register(f.Server.App);
+                new Foxwarm.Channels.WebUi.WebUIChannel(
+                    f.Manager,
+                    runtime,
+                    new MessageRouter(runtime),
+                    f.Terminals,
+                    f.Server.Downloads
+                ).Register(f.Server.App);
             }
             configure?.Invoke(f.Server.App);
             await f.Server.App.StartAsync();
