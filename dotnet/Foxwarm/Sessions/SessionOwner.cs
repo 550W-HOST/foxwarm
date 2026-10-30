@@ -190,7 +190,10 @@ internal sealed partial class SessionOwner
                 }
             }
         }
-        var task = ExecuteAsync();
+        // A new foreground processor must not inherit the triggering tool's scopes.
+        Task task;
+        using (ExecutionContext.SuppressFlow())
+            task = ExecuteAsync();
         running.TryAdd(index, task);
         ready.TrySetResult();
         return task;
