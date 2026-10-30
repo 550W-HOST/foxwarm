@@ -197,7 +197,8 @@ internal sealed partial class SessionManager
         if (ClaudeRuntimeState.IsExternal(snapshot.AuthorityEnvelope))
         {
             var envelope = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
-            envelope["externalRuntime"]!["status"] = "interrupted";
+            if (SessionWait.Text(envelope["externalRuntime"]?["status"]) != "new")
+                envelope["externalRuntime"]!["status"] = "interrupted";
             return snapshot with
             {
                 Busy = false,

@@ -162,7 +162,7 @@ public sealed class SessionTurnRunner
                         );
                     if (
                         ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope)
-                            ? !ClaudeRuntimeState.CanContinue(state.AuthorityEnvelope)
+                            ? !ClaudeRuntimeState.CanContinue(state.AuthorityEnvelope, state.Queue.Any(SessionCompactor.Ordinary))
                             : !SessionContinuation.IsIncomplete(state.History)
                     )
                         throw new SessionContinuationUnavailableException();
@@ -172,7 +172,7 @@ public sealed class SessionTurnRunner
             if (!claimed)
                 return;
             admitted?.Invoke();
-            var retryPending = retry;
+            var retryPending = retry && !entry.WithState(state => ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope) && state.Queue.Any(SessionCompactor.Ordinary));
             while (true)
             {
                 if (entry.WithState(state => state.Stopping))

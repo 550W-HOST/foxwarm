@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Foxwarm.Models;
+using Foxwarm.Tools;
 
 namespace Foxwarm.Sessions;
 
@@ -129,6 +130,7 @@ internal sealed class ClaudeSessionDriver(
                 && ReferenceEquals(host.RuntimeTools.ExternalRun, run)
         );
         host.RuntimeTools.ExternalRun = run;
+        ToolAuthorizationUnavailableException? policyFailure = null;
         run.Call = async (name, args, requestToken) =>
         {
             await run.Lane.WaitAsync(requestToken);
@@ -145,6 +147,12 @@ internal sealed class ClaudeSessionDriver(
                     requestToken
                 );
             }
+            catch (ToolAuthorizationUnavailableException error)
+            {
+                policyFailure = error;
+                manager.RuntimeCredentials.Retire(run);
+                throw;
+            }
             finally
             {
                 run.Lane.Release();
@@ -155,6 +163,7 @@ internal sealed class ClaudeSessionDriver(
         using var identityCancellation = owner.Entry.IdentityLossToken.Register(run.Revoke);
         using var renewalStop = new CancellationTokenSource();
         Task? stderr = null;
+        Task? rootExit = null;
         var inputMayBeAccepted = false;
         var renewal = RenewAsync(run, config.CredentialLifetime, renewalStop.Token);
         try
@@ -215,6 +224,7 @@ internal sealed class ClaudeSessionDriver(
                 throw new ClaudeRuntimeException("Claude Code process could not be started.");
             // Drain without logging user/account data. Errors are reported by structured results or exit status.
             run.ChildAlive = () => !process.HasExited;
+            rootExit = DrainExitedProcessAsync(process);
             stderr = DrainAsync(process.StandardError);
             stream = owner.BeginDraft(externalRuntime: true);
             using var stopProcess = run.Cancellation.Token.Register(() => Interrupt(process));
@@ -308,6 +318,8 @@ internal sealed class ClaudeSessionDriver(
             {
                 run.Lane.Release();
             }
+            if (policyFailure is not null)
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(policyFailure).Throw();
             token.ThrowIfCancellationRequested();
             throw;
         }
@@ -322,6 +334,7 @@ internal sealed class ClaudeSessionDriver(
                 await StopProcessAsync(process);
                 if (stderr is not null)
                     await stderr;
+                if (rootExit is not null) await rootExit;
                 process.Dispose();
             }
             await run.Lane.WaitAsync();
@@ -478,8 +491,7 @@ internal sealed class ClaudeSessionDriver(
             if (result.ContainsKey(key))
                 usage[key] = result[key]?.DeepClone();
         // CLI cost may be cumulative across resume; preserve its latest estimate without adding it to API cost.
-        if (lastAssistant is not null)
-            await host.FinalizeAssistantControlsAsync(lastAssistant);
+        await host.FinalizeAssistantControlsAsync(lastAssistant);
         checkpoint["lastResult"] = usage;
         checkpoint["status"] = "complete";
         await host.AppendHistoryMessageStrictAsync(null, externalRuntime: checkpoint);
@@ -686,6 +698,14 @@ internal sealed class ClaudeSessionDriver(
                 _ = kill(process.Id, 2);
         }
         catch (InvalidOperationException) { }
+    }
+
+    private static async Task DrainExitedProcessAsync(Process process)
+    {
+        // Root lifetime is independent of EOF: an owned descendant may retain both pipes.
+        // Closing that group leaves buffered final records available to the normal reader.
+        await process.WaitForExitAsync();
+        await StopProcessAsync(process);
     }
 
     private static async Task StopProcessAsync(Process process)

@@ -26,8 +26,8 @@ internal static class ClaudeRuntimeState
         IsExternal(envelope)
         && SessionWait.Text(envelope["externalRuntime"]?["status"]) is "running" or "interrupted";
 
-    internal static bool CanContinue(JsonObject envelope) =>
-        Interrupted(envelope)
+    internal static bool CanContinue(JsonObject envelope, bool queued = false) =>
+        queued || Interrupted(envelope)
         || (SessionWait.Number(envelope["externalRuntime"]?["lastUserSeq"]) ?? 0)
             > (SessionWait.Number(envelope["externalRuntime"]?["submittedThroughSeq"]) ?? 0);
 

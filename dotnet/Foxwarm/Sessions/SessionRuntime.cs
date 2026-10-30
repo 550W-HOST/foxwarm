@@ -271,7 +271,7 @@ internal sealed partial class SessionOwner
                 node is JsonValue value && value.TryGetValue<bool>(out var flag) && flag;
             var external = envelope["externalRuntime"]?.DeepClone() as JsonObject;
             if (external is not null)
-                external["canContinue"] = ClaudeRuntimeState.CanContinue(envelope);
+                external["canContinue"] = ClaudeRuntimeState.CanContinue(envelope, state.Queue.Any(SessionCompactor.Ordinary));
             return new SessionMetadata(
                 Id,
                 Agent,

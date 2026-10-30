@@ -433,9 +433,9 @@ public sealed partial class LocalSessionTurnHost
         return calls;
     }
 
-    internal async Task FinalizeAssistantControlsAsync(JsonObject assistant)
+    internal async Task FinalizeAssistantControlsAsync(JsonObject? assistant)
     {
-        var parts = assistant["parts"]?.AsArray() ?? [];
+        var parts = assistant?["parts"]?.AsArray() ?? [];
         var noAction = parts.Any(part =>
             SessionBoundary.IsNoAction(SessionWait.Text(part?["text"]))
         );

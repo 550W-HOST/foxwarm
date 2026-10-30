@@ -437,11 +437,12 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await executor.ReconcileNowAsync();
         executor.StartReconciliation();
         foreach (var owner in sessions.Values)
-            if (
-                !ClaudeRuntimeState.Interrupted(owner.Entry.Snapshot().AuthorityEnvelope)
-                && owner.Registry.HasRunnableWork(owner.Entry)
-            )
+        {
+            var envelope = owner.Entry.Snapshot().AuthorityEnvelope;
+            if ((!ClaudeRuntimeState.IsExternal(envelope) || SessionWait.Text(envelope["externalRuntime"]?["status"]) == "complete")
+                && owner.Registry.HasRunnableWork(owner.Entry))
                 _ = owner.StartProcessing();
+        }
     }
 
     private async Task RecoverOwnerAsync(string id)

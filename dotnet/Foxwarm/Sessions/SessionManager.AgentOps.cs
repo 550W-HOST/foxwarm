@@ -358,7 +358,7 @@ internal sealed partial class SessionManager
                     var system =
                         SessionBoundary.Identity(parentId, child.Id, inherited: false)
                         + "\nYou are a child session (new, empty context). "
-                        + SessionBoundary.Completion(parentId, HandoffConfirmationEnabled, taskId);
+                        + SessionBoundary.Completion(parentId, HandoffConfirmationEnabled, taskId, runtime == ClaudeRuntimeState.Kind);
                     await child.Entry.SaveLane.CommitCanonicalAppendAsync(state =>
                     {
                         var message = new JsonObject

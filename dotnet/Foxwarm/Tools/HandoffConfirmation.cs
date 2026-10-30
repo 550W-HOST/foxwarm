@@ -128,8 +128,8 @@ internal static class HandoffConfirmation
             Validate(args);
     }
 
-    internal static string GuidanceArgument(string parentSessionId) =>
-        $"handoffRecall: \"{RecallPlaceholder}\", sessionId: `{parentSessionId}`, message: \"...\", afterSend: \"finish\", handoffConfirmation: \"{Placeholder}\\n{Suffix}\"";
+    internal static string GuidanceArgument(string parentSessionId, string afterSend = "finish") =>
+        $"handoffRecall: \"{RecallPlaceholder}\", sessionId: `{parentSessionId}`, message: \"...\", afterSend: \"{afterSend}\", handoffConfirmation: \"{Placeholder}\\n{Suffix}\"";
 
     internal const string Guidance =
         " Keep handoffRecall before message and handoffConfirmation last. Briefly recall the relevant rules and what to say, then honestly check the handoff. End the confirmation with “I confirm this handoff should proceed.” only if it should proceed; otherwise omit or cancel the call.";

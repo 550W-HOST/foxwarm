@@ -13,7 +13,7 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
     private string? previousConfig;
     private bool configured;
 
-    internal static async Task<ClaudeRuntimeFixture> CreateAsync(JsonObject? peer = null)
+    internal static async Task<ClaudeRuntimeFixture> CreateAsync(JsonObject? peer = null, bool handoffConfirmation = false)
     {
         var f = new ClaudeRuntimeFixture();
         try
@@ -46,6 +46,7 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
             );
             await f.PeerAsync(peer ?? new JsonObject());
             var app = InboundMcpFixture.App();
+            app["handoffConfirmation"] = handoffConfirmation;
             app["claudeCode"] = new JsonObject
             {
                 ["executable"] = launcher,
@@ -91,16 +92,18 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
             .Select(line => JsonNode.Parse(line)!.AsObject())
             .ToArray();
 
-    internal async Task ReadyAsync()
+    internal Task ReadyAsync() => WaitForFileAsync("ready");
+
+    internal async Task WaitForFileAsync(string name, CancellationToken token = default)
     {
-        var file = Path.Combine(Cwd, "ready");
+        var file = Path.Combine(Cwd, name);
         var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var watcher = new FileSystemWatcher(Cwd, "ready") { EnableRaisingEvents = true };
+        using var watcher = new FileSystemWatcher(Cwd, name) { EnableRaisingEvents = true };
         watcher.Created += (_, _) => ready.TrySetResult();
         watcher.Changed += (_, _) => ready.TrySetResult();
         if (File.Exists(file))
             return;
-        await ready.Task.WaitAsync(TimeSpan.FromSeconds(20));
+        await ready.Task.WaitAsync(TimeSpan.FromSeconds(20), token);
     }
 
     public async ValueTask DisposeAsync()

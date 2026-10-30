@@ -5,6 +5,7 @@ import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { once } from 'node:events'
 import { spawn } from 'node:child_process'
+import { watch } from 'node:fs'
 
 const require = createRequire(path.join(process.env.FOXWARM_TS_ROOT, 'package.json'))
 const { Client } = await import(pathToFileURL(require.resolve('@modelcontextprotocol/sdk/client/index.js')))
@@ -38,9 +39,23 @@ const client = new Client({ name: 'controlled-claude-peer', version: '1.0.0' })
 await client.connect(transport)
 const tools = await client.listTools()
 await fs.writeFile(path.join(process.cwd(), 'tools.json'), JSON.stringify(tools))
+async function waitFor(name) {
+  await new Promise(resolve => {
+    const done = () => { watcher.close(); resolve() }
+    const watcher = watch(process.cwd(), (_, filename) => { if (filename === name) done() })
+    fs.stat(path.join(process.cwd(), name)).then(done, () => {})
+  })
+}
+if (settings.emptyOnce && !(await fs.stat(path.join(process.cwd(), 'empty-once')).catch(() => null))) {
+  await fs.writeFile(path.join(process.cwd(), 'empty-once'), 'done')
+  settings.empty = true
+  settings.calls = []
+}
+if (settings.pauseBeforeCalls) { await fs.writeFile(path.join(process.cwd(), 'before-calls'), 'ready'); await waitFor('allow-calls') }
 for (const [index, operation] of (settings.calls || []).entries()) {
   const result = await client.callTool({ name: operation.name || 'call_tool', arguments: operation.args })
   await fs.appendFile(path.join(process.cwd(), 'results.jsonl'), JSON.stringify({ index, result }) + '\n')
+  if (settings.pauseAfterFirstCall && index === 0) { await fs.writeFile(path.join(process.cwd(), 'after-first-call'), 'ready'); await waitFor('policy-restored') }
   await emit({ type: 'assistant', uuid: `echo-${index}`, message: { id: `echo-${index}`, content: [{ type: 'tool_use', id: `cli-${index}`, name: operation.name || 'call_tool', input: operation.args }] } })
   await emit({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: `cli-${index}`, content: 'observed' }] } })
 }
@@ -53,16 +68,19 @@ if (settings.empty) {
   await client.close()
   process.exit(0)
 }
-await emit({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hello 🦊' } } })
+const answer = settings.answer || 'Hello 🦊'
+await emit({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: answer } } })
 if (settings.partialCrash) process.exit(18)
 if (settings.compact) await emit({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 1000 } })
-const assistant = { type: 'assistant', uuid: 'final', message: { id: 'final', content: [{ type: 'text', text: 'Hello 🦊' }] } }
+const assistant = { type: 'assistant', uuid: 'final', message: { id: 'final', content: [{ type: 'text', text: answer }] } }
 await emit(assistant)
 await emit(assistant)
-await emit({ type: 'result', subtype: 'success', result: 'Hello 🦊', usage: { input_tokens: 11, output_tokens: 7 }, total_cost_usd: 1.25, num_turns: 1 })
+await emit({ type: 'result', subtype: 'success', result: answer, usage: { input_tokens: 11, output_tokens: 7 }, total_cost_usd: 1.25, num_turns: 1 })
 // Deliberately hostile late data must not create another canonical result or business effect.
 if (settings.late) {
   await emit({ type: 'result', subtype: 'success', result: 'duplicate', usage: { input_tokens: 999 }, total_cost_usd: 999 })
   await emit({ type: 'assistant', uuid: 'late', message: { content: [{ type: 'text', text: 'late' }] } })
 }
 await client.close()
+
+if (settings.exitAfterResult) process.exit(0)
