@@ -41,6 +41,23 @@ function buildExecEntry(logPath: string, overrides: Partial<RunningExecEntry> = 
   };
 }
 
+test('external background results direct callers to their context-owned result query', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-external-background-'));
+  const manager = new PersistentExecManager({ getDefaultCwd: () => root, getExecTempDir: () => root });
+  try {
+    const log = path.join(root, 'command.log');
+    await fs.writeFile(log, 'partial bytes');
+    const entry = buildExecEntry(log, { agentName: undefined, externalOwner: { kind: 'external', externalId: 'peer', contextId: 'context' } });
+    const output = await manager.buildBackgroundTimeoutResult(entry, 1);
+    assert.match(output, /foxwarm_exec_result/);
+    assert.doesNotMatch(output, /STOP calling tools|notification message/);
+    assert.match(output, /partial bytes/);
+  } finally {
+    await manager.shutdown();
+    await fs.remove(root);
+  }
+});
+
 test('persistent exec petnames are deterministic through the random seam and path-safe', () => {
   const values = [0, 19];
   const bounds: number[] = [];
