@@ -43,6 +43,10 @@ Generated Windows scripts use UTF-8 with BOM for PowerShell 5.1. The wrapper exp
 
 ## Native mechanics and compatibility
 
+### D-persistent-exec-logical-cwd
+
+[2026-10-30] POSIX native exec binds the child shell's `PWD` to its validated logical start cwd. A completed command that does not change directories keeps the requested symlink path spelling in `$PWD` and the final cwd sidecar, avoiding a false Main Session cwd update. A real `cd` still determines the recorded final cwd. This applies to TypeScript CLI and the shared [.NET Main/CLI launcher](./dotnet-node-primitives.md); Windows environment and cwd recording are unchanged. Existing live `/proc` cwd observations remain physical paths.
+
 - Bash/PowerShell wrappers record final cwd and actual exit status. POSIX redirects merged output in the wrapper and publishes paths through a temporary paths file; Windows passes known paths to the wrapper and inherits output handles under [D-persistent-exec-windows-capture](#d-persistent-exec-windows-capture). New native starts prepare the real Agent tmp directory, validate target-local cwd and record time immediately before launch. External namespaces omit Agent mapping and strip inherited reserved `fw_agentdir`/`fw_tmp` values. Windows strips case variants; POSIX preserves unrelated uppercase names.
 - `NativeExecBackend` owns those scripts/artifacts and delegates low-level process facts to `ProcessOperations`. `PersistentExecManager` owns public identity, durable registry mutation, wait/notification lifetime and result formatting. Native status polling preserves its existing cadence and status-before-Stop precedence; native status-read errors are not reclassified as successful exits.
 - Missing native status falls back only after the managed PID is no longer running and the existing grace period has elapsed. The fallback has unknown exit code, a detection timestamp and the existing missing-status error; its duration is unknown. Missing retention-pruned status parents are recreated before atomic fallback publication.

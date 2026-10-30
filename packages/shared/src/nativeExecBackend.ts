@@ -215,6 +215,7 @@ export class NativeExecBackend {
         cwd: initialCwd,
         env: {
           ...hostEnv,
+          ...(platform === 'win32' ? {} : { PWD: initialCwd }),
           ...(agentDir ? { fw_agentdir: agentDir, fw_tmp: path.join(agentDir, 'tmp') } : {}),
           TERM: 'xterm-256color',
           FOXWARM_EXEC_LOG_DIR: dateDir,

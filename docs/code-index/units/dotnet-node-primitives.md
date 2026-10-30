@@ -47,6 +47,8 @@ Existing Main file/Provider/image and compact-repair tests exercise the relocate
 
 Native primitives and their BrowserSupport consumer are not RID-agnostic project references: the consuming executable's target RID must flow through both paths, so a Linux cross-publish of win-x64 does not collect a build-host PTY shared object. Linux builds compile the existing C PTY shim with the installed GCC and propagate its shared object to actual executable build/publish outputs. Native CLI delivery includes that library and still needs its real libc/shell dependencies and a writable local temporary directory for helper IPC. The [Linux x64 delivery unit](./dotnet-cli-linux-aot.md) owns the measured libc floor and PTY pidfd/kernel requirements; these shared-object measurements do not qualify the separate static build or other platforms. Windows retains current-user named pipes, PowerShell/cmd wrappers and ConPTY; its runtime qualification remains separate.
 
+`ExecNative.Launcher` binds POSIX `PWD` for Main and CLI under the shared [logical cwd contract](./shared-persistent-exec.md#d-persistent-exec-logical-cwd).
+
 ### Windows persistent exec output
 
 Main and CLI share `ExecNative.Start` and `WindowsExecProcess` for Windows persistent exec. The caller fixes the original unique log/status/cwd paths before its final synchronous launch fence. Exclusive log creation (`CREATE_NEW`) rejects an existing path; read/write/delete sharing matches Source's `openSync(..., 'wx')`, not a no-delete lease. Stdout and stderr share that single inherited log handle; stdin is NUL. There is no transcript or output pump.
