@@ -144,7 +144,7 @@ internal sealed partial class CodeWorkbench
         return result;
     }
 
-    private static byte[] Binary(JsonObject value, long limit)
+    internal static byte[] Binary(JsonObject value, long limit)
     {
         var encoded = Text(value, "contentBase64");
         if (encoded is null || encoded.Length > ((limit + 2) / 3) * 4)
@@ -174,6 +174,36 @@ internal sealed partial class CodeWorkbench
             );
         return bytes;
     }
+
+    internal static Task DownloadAsync(
+        HttpContext context,
+        Foxwarm.Nodes.NodeConnectionHub nodes
+    ) =>
+        Guard(
+            context,
+            async () =>
+            {
+                var bytes =
+                    NodeId(context) == "master"
+                        ? await CodeFileService.ReadFileAsync(
+                            Target(context),
+                            context.RequestAborted
+                        )
+                        : Binary(
+                            await nodes.RequestServiceAsync(
+                                NodeId(context),
+                                "vscode-fs",
+                                "read-file",
+                                new() { ["path"] = Target(context) },
+                                context.RequestAborted
+                            ),
+                            CodeFileService.MaxFileBytes
+                        );
+                context.Response.ContentType = "application/octet-stream";
+                context.Response.Headers.CacheControl = "no-store";
+                await context.Response.Body.WriteAsync(bytes, context.RequestAborted);
+            }
+        );
 
     internal void Register(WebApplication app)
     {
@@ -221,35 +251,6 @@ internal sealed partial class CodeWorkbench
                                 () => CodeFileService.ReadDirectory(Target(context))
                             )
                         )
-                )
-        );
-        app.MapGet(
-            "/api/vscode-web/fs/read-file",
-            context =>
-                Guard(
-                    context,
-                    async () =>
-                    {
-                        var bytes =
-                            NodeId(context) == "master"
-                                ? await CodeFileService.ReadFileAsync(
-                                    Target(context),
-                                    context.RequestAborted
-                                )
-                                : Binary(
-                                    await nodes.RequestServiceAsync(
-                                        NodeId(context),
-                                        "vscode-fs",
-                                        "read-file",
-                                        new() { ["path"] = Target(context) },
-                                        context.RequestAborted
-                                    ),
-                                    CodeFileService.MaxFileBytes
-                                );
-                        context.Response.ContentType = "application/octet-stream";
-                        context.Response.Headers.CacheControl = "no-store";
-                        await context.Response.Body.WriteAsync(bytes, context.RequestAborted);
-                    }
                 )
         );
         app.MapPut(

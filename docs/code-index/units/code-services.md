@@ -8,13 +8,15 @@ Serves source files and Git metadata through the Code workbench boundary, includ
 
 ## Stable symbols and callers
 
-`CodeWorkbench.Register`, `PatchWorkbench`, `PatchPre`; `CodeFileService`; `CodeGitService`. Native file/Git mechanisms now live in [shared primitives](./dotnet-node-primitives.md); these wrappers retain Main path/URI adaptation, unavailable-Git presentation and authenticated HTTP ownership.
+`CodeWorkbench.Register`, `DownloadAsync`, `PatchWorkbench`, `PatchPre`; `CodeFileService`; `CodeGitService`. Native file/Git mechanisms now live in [shared primitives](./dotnet-node-primitives.md); these wrappers retain Main path/URI adaptation, unavailable-Git presentation and authenticated HTTP ownership.
 
 Callers and adjacent boundaries: HttpServer; WebUI workbench components; TerminalRegistry.
 
 ## Local and remote consumers
 
 `CodeWorkbench` keeps the existing deployment-relative workbench, static assets, capability URLs, persistent multi-root workspace and browser bridge. Filesystem routes select Master-local `CodeFileService` or the captured Node's advertised `vscode-fs` operations. Write/read retain the inclusive 50 MiB file boundary; oversized requests reject before dispatch. Remote binary content crosses the official base64 service envelope, not an exec command or ordinary model tool.
+
+The read-file HTTP route is registered by the [MCP download boundary](./dotnet-inbound-mcp.md#stateless-remote-file-download), which delegates existing administrator requests to `CodeWorkbench.DownloadAsync`. Its independent external identity checks do not authorize the other Code APIs. `NodeConnectionHub.RequestServiceAsync` accepts a final caller assertion at the existing exact-connection send gate; ordinary Code callers keep their current path.
 
 Status/content select local `CodeGitService` or `vscode-git`; commit details require service version 2 and retain immutable commit IDs and bounded content. The HTTP response stamps the requested authenticated Node namespace for Git consumers rather than accepting a peer-supplied identity. SCM remains read-only. Local Main content normalizes the path, checks its workspace child and validates the content ref before side dispatch, including working content. The shared Node service applies the child check only to working reads and ignores their refs, so literal `..`-prefixed base names are service-only. Absolute POSIX paths and `foxwarm://node+<id>/...` preserve the concrete remote namespace; earlier URI readers remain available. Windows Main maps absolute drive paths at the [Code URI boundary](../threads/code-integration.md#d-code-real-path-uri); local filesystem/Git calls receive native paths while remote payloads retain their existing POSIX semantics. `CodeNativePaths.Native`/`Transport` own that mapping. Windows stat uses native file metadata/link resolution and rename uses MoveFileEx without cross-volume copy or rollback. Typed bootstrap URI components retain escaped path segments for the official URI readers' single decode, including literal percent sequences, drive colons, spaces and Unicode. Git remains an optional external executable and missing Git reports unavailable rather than borrowing a shell implementation.
 

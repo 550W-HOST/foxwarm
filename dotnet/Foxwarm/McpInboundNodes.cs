@@ -108,6 +108,10 @@ internal sealed class McpInboundNodes(
                     descriptor["description"] =
                         "Add, modify, or delete files using *** Begin Patch / *** End Patch. "
                         + ExternalPathDescription;
+                else if (name == "read")
+                    descriptor["description"] =
+                        descriptor["description"]!.GetValue<string>()
+                        + " For full file bytes, GET <deployment-base>/api/vscode-web/fs/read-file?nodeId=<nodeId>&path=<absolute-path> with the same MCP Bearer token. This independent download rechecks read authorization without an MCP context; compatible remote CLI Nodes only, up to 50 MiB.";
                 result.Add(descriptor);
             }
         }
