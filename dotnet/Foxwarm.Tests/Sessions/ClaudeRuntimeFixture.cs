@@ -9,19 +9,21 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
     internal readonly TempDirectory Temp = new();
     internal InboundMcpFixture Main = null!;
     internal SessionOwner Owner = null!;
-    internal string Cwd => Path.Combine(Temp.Path, "cli");
+    internal string PeerDirectory => Path.Combine(Temp.Path, "cli");
     private string? previousConfig;
     private bool configured;
 
     internal static async Task<ClaudeRuntimeFixture> CreateAsync(
         JsonObject? peer = null,
-        bool handoffConfirmation = false
+        bool handoffConfirmation = false,
+        bool startHttpServer = true,
+        bool webUiEnabled = false
     )
     {
         var f = new ClaudeRuntimeFixture();
         try
         {
-            Directory.CreateDirectory(f.Cwd);
+            Directory.CreateDirectory(f.PeerDirectory);
             f.previousConfig = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
             // The assembly serializes tests. Only this controlled child sees this owned synthetic account directory.
             Environment.SetEnvironmentVariable(
@@ -37,7 +39,7 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
             var launcher = Path.Combine(f.Temp.Path, "claude-peer");
             await File.WriteAllTextAsync(
                 launcher,
-                "#!/bin/sh\nexec node '"
+                "#!/bin/sh\nexport FOXWARM_CLAUDE_PEER_DIRECTORY='" + f.PeerDirectory.Replace("'", "'\\''") + "'\nexec node '"
                     + root.Replace("'", "'\\''")
                     + "/dotnet/Foxwarm.Tests/Mcp/Fixtures/claude-runtime-peer.mjs' \"$@\"\n"
             );
@@ -53,10 +55,9 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
             app["claudeCode"] = new JsonObject
             {
                 ["executable"] = launcher,
-                ["workingDirectory"] = f.Cwd,
                 ["credentialLifetimeSeconds"] = 1,
             };
-            f.Main = await InboundMcpFixture.CreateAsync(appConfiguration: app);
+            f.Main = await InboundMcpFixture.CreateAsync(appConfiguration: app, startHttpServer: startHttpServer, webUiEnabled: webUiEnabled);
             var agentMemory = Path.Combine(f.Main.Manager.AgentDirectory("main"), "memory");
             Directory.CreateDirectory(agentMemory);
             await File.WriteAllTextAsync(
@@ -81,7 +82,7 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
     }
 
     internal Task PeerAsync(JsonObject settings) =>
-        File.WriteAllTextAsync(Path.Combine(Cwd, "peer.json"), settings.ToJsonString());
+        File.WriteAllTextAsync(Path.Combine(PeerDirectory, "peer.json"), settings.ToJsonString());
 
     internal async Task RunAsync(string? text = "input")
     {
@@ -91,7 +92,7 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
     }
 
     internal JsonObject[] Lines(string name) =>
-        File.ReadAllLines(Path.Combine(Cwd, name))
+        File.ReadAllLines(Path.Combine(PeerDirectory, name))
             .Select(line => JsonNode.Parse(line)!.AsObject())
             .ToArray();
 
@@ -99,9 +100,9 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
 
     internal async Task WaitForFileAsync(string name, CancellationToken token = default)
     {
-        var file = Path.Combine(Cwd, name);
+        var file = Path.Combine(PeerDirectory, name);
         var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var watcher = new FileSystemWatcher(Cwd, name) { EnableRaisingEvents = true };
+        using var watcher = new FileSystemWatcher(PeerDirectory, name) { EnableRaisingEvents = true };
         watcher.Created += (_, _) => ready.TrySetResult();
         watcher.Changed += (_, _) => ready.TrySetResult();
         if (File.Exists(file))

@@ -8,7 +8,9 @@ Claude Code Sessions remain ordinary internal Sessions: Main owns their queue, h
 
 The current launcher requires Linux, `setsid`, and an installed `claude` executable supporting the streaming flags used by `ClaudeSessionDriver.Command`. It runs on Main, even when business tools target a remote Node. Its host account, executable, and effective administrator-controlled configuration are trusted prerequisites. This hosting mode is not an OS or account sandbox.
 
-Foxwarm launches with native tools removed, a strict single-server MCP configuration, disabled slash commands, and a run-owned settings overlay. That overlay disables hooks only within Claude Code's documented user/project/local/plugin scope. Administrator-managed hooks and force-enabled managed plugin hooks can remain active. Configured automatic effects outside the bridge are not controlled by Foxwarm tool policy. Foxwarm does not modify administrator policy or replace the account's authentication directory.
+The launcher flags were checked without a model call against official Claude Code 2.1.314. Qualify the executable actually installed on Main separately.
+
+Foxwarm launches with `--setting-sources user`, which excludes project/local settings even when those files exist in the working directory. Normal user-level model/login configuration and administrator-managed settings remain in scope. It also launches with native tools removed, a strict single-server MCP configuration, disabled slash commands, and a run-owned settings overlay. That overlay disables hooks only within Claude Code's documented user/project/local/plugin scope. Administrator-managed hooks and force-enabled managed plugin hooks can remain active. Configured automatic effects outside the bridge are not controlled by Foxwarm tool policy. Foxwarm does not modify administrator policy or replace the account's authentication directory.
 
 The driver refuses observable initialization mismatches in the tool set, connected MCP servers, plugins, and permission mode. Successful initialization does not prove that no managed hooks ran: initialization occurs after startup and does not include an effective managed-policy inventory. Qualify the intended installation and account before enabling this runtime. Automated regression tests use a controlled NDJSON process and real MCP SDK clients; they do not exercise a Claude model or subscription account.
 
@@ -19,13 +21,14 @@ The optional startup configuration section is:
 ```yaml
 claudeCode:
   executable: claude
-  # workingDirectory: /srv/foxwarm/claude-work
   credentialLifetimeSeconds: 3600
 ```
 
-`executable` is a trusted executable name or path on Main. `workingDirectory`, when supplied, is an absolute Main-local directory. Otherwise each new external context starts in its owning Agent's Main directory. These settings take effect when Main starts. They do not select a Claude model or authentication method.
+`executable` is a trusted executable name or path on Main. These settings take effect when Main starts and do not select a Claude model or authentication method. The earlier `workingDirectory` option has been removed.
 
-The working directory is independent of the Session's business-tool Node and tool working directory. An existing external context keeps its recorded CLI working directory and transcript reference across identity moves and restarts. The transcript must remain available on Main under the CLI account's configuration directory. Changing the business-tool Node does not transfer a Claude process or transcript.
+Each CLI context uses a stable Main-owned mode-0700 directory under `<data>/state/claude-runtime/<external-session-id>`, outside the Agent workspace. Its working directory is independent of the Session's business-tool Node and tool working directory. An existing external context keeps its recorded CLI working directory and transcript reference across identity moves and restarts. The transcript must remain available on Main under the CLI account's configuration directory. Changing the business-tool Node does not transfer a Claude process or transcript. A checkpoint using an earlier Agent/custom cwd requires Clear rather than an automatic move or replay.
+
+Private ownership and mode 0700 are separate from tool authorization. Existing scoped policy can deny outside-Agent native writes and Main exec. A default-allow Agent is not confined, and unrestricted native-write or Main-exec grants can access this directory under the shared OS account. Foxwarm does not install or change user policy automatically.
 
 ## Input, history, and tools
 

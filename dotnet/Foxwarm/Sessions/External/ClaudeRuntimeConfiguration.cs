@@ -4,7 +4,6 @@ namespace Foxwarm.Sessions;
 
 internal sealed record ClaudeRuntimeConfiguration(
     string Executable,
-    string? WorkingDirectory,
     TimeSpan CredentialLifetime
 )
 {
@@ -16,7 +15,7 @@ internal sealed record ClaudeRuntimeConfiguration(
         var config = raw as JsonObject;
         if (
             config?.Any(p =>
-                p.Key is not ("executable" or "workingDirectory" or "credentialLifetimeSeconds")
+                p.Key is not ("executable" or "credentialLifetimeSeconds")
             ) == true
         )
             throw new InvalidDataException("Unsupported claudeCode setting.");
@@ -32,11 +31,6 @@ internal sealed record ClaudeRuntimeConfiguration(
                 : throw new InvalidDataException("Invalid claudeCode." + key + ".");
         }
         var executable = Text("executable") ?? "claude";
-        var cwd = Text("workingDirectory");
-        if (cwd is not null && !Path.IsPathFullyQualified(cwd))
-            throw new InvalidDataException(
-                "claudeCode.workingDirectory must be an absolute Main-local path."
-            );
         var seconds = config?["credentialLifetimeSeconds"] is null
             ? 3600
             : SessionWait.Number(config["credentialLifetimeSeconds"]);
@@ -50,6 +44,6 @@ internal sealed record ClaudeRuntimeConfiguration(
             throw new InvalidDataException(
                 "claudeCode.credentialLifetimeSeconds must be an integer from 1 to 86400."
             );
-        return new(executable, cwd, TimeSpan.FromSeconds(seconds.Value));
+        return new(executable, TimeSpan.FromSeconds(seconds.Value));
     }
 }

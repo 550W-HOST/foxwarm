@@ -523,7 +523,6 @@ export const APP_CONFIG_SCHEMA = {
       type: 'object', additionalProperties: false,
       properties: {
         executable: { type: 'string', minLength: 1, default: 'claude' },
-        workingDirectory: { type: 'string', minLength: 1, description: 'Absolute Main-local Claude Code working directory. Defaults to the owning Agent directory on Main.' },
         credentialLifetimeSeconds: { type: 'integer', minimum: 1, maximum: 86400, default: 3600 },
       },
       description: 'Trusted Main-local Claude Code launcher and renewable tool credential lifetime. Model and login remain managed by Claude Code.',

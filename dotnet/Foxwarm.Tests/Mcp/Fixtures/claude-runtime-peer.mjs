@@ -12,14 +12,34 @@ const { Client } = await import(pathToFileURL(require.resolve('@modelcontextprot
 const { StreamableHTTPClientTransport } = await import(pathToFileURL(require.resolve('@modelcontextprotocol/sdk/client/streamableHttp.js')))
 const args = process.argv.slice(2)
 const arg = name => args[args.indexOf(name) + 1]
-process.on("uncaughtException", async error => { await fs.writeFile(path.join(process.cwd(), "peer-error.txt"), String(error.stack || error)); process.exit(1) })
-const settings = JSON.parse(await fs.readFile(path.join(process.cwd(), 'peer.json'), 'utf8'))
+process.on("uncaughtException", async error => { await fs.writeFile(path.join(fixtureDirectory, "peer-error.txt"), String(error.stack || error)); process.exit(1) })
+const fixtureDirectory = process.env.FOXWARM_CLAUDE_PEER_DIRECTORY
+const settings = JSON.parse(await fs.readFile(path.join(fixtureDirectory, 'peer.json'), 'utf8'))
 const config = JSON.parse(await fs.readFile(arg('--mcp-config'), 'utf8')).mcpServers.foxwarm
 const id = arg(args.includes('--resume') ? '--resume' : '--session-id')
 const chunks = []
 for await (const chunk of process.stdin) chunks.push(chunk)
 const input = JSON.parse(Buffer.concat(chunks).toString())
-await fs.appendFile(path.join(process.cwd(), 'inputs.jsonl'), JSON.stringify({ args, input, id, resumed: args.includes('--resume'), endpoint: config.url, token: config.headers.Authorization, overlay: JSON.parse(await fs.readFile(arg('--settings'), 'utf8')), prompt: await fs.readFile(arg('--append-system-prompt-file'), 'utf8') }) + '\n')
+const overlay = JSON.parse(await fs.readFile(arg('--settings'), 'utf8'))
+let settingsProbe = null
+if (settings.probeSettingSources) {
+  const sources = args.includes('--setting-sources') ? arg('--setting-sources').split(',') : ['user', 'project', 'local']
+  const paths = {
+    user: path.join(process.env.CLAUDE_CONFIG_DIR, 'settings.json'),
+    project: path.join(process.cwd(), '.claude', 'settings.json'),
+    local: path.join(process.cwd(), '.claude', 'settings.local.json'),
+  }
+  const loaded = []
+  let effective = {}
+  for (const source of sources) {
+    const contents = await fs.readFile(paths[source], 'utf8').catch(error => { if (error.code !== 'ENOENT') throw error; return null })
+    if (contents) { loaded.push(paths[source]); effective = { ...effective, ...JSON.parse(contents) } }
+  }
+  effective = { ...effective, ...overlay }
+  // Observe fixture selection only. Never execute the commands stored in fixture settings.
+  settingsProbe = { sources, loaded, model: effective.model, apiKeyHelper: !!effective.apiKeyHelper, hooks: !!effective.hooks }
+}
+await fs.appendFile(path.join(fixtureDirectory, 'inputs.jsonl'), JSON.stringify({ args, input, id, cwd: process.cwd(), settingsProbe, resumed: args.includes('--resume'), endpoint: config.url, token: config.headers.Authorization, overlay, prompt: await fs.readFile(arg('--append-system-prompt-file'), 'utf8') }) + '\n')
 const transcript = path.join(process.env.CLAUDE_CONFIG_DIR, 'projects', process.cwd().replace(/[^a-zA-Z0-9]/g, '-'), id + '.jsonl')
 await fs.mkdir(path.dirname(transcript), { recursive: true })
 await fs.appendFile(transcript, JSON.stringify(input) + '\n')
@@ -31,35 +51,35 @@ async function emit(event) {
     if (!process.stdout.write(bytes.subarray(i, i + 7))) await once(process.stdout, 'drain')
   }
 }
-if (settings.descendant) { const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' }); await fs.writeFile(path.join(process.cwd(), 'descendant.pid'), String(child.pid)) }
+if (settings.descendant) { const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' }); await fs.writeFile(path.join(fixtureDirectory, 'descendant.pid'), String(child.pid)) }
 if (settings.malformed) { process.stdout.write('{broken\n'); await new Promise(() => { setInterval(() => {}, 1000) }) }
 await emit({ type: 'system', subtype: 'init', model: 'cli-configured-model', tools: ['mcp__foxwarm__search_tools', 'mcp__foxwarm__call_tool', 'EndConversation'], mcp_servers: [{ name: 'foxwarm', status: 'connected' }], plugins: settings.plugins ? [{ name: 'unexpected-plugin' }] : [] })
 const transport = new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: config.headers } })
 const client = new Client({ name: 'controlled-claude-peer', version: '1.0.0' })
 await client.connect(transport)
 const tools = await client.listTools()
-await fs.writeFile(path.join(process.cwd(), 'tools.json'), JSON.stringify(tools))
+await fs.writeFile(path.join(fixtureDirectory, 'tools.json'), JSON.stringify(tools))
 async function waitFor(name) {
   await new Promise(resolve => {
     const done = () => { watcher.close(); resolve() }
-    const watcher = watch(process.cwd(), (_, filename) => { if (filename === name) done() })
-    fs.stat(path.join(process.cwd(), name)).then(done, () => {})
+    const watcher = watch(fixtureDirectory, (_, filename) => { if (filename === name) done() })
+    fs.stat(path.join(fixtureDirectory, name)).then(done, () => {})
   })
 }
-if (settings.emptyOnce && !(await fs.stat(path.join(process.cwd(), 'empty-once')).catch(() => null))) {
-  await fs.writeFile(path.join(process.cwd(), 'empty-once'), 'done')
+if (settings.emptyOnce && !(await fs.stat(path.join(fixtureDirectory, 'empty-once')).catch(() => null))) {
+  await fs.writeFile(path.join(fixtureDirectory, 'empty-once'), 'done')
   settings.empty = true
   settings.calls = []
 }
-if (settings.pauseBeforeCalls) { await fs.writeFile(path.join(process.cwd(), 'before-calls'), 'ready'); await waitFor('allow-calls') }
+if (settings.pauseBeforeCalls) { await fs.writeFile(path.join(fixtureDirectory, 'before-calls'), 'ready'); await waitFor('allow-calls') }
 for (const [index, operation] of (settings.calls || []).entries()) {
   const result = await client.callTool({ name: operation.name || 'call_tool', arguments: operation.args })
-  await fs.appendFile(path.join(process.cwd(), 'results.jsonl'), JSON.stringify({ index, result }) + '\n')
-  if (settings.pauseAfterFirstCall && index === 0) { await fs.writeFile(path.join(process.cwd(), 'after-first-call'), 'ready'); await waitFor('policy-restored') }
+  await fs.appendFile(path.join(fixtureDirectory, 'results.jsonl'), JSON.stringify({ index, result }) + '\n')
+  if (settings.pauseAfterFirstCall && index === 0) { await fs.writeFile(path.join(fixtureDirectory, 'after-first-call'), 'ready'); await waitFor('policy-restored') }
   await emit({ type: 'assistant', uuid: `echo-${index}`, message: { id: `echo-${index}`, content: [{ type: 'tool_use', id: `cli-${index}`, name: operation.name || 'call_tool', input: operation.args }] } })
   await emit({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: `cli-${index}`, content: 'observed' }] } })
 }
-await fs.writeFile(path.join(process.cwd(), 'ready'), 'ready')
+await fs.writeFile(path.join(fixtureDirectory, 'ready'), 'ready')
 if (settings.hold) await new Promise(() => { setInterval(() => {}, 1000) })
 if (settings.crash) process.exit(17)
 if (settings.empty) {

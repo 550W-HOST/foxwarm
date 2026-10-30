@@ -73,7 +73,8 @@ internal sealed class InboundMcpFixture : IAsyncDisposable
         bool allow = true,
         Action<WebApplication>? configure = null,
         JsonObject? appConfiguration = null,
-        bool webUiEnabled = false
+        bool webUiEnabled = false,
+        bool startHttpServer = true
     )
     {
         var f = new InboundMcpFixture();
@@ -122,11 +123,11 @@ internal sealed class InboundMcpFixture : IAsyncDisposable
                 ).Register(f.Server.App);
             }
             configure?.Invoke(f.Server.App);
-            await f.Server.App.StartAsync();
-            f.Url =
-                f.Server.App.Services.GetRequiredService<IServer>()
-                    .Features.Get<IServerAddressesFeature>()!
-                    .Addresses.Single() + "/mcp";
+            if (startHttpServer)
+            {
+                await f.Server.App.StartAsync();
+                f.Url = f.Server.App.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single() + "/mcp";
+            }
             if (allow)
                 await f.PolicyAsync(
                     "version: 1\nrules:\n  - id: external\n    action: allow\n    match: {externalId: [alpha, beta]}\n"

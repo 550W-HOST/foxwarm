@@ -45,7 +45,7 @@ public sealed partial class ClaudeRuntimeTests
         await AssertRevokedAsync(f, token);
         Assert.False(f.Owner.Processing);
         var childPid = int.Parse(
-            await File.ReadAllTextAsync(Path.Combine(f.Cwd, "descendant.pid"))
+            await File.ReadAllTextAsync(Path.Combine(f.PeerDirectory, "descendant.pid"))
         );
         if (File.Exists($"/proc/{childPid}/stat"))
             Assert.Contains(") Z ", await File.ReadAllTextAsync($"/proc/{childPid}/stat"));
@@ -99,8 +99,8 @@ public sealed partial class ClaudeRuntimeTests
         await Assert.ThrowsAsync<SessionContinuationUnavailableException>(() =>
             new SessionRuntime(f.Main.Manager).ContinueAsync(f.Owner.Id)
         );
-        await File.WriteAllTextAsync(Path.Combine(f.Cwd, "peer.json"), "{\"hold\":true}");
-        File.Delete(Path.Combine(f.Cwd, "ready"));
+        await File.WriteAllTextAsync(Path.Combine(f.PeerDirectory, "peer.json"), "{\"hold\":true}");
+        File.Delete(Path.Combine(f.PeerDirectory, "ready"));
         var running = f.RunAsync("held");
         await f.ReadyAsync();
         await f.Owner.Registry.Ingress.EnqueueAsync(f.Owner.Id, QueueItem.UserText("later input"));

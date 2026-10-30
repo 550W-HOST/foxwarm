@@ -45,14 +45,14 @@ internal sealed class ClaudeSessionDriver(
         );
         var previousCheckpoint = (JsonObject)checkpoint.DeepClone();
         var resume = SessionWait.Text(checkpoint["sessionId"]);
-        var cwd =
-            SessionWait.Text(checkpoint["cwd"])
-            ?? config.WorkingDirectory
-            ?? manager.AgentDirectory(owner.Agent);
-        if (!Directory.Exists(cwd))
-            throw new ClaudeRuntimeException(
-                "Claude Code Main-local working directory does not exist."
-            );
+        var externalId = resume ?? Guid.NewGuid().ToString();
+        var cwd = ContextDirectory(manager.DataRoot, externalId);
+        if (resume is not null && SessionWait.Text(checkpoint["cwd"]) != cwd)
+            throw new ClaudeRuntimeException("Claude Code context does not use this Main's private runtime directory. Clear this Session to start a new private context; previous input will not be replayed.");
+        if (resume is not null && !Directory.Exists(cwd))
+            throw new ClaudeRuntimeException("Claude Code private working directory is unavailable. Restore it or Clear this Session; previous input will not be replayed.");
+        PrivateDirectory(Path.GetDirectoryName(cwd)!);
+        PrivateDirectory(cwd);
         if (
             resume is not null
             && (
@@ -63,7 +63,6 @@ internal sealed class ClaudeSessionDriver(
             throw new ClaudeRuntimeException(
                 "Claude Code transcript is unavailable. Restore its Main-local transcript or Clear this Session; the previous input will not be replayed."
             );
-        var externalId = resume ?? Guid.NewGuid().ToString();
         checkpoint["sessionId"] = externalId;
         checkpoint["cwd"] = cwd;
         checkpoint["transcript"] ??= TranscriptPath(cwd, externalId);
@@ -576,6 +575,8 @@ internal sealed class ClaudeSessionDriver(
                 "--permission-mode",
                 "dontAsk",
                 "--disable-slash-commands",
+                "--setting-sources",
+                "user",
                 "--settings",
                 settings,
                 "--append-system-prompt-file",
@@ -587,6 +588,17 @@ internal sealed class ClaudeSessionDriver(
         start.ArgumentList.Add(resume ?? id);
         // Deliberately inherit normal account authentication/model configuration, with no LLM overrides.
         return start;
+    }
+
+    internal static string ContextDirectory(string dataRoot, string externalSessionId) =>
+        Path.Combine(dataRoot, "state", "claude-runtime", externalSessionId);
+
+    [System.Runtime.Versioning.SupportedOSPlatform("linux")]
+    private static void PrivateDirectory(string path)
+    {
+        var mode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        Directory.CreateDirectory(path, mode);
+        File.SetUnixFileMode(path, mode);
     }
 
     internal static string TranscriptPath(string cwd, string id)

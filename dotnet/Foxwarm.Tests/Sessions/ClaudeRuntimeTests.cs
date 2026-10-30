@@ -49,8 +49,8 @@ public sealed partial class ClaudeRuntimeTests
             f.Owner.Entry.LastBackgroundProcessorFailure is null,
             f.Owner.Entry.LastBackgroundProcessorFailure
                 + (
-                    File.Exists(Path.Combine(f.Cwd, "peer-error.txt"))
-                        ? File.ReadAllText(Path.Combine(f.Cwd, "peer-error.txt"))
+                    File.Exists(Path.Combine(f.PeerDirectory, "peer-error.txt"))
+                        ? File.ReadAllText(Path.Combine(f.PeerDirectory, "peer-error.txt"))
                         : ""
                 )
         );
@@ -125,8 +125,8 @@ public sealed partial class ClaudeRuntimeTests
             f.Owner.Entry.LastBackgroundProcessorFailure is null,
             f.Owner.Entry.LastBackgroundProcessorFailure
                 + (
-                    File.Exists(Path.Combine(f.Cwd, "peer-error.txt"))
-                        ? File.ReadAllText(Path.Combine(f.Cwd, "peer-error.txt"))
+                    File.Exists(Path.Combine(f.PeerDirectory, "peer-error.txt"))
+                        ? File.ReadAllText(Path.Combine(f.PeerDirectory, "peer-error.txt"))
                         : ""
                 )
         );

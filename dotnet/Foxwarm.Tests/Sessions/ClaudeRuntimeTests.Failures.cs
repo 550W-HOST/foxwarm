@@ -149,7 +149,7 @@ public sealed partial class ClaudeRuntimeTests
                 "status"
             ]!.GetValue<string>()
         );
-        Assert.False(File.Exists(Path.Combine(f.Cwd, "inputs.jsonl")));
+        Assert.False(File.Exists(Path.Combine(f.PeerDirectory, "inputs.jsonl")));
         await new SessionRuntime(f.Main.Manager).ContinueAsync(f.Owner.Id);
         Assert.Single(f.Lines("inputs.jsonl"));
         Assert.Contains("not submitted", f.Lines("inputs.jsonl")[0]["input"]!.ToJsonString());

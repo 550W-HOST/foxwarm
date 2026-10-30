@@ -14,7 +14,7 @@ public sealed partial class ClaudeRuntimeTests
         bool consumed
     )
     {
-        await using var f = await ClaudeRuntimeFixture.CreateAsync();
+        await using var f = await ClaudeRuntimeFixture.CreateAsync(startHttpServer: !consumed);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var path = Path.Combine(f.Main.Data, "state", "sessions", "external.json");
@@ -26,11 +26,9 @@ public sealed partial class ClaudeRuntimeTests
             entered.TrySetResult();
             await release.Task;
         }
-        var moved = f.Cwd + "-held";
         if (consumed)
         {
-            // A real preflight failure occurs after the ordinary queue commit, before UUID creation.
-            Directory.Move(f.Cwd, moved);
+            // Main has not started its HTTP listener yet: a real preflight failure follows queue consumption.
             f.Owner.Registry.OnTurnFailure = async (_, _) => await CaptureAsync();
         }
         else
@@ -55,8 +53,6 @@ public sealed partial class ClaudeRuntimeTests
         }
         await running;
         await f.Main.Manager.ShutdownAsync();
-        if (consumed)
-            Directory.Move(moved, f.Cwd);
         await File.WriteAllTextAsync(path, crashAuthority!);
         await using var reopened = new SessionManager(
             f.Main.Data,
@@ -76,7 +72,7 @@ public sealed partial class ClaudeRuntimeTests
         Assert.Null(owner.Entry.Snapshot().AuthorityEnvelope["externalRuntime"]!["sessionId"]);
         Assert.True(owner.BuildDto()["externalRuntime"]!["canContinue"]!.GetValue<bool>());
         Assert.Equal(consumed ? 0 : 1, owner.Entry.Snapshot().Queue.Count);
-        Assert.False(File.Exists(Path.Combine(f.Cwd, "inputs.jsonl")));
+        Assert.False(File.Exists(Path.Combine(f.PeerDirectory, "inputs.jsonl")));
         owner.Registry.TriggerOverride = _ => Task.CompletedTask;
         var server = new HttpServer(
             [],
@@ -129,7 +125,7 @@ public sealed partial class ClaudeRuntimeTests
                     ["toolId"] = "node:master/write",
                     ["args"] = new JsonObject
                     {
-                        ["filePath"] = Path.Combine(f.Cwd, filename),
+                        ["filePath"] = Path.Combine(f.PeerDirectory, filename),
                         ["content"] = "effect",
                     },
                 },
@@ -154,12 +150,12 @@ public sealed partial class ClaudeRuntimeTests
             "version: 1\nrules: null\n"
         );
         f.Main.Manager.Authorization.Invalidate();
-        await File.WriteAllTextAsync(Path.Combine(f.Cwd, "allow-calls"), "go");
+        await File.WriteAllTextAsync(Path.Combine(f.PeerDirectory, "allow-calls"), "go");
         using var observation = new CancellationTokenSource();
         var firstReply = f.WaitForFileAsync("after-first-call", observation.Token);
         await Task.WhenAny(running, firstReply);
         await f.Main.PolicyAsync("version: 1\ndefaultAction: allow\n");
-        await File.WriteAllTextAsync(Path.Combine(f.Cwd, "policy-restored"), "go");
+        await File.WriteAllTextAsync(Path.Combine(f.PeerDirectory, "policy-restored"), "go");
         observation.Cancel();
         try
         {
@@ -179,8 +175,8 @@ public sealed partial class ClaudeRuntimeTests
             ]!.GetValue<string>()
         );
         Assert.Single(f.Lines("inputs.jsonl"));
-        Assert.False(File.Exists(Path.Combine(f.Cwd, "first-effect")));
-        Assert.False(File.Exists(Path.Combine(f.Cwd, "second-effect")));
+        Assert.False(File.Exists(Path.Combine(f.PeerDirectory, "first-effect")));
+        Assert.False(File.Exists(Path.Combine(f.PeerDirectory, "second-effect")));
         Assert.Equal(queuedSuccessor ? 1 : 0, f.Owner.Entry.Snapshot().Queue.Count);
         var token = f.Lines("inputs.jsonl")[0]["token"]!.GetValue<string>();
         await AssertRevokedAsync(f, token);
@@ -196,8 +192,8 @@ public sealed partial class ClaudeRuntimeTests
         {
             await f.PeerAsync(new JsonObject { ["calls"] = new JsonArray(Write("second-effect")) });
             await new SessionRuntime(f.Main.Manager).ContinueAsync(f.Owner.Id);
-            Assert.True(File.Exists(Path.Combine(f.Cwd, "second-effect")));
-            Assert.False(File.Exists(Path.Combine(f.Cwd, "first-effect")));
+            Assert.True(File.Exists(Path.Combine(f.PeerDirectory, "second-effect")));
+            Assert.False(File.Exists(Path.Combine(f.PeerDirectory, "first-effect")));
             Assert.Equal(2, f.Lines("inputs.jsonl").Length);
             Assert.Contains(
                 "later queued unit",
@@ -264,7 +260,7 @@ public sealed partial class ClaudeRuntimeTests
                 row => row["parts"]!.ToJsonString().Contains("Hello")
             );
         }
-        var pid = int.Parse(await File.ReadAllTextAsync(Path.Combine(f.Cwd, "descendant.pid")));
+        var pid = int.Parse(await File.ReadAllTextAsync(Path.Combine(f.PeerDirectory, "descendant.pid")));
         var proc = "/proc/" + pid + "/stat";
         Assert.True(!File.Exists(proc) || (await File.ReadAllTextAsync(proc)).Split(' ')[2] == "Z");
         await AssertRevokedAsync(f, f.Lines("inputs.jsonl")[0]["token"]!.GetValue<string>());
