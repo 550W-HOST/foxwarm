@@ -17,7 +17,7 @@ Provides native Windows build, background start, restart, status, and stop workf
 - Control replies retain the Source JSON-plus-EOF completion contract. Each connected server instance drains its Windows output and closes its handle rather than forcibly disconnecting/reusing it; a pending successor keeps the pipe name available. The JavaScript client still requires ordinary complete-response EOF and propagates transport/parse failures. This preserves existing clients and does not turn a partial/error reply into success.
 - A graceful shutdown that exceeds the bounded timeout falls back to terminating the exact PID returned by the control pipe.
 - Both [source installers](./source-main-entry.md) also diagnose managed build prerequisites and reject unsupported Node.js versions before dependency installation; their build-time check follows the WebUI package engine range, not a new requirement on prebuilt backend or CLI execution.
-- The Windows installer invokes the same stopped-state guard before dependency installation and uses the same background launcher, so later status, restart, and stop commands manage installer-started processes without installing over a running instance.
+- The Windows installer invokes the same stopped-state guard before dependency installation and uses the same background launcher, so later status, restart, and stop commands manage installer-started processes without installing over a running instance. It persists and exports its [selected data root](./source-main-entry.md#build-and-controls) before the guard and build, so control identity, upgrade inspection, logs and configuration/token lookup all follow that selection.
 
 ## Qualification boundary
 
