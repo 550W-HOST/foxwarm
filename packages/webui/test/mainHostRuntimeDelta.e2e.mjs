@@ -238,8 +238,12 @@ try {
   assert(!(await history(source)).messages.some(row => row.parts.some(part => part.text === 'cannot commit')))
   await turn(source, 'after-authority')
   // Original App prepared navigation keeps using the existing tail/continuous APIs and preserves the resulting metadata.
-  await page.evaluate(id => window.foxwarmTest.switchToSession(id), target); await page.waitForFunction(() => document.body.innerText.includes('MSG-SCRIPT'))
-  await page.evaluate(id => window.foxwarmTest.switchToSession(id), source); await waitForWebUiReady(page)
+  await page.evaluate(id => window.foxwarmTest.switchToSession(id), target)
+  await page.waitForFunction(id => location.hash === '#tab/' + encodeURIComponent('chat:' + id) && document.querySelector('[data-session-header-subtitle]')?.textContent.includes('session ' + id), {}, target)
+  await page.waitForFunction(() => document.body.innerText.includes('MSG-SCRIPT'))
+  await page.evaluate(id => window.foxwarmTest.switchToSession(id), source)
+  // The entry splash is already gone while prepared navigation still shows the previous Chat.
+  await page.waitForFunction(id => location.hash === '#tab/' + encodeURIComponent('chat:' + id) && document.querySelector('[data-session-header-subtitle]')?.textContent.includes('session ' + id), {}, source)
   await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForSelector('.foxwarm-chat-root'); await page.waitForFunction(() => document.body.innerText.includes('Compaction failed'))
   const restored = await history(source); assert(responseOf(restored, 'script-send').__meta.toolScriptSubCalls.some(row => row.sessionMessage?.message === 'MSG-SCRIPT'))
   assert.deepEqual(errors, [])
