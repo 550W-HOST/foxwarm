@@ -28,7 +28,9 @@ await writeFile(join(data, 'state/token'), apiToken, { mode: 0o600 })
 const modelPath = join(data, 'state/models.yaml'), effectPath = join(work, 'note.txt')
 let host, browser, page, current, flowHold, stopHold, plannerRound = 0
 const requests = [], hostPids = [], errors = [], closed = new Set(), intervals = new Set()
-const opaque = { signature: 'synthetic-opaque-signature', vendor: { nested: [null, 17, 'kept'] } }
+const earlyOpaque = { early: true, signature: 'synthetic-initial-signature', vendor: { retained: 'early', revision: 'first', nested: [1] } }
+const laterOpaque = { early: null, signature: 'synthetic-opaque-signature', vendor: { retained: null, revision: 'last', toolSignature: 'synthetic-tool-signature', nested: [null, 17, 'kept'] } }
+const opaque = { early: true, signature: 'synthetic-opaque-signature', vendor: { retained: 'early', revision: 'last', toolSignature: 'synthetic-tool-signature', nested: [null, 17, 'kept'] } }
 const textOf = content => typeof content === 'string' ? content : (content || []).map(part => part.text || '').join('\n')
 const inputOf = body => body.messages.map(message => textOf(message.content)).join('\n')
 const event = (response, data) => response.write('data: ' + JSON.stringify(data) + '\r\n\r\n')
@@ -77,9 +79,9 @@ function peer(label) {
       }
       if (record.user.includes('tool-flow') && !body.messages.some(message => message.tool_call_id === 'call_write')) {
         assert.equal(request.headers.authorization, 'Bearer ' + oldToken)
-        delta(response, { role: 'assistant', reasoning_content: 'Preferred reasoning ', reasoning: 'Compatibility reasoning', provider_specific_fields: { obsolete: true } })
+        delta(response, { role: 'assistant', reasoning_content: 'Preferred reasoning ', reasoning: 'Compatibility reasoning', provider_specific_fields: earlyOpaque })
         event(response, { choices: [{ index: 1, delta: { content: 'ignored choice' } }] })
-        delta(response, { provider_specific_fields: opaque, tool_calls: [{ index: 0, id: 'call_', type: 'function', function: { name: 'wri', arguments: '{"filePath":"note.txt",' } }] })
+        delta(response, { provider_specific_fields: laterOpaque, tool_calls: [{ index: 0, id: 'call_', type: 'function', function: { name: 'wri', arguments: '{"filePath":"note.txt",' } }] })
         delta(response, { tool_calls: [{ index: 0, id: 'write', function: { name: '', arguments: '' } }] })
         flowHold = { record, response, finish: async () => {
           const payload = Buffer.from('data: ' + JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { name: 'te', arguments: '"content":"héllo"}' } }] } }] }) + '\n\n')
@@ -178,6 +180,7 @@ try {
   assert.equal(sql('SELECT COUNT(*) FROM archive_messages WHERE session_id=?', [current])[0][0], flowHistory.length)
   if (!(await page.$('[data-model-selector-popup="true"]'))) await page.click('.foxwarm-model-selector-trigger'); await page.waitForSelector('[data-model-column="current"] [data-model-option-key="b"]'); await page.click('[data-model-column="current"] [data-model-option-key="b"]'); await until(async () => (await history()).session.modelKey === 'b', 'same wire other concrete selected')
   const originalArchive = sql('SELECT message_json FROM archive_messages WHERE session_id=? AND seq=?', [current, assistant.__meta.seq])
+  assert.deepEqual(JSON.parse(originalArchive[0][0]).providerMeta, assistant.providerMeta)
   await send('cross-concrete', 'CROSS-DONE')
   assert.deepEqual((await history()).messages.find(row => row.__meta?.seq === assistant.__meta.seq), assistant); assert.deepEqual(sql('SELECT message_json FROM archive_messages WHERE session_id=? AND seq=?', [current, assistant.__meta.seq]), originalArchive)
   await api('POST', route(current) + '/model', { model: 'c' }); await send('cross-responses-destination', 'RESPONSES-CROSS-DONE')

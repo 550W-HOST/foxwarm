@@ -140,7 +140,7 @@ internal sealed class CompletionsEventAccumulator(ResponsesStreamCallbacks? call
 
     private static JsonObject MergeOpaqueFields(JsonObject? previous, JsonObject incoming)
     {
-        // Match Source: merge only object/object pairs; null members do not clear
+        // Accumulate object/object deltas; null members do not clear
         // accumulated values. Newly assigned objects and arrays remain opaque.
         var merged = previous?.DeepClone().AsObject() ?? new JsonObject();
         foreach (var (key, value) in incoming)

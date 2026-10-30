@@ -27,8 +27,14 @@ Canonical conversion retains empty signed thinking and `redacted_thinking` data;
 
 Chat Completions message-level `provider_specific_fields` and `extra_fields` are independent opaque objects stored as `providerMeta.providerSpecificFields` and `providerMeta.extraFields`, with the producing `sourceModelId`, including tool-call-only responses. Streaming recursively merges object/object members, skips null members at each merge step, and replaces other values, including arrays. Newly assigned objects retain nested nulls; non-object top-level deltas are ignored. These fields do not generate visible progress. History replay uses the captured [model history compatibility](./model-configuration.md) mapping for both fields without changing source attribution; request-level configured `extraFields` is separate. [Archive validation](./archive-message-store.md#side-effects-and-compatibility) owns persisted shapes.
 
+## Design Decisions
+
+- [2026-10-30] Chat Completions opaque objects deliberately accumulate recursively across streaming deltas, retaining earlier keys for continuation and replay. This differs from the retained TypeScript collector's latest-`provider_specific_fields`-object assignment.
+
 ## Tests
 
 `AnthropicTests`, `AnthropicStreamingTests`, `CompletionsTests`, `ResponsesStreamingTests`, routing/retry/journal qualification and image/tool serialization tests. `packages/webui/test/mainHostAnthropic.e2e.mjs` qualifies the original App against owned local SSE/JSON peers: live progress, held terminal completion, ordered real tools, invalid-input nonexecution, limit notices, replay/filtering, leaf image preparation, cancellation/watchdog, journal/Archive and clean host restart. No paid-provider behavior is claimed.
 
 `CompletionsOpaqueFieldsTests` covers object conversion/merge, declared model/provider compatibility, real SSE tool continuation, Session JSON/SQLite persistence, cold reopen and incompatible-model filtering. JSON converter coverage does not establish HTTP non-streaming Completions support: `CompletionsChatService` continues to select its SSE collector.
+
+`packages/webui/test/mainHostCompletions.e2e.mjs` qualifies recursive opaque accumulation through real fragmented tool execution, canonical history, SQLite Archive, same-concrete replay and incompatible Completions/Responses filtering. Its deltas retain early top-level/nested keys, update scalar/array values and skip null overwrites.
