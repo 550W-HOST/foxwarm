@@ -517,7 +517,7 @@ internal sealed class McpInboundHttp : IAsyncDisposable, IHostedService
                 connection = Open(principal);
             if (connection is not null)
             {
-                if (connection.Active >= 4)
+                if (request.Method != "GET" && connection.Active >= 32)
                 {
                     status = 429;
                     errorText = "Too many concurrent requests.";
@@ -525,7 +525,8 @@ internal sealed class McpInboundHttp : IAsyncDisposable, IHostedService
                 }
                 else
                 {
-                    connection.Active++;
+                    if (request.Method != "GET")
+                        connection.Active++;
                     connection.LastActivity = DateTimeOffset.UtcNow;
                     if (request.Method == "POST")
                         connection.Posts++;
@@ -636,7 +637,8 @@ internal sealed class McpInboundHttp : IAsyncDisposable, IHostedService
             Task? retire = null;
             lock (gate)
             {
-                connection.Active--;
+                if (request.Method != "GET")
+                    connection.Active--;
                 if (request.Method == "POST")
                 {
                     connection.Posts--;

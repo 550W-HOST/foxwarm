@@ -110,10 +110,11 @@ public sealed record ArchiveMessageRecord(
                 ?? throw new InvalidDataException(
                     $"Archive message {seq} providerMeta must be an object."
                 );
-            if (provider["providerSpecificFields"] is not JsonObject)
-                throw new InvalidDataException(
-                    $"Archive message {seq} providerSpecificFields must be an object."
-                );
+            foreach (var field in new[] { "providerSpecificFields", "extraFields" })
+                if (provider.ContainsKey(field) && provider[field] is not JsonObject)
+                    throw new InvalidDataException(
+                        $"Archive message {seq} {field} must be an object."
+                    );
             if (
                 provider.ContainsKey("sourceModelId")
                 && (

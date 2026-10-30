@@ -138,6 +138,8 @@ internal static class ExecNative
         self ??= SelfStart();
         self.UseShellExecute = false;
         self.WorkingDirectory = cwd;
+        if (!OperatingSystem.IsWindows())
+            self.Environment["PWD"] = cwd;
         self.CreateNoWindow = true;
         self.ArgumentList.Add(
             OperatingSystem.IsWindows() ? "--exec-launch-windows" : "--exec-launch"

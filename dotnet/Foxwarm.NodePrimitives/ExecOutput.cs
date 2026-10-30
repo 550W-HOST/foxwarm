@@ -282,8 +282,11 @@ internal static class ExecOutput
     )
     {
         var output = await CaptureLog(entry, true, files);
-        var notice = stopped
-            ? $"{waitEndedBy ?? "Stop or Run queued"} ended this call's wait. The command was already started and was not killed; it may still be running in the background. Completion will be reported separately."
+        var notice =
+            entry["externalOwner"] is JsonObject
+                ? $"[Process running longer than {seconds.ToString(CultureInfo.InvariantCulture)}s] Switched to background. Use foxwarm_exec_result within this same MCP context to retrieve results."
+            : stopped
+                ? $"{waitEndedBy ?? "Stop or Run queued"} ended this call's wait. The command was already started and was not killed; it may still be running in the background. Completion will be reported separately."
             : $"[Process running longer than {seconds.ToString(CultureInfo.InvariantCulture)}s] Switched to background. The system will send a notification message when done. STOP calling tools to check status. Wait for notification unless working on other tasks in parallel; if you continue other work, remember this process remains outstanding until its completion message arrives.";
         var lines = new List<string> { "---", notice };
         if (!output.Empty && !output.EndedWithLf)

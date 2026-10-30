@@ -31,6 +31,17 @@ internal sealed partial class NodeConnectionHub
             return nodes.TryGetValue(node, out var connection) && SupportsExternal(connection);
     }
 
+    internal bool SupportsExternalRead(string node)
+    {
+        lock (gate)
+            return nodes.TryGetValue(node, out var connection)
+                && SupportsExternal(connection)
+                && connection.Type is "cli" or "cli-node"
+                && connection.Capabilities["tools"]!
+                    .AsArray()
+                    .Any(tool => SessionWait.Text(tool?["name"]) == "read");
+    }
+
     internal async Task<JsonNode?> ExecuteExternalAsync(
         McpExternalContext context,
         string node,
