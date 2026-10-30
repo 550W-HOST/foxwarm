@@ -28,9 +28,34 @@ if ($InstallDir) {
 } else {
   $Dir = Join-Path (Get-Location).Path 'foxwarm'
 }
-$DataDir = if ($DataDir) { $DataDir } elseif ($env:FOXWARM_DATA_DIR) { $env:FOXWARM_DATA_DIR } else { Join-Path (Split-Path $Dir) 'foxwarm-data' }
-$Dir = [System.IO.Path]::GetFullPath((Join-Path $CallDir $Dir))
-$DataDir = [System.IO.Path]::GetFullPath((Join-Path $CallDir $DataDir))
+function Resolve-InstallerPath($Value, $BaseDir) {
+  if ($Value -eq '~') {
+    $Value = $HOME
+  } elseif ($Value.StartsWith('~/')) {
+    $Value = Join-Path $HOME $Value.Substring(2)
+  }
+  if (-not [System.IO.Path]::IsPathRooted($Value)) {
+    $Value = Join-Path $BaseDir $Value
+  }
+  return [System.IO.Path]::GetFullPath($Value)
+}
+
+$Dir = Resolve-InstallerPath $Dir $CallDir
+if ($DataDir) {
+  $DataDir = Resolve-InstallerPath $DataDir $CallDir
+} elseif ($env:FOXWARM_DATA_DIR) {
+  $DataDir = Resolve-InstallerPath $env:FOXWARM_DATA_DIR $CallDir
+} else {
+  $Pointer = Join-Path $Dir 'data_dir'
+  $SavedDataDir = if (Test-Path $Pointer) { ([string](Get-Content $Pointer -Raw)).Trim() } else { '' }
+  if ($SavedDataDir) {
+    $DataDir = Resolve-InstallerPath $SavedDataDir $Dir
+  } elseif (Test-Path (Join-Path $Dir '.git')) {
+    $DataDir = $Dir
+  } else {
+    $DataDir = Join-Path (Split-Path $Dir) 'foxwarm-data'
+  }
+}
 if ($BranchName) {
   $Branch = $BranchName
 } elseif ($env:FOXWARM_BRANCH) {
