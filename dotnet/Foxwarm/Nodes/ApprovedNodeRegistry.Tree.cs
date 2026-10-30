@@ -217,7 +217,9 @@ internal sealed partial class ApprovedNodeRegistry
     }
 
     internal void ObserveProviders(
-        IReadOnlyDictionary<string, JsonArray> inventories, Mutation? mutation = null)
+        IReadOnlyDictionary<string, JsonArray> inventories,
+        Mutation? mutation = null
+    )
     {
         using var owned = mutation is null ? TryBeginMutation() : null;
         if (mutation is null && owned is null)
@@ -255,7 +257,10 @@ internal sealed partial class ApprovedNodeRegistry
                     records[id]!["descriptor"] = descriptor.DeepClone();
                 }
                 foreach (var (id, record) in records)
-                    if (id.StartsWith(provider + "/", StringComparison.Ordinal) && !seen.Contains(id))
+                    if (
+                        id.StartsWith(provider + "/", StringComparison.Ordinal)
+                        && !seen.Contains(id)
+                    )
                         record!["absent"] = true;
             }
             PruneAbsent(next, id => SessionCatalog.Flag(records[id]?["absent"]));
@@ -263,7 +268,12 @@ internal sealed partial class ApprovedNodeRegistry
             foreach (var id in observed)
                 _ = forest.Chain(id);
             foreach (var id in added)
-                RequireAdmission(next, id, SessionWait.Text(records[id]?["parentNode"]), changed: true);
+                RequireAdmission(
+                    next,
+                    id,
+                    SessionWait.Text(records[id]?["parentNode"]),
+                    changed: true
+                );
             if (!JsonNode.DeepEquals(next, data))
                 Change(
                     document =>

@@ -124,7 +124,9 @@ internal sealed partial class NodeProviderRegistry
             ? provider.ParentNode
             : null;
 
-    private async Task<Dictionary<string, JsonArray>> DiscoverProvidersAsync(CancellationToken token)
+    private async Task<Dictionary<string, JsonArray>> DiscoverProvidersAsync(
+        CancellationToken token
+    )
     {
         var inventories = new Dictionary<string, JsonArray>(StringComparer.Ordinal);
         foreach (var provider in providers.Values)
@@ -143,15 +145,19 @@ internal sealed partial class NodeProviderRegistry
     }
 
     private async Task<JsonArray> DiscoverProviderAsync(
-        ExecutableNodeProvider provider, CancellationToken token, ApprovedNodeRegistry.Mutation? mutation)
+        ExecutableNodeProvider provider,
+        CancellationToken token,
+        ApprovedNodeRegistry.Mutation? mutation
+    )
     {
         var parent = provider.ParentNode;
-        var inventories = parent is not null && parent.Contains('/') && !native.Registry.Forest().Contains(parent)
-            ? await DiscoverProvidersAsync(token)
-            : new Dictionary<string, JsonArray>(StringComparer.Ordinal)
-            {
-                [provider.Id] = await provider.ListAsync(token),
-            };
+        var inventories =
+            parent is not null && parent.Contains('/') && !native.Registry.Forest().Contains(parent)
+                ? await DiscoverProvidersAsync(token)
+                : new Dictionary<string, JsonArray>(StringComparer.Ordinal)
+                {
+                    [provider.Id] = await provider.ListAsync(token),
+                };
         native.Registry.ObserveProviders(inventories, mutation);
         return inventories[provider.Id];
     }
