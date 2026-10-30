@@ -39,7 +39,9 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
             var launcher = Path.Combine(f.Temp.Path, "claude-peer");
             await File.WriteAllTextAsync(
                 launcher,
-                "#!/bin/sh\nexport FOXWARM_CLAUDE_PEER_DIRECTORY='" + f.PeerDirectory.Replace("'", "'\\''") + "'\nexec node '"
+                "#!/bin/sh\nexport FOXWARM_CLAUDE_PEER_DIRECTORY='"
+                    + f.PeerDirectory.Replace("'", "'\\''")
+                    + "'\nexec node '"
                     + root.Replace("'", "'\\''")
                     + "/dotnet/Foxwarm.Tests/Mcp/Fixtures/claude-runtime-peer.mjs' \"$@\"\n"
             );
@@ -57,7 +59,11 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
                 ["executable"] = launcher,
                 ["credentialLifetimeSeconds"] = 1,
             };
-            f.Main = await InboundMcpFixture.CreateAsync(appConfiguration: app, startHttpServer: startHttpServer, webUiEnabled: webUiEnabled);
+            f.Main = await InboundMcpFixture.CreateAsync(
+                appConfiguration: app,
+                startHttpServer: startHttpServer,
+                webUiEnabled: webUiEnabled
+            );
             var agentMemory = Path.Combine(f.Main.Manager.AgentDirectory("main"), "memory");
             Directory.CreateDirectory(agentMemory);
             await File.WriteAllTextAsync(
@@ -102,7 +108,10 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
     {
         var file = Path.Combine(PeerDirectory, name);
         var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var watcher = new FileSystemWatcher(PeerDirectory, name) { EnableRaisingEvents = true };
+        using var watcher = new FileSystemWatcher(PeerDirectory, name)
+        {
+            EnableRaisingEvents = true,
+        };
         watcher.Created += (_, _) => ready.TrySetResult();
         watcher.Changed += (_, _) => ready.TrySetResult();
         if (File.Exists(file))

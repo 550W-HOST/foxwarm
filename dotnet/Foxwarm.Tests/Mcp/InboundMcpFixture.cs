@@ -126,7 +126,10 @@ internal sealed class InboundMcpFixture : IAsyncDisposable
             if (startHttpServer)
             {
                 await f.Server.App.StartAsync();
-                f.Url = f.Server.App.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single() + "/mcp";
+                f.Url =
+                    f.Server.App.Services.GetRequiredService<IServer>()
+                        .Features.Get<IServerAddressesFeature>()!
+                        .Addresses.Single() + "/mcp";
             }
             if (allow)
                 await f.PolicyAsync(

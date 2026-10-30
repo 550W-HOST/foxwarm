@@ -48,9 +48,13 @@ internal sealed class ClaudeSessionDriver(
         var externalId = resume ?? Guid.NewGuid().ToString();
         var cwd = ContextDirectory(manager.DataRoot, externalId);
         if (resume is not null && SessionWait.Text(checkpoint["cwd"]) != cwd)
-            throw new ClaudeRuntimeException("Claude Code context does not use this Main's private runtime directory. Clear this Session to start a new private context; previous input will not be replayed.");
+            throw new ClaudeRuntimeException(
+                "Claude Code context does not use this Main's private runtime directory. Clear this Session to start a new private context; previous input will not be replayed."
+            );
         if (resume is not null && !Directory.Exists(cwd))
-            throw new ClaudeRuntimeException("Claude Code private working directory is unavailable. Restore it or Clear this Session; previous input will not be replayed.");
+            throw new ClaudeRuntimeException(
+                "Claude Code private working directory is unavailable. Restore it or Clear this Session; previous input will not be replayed."
+            );
         PrivateDirectory(Path.GetDirectoryName(cwd)!);
         PrivateDirectory(cwd);
         if (

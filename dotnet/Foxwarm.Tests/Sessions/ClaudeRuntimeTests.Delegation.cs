@@ -15,88 +15,204 @@ public sealed partial class ClaudeRuntimeTests
     {
         await using var f = await ClaudeRuntimeFixture.CreateAsync(webUiEnabled: true);
         var rootCredential = f.Main.Manager.Nodes.Registry.Create("box1");
-        await using var box = await OwnedNode.StartAsync(f, "box1", rootCredential["authToken"]!.GetValue<string>());
-        static JsonArray NodeScope(string node) => new(new JsonObject { ["node"] = node, ["action"] = "allow" }, new JsonObject { ["node"] = "*", ["action"] = "deny" });
-        using var request = new HttpRequestMessage(HttpMethod.Post, f.Main.Url[..^4] + "/api/agents")
+        await using var box = await OwnedNode.StartAsync(
+            f,
+            "box1",
+            rootCredential["authToken"]!.GetValue<string>()
+        );
+        static JsonArray NodeScope(string node) =>
+            new(
+                new JsonObject { ["node"] = node, ["action"] = "allow" },
+                new JsonObject { ["node"] = "*", ["action"] = "deny" }
+            );
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            f.Main.Url[..^4] + "/api/agents"
+        )
         {
-            Content = new StringContent(new JsonObject
-            {
-                ["agentId"] = "planner", ["rules"] = NodeScope("box1"), ["defaultNode"] = "box1",
-            }.ToJsonString(), Encoding.UTF8, "application/json"),
+            Content = new StringContent(
+                new JsonObject
+                {
+                    ["agentId"] = "planner",
+                    ["rules"] = NodeScope("box1"),
+                    ["defaultNode"] = "box1",
+                }.ToJsonString(),
+                Encoding.UTF8,
+                "application/json"
+            ),
         };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", InboundMcpFixture.Admin);
+        request.Headers.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            InboundMcpFixture.Admin
+        );
         using var response = await f.Main.Http.SendAsync(request);
         Assert.True(response.IsSuccessStatusCode, await response.Content.ReadAsStringAsync());
         var planner = await f.Main.Manager.RequiredAsync("planner/main");
         Assert.Null(f.Main.Manager.AgentMetadata["planner"]?["createdBy"]);
         planner.Registry.TriggerOverride = _ => Task.CompletedTask;
         var definitions = WorkspaceTools.Definitions();
-        foreach (var definition in AgentToolDefinitions.Definitions()
-                     .Concat(NodeToolDefinitions.All())
-                     .Concat(UnifiedToolDefinitions.All())
-                     .Concat(LocalExecManager.Definitions()))
+        foreach (
+            var definition in AgentToolDefinitions
+                .Definitions()
+                .Concat(NodeToolDefinitions.All())
+                .Concat(UnifiedToolDefinitions.All())
+                .Concat(LocalExecManager.Definitions())
+        )
             definitions.Add(definition!.DeepClone());
-        var registry = SessionToolExecutor.CreateRegistry(definitions, f.Main.Manager.OutboundMcp,
-            owner => f.Main.Manager.IdentityWorkspace(owner).ToolDirectory, f.Main.Manager.Nodes, f.Main.Manager.NodeProviders);
+        var registry = SessionToolExecutor.CreateRegistry(
+            definitions,
+            f.Main.Manager.OutboundMcp,
+            owner => f.Main.Manager.IdentityWorkspace(owner).ToolDirectory,
+            f.Main.Manager.Nodes,
+            f.Main.Manager.NodeProviders
+        );
         async Task<JsonObject> Tool(SessionOwner owner, string name, JsonObject args)
         {
-            var executor = new SessionToolExecutor(new WorkspaceTools(f.Main.Manager.IdentityWorkspace(owner).ToolDirectory), owner, f.Main.Manager, registry);
+            var executor = new SessionToolExecutor(
+                new WorkspaceTools(f.Main.Manager.IdentityWorkspace(owner).ToolDirectory),
+                owner,
+                f.Main.Manager,
+                registry
+            );
             executor.BeginTurn();
-            return (await executor.ExecuteAsync(new JsonObject { ["name"] = name, ["args"] = args }, default))!.AsObject();
+            return (
+                await executor.ExecuteAsync(
+                    new JsonObject { ["name"] = name, ["args"] = args },
+                    default
+                )
+            )!.AsObject();
         }
-        static void Success(JsonObject result) => Assert.True(result["error"] is null, result.ToJsonString());
+        static void Success(JsonObject result) =>
+            Assert.True(result["error"] is null, result.ToJsonString());
         var credentialFile = Path.Combine(f.Main.Manager.AgentDirectory("planner"), "c1.token");
-        Success(await Tool(planner, "node_create_auth_token", new JsonObject
-        {
-            ["nodeId"] = "c1", ["parentNode"] = "box1", ["filePath"] = credentialFile,
-        }));
+        Success(
+            await Tool(
+                planner,
+                "node_create_auth_token",
+                new JsonObject
+                {
+                    ["nodeId"] = "c1",
+                    ["parentNode"] = "box1",
+                    ["filePath"] = credentialFile,
+                }
+            )
+        );
         Assert.Equal("box1", f.Main.Manager.Nodes.Registry.Forest().Parent("c1"));
-        await using var child = await OwnedNode.StartAsync(f, "c1", (await File.ReadAllTextAsync(credentialFile)).Trim());
-        Success(await Tool(planner, "create_agent", new JsonObject
-        {
-            ["agentName"] = "worker", ["rules"] = NodeScope("c1"), ["defaultNode"] = "c1",
-        }));
+        await using var child = await OwnedNode.StartAsync(
+            f,
+            "c1",
+            (await File.ReadAllTextAsync(credentialFile)).Trim()
+        );
+        Success(
+            await Tool(
+                planner,
+                "create_agent",
+                new JsonObject
+                {
+                    ["agentName"] = "worker",
+                    ["rules"] = NodeScope("c1"),
+                    ["defaultNode"] = "c1",
+                }
+            )
+        );
         var worker = await f.Main.Manager.RequiredAsync("worker/main");
-        Assert.Equal("planner", f.Main.Manager.AgentMetadata["worker"]!["createdBy"]!.GetValue<string>());
+        Assert.Equal(
+            "planner",
+            f.Main.Manager.AgentMetadata["worker"]!["createdBy"]!.GetValue<string>()
+        );
         // Actual management tool: a child cannot broaden its ancestor's policy.
-        var outOfScope = await Tool(worker, "set_agent_rules", new JsonObject { ["agentName"] = "planner", ["rules"] = new JsonArray() });
+        var outOfScope = await Tool(
+            worker,
+            "set_agent_rules",
+            new JsonObject { ["agentName"] = "planner", ["rules"] = new JsonArray() }
+        );
         Assert.NotNull(outOfScope["error"]);
-        Assert.True(JsonNode.DeepEquals(NodeScope("box1"), f.Main.Manager.AgentMetadata["planner"]!["rules"]));
-        Success(await Tool(planner, "create_child_session", new JsonObject
-        {
-            ["agentName"] = "worker", ["suffix"] = "run", ["runtime"] = "claude-code", ["node"] = "c1",
-        }));
+        Assert.True(
+            JsonNode.DeepEquals(
+                NodeScope("box1"),
+                f.Main.Manager.AgentMetadata["planner"]!["rules"]
+            )
+        );
+        Success(
+            await Tool(
+                planner,
+                "create_child_session",
+                new JsonObject
+                {
+                    ["agentName"] = "worker",
+                    ["suffix"] = "run",
+                    ["runtime"] = "claude-code",
+                    ["node"] = "c1",
+                }
+            )
+        );
         f.Owner = await f.Main.Manager.RequiredAsync("worker/run");
         f.Owner.Registry.TriggerOverride = _ => Task.CompletedTask;
-        Assert.Equal("claude-code", f.Owner.Entry.Snapshot().AuthorityEnvelope["runtime"]!.GetValue<string>());
-        JsonObject Remote(string node, string file) => new()
-        {
-            ["args"] = new JsonObject
+        Assert.Equal(
+            "claude-code",
+            f.Owner.Entry.Snapshot().AuthorityEnvelope["runtime"]!.GetValue<string>()
+        );
+        JsonObject Remote(string node, string file) =>
+            new()
             {
-                ["toolId"] = "node:" + node + "/exec",
                 ["args"] = new JsonObject
                 {
-                    ["command"] = "printf delegated > '" + Path.Combine(node == "c1" ? child.Directory : box.Directory, file) + "'",
-                    ["cwd"] = node == "c1" ? child.Directory : box.Directory,
+                    ["toolId"] = "node:" + node + "/exec",
+                    ["args"] = new JsonObject
+                    {
+                        ["command"] =
+                            "printf delegated > '"
+                            + Path.Combine(node == "c1" ? child.Directory : box.Directory, file)
+                            + "'",
+                        ["cwd"] = node == "c1" ? child.Directory : box.Directory,
+                    },
                 },
-            },
-        };
-        await f.PeerAsync(new JsonObject
-        {
-            ["calls"] = new JsonArray(Remote("c1", "allowed.txt"), Remote("box1", "denied.txt"),
-                Call("send_to_session", new JsonObject { ["sessionId"] = "<parent>", ["message"] = "Child command completed; parent-Node command was refused.", ["afterSend"] = "continue" })),
-        });
-        Success(await Tool(planner, "send_to_session", new JsonObject
-        {
-            ["sessionId"] = f.Owner.Id, ["message"] = "Run the assigned child-Node command, observe scope refusal and report the outcome.", ["afterSend"] = "continue",
-        }));
+            };
+        await f.PeerAsync(
+            new JsonObject
+            {
+                ["calls"] = new JsonArray(
+                    Remote("c1", "allowed.txt"),
+                    Remote("box1", "denied.txt"),
+                    Call(
+                        "send_to_session",
+                        new JsonObject
+                        {
+                            ["sessionId"] = "<parent>",
+                            ["message"] =
+                                "Child command completed; parent-Node command was refused.",
+                            ["afterSend"] = "continue",
+                        }
+                    )
+                ),
+            }
+        );
+        Success(
+            await Tool(
+                planner,
+                "send_to_session",
+                new JsonObject
+                {
+                    ["sessionId"] = f.Owner.Id,
+                    ["message"] =
+                        "Run the assigned child-Node command, observe scope refusal and report the outcome.",
+                    ["afterSend"] = "continue",
+                }
+            )
+        );
         Assert.Single(f.Owner.Entry.Snapshot().Queue);
         await f.RunAsync(text: null);
         Assert.Null(f.Owner.Entry.LastBackgroundProcessorFailure);
         var results = f.Lines("results.jsonl");
         Assert.Equal(3, results.Length);
-        Assert.True(!(results[0]["result"]?["isError"]?.GetValue<bool>() ?? false), results[0].ToJsonString());
-        Assert.Equal("delegated", await File.ReadAllTextAsync(Path.Combine(child.Directory, "allowed.txt")));
+        Assert.True(
+            !(results[0]["result"]?["isError"]?.GetValue<bool>() ?? false),
+            results[0].ToJsonString()
+        );
+        Assert.Equal(
+            "delegated",
+            await File.ReadAllTextAsync(Path.Combine(child.Directory, "allowed.txt"))
+        );
         Assert.False(File.Exists(Path.Combine(box.Directory, "denied.txt")));
         Assert.True(results[1]["result"]!["isError"]!.GetValue<bool>());
         Assert.Contains("tool_authorization_denied", results[1].ToJsonString());
@@ -112,22 +228,48 @@ public sealed partial class ClaudeRuntimeTests
         private Process process = null!;
         private Task<string> stderr = null!;
 
-        internal static async Task<OwnedNode> StartAsync(ClaudeRuntimeFixture f, string id, string token)
+        internal static async Task<OwnedNode> StartAsync(
+            ClaudeRuntimeFixture f,
+            string id,
+            string token
+        )
         {
             var node = new OwnedNode { Directory = Path.Combine(f.Temp.Path, "node-" + id) };
             System.IO.Directory.CreateDirectory(node.Directory);
             var config = Path.Combine(node.Directory, "connection.json");
-            await File.WriteAllTextAsync(config, new JsonObject
-            {
-                ["host"] = f.Main.Url[..^4], ["nodeId"] = id, ["authToken"] = token,
-                ["credentialsFile"] = Path.Combine(node.Directory, "credentials.json"), ["localTrigger"] = false,
-            }.ToJsonString());
+            await File.WriteAllTextAsync(
+                config,
+                new JsonObject
+                {
+                    ["host"] = f.Main.Url[..^4],
+                    ["nodeId"] = id,
+                    ["authToken"] = token,
+                    ["credentialsFile"] = Path.Combine(node.Directory, "credentials.json"),
+                    ["localTrigger"] = false,
+                }.ToJsonString()
+            );
             var bootstrap = Path.Combine(node.Directory, "connect.cjs");
-            await File.WriteAllTextAsync(bootstrap,
-                "const {NodeClient}=require(process.argv[2]); const fs=require('fs'); const client=new NodeClient({...JSON.parse(fs.readFileSync(process.argv[3],'utf8')),onStatus:event=>{if(event==='registered') console.log('READY')}}); client.connect().catch(e=>{console.error(e);process.exit(1)});");
-            var start = new ProcessStartInfo("node") { WorkingDirectory = node.Directory, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+            await File.WriteAllTextAsync(
+                bootstrap,
+                "const {NodeClient}=require(process.argv[2]); const fs=require('fs'); const client=new NodeClient({...JSON.parse(fs.readFileSync(process.argv[3],'utf8')),onStatus:event=>{if(event==='registered') console.log('READY')}}); client.connect().catch(e=>{console.error(e);process.exit(1)});"
+            );
+            var start = new ProcessStartInfo("node")
+            {
+                WorkingDirectory = node.Directory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
             start.ArgumentList.Add(bootstrap);
-            start.ArgumentList.Add(Path.Combine(Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")!, "packages", "cli-node", "dist", "client.js"));
+            start.ArgumentList.Add(
+                Path.Combine(
+                    Environment.GetEnvironmentVariable("FOXWARM_TS_ROOT")!,
+                    "packages",
+                    "cli-node",
+                    "dist",
+                    "client.js"
+                )
+            );
             start.ArgumentList.Add(config);
             start.Environment["FOXWARM_AGENT_DIR"] = node.Directory;
             start.Environment["FOXWARM_DATA_DIR"] = Path.Combine(node.Directory, "state");
@@ -136,16 +278,26 @@ public sealed partial class ClaudeRuntimeTests
             node.stderr = node.process.StandardError.ReadToEndAsync();
             try
             {
-                Assert.Equal("READY", await node.process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(15)));
+                Assert.Equal(
+                    "READY",
+                    await node
+                        .process.StandardOutput.ReadLineAsync()
+                        .WaitAsync(TimeSpan.FromSeconds(15))
+                );
                 Assert.True(f.Main.Manager.Nodes.Connected(id));
                 return node;
             }
-            catch { await node.DisposeAsync(); throw; }
+            catch
+            {
+                await node.DisposeAsync();
+                throw;
+            }
         }
 
         public async ValueTask DisposeAsync()
         {
-            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
             await process.WaitForExitAsync();
             await stderr;
             process.Dispose();

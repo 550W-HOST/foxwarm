@@ -260,7 +260,9 @@ public sealed partial class ClaudeRuntimeTests
                 row => row["parts"]!.ToJsonString().Contains("Hello")
             );
         }
-        var pid = int.Parse(await File.ReadAllTextAsync(Path.Combine(f.PeerDirectory, "descendant.pid")));
+        var pid = int.Parse(
+            await File.ReadAllTextAsync(Path.Combine(f.PeerDirectory, "descendant.pid"))
+        );
         var proc = "/proc/" + pid + "/stat";
         Assert.True(!File.Exists(proc) || (await File.ReadAllTextAsync(proc)).Split(' ')[2] == "Z");
         await AssertRevokedAsync(f, f.Lines("inputs.jsonl")[0]["token"]!.GetValue<string>());

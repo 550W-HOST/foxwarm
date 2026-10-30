@@ -2,10 +2,7 @@ using System.Text.Json.Nodes;
 
 namespace Foxwarm.Sessions;
 
-internal sealed record ClaudeRuntimeConfiguration(
-    string Executable,
-    TimeSpan CredentialLifetime
-)
+internal sealed record ClaudeRuntimeConfiguration(string Executable, TimeSpan CredentialLifetime)
 {
     internal static ClaudeRuntimeConfiguration Capture(JsonObject? app)
     {
@@ -13,11 +10,7 @@ internal sealed record ClaudeRuntimeConfiguration(
         if (raw is not null && raw is not JsonObject)
             throw new InvalidDataException("claudeCode must be an object.");
         var config = raw as JsonObject;
-        if (
-            config?.Any(p =>
-                p.Key is not ("executable" or "credentialLifetimeSeconds")
-            ) == true
-        )
+        if (config?.Any(p => p.Key is not ("executable" or "credentialLifetimeSeconds")) == true)
             throw new InvalidDataException("Unsupported claudeCode setting.");
         string? Text(string key)
         {
