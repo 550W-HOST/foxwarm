@@ -160,11 +160,7 @@ internal sealed partial class NodeProviderRegistry
             if (!description["lifecycle"]!.AsArray().Any(item => SessionWait.Text(item) == action))
                 throw Unsupported(provider.Id, action);
             if (creating && nodeId is null)
-                native.Registry.ObserveProvider(
-                    provider.Id,
-                    await provider.ListAsync(token),
-                    mutation
-                );
+                _ = await DiscoverProviderAsync(provider, token, mutation);
             if (creating && nodeId is not null)
             {
                 var existing = await ResolveAsync(nodeId, token, mutation);

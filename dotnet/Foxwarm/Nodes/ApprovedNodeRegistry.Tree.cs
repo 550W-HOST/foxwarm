@@ -216,7 +216,8 @@ internal sealed partial class ApprovedNodeRegistry
         } while (removed);
     }
 
-    internal void ObserveProvider(string provider, JsonArray descriptors, Mutation? mutation = null)
+    internal void ObserveProviders(
+        IReadOnlyDictionary<string, JsonArray> inventories, Mutation? mutation = null)
     {
         using var owned = mutation is null ? TryBeginMutation() : null;
         if (mutation is null && owned is null)
@@ -227,32 +228,42 @@ internal sealed partial class ApprovedNodeRegistry
         {
             var next = (JsonObject)data.DeepClone();
             var records = ProviderNodes(next);
-            var seen = descriptors
-                .OfType<JsonObject>()
-                .Select(value => SessionWait.Text(value["id"])!)
-                .ToHashSet(StringComparer.Ordinal);
-            foreach (var descriptor in descriptors.OfType<JsonObject>())
+            var added = new List<string>();
+            var observed = new List<string>();
+            foreach (var (provider, descriptors) in inventories)
             {
-                var id = SessionWait.Text(descriptor["id"])!;
-                if (!records.ContainsKey(id))
+                var seen = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var descriptor in descriptors.OfType<JsonObject>())
                 {
-                    RequireFresh(next, id);
-                    var parent = providerParents.GetValueOrDefault(provider);
-                    RequireAdmission(next, id, parent);
-                    records[id] = new JsonObject
+                    var id = SessionWait.Text(descriptor["id"])!;
+                    seen.Add(id);
+                    observed.Add(id);
+                    if (!records.ContainsKey(id))
                     {
-                        ["nodeId"] = id,
-                        ["provider"] = provider,
-                        ["parentNode"] = parent,
-                    };
+                        // Check reservations against committed identities, not sibling candidates
+                        // whose configured parent may be registered later in this same snapshot.
+                        RequireFresh(data, id);
+                        records[id] = new JsonObject
+                        {
+                            ["nodeId"] = id,
+                            ["provider"] = provider,
+                            ["parentNode"] = providerParents.GetValueOrDefault(provider),
+                        };
+                        added.Add(id);
+                    }
+                    records[id]!.AsObject().Remove("absent");
+                    records[id]!["descriptor"] = descriptor.DeepClone();
                 }
-                records[id]!.AsObject().Remove("absent");
-                records[id]!["descriptor"] = descriptor.DeepClone();
+                foreach (var (id, record) in records)
+                    if (id.StartsWith(provider + "/", StringComparison.Ordinal) && !seen.Contains(id))
+                        record!["absent"] = true;
             }
-            foreach (var (id, record) in records)
-                if (id.StartsWith(provider + "/", StringComparison.Ordinal) && !seen.Contains(id))
-                    record!["absent"] = true;
             PruneAbsent(next, id => SessionCatalog.Flag(records[id]?["absent"]));
+            var forest = new NodeAuthorizationForest(Parents(next));
+            foreach (var id in observed)
+                _ = forest.Chain(id);
+            foreach (var id in added)
+                RequireAdmission(next, id, SessionWait.Text(records[id]?["parentNode"]), changed: true);
             if (!JsonNode.DeepEquals(next, data))
                 Change(
                     document =>

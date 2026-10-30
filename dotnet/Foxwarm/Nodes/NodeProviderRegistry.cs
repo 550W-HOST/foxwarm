@@ -124,19 +124,36 @@ internal sealed partial class NodeProviderRegistry
             ? provider.ParentNode
             : null;
 
+    private async Task<Dictionary<string, JsonArray>> DiscoverProvidersAsync(CancellationToken token)
+    {
+        var inventories = new Dictionary<string, JsonArray>(StringComparer.Ordinal);
+        foreach (var provider in providers.Values)
+            inventories.Add(provider.Id, await provider.ListAsync(token));
+        return inventories;
+    }
+
     internal async Task<JsonArray> ListAsync(CancellationToken token)
     {
-        var values = new List<JsonObject>();
-        foreach (var provider in providers.Values)
-        {
-            var descriptors = await provider.ListAsync(token);
-            native.Registry.ObserveProvider(provider.Id, descriptors);
-            values.AddRange(descriptors.OfType<JsonObject>());
-        }
+        var inventories = await DiscoverProvidersAsync(token);
+        native.Registry.ObserveProviders(inventories);
         discovered.Clear();
-        foreach (var value in values)
+        foreach (var value in inventories.Values.SelectMany(nodes => nodes.OfType<JsonObject>()))
             PublishDescriptor(value);
         return Snapshot();
+    }
+
+    private async Task<JsonArray> DiscoverProviderAsync(
+        ExecutableNodeProvider provider, CancellationToken token, ApprovedNodeRegistry.Mutation? mutation)
+    {
+        var parent = provider.ParentNode;
+        var inventories = parent is not null && parent.Contains('/') && !native.Registry.Forest().Contains(parent)
+            ? await DiscoverProvidersAsync(token)
+            : new Dictionary<string, JsonArray>(StringComparer.Ordinal)
+            {
+                [provider.Id] = await provider.ListAsync(token),
+            };
+        native.Registry.ObserveProviders(inventories, mutation);
+        return inventories[provider.Id];
     }
 
     internal static JsonObject MasterSummary(bool hasPty = false) =>
@@ -184,14 +201,13 @@ internal sealed partial class NodeProviderRegistry
         JsonArray nodes;
         try
         {
-            nodes = await provider.ListAsync(token);
+            nodes = await DiscoverProviderAsync(provider, token, mutation);
         }
         catch
         {
             discovered.TryRemove(id, out _);
             throw;
         }
-        native.Registry.ObserveProvider(provider.Id, nodes, mutation);
         var descriptor = nodes
             .OfType<JsonObject>()
             .FirstOrDefault(value => SessionWait.Text(value["id"]) == id);
