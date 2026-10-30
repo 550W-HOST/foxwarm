@@ -197,6 +197,8 @@ try {
   launchOptions = {
     executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium',
     headless: !ownedXvfb,
+    pipe: true,
+    enableExtensions: true,
     ignoreDefaultArgs: ['--disable-infobars', '--enable-automation'],
     userDataDir: join(fixture.root, 'profile'),
     args: [
@@ -205,14 +207,14 @@ try {
       '--no-sandbox',
       '--disable-dev-shm-usage',
       '--window-size=1280,900',
-      '--disable-extensions-except=' + extension,
-      '--load-extension=' + extension,
     ],
   };
   browser = await puppeteer.launch(launchOptions);
   stage = 'browser version';
   evidence.browser = await browser.version();
   evidence.mode = ownedXvfb ? 'owned-xvfb' : 'headless';
+  stage = 'extension installation';
+  await browser.installExtension(extension);
   stage = 'extension service-worker admission';
   const target = await browser.waitForTarget(
     (target) => target.type() === 'service_worker' && target.url().endsWith('/background/main.js'),
