@@ -120,7 +120,7 @@ Dynamic public-path ownership is canonical in [D-webui-dynamic-base-path](../mod
 
 ## Verification
 
-`packages/webui/test/mainHostCode.e2e.mjs` exercises the original App, official workbench and browser extensions through file edits, terminal effects, immutable commit views, embedded leaf views, workspace restoration, advisory YAML diagnostics and prefixed authenticated writes. Static stage labels and elapsed times survive whole-file interruption in the existing runner log. Failure projection uses bounded cached frame paths without query strings or browser evaluation, so collecting diagnostics cannot wait on an unresponsive renderer. Assertion and runner deadlines remain independent of that projection.
+`packages/webui/test/mainHostCode.e2e.mjs` exercises the original App, official workbench and browser extensions through file edits, terminal effects, immutable commit views, embedded leaf views, workspace restoration, advisory YAML diagnostics and prefixed authenticated writes. Static stage labels and elapsed times survive whole-file interruption in the existing runner log, separating startup-config evaluation/request from YAML restoration input/save/verification. Passive native-dialog records identify the App or Code popup, current stage, type and bounded message without handling the dialog. Failure projection uses bounded cached frame paths without query strings or browser evaluation, so collecting diagnostics cannot wait on an unresponsive renderer. Assertion and runner deadlines remain independent of that projection.
 
 ## Open questions
 
