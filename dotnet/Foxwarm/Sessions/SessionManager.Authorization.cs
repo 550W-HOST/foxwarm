@@ -251,6 +251,17 @@ internal sealed partial class SessionManager
                 NodeTargets = nodeEffects,
                 NodeForest = nodeEffects.Count > 0 ? Nodes.Registry.Forest() : null,
             };
+        // Compound consumers and their source reads must decide policy with the same admitted
+        // endpoint facts as ordinary Node capabilities, before any file materialization or effect.
+        // Read-only Node inspection keeps its independent, nonblocking metadata path.
+        if (request.NodeTargets is { Count: > 0 } endpoints
+            && endpoints.Any(NodeProviders.IsProviderNode)
+            && !(resolved is { Source: "builtin", Name: "node" }
+                && SessionWait.Text(resolved.Args["action"])?.Trim().ToLowerInvariant() == "inspect"))
+            request = request with
+            {
+                NodeForest = await NodeProviders.PrepareAuthorizationForestAsync(endpoints, token),
+            };
         var policies = EffectivePolicies(owner.Agent, await authorization.LoadAsync(token));
         request = PopulateEffectiveTargets(request, owner, policies, concreteTarget);
         var decision = EffectiveDecision(policies, request);

@@ -252,6 +252,23 @@ internal sealed partial class NodeProviderRegistry
             );
     }
 
+    internal async Task<NodeAuthorizationForest> PrepareAuthorizationForestAsync(
+        IReadOnlyList<string> endpoints, CancellationToken token)
+    {
+        var providerEndpoints = endpoints.Where(IsProviderNode).Distinct(StringComparer.Ordinal).ToArray();
+        foreach (var id in providerEndpoints)
+            if (!native.Registry.Forest().Contains(id))
+                _ = await ResolveAsync(id, token);
+        var forest = native.Registry.Forest();
+        foreach (var id in providerEndpoints)
+        {
+            if (!forest.Contains(id))
+                throw new InvalidOperationException("Node authorization metadata is not admitted: " + id);
+            _ = forest.Chain(id);
+        }
+        return forest;
+    }
+
     internal async Task RefreshAsync(string id, CancellationToken token)
     {
         if (IsProviderNode(id))
