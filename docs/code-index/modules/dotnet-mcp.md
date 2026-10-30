@@ -5,7 +5,6 @@ The .NET MCP boundary owns ordinary inbound external contexts, explicit Session 
 ## Units
 
 - [Exact-run internal runtime MCP bridge](../units/session-claude-runtime.md)
-
 - [Ordinary inbound MCP](../units/dotnet-inbound-mcp.md)
 - [Session notifications and explicit text channels](../units/dotnet-mcp-notifications.md)
 - [Outbound MCP client](../units/mcp.md)
