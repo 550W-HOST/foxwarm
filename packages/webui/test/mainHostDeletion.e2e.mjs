@@ -28,6 +28,7 @@ const peer = createServer(async (request, response) => {
       response.writeHead(200, { 'content-type': 'text/event-stream' }); response.end('data: ' + JSON.stringify({ type: 'response.completed', response: { id: 'delete-' + records.length, status: 'completed', output, usage: { input_tokens: 20, output_tokens: 3 } } }) + '\n\n')
     }
     if (input.includes('COMPACTION STARTED:')) { record.planning = true; held.set('plan', record); return }
+    if (key === 'exec-finished' && n === 2) { held.set('retained-completion', record); return }
     if (key.startsWith('held-')) { held.set(key, record); return }
     if (key === 'model-delete' && n < 2) {
       record.complete(n === 0 ? [call('discover-delete', 'search_tools', { query: 'delete_session', sources: ['builtin'], limit: 5 })]
@@ -80,7 +81,9 @@ const saved = id => readFile(join(sessions, id + '.json'), 'utf8').then(JSON.par
 async function dto(id) { const reply = await fixture.api('POST', '/api/session-list/by-id', { ids: [id] }); assert.equal(reply.status, 200); return reply.body.results[0].session }
 async function remove(id, recursive = false, status = 200) { const reply = await fixture.api('DELETE', route(id), { includeDescendants: recursive }); assert.equal(reply.status, status, JSON.stringify(reply)); return reply.body }
 async function message(id, text, status = 202) { const reply = await fixture.api('POST', route(id) + '/message', { text }); assert.equal(reply.status, status, JSON.stringify(reply)); return reply.body }
-async function done(id, key) { await until(async () => { const current = await dto(id); return current && !current.busy && (await saved(id)).history.some(row => row.parts?.some(part => part.text === 'DONE-' + key)) }, 'completed ' + key) }
+const idle = current => current && !current.busy && !current.runtimeState?.processing && !current.queueLength
+const finals = async (id, key) => (await saved(id)).history.filter(row => row.role === 'model' && row.parts?.some(part => part.text === 'DONE-' + key)).length
+async function done(id, key, expectedFinals = 1) { await until(async () => idle(await dto(id)) && await finals(id, key) === expectedFinals, 'completed ' + key) }
 async function send(id, key, extra = '') { await message(id, 'CASE:' + key + ' ' + extra); await done(id, key) }
 const fileFor = id => join(sessions, id + '.json')
 
@@ -134,12 +137,12 @@ try {
   // A busy target is stopped and retried, not silently deleted or replayed.
   await message('live', 'CASE:held-provider'); await until(() => held.has('held-provider'), 'actual held provider')
   await message('live', 'queued work before deletion'); const busy = await remove('live', false, 409); assert.equal(busy.code, 'SESSION_DELETE_BUSY'); assert.equal(busy.droppedQueueItems, 1)
-  await until(async () => !(await dto('live')).busy, 'busy target foreground stopped'); assert(held.get('held-provider').closed); assert(await dto('live')); await remove('live')
+  await until(async () => idle(await dto('live')), 'busy target foreground stopped'); assert(held.get('held-provider').closed); assert(await dto('live')); await remove('live')
   // A retained background planner is not canceled on foreground Stop/retry; final idle retirement drains it.
   for (let index = 0; index < 7; index++) await send('background', 'seed-' + index, ('ordered-context-' + index + '-').repeat(400))
   const compact = await message('background', '/compact', 200); assert.equal(compact.success, true); await until(() => held.has('plan'), 'actual background planner')
   await message('background', 'CASE:held-background'); await until(() => held.has('held-background'), 'foreground held alongside planner')
-  await remove('background', false, 409); await until(async () => !(await dto('background')).busy, 'foreground drained without planner cancellation'); assert.equal(held.get('plan').closed, false)
+  await remove('background', false, 409); await until(async () => idle(await dto('background')), 'foreground drained without planner cancellation'); assert.equal(held.get('plan').closed, false)
   await remove('background'); await until(() => held.get('plan').closed, 'only final retirement cancels planner'); assert.equal(await dto('background'), null)
   // Real primary empty authority takes precedence over selected older migration evidence.
   await writeFile(channelsFile, JSON.stringify({ channels: {} })); await writeFile(join(state, 'sessions.json.pre-catalog-sqlite-v1.bak'), JSON.stringify({ channelAttachments: { 'discord:old': 'worker-target' } }))
@@ -169,7 +172,12 @@ try {
   await until(() => access(finishedFolder.statusPath).then(() => true, () => false), 'one shell naturally finishes with no host')
   const prior = records.length; await fixture.start(); await until(() => counts.get('exec-finished') === 3, 'only real retained recipient receives completion')
   await writeFile(join(fixture.work, 'exec-live-release'), ''); await until(() => access(liveFolder.statusPath).then(() => true, () => false), 'deleted recipient shell is not killed or replayed')
-  assert.equal(counts.get('exec-live'), 2); assert.equal(await dto('exec-live'), null); assert(records.length > prior); await remove('exec-finished')
+  assert.equal(counts.get('exec-live'), 2); assert.equal(await dto('exec-live'), null); assert(records.length > prior)
+  // Request arrival is observable before the resumed answer commits or its processor settles.
+  const completion = held.get('retained-completion'); assert(completion && !completion.closed)
+  assert.equal(idle(await dto('exec-finished')), false); assert.equal(await finals('exec-finished', 'exec-finished'), 1)
+  completion.complete(final('DONE-exec-finished')); await done('exec-finished', 'exec-finished', 2)
+  await remove('exec-finished')
   const badFolder = await launch('exec-bad'); await message('wait-sibling', 'CASE:wait-sibling')
   await until(async () => (await saved('wait-sibling')).meta.wait && !(await dto('wait-sibling')).busy, 'actual persisted wait declaration')
   await fixture.stop(); const execAuthority = await readFile(fileFor('exec-bad'), 'utf8'); await unlink(fileFor('exec-bad')); await writeFile(join(fixture.work, 'exec-bad-release'), '')
