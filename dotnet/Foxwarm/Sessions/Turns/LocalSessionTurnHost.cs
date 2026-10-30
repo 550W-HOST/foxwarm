@@ -116,6 +116,8 @@ public sealed partial class LocalSessionTurnHost
                 );
             if (tools is ITurnToolControl control)
                 control.BeginTurn();
+            if (entry.ExternalTurn is { } external && entry.WithState(state => ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope)))
+                return await external(this, registered.Token).ConfigureAwait(false);
             for (var iteration = 0; iteration < maxToolIterations; iteration++)
             {
                 AssertCanContinue();
@@ -201,36 +203,7 @@ public sealed partial class LocalSessionTurnHost
                     var calls = ExtractFunctionCalls(assistant);
                     if (calls.Count == 0)
                     {
-                        var parts = assistant["parts"]?.AsArray() ?? [];
-                        var noAction = parts.Any(part =>
-                            SessionBoundary.IsNoAction(SessionWait.Text(part?["text"]))
-                        );
-                        var finalText = string.Join(
-                            "",
-                            parts
-                                .Select(part => SessionWait.Text(part?["text"]))
-                                .Where(text => text is not null)
-                        );
-                        var hasLeadingQueue = entry.WithState(state =>
-                            state.Queue.Any(SessionCompactor.Ordinary)
-                        );
-                        if (!hasLeadingQueue && noAction)
-                            await entry.SaveLane.ResolveChildHandoffAsync().ConfigureAwait(false);
-                        var parent = ParentSessionId();
-                        if (
-                            !hasLeadingQueue
-                            && parent is not null
-                            && SessionBoundary.NeedsChildHandoff(entry.Snapshot().AuthorityEnvelope)
-                            && !noAction
-                            && !finalText.TrimStart().StartsWith("Error:", StringComparison.Ordinal)
-                        )
-                            await entry
-                                .SaveLane.QueueChildReminderAsync(
-                                    parent,
-                                    tools is SessionToolExecutor toolMode
-                                        && toolMode.HandoffConfirmationEnabled
-                                )
-                                .ConfigureAwait(false);
+                        await FinalizeAssistantControlsAsync(assistant).ConfigureAwait(false);
                         if (
                             Closing
                             || !entry.WithState(state =>
@@ -422,9 +395,10 @@ public sealed partial class LocalSessionTurnHost
         return entry.WithState(state => (state.HistoryVersion, state.NextMessageSeq) != context);
     }
 
-    private async Task<IReadOnlyList<JsonObject>> AppendHistoryMessageStrictAsync(
+    internal async Task<IReadOnlyList<JsonObject>> AppendHistoryMessageStrictAsync(
         JsonObject? message,
-        JsonObject? usage = null
+        JsonObject? usage = null,
+        JsonObject? externalRuntime = null
     )
     {
         if (message is not null && store is PersistentSessionAuthorityStore persistent)
@@ -438,7 +412,8 @@ public sealed partial class LocalSessionTurnHost
                     updateLastMessageTime: false,
                     finalizing: false,
                     clock,
-                    usage
+                    usage,
+                    externalRuntime
                 )
             )
             .ConfigureAwait(false);
@@ -453,6 +428,40 @@ public sealed partial class LocalSessionTurnHost
             if (node is JsonObject part && part["functionCall"] is JsonObject call)
                 calls.Add((JsonObject)call.DeepClone());
         return calls;
+    }
+
+    internal async Task FinalizeAssistantControlsAsync(JsonObject assistant)
+    {
+        var parts = assistant["parts"]?.AsArray() ?? [];
+        var noAction = parts.Any(part =>
+            SessionBoundary.IsNoAction(SessionWait.Text(part?["text"]))
+        );
+        var finalText = string.Join(
+            "",
+            parts
+                .Select(part => SessionWait.Text(part?["text"]))
+                .Where(text => text is not null)
+        );
+        var hasLeadingQueue = entry.WithState(state =>
+            state.Queue.Any(SessionCompactor.Ordinary)
+        );
+        if (!hasLeadingQueue && noAction)
+            await entry.SaveLane.ResolveChildHandoffAsync().ConfigureAwait(false);
+        var parent = ParentSessionId();
+        if (
+            !hasLeadingQueue
+            && parent is not null
+            && SessionBoundary.NeedsChildHandoff(entry.Snapshot().AuthorityEnvelope)
+            && !noAction
+            && !finalText.TrimStart().StartsWith("Error:", StringComparison.Ordinal)
+        )
+            await entry
+                .SaveLane.QueueChildReminderAsync(
+                    parent,
+                    tools is SessionToolExecutor toolMode
+                        && toolMode.HandoffConfirmationEnabled
+                )
+                .ConfigureAwait(false);
     }
 
     private async Task ContinueAfterResultAsync(ChatResult result, CancellationToken token)
@@ -640,7 +649,8 @@ public sealed partial class LocalSessionTurnHost
         bool updateLastMessageTime,
         bool finalizing,
         Func<long> clock,
-        JsonObject? usage = null
+        JsonObject? usage = null,
+        JsonObject? externalRuntime = null
     )
     {
         var capturedNextSeq = state.NextMessageSeq;
@@ -682,6 +692,14 @@ public sealed partial class LocalSessionTurnHost
         if (startsForeground)
             stagedMeta.Remove("llmFailed");
         var stagedEnvelope = (JsonObject)state.AuthorityEnvelope.DeepClone();
+        if (externalRuntime is not null) stagedEnvelope["externalRuntime"] = externalRuntime.DeepClone();
+        if (ClaudeRuntimeState.IsExternal(stagedEnvelope))
+        {
+            var latestUser = SessionWait.Number(state.AuthorityEnvelope["externalRuntime"]?["lastUserSeq"]) ?? 0;
+            foreach (var message in canonicalMessages)
+                if (SessionWait.Text(message["role"]) == "user") latestUser = Math.Max(latestUser, SessionWait.Number(message["__meta"]?["seq"]) ?? 0);
+            if (latestUser > 0) stagedEnvelope["externalRuntime"]!["lastUserSeq"] = latestUser;
+        }
         if (usage is not null)
         {
             var stats = stagedEnvelope["stats"] as JsonObject;
@@ -749,6 +767,7 @@ public sealed partial class LocalSessionTurnHost
                 live.Meta["messageCount"] = live.History.Count;
                 if (startsForeground)
                     live.Meta.Remove("llmFailed");
+                if (ClaudeRuntimeState.IsExternal(stagedEnvelope)) live.AuthorityEnvelope["externalRuntime"] = stagedEnvelope["externalRuntime"]!.DeepClone();
                 if (usage is not null)
                     live.AuthorityEnvelope["stats"] = stagedEnvelope["stats"]!.DeepClone();
                 if (stagedEnvelope["childHandoffState"] is null)

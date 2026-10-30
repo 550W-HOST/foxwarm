@@ -42,7 +42,7 @@ internal sealed partial class SessionCatalog
         JsonObject? legacyCatalog = null
     )
     {
-        if (raw.ContainsKey("sessionStateVersion") && Number(raw["sessionStateVersion"]) != 1)
+        if (raw.ContainsKey("sessionStateVersion") && Number(raw["sessionStateVersion"]) is not (1 or 2))
             throw SessionAuthorityErrors.Unsupported(
                 "Unsupported per-session state format version.",
                 "sessionStateVersion"
@@ -125,7 +125,7 @@ internal sealed partial class SessionCatalog
                 .Max();
             value["nextMessageSeq"] = max + 1;
         }
-        value["sessionStateVersion"] = 1;
+        value["sessionStateVersion"] = raw["sessionStateVersion"]?.DeepClone() ?? JsonValue.Create(1);
         // Null is the historical no-parent value. The Main catalog overlay supplies
         // current topology, including a parent that differs from this stale copy.
         if (value["parentSessionId"] is null)

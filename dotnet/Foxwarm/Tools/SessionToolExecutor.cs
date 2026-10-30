@@ -21,8 +21,19 @@ internal sealed partial class SessionToolExecutor(
         invocation.Value?.Files
         ?? (workspace is WorkspaceTools ? sessions.IdentityWorkspace(hosted) : null);
 
-    internal Task AuthorizeAsync(ResolvedTool resolved, CancellationToken token) =>
-        sessions.AuthorizeToolAsync(
+    internal ClaudeRuntimeRun? ExternalRun { get; set; }
+    internal async Task AuthorizeAsync(ResolvedTool resolved, CancellationToken token)
+    {
+        void RequireRuntime()
+        {
+            if (ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope) && !unattended)
+            {
+                (ExternalRun ?? throw new InvalidOperationException("No current external runtime run.")).Require();
+                ClaudeRuntimeToolSupport.Require(hosted, sessions, resolved);
+            }
+        }
+        RequireRuntime();
+        await sessions.AuthorizeToolAsync(
             hosted,
             resolved,
             resolved.Name is "run_script" or "start_toolscript_run"
@@ -33,6 +44,8 @@ internal sealed partial class SessionToolExecutor(
                 : Files,
             token
         );
+        RequireRuntime();
+    }
 
     private readonly List<string> explicitWaitIds = [];
     private readonly List<string> handoffTargets = [];

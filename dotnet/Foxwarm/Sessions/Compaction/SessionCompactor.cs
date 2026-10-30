@@ -136,7 +136,8 @@ internal sealed partial class SessionCompactor
     {
         lock (gate)
         {
-            if (hosted.Entry.HistoryMutation)
+            ClaudeRuntimeState.RequireFoxwarm(hosted, "Foxwarm context compaction");
+        if (hosted.Entry.HistoryMutation)
                 return null;
             if (active is not null)
                 return null;
@@ -221,6 +222,7 @@ internal sealed partial class SessionCompactor
         double? keepPercent = null
     )
     {
+        ClaudeRuntimeState.RequireFoxwarm(hosted, "Foxwarm context compaction");
         if (hosted.Entry.HistoryMutation)
             throw new InvalidOperationException("Session history change is in progress.");
         using var admission = hosted.Entry.AdmitMutation();

@@ -194,6 +194,12 @@ internal sealed partial class SessionManager
 
     private static SessionSnapshot RecoverBusySnapshot(SessionSnapshot snapshot)
     {
+        if (ClaudeRuntimeState.IsExternal(snapshot.AuthorityEnvelope))
+        {
+            var envelope = (JsonObject)snapshot.AuthorityEnvelope.DeepClone();
+            envelope["externalRuntime"]!["status"] = "interrupted";
+            return snapshot with { Busy = false, BusyStartedAt = null, Stopping = false, AuthorityEnvelope = envelope };
+        }
         var queue = snapshot.Queue.Select(item => item.CloneItem()).ToList();
         if (queue.LastOrDefault() is not { } last || !HasTrailingResumeEvent(last))
         {

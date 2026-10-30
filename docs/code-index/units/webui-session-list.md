@@ -5,6 +5,8 @@ Secondary files: packages/webui/src/components/ContextMenu.tsx, packages/webui/t
 
 ## Purpose
 
+Session rows identify the creation-selected Claude Code runtime. The [runtime unit](./session-claude-runtime.md) owns the model/status/usage projection; ordinary Session rows retain their normal presentation.
+
 Renders a hierarchical, interactive session list for the Foxwarm web UI. `SessionListCore` handles tree rendering, list display modes, expand/collapse, drag-and-drop, context menus, and session management actions (archive, rename, delete, fork). `SessionList` wraps it with a full-page layout including header, navigation buttons, settings, and tab creation controls.
 
 ## Key Exports

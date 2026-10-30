@@ -5,6 +5,8 @@ Secondary files: packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/sr
 
 ## Purpose
 
+External Continue follows the [runtime checkpoint capability](./session-claude-runtime.md).
+
 `useChatConversationSync` owns session history, queue, runtime/model state, realtime subscription, uploads and sends. `Chat` owns presentation, settings, ASR, debug, search and viewport. Active context and Archive originals stay separate. `continuousHistory.ts` filters/merges originals, derives loaded-row membership demand, prunes non-leaf CTX traversal and projects active-authoritative rows. [History rules](../behaviors/conversation-and-history.md) and [retrieval invariants](../threads/archive-and-recall.md#d-webui-continuous-chat-history).
 
 Queue-origin deltas update committed history and queue atomically only across contiguous canonical sequences. Gaps, incoherence or request races stage a bounded missing range and force non-starvable reconciliation from the trusted frontier; neither side renders alone. History responses replace both sides, recovering dropped deltas. If tail-plus-prefix bootstrap ends before a staged batch, retain that complete older snapshot and recover the batch with `afterSeq`, not another full snapshot. HTTP latest-sequence/version authority fences delayed covered deltas even before prefix rows mount. Concurrent live rows advance it only through a contiguous sorted suffix, never across an unseen sequence.

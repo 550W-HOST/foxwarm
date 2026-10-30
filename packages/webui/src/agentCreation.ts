@@ -1,3 +1,5 @@
+export type SessionRuntimeKind = 'foxwarm' | 'claude-code'
+
 export type AgentSummary = {
   id: string
   inherit?: string | null
@@ -18,8 +20,9 @@ export function validateSessionId(sessionId: string): string | null {
   return null
 }
 
-export function buildSessionCreationBody(agentId: string, sessionId: string): { agentId: string; sessionId?: string } {
-  const body: { agentId: string; sessionId?: string } = { agentId }
+export function buildSessionCreationBody(agentId: string, sessionId: string, runtime: SessionRuntimeKind = 'foxwarm'): { agentId: string; sessionId?: string; runtime?: SessionRuntimeKind } {
+  const body: { agentId: string; sessionId?: string; runtime?: SessionRuntimeKind } = { agentId }
+  if (runtime !== 'foxwarm') body.runtime = runtime
   const trimmed = sessionId.trim()
   if (trimmed) body.sessionId = trimmed
   return body

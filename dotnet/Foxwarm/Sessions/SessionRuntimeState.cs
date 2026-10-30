@@ -48,8 +48,16 @@ internal static class SessionRuntimeState
         bool compacting,
         JsonObject? foreground = null,
         JsonObject? compaction = null
-    ) =>
-        Build(
+    )
+    {
+        if (meta.Runtime == ClaudeRuntimeState.Kind && meta.Busy && foreground is null)
+            foreground = new JsonObject
+            {
+                ["state"] = "requesting-model",
+                ["note"] = "Claude Code is running on Main.",
+                ["active"] = new JsonObject { ["phase"] = "external-runtime", ["runtime"] = meta.Runtime, ["modelKey"] = meta.Model },
+            };
+        var result = Build(
             meta.Busy,
             meta.Stopping,
             meta.BusyStartedAt,
@@ -61,6 +69,10 @@ internal static class SessionRuntimeState
             compaction,
             meta.LlmFailed
         );
+        if (meta.Runtime == ClaudeRuntimeState.Kind && !meta.Busy && SessionWait.Text(meta.ExternalRuntime?["status"]) == "interrupted")
+            result["note"] = "Claude Code was interrupted. Continue or send a new message.";
+        return result;
+    }
 
     internal static JsonObject Build(
         bool busy,

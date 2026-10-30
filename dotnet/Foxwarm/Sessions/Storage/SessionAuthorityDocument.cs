@@ -302,11 +302,12 @@ public sealed class SessionAuthorityDocument
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentException.ThrowIfNullOrWhiteSpace(agent);
-        if (RequiredSafeInteger(root, "sessionStateVersion", "Session authority") != 1)
+        if (RequiredSafeInteger(root, "sessionStateVersion", "Session authority") is not (1 or 2))
             throw SessionAuthorityErrors.Unsupported(
                 "Only sessionStateVersion 1 is supported.",
                 "sessionStateVersion"
             );
+        ClaudeRuntimeState.ValidateAuthority(root);
         if (
             root["persistentMemorySnapshot"] is not JsonValue memory
             || !memory.TryGetValue<string>(out _)

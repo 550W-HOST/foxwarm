@@ -13,7 +13,8 @@ internal sealed partial class AgentMemory(AgentCatalog agents, Skills skills)
         string sessionId,
         string concreteModelId,
         CancellationToken cancellationToken = default,
-        IReadOnlyList<string>? selection = null
+        IReadOnlyList<string>? selection = null,
+        bool externalRuntime = false
     )
     {
         var blocks = new StringBuilder();
@@ -103,6 +104,7 @@ internal sealed partial class AgentMemory(AgentCatalog agents, Skills skills)
         }
         var directory = $"--- DIRECTORIES ---\n- agent_folder: {agents.AgentDirectory(agentName)}";
         var bodyText = blocks.ToString().Trim();
+        if (externalRuntime) return bodyText.Length == 0 ? directory : bodyText + "\n\n" + directory;
         return ConditionalMemory.BuildCurrentModelSnapshot(
             concreteModelId,
             bodyText.Length == 0 ? directory : bodyText + "\n\n" + directory

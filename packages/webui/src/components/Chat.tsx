@@ -1485,7 +1485,7 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
     return modelOptions.find(option => option.key === currentModelKey)?.contextLimit ?? null
   }, [modelOptions, sessionRecord?.modelKey])
 
-  const turnIncomplete = useMemo(() => isSessionTurnIncomplete(activeMessages), [activeMessages])
+  const turnIncomplete = useMemo(() => sessionRecord?.runtime === 'claude-code' ? sessionRecord.externalRuntime?.canContinue === true : isSessionTurnIncomplete(activeMessages), [activeMessages, sessionRecord?.runtime, sessionRecord?.externalRuntime?.canContinue])
 
   const renderQueuedFooter = (alignment: 'left' | 'right') => <QueuedMessageStatus
     count={sessionQueueLength}
@@ -1732,6 +1732,8 @@ const Chat = memo(function Chat({ sessionId, searchShortcutActive = true, sessio
         sessionMessageAttachments={sessionMessageAttachments}
         compactModelSelector={compactModelSelector}
         sessionId={sessionId}
+        sessionRuntime={sessionRecord?.runtime}
+        externalCostEstimate={sessionRecord?.externalRuntime?.lastResult?.total_cost_usd}
         webUiIdentityMode={webUiIdentityMode}
         currentNode={sessionRecord?.currentNode}
         onChangeNode={updateSessionNode}

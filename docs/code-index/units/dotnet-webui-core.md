@@ -8,6 +8,8 @@ Registers the .NET WebUI route surface and defines shared request/response/event
 
 ## Stable methods and callers
 
+Session creation accepts the creation-only `runtime` selector. Hot and snapshot Session DTOs share the [external runtime presentation](./session-claude-runtime.md), showing the observed CLI model/source, source-labeled usage estimate and Continue capability rather than a Foxwarm model default.
+
 `WebUIChannel.Register` composes route groups and injects `SessionManager`, `SessionRuntime`, `TaskService`, `ImageBlobStore`, `TerminalRegistry`, `CodeWorkbench`, and realtime publisher dependencies. `WebUiContract` owns parsing/serialization helpers and bounded pagination/operation results consumed by all partial route units and React WebUI units.
 
 ## Contract and side effects

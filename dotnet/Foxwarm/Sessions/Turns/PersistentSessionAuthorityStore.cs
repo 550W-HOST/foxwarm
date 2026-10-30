@@ -402,7 +402,7 @@ public sealed class PersistentSessionAuthorityStore
             SessionCatalog.OverlayAuthorityContext(root, main);
         foreach (var field in new[] { "archived", "pinned", "sidebarOrder" })
             root.Remove(field);
-        root["sessionStateVersion"] = 1;
+        root["sessionStateVersion"] = ClaudeRuntimeState.IsExternal(root) ? 2 : 1;
         if (root["goalState"] is JsonObject goal)
             goal.Remove("remindOnTurnEnd");
         root["agent"] = agent;

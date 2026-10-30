@@ -432,6 +432,7 @@ internal sealed partial class SessionManager
         string? selectedNode = null
     )
     {
+        if (owner.Entry.WithState(state => ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope)) && !ClaudeRuntimeToolSupport.Visible(source, name)) return false;
         ToolAuthorizationPolicy[] layers;
         try
         {

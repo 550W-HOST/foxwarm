@@ -292,6 +292,7 @@ internal sealed partial class SessionManager
                             "displayName",
                             "parentSessionId",
                             "node",
+                            "runtime",
                             "forceModel",
                             "systemPromptFiles",
                         ],
@@ -332,7 +333,8 @@ internal sealed partial class SessionManager
                                 ?? SessionWait.Text(settings["effort"])
                         ),
                         selectedFiles: selection,
-                        parentSessionId: OptionalString(args, "parentSessionId")
+                        parentSessionId: OptionalString(args, "parentSessionId"),
+                        runtime: ClaudeRuntimeState.ValidateSelection(args["runtime"], args.ContainsKey("runtime"))
                     );
                     return (
                         Output($"Created Session {created.Id} under Agent {created.Agent}."),
@@ -350,6 +352,7 @@ internal sealed partial class SessionManager
                             "handoffRecall",
                             "message",
                             "afterSend",
+                            "runtime",
                             "forceModel",
                             "node",
                             "fork",
@@ -386,7 +389,8 @@ internal sealed partial class SessionManager
                             forceModel,
                             OptionalBool(args, "fork") ?? false,
                             taskId,
-                            initialNode
+                            initialNode,
+                            runtime: ClaudeRuntimeState.ValidateSelection(args["runtime"], args.ContainsKey("runtime"))
                         );
                         child = created.Child;
                         delivered = created.Delivered;
@@ -408,7 +412,8 @@ internal sealed partial class SessionManager
                                         forceModel,
                                         OptionalBool(args, "fork") ?? false,
                                         taskId,
-                                        initialNode
+                                        initialNode,
+                                        runtime: ClaudeRuntimeState.ValidateSelection(args["runtime"], args.ContainsKey("runtime"))
                                     )
                                 ).Child,
                             initialMessage

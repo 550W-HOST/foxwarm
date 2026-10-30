@@ -156,7 +156,8 @@ internal sealed class HttpServer
             async (context, next) =>
             {
                 if (
-                    context.Request.Path == "/mcp"
+                    context.Request.Path == "/runtime/mcp"
+                    || context.Request.Path == "/mcp"
                     || context.Request.Path == "/node_ws"
                     || Foxwarm.Nodes.NodeConnectionHub.IsShellPath(context.Request.Path)
                     || Foxwarm.Nodes.NodeBootstrap.IsPublicPath(context.Request.Path)
@@ -332,6 +333,13 @@ internal sealed class HttpServer
         Foxwarm.Nodes.NodeRoutes.Register(app, sessions, address);
         McpOAuthRoutes.Register(app, sessions.OutboundMcp);
         InboundMcp.Register(app);
+        new RuntimeMcpService(sessions.RuntimeCredentials).Register(app);
+        app.Lifetime.ApplicationStarted.Register(() =>
+        {
+            var bound = new Uri(app.Urls.First());
+            var localHost = bindAddress is "0.0.0.0" or "::" or "127.0.0.1" ? "127.0.0.1" : bindAddress;
+            sessions.RuntimeMcpEndpoint = new UriBuilder("http", localHost, bound.Port, address.Prefix.ToString() + "/runtime/mcp").Uri;
+        });
         if (port == 0 || desktop)
             app.Lifetime.ApplicationStarted.Register(() =>
                 address.Origin = app.Urls.Single().TrimEnd('/')

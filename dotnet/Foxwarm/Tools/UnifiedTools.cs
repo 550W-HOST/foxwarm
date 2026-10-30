@@ -74,8 +74,9 @@ internal static partial class UnifiedTools
         {
             if (entry.Source == "node")
                 continue;
-            var name = SessionWait.Text(entry.Definition["name"])!;
-            var description = SessionWait.Text(entry.Definition["description"]) ?? "";
+            var definition = owner?.Entry.WithState(state => ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope)) == true ? ClaudeRuntimeToolSupport.Project(entry.Definition) : entry.Definition;
+            var name = SessionWait.Text(definition["name"])!;
+            var description = SessionWait.Text(definition["description"]) ?? "";
             if (visible is not null && !visible(entry.Source, name, null))
                 continue;
             var score = Score(query, name, description);
@@ -85,7 +86,7 @@ internal static partial class UnifiedTools
                         entry.Source,
                         name,
                         description,
-                        entry.Definition["parameters"],
+                        definition["parameters"],
                         null,
                         !entry.DefaultInject,
                         score

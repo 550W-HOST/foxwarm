@@ -14,6 +14,7 @@ internal sealed partial class SessionManager
 
     internal async Task RunBtwAsync(SessionOwner source, string question)
     {
+        ClaudeRuntimeState.RequireFoxwarm(source, "BTW");
         // Join the existing accepted-operation lifetime, not foreground processing or Stop.
         using var lifetime = TrackCreation();
         SessionSnapshot snapshot;

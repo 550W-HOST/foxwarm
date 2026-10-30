@@ -8,6 +8,8 @@ Secondary files: `dotnet/Foxwarm.Tests/Sessions/LlmFailureStateTests.cs`, `dotne
 
 Owns one Session's mutable state, exact-owner runtime operations, serialized turn execution, queue ingress, stop/dequeue controls, and model/tool turn contracts. Persistence ordering belongs to the save-lane and authority-store units linked below.
 
+The [Claude Code runtime](./session-claude-runtime.md) enters `ChatAsync` under the same processor/cancellation owner, consumes one queued input unit, and reuses canonical append, final assistant/handoff controls and attributed tool settlement. Its external checkpoint/recovery/Continue rules replace provider-loop semantics only for that creation-selected runtime.
+
 ## Stable methods and callers
 
 - `SessionRuntime.GetOwnerAsync`, `SubmitAndRunAsync`, `ContinueAsync`, `StopAsync`, `DequeueAsync`, `ForkCommandAsync`, and clear/control methods resolve the canonical owner and return typed lifecycle outcomes.

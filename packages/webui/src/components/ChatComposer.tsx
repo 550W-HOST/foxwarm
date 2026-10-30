@@ -49,6 +49,8 @@ export type ModelOption = {
 interface ChatComposerProps {
   compactModelSelector?: boolean
   sessionId: string
+  sessionRuntime?: 'foxwarm' | 'claude-code'
+  externalCostEstimate?: number
   sessionMessageMode?: boolean
   sessionMessageAttachments?: boolean
   webUiIdentityMode?: boolean
@@ -700,6 +702,8 @@ function ModelSelector({
 }
 
 const ChatComposer = memo(function ChatComposer({
+  sessionRuntime,
+  externalCostEstimate,
   compactModelSelector,
   sessionId,
   webUiIdentityMode = false,
@@ -1589,7 +1593,8 @@ const ChatComposer = memo(function ChatComposer({
                 </button>
               )}
             </div>
-            {!webUiIdentityMode && <ModelSelector
+            {!webUiIdentityMode && sessionRuntime === 'claude-code' && <span className="min-w-0 truncate px-2 text-xs text-fw-text-muted" title="Model managed by Claude Code">Claude Code · {currentModelKey || 'Configured model'}{typeof externalCostEstimate === 'number' && Number.isFinite(externalCostEstimate) && ` · CLI estimate $${externalCostEstimate.toFixed(4)}`}</span>}
+            {!webUiIdentityMode && sessionRuntime !== 'claude-code' && <ModelSelector
               compact={compactModelSelector}
               options={modelOptions}
               currentModelKey={currentModelKey}

@@ -21,6 +21,7 @@ internal static class AppConfigurationRules
         Llm(app["llm"]);
         Tree(app["agentTree"], app.ContainsKey("agentTree"), "agentTree");
         Tree(app["nodeTree"], app.ContainsKey("nodeTree"), "nodeTree");
+        _ = Foxwarm.Sessions.ClaudeRuntimeConfiguration.Capture(app);
         NodeProviders(app["nodeProviders"], app.ContainsKey("nodeProviders"));
         SessionWorkers(app["sessionWorkers"], app.ContainsKey("sessionWorkers"));
         Boolean(app["dbWorkers"], "app config `dbWorkers`", app.ContainsKey("dbWorkers"));

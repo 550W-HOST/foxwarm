@@ -15,6 +15,7 @@ public sealed class SessionControl
     public async Task<StopResult> StopAsync(string sessionId)
     {
         var entry = registry.GetRequired(sessionId);
+        entry.RevokeExternalRun?.Invoke();
         var handle = entry.BeginStop();
         var aborted = handle is not null;
         if (handle is not null)
@@ -40,6 +41,7 @@ public sealed class SessionControl
             registry.Trigger(sessionId);
             return new(count, false, false);
         }
+        entry.RevokeExternalRun?.Invoke();
         var handle = entry.BeginStop(runQueued: true);
         if (handle is not null)
         {

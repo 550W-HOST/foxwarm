@@ -6,6 +6,8 @@ Files: `dotnet/Foxwarm/Tools/AgentToolDefinitions.cs`, `dotnet/Foxwarm/Tools/Com
 
 Discovers concrete tools, projects model definitions, applies output/control policies, and executes Session-local tools for memory/knowledge, observation, waits, settings, timers, compaction, and ToolScript.
 
+The [external Session runtime](./session-claude-runtime.md) adds an exact-run pre-effect support guard to the ordinary attributed executor. Runtime discovery projects handoff enums/copy without changing canonical definitions; resolved aliases and `argsJson` remain subject to execution checks. Independent unattended work keeps its existing executor lifetime.
+
 ## Stable methods and callers
 
 - `ToolRegistry` combines builtins, MCP, provider-hosted definitions, and permitted Node capabilities into one discovered set with stable names/schemas.

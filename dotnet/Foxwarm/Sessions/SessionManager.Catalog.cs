@@ -39,6 +39,8 @@ internal sealed partial class SessionManager
                 "sidebarOrder",
                 "currentNode",
                 "cwd",
+                "runtime",
+                "externalRuntime",
                 "model",
                 "effort",
                 "childModelDefault",
@@ -106,7 +108,7 @@ internal sealed partial class SessionManager
             SessionCatalog.Flag(row["archived"]),
             SessionCatalog.Flag(row["pinned"]),
             SessionCatalog.Number(row["sidebarOrder"]),
-            T(row["model"]),
+            T(row["runtime"]) == ClaudeRuntimeState.Kind ? T(row["externalRuntime"]?["model"]) : T(row["model"]),
             T(row["effort"]),
             SessionCatalog.Number(row["stats"]?["totalCachedTokens"]) ?? 0,
             SessionCatalog.Number(row["stats"]?["totalInputTokens"]) ?? 0,
@@ -116,7 +118,9 @@ internal sealed partial class SessionManager
             T(row["childEffortDefault"]),
             SessionCatalog.Number(row["compactThresholdTokens"]),
             Cost: SessionCatalog.Number(row["stats"]?["totalCost"]),
-            LlmFailed: SessionCatalog.Flag(row["meta"]?["llmFailed"])
+            LlmFailed: SessionCatalog.Flag(row["meta"]?["llmFailed"]),
+            Runtime: T(row["runtime"]) ?? "foxwarm",
+            ExternalRuntime: row["externalRuntime"]?.DeepClone() as JsonObject
         );
     }
 
@@ -168,6 +172,8 @@ internal sealed partial class SessionManager
             ["stopping"] = meta.Stopping,
             ["busyStartedAt"] = meta.BusyStartedAt,
             ["queueLength"] = meta.QueueLength,
+            ["runtime"] = meta.Runtime,
+            ["externalRuntime"] = meta.ExternalRuntime?.DeepClone(),
             ["model"] = meta.Model,
             ["effort"] = meta.Effort,
             ["childModelDefault"] = meta.ChildModel,
@@ -234,6 +240,8 @@ internal sealed partial class SessionManager
         foreach (
             var field in new[]
             {
+                "runtime",
+                "externalRuntime",
                 "model",
                 "effort",
                 "childModelDefault",

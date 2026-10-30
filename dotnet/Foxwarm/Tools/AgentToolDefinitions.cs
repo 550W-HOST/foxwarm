@@ -323,6 +323,7 @@ internal static class AgentToolDefinitions
                 Parameters(
                     new JsonObject
                     {
+                    ["runtime"] = Choice("Model loop for the new Session: foxwarm (default), or claude-code using the installed Claude Code configuration. Choose the runtime when creating the Session.", "foxwarm", "claude-code"),
                         ["agentName"] = String("Existing agent that will own the session."),
                         ["sessionName"] = String(
                             "Session name without the agent prefix. Use only ASCII letters, digits, underscores, and hyphens."
@@ -355,6 +356,7 @@ internal static class AgentToolDefinitions
                 Parameters(
                     new JsonObject
                     {
+                    ["runtime"] = Choice("Model loop for the new Session: foxwarm (default), or claude-code using the installed Claude Code configuration. Choose the runtime when creating the Session.", "foxwarm", "claude-code"),
                         ["agentName"] = String(
                             "Existing agent that will own the child. Omit to use this session's agent."
                         ),

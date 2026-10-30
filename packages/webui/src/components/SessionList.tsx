@@ -39,7 +39,7 @@ interface SessionListProps {
   onCodeOpenInNewWindowChange: (enabled: boolean) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
   onCreateAgent: (agentId: string, inheritAgent?: string) => Promise<void>
-  onCreateSession: (agentId: string, sessionId?: string) => Promise<void>
+  onCreateSession: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code') => Promise<void>
   idleNotificationModes: Record<string, SessionIdleNotificationMode>
   unreadSessionIds?: ReadonlySet<string>
   onToggleIdleNotificationMode: (sessionId: string, mode: SessionIdleNotificationMode) => void

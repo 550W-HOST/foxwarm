@@ -105,6 +105,7 @@ public sealed partial class SessionSaveLane
             var cache = Guid.NewGuid().ToString();
             envelope["nextBlockId"] = nextBlock;
             envelope["promptCacheKey"] = cache;
+            if (ClaudeRuntimeState.IsExternal(envelope)) envelope["externalRuntime"] = new JsonObject { ["status"] = "new" };
             var meta = (JsonObject)snapshot.Meta.DeepClone();
             meta["messageCount"] = 0;
             meta["lastMessageTime"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -136,6 +137,7 @@ public sealed partial class SessionSaveLane
                 state.BusyStartedAt = null;
                 state.Stopping = false;
                 state.AuthorityEnvelope["promptCacheKey"] = cache;
+                if (ClaudeRuntimeState.IsExternal(envelope)) state.AuthorityEnvelope["externalRuntime"] = envelope["externalRuntime"]!.DeepClone();
                 state.Meta["lastMessageTime"] = meta["lastMessageTime"]!.DeepClone();
                 state.Meta.Remove("wait");
                 state.Meta.Remove("runQueuedAfterStop");

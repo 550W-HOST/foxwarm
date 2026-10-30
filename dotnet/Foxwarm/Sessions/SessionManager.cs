@@ -33,6 +33,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private readonly HttpClient http = ProviderHttpRequest.CreateClient();
     private readonly Foxwarm.McpClient mcp;
     internal Foxwarm.McpClient OutboundMcp => mcp;
+    internal SessionRuntimeCredentialStore RuntimeCredentials { get; } = new();
+    internal Uri? RuntimeMcpEndpoint { get; set; }
     internal Foxwarm.Channels.ChannelRegistry ChannelRegistry { get; } = new();
     internal Foxwarm.Nodes.NodeConnectionHub Nodes { get; }
     internal Foxwarm.Nodes.NodeProviderRegistry NodeProviders { get; }
@@ -75,6 +77,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
         ToolScript = new(root);
         HandoffConfirmationEnabled = models.HandoffConfirmationEnabled;
         this.root = Path.GetFullPath(root);
+        var runtimeFiles = Path.Combine(this.root, "state", "runtime-runs");
+        if (Directory.Exists(runtimeFiles)) Directory.Delete(runtimeFiles, recursive: true);
         diagnostics = new(this.root);
         Nodes = new(this.root);
         Nodes.Registry.ConfigureLimits(() =>
@@ -432,7 +436,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
         await executor.ReconcileNowAsync();
         executor.StartReconciliation();
         foreach (var owner in sessions.Values)
-            if (owner.Registry.HasRunnableWork(owner.Entry))
+            if (!ClaudeRuntimeState.Interrupted(owner.Entry.Snapshot().AuthorityEnvelope) && owner.Registry.HasRunnableWork(owner.Entry))
                 _ = owner.StartProcessing();
     }
 
@@ -501,6 +505,8 @@ internal sealed partial class SessionManager : IAsyncDisposable
     private void BindMutations(SessionOwner owner)
     {
         owner.Entry.MutationAdmission = () => BeginOwnerMutation(owner);
+        owner.Entry.ExternalTurn = (host, token) => new ClaudeSessionDriver(this, owner, host).RunAsync(token);
+        owner.Entry.RevokeExternalRun = () => RuntimeCredentials.Revoke(owner);
         owner.Entry.ToolProgress = (call, start) => ChannelToolProgress(owner, call, start);
         owner.Entry.StructuredProgress = progress => ChannelStructuredProgress(owner, progress);
         owner.Entry.TurnStopped = () => ChannelStoppedAsync(owner);
@@ -607,7 +613,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
             catch (Exception error) when (error is IOException or InvalidOperationException) { }
             await MaybeRefreshStaleAsync(hosted);
         };
-        registry.OnTurnCompleted = (_, result) => hosted.Compactor.AutoAfterTurnAsync(result);
+        registry.OnTurnCompleted = (_, result) => ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope) ? Task.CompletedTask : hosted.Compactor.AutoAfterTurnAsync(result);
         registry.OnProcessorFinalizing = async (_, error, interrupted, suspended) =>
         {
             // Retire this run's draft before a queued successor can claim the processor.
@@ -615,9 +621,9 @@ internal sealed partial class SessionManager : IAsyncDisposable
             await FinishChannelTurnAsync(hosted, error, interrupted, suspended);
         };
         registry.OnBeforeContinuation = (_, result, consume, token) =>
-            hosted.Compactor.BeforeContinuationAsync(result, consume, token);
-        registry.OnSafePoint = _ => hosted.Compactor.SafePointAsync();
-        registry.OnRetrySafePoint = _ => hosted.Compactor.SafePointAsync(propagateFailure: true);
+            ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope) ? Task.CompletedTask : hosted.Compactor.BeforeContinuationAsync(result, consume, token);
+        registry.OnSafePoint = _ => ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope) ? Task.CompletedTask : hosted.Compactor.SafePointAsync();
+        registry.OnRetrySafePoint = _ => ClaudeRuntimeState.IsExternal(hosted.Entry.Snapshot().AuthorityEnvelope) ? Task.CompletedTask : hosted.Compactor.SafePointAsync(propagateFailure: true);
         registry.HasCompletedCompact = _ => hosted.Compactor.HasCompletedJob;
         registry.TriggerOverride = _ =>
             Accepting && !IsDeletionClaimed(hosted.Id) && !hosted.Entry.Retired
@@ -687,6 +693,7 @@ internal sealed partial class SessionManager : IAsyncDisposable
 
     public void BeginShutdown()
     {
+        RuntimeCredentials.Close();
         mcp.StopNotificationProducer();
         timers.StopFuture();
         lock (lifecycle)

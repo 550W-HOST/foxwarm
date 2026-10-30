@@ -8,6 +8,8 @@ Files: `dotnet/Foxwarm/Sessions/Storage/SessionAuthorityDocument.cs`, `dotnet/Fo
 
 Defines and durably writes the active per-Session JSON authority. `SessionAuthorityDocument` validates the supported semantic shape before any write; `LinuxAtomicJsonFile` performs temp-file write, file fsync, rename, and directory-sync classification.
 
+[Claude Code Sessions](./session-claude-runtime.md) use version 2 with a validated external checkpoint; Foxwarm authority remains version 1. Normalization preserves the supported version/runtime combination rather than coercing an external Session into the provider loop. The external unit owns its checkpoint and compatibility rationale.
+
 ## Stable symbols and callers
 
 - `SessionAuthorityDocument.Parse`, `FromNode`, `Load`, `CloneRoot`, and `ValidateMessage` validate version, history, queue, metadata, waits, images, context-block shape, and unsupported catalog/frontier fields.

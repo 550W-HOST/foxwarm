@@ -29,6 +29,7 @@ export interface Session {
   busyStartedAt?: number | null
   queueLength?: number
   runtimeState?: SessionRuntimeState
+  runtime?: 'foxwarm' | 'claude-code'
   displayName?: string
   archived?: boolean
   pinned?: boolean
@@ -157,6 +158,7 @@ const getSessionFilterFields = (session: Session): string[] => {
     session.id,
     ...(session.aliases || []),
     session.agent,
+    session.runtime,
     session.currentNode,
     session.cwd || undefined,
     session.model || undefined,
@@ -1266,7 +1268,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 <div className="flex flex-1 min-w-0 items-center gap-1.5 py-1 pr-2 min-h-10" style={{ paddingLeft: contentPaddingLeft }}>
                   {hasChildren ? disclosure : viewMode !== 'flat-time' && !isFiltering ? <span className="session-compact-disclosure w-4 shrink-0" aria-hidden="true" /> : null}
                   <span className="min-w-0 flex-1 truncate text-sm font-medium text-fw-text-strong" title={`${session.displayName || displayId} · ${session.id}`}>
-                    {session.displayName || displayId}
+                    {session.displayName || displayId}{session.runtime === 'claude-code' && <span className="ml-1 text-xs font-normal text-fw-text-muted">Claude Code</span>}
                     {mobileList && activityTime(session.lastMessageTime) && <span className="mt-0.5 block truncate text-xs font-normal text-fw-text-muted">{session.agent ? `${session.agent} · ` : ''}{activityTime(session.lastMessageTime)}</span>}
                   </span>
                   {session.archived && <Archive className="h-3 w-3 shrink-0 text-fw-text-muted" aria-label="Archived session" />}
@@ -1296,7 +1298,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-fw-text-strong">
                     <span className="min-w-0 flex-1 truncate" data-session-title>
-                      {session.displayName || displayId}
+                      {session.displayName || displayId}{session.runtime === 'claude-code' && <span className="ml-1 text-xs font-normal text-fw-text-muted">Claude Code</span>}
                       {unreadSessionIds.has(session.id) && (
                         <span className="ml-1.5 inline-flex items-center align-middle">
                           <span className="h-2 w-2 rounded-full bg-fw-accent" aria-hidden="true" />

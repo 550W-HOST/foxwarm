@@ -8,6 +8,8 @@ This module documents current .NET source behavior. Cross-module contracts belon
 
 ## Units
 
+- [Claude Code Session runtime](../units/session-claude-runtime.md)
+
 - [Shared SQLite writer mechanics](../units/dotnet-sqlite-writers.md)
 
 - [Session value types, messages, identity, and presentation](../units/session-domain.md)

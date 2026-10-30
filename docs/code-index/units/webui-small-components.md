@@ -41,7 +41,7 @@ A collection of small, reusable React UI components and utility functions for th
 | `getSessionInitial(session)` | (CollapsedSidebar.tsx) | Derives a single visible initial/avatar from display name or session id |
 | `CollapsedSidebar({ ... })` | (CollapsedSidebar.tsx) | Renders the compact rail with expand/new-session buttons and top root sessions |
 | `AgentCreationMenu({ ... })` | (AgentCreationMenu.tsx) | Opens New session directly, selects its Agent with wrapping tags, and switches the same modal to New agent from the trailing `+` tag |
-| `buildSessionCreationBody(agentId, sessionId)` | (agentCreation.ts) | Omits blank session IDs so random backend naming remains authoritative |
+| `buildSessionCreationBody(agentId, sessionId, runtime)` | (agentCreation.ts) | Omits blank session IDs so random backend naming remains authoritative |
 | `CreateTabButton({ ... })` | ~50–110 | Split button with dropdown form for custom terminal tab creation |
 | `selectLauncherDraftNode(draft, nodeId)` | `launcherDraft.ts` | Preserve a same-node draft or reset a changed node's path to `/` |
 | `ImageItem({ part, label })` | `ImageParts.tsx` | Resolves deployment-relative blob URLs, enforces safe-raster inline policy, and reports load failure |
@@ -121,3 +121,5 @@ Sidebar and collapsed-rail settings delegate Setup and Logs actions to App; mobi
 Conversation and Detailed use the same explicit runtime facts and details under [Session runtime presentation](../threads/session-runtime-presentation.md).
 
 Mobile header geometry and fallback behavior follow the [mobile shell contract](../threads/webui-mobile-shell.md). Runtime rows no longer own Stop; see [composer running action](./webui-chat-composer.md#d-composer-running-action).
+
+`AgentCreationMenu` includes a creation-only Foxwarm/Claude Code selector, reset to Foxwarm when opening a new Session dialog. The existing creation callbacks carry its optional third argument through Main, embedded and architecture views. The body helper omits the default runtime and blank name; [external runtime behavior](./session-claude-runtime.md) owns server validation and model/login authority.

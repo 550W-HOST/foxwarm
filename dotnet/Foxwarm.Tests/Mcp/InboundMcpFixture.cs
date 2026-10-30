@@ -71,7 +71,9 @@ internal sealed class InboundMcpFixture : IAsyncDisposable
 
     internal static async Task<InboundMcpFixture> CreateAsync(
         bool allow = true,
-        Action<WebApplication>? configure = null
+        Action<WebApplication>? configure = null,
+        JsonObject? appConfiguration = null,
+        bool webUiEnabled = false
     )
     {
         var f = new InboundMcpFixture();
@@ -79,7 +81,7 @@ internal sealed class InboundMcpFixture : IAsyncDisposable
         {
             Directory.CreateDirectory(Path.Combine(f.Data, "state"));
             Directory.CreateDirectory(f.Work);
-            File.WriteAllText(Path.Combine(f.Data, "state", "config.yaml"), App().ToJsonString());
+            File.WriteAllText(Path.Combine(f.Data, "state", "config.yaml"), (appConfiguration ?? App()).ToJsonString());
             File.WriteAllText(
                 Path.Combine(f.Data, "state", "models.yaml"),
                 "{\"default\":\"local\",\"providers\":{\"local\":{\"providerType\":\"openai-responses\",\"baseUrl\":\"http://127.0.0.1:1\",\"models\":[\"wire\"]}}}"
@@ -104,7 +106,12 @@ internal sealed class InboundMcpFixture : IAsyncDisposable
             f.Target = await f.Manager.CreateNamedAsync("main", "target", null, null);
             f.Target.Registry.TriggerOverride = _ => Task.CompletedTask;
             f.Terminals = new(f.Data, default);
-            f.Server = new([], 0, Admin, null, f.Manager, f.Terminals, webUiEnabled: false);
+            f.Server = new([], 0, Admin, null, f.Manager, f.Terminals, webUiEnabled: webUiEnabled);
+            if (webUiEnabled)
+            {
+                var runtime = new SessionRuntime(f.Manager);
+                new Foxwarm.Channels.WebUi.WebUIChannel(f.Manager, runtime, new MessageRouter(runtime), f.Terminals, f.Server.Downloads).Register(f.Server.App);
+            }
             configure?.Invoke(f.Server.App);
             await f.Server.App.StartAsync();
             f.Url =

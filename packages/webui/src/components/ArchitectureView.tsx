@@ -24,7 +24,7 @@ interface ArchitectureViewProps {
   onBack?: () => void
   onOpenNodes?: () => void
   onCreateAgent?: (agentId: string, inheritAgent?: string) => Promise<void>
-  onCreateSession?: (agentId: string, sessionId?: string) => Promise<void>
+  onCreateSession?: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code') => Promise<void>
   onAgentsChanged?: () => void | Promise<void>
   onOpenAgentMemory?: (memoryRoot: string, filePath?: string) => void
 }
@@ -884,10 +884,10 @@ export default function ArchitectureView({
     await loadAgentRegistry(); setSelectedRegistryAgentId(agentId); await onAgentsChanged?.()
   }
 
-  const createSessionFromRegistry = async (agentId: string, sessionId?: string) => {
-    if (onCreateSession) await onCreateSession(agentId, sessionId)
+  const createSessionFromRegistry = async (agentId: string, sessionId?: string, runtime: 'foxwarm' | 'claude-code' = 'foxwarm') => {
+    if (onCreateSession) await onCreateSession(agentId, sessionId, runtime)
     else {
-      const response = await fetch(`${API_BASE_PATH}/sessions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentId, sessionId: sessionId || undefined }) })
+      const response = await fetch(`${API_BASE_PATH}/sessions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentId, sessionId: sessionId || undefined, runtime }) })
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.error || 'Failed to create session')
       if (payload.sessionId) onSelectSession(payload.sessionId)

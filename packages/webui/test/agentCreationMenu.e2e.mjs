@@ -60,8 +60,8 @@ async function buildFixtureBundle() {
         if (behavior === 'error') throw new Error('Agent request failed')
         if (behavior === 'pending') await waitForFixtureResolution('agent')
       }
-      const onCreateSession = async (agentId, sessionId) => {
-        window.fixtureCalls.push({ type: 'session', agentId, sessionId: sessionId ?? null })
+      const onCreateSession = async (agentId, sessionId, runtime) => {
+        window.fixtureCalls.push({ type: 'session', agentId, sessionId: sessionId ?? null, runtime })
         const behavior = window.fixtureBehavior.session
         if (behavior === 'error') throw new Error('Session request failed')
         if (behavior === 'pending') await waitForFixtureResolution('session')
@@ -161,14 +161,14 @@ test('the shared plus opens New session directly and submits the selected Agent 
   await clickButtonByText('Create')
   await page.waitForSelector('[role="dialog"]', { hidden: true })
   assert.deepEqual(await page.evaluate(() => window.fixtureCalls), [
-    { type: 'session', agentId: 'main', sessionId: 'planned-session' },
+    { type: 'session', agentId: 'main', sessionId: 'planned-session', runtime: 'foxwarm' },
   ])
 
   await openSessionDialog()
   await clickButtonByText('Create')
   await page.waitForSelector('[role="dialog"]', { hidden: true })
   assert.deepEqual(await page.evaluate(() => window.fixtureCalls.at(-1)), {
-    type: 'session', agentId: 'research', sessionId: null,
+    type: 'session', agentId: 'research', sessionId: null, runtime: 'foxwarm',
   })
 })
 
@@ -291,4 +291,17 @@ test('Agent tags wrap without horizontal overflow across themes and narrow scree
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true)
     }
   }
+})
+
+
+test('creation carries the chosen runtime and each new dialog defaults back to Foxwarm', async () => {
+  await resetFixture()
+  await openSessionDialog()
+  assert.equal(await page.$eval('select[aria-label="Session runtime"]', select => select.value), 'foxwarm')
+  await page.select('select[aria-label="Session runtime"]', 'claude-code')
+  await clickButtonByText('Create')
+  await page.waitForSelector('[role="dialog"]', { hidden: true })
+  assert.deepEqual(await page.evaluate(() => window.fixtureCalls.at(-1)), { type: 'session', agentId: 'research', sessionId: null, runtime: 'claude-code' })
+  await openSessionDialog()
+  assert.equal(await page.$eval('select[aria-label="Session runtime"]', select => select.value), 'foxwarm')
 })

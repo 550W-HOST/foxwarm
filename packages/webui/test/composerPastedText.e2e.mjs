@@ -82,6 +82,8 @@ await writeFile(entryPath, `
     }, [])
     const [sessionId, setSessionId] = useState('fixture/main')
     const [loading, setLoading] = useState(false)
+    const [runtime, setRuntime] = useState('foxwarm')
+    window.fixtureSetRuntime = setRuntime
     const [sendKeyMode, setSendKeyMode] = useState('modEnter')
     const [, redraw] = useState(0)
     window.fixtureCurrentSession = sessionId
@@ -91,8 +93,8 @@ await writeFile(entryPath, `
     window.fixtureSendKeyMode = sendKeyMode
     window.fixtureRedraw = () => redraw(value => value + 1)
     const props = {
-      sessionId, sessionMissing: false, loading, sendKeyMode, asrAvailable: true,
-      modelOptions: [], currentModelKey: 'model/current', sessionModel: 'model/current', defaultModelKey: 'model/current',
+      sessionId, sessionMissing: false, loading, sendKeyMode, asrAvailable: true, sessionRuntime: runtime, externalCostEstimate: 1.25,
+      modelOptions: [], currentModelKey: runtime === 'claude-code' ? 'cli-observed-model' : 'model/current', sessionModel: 'model/current', defaultModelKey: 'model/current',
       childModelDefault: 'model/current', effectiveChildModelKey: 'model/current', effectiveEffort: 'medium', effectiveChildEffort: 'medium',
       onChangeModel: noop, onChangeChildModel: noop, onChangeEffort: noop, onChangeChildEffort: noop,
       onRefreshModels: noop, onOpenModelSettings: () => {},
@@ -2138,3 +2140,13 @@ for (const spec of browsers) {
     assert.equal((await page.evaluate(() => window.fixtureDraft)).includes('\u200B'), false)
   }))
 }
+
+
+test('Chromium shows the CLI model and estimate without a Foxwarm current-model picker', async () => withBrowser(browsers[0], async page => {
+  assert.equal(await page.$$('.foxwarm-model-selector-root').then(elements => elements.length), 1)
+  await page.evaluate(() => window.fixtureSetRuntime('claude-code'))
+  await page.waitForFunction(() => document.body.innerText.includes('cli-observed-model'))
+  assert.equal(await page.$('.foxwarm-model-selector-root'), null)
+  assert.ok(await page.evaluate(() => document.body.innerText.includes('$1.2500')))
+  assert.equal(await page.$('[role="textbox"]') !== null, true)
+}))

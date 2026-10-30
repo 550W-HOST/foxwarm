@@ -417,7 +417,7 @@ internal sealed partial class WebUIChannel
                     else
                     {
                         if (
-                            body.Any(item => item.Key is not ("agentId" or "sessionId"))
+                            body.Any(item => item.Key is not ("agentId" or "sessionId" or "runtime"))
                             || body.ContainsKey("agentId")
                                 && (
                                     body["agentId"] is not JsonValue agent
@@ -434,14 +434,16 @@ internal sealed partial class WebUIChannel
                         if (string.IsNullOrEmpty(agentName))
                             agentName = "main";
                         var requested = body["sessionId"]?.GetValue<string>();
+                        var runtimeSelection = ClaudeRuntimeState.ValidateSelection(body["runtime"], body.ContainsKey("runtime"));
                         hosted =
-                            agentName == "main" && string.IsNullOrEmpty(requested)
+                            agentName == "main" && string.IsNullOrEmpty(requested) && runtimeSelection == "foxwarm"
                                 ? await sessions.CreateAsync()
                                 : await sessions.CreateNamedAsync(
                                     agentName,
                                     string.IsNullOrEmpty(requested) ? null : requested,
                                     null,
-                                    null
+                                    null,
+                                    runtime: runtimeSelection
                                 );
                     }
                     runtime.ChangePresentation(catalog =>
@@ -507,6 +509,7 @@ internal sealed partial class WebUIChannel
                                     or "agentName"
                                     or "displayName"
                                     or "message"
+                                    or "runtime"
                                     or "forceModel"
                                 )
                         )
@@ -526,7 +529,8 @@ internal sealed partial class WebUIChannel
                         body["displayName"]?.GetValue<string>(),
                         body["message"]?.GetValue<string>(),
                         body["forceModel"] as JsonObject,
-                        userInitiated: true
+                        userInitiated: true,
+                        runtime: ClaudeRuntimeState.ValidateSelection(body["runtime"], body.ContainsKey("runtime"))
                     );
                     return Results.Ok(
                         new

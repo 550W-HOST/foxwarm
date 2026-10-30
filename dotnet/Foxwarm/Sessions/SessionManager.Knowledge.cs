@@ -54,6 +54,7 @@ internal sealed partial class SessionManager
 
     private async Task MaybeRefreshStaleAsync(SessionOwner owner)
     {
+        if (ClaudeRuntimeState.IsExternal(owner.Entry.Snapshot().AuthorityEnvelope)) return;
         if (!Stale(owner, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
             return;
         try

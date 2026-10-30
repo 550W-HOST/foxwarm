@@ -174,6 +174,7 @@ internal sealed partial class SessionManager
                 {
                     AssertDeleteSource(operation);
                     var owner = operation.Owners[id];
+                    RuntimeCredentials.Revoke(owner);
                     var captured = owner.Entry.WithState(state => state.Queue.ToArray());
                     var wasBusy = owner.Metadata().Busy || owner.Processing;
                     if (captured.Length > 0)

@@ -52,6 +52,7 @@ internal sealed partial class SessionManager
         bool childMode = false
     )
     {
+        ClaudeRuntimeState.RequireFoxwarm(parent, "Fork");
         suffix ??= "fork";
         ValidateForkSuffix(suffix);
         using var operation = TrackCreation();
@@ -98,6 +99,7 @@ internal sealed partial class SessionManager
         string? initialNode = null
     )
     {
+        ClaudeRuntimeState.RequireFoxwarm(parent, "Fork");
         using var membership = BeginAgentAdmission(parent.Agent);
         if (!Accepting)
             throw new InvalidOperationException("Host is shutting down.");

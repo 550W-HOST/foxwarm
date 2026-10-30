@@ -113,9 +113,9 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
     openSession(data.sessionId)
   }
 
-  const createSession = async (agentId: string, sessionId?: string) => {
+  const createSession = async (agentId: string, sessionId?: string, runtime: 'foxwarm' | 'claude-code' = 'foxwarm') => {
     const response = await fetch(`${API_BASE_PATH}/sessions`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildSessionCreationBody(agentId, sessionId || '')),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildSessionCreationBody(agentId, sessionId || '', runtime)),
     })
     const data = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(data.error || 'Failed to create session')

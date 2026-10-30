@@ -122,6 +122,7 @@ internal sealed partial class SessionManager
 
     private void RebindIdentityOwner(SessionOwner owner, string id, string agent)
     {
+        RuntimeCredentials.Revoke(owner);
         var previous = owner.Id;
         owner.AuthorityStore.RebindIdentity(id, agent);
         owner.Archive = owner.AuthorityStore.Archive;
@@ -330,6 +331,15 @@ internal sealed partial class SessionManager
                 throw new InvalidDataException("Target Session ID is already reserved.");
             archiveIdentities.ValidateRename(old, target);
             deletionChannels.ValidateIdentityAuthority();
+            if (ClaudeRuntimeState.IsExternal(owner.Entry.Snapshot().AuthorityEnvelope))
+            {
+                RuntimeCredentials.Revoke(owner);
+                if (owner.Processing || owner.Metadata().Busy)
+                {
+                    await owner.Registry.Control.StopAsync(owner.Id);
+                    await owner.DrainForegroundAsync();
+                }
+            }
             var sourceRow = Catalog.Get(old)!;
             var aliases =
                 (sourceRow["aliases"] as JsonArray)

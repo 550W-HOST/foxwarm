@@ -72,6 +72,7 @@ internal sealed partial class SessionOwner
 
     public async Task<JsonObject> UpdateSettingsAsync(JsonObject patch, bool child)
     {
+        if (!child) ClaudeRuntimeState.RequireFoxwarm(this, "Model changes");
         var allowed = child
             ? new[] { "model", "clear", "childEffortDefault" }
             : ["model", "clear", "effort"];
@@ -111,7 +112,7 @@ internal sealed partial class SessionOwner
             return draft is null ? new JsonObject() : (JsonObject)draft.DeepClone();
     }
 
-    public string BeginDraft(string? outerRequestId = null)
+    public string BeginDraft(string? outerRequestId = null, bool externalRuntime = false)
     {
         var requestId = Guid.NewGuid().ToString("N");
         var startedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -125,7 +126,7 @@ internal sealed partial class SessionOwner
                 ["iteration"] = 1,
                 ["sequence"] = 0,
                 ["startedAt"] = startedAt,
-                ["llmRequestId"] = outerRequestId ?? requestId,
+                ["llmRequestId"] = externalRuntime ? null : outerRequestId ?? requestId,
                 ["text"] = "",
                 ["reasoning"] = "",
                 ["toolCalls"] = new JsonArray(),
@@ -142,7 +143,7 @@ internal sealed partial class SessionOwner
                 ["sequenceStart"] = 0,
                 ["sequence"] = 0,
                 ["startedAt"] = startedAt,
-                ["llmRequestId"] = outerRequestId ?? requestId,
+                ["llmRequestId"] = externalRuntime ? null : outerRequestId ?? requestId,
             };
             Emit(SessionEventKind.ModelStream, payload);
         }
@@ -299,7 +300,7 @@ internal sealed partial class SessionOwner
             ["sequenceStart"] = nextSequence,
             ["sequence"] = nextSequence,
             ["startedAt"] = emittedDraft!["startedAt"]!.GetValue<long>(),
-            ["llmRequestId"] = emittedDraft!["llmRequestId"]!.GetValue<string>(),
+            ["llmRequestId"] = emittedDraft!["llmRequestId"]?.GetValue<string>(),
         };
         if (textDelta is not null)
             update["textDelta"] = textDelta;
@@ -525,11 +526,12 @@ internal sealed partial class SessionOwner
             return;
         }
         var requestId = message["__meta"]?["llmRequestId"]?.GetValue<string>();
-        if (requestId is null)
+        var externalStream = SessionWait.Text(message["__meta"]?["runtimeStreamId"]);
+        if (requestId is null && externalStream is null)
             return;
         lock (draftGate)
         {
-            if (draft?["llmRequestId"]?.GetValue<string>() != requestId)
+            if (externalStream is not null ? SessionWait.Text(draft?["streamId"]) != externalStream : draft?["llmRequestId"]?.GetValue<string>() != requestId)
                 return;
             FlushDraftLocked();
             draft = emittedDraft = null;

@@ -195,6 +195,14 @@ internal sealed partial class SessionCatalog
         };
         if (meta.Count > 0)
             result["meta"] = meta;
+        if (Text(raw["runtime"]) == ClaudeRuntimeState.Kind)
+        {
+            result["runtime"] = ClaudeRuntimeState.Kind;
+            var external = new JsonObject();
+            foreach (var key in new[] { "status", "model", "authMethod", "lastResult" }) Copy(raw["externalRuntime"] as JsonObject, external, key);
+            external["canContinue"] = ClaudeRuntimeState.CanContinue(raw);
+            result["externalRuntime"] = external;
+        }
         foreach (
             var key in new[]
             {

@@ -6,6 +6,8 @@ Integration files: packages/webui/test/workbenchPreview.e2e.mjs, packages/webui/
 
 ## Purpose
 
+For [Claude Code Sessions](./session-claude-runtime.md), the composer replaces the Foxwarm model/effort picker with the observed CLI model and labeled CLI cost estimate. Business-tool Node selection remains separate from the trusted Main-local driver.
+
 A rich chat composer component for the web UI that handles ordered ordinary text, pasted-text blocks, and inline image/file attachment segments, plus slash-command autocomplete, audio transcription, model selection, and message submission with versioned draft persistence.
 
 ## Key Exports

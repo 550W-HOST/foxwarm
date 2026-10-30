@@ -12,7 +12,7 @@ interface AgentCreationMenuProps {
   triggerLabel?: string
   triggerClassName?: string
   onCreateAgent: (agentId: string, inheritAgent?: string) => Promise<void>
-  onCreateSession: (agentId: string, sessionId?: string) => Promise<void>
+  onCreateSession: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code') => Promise<void>
 }
 
 export default function AgentCreationMenu({
@@ -29,6 +29,7 @@ export default function AgentCreationMenu({
   const [inheritAgent, setInheritAgent] = useState('')
   const [sessionAgent, setSessionAgent] = useState('')
   const [sessionId, setSessionId] = useState('')
+  const [runtime, setRuntime] = useState<'foxwarm' | 'claude-code'>('foxwarm')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -76,6 +77,7 @@ export default function AgentCreationMenu({
     setMode('session')
     setSessionAgent(defaultAgent)
     setSessionId('')
+    setRuntime('foxwarm')
     setError('')
   }
 
@@ -120,7 +122,7 @@ export default function AgentCreationMenu({
       if (mode === 'agent') {
         await onCreateAgent(agentId.trim(), inheritAgent || undefined)
       } else {
-        await onCreateSession(sessionAgent, sessionId.trim() || undefined)
+        await onCreateSession(sessionAgent, sessionId.trim() || undefined, runtime)
       }
       setMode(null)
     } catch (cause) {
@@ -215,6 +217,14 @@ export default function AgentCreationMenu({
                 <label className="block text-sm font-medium text-fw-text-strong">
                   Session ID <span className="font-normal text-fw-text-muted">(optional)</span>
                   <input ref={sessionIdInputRef} value={sessionId} onChange={event => setSessionId(event.target.value)} autoComplete="off" placeholder={RANDOM_SESSION_ID_PLACEHOLDER} className="mt-1 w-full rounded-lg border border-fw-border-strong bg-fw-surface px-3 py-2 text-fw-text-strong outline-none focus:border-fw-accent-border focus:ring-2 focus:ring-fw-focus-ring/20 dark:border-fw-border-strong dark:bg-fw-canvas dark:text-fw-text-strong" />
+                </label>
+                <label className="block text-sm font-medium text-fw-text-strong">
+                  Runtime
+                  <select aria-label="Session runtime" value={runtime} onChange={event => setRuntime(event.target.value as 'foxwarm' | 'claude-code')} className="mt-1 w-full rounded-lg border border-fw-border-strong bg-fw-surface px-3 py-2">
+                    <option value="foxwarm">Foxwarm</option>
+                    <option value="claude-code">Claude Code</option>
+                  </select>
+                  {runtime === 'claude-code' && <span className="mt-1 block text-xs font-normal text-fw-text-muted">Uses the installed Claude Code model and login.</span>}
                 </label>
               </div>
             )}

@@ -14,7 +14,7 @@ internal static class SessionPresentation
     )
     {
         var catalog = models.Capture();
-        var model = catalog.All.Count == 0 ? null : catalog.Resolve(meta.Model);
+        var model = meta.Runtime == ClaudeRuntimeState.Kind || catalog.All.Count == 0 ? null : catalog.Resolve(meta.Model);
         var allowed = model?.AllowedEfforts ?? HostModels.Efforts;
         var defaultEffort = model is null ? "high" : model.DefaultEffort;
         var effort =
@@ -60,9 +60,10 @@ internal static class SessionPresentation
         };
         if (meta.Cost is double cost)
             result["tokenUsage"]!["cost"] = cost;
+        var policyModel = meta.Runtime == ClaudeRuntimeState.Kind ? null : meta.Model;
         var settings = new JsonObject
         {
-            ["model"] = meta.Model,
+            ["model"] = policyModel,
             ["effort"] = meta.Effort,
             ["childModelDefault"] = meta.ChildModel,
             ["childEffortDefault"] = meta.ChildEffort,
@@ -82,7 +83,7 @@ internal static class SessionPresentation
             hops.Add(parent);
             parentId = parent.ParentSessionId;
         }
-        var effectiveRaw = meta.ChildModel ?? meta.Model;
+        var effectiveRaw = meta.ChildModel ?? policyModel;
         var supplier = 0;
         if (effectiveRaw is not null)
             for (var index = 0; index < hops.Count; index++)
@@ -96,7 +97,7 @@ internal static class SessionPresentation
                             {
                                 ["level"] = index == 0 ? "session" : "inherited",
                                 ["sessionId"] = hop.Id,
-                                ["modelKey"] = hop.Model,
+                                ["modelKey"] = hop.Runtime == ClaudeRuntimeState.Kind ? null : hop.Model,
                                 ["effort"] = hop.Effort,
                                 ["childModelDefault"] = hop.ChildModel,
                                 ["childEffortDefault"] = hop.ChildEffort,
@@ -111,6 +112,27 @@ internal static class SessionPresentation
                 )
                 .ToArray()
         );
+        ApplyExternalRuntime(result, meta.Runtime, meta.ExternalRuntime);
         return result;
     }
+    internal static void ApplyExternalRuntime(JsonObject result, string runtime, JsonObject? checkpoint)
+    {
+        result["runtime"] = runtime;
+        if (runtime != ClaudeRuntimeState.Kind) return;
+        var model = SessionWait.Text(checkpoint?["model"]);
+        result["model"] = model;
+        result["modelKey"] = model;
+        result["defaultModelKey"] = null;
+        result["modelSource"] = ClaudeRuntimeState.Kind;
+        result["modelLabel"] = model ?? "Managed by Claude Code";
+        result["effort"] = null;
+        result["effortDefault"] = null;
+        result["effectiveEffort"] = null;
+        result["contextLimit"] = null;
+        result["effortAllowed"] = new JsonArray();
+        var external = new JsonObject();
+        foreach (var key in new[] { "status", "model", "authMethod", "lastResult", "canContinue" }) SessionCatalog.Copy(checkpoint, external, key);
+        result["externalRuntime"] = external;
+    }
+
 }

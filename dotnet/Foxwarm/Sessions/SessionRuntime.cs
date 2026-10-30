@@ -49,7 +49,9 @@ internal sealed record SessionMetadata(
     string? ChildEffort = null,
     double? CompactThreshold = null,
     double? Cost = null,
-    bool LlmFailed = false
+    bool LlmFailed = false,
+    string Runtime = "foxwarm",
+    JsonObject? ExternalRuntime = null
 );
 
 /// <summary>Session-semantic in-process API. Channels receive cloned projections, never mutable owners.</summary>
@@ -267,6 +269,8 @@ internal sealed partial class SessionOwner
             static double Number(JsonNode? node) => SessionWait.Number(node) ?? 0;
             static bool Flag(JsonNode? node) =>
                 node is JsonValue value && value.TryGetValue<bool>(out var flag) && flag;
+            var external = envelope["externalRuntime"]?.DeepClone() as JsonObject;
+            if (external is not null) external["canContinue"] = ClaudeRuntimeState.CanContinue(envelope);
             return new SessionMetadata(
                 Id,
                 Agent,
@@ -286,7 +290,7 @@ internal sealed partial class SessionOwner
                 && order.TryGetValue<double>(out var rawOrder)
                     ? rawOrder
                     : null,
-                Text(envelope["model"]),
+                ClaudeRuntimeState.IsExternal(envelope) ? Text(envelope["externalRuntime"]?["model"]) : Text(envelope["model"]),
                 Text(envelope["effort"]),
                 Number(envelope["stats"]?["totalCachedTokens"]),
                 Number(envelope["stats"]?["totalInputTokens"]),
@@ -296,7 +300,9 @@ internal sealed partial class SessionOwner
                 Text(envelope["childEffortDefault"]),
                 SessionWait.Number(envelope["compactThresholdTokens"]),
                 Cost: SessionWait.Number(envelope["stats"]?["totalCost"]),
-                LlmFailed: Flag(state.Meta["llmFailed"])
+                LlmFailed: Flag(state.Meta["llmFailed"]),
+                Runtime: Text(envelope["runtime"]) ?? "foxwarm",
+                ExternalRuntime: external
             );
         });
         return MainMetadata?.Invoke(result) ?? result;
