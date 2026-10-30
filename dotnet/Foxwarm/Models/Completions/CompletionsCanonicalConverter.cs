@@ -77,12 +77,16 @@ internal static class CompletionsCanonicalConverter
             ["parts"] = parts,
             ["__meta"] = meta,
         };
+        var providerMeta = new JsonObject();
         if (message["provider_specific_fields"] is JsonObject fields)
-            result["providerMeta"] = new JsonObject
-            {
-                ["providerSpecificFields"] = fields.DeepClone(),
-                ["sourceModelId"] = concreteModelId,
-            };
+            providerMeta["providerSpecificFields"] = fields.DeepClone();
+        if (message["extra_fields"] is JsonObject extra)
+            providerMeta["extraFields"] = extra.DeepClone();
+        if (providerMeta.Count > 0)
+        {
+            providerMeta["sourceModelId"] = concreteModelId;
+            result["providerMeta"] = providerMeta;
+        }
         return result;
     }
 }

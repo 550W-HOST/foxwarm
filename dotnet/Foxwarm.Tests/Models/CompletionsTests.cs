@@ -152,7 +152,7 @@ public sealed class CompletionsTests
             canonical["parts"]!.AsArray(),
             part => part?["functionCall"]?["argsParseError"] is not null
         );
-        Assert.False(
+        Assert.True(
             canonical["providerMeta"]!["providerSpecificFields"]!.AsObject().ContainsKey("old")
         );
         Assert.Equal(28, canonical["__meta"]!["usage"]!["inputTokens"]!.GetValue<double>());

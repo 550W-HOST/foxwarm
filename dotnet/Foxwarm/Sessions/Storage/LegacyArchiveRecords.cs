@@ -211,7 +211,8 @@ internal static class LegacyArchiveRecords
                 "providerMeta",
                 node =>
                     node is JsonObject meta
-                    && meta["providerSpecificFields"] is JsonObject
+                    && Optional(meta, "providerSpecificFields", node => node is JsonObject)
+                    && Optional(meta, "extraFields", node => node is JsonObject)
                     && Optional(meta, "sourceModelId", String)
             )
         )
