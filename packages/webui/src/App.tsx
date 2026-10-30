@@ -28,6 +28,9 @@ import { findTerminalForTarget, normalizeTerminalTarget } from './terminalTarget
 import { useChatPreferences } from './chatPreferences'
 import { makeFoxwarmPopupUrl, type FoxwarmPopupTarget } from './popupWebUi'
 import { FoxPaneLoader } from './components/FoxLoaders'
+import ProjectWorkspace from './components/ProjectWorkspace'
+import ProjectCodeFrame from './components/ProjectCodeFrame'
+import { useWorkspaceMode } from './workspaceMode'
 
 type AppView = 'session' | 'agents' | 'setup' | 'logs' | 'tasks' | 'nodes'
 
@@ -446,10 +449,21 @@ function isRestorableRouteTabId(tabId: string): boolean {
 
 function App() {
   const initialRoute = getHashState()
+  const workspaceMode = useWorkspaceMode()
+  const [projectVisited, setProjectVisited] = useState(workspaceMode === 'project')
+  const [projectAuxiliaryTabs, setProjectAuxiliaryTabs] = useState<WorkbenchTab[]>([])
+  const [projectAuxiliaryTabId, setProjectAuxiliaryTabId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (workspaceMode === 'project') setProjectVisited(true)
+    setProjectAuxiliaryTabId(null)
+  }, [workspaceMode])
 
   const [agents, setAgents] = useState<AgentSummary[]>([])
   const [route, setRoute] = useState<RouteState>(initialRoute)
   const [setupOobe, setSetupOobe] = useState(false)
+  const classicDisplayed = workspaceMode === 'classic' || setupOobe
+  const projectDisplayed = workspaceMode === 'project' && !classicDisplayed
   const [focusModelsRequest, setFocusModelsRequest] = useState(0)
   const [activeTerminals, setActiveTerminals] = useState<TerminalRegistryRecord[] | null>(null)
   const [isMobile, setIsMobile] = useState<boolean>(window.innerWidth < 768)
@@ -481,6 +495,35 @@ function App() {
   const [codeOpenInNewWindow, setCodeOpenInNewWindow] = useState(loadStoredCodeOpenInNewWindow)
   const [codeFrameUrl, setCodeFrameUrl] = useState(() => makeVscodeWebUrl(API_BASE_PATH, window.location.origin, { nodeId: loadStoredCodeNodeId(), path: loadStoredCodePath() }, { embedded: true }).toString())
   const vscodeFrameBridge = useVscodeWebFrameBridge({ started: vscodeFrameStarted, src: codeFrameUrl }, vscodeFrameRef)
+  const [projectCodeFrameStarted, setProjectCodeFrameStarted] = useState(false)
+  const [projectCodeFrameUrl, setProjectCodeFrameUrl] = useState('')
+  const projectCodeFrameRef = useRef<VscodeWebFrameHostHandle | null>(null)
+  const projectCodeFrameBridge = useVscodeWebFrameBridge({ started: projectCodeFrameStarted, src: projectCodeFrameUrl }, projectCodeFrameRef)
+
+  // Global tools belong to the Project shell, separately from server-owned
+  // work-session tabs and the saved layout of the original workbench.
+  const openProjectAuxiliaryTab = (tab: WorkbenchTab) => {
+    setProjectAuxiliaryTabs(current => current.some(item => item.id === tab.id) ? current : [...current, tab])
+    setProjectAuxiliaryTabId(tab.id)
+  }
+  const updateProjectAuxiliaryTab = (tabId: string, update: (tab: WorkbenchTab) => WorkbenchTab) => {
+    setProjectAuxiliaryTabs(current => current.map(tab => tab.id === tabId ? update(tab) : tab))
+  }
+  const closeProjectAuxiliaryTab = async (tabId: string) => {
+    const tab = projectAuxiliaryTabs.find(item => item.id === tabId)
+    if (tab?.type === 'vscode') {
+      if (!window.confirm('Close Code? Save any unsaved files first.')) return
+      setProjectCodeFrameStarted(false)
+    }
+    if (tab?.type === 'terminal' && tab.terminalId) {
+      if (!window.confirm('Close this tab and end its terminal?')) return
+      const response = await fetch(`${API_BASE_PATH}/terminals/${encodeURIComponent(tab.terminalId)}`, { method: 'DELETE' })
+      if (!response.ok && response.status !== 404) { window.alert(`Could not close terminal (${response.status}).`); return }
+      void fetchActiveTerminals()
+    }
+    setProjectAuxiliaryTabs(current => current.filter(item => item.id !== tabId))
+    setProjectAuxiliaryTabId(current => current === tabId ? null : current)
+  }
   const [nodeTargets, setNodeTargets] = useState<WebUiNodeTarget[]>([MASTER_NODE_TARGET])
   const [nodeTargetsError, setNodeTargetsError] = useState('')
 
@@ -898,10 +941,10 @@ function App() {
   useLayoutEffect(() => {
     setVscodeFrameStarted((started) => {
       return selectCodeFrameStarted(started, activePaneTabTypes, {
-        workbenchVisible: !isMobile || !showSessionList,
+        workbenchVisible: classicDisplayed && (!isMobile || !showSessionList),
       })
     })
-  }, [activePaneTabTypes, isMobile, showSessionList])
+  }, [activePaneTabTypes, isMobile, showSessionList, classicDisplayed])
 
   const updateCodePath = (path: string) => {
     const normalized = writeCodeWorkspacePathPreference(localStorage, path)
@@ -919,6 +962,10 @@ function App() {
   }
 
   const activateEmbeddedCodeTab = () => {
+    if (projectDisplayed) {
+      openProjectAuxiliaryTab(makeVscodeWebTab())
+      return
+    }
     const existingTab = tabsById[VSCODE_WEB_TAB_ID]
     const tab = existingTab ? { ...existingTab, title: 'Code' } as WorkbenchTab : makeVscodeWebTab()
     upsertTab(tab, { activate: true })
@@ -926,7 +973,7 @@ function App() {
   }
 
   const openCode = (target: CodeTarget, forceNewWindow = false) => {
-    const plan = planCodeOpen(vscodeFrameStarted, codeOpenInNewWindow, forceNewWindow)
+    const plan = planCodeOpen(projectDisplayed ? projectCodeFrameStarted : vscodeFrameStarted, codeOpenInNewWindow, forceNewWindow)
     if (plan === 'new-window') {
       const url = makeVscodeWebUrl(API_BASE_PATH, window.location.origin, target).toString()
       window.open(url, '_blank', 'noopener,noreferrer')
@@ -935,10 +982,11 @@ function App() {
 
     if (plan === 'start-embedded') {
       const url = makeVscodeWebUrl(API_BASE_PATH, window.location.origin, target, { embedded: true }).toString()
-      setCodeFrameUrl(url)
-      setVscodeFrameStarted(true)
+      if (projectDisplayed) { setProjectCodeFrameUrl(url); setProjectCodeFrameStarted(true) }
+      else { setCodeFrameUrl(url); setVscodeFrameStarted(true) }
     }
-    void vscodeFrameRef.current?.request({ kind: 'addFolder', nodeId: target.nodeId, path: target.path }).catch((error) => {
+    const frame = projectDisplayed ? projectCodeFrameRef : vscodeFrameRef
+    void frame.current?.request({ kind: 'addFolder', nodeId: target.nodeId, path: target.path }).catch((error) => {
       window.alert(`Could not add the folder to Code.\n\n${error instanceof Error ? error.message : String(error)}`)
     })
     activateEmbeddedCodeTab()
@@ -948,23 +996,25 @@ function App() {
     request: CodeFileTarget,
     workspaceTarget: CodeTarget,
   ) => {
-    const plan = planCodeOpen(vscodeFrameStarted, codeOpenInNewWindow)
+    const plan = planCodeOpen(projectDisplayed ? projectCodeFrameStarted : vscodeFrameStarted, codeOpenInNewWindow)
     if (plan === 'new-window') {
       window.open(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, workspaceTarget, { openFile: request }).toString(), '_blank', 'noopener,noreferrer')
       return
     }
     if (plan === 'start-embedded') {
-      setCodeFrameUrl(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, workspaceTarget, { embedded: true }).toString())
-      setVscodeFrameStarted(true)
+      const url = makeVscodeWebUrl(API_BASE_PATH, window.location.origin, workspaceTarget, { embedded: true }).toString()
+      if (projectDisplayed) { setProjectCodeFrameUrl(url); setProjectCodeFrameStarted(true) }
+      else { setCodeFrameUrl(url); setVscodeFrameStarted(true) }
     }
-    void vscodeFrameRef.current?.request(request).catch((error) => {
+    const frame = projectDisplayed ? projectCodeFrameRef : vscodeFrameRef
+    void frame.current?.request(request).catch((error) => {
       window.alert(`Could not open the file in Code.\n\n${error instanceof Error ? error.message : String(error)}`)
     })
     activateEmbeddedCodeTab()
   }
 
   const openCodeCommit = async (target: CodeCommitTarget): Promise<void> => {
-    const plan = planCodeOpen(vscodeFrameStarted, codeOpenInNewWindow)
+    const plan = planCodeOpen(projectDisplayed ? projectCodeFrameStarted : vscodeFrameStarted, codeOpenInNewWindow)
     if (plan === 'new-window') {
       const opened = window.open(
         makeVscodeWebUrl(API_BASE_PATH, window.location.origin, target, { openCommit: target }).toString(),
@@ -975,11 +1025,12 @@ function App() {
       return
     }
     if (plan === 'start-embedded') {
-      setCodeFrameUrl(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, undefined, { embedded: true }).toString())
-      setVscodeFrameStarted(true)
+      const url = makeVscodeWebUrl(API_BASE_PATH, window.location.origin, undefined, { embedded: true }).toString()
+      if (projectDisplayed) { setProjectCodeFrameUrl(url); setProjectCodeFrameStarted(true) }
+      else { setCodeFrameUrl(url); setVscodeFrameStarted(true) }
     }
     activateEmbeddedCodeTab()
-    const frame = vscodeFrameRef.current
+    const frame = projectDisplayed ? projectCodeFrameRef.current : vscodeFrameRef.current
     if (!frame) throw new Error('The embedded Code frame is unavailable.')
     await frame.request({ kind: 'openCommit', ...target })
   }
@@ -1017,7 +1068,12 @@ function App() {
     navigateToTab(tab.id, origin)
   }
 
-  const openChatTab = async (sessionId: string, origin: SessionNavigationOrigin = 'user') => {
+  const openChatTab = async (sessionId: string, origin: SessionNavigationOrigin = 'user', surface: 'current' | 'classic' = 'current') => {
+    if (projectDisplayed && surface === 'current') {
+      openProjectAuxiliaryTab(makeChatTab(sessionId, sessionTitle(sessionId)))
+      if (shouldAcknowledgeSessionNavigation(origin)) acknowledgeSession(sessionId)
+      return
+    }
     if (pendingChatRef.current?.sessionId === sessionId) return
     cancelPendingChatNavigation()
     const preferred = findPreferredChatTab(sessionId)
@@ -1043,21 +1099,29 @@ function App() {
   }, [route.tabId, focusedPaneId, cancelPendingChatNavigation])
 
   const openNodesTab = () => {
+    if (projectDisplayed) { openProjectAuxiliaryTab({ id: NODES_TAB_ID, type: 'nodes', title: 'Nodes' }); return }
     upsertTab({ id: NODES_TAB_ID, type: 'nodes', title: 'Nodes' }, { activate: true })
     navigateToTab(NODES_TAB_ID)
   }
 
   const openTasksTab = () => {
+    if (projectDisplayed) { openProjectAuxiliaryTab({ id: TASKS_TAB_ID, type: 'tasks', title: 'Tasks' }); return }
     upsertTab({ id: TASKS_TAB_ID, type: 'tasks', title: 'Tasks' }, { activate: true })
     navigateToTab(TASKS_TAB_ID)
   }
 
   const openLogsTab = () => {
+    if (projectDisplayed) { openProjectAuxiliaryTab({ id: LOGS_TAB_ID, type: 'logs', title: 'Logs' }); return }
     upsertTab({ id: LOGS_TAB_ID, type: 'logs', title: 'Logs' }, { activate: true })
     navigateToTab(LOGS_TAB_ID)
   }
 
   const openSearchTab = () => {
+    if (projectDisplayed) {
+      const history = projectAuxiliaryTabs.find(tab => tab.type === 'search')
+      openProjectAuxiliaryTab(history || makeHistoryTab())
+      return
+    }
     const blank = allTabs.find((tab): tab is Extract<WorkbenchTab, { type: 'search' }> => (
       tab.type === 'search' && !tab.searchStarted && !(tab.searchQuery || '').trim()
     ))
@@ -1095,6 +1159,13 @@ function App() {
   }
 
   const openTerminalTab = (options?: { nodeId?: string; path?: string; terminalId?: string; sourcePaneId?: string; preferPanel?: boolean }) => {
+    if (projectDisplayed) {
+      const terminal = options?.terminalId ? activeTerminals?.find(item => item.id === options.terminalId) : null
+      const target = normalizeTerminalTarget({ nodeId: options?.nodeId, cwd: options?.path })
+      const existing = projectAuxiliaryTabs.find(tab => tab.type === 'terminal' && options?.terminalId && tab.terminalId === options.terminalId)
+      openProjectAuxiliaryTab(existing || (terminal ? makeTerminalTabFromRecord(terminal) : makeTerminalDraftTab(target.nodeId, target.cwd)))
+      return
+    }
     if (options?.terminalId) {
       const existing = allTabs.find((tab) => tab.type === 'terminal' && tab.terminalId === options.terminalId)
       const terminal = activeTerminals?.find((item) => item.id === options.terminalId)
@@ -1507,6 +1578,7 @@ function App() {
   }
 
   const openAgentsView = () => {
+    if (projectDisplayed) { openProjectAuxiliaryTab(makeAgentsTab()); return }
     const tab = tabsById[AGENTS_TAB_ID] || makeAgentsTab()
     upsertTab(tab, { activate: true })
     navigateToTab(tab.id)
@@ -1514,6 +1586,7 @@ function App() {
 
   const openSetupView = (options?: { focusModels?: boolean }) => {
     if (options?.focusModels) setFocusModelsRequest((current) => current + 1)
+    if (projectDisplayed) { openProjectAuxiliaryTab({ ...makeSetupTab(), title: 'Settings' }); return }
     const tab = tabsById[SETUP_TAB_ID] || makeSetupTab()
     upsertTab(tab, { activate: true })
     navigateToTab(tab.id)
@@ -1567,7 +1640,8 @@ function App() {
       return
     }
 
-    openChatTab(sessionId)
+    // Route restoration belongs to the original layout, including while hidden.
+    void openChatTab(sessionId, 'user', 'classic')
   }, [route, tabsById, allTabs, sessions])
 
   useEffect(() => {
@@ -1590,8 +1664,9 @@ function App() {
     ;(window as any).foxwarmTest = helper
   }, [focusedActiveTab, sessions])
 
-  const renderTabContent = (tab: WorkbenchTab, onBack?: () => void) => {
+  const renderTabContent = (tab: WorkbenchTab, onBack?: () => void, projectTool = false, active = true) => {
     const sourcePaneId = findPaneContainingTab(root, tab.id)?.id
+    const updateContentTab = projectTool ? updateProjectAuxiliaryTab : updateTab
 
     if (tab.type === 'chat') {
       const sessionRecord = sessions.find((session) => session.id === tab.sessionId || session.aliases?.includes(tab.sessionId))
@@ -1601,7 +1676,7 @@ function App() {
           sessionMessageMode={mainHost}
           sessionMessageAttachments={mainHost}
           sessionId={tab.sessionId}
-          searchShortcutActive={tab.id === focusedActiveTabId && (!isMobile || !showSessionList)}
+          searchShortcutActive={projectTool ? projectDisplayed && active : classicDisplayed && tab.id === focusedActiveTabId && (!isMobile || !showSessionList)}
           canonicalSessionId={sessionRecord?.id || tab.sessionId}
           sessionDisplayName={sessionRecord?.displayName}
           onBack={onBack}
@@ -1652,10 +1727,10 @@ function App() {
       showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata}
       knownSessions={sidebarSessions.map(session => session.id)} onBack={onBack} onOpenSession={openChatTab}
       initialDraft={{ query: tab.searchQuery || '', agentName: tab.searchAgentName || '', sessionId: tab.searchSessionId || '' }}
-      onDraftChange={(draft) => updateTab(tab.id, current => current.type === 'search' ? {
+      onDraftChange={(draft) => updateContentTab(tab.id, current => current.type === 'search' ? {
         ...current, searchQuery: draft.query, searchAgentName: draft.agentName, searchSessionId: draft.sessionId,
       } : current)}
-      onSearchStarted={(draft) => updateTab(tab.id, current => current.type === 'search' ? {
+      onSearchStarted={(draft) => updateContentTab(tab.id, current => current.type === 'search' ? {
         ...current,
         searchStarted: true,
         searchSubmittedQuery: draft.query,
@@ -1688,10 +1763,11 @@ function App() {
       return (
         <Suspense fallback={<LazyViewFallback label="Loading setup…" />}>
           <SetupView mobileHome={tab.id.startsWith('mobile:')}
+            instanceId={projectTool ? 'project' : undefined}
             forced={setupOobe}
-            onClose={setupOobe ? undefined : () => { void closeWorkbenchTab(tab.id) }}
+            onClose={setupOobe ? undefined : () => { void (projectTool ? closeProjectAuxiliaryTab(tab.id) : closeWorkbenchTab(tab.id)) }}
             onSetupChanged={() => { void fetchSetupStatus() }}
-            focusModelsRequest={focusModelsRequest}
+            focusModelsRequest={(projectTool ? projectDisplayed && active : classicDisplayed) ? focusModelsRequest : 0}
             onFocusModelsRequestHandled={handleFocusModelsRequestHandled}
             webUiSettings={webUiSettings}
             onInstanceNameChange={saveWebUiInstanceName}
@@ -1702,7 +1778,7 @@ function App() {
     }
 
     if (tab.type === 'vscode') {
-      return <VscodeWebFrameHost bridge={vscodeFrameBridge} src={codeFrameUrl} />
+      return <VscodeWebFrameHost bridge={projectTool ? projectCodeFrameBridge : vscodeFrameBridge} src={projectTool ? projectCodeFrameUrl : codeFrameUrl} />
     }
 
     return (
@@ -1715,8 +1791,15 @@ function App() {
           createMode={tab.createMode || 'reuse'}
           onBack={onBack}
           onSessionsChanged={() => { void fetchActiveTerminals() }}
-          onTerminalReady={(terminal) => handleTerminalReady(tab.id, terminal)}
-          onTerminalClosed={handleTerminalClosed}
+          onTerminalReady={(terminal) => {
+            if (!projectTool) { handleTerminalReady(tab.id, terminal); return }
+            updateProjectAuxiliaryTab(tab.id, current => current.type === 'terminal' ? {
+              ...current, terminalId: terminal.id, nodeId: terminal.nodeId || 'master', cwd: terminal.cwd,
+              title: formatTerminalTabTitle(terminal.cwd, terminal.nodeId || 'master'),
+            } : current)
+            void fetchActiveTerminals()
+          }}
+          onTerminalClosed={projectTool ? undefined : handleTerminalClosed}
         />
       </Suspense>
     )
@@ -2000,11 +2083,12 @@ function App() {
   const renderStableContent = () => <SessionMessageNamesContext.Provider value={communicationNames}><WorkbenchContentLayer>{allTabs.map(tab => {
     const pane = findPaneContainingTab(root, tab.id)
     if (!pane) return null
-    const visible = (isMobile || !pane.collapsed) && pane.activeTabId === tab.id
+    const selected = (isMobile || !pane.collapsed) && pane.activeTabId === tab.id
       && (!isMobile || (!showSessionList && pane.id === mobilePaneId))
+    const visible = classicDisplayed && selected
     // History already retains hidden views; Code starts lazily then keeps its frame.
     // Ordinary tabs retain their existing semantic hide/unmount policy.
-    if (!visible && tab.type !== 'search' && !(tab.type === 'vscode' && vscodeFrameStarted)) return null
+    if (!selected && tab.type !== 'search' && !(tab.type === 'vscode' && vscodeFrameStarted)) return null
     if (tab.type === 'vscode' && !vscodeFrameStarted) return null
     const props = getPaneProps(pane.id, getPaneCollapseDirection(root, pane.id))!
     return <WorkbenchContentHost key={tab.id} {...props} tab={tab} visible={visible}
@@ -2067,10 +2151,90 @@ function App() {
     </DndContext>
   )
 
+  const renderModeShell = (classic: ReactNode) => (
+    <div className="relative h-full min-h-0 w-full overflow-hidden">
+      <div className="h-full w-full" style={{ display: classicDisplayed ? undefined : 'none' }}>
+        {classic}
+      </div>
+      {projectVisited && (
+        <div className="h-full w-full" style={{ display: projectDisplayed ? undefined : 'none' }}>
+          <SessionMessageNamesContext.Provider value={communicationNames}>
+            <ProjectWorkspace
+              nodeTargets={nodeTargets}
+              unassignedCandidates={sessions}
+              onOpenUnassigned={(sessionId) => { void openChatTab(sessionId) }}
+              onLoadMoreUnassigned={boundedSessions.hasMoreRoots ? () => { void boundedSessions.loadMoreRoots() } : undefined}
+              onOpenSetup={() => openSetupView()}
+              onOpenAgents={openAgentsView}
+              onOpenNodes={openNodesTab}
+              onOpenHistory={openSearchTab}
+              auxiliaryTabs={projectAuxiliaryTabs}
+              activeAuxiliaryTabId={projectAuxiliaryTabId}
+              onSelectAuxiliaryTab={setProjectAuxiliaryTabId}
+              onCloseAuxiliaryTab={(tabId) => { void closeProjectAuxiliaryTab(tabId) }}
+              renderAuxiliaryTab={(tabId, active) => {
+                const tab = projectAuxiliaryTabs.find(item => item.id === tabId)
+                return tab ? renderTabContent(tab, () => setProjectAuxiliaryTabId(null), true, active) : null
+              }}
+              renderAgent={(tab, _project, active, actions) => tab.resourceId ? (
+                <Chat
+                  sessionId={tab.resourceId}
+                  canonicalSessionId={tab.resourceId}
+                  sessionDisplayName={tab.title}
+                  searchShortcutActive={projectDisplayed && active}
+                  onNewSession={() => actions.addTab('agent')}
+                  onOpenTerminal={() => { void actions.addTab('terminal') }}
+                  onOpenCode={() => { void actions.addTab('code') }}
+                  onOpenModelSettings={() => openSetupView({ focusModels: true })}
+                  sendKeyMode={sendKeyMode}
+                  timelineView={timelineView}
+                  showUsageBadge={showUsageBadge}
+                  showInterAgentMessages={showInterAgentMessages}
+                  onShowInterAgentMessagesChange={setShowInterAgentMessages}
+                  showCommentary={showCommentary}
+                  onShowCommentaryChange={setShowCommentary}
+                  fullWidth={fullWidth}
+                  onFullWidthChange={setFullWidth}
+                  showUserMessageMetadata={showUserMessageMetadata}
+                  onSendKeyModeChange={setSendKeyMode}
+                  onTimelineViewChange={setTimelineView}
+                  onShowUsageBadgeChange={setShowUsageBadge}
+                  onShowUserMessageMetadataChange={setShowUserMessageMetadata}
+                />
+              ) : null}
+              renderTerminal={(tab, project, _active, onTerminalReady) => (
+                <Suspense fallback={<LazyViewFallback label="Loading terminal…" />}>
+                  <TerminalView
+                    initialCwd={project.rootPath}
+                    initialNodeId={project.nodeId}
+                    initialTerminalId={tab.resourceId}
+                    createMode="new"
+                    requireExisting={!!tab.resourceId}
+                    onTerminalReady={(terminal) => onTerminalReady(terminal.id)}
+                    onSessionsChanged={() => { void fetchActiveTerminals() }}
+                  />
+                </Suspense>
+              )}
+              renderCode={(tab, project, active) => (
+                <ProjectCodeFrame workspaceId={tab.workspaceSessionId} nodeId={project.nodeId} rootPath={project.rootPath} visible={projectDisplayed && active} />
+              )}
+              onCloseTerminal={async (tab) => {
+                if (!tab.resourceId) return
+                const response = await fetch(`${API_BASE_PATH}/terminals/${encodeURIComponent(tab.resourceId)}`, { method: 'DELETE' })
+                if (!response.ok && response.status !== 404) throw new Error(`Could not close terminal (${response.status}).`)
+                await fetchActiveTerminals()
+              }}
+            />
+          </SessionMessageNamesContext.Provider>
+        </div>
+      )}
+    </div>
+  )
+
   if (isMobile) {
     const mobilePaneProps = mobilePaneId ? getPaneProps(mobilePaneId) : undefined
     const showHome = showSessionList || !mobilePaneProps
-    return renderWorkbenchSurface(<>
+    return renderModeShell(renderWorkbenchSurface(<>
       <div style={{display: showHome ? 'contents' : 'none'}}>
         <SessionList
           renderPage={page => renderTabContent({id: `mobile:${page}`, type: page, title: page === 'setup' ? 'Settings' : page === 'tasks' ? 'Tasks' : 'Search'})}
@@ -2111,10 +2275,10 @@ function App() {
           <WorkbenchPane {...mobilePaneProps} />
         </div>
       )}
-    </>)
+    </>))
   }
 
-  return renderWorkbenchSurface(
+  return renderModeShell(renderWorkbenchSurface(
     <div className="foxwarm-desktop-workbench-shell foxwarm-safe-area-shell foxwarm-viewport-shell relative flex overflow-hidden bg-fw-canvas">
       {!sidebarCollapsed ? (
         <div className="foxwarm-sidebar-frame relative h-full shrink-0" style={{ width: sidebarWidth }}>
@@ -2187,7 +2351,7 @@ function App() {
         />
       </div>
     </div>,
-  )
+  ))
 }
 
 export default App

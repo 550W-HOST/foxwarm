@@ -167,9 +167,15 @@ export function makeCodeWorkspaceUri(target: CodeTarget): string {
   return `foxwarm://node+${encodeURIComponent(target.nodeId)}${encodedPath || '/'}`
 }
 
-export function makeVscodeWebUrl(apiBasePath: string, origin: string, target?: CodeTarget, options: { embedded?: boolean; openFile?: CodeFileTarget; openCommit?: CodeCommitTarget } = {}): URL {
+export function makeVscodeWebUrl(apiBasePath: string, origin: string, target?: CodeTarget, options: { embedded?: boolean; workspaceId?: string; openFile?: CodeFileTarget; openCommit?: CodeCommitTarget } = {}): URL {
   const url = new URL(getVscodeWebPath(apiBasePath), origin)
   const usePersistentWorkspace = options.embedded || Boolean(options.openCommit)
+  if (options.workspaceId !== undefined) {
+    if (!usePersistentWorkspace || !target || options.openCommit || !/^[A-Za-z0-9_-]{1,100}$/.test(options.workspaceId)) {
+      throw new Error('Project workspace ID requires a valid ID, folder, and embedded Code workspace')
+    }
+    url.searchParams.set('workspaceId', options.workspaceId)
+  }
   if (usePersistentWorkspace) url.searchParams.set('embedded', 'true')
   if (target && !options.openCommit) url.searchParams.set(usePersistentWorkspace ? 'initialFolderUri' : 'folderUri', makeCodeWorkspaceUri(target))
   if (options.openFile) {
