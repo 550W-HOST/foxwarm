@@ -74,7 +74,10 @@ internal static class WebUiContract
             result[key] = value?.DeepClone();
         var external = snapshot.AuthorityEnvelope["externalRuntime"]?.DeepClone() as JsonObject;
         if (external is not null)
-            external["canContinue"] = ClaudeRuntimeState.CanContinue(snapshot.AuthorityEnvelope, queueLength > 0);
+            external["canContinue"] = ClaudeRuntimeState.CanContinue(
+                snapshot.AuthorityEnvelope,
+                queueLength > 0
+            );
         SessionPresentation.ApplyExternalRuntime(
             result,
             SessionWait.Text(snapshot.AuthorityEnvelope["runtime"]) ?? "foxwarm",

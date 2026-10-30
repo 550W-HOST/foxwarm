@@ -319,7 +319,9 @@ internal sealed class ClaudeSessionDriver(
                 run.Lane.Release();
             }
             if (policyFailure is not null)
-                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(policyFailure).Throw();
+                System
+                    .Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(policyFailure)
+                    .Throw();
             token.ThrowIfCancellationRequested();
             throw;
         }
@@ -334,7 +336,8 @@ internal sealed class ClaudeSessionDriver(
                 await StopProcessAsync(process);
                 if (stderr is not null)
                     await stderr;
-                if (rootExit is not null) await rootExit;
+                if (rootExit is not null)
+                    await rootExit;
                 process.Dispose();
             }
             await run.Lane.WaitAsync();

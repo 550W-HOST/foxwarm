@@ -439,8 +439,12 @@ internal sealed partial class SessionManager : IAsyncDisposable
         foreach (var owner in sessions.Values)
         {
             var envelope = owner.Entry.Snapshot().AuthorityEnvelope;
-            if ((!ClaudeRuntimeState.IsExternal(envelope) || SessionWait.Text(envelope["externalRuntime"]?["status"]) == "complete")
-                && owner.Registry.HasRunnableWork(owner.Entry))
+            if (
+                (
+                    !ClaudeRuntimeState.IsExternal(envelope)
+                    || SessionWait.Text(envelope["externalRuntime"]?["status"]) == "complete"
+                ) && owner.Registry.HasRunnableWork(owner.Entry)
+            )
                 _ = owner.StartProcessing();
         }
     }

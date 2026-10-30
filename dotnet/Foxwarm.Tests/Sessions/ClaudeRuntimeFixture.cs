@@ -13,7 +13,10 @@ internal sealed class ClaudeRuntimeFixture : IAsyncDisposable
     private string? previousConfig;
     private bool configured;
 
-    internal static async Task<ClaudeRuntimeFixture> CreateAsync(JsonObject? peer = null, bool handoffConfirmation = false)
+    internal static async Task<ClaudeRuntimeFixture> CreateAsync(
+        JsonObject? peer = null,
+        bool handoffConfirmation = false
+    )
     {
         var f = new ClaudeRuntimeFixture();
         try

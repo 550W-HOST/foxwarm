@@ -57,10 +57,17 @@ internal static class SessionBoundary
             || trimmed.EndsWith("[NO_ACTION]", StringComparison.Ordinal)
         );
 
-    internal static string ChildReminder(string parentSessionId, bool handoffConfirmation = false, bool externalRuntime = false)
+    internal static string ChildReminder(
+        string parentSessionId,
+        bool handoffConfirmation = false,
+        bool externalRuntime = false
+    )
     {
         var args = handoffConfirmation
-            ? HandoffConfirmation.GuidanceArgument(parentSessionId, externalRuntime ? "continue" : "finish")
+            ? HandoffConfirmation.GuidanceArgument(
+                parentSessionId,
+                externalRuntime ? "continue" : "finish"
+            )
             : $"sessionId: `{Escape(parentSessionId)}`, message: \"...\", afterSend: \"{(externalRuntime ? "continue" : "finish")}\"";
         var guidance = handoffConfirmation ? HandoffConfirmation.Guidance : "";
         if (externalRuntime)

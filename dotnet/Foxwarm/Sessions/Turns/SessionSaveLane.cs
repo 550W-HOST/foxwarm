@@ -239,7 +239,9 @@ public sealed partial class SessionSaveLane
                         ["system"] = SessionBoundary.ChildReminder(
                             parentSessionId,
                             handoffConfirmation,
-                            externalRuntime: entry.WithState(state => ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope))
+                            externalRuntime: entry.WithState(state =>
+                                ClaudeRuntimeState.IsExternal(state.AuthorityEnvelope)
+                            )
                         ),
                     },
                 ],
