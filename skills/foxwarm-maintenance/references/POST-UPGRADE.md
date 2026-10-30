@@ -4,6 +4,9 @@ Read this file from the target revision when planning an upgrade. Apply only
 changes relevant to that installation; changing source does not authorize a
 user-data migration or replacement of customized configuration.
 
+For the first update from TypeScript Main, read the dedicated
+[migration guide](https://foxwarm.550w.host/docs/typescript-migration/).
+
 ## Source build and restart
 
 For a public source checkout, follow [Source Updates](SOURCE-UPDATES.md). Check

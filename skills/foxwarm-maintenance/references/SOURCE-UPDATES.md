@@ -6,7 +6,7 @@ boundary. Obtain approval for the target installation and restart before acting.
 
 ## Prerequisites
 
-Check these before the first C# source build:
+Check these before building a source installation:
 
 - A .NET SDK that supports `net10.0`, and the ASP.NET Core 10 runtime.
   Check the selected tools with `dotnet --version`, `dotnet --list-sdks` and
@@ -20,9 +20,10 @@ Check these before the first C# source build:
 - Access to the locked npm/NuGet dependencies and the pinned Monty artifact, or
   already provisioned compatible caches. The scripts do not install host tools.
 
-Linux x64 and Windows x64 are the source candidate targets. A Linux build or
-Windows cross-publish does not establish Windows runtime qualification; macOS
-Main is not qualified by this workflow.
+Linux x64 and Windows x64 are the source installation targets; macOS Main is
+not supported by this workflow. For an existing TypeScript Main installation,
+first read the [migration guide](https://foxwarm.550w.host/docs/typescript-migration/).
+Optional Vector search has additional [native platform requirements](https://foxwarm.550w.host/docs/history-search/#enable-semantic-search).
 
 ## Pull and restart
 

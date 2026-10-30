@@ -4,14 +4,6 @@ Foxwarm is a self-hosted runtime for AI agents. It combines persistent conversat
 
 [Website](https://foxwarm.550w.host/) · [Documentation](https://foxwarm.550w.host/docs/)
 
-## Managed Main source candidate
-
-This branch selects the .NET Main host at the existing package/directory, npm, tmux and Windows background entries. `npm run build` prepares its complete resources; source builds need a net10.0-capable .NET SDK and the ASP.NET Core 10 runtime in addition to Node/npm. The public `foxwarm` bin still shows help with no arguments and retains its one-shot `model` and `archive` commands. Missing managed output never falls back to TypeScript.
-
-To update an existing source installation, pull the intended revision and run `./scripts/restart.sh` on Linux. Builds use separate `build/` staging and retained `runtime/` outputs; a failed build leaves the old Main running. See [source updates and restarts](skills/foxwarm-maintenance/references/SOURCE-UPDATES.md) for prerequisites, Windows commands, data preservation and cleanup.
-
-This is a source-entry candidate, not a public release or live-installation cutover. The root Docker recipe and both Compose consumers also select managed Main; default tests run the managed suite and maintained component tests, while retired TypeScript Main tests have an explicit `test:reference` entry. The real-application harness runs managed Main, and CI includes an owned complete-publish proof. Main TUI is not implemented (`--tui` fails clearly); Session Worker hosting and managed ToolScript/controllers remain outside this candidate. Retained TypeScript source and other-platform Node clients remain available. See [build, publish and runtime prerequisites](dotnet/README.md#build-publish-and-public-cli) for the Linux x64 / Windows x64 boundary; macOS Main is not qualified.
-
 ## What you can do
 
 - Work with agents in the WebUI, with chat, files, code, and terminals in one place.
@@ -22,7 +14,12 @@ This is a source-entry candidate, not a public release or live-installation cuto
 
 ## Get started
 
-Install Git, Node.js 20.19+ (20.x) or 22.12+ with npm, a net10.0-capable .NET SDK, and the ASP.NET Core 10 runtime. Linux x64 (including x64 WSL) also needs tmux, Python 3, make, GCC/G++ and libc/libutil development files. Windows x64 needs Python 3 for a fresh pinned native-worker build. Installers diagnose prerequisites; they do not install host toolchains.
+Install Foxwarm on **Linux x64** (including x64 WSL) or **Windows x64**. The source installer needs Git, Node.js 20.19+ (20.x) or 22.12+ with npm, a .NET SDK supporting `net10.0`, and the ASP.NET Core 10 runtime.
+
+- **Linux:** also install tmux, Python 3, make, GCC/G++, and libc/libutil development files.
+- **Windows:** also install Python 3 for the native worker build.
+
+The installer checks these prerequisites but does not install system packages. For a container installation, use [Docker Compose](https://foxwarm.550w.host/docs/installing/#docker-compose).
 
 ### Linux x64 or x64 WSL
 
@@ -36,11 +33,13 @@ curl -fsSL https://foxwarm.550w.host/install-foxwarm.sh | bash
 irm https://foxwarm.550w.host/install-foxwarm.ps1 | iex
 ```
 
-The installer creates `./foxwarm` for the program and `./foxwarm-data` for runtime data, builds the app, and starts it. Open the WebUI URL printed by the installer and configure your provider in **Setup → Models** to start chatting.
+For a new installation, the installer creates `./foxwarm` for the program and `./foxwarm-data` for data, builds the app, and starts it. The program's `data_dir` file remembers that location for later starts and installer reruns. Open the printed WebUI URL and configure your provider in **Setup → Models** to start chatting.
 
 See the [installation guide](https://foxwarm.550w.host/docs/installing/) for prerequisites, custom paths, manual installation, and startup commands. The installer scripts are available to inspect: [Bash](install-foxwarm.sh) and [PowerShell](install-foxwarm.ps1).
 
-Keep access tokens private. Back up the whole data directory; see [data, upgrades, and backups](https://foxwarm.550w.host/docs/data-upgrades-backups/).
+Keep access tokens private. Back up the whole data directory; see [data, updates, and backups](https://foxwarm.550w.host/docs/data-upgrades-backups/). Optional [semantic history search](https://foxwarm.550w.host/docs/history-search/#enable-semantic-search) has additional platform and embedding-service requirements.
+
+Existing TypeScript installations should follow the [migration guide](https://foxwarm.550w.host/docs/typescript-migration/).
 
 ## Model defaults
 
@@ -84,7 +83,7 @@ Start with the [documentation site](https://foxwarm.550w.host/docs/) for install
 
 ## Docker
 
-The source-built Linux x64 candidate uses Node 24 on Debian 13, Microsoft's ASP.NET Core 10 runtime and distro Chromium. Node and the existing operator tools remain available for JavaScript and stdio MCP consumers. Runtime data stays in `/data`; the default listener is port 3001. Optional Code workbench assets and HEIC prerequisites are not bundled. See [Docker build, data and qualification boundaries](test/README.md) before replacing an installation.
+The Linux x64 image builds Foxwarm from source and includes the ASP.NET Core 10 runtime, Node.js and Chromium. Data is mounted at `/data`; the default port is 3001. See the [Docker Compose installation steps](https://foxwarm.550w.host/docs/installing/#docker-compose). Optional Code workbench and HEIC/HEIF support need additional assets.
 
 ## Development
 
