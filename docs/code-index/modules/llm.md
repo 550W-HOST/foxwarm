@@ -10,6 +10,7 @@ LLM owns model/provider configuration consumption, snapshot consumption, provide
 - [src-conditional-memory](../units/src-conditional-memory.md) — pure conditional memory-source filtering and current-model snapshot header helpers.
 - [src-llm-request-journal](../units/src-llm-request-journal.md) — content-addressed canonical request inputs, bounded manifests, attempts, and reconstruction.
 - [src-model-routing](../units/src-model-routing.md) — virtual target selection and process-local failover health.
+- [src-llm-search-sources](../units/src-llm-search-sources.md) — hosted search-source retention and bounded cross-request URL evidence.
 - [src-llm-openai](../units/src-llm-openai.md) — OpenAI Responses/Chat Completions conversion and stream collectors.
 - [src-llm-openai-images](../units/src-llm-openai-images.md) — hosted Responses `image_generation` tool declaration, provider image validation, blob persistence, and same-model replay metadata.
 - [src-mcp-client](../units/src-mcp-client.md) — MCP config, connection lifecycle, discovery, invocation, and result normalization.

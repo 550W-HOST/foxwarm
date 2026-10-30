@@ -2,7 +2,7 @@
 
 See [artifact rendering](./webui-artifacts.md) for revision-pinned content projected outside Activity.
 
-Files: packages/webui/src/components/ChatTimeline.tsx, packages/webui/test/messageCardPadding.e2e.mjs, packages/webui/test/messageWidth.e2e.mjs, packages/webui/test/timelineOverflowBoundary.e2e.mjs, packages/webui/test/streamMarkdownSelection.e2e.mjs, packages/webui/test/imageGenerationTimeline.e2e.mjs
+Files: packages/webui/src/components/ChatTimeline.tsx, packages/webui/test/webSearchCitations.e2e.mjs, packages/webui/test/messageCardPadding.e2e.mjs, packages/webui/test/messageWidth.e2e.mjs, packages/webui/test/timelineOverflowBoundary.e2e.mjs, packages/webui/test/streamMarkdownSelection.e2e.mjs, packages/webui/test/imageGenerationTimeline.e2e.mjs
 Secondary files: packages/webui/test/conversationPresentationPreview.e2e.mjs, packages/webui/src/components/Chat.tsx, packages/webui/src/components/ToolTimelineItems.tsx, packages/webui/src/components/ImageParts.tsx, packages/webui/src/chatViewportState.ts, packages/webui/src/index.css
 
 ## Purpose
@@ -60,6 +60,8 @@ Row derivation, timing, and thread-card families are documented in [webui-timeli
 - `./ModelThreadCard` — shared Reasoning/Web Search thread-card chrome; see [webui-timeline-thread-cards](./webui-timeline-thread-cards.md).
 
 ## Behavior
+
+- `AssistantTextCard` passes each Markdown fragment's original text-part offset and annotations to the citation renderer; commit-card splitting does not rebase provider offsets. Sources lists remain deduplicated annotation URLs. Raw and copy use the unchanged original text, and communication/user/tool surfaces do not enable assistant citation parsing. Native coverage in `webSearchCitations.e2e.mjs` checks sanitization, exact span/scoping, literal surfaces, source disclosure, and streaming artifact/selection identity. See [hosted-search citation integrity](../threads/web-search-citations.md#d-hosted-search-citation-integrity).
 
 Conversation activities retain their mounted identity through overlapping technical-part identities when an earlier page changes the canonical first row. Canonical row keys still own Search, while the mounted identity owns process/nested-tool disclosures. Top-level surfaces expose their original source start independently of scroll-anchor ownership, and process markers also expose the closing source extent. Chat uses these markers to protect its viewport and 500px buffer on each side, including folded runs and later body parts, without adding duplicate scroll anchors.
 

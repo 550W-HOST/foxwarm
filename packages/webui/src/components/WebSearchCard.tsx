@@ -26,6 +26,16 @@ const WebSearchCard = memo(function WebSearchCard({ action }: { action: WebSearc
         ) : (
           <div className="break-words">{action.query}</div>
         )}
+        {!!action.sources?.length && (
+          <div className="mt-2 flex min-w-0 flex-col items-start gap-1 text-xs">
+            <span className="font-semibold">Search sources:</span>
+            {action.sources.map(source => (
+              <a key={source.url} data-web-search-source href={source.url} title={source.title} target="_blank" rel="noopener noreferrer" className="max-w-full whitespace-normal [overflow-wrap:anywhere] text-fw-accent underline">
+                {source.title}
+              </a>
+            ))}
+          </div>
+        )}
       </div>
     )
   }, [action])

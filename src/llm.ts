@@ -11,6 +11,7 @@ import { StringDecoder } from 'string_decoder';
 import zlib from 'zlib';
 import * as tools from './tools';
 import { logger } from './common';
+import { HOSTED_SEARCH_SOURCES_INCLUDE, projectHostedSearchEvidence } from './llmSearchSources';
 import { EffectiveRequestSelection, MessagePart, AnthropicContentBlock, Message, AnthropicMessage, Session, ChatResult, TokenUsage, ToolDefinition, ModelStreamPart, ModelStreamPartDelta, ModelStreamToolCall } from './types';
 import { clearModelStreamDraft, resetModelStreamDraft, updateModelStreamDraft } from './modelStreamDraft';
 import { LOGS_DIR, resolveModelConfig, ModelConfigEntry, ModelsConfig, MAX_OUTPUT, getModelIdForMetadata, isVirtualModelConfigEntry, normalizeOpenAIWebSearchConfig, NormalizedOpenAIWebSearchConfig, NormalizedOpenAIImageGenerationConfig, ModelEffort, MODEL_EFFORTS, getConcreteModelEffortConfig, PROVIDER_IMAGE_OUTPUT_FORMAT } from './config';
@@ -1087,7 +1088,9 @@ function stripRequestDisplayMeta(contents: Message[]): Message[] {
 function prepareHistoryForConcreteModel(contents: Message[], destinationModelId: string): Message[] {
     const prepared: Message[] = [];
 
-    for (const original of contents) {
+    // Source URLs are portable data; extract them before model-scoped native
+    // metadata is removed. This projection is never written to Session history.
+    for (const original of projectHostedSearchEvidence(contents)) {
         const sourceModelId = getHistoricalConcreteModelId(original);
         const { __meta: _internalMeta, ...withoutInternalMeta } = original;
         if (!sourceModelId || sourceModelId === destinationModelId) {
@@ -2013,6 +2016,14 @@ function buildConcreteRequestPlan(options: {
         throw new Error(`Model \`${modelKey}\` extraFields.stream must be true or false for the anthropic providerType.`);
     }
     applyFirstClassEffort(data, providerType, effectiveEffort);
+    // Merge after extraFields and effort normalization, preserving custom
+    // includes and encrypted reasoning. Inspect the final tool declaration.
+    if (useOpenAIResponsesApi && Array.isArray(data.tools)
+        && data.tools.some((tool: any) => tool?.type === 'web_search' || tool?.type === 'web_search_preview')) {
+        const include = Array.isArray(data.include) ? [...data.include] : [];
+        if (!include.includes(HOSTED_SEARCH_SOURCES_INCLUDE)) include.push(HOSTED_SEARCH_SOURCES_INCLUDE);
+        data.include = include;
+    }
     if (useOpenAIResponsesWs) data.store = false;
 
     const sanitizedRequestPayload = sanitizeProviderRequestPayload(data);
@@ -2414,6 +2425,11 @@ function createResponsesPrefixCommitLane(args: {
             const next = completed.get(cursor);
             if ((next.status && next.status !== 'completed')
                 || !['reasoning', 'message', 'image_generation_call', 'web_search_call'].includes(next.type)) break;
+            // Search sources can first arrive in response.completed. Keep this
+            // suffix uncommitted until final merging rather than freezing an
+            // incomplete immutable search item in canonical history. Transient
+            // commentary still streams normally while canonical commit waits.
+            if (next.type === 'web_search_call') break;
             if (next.type === 'message' && next.phase !== 'commentary') break;
             if (next.type === 'message' && next.role !== 'assistant') break;
             if (next.type === 'message' && next.content?.some((part: any) => part?.type !== 'output_text')) break;
@@ -2904,14 +2920,16 @@ async function requestLlmOnceInternal(options: RequestLlmOnceOptions & {
                                     || !!parseFunctionCallArgs(item.arguments).argsParseError
                                 )
                         ));
-                    // A response that produced a hosted image cannot reuse the
-                    // WebSocket chain: the finalizer projects the committed
-                    // message without the hydrated native image data, so the
-                    // next turn must send the full local history instead.
-                    const responseHasGeneratedImages = Array.isArray(resp?.output)
-                        && resp.output.some((item: any) => isCompletedImageGenerationItem(item));
+                    // Generated images need hydrated bytes on the next request.
+                    // Hosted search also adds local source-evidence text that the
+                    // provider did not emit. Never fingerprint that synthetic
+                    // text as already cached output: a fresh full replay must
+                    // deliver it before ordinary exact-prefix reuse can resume.
+                    const responseNeedsFullReplay = Array.isArray(resp?.output)
+                        && resp.output.some((item: any) => isCompletedImageGenerationItem(item)
+                            || item?.type === 'web_search_call');
                     attemptHistoryAppendFinalizer = outcome => {
-                        if (!outcome.appended || unsafeReplayProjection || responseHasGeneratedImages) {
+                        if (!outcome.appended || unsafeReplayProjection || responseNeedsFullReplay) {
                             pending.finalize(false);
                             return;
                         }

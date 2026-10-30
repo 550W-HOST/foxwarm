@@ -32,9 +32,13 @@ export interface SessionSearchMatch extends SearchField {
 }
 
 // Rendered Markdown text, not Markdown syntax or the source of non-text special blocks.
-const htmlText = (html: string): string => new DOMParser().parseFromString(html, 'text/html').body.textContent || ''
-const markdownText = (text: string, assistant: boolean): string => (
-  (assistant ? renderAssistantMarkdownSegments(text, { enabled: true }) : renderMarkdownSegments(text))
+const htmlText = (html: string): string => {
+  const body = new DOMParser().parseFromString(html, 'text/html').body
+  body.querySelectorAll('[data-search-exclude]').forEach(element => element.remove())
+  return body.textContent || ''
+}
+const markdownText = (text: string, assistant: boolean, citations = true): string => (
+  (assistant ? renderAssistantMarkdownSegments(text, { enabled: true }, citations ? undefined : false) : renderMarkdownSegments(text))
     .map(segment => segment.kind === 'html' ? htmlText(segment.html) : '\u0000')
     .join('\u0000')
 )
@@ -85,7 +89,7 @@ export function projectSessionSearchFields(messages: Message[], timelineView: Ti
     const add = (surface: SearchSurface, partIndex: number, text: string, toolIndex?: number, responseIndex?: number, pastedIndex?: number) => {
       if (text.trim()) fields.push({ rowKey, groupKey, sourceIndex, groupStartIndex: groupKey ? groupStarts.get(groupKey) : undefined, surface, partIndex, ...(toolIndex !== undefined ? { toolIndex } : {}), ...(responseIndex !== undefined ? { responseIndex } : {}), ...(pastedIndex !== undefined ? { pastedIndex } : {}), text })
     }
-    if (row.communication) { add('communication', 0, markdownText(row.communication.message, true)); continue }
+    if (row.communication) { add('communication', 0, markdownText(row.communication.message, true, false)); continue }
     const notice = getSessionNotice(msg)
     if (notice) { add('system', 0, [notice.title, notice.summary, notice.details || ''].join('\u0000')); continue }
     if (row.systemLikeMessage) {

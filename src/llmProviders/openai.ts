@@ -1,5 +1,6 @@
 import { StringDecoder } from 'string_decoder';
 import { logger } from '../common';
+import { mergeHostedSearchAction } from '../llmSearchSources';
 import { Message, MessagePart, ModelStreamPart, OpenAIResponsesContent } from '../types';
 import { stringifyFunctionCallArgs } from '../toolCallArgs';
 import { formatToolResponsePayload } from '../../packages/shared/dist/toolResponseFormatting';
@@ -156,6 +157,10 @@ function mergeResponseOutputItem(existing: any, incoming: any): any {
         ...existing,
         ...incoming,
     };
+
+    if (merged.type === 'web_search_call') {
+        merged.action = mergeHostedSearchAction(existing.action, incoming.action);
+    }
 
     if (Array.isArray(existing.content) || Array.isArray(incoming.content)) {
         const maxLength = Math.max(existing.content?.length || 0, incoming.content?.length || 0);
@@ -947,7 +952,16 @@ export async function collectOpenAIResponsesStream(
                 // attach the final message to an earlier search call and
                 // duplicate the text. The stream's indexed order is the
                 // authoritative sequence whenever alignment is unproven.
-                return streamedEntries.map(entry => entry.item);
+                // Source enrichment is safe without positional alignment only
+                // for an unambiguous same-ID search call. Never infer reference
+                // numbers from output positions or attach another call's URLs.
+                return streamedEntries.map(entry => {
+                    if (entry.item?.type !== 'web_search_call' || !entry.item.id) return entry.item;
+                    const matches = completedItems.filter((item: any) => item?.type === 'web_search_call' && item.id === entry.item.id);
+                    const streamedMatches = streamedEntries.filter(candidate => candidate.item?.id === entry.item.id);
+                    return matches.length === 1 && streamedMatches.length === 1
+                        ? mergeResponseOutputItem(entry.item, matches[0]) : entry.item;
+                });
             }
 
             return streamedEntries.map((entry, index) => {
