@@ -81,7 +81,7 @@ try {
   await until(() => activePolls.size > 0, 'an actual outstanding client poll')
   blockPolls = true; for (const response of activePolls) response.destroy()
   await sleep(7000); blockPolls = false
-  await until(() => shell.output.includes('polling resumed'), 'ordinary polling resumes', 60000)
+  await until(() => shell.output.includes('Connection to Main restored'), 'ordinary polling resumes', 60000)
   assert.equal(registrations.length, before); assert(await online(value.nodeId))
   // Restart actual Main processes, preserving only normal persisted data.
   registerFailures = 2; dropRegistrations = 1
