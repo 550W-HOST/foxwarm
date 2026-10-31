@@ -30,13 +30,13 @@ Also install **tmux, Python 3, make, GCC/G++, and libc/libutil development files
 Run this from the directory where you want the program and data directories created:
 
 ```bash
-curl -fsSL https://foxwarm.550w.host/install-foxwarm.sh | bash
+curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
 ```
 
 To choose different directories:
 
 ```bash
-curl -fsSL https://foxwarm.550w.host/install-foxwarm.sh | bash -s -- \
+curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash -s -- \
   --dir "$PWD/foxwarm" \
   --data-dir "$PWD/foxwarm-data"
 ```
@@ -50,7 +50,7 @@ Also install **Python 3** for the native worker build. Windows does not require 
 Open PowerShell in the directory where you want Foxwarm installed:
 
 ```powershell
-irm https://foxwarm.550w.host/install-foxwarm.ps1 | iex
+irm https://foxwarm.net/install-foxwarm.ps1 | iex
 ```
 
 The installer starts Foxwarm in the background and opens the WebUI URL when available.
@@ -58,7 +58,7 @@ The installer starts Foxwarm in the background and opens the WebUI URL when avai
 To inspect the script or pass installation paths, download it first:
 
 ```powershell
-Invoke-WebRequest https://foxwarm.550w.host/install-foxwarm.ps1 -OutFile install-foxwarm.ps1
+Invoke-WebRequest https://foxwarm.net/install-foxwarm.ps1 -OutFile install-foxwarm.ps1
 .\install-foxwarm.ps1 -InstallDir .\foxwarm -DataDir .\foxwarm-data
 ```
 

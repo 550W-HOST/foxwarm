@@ -8,7 +8,7 @@ const websiteRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const repositoryRoot = path.resolve(websiteRoot, '..');
 const distRoot = path.join(websiteRoot, 'dist');
 const publicRoot = path.join(websiteRoot, 'public');
-const siteOrigin = 'https://foxwarm.550w.host';
+const siteOrigin = 'https://foxwarm.net';
 
 const requiredRoutes = [
   '/',

@@ -9,7 +9,7 @@ Builds and validates the public Foxwarm project website and focused user documen
 
 ## Behavior
 
-- `astro.config.mjs` fixes the canonical origin at `https://foxwarm.550w.host`, enables static output and sitemap generation, and configures Starlight routes, navigation, search, branding, edit links, and documentation CSS.
+- `astro.config.mjs` fixes the canonical origin at `https://foxwarm.net`, enables static output and sitemap generation, and configures Starlight routes, navigation, search, branding, edit links, and documentation CSS.
 - `src/pages/index.astro` provides a custom accessible homepage with install/docs/source entry points, restrained light/dark styling, and a clearly labeled system illustration rather than a simulated product screenshot.
 - `src/content/docs/docs/` owns user guides for installation, model setup/options, Agents and Sessions, compaction/history search, tools/Skills/MCP, inbound MCP, Nodes, Channels, backups/upgrades, and FAQ. The `/docs/` article and Starlight sidebar link these guides; detailed implementation references remain in the repository.
 - The tools/Skills and inbound MCP guides navigate to the bundled access-control, agent-management, and mcp-management workflows. The inbound guide distinguishes separately permitted history reads from explicit online text replies; detailed reply setup remains in the MCP skill reference.

@@ -31,3 +31,13 @@ RUN file /publish/Foxwarm.CliNode \
     && test ! -e /publish/libfoxwarm-pty.so
 FROM scratch AS artifact
 COPY --from=build /publish/ /
+
+
+# Separate redistribution target; the qualified compiler/linker invocation above
+# and the raw artifact target remain unchanged.
+FROM build AS distribution-build
+ARG SDK_IMAGE=mcr.microsoft.com/dotnet/sdk:10.0.401-alpine3.23
+COPY scripts/native-aot/collect-notices.sh scripts/native-aot/
+RUN sh scripts/native-aot/collect-notices.sh /distribution
+FROM scratch AS distribution
+COPY --from=distribution-build /distribution/ /

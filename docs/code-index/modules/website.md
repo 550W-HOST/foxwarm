@@ -6,11 +6,12 @@ Owns the static public project homepage, user documentation, root installer down
 
 ## Units
 
+- [Native CLI distribution](../units/native-cli-distribution.md) — independent protocol-keyed static downloads and release workflow.
 - [website site](../units/website-site.md) — Astro configuration, homepage, Starlight content, styling, copied public assets, validation, and Pages workflow.
 
 ## Public interfaces
 
-- `https://foxwarm.550w.host/` — project homepage.
+- `https://foxwarm.net/` — project homepage.
 - `/docs/` — English user documentation with the standard Starlight article layout and navigation sidebar.
 - `/install-foxwarm.sh` and `/install-foxwarm.ps1` — byte-exact build copies of the repository-root installers.
 - `npm ci`, `npm run build`, and `npm run check` from `website/` — standalone dependency, production-build, and validation boundaries.
@@ -33,4 +34,4 @@ Owns the static public project homepage, user documentation, root installer down
 
 ## Integration notes
 
-GitHub repository Pages settings and custom-domain configuration are external administrative prerequisites. The workflow assumes Pages is configured for GitHub Actions and does not attempt to create or administer the Pages site.
+GitHub repository Pages settings, custom-domain configuration, Cloudflare proxy/download routing, and old-domain redirects preserving paths and queries are external administrative prerequisites. The canonical domain is `foxwarm.net`; Pages remains the documentation origin and the independent downloads Worker owns only `/downloads/*`. The workflow assumes Pages is configured for GitHub Actions and does not attempt to create or administer the Pages site.

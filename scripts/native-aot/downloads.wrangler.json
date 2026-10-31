@@ -1,0 +1,17 @@
+{
+  "name": "foxwarm-native-downloads",
+  "compatibility_date": "2026-10-21",
+  "workers_dev": false,
+  "preview_urls": true,
+  "routes": [
+    {
+      "pattern": "foxwarm.net/downloads/*",
+      "zone_name": "foxwarm.net"
+    }
+  ],
+  "assets": {
+    "directory": "../../.temp/native-cli-downloads/assets",
+    "html_handling": "none",
+    "not_found_handling": "none"
+  }
+}
