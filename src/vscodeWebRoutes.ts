@@ -672,9 +672,32 @@ function buildMasterFoxwarmUri(fullPath: string): string {
   return `foxwarm://node+master${encodedPath}`;
 }
 
-function ensureFoxwarmWorkspace(initialFolderUri: string): string {
+function ensureFoxwarmWorkspace(initialFolderUri: string, workspaceId?: string): string {
   toFoxwarmFolderUriComponents(initialFolderUri);
-  const workspacePath = DEFAULT_VSCODE_WEB_WORKSPACE_PATH;
+  let workspacePath = DEFAULT_VSCODE_WEB_WORKSPACE_PATH;
+  if (workspaceId !== undefined) {
+    if (!/^[A-Za-z0-9_-]{1,100}$/.test(workspaceId)) {
+      throw new VscodeWebFsError('InvalidPath', 'Invalid project workspace identifier.');
+    }
+    const projectDirectory = path.join(path.dirname(DEFAULT_VSCODE_WEB_WORKSPACE_PATH), 'project-workspaces');
+    fs.ensureDirSync(projectDirectory, { mode: 0o700 });
+    workspacePath = path.join(projectDirectory, `${workspaceId}.code-workspace`);
+    const targetPath = path.join(projectDirectory, `${workspaceId}.target.json`);
+    try {
+      fs.writeFileSync(targetPath, JSON.stringify({ initialFolderUri }), { flag: 'wx', mode: 0o600 });
+    } catch (error: any) {
+      if (error?.code !== 'EEXIST') throw error;
+    }
+    let savedTarget: unknown;
+    try {
+      savedTarget = fs.readJsonSync(targetPath)?.initialFolderUri;
+    } catch {
+      throw new VscodeWebFsError('InvalidPath', 'Project workspace target cannot be read.');
+    }
+    if (savedTarget !== initialFolderUri) {
+      throw new VscodeWebFsError('InvalidPath', 'Project workspace already belongs to a different folder.');
+    }
+  }
   if (!fs.existsSync(workspacePath)) {
     fs.outputJsonSync(workspacePath, {
       folders: [{ uri: initialFolderUri }],
@@ -721,7 +744,15 @@ function escapeHtmlText(value: string): string {
 function buildWorkbenchConfiguration(req: express.Request) {
   const origin = getRequestOrigin(req);
   const embeddedWorkspace = getSingleQueryValue(req.query.embedded) === 'true';
-  const requestedFolderUri = getSingleQueryValue(embeddedWorkspace ? req.query.initialFolderUri : req.query.folderUri) ?? getDefaultFolderUri();
+  const workspaceId = getSingleQueryValue(req.query.workspaceId);
+  if (workspaceId !== undefined && !embeddedWorkspace) {
+    throw new VscodeWebFsError('InvalidPath', 'A project workspace requires embedded mode.');
+  }
+  const requestedFolder = getSingleQueryValue(embeddedWorkspace ? req.query.initialFolderUri : req.query.folderUri);
+  if (workspaceId !== undefined && !requestedFolder) {
+    throw new VscodeWebFsError('InvalidPath', 'A project workspace requires an explicit folder.');
+  }
+  const requestedFolderUri = requestedFolder ?? getDefaultFolderUri();
   const staticBasePath = getExternalPath(req, VSCODE_WEB_STATIC_ROUTE);
   const fsExtensionPath = getExternalPath(req, VSCODE_WEB_FS_EXTENSION_ROUTE);
   const terminalExtensionPath = getExternalPath(req, VSCODE_WEB_TERMINAL_EXTENSION_ROUTE);
@@ -752,7 +783,7 @@ function buildWorkbenchConfiguration(req: express.Request) {
     webviewOriginTemplate,
     configuration: {
       ...(embeddedWorkspace
-        ? { workspaceUri: toUriComponents(ensureFoxwarmWorkspace(requestedFolderUri)) }
+        ? { workspaceUri: toUriComponents(ensureFoxwarmWorkspace(requestedFolderUri, workspaceId)) }
         : { folderUri: toFoxwarmFolderUriComponents(requestedFolderUri) }),
       callbackRoute,
       productConfiguration: {

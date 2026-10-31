@@ -668,6 +668,69 @@ public sealed class CodeRoutesTests
         Assert.Equal("{broken workspace", await File.ReadAllTextAsync(workspace));
     }
 
+    [Fact]
+    public async Task Project_workspaces_keep_independent_descriptors_and_reject_rebinding()
+    {
+        await using var f = await Fixture.Create();
+        foreach (
+            var file in new[]
+            {
+                "out/nls.messages.js",
+                "out/vs/workbench/workbench.web.main.internal.css",
+                "out/vs/workbench/workbench.web.main.internal.js",
+            }
+        )
+        {
+            var target = Path.Combine(f.Assets, file);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            await File.WriteAllTextAsync(target, "bootstrap fixture");
+        }
+        const string folder = "foxwarm://node+project-peer/srv/project";
+        string Url(string id, string root = folder) =>
+            "/vscode-web/?embedded=true&workspaceId="
+            + Uri.EscapeDataString(id)
+            + "&initialFolderUri="
+            + Uri.EscapeDataString(root);
+        foreach (var id in new[] { "work-one", "work-two" })
+        {
+            var html = await f.Client.GetStringAsync(Url(id));
+            Assert.Contains("project-workspaces/" + id + ".code-workspace", html);
+            var target = Path.Combine(
+                f.Data,
+                "state/vscode-web/project-workspaces",
+                id + ".code-workspace"
+            );
+            var workspace = JsonNode.Parse(await File.ReadAllTextAsync(target))!;
+            Assert.Equal(folder, workspace["folders"]![0]!["uri"]!.ToString());
+            workspace["settings"]!["editor.fontSize"] = id == "work-one" ? 15 : 19;
+            await File.WriteAllTextAsync(target, workspace.ToJsonString());
+            await f.Client.GetStringAsync(Url(id));
+            Assert.Equal(
+                id == "work-one" ? 15 : 19,
+                JsonNode.Parse(await File.ReadAllTextAsync(target))!["settings"]![
+                    "editor.fontSize"
+                ]!.GetValue<int>()
+            );
+        }
+        Assert.False(File.Exists(Path.Combine(f.Data, "state/vscode-web/foxwarm.code-workspace")));
+        Assert.Equal(
+            HttpStatusCode.BadRequest,
+            (await f.Client.GetAsync(Url("work-one", "foxwarm://node+master/other"))).StatusCode
+        );
+        Assert.Equal(
+            HttpStatusCode.BadRequest,
+            (await f.Client.GetAsync(Url("../escape"))).StatusCode
+        );
+        Assert.Equal(
+            HttpStatusCode.BadRequest,
+            (await f.Client.GetAsync("/vscode-web/?workspaceId=work-one")).StatusCode
+        );
+        Assert.Equal(
+            HttpStatusCode.BadRequest,
+            (await f.Client.GetAsync("/vscode-web/?embedded=true&workspaceId=work-one")).StatusCode
+        );
+    }
+
     [Theory]
     [InlineData("hvt", "r2o", "e", "ao", "sha-256", true)]
     [InlineData("$origin9", "encode_2", "$items", "browser_7", "sha-256", true)]

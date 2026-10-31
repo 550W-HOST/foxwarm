@@ -19,6 +19,7 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 - Official workbench assets are optional and excluded from the main WebUI bundle, Git, and ordinary build.
 - Preferred resources use `foxwarm://node+<nodeId>/<absolute-posix-path>`.
 - Direct new-tab launches can open one folder. Embedded launches use a persistent `foxwarm.code-workspace`, so later folders append without replacing the iframe or losing editor/terminal state.
+- Project working sessions use a separate persistent workspace and iframe per working-session ID. The initial Node and folder are bound to that ID when first opened; subsequent requests with a different target fail rather than adding another Project's root. Hiding a working session retains its loaded iframe and editor state.
 - The filesystem extension exposes fixed commands for the authoritative master app and data roots. They add an exact normalized root to the current multi-root workspace, then open Explorer and reveal it; they never derive these roots from a session node or cwd.
 - A pinned MIT Red Hat YAML Web extension consumes the same static config schemas as Setup through a local contributor. Only the authoritative master app/models file URIs match.
 - Main WebUI presents the feature as **Code** while route/package identifiers remain `/vscode-web`.
@@ -83,6 +84,8 @@ Represent node identity in URI authority and retain the absolute slash-based pat
 **Derived integration design; adopted for [independent mounted/visible/running lifetimes](../behaviors/workbench-and-chat.md#mounted-visible-and-running-are-independent).** One workspace and a stable iframe preserve editor state through ordinary layout changes. Visibility admission and explicit Close implement the selected resource behavior, not arbitrary remount heuristics.
 
 Embedded Code uses one persistent multi-root workspace and an iframe that starts on first actual Code-tab visibility in an expanded pane of the displayed workbench surface, not merely because a restored or logically active Code tab exists. Once started, ordinary tab switching, hiding the workbench, and collapse of the owning pane preserve the same iframe and background workbench state. Collapse hides and pointer-disables the frame while its slot is unavailable, including when Code is an inactive tab; expansion reuses the existing frame. Explicit Code-tab close destroys the iframe and resets its bridge lifecycle so reopening creates a fresh frame. New folders/requests use a fixed bridge instead of reloading/replacing it.
+
+This singleton describes the classic workbench. Project working sessions instead use one persisted workspace file per working-session ID, preserving the Node and initial folder binding across reloads. The project editor is loaded only when first shown and kept mounted while hidden; separate working sessions never share the classic workspace file or iframe.
 
 ### D-code-fixed-remote-services
 

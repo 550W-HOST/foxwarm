@@ -45,3 +45,5 @@ Agent/knowledge/setup, file-delivery, wait, compact, authorization, settings, an
 `MainFileDeliveryTests` and the native nested-delivery test in `MainToolScriptTests` cover successful structured receipts, failure exclusion, destination identity and unchanged history/queue. The original-App continuous/download driver checks target filtering and native downloads; `mainHostNodeFiles.e2e.mjs` checks direct/nested receipt provenance and real staging through official CLI clients.
 
 `WaitDeclarationTests.cs` checks omission-equivalent empty placeholders through direct, unified and native ToolScript consumers, persisted effective declarations, source-free rejection, nonempty cardinality/identity checks, active and queued exec fallback behavior, schema cardinalities, and the separate legacy persisted-state validator.
+
+Project Agent tabs use `CreateNamedAsync` with an explicit initial Node and cwd before the first strict authority save; [managed Project workspaces](./dotnet-project-workspaces.md) owns membership and retry semantics. Existing creation callers omit the cwd and retain their current defaults.

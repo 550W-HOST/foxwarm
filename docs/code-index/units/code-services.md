@@ -28,6 +28,10 @@ Code workbench assets use `<resource-root>/packages/vscode-web/assets/vscode-web
 
 Direct launches without a folder request open the application root. Embedded launches retain selected `state/vscode-web/foxwarm.code-workspace`; persisted folders, explicit settings and malformed files keep their existing behavior. Managed webviews retain the same-public-origin process capability. Source retains its automatic hashed localhost origin and same-origin capability fallback elsewhere. No configured-origin, default-folder or workspace-path environment branch participates.
 
+## Project workspace identities
+
+An embedded bootstrap with `workspaceId` requires an explicit initial folder and a bounded filesystem-safe ID. It uses `state/vscode-web/project-workspaces/<id>.code-workspace` and a matching `.target.json` initial-folder binding, independently from the classic workspace. Reusing an ID with a different initial Node/folder rejects; ordinary settings/folders inside the descriptor retain the existing Code persistence behavior. The shared Project shell supplies its work-session ID, starts the iframe on first visibility and retains it across navigation. Closing the Code tab destroys that iframe; reopening the same work session reuses its persisted descriptor. The ID is browser workspace identity, not a new filesystem authorization boundary.
+
 ## Asset adaptation and version evidence
 
 The authenticated static route adapts only `out/vs/workbench/workbench.web.main.internal.js` from the installed optional asset directory. `PatchWorkbench` matches the Source-supported webview-origin hash helper and clipboard-probe bodies, capturing current generated identifiers rather than pinning minifier names. Only the first supported helper/probe is rewritten; changed shapes fail with an explicit unavailable response. The original asset file is not modified. Capability bootstrap/CSP rewriting, normal auth and deployment-relative URLs keep their existing owners.

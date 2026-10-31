@@ -25,6 +25,8 @@ Static WebUI and state-changing routes are served only after normal host auth; `
 
 `WebUiRealtime` carries Session lifecycle, message/tool stream, task, list/presentation, terminal, and Code events with revision/ack semantics. A streamed delta is not automatically active JSON history; the Session turn/save path determines when canonical history is committed. Browser replay/list units use bounded cursors and catalog projections, not Archive reconstruction. The separate continuous-history display route reads bounded effective original Archive pages under the ordinary snapshot upper bound; it never supplies active authority. See [history routes](../units/dotnet-webui-history-list.md).
 
+The optional shared Project shell uses [managed Project workspace routes and persistence](../units/dotnet-project-workspaces.md), including initial Session Node/cwd binding and workspace-specific Code storage.
+
 ## Current gaps
 
 The .NET channel has real routes for current tasks/terminal/files/images/history and connected external Node onboarding, ordinary tools, exec/completion, file consumers, Code/PTY and exec-only Shell HTTP. The connected Node contract belongs to [Remote Node compatibility](./remote-node-compatibility.md#net-external-node-integration); excluded hosting/lifecycle platforms are listed in [delivery scope](../overview.md#d-dotnet-delivery-scope). Vector-backed history/admission follows the configured [Vector owner](../units/vector-owner.md); disabled configuration remains explicitly `VECTOR_DISABLED`. Root package startup and delivery build select managed Main; the TypeScript Main remains an explicit reference build.
