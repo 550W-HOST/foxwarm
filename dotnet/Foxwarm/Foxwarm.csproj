@@ -54,11 +54,11 @@
       CopyToPublishDirectory="PreserveNewest"
     />
   </ItemGroup>
-  <!-- Native worker selection follows the requested target, never the build host. -->
+  <!-- Prefer an explicit target; source builds use the SDK's portable RID. -->
   <PropertyGroup>
     <MontyTargetRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</MontyTargetRid>
     <MontyTargetRid Condition="'$(MontyTargetRid)' == ''"
-      >$(NETCoreSdkRuntimeIdentifier)</MontyTargetRid>
+      >$(NETCoreSdkPortableRuntimeIdentifier)</MontyTargetRid>
     <MontyExecutable Condition="'$(MontyTargetRid)' == 'win-x64'">monty.exe</MontyExecutable>
     <MontyExecutable Condition="'$(MontyTargetRid)' == 'linux-x64'">monty</MontyExecutable>
     <MontyNativePrefix>$(MSBuildProjectDirectory)/obj/monty-0.0.19/$(MontyTargetRid)</MontyNativePrefix>
