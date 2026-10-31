@@ -77,9 +77,9 @@ test('only the current exact path, Session object and operation can read or edit
     await assert.rejects(file.read(file.filePath, { ...session }, operation), /Only the pending/);
     await assert.rejects(file.read(file.filePath, session, {}), /Only the pending/);
     for (const body of [`*** Delete File: ${file.filePath}`, `*** Add File: ${file.filePath}\n+oops`, `*** Update File: ${file.filePath}\n@@\n-[]\n+[1]\n*** Delete File: other`]) {
-      await assert.rejects(file.edit({ id: 'patch', name: 'apply_patch', args: { input: `*** Begin Patch\n${body}\n*** End Patch` } }, session, operation), /Repair patches/);
+      await assert.rejects(file.edit({ id: 'patch', name: 'edit', args: { apply_patch: `*** Begin Patch\n${body}\n*** End Patch` } }, session, operation), /Repair patches/);
     }
-    await file.edit({ id: 'patch', name: 'apply_patch', args: { input: `*** Begin Patch\n*** Update File: ${file.filePath}\n@@\n- {"replaceAsBlocks": [] }\n+ {"replaceAsBlocks": [1] }\n*** End Patch` } }, session, operation);
+    await file.edit({ id: 'patch', name: 'edit', args: { apply_patch: `*** Begin Patch\n*** Update File: ${file.filePath}\n@@\n- {"replaceAsBlocks": [] }\n+ {"replaceAsBlocks": [1] }\n*** End Patch` } }, session, operation);
     assert.match(await file.read(file.filePath, session, operation), /\[1\]/);
   } finally { await file.cleanup(); }
   assert.equal(await fs.pathExists(file.filePath), false);

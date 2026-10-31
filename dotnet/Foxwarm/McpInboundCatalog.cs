@@ -451,7 +451,8 @@ internal sealed class McpInboundCatalog
             .ThenBy(item => item.Name, comparer)
             .Take(limit);
         var tools = new JsonArray();
-        var size = 256;
+        const int maxTextBytes = 16 * 1024;
+        var size = 1024 + 2 * maxTextBytes;
         var schemaOmitted = false;
         foreach (var item in sorted)
         {
@@ -472,15 +473,27 @@ internal sealed class McpInboundCatalog
         }
         context.Require();
         var truncated = tools.Count < collected.Count;
+        var text = new StringBuilder(
+            $"Showing {tools.Count} of {collected.Count} matching available tools{(totalKnown ? "" : " from reachable servers")}{(truncated ? " (truncated)" : "")}."
+        );
+        var textBytes = Encoding.UTF8.GetByteCount(text.ToString()) + 256;
+        var textCount = 0;
+        foreach (var tool in tools.OfType<JsonObject>())
+        {
+            var line = "\n- " + tool["toolId"]!.ToJsonString();
+            var bytes = Encoding.UTF8.GetByteCount(line);
+            if (textBytes + bytes > maxTextBytes)
+                break;
+            text.Append(line);
+            textBytes += bytes;
+            textCount++;
+        }
+        if (textCount < tools.Count)
+            text.Append("\nAdditional returned tool IDs are available in structuredContent.tools.");
         return new JsonObject
         {
             ["content"] = new JsonArray(
-                new JsonObject
-                {
-                    ["type"] = "text",
-                    ["text"] =
-                        $"Showing {tools.Count} of {collected.Count} matching available tools{(totalKnown ? "" : " from reachable servers")}{(truncated ? " (truncated)" : "")}.",
-                }
+                new JsonObject { ["type"] = "text", ["text"] = text.ToString() }
             ),
             ["structuredContent"] = new JsonObject
             {

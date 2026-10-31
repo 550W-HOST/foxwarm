@@ -25,7 +25,7 @@ Durable JSON semantics are canonical in [src-utils](../units/src-utils.md#d-disk
 - `CURRENT_NODE_PROTOCOL_RANGE`, `resolveAdvertisedNodeProtocol()`, and `negotiateNodeProtocol()`.
 - shared low-level native file/process backends, file read/write/patch semantic core, and node transfer/path helpers.
 - `detectRasterImageMimeType` and its bounded header size — pure raster-signature recognition, with [content-based read classification](../units/shared-node-tools.md#d-file-read-raster-classification).
-- patch parsing/content-application functions plus per-operation change-count summaries; `applyExactReplacement` from `exactReplacement`.
+- patch parsing/content-application functions plus per-operation change-count summaries; `parseUnifiedEdit` and `applyTextEdits` from `unifiedEdit`.
 - `isSessionTurnIncomplete`, `isCompactCompletionMaintenanceMessage`, and their structural history input types from `sessionContinuation`.
 - `PersistentExecManager` and shared timeout/cwd resolution.
 - `truncateOutputForDisplay`.
@@ -36,7 +36,7 @@ Durable JSON semantics are canonical in [src-utils](../units/src-utils.md#d-disk
 
 ## Invariants
 
-- Patch matching normalizes LF internally and restores original line endings; exact edit replacement rejects multiple occurrences.
+- Patch matching normalizes LF internally and restores original line endings; exact edit replacement follows the [unified-edit contract](../units/shared-node-tools.md#d-unified-edit).
 - Master and node patch results share per-file add/update counts; the exact counting and display contract is canonical in [D-apply-patch-change-counts](../units/shared-apply-patch.md#d-apply-patch-change-counts).
 - Write refuses overwrite by default and creates parents only with `createDirs=true`; it attempts the real write before enriching parent errors.
 - Main and Node read/write/edit/patch wrappers reuse shared semantics; local target-specific system calls sit behind the small file/process contracts. Exact replacement is pure shared logic also used by compact repair. The implementation ownership rule is canonical in [D-shared-package-boundary](#d-shared-package-boundary).
@@ -77,7 +77,7 @@ When output overflows, shorten extreme individual lines and omit whole middle li
 
 Wrappers retain only environment-specific roots/namespaces, permission and ownership checks, transport, interactive approval, and result/presentation metadata. The patch parser/matcher is `packages/shared/src/applyPatch.ts`; the file patch executor is `packages/shared/src/fileToolCore.ts` over `FileOperations`, including provider-owned asynchronous parents. Main file/memory, native CLI, and primitive Provider calls use these same implementations. Compact repair reuses pure patch semantics while retaining its exact pending-file descriptor boundary.
 
-Pure exact replacement is owned by `packages/shared/src/exactReplacement.ts`; Main, Node, and compact repair import it directly. Current file composition is mapped by [D-dispatch-shared-file-semantics](../threads/tool-dispatch-node-execution.md#d-dispatch-shared-file-semantics).
+Pure exact edit validation, transformation and schema projection are owned by `packages/shared/src/unifiedEdit.ts`; Main, Node and compact repair import them directly. The retained `exactReplacement` helper keeps the separate memory-tool behavior. Current file composition is mapped by [D-dispatch-shared-file-semantics](../threads/tool-dispatch-node-execution.md#d-dispatch-shared-file-semantics).
 
 ## Canonical cross-module ownership
 

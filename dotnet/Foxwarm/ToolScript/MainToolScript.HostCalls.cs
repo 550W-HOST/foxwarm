@@ -160,7 +160,6 @@ internal sealed partial class MainToolScript
             "read",
             "write",
             "edit",
-            "apply_patch",
             "image_crop",
             "image_write_to_file",
             "send_file",

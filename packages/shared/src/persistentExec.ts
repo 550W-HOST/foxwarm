@@ -825,9 +825,11 @@ export class PersistentExecManager {
 
   async buildBackgroundTimeoutResult(entry: RunningExecEntry, timeoutSeconds: number = DEFAULT_EXEC_TIMEOUT_SECONDS, warning?: string, waitEndedBy?: string, files?: ExecOutputFiles): Promise<string> {
     const partialOutput = await this.readPartialLog(entry, files);
-    const fullNotice = waitEndedBy
-      ? `${waitEndedBy} ended this call's wait. The command was already started and was not killed; it may still be running in the background. Completion will be reported separately.`
-      : buildBackgroundTimeoutFullNotice(timeoutSeconds);
+    const fullNotice = entry.externalOwner
+      ? `${buildBackgroundTimeoutShortNotice(timeoutSeconds)} Switched to background. Use foxwarm_exec_result within this same MCP context to retrieve results.`
+      : waitEndedBy
+        ? `${waitEndedBy} ended this call's wait. The command was already started and was not killed; it may still be running in the background. Completion will be reported separately.`
+        : buildBackgroundTimeoutFullNotice(timeoutSeconds);
     const processTree = await this.buildLiveProcessTree(entry);
     const pidLine = entry.pid === undefined ? '' : `PID: ${entry.pid}\n`;
     const nodeLine = entry.nodeId && entry.nodeId !== 'master' ? `Node: \`${entry.nodeId}\`\n` : '';

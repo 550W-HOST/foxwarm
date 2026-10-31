@@ -12,7 +12,10 @@ internal sealed class McpInboundNodes(
     McpExternalAuthorization authorization
 )
 {
-    private static readonly string[] supported = ["read", "write", "edit", "apply_patch", "exec"];
+    private const string ExternalPathDescription =
+        "Path on this Node. Relative paths use this external connection's working directory when this Node is selected, otherwise the Node process working directory. Absolute and ~/ paths are accepted. Agent directories and $fw_agentdir/$fw_tmp path variables are unavailable.";
+
+    private static readonly string[] supported = ["read", "write", "edit", "exec"];
 
     private static IReadOnlyList<AuthorizationPath> Paths(string node, string name, JsonObject args)
     {
@@ -26,9 +29,24 @@ internal sealed class McpInboundNodes(
             Add("filePath", SessionWait.Text(args["filePath"]));
         if (name == "exec")
             Add("cwd", SessionWait.Text(args["cwd"]));
-        if (name == "apply_patch" && SessionWait.Text(args["input"]) is string input)
-            foreach (var operation in WorkspacePatch.Parse(input))
-                Add("input", operation.Path);
+        if (name == "edit" && args.ContainsKey("apply_patch"))
+        {
+            if (SessionWait.Text(args["apply_patch"]) is not string input)
+                throw new McpInboundSafeException(
+                    "apply_patch requires an input string. No call was sent."
+                );
+            try
+            {
+                foreach (var operation in WorkspacePatch.Parse(input))
+                    Add("apply_patch", operation.Path);
+            }
+            catch (Exception error) when (error is InvalidDataException)
+            {
+                throw new McpInboundSafeException(
+                    "Invalid apply_patch input. Check the patch envelope and file sections. No call was sent."
+                );
+            }
+        }
         return records;
     }
 
@@ -72,10 +90,24 @@ internal sealed class McpInboundNodes(
                     ["description"] = description[..Math.Min(description.Length, 2000)],
                 };
                 if (
-                    tool["parameters"] is JsonNode schema
+                    tool["parameters"] is JsonObject schema
                     && Encoding.UTF8.GetByteCount(schema.ToJsonString()) <= 16 * 1024
                 )
-                    descriptor["inputSchema"] = schema.DeepClone();
+                {
+                    var copy = (JsonObject)schema.DeepClone();
+                    copy["additionalProperties"] = false;
+                    var pathKey = name == "exec" ? "cwd" : "filePath";
+                    if (copy["properties"]?[pathKey] is JsonObject path)
+                        path["description"] = ExternalPathDescription;
+                    descriptor["inputSchema"] = copy;
+                }
+                if (name == "exec")
+                    descriptor["description"] =
+                        "Run a shell command on this Node using its process environment, not a login shell or an Agent environment. No Agent directory variables are injected. Output is saved to a command log and returned as a bounded preview. A command exceeding timeout continues in the background with an execId; timeout does not kill it. Use foxwarm_exec_result to retrieve results within this same MCP context. Selecting this Node preserves its connection-local working directory between calls; pass cwd to override it.";
+                else if (name == "read")
+                    descriptor["description"] =
+                        descriptor["description"]!.GetValue<string>()
+                        + " For full file bytes, GET <deployment-base>/api/vscode-web/fs/read-file?nodeId=<nodeId>&path=<absolute-path> with the same MCP Bearer token. This independent download rechecks read authorization without an MCP context; compatible remote CLI Nodes only, up to 50 MiB.";
                 result.Add(descriptor);
             }
         }
@@ -94,6 +126,29 @@ internal sealed class McpInboundNodes(
             throw new McpInboundSafeException(
                 "This Node capability is not available to external callers."
             );
+        string[] fields = name switch
+        {
+            "read" => ["filePath", "startLine", "endLine"],
+            "write" => ["filePath", "content", "overwrite", "createDirs"],
+            "edit" => ["filePath", "oldText", "newText", "replaceAll", "edits", "apply_patch"],
+            "exec" => ["command", "cwd", "timeout"],
+            _ => [],
+        };
+        if (args.Any(pair => !fields.Contains(pair.Key, StringComparer.Ordinal)))
+            throw new McpInboundSafeException(
+                $"Unsupported {name} arguments. Accepted fields: {string.Join(", ", fields)}.{(name == "exec" ? " timeout is measured in seconds." : "")} No call was sent."
+            );
+        if (name == "edit")
+        {
+            try
+            {
+                _ = UnifiedEdit.Parse(args);
+            }
+            catch (InvalidDataException error)
+            {
+                throw new McpInboundSafeException(error.Message);
+            }
+        }
         var permission = Permission(context, node, name, args);
         await authorization.RequireAsync(context, permission, token);
         if (

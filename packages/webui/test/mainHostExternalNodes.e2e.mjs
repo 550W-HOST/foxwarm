@@ -103,7 +103,7 @@ try {
   assert.equal(pair(state, 'select').nodeId, 'official-cli'); assert.equal(state.currentNode, 'official-cli'); assert.equal(state.cwd, undefined)
   assert.equal(await readFile(join(remote, 'agents/main/remote.txt'), 'utf8'), 'remote-one')
   assert(!await exists(join(fixture.work, 'remote.txt')))
-  state = await turn(actor, 'edit-patch-read', [call('edit', 'edit', { filePath: 'remote.txt', oldText: 'one', newText: 'two' }), call('patch', 'apply_patch', { input: '*** Begin Patch\n*** Update File: remote.txt\n@@\n-remote-two\n+remote-three\n*** End Patch' }), call('read', 'read', { filePath: 'remote.txt' })])
+  state = await turn(actor, 'edit-patch-read', [call('edit', 'edit', { filePath: 'remote.txt', oldText: 'one', newText: 'two' }), call('patch', 'edit', { apply_patch: '*** Begin Patch\n*** Update File: remote.txt\n@@\n-remote-two\n+remote-three\n*** End Patch' }), call('read', 'read', { filePath: 'remote.txt' })])
   assert(JSON.stringify(pair(state, 'read')).includes('remote-three'))
   assert.equal(await readFile(join(remote, 'agents/main/remote.txt'), 'utf8'), 'remote-three')
   state = await turn(actor, 'native', [call('native', 'run_script', { code: "call_tool('node:official-cli/write', {'filePath':'native.txt','content':'native-node'})\nreturn call_tool('read', {'filePath':'native.txt'})" })])

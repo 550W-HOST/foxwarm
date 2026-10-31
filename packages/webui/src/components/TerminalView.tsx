@@ -37,13 +37,15 @@ interface TerminalViewProps {
   initialNodeId?: string
   initialTerminalId?: string
   createMode?: 'new' | 'reuse'
+  /** Keep a restored tab attached to its original PTY; never silently replace it. */
+  requireExisting?: boolean
   onBack?: () => void
   onSessionsChanged?: () => void
   onTerminalReady?: (terminal: TerminalInfo) => void
   onTerminalClosed?: (terminalId: string) => void
 }
 
-export default function TerminalView({ initialCwd, initialNodeId, initialTerminalId, createMode = 'reuse', onBack, onSessionsChanged, onTerminalReady, onTerminalClosed }: TerminalViewProps) {
+export default function TerminalView({ initialCwd, initialNodeId, initialTerminalId, createMode = 'reuse', requireExisting = false, onBack, onSessionsChanged, onTerminalReady, onTerminalClosed }: TerminalViewProps) {
   const tabHeader = useWorkbenchTabHeader()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const xtermRef = useRef<Terminal | null>(null)
@@ -77,6 +79,10 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
   const requestedTargetRef = useRef(requestedTarget)
   const initialTerminalIdRef = useRef<string | undefined>(initialTerminalId)
   const createModeRef = useRef<'new' | 'reuse'>(createMode)
+  const requireExistingRef = useRef(requireExisting)
+  // A new Project terminal becomes a retained resource after its first ready
+  // event. Later reconnects must never silently spawn a replacement PTY.
+  if (requireExisting) requireExistingRef.current = true
 
   useEffect(() => {
     onSessionsChangedRef.current = onSessionsChanged
@@ -240,8 +246,17 @@ export default function TerminalView({ initialCwd, initialNodeId, initialTermina
           if (lookupRes.ok && lookupData.terminal) {
             // keep existing terminal
           } else {
+            if (requireExistingRef.current) {
+              throw new Error(lookupRes.status === 404
+                ? 'This terminal has ended. Create a new terminal to continue.'
+                : (lookupData.error || 'Could not restore this terminal.'))
+            }
             terminalId = null
           }
+        }
+
+        if (!terminalId && requireExistingRef.current) {
+          throw new Error('This terminal has ended. Create a new terminal to continue.')
         }
 
         if (!terminalId && createModeRef.current !== 'new') {

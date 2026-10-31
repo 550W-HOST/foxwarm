@@ -18,6 +18,11 @@ function stage(name) {
   currentStage = name
   console.error(JSON.stringify({ fixture: 'mainHostCode', stage: name, elapsedMs: Date.now() - startedAt }))
 }
+function observeNativeDialogs(page, surface) {
+  page.on('dialog', dialog => {
+    console.error(JSON.stringify({ fixture: 'mainHostCode', stage: currentStage, event: 'native-dialog', surface, type: dialog.type(), message: dialog.message().slice(0, 2048), elapsedMs: Date.now() - startedAt }))
+  })
+}
 stage('owned fixture preparation')
 
 const workbenchDir = resolve('dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web')
@@ -60,7 +65,7 @@ if (declaredMode) {
   await writeFile(join(owned.data, 'state/token'), owned.token, { mode: 0o600 })
   await writeFile(join(owned.data, 'state/config.yaml'), 'url: ' + options.publicRoot + '\nbot:\n  httpPort: ' + owned.port + '\nllm:\n  maxOutput: 713\n  compactKeepPercent: 0.3\n')
 }
-options.onPage = page => { appPage = page; page.on('pageerror', error => browserErrors.push(error.message)); page.on('response', response => { if (response.status() >= 400) codeResponses.push({ url: response.url(), status: response.status() }) }) }
+options.onPage = page => { appPage = page; observeNativeDialogs(page, 'app'); page.on('pageerror', error => browserErrors.push(error.message)); page.on('response', response => { if (response.status() >= 400) codeResponses.push({ url: response.url(), status: response.status() }) }) }
 let releaseHold, holdStarted = false; const hold = new Promise(done => { releaseHold = done })
 const peer = createServer(async (request, response) => {
   try {
@@ -196,7 +201,7 @@ try {
   })
   await page.click('button[aria-label="Open code options"]')
   stage('standalone Code popup')
-  const popupReady = once(page, 'popup'); await page.click('.foxwarm-chat-root button[title="Code"]'); const [popup] = await popupReady; extraPage = popup; popup.on('pageerror', error => browserErrors.push(error.message))
+  const popupReady = once(page, 'popup'); await page.click('.foxwarm-chat-root button[title="Code"]'); const [popup] = await popupReady; extraPage = popup; observeNativeDialogs(popup, 'code-popup'); popup.on('pageerror', error => browserErrors.push(error.message))
   await popup.waitForSelector('.monaco-workbench', { timeout: 30000 }); const configuration = await popup.evaluate(() => JSON.parse(document.querySelector('#vscode-workbench-web-configuration').getAttribute('data-settings')))
   assert.equal(configuration.folderUri.authority, 'node+master'); assert.equal(resolve(decodeURIComponent(configuration.folderUri.path)), owned.work); assert(!configuration.workspaceUri)
   stage('standalone config navigation')
@@ -207,10 +212,15 @@ try {
   await popup.click('.editor-instance .view-lines'); await popup.keyboard.down('Control'); await popup.keyboard.press('A'); await popup.keyboard.up('Control'); await popup.keyboard.type('llm:\n  maxOutput: "invalid"\n')
   await popup.waitForSelector('.squiggly-error', { timeout: 30000 }); await popup.keyboard.down('Control'); await popup.keyboard.press('S'); await popup.keyboard.up('Control')
   await until(async () => (await readFile(roots.configFiles.app.path, 'utf8')).includes('invalid'), 'human raw YAML save remains advisory')
-  stage('unchanged startup config and YAML restoration')
+  stage('startup config capture evaluation')
   await page.evaluate(() => window.foxwarmTest.sendMessage('CONFIG-CAPTURE'))
+  stage('startup config capture request')
   await until(() => requests.length === 3, 'unchanged startup app config after Code save'); assert.equal(requests[2].max_output_tokens, 713)
-  await popup.click('.editor-instance .view-lines'); await popup.keyboard.down('Control'); await popup.keyboard.press('A'); await popup.keyboard.up('Control'); await popup.keyboard.sendCharacter(rawApp.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n')); await popup.keyboard.down('Control'); await popup.keyboard.press('S'); await popup.keyboard.up('Control')
+  stage('YAML restoration editor input')
+  await popup.click('.editor-instance .view-lines'); await popup.keyboard.down('Control'); await popup.keyboard.press('A'); await popup.keyboard.up('Control'); await popup.keyboard.sendCharacter(rawApp.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n'))
+  stage('YAML restoration save')
+  await popup.keyboard.down('Control'); await popup.keyboard.press('S'); await popup.keyboard.up('Control')
+  stage('YAML restoration file verification')
   await until(async () => (await readFile(roots.configFiles.app.path, 'utf8')).replaceAll('\r\n', '\n') === rawApp.replaceAll('\r\n', '\n'), 'restore owned YAML fixture')
   stage('standalone popup close')
   await popup.close()

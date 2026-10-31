@@ -545,14 +545,8 @@ public sealed partial class ToolAuthorizationSourceTests
                     }
                 ),
                 ("node", "exec", Obj("""{"command":"never run"}""")),
-                (
-                    "node",
-                    "apply_patch",
-                    new JsonObject
-                    {
-                        ["input"] = "*** Begin Patch\n*** Add File: own\n+bytes\n*** End Patch",
-                    }
-                ),
+                // Unified patch arguments are covered by current physical-path effect tests;
+                // this frozen Source oracle only compares the unchanged file forms.
                 ("builtin", "session", new()),
                 ("builtin", "session", Obj("""{"action":null}""")),
                 ("builtin", "session", Obj("""{"action":""}""")),

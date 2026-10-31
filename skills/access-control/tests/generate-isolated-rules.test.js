@@ -87,8 +87,8 @@ test('non-isolated callers are constrained by source, Node, all master patch pat
   assert.equal(decision('exec', {}, 'node', 'node-b'), 'deny');
   assert.equal(decision('read', { filePath: own }, 'mcp', 'node-a'), 'deny');
   const patch = `*** Begin Patch\n*** Add File: ${own}\n+note\n*** End Patch`;
-  assert.equal(decision('apply_patch', { input: patch }, 'node'), 'allow');
-  assert.equal(decision('apply_patch', { input: patch.replace('*** End Patch', `*** Delete File: ${path.join(scratch, 'outside.md')}\n*** End Patch`) }, 'node'), 'deny');
+  assert.equal(decision('edit', { apply_patch: patch }, 'node'), 'allow');
+  assert.equal(decision('edit', { apply_patch: patch.replace('*** End Patch', `*** Delete File: ${path.join(scratch, 'outside.md')}\n*** End Patch`) }, 'node'), 'deny');
   assert.equal(decision('read_memory', { filePath: 'notes.md' }), 'allow');
   assert.equal(decision('read_memory', { filePath: '../outside.md' }), 'deny');
   assert.equal(decision('apply_patch_memory', { input: '*** Begin Patch\n*** Add File: notes.md\n+note\n*** End Patch' }), 'allow');

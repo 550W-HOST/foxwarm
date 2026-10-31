@@ -90,7 +90,7 @@ Use `call_tool("read", ...)`, `call_tool("write", ...)`, or `call_tool("exec", .
 
 ### `call_tool(...)`
 
-Use one bridge for builtin, MCP, and node tools. Environment capabilities such as read/write/edit/apply_patch/exec/browse use `source: "node"`; omitting `nodeId` targets the session current node. The unified descriptor is the clearest form:
+Use one bridge for builtin, MCP, and node tools. Environment capabilities such as read/write/edit/exec/browse use `source: "node"`; omitting `nodeId` targets the session current node. The unified descriptor is the clearest form:
 
 ```python
 content = call_tool({
@@ -133,7 +133,7 @@ Common shapes:
 | `read` on an image | dictionary with image metadata and inline data |
 | `exec` | dictionary with `output`, captured `content` when available, `truncated`, `status`, completion `exitCode`, `execId` and log metadata |
 | `write` / `edit` | success string; failure raises an exception |
-| `apply_patch` | string summarizing changed files |
+| `edit` with `apply_patch` | string summarizing changed files |
 | `search_tools` | dictionary with readable `output`, source-qualified `tools` descriptors, requested schemas and actual warnings when present |
 | `request_model_without_context` | dictionary containing `text` and `parts` (text and stored-image references) |
 

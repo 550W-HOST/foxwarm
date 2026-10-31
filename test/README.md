@@ -1,9 +1,9 @@
 # Managed Main Docker delivery
 
 The root `Dockerfile` is the single production/test application recipe. Both
-root Compose and `test/docker-compose.yml` build it from source. Its qualified
-container target is Linux x64; this is a delivery candidate, not public release
-promotion or permission to replace a live installation.
+root Compose and `test/docker-compose.yml` build it from source. The container
+target is Linux x64. For a new instance, follow the
+[Docker installation guide](../website/src/content/docs/docs/installing.md#docker-compose).
 
 ## Build and runtime
 
@@ -101,9 +101,9 @@ A source-built image needs its own managed default startup, original App/auth/
 Setup, Node source archive/resources, actual image Chromium/browser/image tool
 path, normal stop/drain/restart and preserved owned-data proof. Historical
 private-image or host-browser results do not qualify a new public recipe.
-The managed WebUI Logs surface remains missing: the original required Logs
-application scenario is enabled and fails. Successful image/publish proofs do
-not establish complete default App/CI qualification or authorize a deployment.
+Image and publish smoke checks cover their stated delivery paths. Run the
+complete application and CI checks separately; a successful smoke check alone
+does not establish that every application feature works.
 Linux image evidence does not imply ARM, macOS, Windows container or Main AOT
 support. Windows source/control qualification is separate. Default CI uses the
 [maintained test runners](../docs/testing.md), not an existing installation's

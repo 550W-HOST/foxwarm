@@ -67,7 +67,7 @@ try {
     tool('direct-denied', 'exec', { command: 'touch forbidden-exec' }), invoke('neutral-denied', 'node:master/exec', { command: 'touch forbidden-exec' }),
     invoke('mcp-denied', 'mcp:policy-peer/hidden', { tag: 'hidden' }), invoke('mcp-allowed', 'mcp:policy-peer/probe', { tag: 'allowed' }),
     tool('write-denied', 'write', { filePath: 'forbidden/new', content: 'denied' }), tool('write-allowed', 'write', { filePath: 'allowed/new', content: 'allowed' }),
-    tool('patch-denied', 'apply_patch', { input: '*** Begin Patch\n*** Update File: allowed/existing\n@@\n-unchanged\n+changed\n*** Update File: forbidden/second\n@@\n-unchanged\n+changed\n*** End Patch' })])
+    tool('patch-denied', 'edit', { apply_patch: '*** Begin Patch\n*** Update File: allowed/existing\n@@\n-unchanged\n+changed\n*** Update File: forbidden/second\n@@\n-unchanged\n+changed\n*** End Patch' })])
   for (const call of ['direct-denied', 'neutral-denied', 'mcp-denied', 'write-denied', 'patch-denied']) assert.equal((await paired(current, call)).error.type, 'tool_authorization_denied')
   assert(!(await paired(current, 'search-node')).output.includes('node:master/exec')); assert(!(await paired(current, 'search-mcp')).output.includes('policy-peer/hidden')); assert((await paired(current, 'search-mcp')).output.includes('policy-peer/probe'))
   assert(!await exists(join(own, 'forbidden-exec'))); assert(!await exists(join(own, 'forbidden/new'))); assert.equal(await readFile(join(own, 'allowed/new'), 'utf8'), 'allowed')

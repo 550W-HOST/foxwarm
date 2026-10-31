@@ -12,6 +12,7 @@ import SimpleCodeEditor from './SimpleCodeEditor'
 import ThemeManager from './ThemeManager'
 import FoxLoaderPreview from './FoxLoaderPreview'
 import WebUiBrandingSettings, { type WebUiBrandingSettingsValue } from './WebUiBrandingSettings'
+import { setWorkspaceMode, useWorkspaceMode } from '../workspaceMode'
 
 type SetupStatus = {
   oobe: boolean
@@ -49,6 +50,7 @@ type SetupStatus = {
 }
 
 interface SetupViewProps {
+  instanceId?: string
   mobileHome?: boolean
   forced?: boolean
   onClose?: () => void
@@ -122,8 +124,13 @@ function normalizeWeixinQrPayload(value: string): { imageSrc: string | null; raw
   return { imageSrc: null, raw: trimmed }
 }
 
-export default function SetupView({ mobileHome = false, forced = false, onClose, onSetupChanged, focusModelsRequest = 0, onFocusModelsRequestHandled, webUiSettings, onInstanceNameChange, onTabIconChange }: SetupViewProps) {
+export default function SetupView({ instanceId, mobileHome = false, forced = false, onClose, onSetupChanged, focusModelsRequest = 0, onFocusModelsRequestHandled, webUiSettings, onInstanceNameChange, onTabIconChange }: SetupViewProps) {
   const tabHeader = useWorkbenchTabHeader()
+  const setupId = instanceId ? `setup-${encodeURIComponent(instanceId)}` : 'setup'
+  // Both workspace experiences retain their settings views. Each editor owns
+  // its Monaco model, while the YAML filename still selects its schema.
+  const scopeModelUri = (uri: string) => instanceId ? uri.replace(/\/([^/]+)$/, `/${encodeURIComponent(instanceId)}/$1`) : uri
+  const workspaceMode = useWorkspaceMode()
   const [activeTab, setActiveTab] = useState<SetupTab>('appearance')
   const [mobileOptions, setMobileOptions] = useState<ContextMenuAnchorRect | null>(null)
   const mobileOptionsRef = useRef<HTMLButtonElement>(null)
@@ -479,11 +486,11 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
               <div role="tablist" aria-label="Setup sections" aria-orientation={verticalSections ? 'vertical' : 'horizontal'} className="foxwarm-setup-section-list flex gap-1">
                 <button
                   ref={appearanceTabRef}
-                  id="setup-tab-appearance"
+                  id={`${setupId}-tab-appearance`}
                   type="button"
                   role="tab"
                   aria-selected={activeTab === 'appearance'}
-                  aria-controls="setup-panel-appearance"
+                  aria-controls={`${setupId}-panel-appearance`}
                   tabIndex={activeTab === 'appearance' ? 0 : -1}
                   data-setup-tab="appearance"
                   onClick={() => activateTab('appearance')}
@@ -495,11 +502,11 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
                 </button>
                 <button
                   ref={modelsTabRef}
-                  id="setup-tab-models"
+                  id={`${setupId}-tab-models`}
                   type="button"
                   role="tab"
                   aria-selected={activeTab === 'models'}
-                  aria-controls="setup-panel-models"
+                  aria-controls={`${setupId}-panel-models`}
                   tabIndex={activeTab === 'models' ? 0 : -1}
                   data-setup-tab="models"
                   onClick={() => activateTab('models')}
@@ -517,11 +524,11 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
                 </button>
                 <button
                   ref={configTabRef}
-                  id="setup-tab-config"
+                  id={`${setupId}-tab-config`}
                   type="button"
                   role="tab"
                   aria-selected={activeTab === 'config'}
-                  aria-controls="setup-panel-config"
+                  aria-controls={`${setupId}-panel-config`}
                   tabIndex={activeTab === 'config' ? 0 : -1}
                   data-setup-tab="config"
                   onClick={() => activateTab('config')}
@@ -537,8 +544,16 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
               </div>
             </div>
 
-            <section id="setup-panel-appearance" role="tabpanel" aria-labelledby="setup-tab-appearance" data-setup-section="appearance" hidden={activeTab !== 'appearance'} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
+            <section id={`${setupId}-panel-appearance`} role="tabpanel" aria-labelledby={`${setupId}-tab-appearance`} data-setup-section="appearance" hidden={activeTab !== 'appearance'} className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
               <div className="mx-auto w-full max-w-5xl">
+                <section className="mb-6 rounded-xl border border-fw-border bg-fw-surface p-4" aria-label="Workspace experience">
+                  <h2 className="text-base font-semibold text-fw-text-strong">Workspace experience</h2>
+                  <p className="mt-1 text-sm text-fw-text-muted">Choose how this browser organizes your work. Your conversations and running tasks stay in place.</p>
+                  <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Workspace experience">
+                    <button type="button" aria-pressed={workspaceMode === 'classic'} onClick={() => setWorkspaceMode('classic')} className={`rounded-lg border px-3 py-2 text-sm ${workspaceMode === 'classic' ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent' : 'border-fw-border text-fw-text hover:bg-fw-hover'}`}>Original</button>
+                    <button type="button" aria-pressed={workspaceMode === 'project'} onClick={() => setWorkspaceMode('project')} className={`rounded-lg border px-3 py-2 text-sm ${workspaceMode === 'project' ? 'border-fw-accent-border bg-fw-accent-surface text-fw-accent' : 'border-fw-border text-fw-text hover:bg-fw-hover'}`}>Project</button>
+                  </div>
+                </section>
                 <ThemeManager />
                 <FoxLoaderPreview />
                 {webUiSettings && onInstanceNameChange && onTabIconChange && (
@@ -547,7 +562,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
               </div>
             </section>
 
-            <section ref={modelsSectionRef} id="setup-panel-models" role="tabpanel" aria-labelledby="setup-tab-models" data-setup-section="models" hidden={activeTab !== 'models'} className={`${activeTab === 'models' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto scroll-mt-4 p-4 md:p-5`}>
+            <section ref={modelsSectionRef} id={`${setupId}-panel-models`} role="tabpanel" aria-labelledby={`${setupId}-tab-models`} data-setup-section="models" hidden={activeTab !== 'models'} className={`${activeTab === 'models' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto scroll-mt-4 p-4 md:p-5`}>
               <div className="foxwarm-setup-editor-section">
                 <div className="shrink-0">
                   <h2 className="text-base font-semibold text-fw-text-strong">Model settings</h2>
@@ -560,7 +575,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
                     onChange={updateModelsYaml}
                     language="yaml"
                     height="100%"
-                    modelUri={MODELS_YAML_MODEL_URI}
+                    modelUri={scopeModelUri(MODELS_YAML_MODEL_URI)}
                     focusRequest={modelsEditorFocusRequest}
                     ariaLabel="Models YAML editor"
                   />
@@ -574,7 +589,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
               </div>
             </section>
 
-            <section id="setup-panel-config" role="tabpanel" aria-labelledby="setup-tab-config" data-setup-section="config" hidden={activeTab !== 'config'} className={`${activeTab === 'config' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto p-4 md:p-5`}>
+            <section id={`${setupId}-panel-config`} role="tabpanel" aria-labelledby={`${setupId}-tab-config`} data-setup-section="config" hidden={activeTab !== 'config'} className={`${activeTab === 'config' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col overflow-y-auto p-4 md:p-5`}>
               <div className="foxwarm-setup-editor-section">
                 <div className="shrink-0">
                   <h2 className="text-base font-semibold text-fw-text-strong">App and channel settings</h2>
@@ -582,7 +597,7 @@ export default function SetupView({ mobileHome = false, forced = false, onClose,
                 </div>
 
                 <div className="mt-4 min-h-72 flex-1" onKeyDownCapture={(event) => handleEditorSaveShortcut(event, 'config')}>
-                  <SimpleCodeEditor value={configYaml} onChange={updateConfigYaml} language="yaml" height="100%" modelUri={APP_CONFIG_YAML_MODEL_URI} ariaLabel="Application config YAML editor" />
+                  <SimpleCodeEditor value={configYaml} onChange={updateConfigYaml} language="yaml" height="100%" modelUri={scopeModelUri(APP_CONFIG_YAML_MODEL_URI)} ariaLabel="Application config YAML editor" />
                 </div>
                 <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2">
                   <button disabled={savingConfig} onClick={() => void saveConfig()} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:opacity-60">{savingConfig ? 'Saving…' : 'Save config'}</button>

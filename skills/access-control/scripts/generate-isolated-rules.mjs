@@ -35,7 +35,7 @@ export function generateIsolatedRules(mapping) {
 
     if (node) add('node', { tool: { source: 'node' }, targetNode: node });
     add('master-files', {
-      tool: { source: 'node', name: ['read', 'write', 'edit', 'apply_patch'] },
+      tool: { source: 'node', name: ['read', 'write', 'edit'] },
       targetNode: 'master', path: within('${agent.dir}'),
     });
     builtin('memory', ['read_memory', 'write_memory', 'edit_memory', 'delete_memory', 'apply_patch_memory'], {

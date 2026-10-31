@@ -46,7 +46,7 @@ This module owns model-facing tool definitions, builtin tool implementations, un
 - On the master, an isolated agent may access only its own agent directory. On its bound/current node, it may use default or exactly allowed capabilities subject to the authenticated advertised-tool boundary.
 - Non-isolated file operations may use absolute, home-relative, or session-cwd-relative paths.
 - Master and node read/write wrappers share `packages/shared/src/fileToolCore.ts` after their own context and permission handling.
-- Only `read`, `write`, `edit`, `apply_patch`, `exec`, and `browse_*` are registered node-environment builtins. The removed `delete_file` surface has no compatibility alias; use structured `apply_patch` delete operations or an explicit shell command when appropriate.
+- Only `read`, `write`, `edit`, `exec`, and `browse_*` are registered node-environment builtins. The removed `delete_file` surface has no compatibility alias; use `edit` patch delete operations or an explicit shell command when appropriate.
 - `write` does not create missing parent directories unless `createDirs=true` is explicit.
 - Exact edit requires exactly one match; ambiguous edits fail.
 - Pending write references are scoped, bounded, expire, and may reuse their cached payload at any independently authorized write target in the same session and agent.

@@ -163,6 +163,7 @@ internal sealed class HttpServer
                     || Foxwarm.Nodes.NodeBootstrap.IsPublicPath(context.Request.Path)
                     || McpOAuthRoutes.IsPublic(context.Request)
                     || code?.IsCapabilityRequest(context) == true
+                    || McpNodeFileDownload.IsRequest(context.Request)
                 )
                 {
                     await next();
@@ -318,6 +319,13 @@ internal sealed class HttpServer
             );
             code!.Register(app);
         }
+        McpNodeFileDownload.Register(
+            app,
+            sessions,
+            accessConfiguration,
+            request => Authorized(request, apiToken, browserCookie),
+            context => Foxwarm.Code.CodeWorkbench.DownloadAsync(context, sessions.Nodes)
+        );
         app.MapGet("/health", () => Results.Ok(new { status = "ready" }));
         app.MapPost(
             "/admin/shutdown",

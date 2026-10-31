@@ -30,7 +30,7 @@ Environment overrides:
   FOXWARM_REPO          Git repository URL
   FOXWARM_BRANCH        Branch to clone/update (default: main for new installs)
   FOXWARM_DIR           Program checkout directory (default: ./foxwarm)
-  FOXWARM_DATA_DIR      Data/config directory (default: ./foxwarm-data)
+  FOXWARM_DATA_DIR      Data/config directory (default: saved selection; fresh installs use sibling foxwarm-data)
   FOXWARM_TMUX_SESSION  tmux session name (default: foxwarm)
 EOF
       exit 0
@@ -42,12 +42,12 @@ EOF
   esac
 done
 
-absolute_path_from_call_dir() {
+absolute_path() {
   case "$1" in
     /*) printf '%s\n' "$1" ;;
-    ~) printf '%s\n' "$HOME" ;;
-    ~/*) printf '%s/%s\n' "$HOME" "${1#~/}" ;;
-    *) printf '%s/%s\n' "$CALL_DIR" "$1" ;;
+    '~') printf '%s\n' "$HOME" ;;
+    '~/'*) printf '%s/%s\n' "$HOME" "${1#\~/}" ;;
+    *) printf '%s/%s\n' "$2" "$1" ;;
   esac
 }
 
@@ -56,9 +56,24 @@ if [ -z "${FOXWARM_DIR:-}" ] && [ -f "package.json" ] && grep -q '"name": "foxwa
 else
   FOXWARM_DIR="${FOXWARM_DIR:-$PWD/foxwarm}"
 fi
-FOXWARM_DATA_DIR="${FOXWARM_DATA_DIR:-$(dirname "$FOXWARM_DIR")/foxwarm-data}"
-FOXWARM_DIR="$(absolute_path_from_call_dir "$FOXWARM_DIR")"
-FOXWARM_DATA_DIR="$(absolute_path_from_call_dir "$FOXWARM_DATA_DIR")"
+FOXWARM_DIR="$(absolute_path "$FOXWARM_DIR" "$CALL_DIR")"
+if [ -n "${FOXWARM_DATA_DIR:-}" ]; then
+  FOXWARM_DATA_DIR="$(absolute_path "$FOXWARM_DATA_DIR" "$CALL_DIR")"
+else
+  saved_data_dir=""
+  if [ -f "$FOXWARM_DIR/data_dir" ]; then
+    saved_data_dir="$(cat "$FOXWARM_DIR/data_dir")"
+    saved_data_dir="${saved_data_dir#"${saved_data_dir%%[![:space:]]*}"}"
+    saved_data_dir="${saved_data_dir%"${saved_data_dir##*[![:space:]]}"}"
+  fi
+  if [ -n "$saved_data_dir" ]; then
+    FOXWARM_DATA_DIR="$(absolute_path "$saved_data_dir" "$FOXWARM_DIR")"
+  elif [ -e "$FOXWARM_DIR/.git" ]; then
+    FOXWARM_DATA_DIR="$FOXWARM_DIR"
+  else
+    FOXWARM_DATA_DIR="$(dirname "$FOXWARM_DIR")/foxwarm-data"
+  fi
+fi
 if [ -z "${FOXWARM_BRANCH:-}" ] && [ -e "$FOXWARM_DIR/.git" ]; then
   FOXWARM_BRANCH="$(git -C "$FOXWARM_DIR" branch --show-current 2>/dev/null || true)"
 fi

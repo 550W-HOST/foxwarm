@@ -6,7 +6,7 @@ The CLI advertises optional `execWaitCancellation` and keeps foreground exec con
 
 ## Purpose
 
-Current CLI capability negotiation advertises `programmaticToolData`; trusted call metadata reaches shared read/exec producers without widening ordinary results. Older peers keep native results. See [programmatic data](../threads/tool-dispatch-node-execution.md#d-dispatch-programmatic-tool-data).
+Current CLI capability negotiation advertises `unifiedEdit` and `programmaticToolData`; trusted call metadata reaches shared read/exec producers without widening ordinary results. Older peers keep native results. See [programmatic data](../threads/tool-dispatch-node-execution.md#d-dispatch-programmatic-tool-data).
 
 Implements the full remote Node.js client: pairing/authenticated WebSocket connection, shared-tool execution, service dispatch, bidirectional file transfer, protocol heartbeat/reconnect, localhost trigger, session RPC, and optional node-local Code PTYs.
 

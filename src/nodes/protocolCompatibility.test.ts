@@ -20,6 +20,23 @@ const capabilities = {
   services: { 'vscode-fs': 1 },
 };
 
+test('project cwd probe works before any Session without authorizing arbitrary unbound tools', async () => {
+  const manager = new NodesManager();
+  const ws = new FakeSocket();
+  manager.registerNodeWithTools(ws as any, {} as http.IncomingMessage, 'cli-node', {
+    tools: [{ name: 'get_default_cwd', description: 'cwd' }, { name: 'exec', description: 'exec' }],
+  }, 'project-probe');
+  try {
+    const result = manager.getDefaultCwdForProject('project-probe');
+    const request = ws.sent.find(message => message.type === 'tool_call');
+    assert.equal(request.tool, 'get_default_cwd');
+    assert.equal(request.sessionCwd, undefined);
+    manager.handleToolResponse(request.callId, { output: '/opt/foxwarm-node/foxwarm-node' }, 'project-probe');
+    assert.equal(await result, '/opt/foxwarm-node/foxwarm-node');
+    await assert.rejects(() => manager.executeTool('project-probe', 'exec', { command: 'pwd' }, 'unbound', undefined, undefined, undefined, true), /not found/);
+  } finally { manager.unregisterNode('project-probe'); }
+});
+
 test('compatible Node registration advertises negotiated protocol and remains executable', () => {
   const manager = new NodesManager();
   const ws = new FakeSocket();

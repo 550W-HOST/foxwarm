@@ -65,6 +65,7 @@ import { registerWebUiNodeOnboardingRoutes } from './webuiNodeOnboarding';
 import { WebUiRealtimeHub, WEBUI_REALTIME_PATH } from './webuiRealtime';
 import { buildQueuedPreviewMessages, MAX_QUEUED_PREVIEW_ITEMS, sanitizeQueuedPreviewParts } from './webuiQueuePreview';
 import { registerWebUiSetupRoutes } from './webuiSetup';
+import { registerWebUiProjectRoutes } from './webuiProjects';
 
 const WEBUI_UPLOAD_DIR = path.join(os.tmpdir(), 'foxwarm-uploads');
 const WEBUI_UPLOAD_MAX_BYTES = 1024 * 1024 * 1024;
@@ -1006,6 +1007,7 @@ export class WebUIChannel implements Channel {
       registerVscodeWebRoutes(httpServerInstance);
       registerWebUiLogRoutes(httpServerInstance, this.logs);
       registerWebUiNodeOnboardingRoutes(httpServerInstance);
+      registerWebUiProjectRoutes(httpServerInstance, { onSessionCreated: () => this.broadcastSessionListUpdate() });
 
       // Auth endpoint
       httpServerInstance.addRoute({

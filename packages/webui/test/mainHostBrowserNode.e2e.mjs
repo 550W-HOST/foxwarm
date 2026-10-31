@@ -197,6 +197,8 @@ try {
   launchOptions = {
     executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium',
     headless: !ownedXvfb,
+    pipe: true,
+    enableExtensions: true,
     ignoreDefaultArgs: ['--disable-infobars', '--enable-automation'],
     userDataDir: join(fixture.root, 'profile'),
     args: [
@@ -205,14 +207,14 @@ try {
       '--no-sandbox',
       '--disable-dev-shm-usage',
       '--window-size=1280,900',
-      '--disable-extensions-except=' + extension,
-      '--load-extension=' + extension,
     ],
   };
   browser = await puppeteer.launch(launchOptions);
   stage = 'browser version';
   evidence.browser = await browser.version();
   evidence.mode = ownedXvfb ? 'owned-xvfb' : 'headless';
+  stage = 'extension installation';
+  await browser.installExtension(extension);
   stage = 'extension service-worker admission';
   const target = await browser.waitForTarget(
     (target) => target.type() === 'service_worker' && target.url().endsWith('/background/main.js'),
@@ -736,6 +738,45 @@ try {
     await writeFile(process.env.FOXWARM_BROWSER_EVIDENCE, JSON.stringify(evidence, null, 2) + '\n');
 } catch (error) {
   console.error(fixture.output);
+  if (browser && stage === 'extension service-worker admission') {
+    let session, timeout;
+    try {
+      const startup = await Promise.race([
+        (async () => {
+          session = await browser.target().createCDPSession();
+          const [{ targetInfos }, { histograms }] = await Promise.all([
+            session.send('Target.getTargets', {}, { timeout: 1000 }),
+            session.send(
+              'Browser.getHistograms',
+              { query: 'Extensions.ServiceWorkerBackground', delta: false },
+              { timeout: 1000 },
+            ),
+          ]);
+          return {
+            targets: targetInfos.slice(0, 32).map(({ type, url }) => ({
+              type,
+              extensionWorker: type === 'service_worker' && url.endsWith('/background/main.js'),
+            })),
+            histograms: histograms.slice(0, 32).map(({ name, sum, count, buckets }) => ({
+              name,
+              sum,
+              count,
+              buckets: buckets.slice(0, 32),
+            })),
+          };
+        })(),
+        new Promise((_, reject) => {
+          timeout = setTimeout(() => reject(new Error('Startup snapshot timed out')), 2000);
+        }),
+      ]);
+      console.error('Browser fixture worker registration: ' + JSON.stringify(startup));
+    } catch {
+      console.error('Browser fixture worker registration unavailable.');
+    } finally {
+      clearTimeout(timeout);
+      if (session) void session.detach().catch(() => {});
+    }
+  }
   try {
     const boundedArgs = (args) => args?.slice(0, 64).map((arg) => arg.slice(0, 1024));
     console.error(

@@ -60,7 +60,7 @@ test('external SSH adapter: canonical files, raw bytes, cwd, bounded output, bac
     await assert.rejects(() => callTool('node', { action: 'create', providerId: 'external-ssh' }, ctx), /does not support/);
     await callTool('write', { filePath: 'sample.txt', content: 'alpha\nβ\n' }, ctx);
     await callTool('edit', { filePath: 'sample.txt', oldText: 'alpha', newText: 'changed' }, ctx);
-    await callTool('apply_patch', { input: '*** Begin Patch\n*** Update File: sample.txt\n@@\n-β\n+gamma\n*** Add File: added.txt\n+new\n*** End Patch' }, ctx);
+    await callTool('edit', { apply_patch: '*** Begin Patch\n*** Update File: sample.txt\n@@\n-β\n+gamma\n*** Add File: added.txt\n+new\n*** End Patch' }, ctx);
     assert.equal(await fs.readFile(path.join(cwd, 'sample.txt'), 'utf8'), 'changed\ngamma\n');
     assert.equal(await fs.readFile(path.join(cwd, 'added.txt'), 'utf8'), 'new');
     const read: any = await callTool('read', { filePath: 'sample.txt' }, ctx);

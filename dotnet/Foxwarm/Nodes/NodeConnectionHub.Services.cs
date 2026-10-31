@@ -103,7 +103,8 @@ internal sealed partial class NodeConnectionHub
         string operation,
         JsonObject args,
         CancellationToken token,
-        Action<JsonObject>? receive = null
+        Action<JsonObject>? receive = null,
+        Action? beforeSend = null
     )
     {
         var requestId = "service_" + Guid.NewGuid().ToString("N");
@@ -134,7 +135,8 @@ internal sealed partial class NodeConnectionHub
                     ["operation"] = operation,
                     ["args"] = args.DeepClone(),
                 },
-                deadline.Token
+                deadline.Token,
+                beforeSend
             );
             return await invocation.Result.Task.WaitAsync(deadline.Token);
         }
@@ -181,7 +183,8 @@ internal sealed partial class NodeConnectionHub
         ServiceTarget target,
         Connection connection,
         JsonObject message,
-        CancellationToken token
+        CancellationToken token,
+        Action? beforeSend = null
     )
     {
         await connection.SendGate.WaitAsync(token);
@@ -197,6 +200,7 @@ internal sealed partial class NodeConnectionHub
                         "Node connection changed.",
                         503
                     );
+                beforeSend?.Invoke();
                 send = connection.Socket.SendAsync(
                     System.Text.Encoding.UTF8.GetBytes(message.ToJsonString()),
                     System.Net.WebSockets.WebSocketMessageType.Text,

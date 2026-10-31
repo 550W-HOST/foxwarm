@@ -27,7 +27,7 @@ async function buildFixtureBundle() {
       { thinking: 'second reasoning' },
       metadata({ type: 'open_page', url: 'https://example.com/page' }),
       metadata({ type: 'find_in_page', pattern: 'invisible' }),
-      { text: 'final answer', providerMeta: { openaiResponses: { annotations: [{ type: 'url_citation', url: 'https://example.com/source', title: 'Example source' }] } } },
+      { text: 'final answer', providerMeta: { openaiResponses: { annotations: [{ type: 'url_citation', url: 'https://example.com/source', title: 'Example source' }, { type: 'url_citation', url: 'https://example.com/second', title: 'A long reference title '.repeat(18) }] } } },
     ], __meta: { seq: 1 } }
     createRoot(document.getElementById('root')).render(React.createElement(ChatTimeline, { sessionId: 'fixture/main', messages: [message], isMobile: false, timelineView: 'detailed', showUsageBadge: false }))
   `
@@ -84,7 +84,8 @@ test('persisted web search calls render in part order as collapsed reasoning-sty
   assert.deepEqual(snapshot.tags, ['Web Search', 'Web Search'])
   assert.deepEqual(snapshot.previews, ['primary query', 'Open Page: https://example.com/page'])
   assert.deepEqual(snapshot.expanded, ['false', 'false'])
-  assert.deepEqual(snapshot.sources, ['[1] Example source'])
+  assert.equal(snapshot.sources[0], '[1] Example source')
+  assert.equal(snapshot.sources.length, 2)
   assert.equal(snapshot.hasToolCard, false)
 
   await page.click('[data-model-thread-card="web-search"]')
@@ -96,4 +97,26 @@ test('persisted web search calls render in part order as collapsed reasoning-sty
   assert.match(expanded.body || '', /primary query/)
   assert.match(expanded.body || '', /secondary query/)
   assert.equal((expanded.body || '').match(/secondary query/g)?.length, 1)
+})
+
+test('sources occupy separate lines and long titles wrap on desktop and mobile', async () => {
+  for (const width of [1200, 390]) {
+    await page.setViewport({width, height: 900})
+    await page.goto(fixtureUrl, {waitUntil: 'load'})
+    await page.waitForSelector('[data-web-search-citation]')
+    const layout = await page.evaluate(() => {
+      const links = [...document.querySelectorAll('[data-web-search-citation]')]
+      const label = links[0].parentElement.querySelector('span').getBoundingClientRect()
+      return {labelBottom: label.bottom, links: links.map(link => {
+        const box = link.getBoundingClientRect(), style = getComputedStyle(link)
+        return {top: box.top, bottom: box.bottom, left: box.left, right: box.right,
+          height: box.height, lineHeight: parseFloat(style.lineHeight), href: link.getAttribute('href')}
+      })}
+    })
+    assert.ok(layout.links[0].top >= layout.labelBottom)
+    assert.ok(layout.links[1].top >= layout.links[0].bottom)
+    assert.ok(layout.links[1].height > layout.links[1].lineHeight)
+    assert.ok(layout.links.every(link => link.left >= 0 && link.right <= width))
+    assert.equal(layout.links[1].href, 'https://example.com/second')
+  }
 })

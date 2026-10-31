@@ -19,6 +19,7 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 - Official workbench assets are optional and excluded from the main WebUI bundle, Git, and ordinary build.
 - Preferred resources use `foxwarm://node+<nodeId>/<absolute-posix-path>`.
 - Direct new-tab launches can open one folder. Embedded launches use a persistent `foxwarm.code-workspace`, so later folders append without replacing the iframe or losing editor/terminal state.
+- Project working sessions use a separate persistent workspace and iframe per working-session ID. The initial Node and folder are bound to that ID when first opened; subsequent requests with a different target fail rather than adding another Project's root. Hiding a working session retains its loaded iframe and editor state.
 - The filesystem extension exposes fixed commands for the authoritative master app and data roots. They add an exact normalized root to the current multi-root workspace, then open Explorer and reveal it; they never derive these roots from a session node or cwd.
 - A pinned MIT Red Hat YAML Web extension consumes the same static config schemas as Setup through a local contributor. Only the authoritative master app/models file URIs match.
 - Main WebUI presents the feature as **Code** while route/package identifiers remain `/vscode-web`.
@@ -28,7 +29,7 @@ Foxwarm hosts optional official Code for the Web assets in a separate workbench 
 - `API_BASE_PATH` is converted to the deployment-relative `/vscode-web/` path; launch URLs preserve reverse-proxy prefixes.
 - Embedded mode uses the shared [Workbench content host](../units/webui-workbench-content.md#d-workbench-stable-content) for its single iframe, while App retains the bridge controller before lazy iframe creation. A restored inactive Code tab, or a logically active Code tab while the mobile list hides the workbench surface, does not create it; the first Code tab actually shown as active in any visible expanded workbench pane starts it. Ordinary tab switching then hides/repositions the persistent iframe without unmounting it. Pane collapse and explicit Code-tab close follow [D-code-persistent-workspace](#d-code-persistent-workspace).
 - Parent/workbench communication is versioned, exact-origin/source checked, and allowlisted to add-folder, open-file, and open-commit request shapes with acknowledgements.
-- Direct `read`, `write`, `edit`, and actionable `apply_patch` tool paths remain plain text; after exact node/cwd/path resolution, an adjacent icon-only Code action may issue the open-file request. See [D-webui-tool-call-region](../units/webui-tool-timeline.md#d-webui-tool-call-region) for the interaction contract. Memory tools, nested descriptors, and ambiguous paths remain inert.
+- Direct `read`, `write`, `edit` (including actionable patches) tool paths remain plain text; after exact node/cwd/path resolution, an adjacent icon-only Code action may issue the open-file request. See [D-webui-tool-call-region](../units/webui-tool-timeline.md#d-webui-tool-call-region) for the interaction contract. Memory tools, nested descriptors, and ambiguous paths remain inert.
 - New-tab mode carries initial target parameters; it does not control an already-open tab.
 - Moving the WebUI Code tab to a browser window uses this existing standalone new-tab mode with the current launcher node/path. It is a fresh standalone Code launch, not transfer of the running embedded iframe; only after `window.open` succeeds does WebUI remove the source Code tab and destroy its embedded frame.
 
@@ -84,6 +85,8 @@ Represent node identity in URI authority and retain the absolute slash-based pat
 
 Embedded Code uses one persistent multi-root workspace and an iframe that starts on first actual Code-tab visibility in an expanded pane of the displayed workbench surface, not merely because a restored or logically active Code tab exists. Once started, ordinary tab switching, hiding the workbench, and collapse of the owning pane preserve the same iframe and background workbench state. Collapse hides and pointer-disables the frame while its slot is unavailable, including when Code is an inactive tab; expansion reuses the existing frame. Explicit Code-tab close destroys the iframe and resets its bridge lifecycle so reopening creates a fresh frame. New folders/requests use a fixed bridge instead of reloading/replacing it.
 
+This singleton describes the classic workbench. Project working sessions instead use one persisted workspace file per working-session ID, preserving the Node and initial folder binding across reloads. The project editor is loaded only when first shown and kept mounted while hidden; separate working sessions never share the classic workspace file or iframe.
+
 ### D-code-fixed-remote-services
 
 **Derived transport design under [ordinary administrator/Node authority](../behaviors/workbench-and-chat.md#code-and-terminal-do-not-inherit-arbitrary-chat-authority).** Existing official clients independently constrain service versions and namespaces. Fixed authenticated services implement Code operations without fabricating model credentials or a Session principal.
@@ -120,7 +123,7 @@ Dynamic public-path ownership is canonical in [D-webui-dynamic-base-path](../mod
 
 ## Verification
 
-`packages/webui/test/mainHostCode.e2e.mjs` exercises the original App, official workbench and browser extensions through file edits, terminal effects, immutable commit views, embedded leaf views, workspace restoration, advisory YAML diagnostics and prefixed authenticated writes. Static stage labels and elapsed times survive whole-file interruption in the existing runner log. Failure projection uses bounded cached frame paths without query strings or browser evaluation, so collecting diagnostics cannot wait on an unresponsive renderer. Assertion and runner deadlines remain independent of that projection.
+`packages/webui/test/mainHostCode.e2e.mjs` exercises the original App, official workbench and browser extensions through file edits, terminal effects, immutable commit views, embedded leaf views, workspace restoration, advisory YAML diagnostics and prefixed authenticated writes. Static stage labels and elapsed times survive whole-file interruption in the existing runner log, separating startup-config evaluation/request from YAML restoration input/save/verification. Passive native-dialog records identify the App or Code popup, current stage, type and bounded message without handling the dialog. Failure projection uses bounded cached frame paths without query strings or browser evaluation, so collecting diagnostics cannot wait on an unresponsive renderer. Assertion and runner deadlines remain independent of that projection.
 
 ## Open questions
 

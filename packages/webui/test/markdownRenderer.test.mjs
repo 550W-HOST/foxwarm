@@ -23,6 +23,7 @@ await esbuild.build({
 })
 
 const {
+  assistantArtifactReferences,
   renderAssistantMarkdownSegmentsWithSanitizer,
   renderMarkdownSegmentsWithSanitizer,
   renderMarkdownWithSanitizer,
@@ -361,4 +362,144 @@ test('mixed top-level and nested specials extract only complete top-level tokens
 
   assert.deepEqual(segments.map(segment => segment.kind), ['html', 'mermaid', 'html', 'latex'])
   assert.match(segments[2].html, /^<ul>[\s\S]*language-mermaid[\s\S]*<\/ul>\n$/)
+})
+
+
+test('later display math preserves preceding artifact identity and reference projection', () => {
+  const marker = '<foxwarm-artifact id="art_00000000000000000000000000000001" revision="1" />'
+  const prefix = 'Before figure.\n\n' + marker + '\n\n*Caption.*\n\n'
+  const formula = '\\[\nx=1\n\\]'
+  const initial = renderAssistantMarkdownSegmentsWithSanitizer(prefix, identitySanitizer, {enabled:true,streaming:true})
+  const expected = initial.find(segment => segment.kind === 'artifact')
+  assert.ok(expected)
+  for (let length = 0; length <= formula.length; length++) {
+    const text = prefix + formula.slice(0, length)
+    const segments = renderAssistantMarkdownSegmentsWithSanitizer(text, identitySanitizer, {enabled:true,streaming:true})
+    assert.deepEqual(segments.filter(segment => segment.kind === 'artifact'), [expected])
+    assert.deepEqual(assistantArtifactReferences(text), [expected.reference])
+    assert.ok(!segments.some(segment => segment.kind === 'html' && segment.html.includes('&lt;foxwarm-artifact')))
+  }
+  const complete = renderAssistantMarkdownSegmentsWithSanitizer(prefix + formula + '\n\nAfter.', identitySanitizer, {enabled:true})
+  assert.deepEqual(complete.find(segment => segment.kind === 'artifact'), expected)
+  assert.equal(complete.filter(segment => segment.kind === 'latex').length, 1)
+  for (const nested of ['> ' + marker, '    ' + marker, '```xml\n' + marker + '\n```']) {
+    const text = nested + '\n\n' + formula
+    assert.deepEqual(assistantArtifactReferences(text), [])
+    assert.ok(!renderAssistantMarkdownSegmentsWithSanitizer(text, identitySanitizer, {enabled:true}).some(segment => segment.kind === 'artifact'))
+  }
+})
+
+const citationMarker = '\uE200cite\uE202turn0search3\uE201'
+const citationHtml = (text, annotations = [], streaming = false, extra = {}) => renderAssistantMarkdownSegmentsWithSanitizer(text, identitySanitizer, { enabled: true, streaming }, { annotations, ...extra }).filter(segment => segment.kind === 'html').map(segment => segment.html).join('')
+
+test('assistant citations retain unknown reference IDs without guessing a URL', () => {
+  const raw = '\uE200cite\uE202turn0search3\uE202turn0search3\uE202turn2search7\uE201'
+  const html = citationHtml(`Claim ${raw}`)
+  assert.match(html, /data-web-search-ref="unresolved"/)
+  assert.match(html, /title="turn0search3, turn0search3, turn2search7"/)
+  assert.match(html, /\[source\?\]/)
+  assert.doesNotMatch(html, /<a\b/)
+  assert.match(html, /data-citation-raw="/)
+  assert.match(renderMarkdownWithSanitizer(`Claim ${raw}`, identitySanitizer), /\uE200cite/)
+  assert.doesNotMatch(renderMarkdownWithSanitizer(raw, identitySanitizer), /data-web-search-ref/)
+})
+
+test('only exact current-part annotation spans resolve citations, including Unicode offsets', () => {
+  const prefix = '😀 中文 claim '
+  const text = `${prefix}${citationMarker} and ${citationMarker}`
+  for (const start of [prefix.length, [...prefix].length]) {
+    const html = citationHtml(text, [{ type: 'url_citation', start_index: start, end_index: start + citationMarker.length, url: 'https://example.com/exact', title: 'Exact source' }])
+    assert.equal((html.match(/data-web-search-ref="resolved"/g) || []).length, 1)
+    assert.equal((html.match(/data-web-search-ref="unresolved"/g) || []).length, 1)
+    assert.match(html, /href="https:\/\/example.com\/exact"/)
+  }
+  for (const annotations of [
+    [{ type: 'url_citation', url: 'https://example.com/no-span' }],
+    [{ type: 'url_citation', start_index: 0, end_index: text.length, url: 'https://example.com/whole-claim' }],
+    [{ type: 'other', start_index: prefix.length, end_index: prefix.length + citationMarker.length, url: 'https://example.com/wrong-type' }],
+    [{ type: 'url_citation', start_index: prefix.length + 1, end_index: prefix.length + citationMarker.length, url: 'https://example.com/partial' }],
+  ]) assert.doesNotMatch(citationHtml(text, annotations), /data-web-search-ref="resolved"/)
+})
+
+test('nested annotations, repeated annotations and split markdown retain exact positions', () => {
+  const prefix = 'intro\n<foxwarm-commit node="master" path="/repo" id="abcdef123" />\n'
+  const fragment = `After ${citationMarker}`
+  const annotation = { type: 'url_citation', url_citation: { start_index: prefix.length + 6, end_index: prefix.length + 6 + citationMarker.length, url: 'https://example.com/nested', title: 'Nested' } }
+  const html = citationHtml(fragment, [annotation, annotation], false, { sourceText: prefix + fragment, sourceOffset: prefix.length })
+  assert.equal((html.match(/data-web-search-ref="resolved"/g) || []).length, 1)
+  assert.doesNotMatch(citationHtml(fragment, [annotation], false, { sourceText: prefix + fragment, sourceOffset: 0 }), /data-web-search-ref="resolved"/)
+  const quoted = `> 😀 ${citationMarker}\n\n- ${citationMarker}`
+  const start = quoted.lastIndexOf(citationMarker)
+  const nestedHtml = citationHtml(quoted, [{ type: 'url_citation', start_index: start, end_index: start + citationMarker.length, url: 'https://example.com/list' }])
+  assert.match(nestedHtml, /<blockquote>[\s\S]*data-web-search-ref="unresolved"/)
+  assert.match(nestedHtml, /<li><a[^>]*data-web-search-ref="resolved"/)
+})
+
+test('citation links reject unsafe URLs and escape reference IDs and titles', () => {
+  for (const url of ['javascript:alert(1)', 'data:text/html,hi', '//example.com', 'https://', 'https://example.com\\@evil.com', 'https://example.com\n.evil.com', 'https://user:pass@example.com']) {
+    assert.doesNotMatch(citationHtml(citationMarker, [{ type: 'url_citation', start_index: 0, end_index: citationMarker.length, url }]), /<a\b/)
+  }
+  const html = citationHtml(citationMarker, [{ type: 'url_citation', start_index: 0, end_index: citationMarker.length, url: 'https://example.com/?a=1&b=2', title: '\"><img src=x onerror=alert(1)>' }])
+  assert.doesNotMatch(html, /<img/)
+  assert.match(html, /&quot;&gt;&lt;img/)
+  assert.doesNotMatch(citationHtml('\uE200cite\uE202\"><script>alert(1)</script>\uE201'), /<script/)
+})
+
+test('literal citation markers stay intact in inline/fenced code and math raw sources', () => {
+  for (const text of [`\`${citationMarker}\``, `\`\`\`text\n${citationMarker}\n\`\`\``, `    ${citationMarker}`, `<code>${citationMarker}</code>`]) {
+    const html = citationHtml(text)
+    assert.match(html, /\uE200cite/)
+    assert.doesNotMatch(html, /data-web-search-ref/)
+    assert.doesNotMatch(html, /FOXWARMCITATION/)
+  }
+  const math = `\\[\n${citationMarker}\n\\]`
+  assert.equal(renderAssistantMarkdownSegmentsWithSanitizer(math, identitySanitizer)[0].raw, math)
+  const mermaid = `\`\`\`mermaid\n${citationMarker}\n\`\`\``
+  assert.equal(renderAssistantMarkdownSegmentsWithSanitizer(mermaid, identitySanitizer)[0].source, citationMarker)
+})
+
+test('streaming incomplete markers do not expose private-use glyphs or remount earlier token identities', () => {
+  for (let end = 1; end < citationMarker.length; end++) {
+    const html = citationHtml(`Claim ${citationMarker.slice(0, end)}`, [], true)
+    assert.doesNotMatch(html, /[\uE000\uE001\uE200\uE201\uE202]/)
+    assert.doesNotMatch(html, /turn0search|FOXWARMCITATION/)
+    assert.match(html, /Claim/)
+  }
+  assert.match(citationHtml(`Claim ${citationMarker}`, [], true), /\[source\?\]/)
+  assert.match(citationHtml('Claim \uE200cite\uE202turn0sea'), /\[source\?\]/)
+  const prefix = `<foxwarm-artifact id="art_${'a'.repeat(32)}" revision="1" />\n\n`
+  const initial = renderAssistantMarkdownSegmentsWithSanitizer(prefix + `Claim ${citationMarker.slice(0, 8)}`, identitySanitizer, { enabled: true, streaming: true })
+  const later = renderAssistantMarkdownSegmentsWithSanitizer(prefix + `Claim ${citationMarker}\n\n\\[\nx=1\n\\]`, identitySanitizer, { enabled: true, streaming: true })
+  assert.equal(initial[0].kind, 'artifact')
+  assert.deepEqual(initial[0], later[0])
+})
+
+test('invalid/out-of-range and ambiguous Unicode span endpoints cannot resolve a final marker', () => {
+  for (const [start, end] of [[0, 100000], [0, citationMarker.length + 1], [0, undefined], [undefined, citationMarker.length], [-1, citationMarker.length], [0.1, citationMarker.length], [0, Infinity], [0, Number.MAX_SAFE_INTEGER + 1]]) {
+    assert.doesNotMatch(citationHtml(citationMarker, [{ type: 'url_citation', start_index: start, end_index: end, url: 'https://example.com/invalid' }]), /data-web-search-ref="resolved"/, `invalid endpoints: ${start},${end}`)
+  }
+  const prefix = '😀'.repeat(citationMarker.length + 1)
+  const text = `${prefix}${citationMarker} ${citationMarker}`
+  assert.doesNotMatch(citationHtml(text, [{ type: 'url_citation', start_index: prefix.length, end_index: prefix.length + citationMarker.length, url: 'https://example.com/ambiguous' }]), /data-web-search-ref="resolved"/)
+})
+
+test('oversized markers have bounded tooltip/raw DOM metadata while literal code retains full original text', () => {
+  const raw = `\uE200cite\uE202${'turn0search3\uE202'.repeat(10000)}\uE201`
+  const html = citationHtml(raw)
+  assert.ok(html.length < 4000)
+  assert.match(html, /\[source\?\]/)
+  assert.match(html, /…/)
+  assert.ok(citationHtml(`\`${raw}\``).includes(raw))
+  const hostile = '\uE200cite\uE202<a href="https://example.com">&</a>\uE201'
+  const codeHtml = citationHtml(`\`${hostile}\``)
+  assert.doesNotMatch(codeHtml, /<a\b/)
+  assert.match(codeHtml, /&lt;a/)
+})
+
+test('incomplete citations inside code are literal even while streaming', () => {
+  const partial = '\uE200cite\uE202turn0sea'
+  for (const source of [`\`${partial}\``, `\`\`\`text\n${partial}`]) {
+    assert.match(citationHtml(source, [], true), /\uE200cite\uE202turn0sea/)
+    assert.doesNotMatch(citationHtml(source, [], true), /data-web-search-ref|FOXWARMCITATION/)
+  }
 })

@@ -25,6 +25,8 @@ Owns the browser application and WebUI-facing server surface: workbench/session 
 - [webui-chat-composer](../units/webui-chat-composer.md) — draft/input, autocomplete, attachments, and model controls.
 - [WebUI timeline](./webui-timeline.md) — focused module for Timeline modes, pane-local Search, Reasoning, Conversation and Activity contracts, with navigation to the rendering units.
 - [webui-workbench](../units/webui-workbench.md) — persisted tab/pane layout and compatibility normalization.
+- [webui-project-workspaces](../units/webui-project-workspaces.md) — Project navigation, remote directory selection and work-session tabs.
+- [Project workspace backend](../units/src-project-workspaces.md) — Main-owned Project metadata and execution target binding.
 - [webui-workbench-content](../units/webui-workbench-content.md) — stable tab instances, shared slot geometry, current-pane headers/focus, and content error isolation.
 - [webui-setup-view](../units/webui-setup-view.md), [webui-settings](../units/webui-settings.md), [settings menu](../units/webui-settings-menu.md).
 - [webui-theme-system](../units/webui-theme-system.md) — versioned portable manifests, built-ins, browser-local registry/selection, semantic runtime, Setup management, and renderer adapters.

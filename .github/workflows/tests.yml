@@ -80,9 +80,9 @@ jobs:
   chromium:
     name: Chromium fixtures
     runs-on: ubuntu-24.04
-    # Successful local timings for 112 serial files sum to 43 minutes, before the
-    # remaining fixtures and job setup/build/publish work. File deadlines stay bounded.
-    timeout-minutes: 90
+    # Allow setup/build, the full serial fixture suite and cleanup; measured
+    # hosted completion already reaches the previous 90-minute job budget.
+    timeout-minutes: 120
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

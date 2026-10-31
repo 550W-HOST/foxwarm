@@ -25,7 +25,7 @@ test('backend apply patch output reports per-file added and deleted line counts'
     await fs.writeFile(path.join(baseDir, 'remove.txt'), 'head\nremove\ntail');
     await fs.writeFile(path.join(baseDir, 'delete.txt'), 'delete me');
 
-    const result = await callTool('apply_patch', { input: [
+    const result = await callTool('edit', { apply_patch: [
       '*** Begin Patch',
       '*** Update File: replace.txt',
       '@@',
@@ -81,7 +81,7 @@ test('backend partial failure includes counts for operations already applied', a
 
   try {
     await assert.rejects(
-      () => callTool('apply_patch', { input: [
+      () => callTool('edit', { apply_patch: [
         '*** Begin Patch',
         '*** Add File: applied.txt',
         '+one',
@@ -118,7 +118,7 @@ test('backend Unicode patching retains per-file partial success when a later nea
   try {
     await fs.writeFile(path.join(baseDir, 'good.cs'), good);
     await fs.writeFile(path.join(baseDir, 'bad.cs'), bad);
-    await assert.rejects(() => callTool('apply_patch', { input: [
+    await assert.rejects(() => callTool('edit', { apply_patch: [
       '*** Begin Patch',
       '*** Update File: good.cs',
       '@@ section "target"',

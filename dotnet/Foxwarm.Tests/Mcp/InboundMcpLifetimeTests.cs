@@ -208,9 +208,9 @@ public sealed class InboundMcpLifetimeTests
                 (await f.Http.SendAsync(tooLarge)).StatusCode
             );
         }
-        // This client explicitly disables its optional GET; four held POSTs exhaust the four-request bound.
+        // Thirty-two held POSTs exhaust the ordinary HTTP budget; the physical GET has its own slot.
         var held = Enumerable
-            .Range(0, 4)
+            .Range(0, 32)
             .Select(i =>
                 InboundMcpFixture.ConcreteAsync(
                     client,
@@ -219,7 +219,13 @@ public sealed class InboundMcpLifetimeTests
                 )
             )
             .ToArray();
-        await peer.WaitAsync("effect", count: 6); // two earlier result effects and these four held POSTs.
+        await peer.WaitAsync("effect", count: 34); // Two earlier result effects and these thirty-two held POSTs.
+        using var get = f.Request("GET", client.SessionId);
+        using var stream = await f.Http.SendAsync(get, HttpCompletionOption.ResponseHeadersRead);
+        Assert.Equal(HttpStatusCode.OK, stream.StatusCode);
+        using var duplicate = f.Request("GET", client.SessionId);
+        using var duplicateResponse = await f.Http.SendAsync(duplicate);
+        Assert.Equal(HttpStatusCode.Conflict, duplicateResponse.StatusCode);
         using (
             var excess = f.Request(
                 "POST",
@@ -231,7 +237,7 @@ public sealed class InboundMcpLifetimeTests
                 HttpStatusCode.TooManyRequests,
                 (await f.Http.SendAsync(excess)).StatusCode
             );
-        foreach (var i in Enumerable.Range(0, 4))
+        foreach (var i in Enumerable.Range(0, 32))
             await peer.ReleaseAsync("concurrent-" + i);
         await Task.WhenAll(held).WaitAsync(TimeSpan.FromSeconds(10));
         Assert.NotNull(await client.ListToolsAsync(new ListToolsRequestParams()));

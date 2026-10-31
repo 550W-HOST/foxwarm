@@ -200,7 +200,7 @@ export async function executeResolvedTool(resolved: ResolvedTool, ctx: ToolConte
   // the trusted resolved target, never to a remote result or the current UI Node.
   const { onResolvedPaths, ...toolCtx } = ctx;
   if (resolved.source === 'node') {
-    const fileTool = ['read', 'write', 'edit', 'apply_patch'].includes(resolved.name);
+    const fileTool = ['read', 'write', 'edit'].includes(resolved.name);
     if (resolved.executionNode !== 'master') {
       const result = await executeNodeTool(ctx.sessionId, resolved.executionNode, resolved.name, resolved.args,
         resolved.routingSnapshot

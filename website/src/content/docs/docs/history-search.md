@@ -23,7 +23,12 @@ llm:
 
 ## Enable semantic search
 
-Vector search is disabled by default. It requires an embedding service in addition to your chat model endpoint.
+Vector search is disabled by default. It requires an embedding service in addition to your chat model endpoint, plus the bundled LanceDB native library's platform dependencies:
+
+- **Linux x64:** a compatible glibc-based system. Debian 13 has been exercised; older distributions need a native-library compatibility check before enabling search. The pinned package does not provide Linux-musl or Linux-arm64 assets. The [Docker image](/docs/installing/#docker-compose) provides the Debian 13 environment.
+- **Windows x64:** the system Visual C++ and Universal C runtime dependencies must be available for the native library.
+
+If the library cannot load, check the startup logs for the missing dependency. Main can continue with Vector unavailable. Upgrade the environment or leave `vector: false`; ordinary conversations, compaction and exact Archive reads do not require Vector.
 
 The current runtime requests the model **`qwen3-embedding:0.6b`** from an OpenAI-compatible `/embeddings` API. Your service must provide that model name. The configuration does not currently offer a different embedding-model name or an API-key field; use an endpoint Foxwarm can reach without an API key. Do not put credentials in its URL.
 

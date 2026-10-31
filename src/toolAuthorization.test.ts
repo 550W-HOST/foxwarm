@@ -250,7 +250,7 @@ rules:
   const mcpRead = buildToolAuthorizationRequest({ session, tool: { source: 'mcp', server: 'files', name: 'read' }, targetNode: 'master', args: { filePath: 'link/existing.txt' } });
   assert.deepEqual(mcpRead.paths, []);
   const patch = buildToolAuthorizationRequest({
-    session, tool: { source: 'node', name: 'apply_patch' }, targetNode: 'master', args: { input: [
+    session, tool: { source: 'node', name: 'edit' }, targetNode: 'master', args: { apply_patch: [
       '*** Begin Patch',
       '*** Add File: added.txt', '+added',
       '*** Update File: existing.txt', '@@', '-outside', '+updated',

@@ -16,7 +16,7 @@ import {
   type ToolAuthorizationPathRecord,
 } from './toolAuthorization';
 
-const EXTERNAL_NODE_TOOLS = new Set(['read', 'write', 'edit', 'apply_patch', 'exec']);
+const EXTERNAL_NODE_TOOLS = new Set(['read', 'write', 'edit', 'exec']);
 const MAX_NODES = 100;
 const MAX_TOOLS_PER_NODE = 200;
 
@@ -44,8 +44,8 @@ function pathFacts(nodeId: string, name: string, args: Record<string, unknown>):
     if (typeof value === 'string' && value.length > 0) records.push({ arg, raw: value, targetNode: nodeId });
   };
   if (['read', 'write', 'edit'].includes(name)) add('filePath', args.filePath);
-  if (name === 'apply_patch' && typeof args.input === 'string') {
-    for (const operation of parseApplyPatchInput(args.input)) add('input', operation.filePath);
+  if (name === 'edit' && typeof args.apply_patch === 'string') {
+    for (const operation of parseApplyPatchInput(args.apply_patch)) add('apply_patch', operation.filePath);
   }
   if (name === 'exec') add('cwd', args.cwd);
   return records;

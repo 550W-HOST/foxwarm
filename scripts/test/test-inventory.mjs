@@ -4,6 +4,7 @@ import path from 'node:path'
 // Both the full harness and per-scenario npm scripts use an owned application.
 // Raw invocation of these scenario files fails before reading an installation token.
 export const appRuntimeE2e = [
+  'packages/webui/test/projectWorkspaceApp.e2e.mjs',
   'packages/webui/test/lazyTimelineRestore.e2e.mjs',
   'packages/webui/test/scrollState.e2e.mjs',
   'packages/webui/test/sessionHeader.e2e.mjs',

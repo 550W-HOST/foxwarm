@@ -19,7 +19,7 @@ internal static class ConcreteRequestHistory
     )
     {
         var prepared = new List<JsonObject>();
-        foreach (var original in history)
+        foreach (var original in HostedSearchSources.Project(history))
         {
             // Visibility belongs to canonical admission, before request-only metadata removal.
             if (!CanonicalMessage.IsVisible(original))

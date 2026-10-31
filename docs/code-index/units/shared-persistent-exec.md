@@ -43,6 +43,10 @@ Generated Windows scripts use UTF-8 with BOM for PowerShell 5.1. The wrapper exp
 
 ## Native mechanics and compatibility
 
+### D-persistent-exec-logical-cwd
+
+[2026-10-30] POSIX native exec binds the child shell's `PWD` to its validated logical start cwd. A completed command that does not change directories keeps the requested symlink path spelling in `$PWD` and the final cwd sidecar, avoiding a false Main Session cwd update. A real `cd` still determines the recorded final cwd. This applies to TypeScript CLI and the shared [.NET Main/CLI launcher](./dotnet-node-primitives.md); Windows environment and cwd recording are unchanged. Existing live `/proc` cwd observations remain physical paths.
+
 - Bash/PowerShell wrappers record final cwd and actual exit status. POSIX redirects merged output in the wrapper and publishes paths through a temporary paths file; Windows passes known paths to the wrapper and inherits output handles under [D-persistent-exec-windows-capture](#d-persistent-exec-windows-capture). New native starts prepare the real Agent tmp directory, validate target-local cwd and record time immediately before launch. External namespaces omit Agent mapping and strip inherited reserved `fw_agentdir`/`fw_tmp` values. Windows strips case variants; POSIX preserves unrelated uppercase names.
 - `NativeExecBackend` owns those scripts/artifacts and delegates low-level process facts to `ProcessOperations`. `PersistentExecManager` owns public identity, durable registry mutation, wait/notification lifetime and result formatting. Native status polling preserves its existing cadence and status-before-Stop precedence; native status-read errors are not reclassified as successful exits.
 - Missing native status falls back only after the managed PID is no longer running and the existing grace period has elapsed. The fallback has unknown exit code, a detection timestamp and the existing missing-status error; its duration is unknown. Missing retention-pruned status parents are recreated before atomic fallback publication.
@@ -65,6 +69,7 @@ Generated Windows scripts use UTF-8 with BOM for PowerShell 5.1. The wrapper exp
 - Stat-time snapshots at or below 1 MiB use bounded reads of that snapshot. Larger logs read only 5,000-byte head/tail samples. Byte offsets and sizes are exact; Unicode/binary classification and display conversions use the shared bounded-text implementation. Programmatic content above 1 MiB is omitted rather than sampled as if complete.
 - Boundary whitespace is preserved, including whitespace-only output. Only a zero-byte capture gets a no-output placeholder. Metadata begins after the existing trailing LF or one separator LF; missing captured trailing LF is stated explicitly. Oversized logs report byte size, not an invented original line count.
 - Foreground and completion duration uses real timestamps or a supplied measured duration, not wait budget or dispatch time. Legacy missing or synthetic timestamps retain notification timestamps but display unknown duration. Timeout results show current elapsed time instead.
+- External-owner background results point to `foxwarm_exec_result` in the same MCP context; they do not promise an internal Session completion notification. Internal timeout/Stop copy and the existing completion dispatch remain unchanged. See the [inbound MCP boundary](./dotnet-inbound-mcp.md#concrete-catalog-and-retained-effects).
 - Known cwd crosses the Core adapter as private result metadata. Exact Session-owner synchronization and deferred replay enforce that the Session still selects that Node. Existing native cwd behavior and Node-selection entry points remain unchanged; provider cwd whitespace remains target data.
 
 ## Design decisions

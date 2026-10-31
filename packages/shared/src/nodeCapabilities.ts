@@ -1,3 +1,4 @@
+import { UNIFIED_EDIT_DESCRIPTION, unifiedEditParameters } from './unifiedEdit';
 import { VSCODE_GIT_COMMIT_SERVICE_VERSION } from './gitCommitDetails';
 
 export const CLI_NODE_CAPABILITIES = {
@@ -35,16 +36,8 @@ export const CLI_NODE_CAPABILITIES = {
     },
     {
       name: 'edit',
-      description: "Replace one exact occurrence of text in a file. Use apply_patch when a line-based patch is more suitable.",
-      parameters: {
-        type: 'object',
-        properties: {
-          filePath: { type: 'string' , description: "File to edit on this Node. Relative paths use the session working directory supplied for this Node, or its agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."},
-          oldText: { type: 'string' , description: "Exact text to replace; it must identify a single occurrence."},
-          newText: { type: 'string' , description: "Replacement text."},
-        },
-        required: ['filePath', 'oldText', 'newText'],
-      },
+      description: UNIFIED_EDIT_DESCRIPTION,
+      parameters: unifiedEditParameters("File to edit on this Node. Relative paths use the session working directory supplied for this Node, or its agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."),
     },
     {
       name: 'apply_patch',

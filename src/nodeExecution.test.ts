@@ -310,7 +310,7 @@ test('primitive Node backends derive canonical file tools and preserve provider-
   };
   const registry = new NodeProviderRegistry([provider]);
   const tools = Object.fromEntries((await registry.listNodes()).map(node => [node.id, node.tools.map(tool => tool.name)]));
-  assert.deepEqual(tools['primitive-rw'], ['read', 'write', 'edit', 'apply_patch']);
+  assert.deepEqual(tools['primitive-rw'], ['read', 'write', 'edit']);
   assert.deepEqual(tools['primitive-ro'], ['read']);
   for (const toolName of ['read', 'write']) {
     await assert.rejects(() => registry.invokeTool({
@@ -328,7 +328,7 @@ test('primitive Node backends derive canonical file tools and preserve provider-
   assert.equal(scriptRead.content, 'hello world\n'); assert.equal(scriptRead.truncated, false); assert.equal(scriptRead.filePath, 'urn:existing');
   assert.ok(observed.some(request => request.context.programmatic === true));
   await registry.invokeTool({ ...base, toolName: 'edit', args: { filePath: 'urn:existing', oldText: 'world', newText: 'primitive' } });
-  await registry.invokeTool({ ...base, toolName: 'apply_patch', args: { input: '*** Begin Patch\n*** Update File: urn:existing\n@@\n-hello primitive\n+hello canonical\n*** Add File: urn:added\n+added\n*** End Patch' } });
+  await registry.invokeTool({ ...base, toolName: 'edit', args: { apply_patch: '*** Begin Patch\n*** Update File: urn:existing\n@@\n-hello primitive\n+hello canonical\n*** Add File: urn:added\n+added\n*** End Patch' } });
   await registry.invokeTool({ ...base, toolName: 'write', args: { filePath: 'urn:new', content: 'new', overwrite: true, createDirs: true } });
   assert.equal(files.get('urn:existing')?.toString(), 'hello canonical\n');
   assert.equal(files.get('urn:added')?.toString(), 'added');
@@ -341,7 +341,7 @@ test('primitive Node backends derive canonical file tools and preserve provider-
   for (const request of [
     { toolName: 'read', args: { filePath: '$fw_tmp/a.txt' } },
     { toolName: 'write', args: { filePath: '$fw_agentdir/a.txt', content: 'x' } },
-    { toolName: 'apply_patch', args: { input: '*** Begin Patch\n*** Add File: $fw_tmp/a.txt\n+one\n*** End Patch' } },
+    { toolName: 'edit', args: { apply_patch: '*** Begin Patch\n*** Add File: $fw_tmp/a.txt\n+one\n*** End Patch' } },
   ]) {
     await assert.rejects(() => registry.invokeTool({ ...base, ...request }), /unavailable in this execution environment/);
   }
@@ -399,8 +399,8 @@ test('primitive patch Add propagates invalid stat and performs no mutation', asy
     },
   };
   await assert.rejects(() => new NodeProviderRegistry([provider]).invokeTool({
-    sourceSessionId: 'source', nodeId: descriptor.id, toolName: 'apply_patch',
-    args: { input: '*** Begin Patch\n*** Add File: opaque-existing\n+replacement\n*** End Patch' },
+    sourceSessionId: 'source', nodeId: descriptor.id, toolName: 'edit',
+    args: { apply_patch: '*** Begin Patch\n*** Add File: opaque-existing\n+replacement\n*** End Patch' },
     context: { agent: 'agent', currentNode: descriptor.id, cwd: 'opaque-cwd' },
   }), /Filesystem stat returned an invalid result/);
   assert.deepEqual(calls, ['stat']);

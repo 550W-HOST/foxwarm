@@ -305,14 +305,6 @@ internal sealed partial class NodeProviderRegistry
                         : "File to edit"
                     )
                     + " on this Node. Relative paths use the Session's working directory, or the Node's default directory when unset. Path syntax and home-directory handling are defined by the Node. $fw_agentdir and $fw_tmp are not supported.";
-            else if (name == "apply_patch")
-                definition["description"] = definition["description"]!
-                    .GetValue<string>()
-                    .Replace(
-                        "Paths in patch headers use the session working directory, or the agent directory when unset. Absolute paths, ~/ paths, and leading $fw_agentdir or $fw_tmp are accepted subject to permissions. Other leading $ names are rejected.",
-                        "Relative paths in patch headers use the Session's working directory, or the Node's default directory when unset. Path syntax and home-directory handling are defined by the Node. $fw_agentdir and $fw_tmp are not supported.",
-                        StringComparison.Ordinal
-                    );
         }
         return definitions;
     }
@@ -434,7 +426,7 @@ internal sealed partial class NodeProviderRegistry
             );
         if (owner is null)
             throw new InvalidOperationException("Primitive file tools require a Session owner.");
-        if (name is not ("read" or "write" or "edit" or "apply_patch"))
+        if (name is not ("read" or "write" or "edit"))
             throw new InvalidOperationException("Tool is unavailable on this Node: " + name);
         var operations = await FileOperationsAsync(
             node,

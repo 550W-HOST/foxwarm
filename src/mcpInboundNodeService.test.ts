@@ -78,7 +78,7 @@ test('an external context discovers, selects, and uses paired CLI file capabilit
     const b: ExternalExecutionContext = { id: '11111111-2222-4333-8444-666666666666', externalId: 'beta', currentNode: 'master', cwd: null, selectionGeneration: 0 };
     assert.deepEqual(await listExternalNodeTools(beta, b), []);
     const tools = await listExternalNodeTools(alpha, a);
-    assert.deepEqual(new Set(tools.map(tool => tool.name)), new Set(['read', 'write', 'edit', 'apply_patch', 'exec']));
+    assert.deepEqual(new Set(tools.map(tool => tool.name)), new Set(['read', 'write', 'edit', 'exec']));
     assert.equal((await externalNodeAction(alpha, a, 'status')).available, false); // master not yet supported externally.
     setToolAuthorizationPolicyForTests(parseToolAuthorizationPolicyBytes(`version: 1
 defaultAction: deny
@@ -110,7 +110,7 @@ rules:
     const filePath = path.join(dir, 'test.txt');
     await callExternalNodeTool(alpha, a, 'paired-external-node', 'write', { filePath, content: 'one', createDirs: true });
     await callExternalNodeTool(alpha, a, 'paired-external-node', 'edit', { filePath, oldText: 'one', newText: 'two' });
-    await callExternalNodeTool(alpha, a, 'paired-external-node', 'apply_patch', { input: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-two\n+three\n*** End Patch` });
+    await callExternalNodeTool(alpha, a, 'paired-external-node', 'edit', { apply_patch: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-two\n+three\n*** End Patch` });
     const read = await callExternalNodeTool(alpha, a, 'paired-external-node', 'read', { filePath });
     assert.match(String((read as any).output), /three/);
     assert.equal(await fs.readFile(filePath, 'utf8'), 'three');

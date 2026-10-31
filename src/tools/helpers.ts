@@ -208,7 +208,7 @@ export async function editResolvedPath(fullPath: string, oldText: string, newTex
     const content = (await readWholeFile(operations, fullPath)).toString('utf8');
 
     if (typeof oldText !== 'string' || typeof newText !== 'string') {
-        throw new Error('Edit tool requires oldText and newText. Use apply_patch for patch-style edits.');
+        throw new Error('edit_memory requires oldText and newText strings.');
     }
 
     const updatedContent = applyExactReplacement(content, oldText, newText, 'oldText');

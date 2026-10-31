@@ -48,8 +48,9 @@ internal sealed class CompletionsEventAccumulator(ResponsesStreamCallbacks? call
             }
             if (SessionWait.Text(delta["refusal"]) is { Length: > 0 })
                 callbacks?.OnMeaningfulProgress?.Invoke();
-            if (delta["provider_specific_fields"] is JsonObject opaque)
-                message["provider_specific_fields"] = opaque.DeepClone();
+            foreach (var key in new[] { "provider_specific_fields", "extra_fields" })
+                if (delta[key] is JsonObject opaque)
+                    message[key] = MergeOpaqueFields(message[key] as JsonObject, opaque);
             foreach (var rawCall in delta["tool_calls"] as JsonArray ?? [])
             {
                 var part =
@@ -135,6 +136,23 @@ internal sealed class CompletionsEventAccumulator(ResponsesStreamCallbacks? call
             if (SessionWait.Text(choice["finish_reason"]) is { Length: > 0 } reason)
                 finishReason = reason;
         }
+    }
+
+    private static JsonObject MergeOpaqueFields(JsonObject? previous, JsonObject incoming)
+    {
+        // Accumulate object/object deltas; null members do not clear
+        // accumulated values. Newly assigned objects and arrays remain opaque.
+        var merged = previous?.DeepClone().AsObject() ?? new JsonObject();
+        foreach (var (key, value) in incoming)
+        {
+            if (value is null)
+                continue;
+            merged[key] =
+                value is JsonObject next && merged[key] is JsonObject prior
+                    ? MergeOpaqueFields(prior, next)
+                    : value.DeepClone();
+        }
+        return merged;
     }
 
     private IEnumerable<Tool> Ordered() =>

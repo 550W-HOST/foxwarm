@@ -72,6 +72,16 @@ test('embedded Code starts from a persistent workspace URL', () => {
   assert.equal(url.searchParams.has('folderUri'), false)
 })
 
+test('project Code URL binds the workspace ID and remote folder', () => {
+  const target = { nodeId: 'worker-a', path: '/srv/project' }
+  const url = makeVscodeWebUrl('/proxy/api', 'https://example.test', target, { embedded: true, workspaceId: 'work-session-1' })
+  assert.equal(url.pathname, '/proxy/vscode-web/')
+  assert.equal(url.searchParams.get('workspaceId'), 'work-session-1')
+  assert.equal(url.searchParams.get('initialFolderUri'), 'foxwarm://node+worker-a/srv/project')
+  assert.throws(() => makeVscodeWebUrl('/api', 'https://example.test', target, { embedded: true, workspaceId: '../outside' }))
+  assert.throws(() => makeVscodeWebUrl('/api', 'https://example.test', target, { workspaceId: 'work-session-1' }))
+})
+
 test('tool file paths resolve for valid local or remote nodes with absolute path or cwd', () => {
   assert.deepEqual(resolveToolCodeFileTarget('src/index.ts', 'master', '/app', { startLine: 4, endLine: 8 }), {
     kind: 'openFile',

@@ -177,9 +177,13 @@ internal static class CompletionsRequestSerializer
                     SessionWait.Text(raw["providerMeta"]?["sourceModelId"]),
                     concreteModelId
                 )
-                && raw["providerMeta"]?["providerSpecificFields"] is JsonObject fields
             )
-                wire["provider_specific_fields"] = fields.DeepClone();
+            {
+                if (raw["providerMeta"]?["providerSpecificFields"] is JsonObject fields)
+                    wire["provider_specific_fields"] = fields.DeepClone();
+                if (raw["providerMeta"]?["extraFields"] is JsonObject extra)
+                    wire["extra_fields"] = extra.DeepClone();
+            }
             result.Add(wire);
         }
         FlushToolImages();

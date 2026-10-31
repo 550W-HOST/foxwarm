@@ -14,7 +14,6 @@ import {
 import { resolveDirectTool } from './resolvedTools';
 
 const EXPECTED_NODE_ENVIRONMENT_TOOLS = [
-  'apply_patch',
   'browse_close',
   'browse_get',
   'browse_interact',
@@ -40,7 +39,7 @@ test('node-environment builtins are intentional and match applicable CLI node ca
   const cliNames = CLI_NODE_CAPABILITIES.tools.map(tool => tool.name).sort();
   assert.equal(cliNames.includes('get_default_cwd'), true, 'get_default_cwd remains a node-only capability');
   assert.deepEqual(
-    cliNames.filter(name => name !== 'get_default_cwd'),
+    cliNames.filter(name => name !== 'get_default_cwd' && name !== 'apply_patch'),
     EXPECTED_NODE_ENVIRONMENT_TOOLS,
   );
 });

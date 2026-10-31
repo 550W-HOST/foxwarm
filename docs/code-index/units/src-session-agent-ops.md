@@ -13,7 +13,7 @@ Metadata facts, normalized storage, isolation reads and inheritance traversal li
 
 - `validateAgentName(agentName)` — validates agent name format
 - `validateSessionName(sessionName)` — validates session name format
-- `createSessionInAgent(options, deps)` — creates a new session scoped to an agent with optional explicit Node and model/effort settings; see [named-session Node defaults](#named-session-node-defaults)
+- `createSessionInAgent(options, deps)` — creates a new session scoped to an agent with optional explicit Node, initial cwd and model/effort settings; Project creation supplies Node and cwd before the first authoritative Session write. See [named-session Node defaults](#named-session-node-defaults).
 - `createAgentWithMainSession(options, deps)` — creates a new agent directory and its optional initial main session, inheriting source model/effort and future-child defaults when present; this agent-creation contract is distinct from spawned child/fork normalization
 - `moveSessionToTarget(options, deps)` — renames or moves a session across agents
 - `recoverPendingSessionIdentityMove(moveSessionArchiveIndex)` — finishes or reverses the one crash-interrupted identity move before normal session loading

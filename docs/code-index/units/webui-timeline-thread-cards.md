@@ -14,7 +14,7 @@ Owns the thread-card family used by the chat timeline for CTX-BLOCK, Reasoning, 
 - `ModelThreadCard` — shared Reasoning/Web Search thread-card chrome and expand/collapse interaction; optional header information follows the shrinkable preview. Reasoning token information stays fixed at the trailing edge even when expanded; WebSearch without information is unchanged.
 - `ReasoningTokenBadge` — compact accessible Brain/token information shared by a tool or assistant-text recipient of an empty reasoning run; shows one icon and the sum of known assigned values for display only, without estimating or changing usage.
 - `useThreadCardHeightTransition(expanded)` — one-shot measured height interpolation on local toggles; delegates viewport follow to Chat
-- `WebSearchCard` — narrow renderer for persisted OpenAI Responses search/open-page activity
+- `WebSearchCard` — narrow renderer for persisted OpenAI Responses search/open-page activity; safe deduplicated `action.sources` stay in their own expanded card under **Search sources**, separately from sentence citations. See [hosted-search citation integrity](../threads/web-search-citations.md#d-hosted-search-citation-integrity).
 - `getContextBlockMetaFromMessage(message)` — pure helper that prefers structured `__meta.contextBlock` metadata and falls back to parsing legacy CTX-BLOCK text only when needed
 
 ## Function Index

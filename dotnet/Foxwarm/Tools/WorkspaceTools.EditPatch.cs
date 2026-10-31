@@ -5,51 +5,24 @@ namespace Foxwarm.Tools;
 
 public sealed partial class WorkspaceTools
 {
-    private async Task<JsonObject> ExecuteEditPatchAsync(
-        string name,
-        JsonObject? args,
-        CancellationToken ct
-    )
+    private async Task<JsonObject> ExecuteEditPatchAsync(JsonObject? args, CancellationToken ct)
     {
         try
         {
-            if (name == "edit")
+            var edit = UnifiedEdit.Parse(args);
+            if (edit is { Patch: null })
             {
-                if (
-                    args is null
-                    || args.Count != 3
-                    || !Text(args, "filePath", out var file)
-                    || !Text(args, "oldText", out var oldText)
-                    || !Text(args, "newText", out var newText)
-                )
-                    return Error(
-                        "invalid_tool_arguments",
-                        "edit requires filePath, oldText and newText strings."
-                    );
+                var file = edit.FilePath!;
                 var path = ResolvePatchPath(file, false);
                 var content = await ReadPatchFileAsync(path, ct);
-                var (occurrences, updated) = ExactReplacement.Apply(content, oldText, newText);
-                if (occurrences == 0)
-                    return Error(
-                        "edit_failed",
-                        "Could not find oldText in file. Make sure whitespace matches exactly."
-                    );
-                if (occurrences > 1)
-                    return Error(
-                        "edit_failed",
-                        $"Found {occurrences} occurrences of oldText in file. Make oldText more specific."
-                    );
-                await WritePatchFileAsync(path, updated!, ct);
+                var updated = edit.Apply(content);
+                await WritePatchFileAsync(path, updated, ct);
                 ReportPaths((file, path));
                 return new JsonObject { ["output"] = "File edited successfully" };
             }
-            if (
-                args is null
-                || args.Count != 1
-                || !Text(args, "input", out var input)
-                || input.Length == 0
-            )
-                return Error("invalid_tool_arguments", "apply_patch requires input string.");
+            var input = edit.Patch;
+            if (string.IsNullOrEmpty(input))
+                return Error("invalid_tool_arguments", "Patch text is required.");
             PatchOperation[] operations;
             try
             {
@@ -173,12 +146,6 @@ public sealed partial class WorkspaceTools
         {
             return Error("tool_io_error", error.Message);
         }
-    }
-
-    private static bool Text(JsonObject args, string key, out string value)
-    {
-        value = "";
-        return args[key] is JsonValue scalar && scalar.TryGetValue<string>(out value!);
     }
 
     private string ResolvePatchPath(string text, bool allowMissing) =>

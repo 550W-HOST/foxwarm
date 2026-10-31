@@ -1,6 +1,6 @@
 # Unit: OpenAI Responses HTTP and WebSocket adapters
 
-Files: `dotnet/Foxwarm/Models/Responses/ResponsesAttempt.cs`, `dotnet/Foxwarm/Models/Responses/HostedResponsesTools.cs`, `dotnet/Foxwarm/Models/Responses/OpenAIResponsesClient.cs`, `dotnet/Foxwarm/Models/Responses/ResponsesRequestPlan.cs`, `dotnet/Foxwarm/Models/Responses/ResponsesStreaming.cs`, `dotnet/Foxwarm/Models/Responses/WebSockets/ResponsesWsChatService.cs`, `dotnet/Foxwarm/Models/Responses/WebSockets/ResponsesWsResource.cs`, `dotnet/Foxwarm/Models/Responses/WebSockets/ResponsesWsState.cs`, `dotnet/Foxwarm/Models/Responses/WebSockets/ResponsesWsTransport.cs`
+Files: `dotnet/Foxwarm/Models/Responses/ResponsesAttempt.cs`, `dotnet/Foxwarm/Models/Responses/HostedResponsesTools.cs`, `dotnet/Foxwarm/Models/Responses/HostedSearchSources.cs`, `dotnet/Foxwarm/Models/Responses/OpenAIResponsesClient.cs`, `dotnet/Foxwarm/Models/Responses/ResponsesRequestPlan.cs`, `dotnet/Foxwarm/Models/Responses/ResponsesStreaming.cs`, `dotnet/Foxwarm/Models/Responses/WebSockets/ResponsesWsChatService.cs`, `dotnet/Foxwarm/Models/Responses/WebSockets/ResponsesWsResource.cs`, `dotnet/Foxwarm/Models/Responses/WebSockets/ResponsesWsState.cs`, `dotnet/Foxwarm/Models/Responses/WebSockets/ResponsesWsTransport.cs`
 
 ## Purpose
 
@@ -12,6 +12,7 @@ Plans and sends Responses requests, collects event streams, executes supported h
 - `OpenAIResponsesClient.ExecuteAsync` owns HTTP response status/error handling and returns a streaming/non-streaming attempt result.
 - `ResponsesEventAccumulator`/`ResponsesSseCollector.CollectAsync` parse response events, record output text/reasoning/tool calls/usage, emit rebuilt completed items (including streamed summary/content enrichment), and stop on terminal/error events.
 - `ResponsesAttempt` shares SSE/WS completed-prefix ordering, guarded reasoning retention, conversion, per-physical-attempt generated-image budget and suffix extraction. The exact ordinary turn host supplies its append/delivery callback; detached services have no segment-commit authority.
+- `HostedSearchSources` retains/enriches raw hosted search actions and projects bounded, untrusted URL evidence for subsequent requests. The request projection favors recent calls within 16 KiB UTF-8, 64 sources and eight calls; it preserves producing model/request/call identity, escapes external titles as JSON and admits only bounded credential-free HTTP(S) URLs. Source evidence has no citation-reference mapping; [hosted-search integrity](../threads/web-search-citations.md#d-hosted-search-citation-integrity) owns the contract.
 - `HostedResponsesTools` exposes provider-hosted search/hosted tools as definitions/results; it does not grant local filesystem or Session authority.
 - `ResponsesWsChatService`, `ResponsesWsResource`, `ResponsesWsState`, and `ResponsesWsTransport` own connection lease, handshake, resumable state, close/error, and resource disposal for WebSocket turns.
 
@@ -34,6 +35,10 @@ Indexed reasoning-summary part-added, part-done, text-delta and text-done events
 ## Replay and hosted output boundaries
 
 WebSocket state belongs to the concrete request/cache generation and its owned connection lease. The complete semantic body is prepared and its digest recorded before connection-specific suffix selection or reconnect. Reuse depends on compatible committed input and tool pairs, not merely a prior response ID. Malformed function arguments use the shared [per-call argument-error boundary](./session-domain.md#tool-argument-parsing), preserving valid siblings and safe replay instead of retrying the complete response. A reconnect sends the appropriate complete request rather than pretending a failed socket retained state.
+
+Hosted search includes are merged after `extraFields` and first-class effort normalization, based on the final `web_search` / `web_search_preview` declarations. Custom includes and required encrypted reasoning keep their ordinary precedence. Stream/final search actions merge source records by actual type and URL; sparse or condensed finals enrich only unambiguous exact-ID search calls, never unrelated output positions. A search call blocks early canonical publication of itself and its suffix until final assembly, while draft text remains live. Earlier commentary prefixes retain their ordinary commit/failure behavior.
+
+After a hosted-search response, the WebSocket finalizer discards that chain: request-only evidence was not provider-emitted output and must be sent in the next full request. Exact-prefix reuse resumes after that request. Canonical annotations retain the provider's original offsets and their own text-part scope through ordinary WebUI history/notifications to shared React; no source-list position supplies a citation mapping.
 
 ### D-responses-hosted-tool-purpose
 
@@ -60,3 +65,5 @@ SSE and WebSocket image activity share the attempt-local latched inactivity floo
 `ResponsesWsCancellationTests.cs` holds linked-attempt propagation behind a real original-caller socket abort, distinguishes independent timeout/disconnect failures, and checks ordinary Stop journal classification, one send and idle owner settlement.
 
 `ResponsesParityTests.cs` exercises ordinary HTTP request owners for both Responses aliases, cache-key overrides, canonical encrypted-reasoning replay, and provider SSE bytes for indexed summary synthesis, part-added seeds, empty replacement and final-output alignment.
+
+`HostedSearchSourcesTests.cs` covers immutable projection, URL safety, escaping, recent-call/source/UTF-8 budgets, request-scoped deduplication, opened-page distinction and aligned/sparse/ambiguous enrichment. `ResponsesHostedSearchTests.cs` shares the ordinary Session owner fixture with prefix tests: real HTTP/WS peers qualify final declaration/include precedence, pre-search prefix persistence, draft continuity, final-only sources and exact annotations, local tool handoff, full replay and subsequent WS reuse. `packages/webui/test/mainHostSearchSources.e2e.mjs` drives a disposable normal C# host and the original React App through HTTP/WS search, actual read-tool continuation, a Completions model switch, persistence/restart, safe source disclosure and Unicode exact-span versus unrelated references. Shared citation/artifact rendering edge cases remain covered by `webSearchCitations.e2e.mjs`.

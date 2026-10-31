@@ -79,6 +79,14 @@ The master serves current launch scripts, compose, PowerShell, a minimal dynamic
 
 ## Design decisions
 
+### D-node-thread-unified-edit
+
+[2026-10-31] Current CLI Nodes advertise `features.unifiedEdit:true` without changing the core protocol range. Current Main projects advertised edit capabilities to the [unified model surface](../units/shared-node-tools.md#d-unified-edit), omitting the standalone patch tool. Current Nodes retain the legacy `apply_patch({input})` wire handler/advertisement so older supported Main can still send patches.
+
+At the authenticated resident boundary, Main sends native edit arguments when the feature is present. Otherwise a single replacement maps to legacy `edit`, and an `apply_patch` field maps to the legacy patch wire call. For Session-owned batches or `replaceAll:true`, Main reuses its existing authorized complete-source read, including the Node's read approval, then validates all original-content ranges and sends one legacy edit whose `oldText` is the complete original and `newText` is the final result. Complete programmatic content is preferred; older/bounded replies require the existing correlated byte transfer only after the approved read. Legacy JavaScript replacement tokens are escaped so dollars and newlines remain literal. Matching or read failure prevents the edit; the complete captured original must match exactly once. A concurrent prefix/suffix that leaves that match intact is preserved by legacy substring replacement; this is not compare-and-swap. An effect is never retried after ambiguous transport failure, and no backend write bypass or multi-file transaction is introduced.
+
+External MCP callers use native unified Nodes for all forms. Legacy external peers retain single replacement (including explicit `replaceAll:false`) and patch translation; `edits[]` or `replaceAll:true` reject before dispatch with an upgrade-needed error. The compatibility adapter does not grant external whole-source, Session-transfer or Code-service authority.
+
 ### D-node-thread-shell-http
 
 An exec-only Shell Node is an authenticated remote Node behind the same provider/selection boundary. It uses the existing pre-created per-node credential and a genuine HTTP long-poll transport, without client JSON parsing, WebSocket emulation, filesystem services, or external-owner capabilities. The current C# Main supports the existing POSIX sh/curl client and an explicit Windows PowerShell 5.1 dialect, independent of Main's host OS. Main keeps the original dispatch Session, generated exec ID, and signed completion grant; the client reports only that task's result. Foreground timeout transitions to the same background command and its completion uses the existing durable Session-event admission/ACK boundary. No network failure requeues an already delivered command.
