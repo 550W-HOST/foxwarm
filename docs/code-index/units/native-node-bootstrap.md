@@ -1,0 +1,26 @@
+# Unit: Native-aware Node bootstrap
+
+Files: `templates/node/run.sh`, `templates/node/run-interactive.sh`, `templates/node/run-docker.sh`, `templates/node/run.ps1`, `templates/node/docker-compose.yaml`, `scripts/start-sandbox-node.sh`, `dotnet/Foxwarm.Tests/scripts/qualify-native-onboarding.mjs`
+Secondary/integration references: `dotnet/Foxwarm/Nodes/NodeBootstrap.cs`, `dotnet/Foxwarm/Nodes/NodeConnectionHub.cs`, `src/nodes/httpRoutes.ts`, `src/nodes/runSh.test.ts`, `src/nodes/runPs1.test.ts`, `dotnet/Foxwarm.Tests/Tools/NodeOnboardingHttpTests.cs`
+
+## Selection and delivery
+
+Main-generated WebUI, `/node` and bootstrap-info commands share the existing templates. Bare-metal foreground/background/systemd and interactive launchers select the full static native CLI only for Linux x86-64. Docker selection runs inside the target Linux build, so it follows the container architecture rather than the operator's machine. Other platforms retain the prebuilt JavaScript/source-build path; PowerShell and the independent Shell HTTP client keep their existing implementations.
+
+`NodeBootstrap` renders the public URL `https://foxwarm.net/downloads/native-cli-node-latest-v{n}.tar.gz` using `NodeConnectionHub.CurrentProtocolVersion`, the same owner used for Main negotiation. The retained Source renderer uses its existing shared protocol range. The [distribution lane](./native-cli-distribution.md) owns the complete package and channel retention. Clients download directly; Main does not compile, fetch, proxy or cache a release. A failed native download fails setup rather than silently choosing another implementation. Domain/download activation must precede rollout of these templates.
+
+## Existing caller effects
+
+The [external Node unit](./external-nodes.md#bootstrap-address-ownership) owns configured/browser/explicit addresses, deployment prefixes, public request-derived defaults and validation before credential creation. Native selection does not change those rules or pairing versus direct-auth command generation. The CLI receives the same host, ID, pairing/auth token and credential-file arguments. Existing credential files remain readable; credential persistence and reconnect remain CLI-owned.
+
+Bare-metal installation requires `--dir`. Its runtime, generated launcher, credentials, logs, PID/mode, environment file and systemd unit remain under that root. The process cwd remains `<dir>/foxwarm-node`, retaining existing Agent path resolution. Foreground is the default, background prefers tmux then nohup, and systemd invokes the same foreground launcher without another daemon layer.
+
+Interactive startup preserves its source/state directory flags, approval pattern/deadline and caller cwd. Its native branch attaches `/dev/tty` before entering `--interactive`, because the generated curl pipeline uses stdin for the shell script. A controlling terminal is required. Native console behavior is owned by the [interactive unit](./dotnet-cli-interactive.md).
+
+Docker retains the existing utility-rich Node base image and non-x64 JavaScript fallback. On x64 it downloads the native package and Main's public `/node/start-sandbox-node.sh` instead of the source archive. That shared startup script preserves direct-token/stored-credential/pairing-file precedence and readiness polling, then executes the installed native client or retained JavaScript entry. Compose adds an Agent bind mount from `${NODE_DATA_DIR:-./data}/agents` to `/app/agents`, preserving the existing in-container Agent path, `/app` startup cwd and `/data` credential mount. Before replacing an existing container, copy its previously unmounted `/app/agents` contents into the host data directory's `agents` subdirectory. No automatic migration or container provisioning service is added.
+
+## Tests and limits
+
+`qualify-native-onboarding.mjs --archive <qualified-complete-release>` starts an owned normal Main and local model peer. It requires the real built WebUI assets in Main's output because Docker startup waits on the public login page. Credential checks wait for client persistence separately from Main's online publication. Only its curl fixture redirects the exact canonical asset URL to a local archive server; production has no test download override. It executes generated precreated-token and shared-pairing commands, asserts native process identity without CLR/Node mappings, private credential persistence, deployment prefixes, native ordinary exec, background startup, saved-credential restart and cold Main reconnect. The generated interactive curl pipeline runs in a real PTY, manually approves selection, auto-approves an exec call, reads its bound Session history and restores terminal state on quit.
+
+The same fixture parses generated Compose with the real offline Compose CLI and runs the exact public Docker startup script with the supplied executable and owned state. It does not claim a container build/run. Systemd effects are mocked while checking generated service/launcher and enable/restart calls. The retained shell regression suite also verifies fallback source execution, tmux/nohup, direct credentials, quoting and real systemd unit parsing. Native package availability, container execution and public-domain cutover require separate rollout evidence.

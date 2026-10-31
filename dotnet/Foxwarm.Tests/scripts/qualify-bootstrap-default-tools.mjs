@@ -59,7 +59,7 @@ try {
         for (const name of ['run-shell.sh', 'run.sh', 'run-docker.sh', 'run-interactive.sh', 'run-cli-node.sh', 'run.ps1', 'docker-compose.yaml']) {
           const template = await readFile(join('templates/node', name === 'run-cli-node.sh' ? 'run-interactive.sh' : name), 'utf8')
           const rendered = await text(f.origin, prefix + '/node/' + name, { host: 'internal.example:3001', 'x-forwarded-host': 'edge.example:8443, ignored.example', 'x-forwarded-proto': 'HTTPS, http' })
-          assert.equal(rendered, template.replaceAll('__FOXWARM_DEFAULT_BASE_URL__', 'https://edge.example:8443'), name)
+          assert.equal(rendered, template.replaceAll('__FOXWARM_DEFAULT_BASE_URL__', 'https://edge.example:8443').replaceAll('__FOXWARM_NATIVE_CLI_URL__', 'https://foxwarm.net/downloads/native-cli-node-latest-v3.tar.gz'), name)
         }
         const template = await readFile('templates/node/run.sh', 'utf8')
         for (const [headers, expected] of [
@@ -67,7 +67,7 @@ try {
           [{ host: '[::1]:8800', 'x-forwarded-proto': 'bogus' }, 'http://[::1]:8800'],
           [{ host: 'direct.example', 'x-forwarded-host': 'bad/host' }, ''],
           [{ host: 'direct.example', 'x-forwarded-host': ' , ignored.example', 'x-forwarded-proto': 'javascript' }, 'http://direct.example'],
-        ]) assert.equal(await text(f.origin, prefix + '/node/run.sh', headers), template.replaceAll('__FOXWARM_DEFAULT_BASE_URL__', expected))
+        ]) assert.equal(await text(f.origin, prefix + '/node/run.sh', headers), template.replaceAll('__FOXWARM_DEFAULT_BASE_URL__', expected).replaceAll('__FOXWARM_NATIVE_CLI_URL__', 'https://foxwarm.net/downloads/native-cli-node-latest-v3.tar.gz'))
       })
       if (!configured) await check('ordinary real provider request omits default-hidden management definitions', async () => {
         const created = await post('/api/sessions', { agentId: 'main', sessionId: 'ordinary-tools' })

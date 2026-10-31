@@ -10,6 +10,7 @@ Executable registry/files, persistent provider exec and optional lifecycle are c
 
 ## Units
 
+- [Native-aware Node bootstrap](../units/native-node-bootstrap.md) — generated platform selection, state/service paths and public download channel.
 - [.NET CLI Node](../units/dotnet-cli-node.md) — separate authenticated file/exec, fixed Code/optional terminal services, loopback trigger and Session client API executable.
 - [Native CLI interactive entry](../units/dotnet-cli-interactive.md) — explicit console mode with bounded Session history/message input and ordinary-tool approval.
 - [Main-local browser and shared evaluation](../units/dotnet-main-browser.md) — hidden master capabilities with process-owned tabs and caller-specific file/image effects.

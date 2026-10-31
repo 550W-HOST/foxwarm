@@ -3,8 +3,8 @@
 This recipe publishes the standalone .NET CLI Node, including its optional Linux
 PTY shim. It does not build Main, frontend assets or the TypeScript CLI. The
 qualified default target is **Linux x64 with glibc**. The separate static-musl
-build below has its own bounded qualification; neither recipe changes bootstrap
-selection or qualifies ARM64.
+build below has its own bounded qualification. Main onboarding selects the
+qualified full static Linux x64 package; neither recipe qualifies ARM64.
 
 The build uses official .NET SDK 10.0.401 and runtime/ILCompiler 10.0.12 with the
 UBI 9 distro compiler, headers and libraries. It copies SDK files, not the SDK

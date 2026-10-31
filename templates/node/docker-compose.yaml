@@ -4,6 +4,7 @@ services:
       context: .
       args:
         NODE_SOURCE_URL: ${NODE_SOURCE_URL}
+        NODE_HOST: ${NODE_HOST}
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NO_PROXY: ${NO_PROXY:-}
@@ -14,6 +15,7 @@ services:
         FROM node:24.17.0-bookworm-slim
 
         ARG NODE_SOURCE_URL
+        ARG NODE_HOST
 
         RUN apt-get update \
             && apt-get install -y --no-install-recommends \
@@ -45,19 +47,25 @@ services:
 
         WORKDIR /app
 
-        RUN test -n "$NODE_SOURCE_URL"
-        RUN curl -fsSL "$NODE_SOURCE_URL" | tar -xzf - -C /app
-
-        RUN if [ -f /app/packages/cli-node/dist/client.bundle.js ]; then \
-              echo "Using bundled node client from source archive; skipping npm install."; \
+        RUN if [ "$$(uname -m)" = "x86_64" ]; then \
+              curl -fsSL "__FOXWARM_NATIVE_CLI_URL__" -o /tmp/native-cli-node.tar.gz \
+              && tar -xzf /tmp/native-cli-node.tar.gz -C /app \
+              && rm /tmp/native-cli-node.tar.gz \
+              && test -x /app/native-cli-node-linux-x64/Foxwarm.CliNode \
+              && mkdir -p /app/scripts \
+              && curl -fsSL "$$NODE_HOST/node/start-sandbox-node.sh" -o /app/scripts/start-sandbox-node.sh; \
             else \
-              npm --prefix /app/packages/shared ci \
-              && npm --prefix /app/packages/shared run build \
-              && npm --prefix /app/packages/cli-node ci \
-              && npm --prefix /app/packages/cli-node run build; \
+              test -n "$$NODE_SOURCE_URL" \
+              && curl -fsSL "$$NODE_SOURCE_URL" | tar -xzf - -C /app \
+              && if [ ! -f /app/packages/cli-node/dist/client.bundle.js ]; then \
+                npm --prefix /app/packages/shared ci \
+                && npm --prefix /app/packages/shared run build \
+                && npm --prefix /app/packages/cli-node ci \
+                && npm --prefix /app/packages/cli-node run build; \
+              fi \
+              && npm --prefix /app/packages/cli-node-runtime ci --omit=dev \
+              && npm cache clean --force; \
             fi
-        RUN npm --prefix /app/packages/cli-node-runtime ci --omit=dev \
-            && npm cache clean --force
         RUN chmod +x /app/scripts/start-sandbox-node.sh
 
         ENV NODE_ENV=production
@@ -79,3 +87,4 @@ services:
       no_proxy: ${no_proxy:-}
     volumes:
       - ${NODE_DATA_DIR:-./data}:/data
+      - ${NODE_DATA_DIR:-./data}/agents:/app/agents

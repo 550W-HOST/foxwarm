@@ -28,10 +28,12 @@ The approved Node receives its own credentials for subsequent connections. Save 
 
 ### Client choices
 
-- The standard CLI client runs directly on Linux, macOS, or Windows.
+- The standard CLI client runs directly on Linux, macOS, or Windows. Linux x64 onboarding downloads the standalone native client; it needs no Node.js or .NET runtime. Other platforms keep the Node.js client.
 - The interactive client adds a local approval interface for tool calls.
-- The Docker bootstrap runs a paired client in a container.
+- The Docker bootstrap selects the native client for Linux x64 containers and the Node.js client for other supported container architectures. Credentials and Agent files persist through data mounts.
 - The Browser Node extension provides supported browser operations.
+
+When replacing a Docker Node created with an older template, copy its `/app/agents` contents into the host data directory's `agents` subdirectory before removing the old container. The new template mounts that directory at the same in-container path.
 
 Tools differ between clients. If a Node is marked **upgrade required**, update it from the current master's bootstrap or source bundle before using it. Existing approved credentials can normally be retained.
 

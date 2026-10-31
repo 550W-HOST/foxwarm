@@ -5,6 +5,7 @@ import path from 'path';
 import { logger } from '../common';
 import { BASE_DIR } from '../config';
 import { HttpServer } from '../httpServer';
+import { CURRENT_NODE_PROTOCOL_RANGE } from '../../packages/shared/dist/nodeProtocol';
 import { registerShellNodeHttpRoutes } from './shellHttp';
 
 const NODE_TEMPLATE_DIR = path.join(BASE_DIR, 'templates', 'node');
@@ -74,7 +75,8 @@ export function inferNodeBootstrapBaseUrl(req: Pick<express.Request, 'headers' |
 
 export function renderNodeTemplateText(templateText: string, req: Pick<express.Request, 'headers' | 'protocol'>): string {
   const defaultBaseUrl = inferNodeBootstrapBaseUrl(req) || '';
-  return templateText.split(NODE_TEMPLATE_BASE_URL_PLACEHOLDER).join(defaultBaseUrl);
+  return templateText.split(NODE_TEMPLATE_BASE_URL_PLACEHOLDER).join(defaultBaseUrl)
+    .split('__FOXWARM_NATIVE_CLI_URL__').join(`https://foxwarm.net/downloads/native-cli-node-latest-v${CURRENT_NODE_PROTOCOL_RANGE.max}.tar.gz`);
 }
 
 function addTextRoute(httpServer: HttpServer, routePath: string, filePath: string, contentType: string): void {
@@ -94,6 +96,7 @@ function addTextRoute(httpServer: HttpServer, routePath: string, filePath: strin
 export function registerNodeHttpRoutes(httpServer: HttpServer): () => void {
   const stopShellTransport = registerShellNodeHttpRoutes(httpServer);
   addTextRoute(httpServer, '/node/run-shell.sh', path.join(NODE_TEMPLATE_DIR, 'run-shell.sh'), 'text/x-shellscript');
+  addTextRoute(httpServer, '/node/start-sandbox-node.sh', path.join(BASE_DIR, 'scripts/start-sandbox-node.sh'), 'text/x-shellscript; charset=utf-8');
   addTextRoute(httpServer, '/node/run.sh', NODE_RUN_SH_PATH, 'text/x-shellscript; charset=utf-8');
   addTextRoute(httpServer, '/node/run-docker.sh', NODE_RUN_DOCKER_SH_PATH, 'text/x-shellscript; charset=utf-8');
   addTextRoute(httpServer, '/node/run-cli-node.sh', NODE_RUN_INTERACTIVE_SH_PATH, 'text/x-shellscript; charset=utf-8');

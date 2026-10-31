@@ -68,6 +68,6 @@ test('Windows bootstrap pins node-owned agent state and launch cwd independently
   const template = await fs.readFile(path.resolve(__dirname, '../../templates/node/run.ps1'), 'utf8');
   assert.match(template, /Remove-Item Env:FOXWARM_AGENT_DIR -ErrorAction SilentlyContinue/);
   assert.match(template, /\$env:FOXWARM_AGENTS_DIR = \$NodeAgentsDir/);
-  assert.match(template, /Push-Location \$ScriptDir/);
+  assert.match(template, /Push-Location -LiteralPath \$ScriptDir/);
   assert.match(template, /finally \{\s*Pop-Location\s*\}/);
 });

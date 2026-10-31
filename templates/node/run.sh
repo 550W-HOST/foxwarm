@@ -92,7 +92,7 @@ case "$INSTALL_DIR" in
 '*|*"$carriage_return"*) echo "Error: --dir must not contain newline characters" >&2; exit 1 ;;
 esac
 
-for cmd in curl tar node; do
+for cmd in curl tar uname; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "Error: $cmd is required for bare-metal node bootstrap" >&2
     exit 1
@@ -123,43 +123,62 @@ if [ -z "$PAIRING" ] && [ -z "$AUTH_TOKEN" ] && [ ! -s "$CREDENTIALS_FILE" ]; th
   exit 1
 fi
 
-echo "Downloading node source bundle from $HOST/node/source.tar.gz ..."
-curl -fsSL "$HOST/node/source.tar.gz" | tar -xzf - -C "$SOURCE_DIR"
-
-NODE_CLIENT_ENTRYPOINT="$SOURCE_DIR/packages/cli-node/dist/client.bundle.js"
-NODE_RUNTIME_DIR="$SOURCE_DIR/packages/cli-node-runtime"
-
-if [ -f "$NODE_CLIENT_ENTRYPOINT" ]; then
-  echo "Using bundled node client from source archive; skipping npm install."
-else
-  if ! command -v npm >/dev/null 2>&1; then
-    echo "Error: npm is required when the downloaded bundle is missing" >&2
+NODE_BIN=""
+NODE_CLIENT_ENTRYPOINT=""
+if [ "$(uname -s)/$(uname -m)" = "Linux/x86_64" ]; then
+  echo "Downloading native Linux x64 node client ..."
+  curl -fsSL "__FOXWARM_NATIVE_CLI_URL__" -o "$SOURCE_DIR/native-cli-node.tar.gz"
+  tar -xzf "$SOURCE_DIR/native-cli-node.tar.gz" -C "$SOURCE_DIR"
+  rm "$SOURCE_DIR/native-cli-node.tar.gz"
+  NODE_BIN="$SOURCE_DIR/native-cli-node-linux-x64/Foxwarm.CliNode"
+  if [ ! -x "$NODE_BIN" ]; then
+    echo "Error: downloaded native node executable is missing: $NODE_BIN" >&2
     exit 1
   fi
-  echo "Bundled node client not found; building fallback in $SOURCE_DIR ..."
-  (cd "$SOURCE_DIR/packages/shared" && npm ci && npm run build)
-  (cd "$SOURCE_DIR/packages/cli-node" && npm ci && npm run build)
-  NODE_CLIENT_ENTRYPOINT="$SOURCE_DIR/packages/cli-node/dist/client.bundle.js"
-fi
-
-if [ -f "$NODE_RUNTIME_DIR/package-lock.json" ]; then
-  if command -v npm >/dev/null 2>&1; then
-    echo "Installing the target-platform PTY runtime (node-pty only) ..."
-    if ! npm --prefix "$NODE_RUNTIME_DIR" ci --omit=dev; then
-      echo "Warning: node-pty installation failed; continuing without remote terminal capability." >&2
-      echo "Linux requires Python 3, make, and a C/C++ compiler for node-pty." >&2
-    fi
-  else
-    echo "Warning: npm is unavailable; continuing without remote terminal capability." >&2
+else
+  if ! command -v node >/dev/null 2>&1; then
+    echo "Error: Node.js is required on platforms without a native package" >&2
+    exit 1
   fi
-fi
+  NODE_BIN="$(command -v node)"
+  echo "Downloading node source bundle from $HOST/node/source.tar.gz ..."
+  curl -fsSL "$HOST/node/source.tar.gz" | tar -xzf - -C "$SOURCE_DIR"
 
-if [ ! -f "$NODE_CLIENT_ENTRYPOINT" ]; then
-  NODE_CLIENT_ENTRYPOINT="$SOURCE_DIR/packages/cli-node/dist/client.js"
-fi
-if [ ! -f "$NODE_CLIENT_ENTRYPOINT" ]; then
-  echo "Error: downloaded node client entrypoint is missing: $NODE_CLIENT_ENTRYPOINT" >&2
-  exit 1
+  NODE_CLIENT_ENTRYPOINT="$SOURCE_DIR/packages/cli-node/dist/client.bundle.js"
+  NODE_RUNTIME_DIR="$SOURCE_DIR/packages/cli-node-runtime"
+
+  if [ -f "$NODE_CLIENT_ENTRYPOINT" ]; then
+    echo "Using bundled node client from source archive; skipping npm install."
+  else
+    if ! command -v npm >/dev/null 2>&1; then
+      echo "Error: npm is required when the downloaded bundle is missing" >&2
+      exit 1
+    fi
+    echo "Bundled node client not found; building fallback in $SOURCE_DIR ..."
+    (cd "$SOURCE_DIR/packages/shared" && npm ci && npm run build)
+    (cd "$SOURCE_DIR/packages/cli-node" && npm ci && npm run build)
+    NODE_CLIENT_ENTRYPOINT="$SOURCE_DIR/packages/cli-node/dist/client.bundle.js"
+  fi
+
+  if [ -f "$NODE_RUNTIME_DIR/package-lock.json" ]; then
+    if command -v npm >/dev/null 2>&1; then
+      echo "Installing the target-platform PTY runtime (node-pty only) ..."
+      if ! npm --prefix "$NODE_RUNTIME_DIR" ci --omit=dev; then
+        echo "Warning: node-pty installation failed; continuing without remote terminal capability." >&2
+        echo "Linux requires Python 3, make, and a C/C++ compiler for node-pty." >&2
+      fi
+    else
+      echo "Warning: npm is unavailable; continuing without remote terminal capability." >&2
+    fi
+  fi
+
+  if [ ! -f "$NODE_CLIENT_ENTRYPOINT" ]; then
+    NODE_CLIENT_ENTRYPOINT="$SOURCE_DIR/packages/cli-node/dist/client.js"
+  fi
+  if [ ! -f "$NODE_CLIENT_ENTRYPOINT" ]; then
+    echo "Error: downloaded node client entrypoint is missing: $NODE_CLIENT_ENTRYPOINT" >&2
+    exit 1
+  fi
 fi
 
 shell_quote() {
@@ -168,13 +187,14 @@ shell_quote() {
   printf "'"
 }
 
-NODE_BIN="$(command -v node)"
 {
   echo '#!/bin/sh'
   echo 'set -eu'
   printf 'cd '; shell_quote "$SOURCE_DIR"; echo
   printf 'exec '; shell_quote "$NODE_BIN"
-  printf ' '; shell_quote "$NODE_CLIENT_ENTRYPOINT"
+  if [ -n "$NODE_CLIENT_ENTRYPOINT" ]; then
+    printf ' '; shell_quote "$NODE_CLIENT_ENTRYPOINT"
+  fi
   printf ' --host '; shell_quote "$HOST"
   printf ' --id '; shell_quote "$NODE_ID"
   if [ -n "$PAIRING" ]; then
