@@ -77,6 +77,18 @@ async function state(hostPort, id) {
   assert.equal(result.status, 200)
   return result.body.session
 }
+async function compactIdle(hostPort, id) {
+  const current = await state(hostPort, id)
+  return !current.busy && !current.runtimeState?.processing && !current.runtimeState?.compaction
+}
+let compactRequest = 0
+async function startCompact(hostPort, id) {
+  const result = await json(hostPort, 'POST', `/api/sessions/${id}/message`, {
+    text: '/compact', controlRequestId: `fixture-compact-${++compactRequest}`,
+  })
+  assert.equal(result.status, 202, JSON.stringify(result.body))
+  assert.equal(result.body.accepted, true, JSON.stringify(result.body))
+}
 async function send(hostPort, id, message) {
   const result = await json(hostPort, 'POST', `/api/sessions/${id}/message`, { text: message })
   assert.equal(result.status, 202, JSON.stringify(result.body))
@@ -274,16 +286,16 @@ try {
   assert(provider.invalidSent, 'First planner request submitted an invalid range')
   assert(provider.requests.some(item => item.planner && item.input.includes('compact_plan_invalid')),
     'Planner saw source-derived invalid-plan feedback and retried')
-  await until(async () => !(await state(hostPort, layeredId)).busy, 'automatic compaction idle')
-  assert.equal((await command(hostPort, layeredId, '/compact')).status, 200)
+  await until(() => compactIdle(hostPort, layeredId), 'automatic compaction idle')
+  await startCompact(hostPort, layeredId)
   await until(async () => provider.layerPlanCount >= 2 && (await history(hostPort, layeredId)).messages.filter(
     row => row.__meta?.contextBlock?.level === 1).length >= 6, 'manual second L1 plan', 40000)
-  await until(async () => !(await state(hostPort, layeredId)).busy, 'manual L1 idle')
+  await until(() => compactIdle(hostPort, layeredId), 'manual L1 idle')
   const beforeL2 = await history(hostPort, layeredId)
-  assert.equal((await command(hostPort, layeredId, '/compact')).status, 200)
+  await startCompact(hostPort, layeredId)
   await until(async () => provider.layerPlanCount >= 3 && (await history(hostPort, layeredId)).messages.some(
     row => row.__meta?.contextBlock?.level === 2), 'manual L2 plan', 40000)
-  await until(async () => !(await state(hostPort, layeredId)).busy, 'manual L2 idle')
+  await until(() => compactIdle(hostPort, layeredId), 'manual L2 idle')
   const layered = await history(hostPort, layeredId)
   const l2 = layered.messages.find(row => row.__meta?.contextBlock?.level === 2)?.__meta?.contextBlock
   assert(l2?.sourceBlockIds?.length >= 2, 'Actual L2 has two archived L1 children')
@@ -393,8 +405,9 @@ try {
     await until(async () => (await history(hostPort, stopId)).messages.filter(row => row.role === 'model').length >= i + 1,
       `stop seed ${i}`)
   }
-  await until(async () => !(await state(hostPort, stopId)).busy, 'stop seed idle')
-  assert.equal((await command(hostPort, stopId, '/compact')).status, 200)
+  // Busy clears before the foreground processor finishes; awaited compaction needs both released.
+  await until(() => compactIdle(hostPort, stopId), 'stop seed idle')
+  await startCompact(hostPort, stopId)
   await until(() => provider.heldStop, 'held planner')
   const beforeStop = await history(hostPort, stopId)
   await send(hostPort, stopId, 'queued-stop after planner cancellation')
