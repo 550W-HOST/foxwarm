@@ -39,6 +39,14 @@ printf '%s' "$START_CWD" > "$STATE/cwd"
 # Do not remove active FIFO/collector files on exit: running commands are not killed.
 STOP=0
 trap 'STOP=1' INT TERM
+# Timestamped events for the person running this Node. Never print credentials.
+log() {
+  printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >&2
+}
+# Bounded display text: first $2 lines and $3 bytes of file $1, without terminal controls.
+excerpt() {
+  head -n "$2" "$1" | head -c "$3" | tr -d '\000-\010\013-\037\177'
+}
 header_value() {
   tr '[:upper:]' '[:lower:]' < "$1" | tr -d '\r' | sed -n "s/^$2: *//p"
 }
@@ -55,15 +63,15 @@ valid_connection() {
 }
 terminal_message() {
   case "$1" in
-    401|403) echo 'Shell Node stopped: credentials rejected or revoked.' >&2 ;;
+    401|403) log 'Stopped: credentials rejected or revoked.' ;;
     409)
       if [ "${2:-}" = connection-replaced ]; then
-        echo 'Shell Node stopped: connection replaced by another client.' >&2
+        log 'Stopped: connection replaced by another client.'
       else
-        echo 'Shell Node stopped: connection conflict; safe automatic reconnect is unavailable.' >&2
+        log 'Stopped: connection conflict with Main.'
       fi ;;
-    410) echo 'Shell Node stopped: connection retired by server.' >&2 ;;
-    *) echo 'Shell Node stopped: registration request rejected.' >&2 ;;
+    410) log 'Stopped: connection retired by Main.' ;;
+    *) log 'Stopped: registration rejected by Main.' ;;
   esac
 }
 # HEAD only reads the predecessor and proposes an identity. A lost response has no effect.
@@ -83,7 +91,7 @@ while [ "$STOP" -eq 0 ]; do
     404|405|501) LEGACY=1; break ;;
     400|401|403|409|410|413|415) terminal_message "$code"; rm -rf "$STATE"; exit 1 ;;
   esac
-  if [ "$retry_notice" -eq 0 ]; then echo 'Shell Node registration unavailable; retrying in 2 seconds.' >&2; retry_notice=1; fi
+  if [ "$retry_notice" -eq 0 ]; then log 'Main unavailable; retrying registration every 2 seconds.'; retry_notice=1; fi
   sleep 2
 done
 register() {
@@ -106,15 +114,15 @@ register() {
     fi
     case "$code" in 400|401|403|409|410|413|415) terminal_message "$code" "$(header_value "$STATE/register.headers" 'x-foxwarm-shell-reason')"; return 1 ;; esac
     if [ "$LEGACY" -eq 1 ]; then
-      echo 'Shell Node registration unconfirmed; this server does not support safe registration retry.' >&2; return 1
+      log 'Stopped: registration not confirmed, and this Main version cannot retry it safely.'; return 1
     fi
-    if [ "$retry_notice" -eq 0 ]; then echo 'Shell Node registration unavailable; retrying in 2 seconds.' >&2; retry_notice=1; fi
+    if [ "$retry_notice" -eq 0 ]; then log 'Main unavailable; retrying registration every 2 seconds.'; retry_notice=1; fi
     sleep 2
   done
   return 1
 }
 if ! register; then rm -rf "$STATE"; exit 1; fi
-printf 'Shell Node %s ready (POSIX sh, bounded output).\n' "$NODE_ID"
+log "Shell Node $NODE_ID connected (POSIX sh)."
 retry_notice=0
 
 collect() {
@@ -179,6 +187,36 @@ report() {
   done
 }
 
+# Show what Main asked this Node to run. Main prefixes the command with its cd line.
+started() {
+  dir=$1
+  sed -n '2,$p' "$dir/script" > "$dir/command"
+  where=$(sed -n "1s/^cd '\(.*\)' || exit 125\$/\\1/p" "$dir/script" | sed "s/'\"'\"'/'/g")
+  text=$(excerpt "$dir/command" 1 160)
+  [ "$(wc -c < "$dir/command")" -le "$(( ${#text} + 1 ))" ] || text="$text …"
+  if [ -n "$where" ] && [ "$where" != "$START_CWD" ]; then
+    log "exec $(cat "$dir/exec") in $where: $text"
+  else
+    log "exec $(cat "$dir/exec"): $text"
+  fi
+}
+
+# Summarize the result, with the beginning of its output.
+finished() {
+  dir=$1
+  total=$(cat "$dir/bytes")
+  summary="exec $(cat "$dir/exec") finished: exit $(cat "$dir/exit"), $(cat "$dir/duration")s, $total bytes"
+  shown=$(head -n 10 "$dir/output" | head -c 800 | wc -c)
+  text=$(excerpt "$dir/output" 10 800)
+  if [ -n "$text" ]; then
+    summary="$summary
+$(printf '%s\n' "$text" | sed 's/^/    /')"
+  fi
+  [ "$total" -le "$shown" ] || summary="$summary
+    … $((total - shown)) more bytes"
+  log "$summary"
+}
+
 run_job() {
   dir=$1; timeout=$2
   # Each job owns its command, foreground budget and report retries independently.
@@ -197,10 +235,12 @@ run_job() {
   while [ ! -f "$dir/ready" ] && [ "$elapsed" -lt "$timeout" ]; do sleep 1; elapsed=$((elapsed + 1)); done
   if [ ! -f "$dir/ready" ]; then
     # Only retry this notice, never the command that has already started.
-    report "$dir" background || echo 'Background result unavailable; command will not be executed again.' >&2
+    log "exec $(cat "$dir/exec") still running after ${timeout}s; continuing in background."
+    report "$dir" background || log "exec $(cat "$dir/exec"): could not notify Main of background execution."
   fi
   wait "$runner"
-  report "$dir" finished || echo 'Completion unavailable; command will not be executed again.' >&2
+  finished "$dir"
+  report "$dir" finished || log "exec $(cat "$dir/exec"): could not deliver the result to Main."
   rm -rf "$dir"
   if [ -f "$STATE/stopped" ]; then
     active=0
@@ -214,7 +254,7 @@ while [ "$STOP" -eq 0 ]; do
   code=$(http "$STATE/poll.headers" "$STATE/poll.body" poll -H "X-Foxwarm-Connection: $CONNECTION") || code=000
   protocol=$(header_value "$STATE/poll.headers" 'x-foxwarm-shell')
   if [ "$code" = 204 ] && [ "$protocol" = foxwarm-shell-1 ]; then
-    if [ "$retry_notice" -eq 1 ]; then echo 'Shell Node polling resumed.' >&2; retry_notice=0; fi
+    if [ "$retry_notice" -eq 1 ]; then log 'Connection to Main restored.'; retry_notice=0; fi
     continue
   fi
   reason=$(header_value "$STATE/poll.headers" 'x-foxwarm-shell-reason')
@@ -222,22 +262,22 @@ while [ "$STOP" -eq 0 ]; do
     case "$reason" in
       connection-unavailable)
         [ "$STOP" -eq 0 ] || break
-        echo 'Shell Node connection expired or Main restarted; reconnecting.' >&2
+        log 'Disconnected: Main restarted or the connection expired; reconnecting.'
         if ! register; then break; fi
-        echo 'Shell Node reconnected; delivered commands are not replayed.' >&2
+        log 'Reconnected to Main.'
         retry_notice=0; continue ;;
       poll-pending)
-        if [ "$retry_notice" -eq 0 ]; then echo 'Shell Node previous poll is still pending; retrying in 2 seconds.' >&2; retry_notice=1; fi
+        if [ "$retry_notice" -eq 0 ]; then log 'Previous poll is still open on Main; retrying every 2 seconds.'; retry_notice=1; fi
         sleep 2; continue ;;
     esac
   fi
   case "$code" in 401|403|409|410) terminal_message "$code" "$reason"; break ;; esac
   if [ "$code" != 200 ] || [ "$protocol" != foxwarm-shell-1 ] || \
      [ "$(header_value "$STATE/poll.headers" 'content-type')" != 'application/x-foxwarm-shell; charset=utf-8' ]; then
-    if [ "$retry_notice" -eq 0 ]; then echo 'Shell Node poll unavailable or invalid; retrying in 2 seconds.' >&2; retry_notice=1; fi
+    if [ "$retry_notice" -eq 0 ]; then log 'Lost connection to Main; retrying every 2 seconds.'; retry_notice=1; fi
     sleep 2; continue
   fi
-  if [ "$retry_notice" -eq 1 ]; then echo 'Shell Node polling resumed.' >&2; retry_notice=0; fi
+  if [ "$retry_notice" -eq 1 ]; then log 'Connection to Main restored.'; retry_notice=0; fi
   task=$(header_value "$STATE/poll.headers" 'x-foxwarm-task')
   exec_id=$(header_value "$STATE/poll.headers" 'x-foxwarm-exec')
   timeout=$(header_value "$STATE/poll.headers" 'x-foxwarm-timeout')
@@ -247,10 +287,12 @@ while [ "$STOP" -eq 0 ]; do
   if [ "${#task}" -ne 32 ] || [ "$timeout" -lt 1 ] || [ "$timeout" -gt 60 ]; then sleep 2; continue; fi
   dir="$STATE/task-$task"
   # A duplicate task cannot cause a second command start within this process.
-  if [ -d "$dir" ]; then echo 'Duplicate task ignored.' >&2; continue; fi
+  if [ -d "$dir" ]; then log 'Duplicate task ignored.'; continue; fi
   mkdir "$dir" || continue
   mv "$STATE/poll.body" "$dir/script"
   printf '%s\n' "$task" > "$dir/id"
+  printf '%s\n' "$exec_id" > "$dir/exec"
+  started "$dir"
   date +%s > "$dir/started"
   mkfifo "$dir/pipe" || { rm -rf "$dir"; continue; }
   run_job "$dir" "$timeout" &

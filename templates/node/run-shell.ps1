@@ -160,6 +160,96 @@ namespace Foxwarm
             }
         }
 
+        static readonly object logGate = new object();
+
+        // Timestamped events for the person running this Node. Never print credentials.
+        static void Log(string text)
+        {
+            lock (logGate)
+                Console.Error.WriteLine(
+                    "["
+                        + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
+                        + "] "
+                        + text
+                );
+        }
+
+        // Bounded display text without terminal controls; consumed counts the source characters shown.
+        static string Excerpt(string text, int lines, int chars, out int consumed)
+        {
+            var builder = new StringBuilder();
+            int line = 0;
+            consumed = 0;
+            while (consumed < text.Length && builder.Length < chars)
+            {
+                char c = text[consumed];
+                if (c == '\n' && ++line >= lines)
+                    break;
+                if (c == '\n' || c == '\t' || !Char.IsControl(c))
+                    builder.Append(c);
+                consumed++;
+            }
+            return builder.ToString().TrimEnd('\n', ' ', '\t');
+        }
+
+        // Show what Main asked this Node to run. Main prefixes the command with its Set-Location line.
+        void Started(string exec, byte[] script)
+        {
+            var text = Encoding.UTF8.GetString(script);
+            var newline = text.IndexOf('\n');
+            var first = newline < 0 ? text : text.Substring(0, newline);
+            var command = newline < 0 ? "" : text.Substring(newline + 1);
+            var target = Regex.Match(
+                first,
+                "^try \\{ Set-Location -LiteralPath '(?:[^']|'')*' -ErrorAction Stop; Set-Location -LiteralPath '((?:[^']|'')*)' -ErrorAction Stop \\}"
+            );
+            int consumed;
+            var shown = Excerpt(command, 1, 160, out consumed);
+            if (command.Substring(consumed).Trim().Length > 0)
+                shown += " \u2026";
+            var where = target.Success ? target.Groups[1].Value.Replace("''", "'") : null;
+            Log(
+                "exec "
+                    + exec
+                    + (
+                        where != null && !String.Equals(where, startup, StringComparison.OrdinalIgnoreCase)
+                            ? " in " + where
+                            : ""
+                    )
+                    + ": "
+                    + shown
+            );
+        }
+
+        // Summarize the result, with the beginning of its output.
+        static void Finished(string exec, int exit, long elapsed, long total, byte[] sample)
+        {
+            var text = Encoding.UTF8.GetString(sample);
+            int consumed;
+            var shown = Excerpt(text, 10, 800, out consumed);
+            var omitted = total - Encoding.UTF8.GetByteCount(text.Substring(0, consumed));
+            var summary = new StringBuilder(
+                "exec "
+                    + exec
+                    + " finished: exit "
+                    + exit.ToString(CultureInfo.InvariantCulture)
+                    + ", "
+                    + elapsed.ToString(CultureInfo.InvariantCulture)
+                    + "s, "
+                    + total.ToString(CultureInfo.InvariantCulture)
+                    + " bytes"
+            );
+            if (shown.Length > 0)
+                foreach (var line in shown.Split('\n'))
+                    summary.Append("\n    ").Append(line.TrimEnd('\r'));
+            if (omitted > 0)
+                summary
+                    .Append("\n    \u2026 ")
+                    .Append(omitted.ToString(CultureInfo.InvariantCulture))
+                    .Append(" more bytes");
+            Log(summary.ToString());
+        }
+
         static bool Terminal(int status)
         {
             return status == 400
@@ -248,6 +338,7 @@ namespace Foxwarm
 
         void RunJob(
             string task,
+            string exec,
             byte[] script,
             int timeout,
             DateTime dispatched,
@@ -258,6 +349,7 @@ namespace Foxwarm
             var sample = new Sample();
             int exit = 125;
             long elapsed = 0;
+            Started(exec, script);
             try
             {
                 // Create a private job directory before writing the bounded script.
@@ -326,6 +418,13 @@ namespace Foxwarm
                         runner.Start();
                         if (!completed.WaitOne(timeout * 1000))
                         {
+                            Log(
+                                "exec "
+                                    + exec
+                                    + " still running after "
+                                    + timeout.ToString(CultureInfo.InvariantCulture)
+                                    + "s; continuing in background."
+                            );
                             if (
                                 !Report(
                                     task,
@@ -338,8 +437,8 @@ namespace Foxwarm
                                     dispatchedConnection
                                 )
                             )
-                                Console.Error.WriteLine(
-                                    "Background result unavailable; command will not be executed again."
+                                Log(
+                                    "exec " + exec + ": could not notify Main of background execution."
                                 );
                         }
                         completed.WaitOne();
@@ -355,6 +454,7 @@ namespace Foxwarm
                 );
                 sample.Append(error, error.Length);
             }
+            Finished(exec, exit, elapsed, sample.Total, sample.Bytes());
             if (
                 !Report(
                     task,
@@ -367,9 +467,7 @@ namespace Foxwarm
                     dispatchedConnection
                 )
             )
-                Console.Error.WriteLine(
-                    "Completion unavailable; command will not be executed again."
-                );
+                Log("exec " + exec + ": could not deliver the result to Main.");
             if (directory != null)
             {
                 try
@@ -388,17 +486,17 @@ namespace Foxwarm
 
         static void Stopped(int status, string reason = null)
         {
-            Console.Error.WriteLine(
+            Log(
                 status == 401 || status == 403
-                    ? "Shell Node stopped: credentials rejected or revoked."
+                    ? "Stopped: credentials rejected or revoked."
                 : status == 409
                     ? (
                         reason == "connection-replaced"
-                            ? "Shell Node stopped: connection replaced by another client."
-                            : "Shell Node stopped: connection conflict; safe automatic reconnect is unavailable."
+                            ? "Stopped: connection replaced by another client."
+                            : "Stopped: connection conflict with Main."
                     )
-                : status == 410 ? "Shell Node stopped: connection retired by server."
-                : "Shell Node stopped: registration request rejected."
+                : status == 410 ? "Stopped: connection retired by Main."
+                : "Stopped: registration rejected by Main."
             );
         }
 
@@ -430,12 +528,12 @@ namespace Foxwarm
                 {
                     Stopped(reply.Status, reply.Headers["X-Foxwarm-Shell-Reason"]);
                     throw new InvalidOperationException(
-                        "Shell Node registration failed; no command was executed."
+                        "Shell Node registration failed."
                     );
                 }
                 if (!retrying)
-                    Console.Error.WriteLine(
-                        "Shell Node registration unavailable; retrying in 2 seconds."
+                    Log(
+                        "Main unavailable; retrying registration every 2 seconds."
                     );
                 retrying = true;
                 Thread.Sleep(2000);
@@ -473,14 +571,14 @@ namespace Foxwarm
                 }
                 if (legacy)
                 {
-                    Console.Error.WriteLine(
-                        "Shell Node registration unconfirmed; this server does not support safe registration retry."
+                    Log(
+                        "Stopped: registration not confirmed, and this Main version cannot retry it safely."
                     );
                     return false;
                 }
                 if (!retrying)
-                    Console.Error.WriteLine(
-                        "Shell Node registration unavailable; retrying in 2 seconds."
+                    Log(
+                        "Main unavailable; retrying registration every 2 seconds."
                     );
                 retrying = true;
                 Thread.Sleep(2000);
@@ -494,11 +592,9 @@ namespace Foxwarm
             Prepare();
             if (!Register())
                 throw new InvalidOperationException(
-                    "Shell Node registration failed; no command was executed."
+                    "Shell Node registration failed."
                 );
-            Console.WriteLine(
-                "Shell Node " + node + " ready (Windows PowerShell, bounded output)."
-            );
+            Log("Shell Node " + node + " connected (Windows PowerShell).");
             bool retrying = false;
             try
             {
@@ -508,7 +604,7 @@ namespace Foxwarm
                     if (reply.Status == 204 && reply.Marked)
                     {
                         if (retrying)
-                            Console.Error.WriteLine("Shell Node polling resumed.");
+                            Log("Connection to Main restored.");
                         retrying = false;
                         continue;
                     }
@@ -517,13 +613,13 @@ namespace Foxwarm
                     {
                         if (reason == "connection-unavailable")
                         {
-                            Console.Error.WriteLine(
-                                "Shell Node connection expired or Main restarted; reconnecting."
+                            Log(
+                                "Disconnected: Main restarted or the connection expired; reconnecting."
                             );
                             if (!Register())
                                 break;
-                            Console.Error.WriteLine(
-                                "Shell Node reconnected; delivered commands are not replayed."
+                            Log(
+                                "Reconnected to Main."
                             );
                             retrying = false;
                             continue;
@@ -531,8 +627,8 @@ namespace Foxwarm
                         if (reason == "poll-pending")
                         {
                             if (!retrying)
-                                Console.Error.WriteLine(
-                                    "Shell Node previous poll is still pending; retrying in 2 seconds."
+                                Log(
+                                    "Previous poll is still open on Main; retrying every 2 seconds."
                                 );
                             retrying = true;
                             Thread.Sleep(2000);
@@ -572,15 +668,15 @@ namespace Foxwarm
                     )
                     {
                         if (!retrying)
-                            Console.Error.WriteLine(
-                                "Shell Node poll unavailable or invalid; retrying in 2 seconds."
+                            Log(
+                                "Lost connection to Main; retrying every 2 seconds."
                             );
                         retrying = true;
                         Thread.Sleep(2000);
                         continue;
                     }
                     if (retrying)
-                        Console.Error.WriteLine("Shell Node polling resumed.");
+                        Log("Connection to Main restored.");
                     retrying = false;
                     // Match Main's bounded recent receipts; Main never redelivers a handed-out task.
                     lock (jobsGate)
@@ -597,7 +693,7 @@ namespace Foxwarm
                     {
                         try
                         {
-                            RunJob(task, script, timeout, dispatched, dispatchedConnection);
+                            RunJob(task, exec, script, timeout, dispatched, dispatchedConnection);
                         }
                         finally
                         {
