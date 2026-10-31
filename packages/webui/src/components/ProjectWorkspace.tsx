@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, Bot, ChevronDown, ChevronRight, Code2, Folder, FolderPlus, History, Layers, Plus, RefreshCw, Server, Settings, SquareTerminal, X } from 'lucide-react'
 import { getNodeTargetAvailability, type WebUiNodeTarget } from '../nodeTargets'
 import { projectApi, type Project, type ProjectSession, type ProjectTab, type ProjectTabType } from '../projectWorkspace'
@@ -12,7 +12,13 @@ export interface UnassignedCandidate {
   currentNode?: string
   cwd?: string | null
 }
+export interface ProjectChatSessions {
+  mountedIds: string[]
+  visibleIds: string[]
+}
+
 export interface ProjectWorkspaceProps {
+  onChatSessionsChange?: (sessions: ProjectChatSessions) => void
   nodeTargets: readonly WebUiNodeTarget[]
   onOpenSetup: () => void
   onOpenAgents: () => void
@@ -51,7 +57,7 @@ function newRequestId() { return typeof crypto.randomUUID === 'function' ? crypt
 const iconByType = { agent: Bot, terminal: SquareTerminal, code: Code2 }
 const auxiliaryIconByType = { setup: Settings, agents: Layers, nodes: Server, search: History, chat: Bot, vscode: Code2, terminal: SquareTerminal }
 
-export default function ProjectWorkspace({ nodeTargets, onOpenSetup, onOpenAgents, onOpenNodes, onOpenHistory, unassignedCandidates = [], onOpenUnassigned, onLoadMoreUnassigned, auxiliaryTabs = [], activeAuxiliaryTabId, onSelectAuxiliaryTab, onCloseAuxiliaryTab, renderAuxiliaryTab, renderAgent, renderTerminal, renderCode, onCloseTerminal }: ProjectWorkspaceProps) {
+export default function ProjectWorkspace({ onChatSessionsChange, nodeTargets, onOpenSetup, onOpenAgents, onOpenNodes, onOpenHistory, unassignedCandidates = [], onOpenUnassigned, onLoadMoreUnassigned, auxiliaryTabs = [], activeAuxiliaryTabId, onSelectAuxiliaryTab, onCloseAuxiliaryTab, renderAuxiliaryTab, renderAgent, renderTerminal, renderCode, onCloseTerminal }: ProjectWorkspaceProps) {
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -116,6 +122,17 @@ export default function ProjectWorkspace({ nodeTargets, onOpenSetup, onOpenAgent
     if (selection) setExpanded(previous => previous.has(selection.project.id) ? previous : new Set(previous).add(selection.project.id))
   }, [selection?.project.id]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { setShowMenu(false) }, [activeAuxiliaryTabId])
+
+  const chatSessions = useMemo<ProjectChatSessions>(() => {
+    const mountedIds = projects.flatMap(project => project.sessions.flatMap(session => session.tabs))
+      .filter(tab => visited.has(tab.id) && tab.type === 'agent' && tab.state === 'ready' && tab.resourceId)
+      .map(tab => tab.resourceId!)
+    const selectedTab = selection?.session.tabs.find(tab => tab.id === activeTabId)
+    const visibleIds = !auxiliaryActive && selectedTab?.type === 'agent' && selectedTab.state === 'ready' && selectedTab.resourceId
+      ? [selectedTab.resourceId] : []
+    return { mountedIds: [...new Set(mountedIds)], visibleIds }
+  }, [projects, visited, selection?.session, activeTabId, auxiliaryActive])
+  useEffect(() => { onChatSessionsChange?.(chatSessions) }, [chatSessions, onChatSessionsChange])
 
   const selectSession = (projectId: string, sessionId: string) => {
     onSelectAuxiliaryTab?.(null)

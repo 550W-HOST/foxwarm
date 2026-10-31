@@ -1,6 +1,6 @@
 import { prepareChatHistory, discardPreparedChatHistory } from './preparedChatHistory'
 import { SessionMessageNamesContext } from './components/SessionMessageCard'
-import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react'
 import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from '@dnd-kit/core'
 import Chat from './components/Chat'
 import SessionList from './components/SessionList'
@@ -28,7 +28,7 @@ import { findTerminalForTarget, normalizeTerminalTarget } from './terminalTarget
 import { useChatPreferences } from './chatPreferences'
 import { makeFoxwarmPopupUrl, type FoxwarmPopupTarget } from './popupWebUi'
 import { FoxPaneLoader } from './components/FoxLoaders'
-import ProjectWorkspace from './components/ProjectWorkspace'
+import ProjectWorkspace, { type ProjectChatSessions } from './components/ProjectWorkspace'
 import ProjectCodeFrame from './components/ProjectCodeFrame'
 import { useWorkspaceMode } from './workspaceMode'
 
@@ -322,8 +322,8 @@ function loadStoredCodeOpenInNewWindow(): boolean {
   return readCodeOpenInNewWindowPreference(localStorage)
 }
 
-function getHashState(): RouteState {
-  const hash = decodeURIComponent(window.location.hash.slice(1))
+function getHashState(hashValue = window.location.hash): RouteState {
+  const hash = decodeURIComponent(hashValue.slice(1))
   const fallbackTabId = loadStoredLastActiveTabId()
 
   if (!hash || hash.startsWith('token=')) {
@@ -450,7 +450,15 @@ function isRestorableRouteTabId(tabId: string): boolean {
 function App() {
   const initialRoute = getHashState()
   const workspaceMode = useWorkspaceMode()
+  // A saved classic tab hash belongs to its retained layout. An inbound Session
+  // link (or another Chat target) opens in the displayed Project shell instead.
+  const initialProjectSessionRef = useRef(workspaceMode === 'project'
+    && initialRoute.tabId?.startsWith('chat:')
+    && window.location.hash && !window.location.hash.startsWith('#token=')
+    && (!window.location.hash.startsWith(`#${TAB_HASH_PREFIX}`) || initialRoute.tabId !== loadStoredLastActiveTabId())
+    ? initialRoute.tabId.slice('chat:'.length) : null)
   const [projectVisited, setProjectVisited] = useState(workspaceMode === 'project')
+  const [projectChatSessions, setProjectChatSessions] = useState<ProjectChatSessions>({ mountedIds: [], visibleIds: [] })
   const [projectAuxiliaryTabs, setProjectAuxiliaryTabs] = useState<WorkbenchTab[]>([])
   const [projectAuxiliaryTabId, setProjectAuxiliaryTabId] = useState<string | null>(null)
 
@@ -460,7 +468,7 @@ function App() {
   }, [workspaceMode])
 
   const [agents, setAgents] = useState<AgentSummary[]>([])
-  const [route, setRoute] = useState<RouteState>(initialRoute)
+  const [route, setRoute] = useState<RouteState>(() => initialProjectSessionRef.current ? getHashState('') : initialRoute)
   const [setupOobe, setSetupOobe] = useState(false)
   const classicDisplayed = workspaceMode === 'classic' || setupOobe
   const projectDisplayed = workspaceMode === 'project' && !classicDisplayed
@@ -574,18 +582,27 @@ function App() {
 
   const sessionTitle = (sessionId: string) => sessions.find((session) => session.id === sessionId || session.aliases?.includes(sessionId))?.displayName || sessionId
 
-  const currentContextSessionId = focusedActiveTab?.type === 'chat'
-    ? focusedActiveTab.sessionId
-    : loadStoredLastVisitedSession()
+  const projectAuxiliaryChat = projectAuxiliaryTabs.find(tab => tab.id === projectAuxiliaryTabId && isChatTab(tab))
+  const currentContextSessionId = projectDisplayed
+    ? (projectAuxiliaryChat?.type === 'chat' ? projectAuxiliaryChat.sessionId : projectChatSessions.visibleIds[0] || '')
+    : focusedActiveTab?.type === 'chat' ? focusedActiveTab.sessionId : loadStoredLastVisitedSession()
   const visibleSessionIds = useMemo(() => {
+    if (projectDisplayed) return selectVisibleSessionIds([
+      ...projectChatSessions.visibleIds,
+      ...(projectAuxiliaryChat?.type === 'chat' ? [projectAuxiliaryChat.sessionId] : []),
+    ], true)
     const visiblePanes = isMobile ? (focusedPane ? [focusedPane] : paneNodes.slice(0, 1)) : paneNodes
     const activeSessionIds = visiblePanes.map(pane => {
       const tab = pane.activeTabId ? tabsById[pane.activeTabId] : null
       return tab?.type === 'chat' ? tab.sessionId : null
     })
     return selectVisibleSessionIds(activeSessionIds, !isMobile || !showSessionList)
-  }, [isMobile, showSessionList, focusedPane, paneNodes, tabsById])
-  const exactSessionIds = useMemo(() => allTabs.flatMap(tab => isChatTab(tab) ? [tab.sessionId] : []), [allTabs])
+  }, [projectDisplayed, projectChatSessions.visibleIds, projectAuxiliaryChat, isMobile, showSessionList, focusedPane, paneNodes, tabsById])
+  const exactSessionIds = useMemo(() => [...new Set([
+    ...allTabs.flatMap(tab => isChatTab(tab) ? [tab.sessionId] : []),
+    ...projectChatSessions.mountedIds,
+    ...projectAuxiliaryTabs.flatMap(tab => isChatTab(tab) ? [tab.sessionId] : []),
+  ])], [allTabs, projectChatSessions.mountedIds, projectAuxiliaryTabs])
   const boundedSessions = useBoundedSessionList({ focusIds: currentContextSessionId ? [currentContextSessionId] : [], exactIds: exactSessionIds, includeGlobalSummary: true })
   const sessions = boundedSessions.knownSessions
   const sidebarSessions = boundedSessions.sessions
@@ -676,8 +693,23 @@ function App() {
   }, [])
 
   useEffect(() => {
+    const openProjectConversation = (sessionId: string) => {
+      void openChatTab(sessionId)
+      // Normalize the inbound link without publishing a classic layout route.
+      // A later click on the same #session link must still be a hash change.
+      window.history.replaceState(window.history.state, '', `#${TAB_HASH_PREFIX}${encodeURIComponent(getPersistentChatTabId(sessionId))}`)
+    }
+    if (projectDisplayed && initialProjectSessionRef.current) {
+      const sessionId = initialProjectSessionRef.current
+      initialProjectSessionRef.current = null
+      openProjectConversation(sessionId)
+    }
     const handleHashChange = () => {
       const nextRoute = getHashState()
+      if (projectDisplayed && nextRoute.tabId?.startsWith('chat:')) {
+        const sessionId = nextRoute.tabId.slice('chat:'.length)
+        if (sessionId) { openProjectConversation(sessionId); return }
+      }
       if (!setupOobe && nextRoute.tabId && tabsById[nextRoute.tabId]) {
         if (nextRoute.tabId !== currentRouteTabIdRef.current) setTabRevealRequest({ tabId: nextRoute.tabId })
         activateTab(nextRoute.tabId)
@@ -690,7 +722,7 @@ function App() {
 
     window.addEventListener('hashchange', handleHashChange)
     return () => window.removeEventListener('hashchange', handleHashChange)
-  }, [activateTab, isMobile, setupOobe, tabsById])
+  }, [activateTab, isMobile, setupOobe, tabsById, projectDisplayed, sessions])
 
   useEffect(() => {
     if (setupOobe && route.tabId !== SETUP_TAB_ID) {
@@ -902,9 +934,9 @@ function App() {
     const currentActiveTabId = currentFocusedPane?.activeTabId
     if (currentActiveTabId && currentState.tabsById[currentActiveTabId] && !closingRouteTabIdsRef.current.has(currentActiveTabId)) {
       setRoute({ view: 'tab', tabId: currentActiveTabId })
-      setTabHash(currentActiveTabId)
+      if (classicDisplayed) setTabHash(currentActiveTabId)
     }
-  }, [route, tabsById, focusedActiveTabId])
+  }, [route, tabsById, focusedActiveTabId, classicDisplayed])
 
   useEffect(() => {
     if (flattenedTabIds.length > 0) {
@@ -920,8 +952,8 @@ function App() {
     const tab = makeChatTab(fallbackSessionId, sessionTitle(fallbackSessionId), { preview: true })
     upsertTab(tab, { paneId: focusedPaneId || paneIds[0], activate: true })
     setRoute({ view: 'tab', tabId: tab.id })
-    setTabHash(tab.id)
-  }, [route.tabId, flattenedTabIds.length, focusedPaneId, paneIds.join('|')])
+    if (classicDisplayed) setTabHash(tab.id)
+  }, [route.tabId, flattenedTabIds.length, focusedPaneId, paneIds.join('|'), classicDisplayed])
 
   const navigateToTab = (tabId: string, origin: SessionNavigationOrigin = 'user', options?: { reveal?: boolean }) => {
     cancelPendingChatNavigation()
@@ -930,12 +962,12 @@ function App() {
     currentRouteTabIdRef.current = tabId
     activateTab(tabId)
     setRoute({ view: 'tab', tabId })
-    setTabHash(tabId)
+    if (classicDisplayed) setTabHash(tabId)
     if (isMobile) {
       setShowSessionList(false)
     }
     const tab = useWorkbenchStore.getState().tabsById[tabId]
-    if (tab?.type === 'chat' && shouldAcknowledgeSessionNavigation(origin)) acknowledgeSession(tab.sessionId)
+    if (classicDisplayed && tab?.type === 'chat' && shouldAcknowledgeSessionNavigation(origin)) acknowledgeSession(tab.sessionId)
   }
 
   useLayoutEffect(() => {
@@ -1011,6 +1043,17 @@ function App() {
       window.alert(`Could not open the file in Code.\n\n${error instanceof Error ? error.message : String(error)}`)
     })
     activateEmbeddedCodeTab()
+  }
+
+  const sessionCodeFileHandler = (sessionTarget: CodeTarget): NonNullable<ComponentProps<typeof Chat>['onOpenCodeFile']> => (filePath, lines, target) => {
+    const request = target
+      ? resolveToolCodeFileTarget(target.resolvedPath, target.nodeId, undefined, lines)
+      : resolveToolCodeFileTarget(filePath, sessionTarget.nodeId, undefined, lines)
+    if (!request) { window.alert('This path cannot be opened in Code yet.'); return }
+    const workspaceTarget = target
+      ? resolveSessionCodeTarget(request.nodeId, request.path.substring(0, request.path.lastIndexOf('/')) || '/')
+      : sessionTarget
+    openCodeFile(request, workspaceTarget)
   }
 
   const openCodeCommit = async (target: CodeCommitTarget): Promise<void> => {
@@ -1640,7 +1683,8 @@ function App() {
       return
     }
 
-    // Route restoration belongs to the original layout, including while hidden.
+    // Hydrate the classic route, including retained hidden state. Explicit
+    // Project conversation hashes use its auxiliary Chat navigation.
     void openChatTab(sessionId, 'user', 'classic')
   }, [route, tabsById, allTabs, sessions])
 
@@ -1683,19 +1727,7 @@ function App() {
           onNewSession={async () => { try { await handleCreateSession(sessionRecord?.agent || 'main') } catch (error) { window.alert(`Failed to create session: ${error instanceof Error ? error.message : String(error)}`) } }}
           onOpenTerminal={isMobile && nodeTargets.some(node => node.id === (sessionRecord?.currentNode || 'master') && getNodeTargetAvailability(node, 'vscode-pty').available) ? () => openTerminalTab({ nodeId: sessionRecord?.currentNode || 'master', path: sessionRecord?.cwd || '/', sourcePaneId }) : undefined}
           onOpenCode={() => openCode(resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd))}
-          onOpenCodeFile={(filePath, lines, target) => {
-            const request = target
-              ? resolveToolCodeFileTarget(target.resolvedPath, target.nodeId, undefined, lines)
-              : resolveToolCodeFileTarget(filePath, sessionRecord?.currentNode, undefined, lines)
-            if (!request) {
-              window.alert('This path cannot be opened in Code yet.')
-              return
-            }
-            const workspaceTarget = target
-              ? resolveSessionCodeTarget(request.nodeId, request.path.substring(0, request.path.lastIndexOf('/')) || '/')
-              : resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd)
-            openCodeFile(request, workspaceTarget)
-          }}
+          onOpenCodeFile={sessionCodeFileHandler(resolveSessionCodeTarget(sessionRecord?.currentNode, sessionRecord?.cwd))}
           onOpenCodeCommit={openCodeCommit}
           onOpenModelSettings={() => openSetupView({ focusModels: true })}
           sendKeyMode={sendKeyMode}
@@ -2161,6 +2193,7 @@ function App() {
           <SessionMessageNamesContext.Provider value={communicationNames}>
             <ProjectWorkspace
               nodeTargets={nodeTargets}
+              onChatSessionsChange={setProjectChatSessions}
               unassignedCandidates={sessions}
               onOpenUnassigned={(sessionId) => { void openChatTab(sessionId) }}
               onLoadMoreUnassigned={boundedSessions.hasMoreRoots ? () => { void boundedSessions.loadMoreRoots() } : undefined}
@@ -2176,32 +2209,37 @@ function App() {
                 const tab = projectAuxiliaryTabs.find(item => item.id === tabId)
                 return tab ? renderTabContent(tab, () => setProjectAuxiliaryTabId(null), true, active) : null
               }}
-              renderAgent={(tab, _project, active, actions) => tab.resourceId ? (
-                <Chat
-                  sessionId={tab.resourceId}
-                  canonicalSessionId={tab.resourceId}
-                  sessionDisplayName={tab.title}
-                  searchShortcutActive={projectDisplayed && active}
-                  onNewSession={() => actions.addTab('agent')}
-                  onOpenTerminal={() => { void actions.addTab('terminal') }}
-                  onOpenCode={() => { void actions.addTab('code') }}
-                  onOpenModelSettings={() => openSetupView({ focusModels: true })}
-                  sendKeyMode={sendKeyMode}
-                  timelineView={timelineView}
-                  showUsageBadge={showUsageBadge}
-                  showInterAgentMessages={showInterAgentMessages}
-                  onShowInterAgentMessagesChange={setShowInterAgentMessages}
-                  showCommentary={showCommentary}
-                  onShowCommentaryChange={setShowCommentary}
-                  fullWidth={fullWidth}
-                  onFullWidthChange={setFullWidth}
-                  showUserMessageMetadata={showUserMessageMetadata}
-                  onSendKeyModeChange={setSendKeyMode}
-                  onTimelineViewChange={setTimelineView}
-                  onShowUsageBadgeChange={setShowUsageBadge}
-                  onShowUserMessageMetadataChange={setShowUserMessageMetadata}
-                />
-              ) : null}
+              renderAgent={(tab, project, active, actions) => {
+                const sessionRecord = sessions.find(session => session.id === tab.resourceId || session.aliases?.includes(tab.resourceId || ''))
+                return tab.resourceId ? (
+                  <Chat
+                    sessionId={tab.resourceId}
+                    canonicalSessionId={sessionRecord?.id || tab.resourceId}
+                    sessionDisplayName={tab.title}
+                    searchShortcutActive={projectDisplayed && active}
+                    onNewSession={() => actions.addTab('agent')}
+                    onOpenCodeFile={sessionCodeFileHandler(resolveSessionCodeTarget(sessionRecord?.currentNode ?? project.nodeId, sessionRecord?.cwd ?? project.rootPath))}
+                    onOpenCodeCommit={openCodeCommit}
+                    onOpenTerminal={() => { void actions.addTab('terminal') }}
+                    onOpenCode={() => { void actions.addTab('code') }}
+                    onOpenModelSettings={() => openSetupView({ focusModels: true })}
+                    sendKeyMode={sendKeyMode}
+                    timelineView={timelineView}
+                    showUsageBadge={showUsageBadge}
+                    showInterAgentMessages={showInterAgentMessages}
+                    onShowInterAgentMessagesChange={setShowInterAgentMessages}
+                    showCommentary={showCommentary}
+                    onShowCommentaryChange={setShowCommentary}
+                    fullWidth={fullWidth}
+                    onFullWidthChange={setFullWidth}
+                    showUserMessageMetadata={showUserMessageMetadata}
+                    onSendKeyModeChange={setSendKeyMode}
+                    onTimelineViewChange={setTimelineView}
+                    onShowUsageBadgeChange={setShowUsageBadge}
+                    onShowUserMessageMetadataChange={setShowUserMessageMetadata}
+                  />
+                ) : null
+              }}
               renderTerminal={(tab, project, _active, onTerminalReady) => (
                 <Suspense fallback={<LazyViewFallback label="Loading terminal…" />}>
                   <TerminalView

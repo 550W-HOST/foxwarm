@@ -10,7 +10,6 @@ The .NET HTTP/WebSocket surface consumed by the React WebUI. `HttpServer` owns a
 - [WebUI files, images, and uploads](../units/dotnet-webui-files-images.md)
 - [WebUI tasks, relations, and architecture actions](../units/dotnet-webui-tasks-relations.md)
 - [WebUI Agent, setup, and model configuration routes](../units/dotnet-webui-agents-setup.md)
-- [Project workspaces, resource membership, and creation recovery](../units/src-project-workspaces.md)
 - [WebUI deletion and terminal routes](../units/dotnet-webui-lifecycle-terminal.md)
 - [Managed Main Logs and file diagnostics](../units/dotnet-webui-logs.md)
 - [Main-owned artifact publication and reads](../units/dotnet-artifacts.md)
@@ -21,3 +20,5 @@ The .NET HTTP/WebSocket surface consumed by the React WebUI. `HttpServer` owns a
 - [.NET WebUI boundary](../threads/dotnet-webui-boundary.md)
 - [Session ownership and persistence](../threads/session-ownership-and-persistence.md)
 - [Tasks, timers, waits, and notifications](../threads/tasks-timers-and-waits.md)
+
+- [Managed Project workspaces](../units/dotnet-project-workspaces.md) — administrator Project membership, initial Session placement and recovery for the optional shared browser shell.

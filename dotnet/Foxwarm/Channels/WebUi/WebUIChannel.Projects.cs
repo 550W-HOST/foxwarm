@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Foxwarm.Code;
+using Foxwarm.Projects;
 using Foxwarm.Sessions;
 using Microsoft.Data.Sqlite;
 
@@ -8,27 +10,23 @@ namespace Foxwarm.Channels.WebUi;
 
 internal sealed partial class WebUIChannel
 {
-    // Reservation, runtime creation and deletion are serialized together. A retry
-    // reuses the recorded runtime identity even after a lost response or restart.
-    private readonly SemaphoreSlim projectGate = new(1, 1);
+    private ProjectStore projects = null!;
+    private readonly ConcurrentDictionary<string, Lazy<Task<JsonObject>>> projectCreations = new();
 
-    private static string ProjectString(JsonNode? value, string name, int max = 256)
+    private static string ProjectString(JsonNode? value, string name, int maximum = 256)
     {
+        var text = SessionWait.Text(value);
         if (
-            value is not JsonValue node
-            || !node.TryGetValue<string>(out var text)
+            text is null
             || string.IsNullOrWhiteSpace(text)
-            || text.Length > max
+            || text.Length > maximum
             || text.Contains('\0')
         )
             throw new InvalidDataException(
-                $"{name} must be a non-empty string of at most {max} characters."
+                $"{name} must be a non-empty string of at most {maximum} characters."
             );
         return text.Trim();
     }
-
-    private static string? ProjectOptional(JsonObject body, string name, int max = 256) =>
-        body.ContainsKey(name) ? ProjectString(body[name], name, max) : null;
 
     private static bool? ProjectArchived(JsonObject body)
     {
@@ -39,70 +37,301 @@ internal sealed partial class WebUIChannel
         throw new InvalidDataException("archived must be a boolean.");
     }
 
-    private async Task<string> ProjectRootAsync(
+    private static async Task<JsonObject> ProjectBody(HttpContext context) =>
+        await JsonNode.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted)
+            as JsonObject
+        ?? throw new InvalidDataException("A JSON object is required.");
+
+    private static void ProjectRoute(
+        WebApplication app,
+        string method,
+        string route,
+        Func<HttpContext, Task<JsonNode>> action
+    )
+    {
+        // HttpServer's administrator middleware owns these routes. They are not
+        // part of the scoped WebUI identity allowlist.
+        app.MapMethods(
+            route,
+            [method],
+            async (HttpContext context) =>
+            {
+                try
+                {
+                    await context.Response.WriteAsJsonAsync(
+                        await action(context),
+                        context.RequestAborted
+                    );
+                }
+                catch (Exception error)
+                    when (error
+                            is InvalidDataException
+                                or JsonException
+                                or IOException
+                                or InvalidOperationException
+                                or CodeServiceException
+                                or SqliteException
+                                or UnauthorizedAccessException
+                    )
+                {
+                    var status = error switch
+                    {
+                        CodeServiceException service => service.Status,
+                        SqliteException { SqliteErrorCode: 19 } => 409,
+                        SqliteException => 500,
+                        _ when error.Message.Contains(
+                                "not found",
+                                StringComparison.OrdinalIgnoreCase
+                            ) => 404,
+                        _ when error.Message.Contains("already", StringComparison.OrdinalIgnoreCase)
+                                || error.Message.Contains(
+                                    "in progress",
+                                    StringComparison.OrdinalIgnoreCase
+                                ) => 409,
+                        _ => 400,
+                    };
+                    context.Response.StatusCode = status;
+                    await context.Response.WriteAsJsonAsync(
+                        new { error = error.Message },
+                        context.RequestAborted
+                    );
+                }
+            }
+        );
+    }
+
+    private void RegisterProjectRoutes(WebApplication app)
+    {
+        projects = new(Path.Combine(sessions.DataRoot, "state", "projects.sqlite"));
+        app.Lifetime.ApplicationStopped.Register(projects.Dispose);
+        static string Id(HttpContext context) => context.Request.RouteValues["id"]!.ToString()!;
+        ProjectRoute(
+            app,
+            "GET",
+            "/api/projects",
+            context =>
+            {
+                var limit = int.TryParse(context.Request.Query["limit"], out var value)
+                    ? Math.Clamp(value, 1, 100)
+                    : 100;
+                var offset = int.TryParse(context.Request.Query["offset"], out value)
+                    ? Math.Clamp(value, 0, 100000)
+                    : 0;
+                var rows = projects.List(limit, offset);
+                return Task.FromResult<JsonNode>(
+                    new JsonObject
+                    {
+                        ["projects"] = rows,
+                        ["nextOffset"] = rows.Count == limit ? offset + limit : null,
+                    }
+                );
+            }
+        );
+        ProjectRoute(
+            app,
+            "POST",
+            "/api/projects/resolve-directory",
+            async context =>
+            {
+                var body = await ProjectBody(context);
+                var node = ProjectString(body["nodeId"], "nodeId");
+                return new JsonObject
+                {
+                    ["nodeId"] = node,
+                    ["rootPath"] = await ResolveProjectRoot(
+                        node,
+                        body["rootPath"],
+                        context.RequestAborted
+                    ),
+                };
+            }
+        );
+        ProjectRoute(
+            app,
+            "POST",
+            "/api/projects",
+            async context =>
+            {
+                var body = await ProjectBody(context);
+                var node = ProjectString(body["nodeId"], "nodeId");
+                var root = await ResolveProjectRoot(node, body["rootPath"], context.RequestAborted);
+                var name = body["name"] is null
+                    ? Path.GetFileName(root.TrimEnd('/'))
+                    : ProjectString(body["name"], "name");
+                return new JsonObject
+                {
+                    ["project"] = projects.CreateProject(
+                        string.IsNullOrEmpty(name) ? node : name,
+                        node,
+                        root
+                    ),
+                };
+            }
+        );
+        ProjectRoute(
+            app,
+            "PATCH",
+            "/api/projects/{id}",
+            async context =>
+            {
+                var body = await ProjectBody(context);
+                return new JsonObject
+                {
+                    ["project"] = projects.UpdateProject(
+                        Id(context),
+                        body.ContainsKey("name") ? ProjectString(body["name"], "name") : null,
+                        ProjectArchived(body)
+                    ),
+                };
+            }
+        );
+        ProjectRoute(
+            app,
+            "POST",
+            "/api/projects/{id}/sessions",
+            async context =>
+            {
+                var body = await ProjectBody(context);
+                return new JsonObject
+                {
+                    ["session"] = projects.CreateSession(
+                        Id(context),
+                        body["title"] is null
+                            ? "New session"
+                            : ProjectString(body["title"], "title")
+                    ),
+                };
+            }
+        );
+        ProjectRoute(
+            app,
+            "PATCH",
+            "/api/project-sessions/{id}",
+            async context =>
+            {
+                var body = await ProjectBody(context);
+                return new JsonObject
+                {
+                    ["session"] = projects.UpdateSession(
+                        Id(context),
+                        body.ContainsKey("title") ? ProjectString(body["title"], "title") : null,
+                        ProjectArchived(body)
+                    ),
+                };
+            }
+        );
+        ProjectRoute(
+            app,
+            "POST",
+            "/api/project-sessions/{id}/tabs",
+            async context => new JsonObject
+            {
+                ["tab"] = await CreateProjectTab(
+                    Id(context),
+                    await ProjectBody(context),
+                    context.RequestAborted
+                ),
+            }
+        );
+        ProjectRoute(
+            app,
+            "PATCH",
+            "/api/project-tabs/{id}",
+            async context =>
+            {
+                var body = await ProjectBody(context);
+                var tab =
+                    projects.GetTab(Id(context))
+                    ?? throw new InvalidDataException("Tab not found.");
+                var resource = body.ContainsKey("resourceId")
+                    ? ProjectString(body["resourceId"], "resourceId", 512)
+                    : null;
+                if (
+                    ProjectStore.Text(tab, "type") == "agent"
+                    && resource is not null
+                    && resource != ProjectStore.Text(tab, "resourceId")
+                )
+                    throw new InvalidDataException("Agent tab ownership cannot be changed.");
+                return new JsonObject
+                {
+                    ["tab"] = projects.UpdateTab(
+                        Id(context),
+                        body.ContainsKey("title") ? ProjectString(body["title"], "title") : null,
+                        resource
+                    ),
+                };
+            }
+        );
+        ProjectRoute(
+            app,
+            "DELETE",
+            "/api/project-tabs/{id}",
+            context =>
+            {
+                if (projectCreations.ContainsKey(Id(context)))
+                    throw new InvalidDataException("Tab creation is in progress.");
+                projects.DeleteTab(Id(context));
+                return Task.FromResult<JsonNode>(new JsonObject { ["success"] = true });
+            }
+        );
+    }
+
+    private async Task<string> ResolveProjectRoot(
         string node,
         JsonNode? requested,
         CancellationToken token
     )
     {
-        string? root;
+        string root;
         if (requested is null || SessionWait.Text(requested) == "")
         {
             if (node == "master")
-                root = sessions.AgentDirectory("main");
+                root = CodeNativePaths.Transport(sessions.AgentDirectory("main"));
             else
             {
-                await sessions.NodeProviders.RefreshAsync(node, token);
-                root = sessions.NodeProviders.DefaultCwd(node);
-                if (
-                    root is null
-                    && sessions
-                        .Nodes.Definitions(node)
-                        .Any(tool => SessionWait.Text(tool?["name"]) == "get_default_cwd")
-                )
-                {
-                    var result = await sessions.Nodes.ExecuteAsync(
-                        node,
-                        "get_default_cwd",
-                        new(),
-                        "main",
-                        "main",
-                        "master",
-                        null,
-                        false,
-                        token
-                    );
-                    root =
-                        SessionWait.Text(result)
-                        ?? SessionWait.Text((result as JsonObject)?["output"]);
-                }
-                if (string.IsNullOrWhiteSpace(root))
-                    throw new InvalidDataException(
-                        "Node does not provide a default project directory; enter an absolute path."
+                // A read-only native Node probe can precede the first Session.
+                // It does not allocate an owner or admit executable tools.
+                var value = await sessions.Nodes.ExecuteAsync(
+                    node,
+                    "get_default_cwd",
+                    new(),
+                    "__project_cwd_probe__",
+                    "main",
+                    "",
+                    null,
+                    false,
+                    token
+                );
+                root =
+                    SessionWait.Text(value)
+                    ?? SessionWait.Text((value as JsonObject)?["output"])
+                    ?? throw new InvalidDataException(
+                        "Node did not report its default working directory."
                     );
             }
         }
         else
-            root = ProjectString(requested, "rootPath", 4096);
-        if (root.Contains('\0') || root.Length > 4096)
-            throw new InvalidDataException("Invalid project directory.");
-        if (node == "master")
-            root = CodeNativePaths.Transport(CodeNativePaths.Native(root));
-        if (root.Contains('\\'))
-            throw new InvalidDataException(
-                "Project directory must use an absolute slash-based path."
-            );
+            root =
+                SessionWait.Text(requested)
+                ?? throw new InvalidDataException("Project directory must be a string.");
+        if (
+            root.Length > 4096
+            || root.Contains('\\')
+            || root.Contains('\0')
+            || !root.StartsWith('/')
+        )
+            throw new InvalidDataException("Project directory must be an absolute POSIX path.");
         root = CodeFileService.PathValue(root);
         JsonObject stat;
         if (node == "master")
         {
             stat = CodeFileService.StatFile(root);
+            if (((int)(SessionWait.Number(stat["type"]) ?? 0) & 2) == 0)
+                throw new InvalidDataException("Project path is not a directory.");
             _ = CodeFileService.ReadDirectory(root);
         }
         else
         {
-            // Both reads use one admitted service generation; reconnects cannot
-            // silently resolve the same project against a replacement machine.
             var target = sessions.Nodes.Service(node, "vscode-fs");
             stat = await sessions.Nodes.RequestServiceAsync(
                 target,
@@ -110,339 +339,141 @@ internal sealed partial class WebUIChannel
                 new() { ["path"] = root },
                 token
             );
-            _ = await sessions.Nodes.RequestServiceAsync(
+            if (((int)(SessionWait.Number(stat["type"]) ?? 0) & 2) == 0)
+                throw new InvalidDataException("Project path is not a directory.");
+            await sessions.Nodes.RequestServiceAsync(
                 target,
                 "read-directory",
                 new() { ["path"] = root },
                 token
             );
         }
-        if ((Convert.ToInt32(SessionWait.Number(stat["type"]) ?? 0) & 2) != 2)
-            throw new InvalidDataException("Project path is not a directory.");
         return root;
     }
 
-    private void RegisterProjectRoutes(WebApplication app)
+    private async Task<JsonObject> CreateProjectTab(
+        string workSessionId,
+        JsonObject body,
+        CancellationToken token
+    )
     {
-        var store = new ProjectStore(sessions.DataRoot);
-        app.Lifetime.ApplicationStopped.Register(store.Dispose);
-
-        async Task<IResult> Handle(
-            HttpContext context,
-            Func<HttpContext, JsonObject, Task<object>> handler
-        )
+        var work = projects.GetSession(workSessionId);
+        if (work is null || work["archived"]!.GetValue<bool>())
+            throw new InvalidDataException("Workspace session not found or archived.");
+        var project = projects.GetProject(ProjectStore.Text(work, "projectId")!);
+        if (project is null || project["archived"]!.GetValue<bool>())
+            throw new InvalidDataException("Project not found or archived.");
+        var type = ProjectString(body["type"], "type");
+        if (type is not ("agent" or "terminal" or "code"))
+            throw new InvalidDataException("Invalid tab type.");
+        var title = body["title"] is null
+            ? type == "agent"
+                ? "Agent"
+                : type == "terminal"
+                    ? "Terminal"
+                    : "Code"
+            : ProjectString(body["title"], "title");
+        var request =
+            body.ContainsKey("requestId") ? ProjectString(body["requestId"], "requestId", 128)
+            : type == "agent" ? Guid.NewGuid().ToString()
+            : null;
+        var node = ProjectStore.Text(project, "nodeId")!;
+        var root = ProjectStore.Text(project, "rootPath")!;
+        SessionOwner? existing = null;
+        if (type == "agent" && body.ContainsKey("existingSessionId"))
         {
-            try
-            {
-                var body = new JsonObject();
-                if (
-                    context.Request.Method is "POST" or "PATCH"
-                    && context.Request.ContentLength != 0
-                )
-                    body =
-                        await JsonNode.ParseAsync(
-                            context.Request.Body,
-                            cancellationToken: context.RequestAborted
-                        ) as JsonObject
-                        ?? throw new InvalidDataException("Project input must be an object.");
-                await projectGate.WaitAsync(context.RequestAborted);
-                try
-                {
-                    if (context.Request.Method != "GET" && !sessions.Accepting)
-                        return Results.StatusCode(503);
-                    return Results.Ok(await handler(context, body));
-                }
-                finally
-                {
-                    projectGate.Release();
-                }
-            }
-            catch (CodeServiceException error)
-            {
-                return Results.Json(
-                    new { error = error.Message, code = error.Code },
-                    statusCode: error.Status
-                );
-            }
-            catch (Exception error)
-                when (error
-                        is JsonException
-                            or InvalidDataException
-                            or InvalidOperationException
-                            or KeyNotFoundException
-                            or IOException
-                            or ArgumentException
-                            or UnauthorizedAccessException
-                            or SqliteException
-                )
-            {
-                var status =
-                    error is KeyNotFoundException ? 404
-                    : error is SqliteException { SqliteErrorCode: 19 }
-                    || error is ProjectConflictException
-                        ? 409
-                    : 400;
-                return Results.Json(new { error = error.Message }, statusCode: status);
-            }
+            existing =
+                await sessions.GetExistingAsync(
+                    ProjectString(body["existingSessionId"], "existingSessionId", 512)
+                ) ?? throw new InvalidDataException("Existing Agent session not found.");
+            RequireProjectPlacement(existing, node, root);
         }
-
-        void Route(
-            string method,
-            string path,
-            Func<HttpContext, JsonObject, Task<object>> handler
-        ) =>
-            app.MapMethods(
-                path,
-                [method],
-                (Func<HttpContext, Task<IResult>>)(context => Handle(context, handler))
-            );
-        static Task<object> Value(object value) => Task.FromResult(value);
-        static string Id(HttpContext context) =>
-            ProjectString(
-                JsonValue.Create(context.Request.RouteValues["id"]?.ToString()),
-                "id",
-                128
-            );
-
-        Route(
-            "GET",
-            "/api/projects",
-            (context, _) =>
-            {
-                var limit = Math.Clamp(
-                    int.TryParse(context.Request.Query["limit"], out var n) ? n : 100,
-                    1,
-                    100
-                );
-                var offset = Math.Clamp(
-                    int.TryParse(context.Request.Query["offset"], out var m) ? m : 0,
-                    0,
-                    100000
-                );
-                var projects = store.List(limit, offset);
-                return Value(
-                    new
-                    {
-                        projects,
-                        nextOffset = projects.Count == limit ? (int?)(offset + limit) : null,
-                    }
-                );
-            }
-        );
-        Route(
-            "POST",
-            "/api/projects/resolve-directory",
-            async (context, body) =>
-            {
-                var nodeId = ProjectString(body["nodeId"], "nodeId");
-                return new
-                {
-                    nodeId,
-                    rootPath = await ProjectRootAsync(
-                        nodeId,
-                        body["rootPath"],
-                        context.RequestAborted
-                    ),
-                };
-            }
-        );
-        Route(
-            "POST",
-            "/api/projects",
-            async (context, body) =>
-            {
-                var node = ProjectString(body["nodeId"], "nodeId");
-                var root = await ProjectRootAsync(node, body["rootPath"], context.RequestAborted);
-                var name =
-                    ProjectOptional(body, "name")
-                    ?? (Path.GetFileName(root) is { Length: > 0 } basename ? basename : node);
-                return new { project = store.CreateProject(name, node, root) };
-            }
-        );
-        Route(
-            "PATCH",
-            "/api/projects/{id}",
-            (context, body) =>
-                Value(
-                    new
-                    {
-                        project = store.UpdateProject(
-                            Id(context),
-                            ProjectOptional(body, "name"),
-                            ProjectArchived(body)
-                        ),
-                    }
-                )
-        );
-        Route(
-            "POST",
-            "/api/projects/{id}/sessions",
-            (context, body) =>
-                Value(
-                    new
-                    {
-                        session = store.CreateSession(
-                            Id(context),
-                            ProjectOptional(body, "title") ?? "New session"
-                        ),
-                    }
-                )
-        );
-        Route(
-            "PATCH",
-            "/api/project-sessions/{id}",
-            (context, body) =>
-                Value(
-                    new
-                    {
-                        session = store.UpdateSession(
-                            Id(context),
-                            ProjectOptional(body, "title"),
-                            ProjectArchived(body)
-                        ),
-                    }
-                )
-        );
-        Route(
-            "POST",
-            "/api/project-sessions/{id}/tabs",
-            async (context, body) =>
-            {
-                var workSession = store.GetSession(Id(context));
-                if (workSession is null || workSession["archived"]!.GetValue<bool>())
-                    throw new KeyNotFoundException("Workspace session not found or archived.");
-                var project = store.GetProject(workSession["projectId"]!.GetValue<string>());
-                if (project is null || project["archived"]!.GetValue<bool>())
-                    throw new KeyNotFoundException("Project not found or archived.");
-                var node = project["nodeId"]!.GetValue<string>();
-                var root = project["rootPath"]!.GetValue<string>();
-                var type = ProjectString(body["type"], "type");
-                if (type is not ("agent" or "terminal" or "code"))
-                    throw new InvalidDataException("Invalid tab type.");
-                var title =
-                    ProjectOptional(body, "title")
+        var previous = request is null ? null : projects.FindRequest(request);
+        var agent =
+            type == "agent"
+                ? existing?.Agent
                     ?? (
-                        type == "agent" ? "Agent"
-                        : type == "terminal" ? "Terminal"
-                        : "Code"
-                    );
-                var request =
-                    ProjectOptional(body, "requestId", 128)
-                    ?? (type == "agent" ? Guid.NewGuid().ToString() : null);
-                var existingId =
-                    type == "agent" ? ProjectOptional(body, "existingSessionId", 512) : null;
-                var existing = existingId is null
-                    ? null
-                    : await sessions.GetExistingAsync(existingId);
-                if (existingId is not null && existing is null)
-                    throw new KeyNotFoundException("Existing Agent session not found.");
-                if (existing is not null)
-                {
-                    var placement = sessions.ExecutionPlacement(existing);
-                    if (
-                        placement.Node != node
-                        || placement.Cwd is null
-                        || CodePath(placement.Cwd, node) != root
+                        body.ContainsKey("agentId") ? ProjectString(body["agentId"], "agentId", 128)
+                        : previous is null ? "main"
+                        : ProjectStore.Text(previous, "agentId") ?? "main"
                     )
-                        throw new InvalidDataException(
-                            "Existing Agent session must already use the project node and directory."
-                        );
-                }
-                var previous = request is null ? null : store.FindRequest(request);
-                var agent =
-                    type == "agent"
-                        ? existing?.Agent
-                            ?? ProjectOptional(body, "agentId", 128)
-                            ?? SessionWait.Text(previous?["agentId"])
-                            ?? "main"
-                        : null;
-                if (agent is not null)
-                {
-                    AgentCatalog.ValidateName(agent);
-                    if (sessions.BoundNode(agent) is { } bound && bound != node)
-                        throw new InvalidDataException(
-                            $"Agent is bound to node {bound}; choose a project on that node."
-                        );
-                }
-                var sessionId = workSession["id"]!.GetValue<string>();
-                if (existing is not null)
-                    return new
-                    {
-                        tab = store.LinkExisting(
-                            sessionId,
-                            title,
-                            request,
-                            existing.Id,
-                            existing.Agent
-                        ),
-                    };
-                var tab = store.CreateTab(sessionId, type, title, request, agent);
-                if (type != "agent")
-                    return new { tab };
-                var name = "project_" + tab["id"]!.GetValue<string>().Replace("-", "");
-                var runtimeId = SessionIdentity.Build(agent!, name);
-                if (
-                    tab["resourceId"] is not null
-                    && SessionWait.Text(tab["resourceId"]) != runtimeId
-                )
-                    throw new ProjectConflictException(
-                        "Request ID was already used with a different Agent."
-                    );
-                if (tab["state"]!.GetValue<string>() == "ready")
-                    return new { tab };
-                store.UpdateTab(tab["id"]!.GetValue<string>(), resource: runtimeId);
-                var owner = await sessions.GetExistingAsync(runtimeId);
-                if (owner is null)
-                {
-                    await ProjectRootAsync(node, JsonValue.Create(root), context.RequestAborted);
-                    owner = await sessions.CreateNamedAsync(
-                        agent!,
-                        name,
-                        null,
-                        null,
-                        initialNode: node,
-                        initialCwd: node == "master" ? CodeNativePaths.Native(root) : root
-                    );
-                }
-                var target = sessions.ExecutionPlacement(owner);
-                if (target.Node != node || target.Cwd is null || CodePath(target.Cwd, node) != root)
-                    throw new InvalidDataException(
-                        "Agent session target changed during creation; it was not rebound."
-                    );
-                return new { tab = store.UpdateTab(tab["id"]!.GetValue<string>(), state: "ready") };
-            }
-        );
-        Route(
-            "PATCH",
-            "/api/project-tabs/{id}",
-            (context, body) =>
-            {
-                var id = Id(context);
-                var tab = store.GetTab(id) ?? throw new KeyNotFoundException("Tab not found.");
-                var resource = ProjectOptional(body, "resourceId", 512);
-                if (
-                    tab["type"]!.GetValue<string>() == "agent"
-                    && resource is not null
-                    && resource != SessionWait.Text(tab["resourceId"])
-                )
-                    throw new InvalidDataException("Agent tab ownership cannot be changed.");
-                return Value(
-                    new { tab = store.UpdateTab(id, ProjectOptional(body, "title"), resource) }
+                : null;
+        if (agent is not null)
+        {
+            if (!sessions.Agents().Contains(agent))
+                throw new InvalidDataException("Agent not found.");
+            if (sessions.BoundNode(agent) is { } bound && bound != node)
+                throw new InvalidDataException(
+                    $"Agent is bound to node {bound}; choose a project on that node."
                 );
-            }
+        }
+        if (existing is not null)
+            return projects.LinkExisting(workSessionId, title, request, existing.Id, agent!);
+        var tab = projects.CreateTab(workSessionId, type, title, request, agent);
+        if (type != "agent" || ProjectStore.Text(tab, "state") == "ready")
+            return tab;
+        var id = ProjectStore.Text(tab, "id")!;
+        var sessionName = "project_" + id.Replace("-", "");
+        var runtimeId = SessionIdentity.Build(agent!, sessionName);
+        if (ProjectStore.Text(tab, "resourceId") is { } resource && resource != runtimeId)
+            throw new InvalidDataException("Request ID was already used with a different Agent.");
+        var pending = projectCreations.GetOrAdd(
+            id,
+            _ => new(() => InitializeProjectAgent(tab, agent!, sessionName, runtimeId, node, root))
         );
-        Route(
-            "DELETE",
-            "/api/project-tabs/{id}",
-            (context, _) =>
-            {
-                if (!store.DeleteTab(Id(context)))
-                    throw new KeyNotFoundException("Tab not found.");
-                return Value(new { success = true });
-            }
-        );
+        try
+        {
+            return (JsonObject)(await pending.Value).DeepClone();
+        }
+        finally
+        {
+            projectCreations.TryRemove(
+                new KeyValuePair<string, Lazy<Task<JsonObject>>>(id, pending)
+            );
+        }
     }
 
-    private static string CodePath(string path, string node) =>
-        CodeFileService.PathValue(node == "master" ? CodeNativePaths.Transport(path) : path);
+    private void RequireProjectPlacement(SessionOwner owner, string node, string root)
+    {
+        var placement = sessions.ExecutionPlacement(owner);
+        var cwd =
+            node == "master" && placement.Cwd is not null
+                ? CodeNativePaths.Transport(placement.Cwd)
+                : placement.Cwd;
+        if (placement.Node != node || cwd != root)
+            throw new InvalidDataException(
+                "Agent session must already use the project node and directory; its target was not rebound."
+            );
+    }
+
+    private async Task<JsonObject> InitializeProjectAgent(
+        JsonObject tab,
+        string agent,
+        string name,
+        string runtimeId,
+        string node,
+        string root
+    )
+    {
+        var id = ProjectStore.Text(tab, "id")!;
+        projects.UpdateTab(id, resourceId: runtimeId);
+        var owner = await sessions.GetExistingAsync(runtimeId);
+        if (owner is null)
+        {
+            await ResolveProjectRoot(node, JsonValue.Create(root), CancellationToken.None);
+            owner = await sessions.CreateNamedAsync(
+                agent,
+                name,
+                null,
+                null,
+                initialNode: node,
+                initialCwd: node == "master" ? CodeNativePaths.Native(root) : root
+            );
+        }
+        sessions.RequireNodeBoundary(owner, node);
+        if (node != "master")
+            _ = sessions.Nodes.Service(node, "vscode-fs");
+        RequireProjectPlacement(owner, node, root);
+        return projects.UpdateTab(id, state: "ready");
+    }
 }

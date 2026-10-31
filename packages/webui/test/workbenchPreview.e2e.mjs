@@ -49,14 +49,14 @@ after(async () => {
   await new Promise(resolve => server?.close(resolve))
 })
 
-async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, colorMode = 'light', nodeDirectory = [], taskRows = null, codeNewWindow, responsiveChat = false, chatMessages = null, timelineView = 'grouped', showScrollbar, terminal = null, width = 1400, height = 900, reducedMotion = false, waitForSplash = true } = {}) {
+async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')], activeTabId = 'chat:e2e-a', hash = '', split = false, splitSecondChat = false, splitDirection = 'row', layout = null, themeId, colorMode = 'light', nodeDirectory = [], taskRows = null, codeNewWindow, responsiveChat = false, chatMessages = null, timelineView = 'grouped', showScrollbar, terminal = null, projectSessionId = null, sessionAliases = {}, unreadSessions = [], width = 1400, height = 900, reducedMotion = false, waitForSplash = true } = {}) {
   const page = await browser.newPage()
   if (reducedMotion) await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }])
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
   // Firefox ESR retains its native viewport; Puppeteer orientation emulation is unsupported.
   if (!firefox) await page.setViewport({ width, height })
-  await page.evaluateOnNewDocument(({ freshBrowser, initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, colorMode, nodeDirectory, taskRows, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal }) => {
+  await page.evaluateOnNewDocument(({ freshBrowser, initialTabs, activeId, splitPanes, splitSecondChat, splitDirection, initialLayout, themeId, colorMode, nodeDirectory, taskRows, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal, projectSessionId, sessionAliases, unreadSessions }) => {
     if (window !== window.top) return
     const tabsById = Object.fromEntries(initialTabs.map(tab => [tab.id, tab]))
     const root = initialLayout || (splitPanes
@@ -70,12 +70,19 @@ async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')
       localStorage.setItem('foxwarm_workbench_state_v4', JSON.stringify({ state: { version: 4, tabsById, root, focusedPaneId: 'pane-main' }, version: 1 }))
       localStorage.setItem('foxwarm_last_active_tab_v1', activeId)
       localStorage.setItem('foxwarm_sidebar_collapsed_v1', 'false')
+      localStorage.setItem('foxwarm_session_idle_unread_v1', JSON.stringify({ version: 1, unread: Object.fromEntries(unreadSessions.map(id => [id, Date.now()])) }))
       if(freshBrowser) for(const key of ['foxwarm_workbench_state_v4','foxwarm_workbench_tabs_v3','foxwarm_last_active_tab_v1','foxwarm_last_visited_session_v1'])localStorage.removeItem(key)
     }
     if (chatMessages) localStorage.setItem('foxwarm_timeline_view_v1', timelineView)
     if (showScrollbar !== undefined) localStorage.setItem('foxwarm.contextScrollbar.showScrollbar', String(showScrollbar))
     if (themeId) localStorage.setItem('foxwarm_theme_selection_v3', JSON.stringify({ version: 3, themeId, lightThemeId: themeId, darkThemeId: themeId, colorMode }))
     if (codeNewWindow !== undefined) localStorage.setItem('foxwarm_code_open_new_window_v1', String(codeNewWindow))
+    localStorage.setItem('foxwarm_workspace_mode_v1', projectSessionId ? 'project' : 'classic')
+    if (projectSessionId) {
+      localStorage.setItem('foxwarm_project_active_session_v1', 'work-one')
+      localStorage.setItem('foxwarm_project_active_tabs_v1', JSON.stringify({ 'work-one': 'project-agent' }))
+    }
+    const project = { id: 'project-one', name: 'Linked Project', nodeId: 'master', rootPath: '/fixture', archived: false, createdAt: 1, sessions: [{ id: 'work-one', projectId: 'project-one', title: 'Linked work', archived: false, createdAt: 1, tabs: [{ id: 'project-agent', workspaceSessionId: 'work-one', type: 'agent', title: 'Agent', resourceId: projectSessionId, state: 'ready', createdAt: 1 }] }] }
     const json = body => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     window.__fetches = []
     window.__sent = []
@@ -92,6 +99,7 @@ async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')
       window.__fetches.push({ path: pathname, search: url.search, body: options.body || null })
       if (pathname.endsWith('/api/nodes/onboarding/pending')) return json({ items: [], total: 0, offset: 0, limit: 50 })
       if (pathname.endsWith('/api/tasks') && window.__failTaskPreview && url.searchParams.get('limit') === '3') return Promise.resolve(new Response('{}', { status: 503 }))
+      if (pathname.endsWith('/api/projects')) return json({ projects: projectSessionId ? [project] : [], nextOffset: null })
       if (pathname.endsWith('/api/auth/session')) return json({ role: 'admin' })
       if (pathname.endsWith('/api/tasks')) {
         const status = url.searchParams.get('status')
@@ -127,6 +135,10 @@ async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')
       if (pathname.endsWith('/api/models')) return json({ models: responsiveChat ? [{ key: 'fixture/model', label: 'Fixture model', contextLimit: 128000 }] : [] })
       if (pathname.endsWith('/api/commands')) return json({ commands: [] })
       if (pathname.endsWith('/api/session-list/sidebar')) return json({ version: 1, revision: 'r1', sessions: [sessionFixture('e2e-a'), sessionFixture('e2e-b'), sessionFixture('e2e-c')], nextCursor: null, children: [], focus: [], pathContext: [], forcedChildren: {} })
+      if (pathname.endsWith('/api/session-list/by-id') && Object.keys(sessionAliases).length) return json({ results: JSON.parse(options.body).ids.map(requestedId => {
+        const canonical = ['e2e-a', 'e2e-b', 'e2e-c'].find(id => id === requestedId || sessionAliases[id]?.includes(requestedId))
+        return canonical ? { requestedId, session: sessionFixture(canonical) } : { requestedId }
+      }) })
       if (pathname.endsWith('/api/session-list/by-id')) return json({ results: JSON.parse(options.body).ids.filter(id => id === 'history-outside/main').map(requestedId => ({ requestedId, resolution: { kind: 'exact', sessionId: requestedId }, session: { ...sessionFixture(requestedId), displayName: 'Outside the sidebar' } })) })
       if (pathname.endsWith('/api/history/search')) {
         window.__historySearchReads.push(url.search)
@@ -155,7 +167,7 @@ async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')
       }
       return json({})
     }
-    function sessionFixture(id) { return { tokenUsage: id === 'e2e-a' ? { cachedTokens: 12000, inputTokens: 1000, outputTokens: 200 } : { cachedTokens: 2000, inputTokens: 400, outputTokens: 100 }, id, aliases: [], archived: false, parentSessionId: null, childTotal: 0, messageCount: 0, lastMessageTime: 1, busy: false } }
+    function sessionFixture(id) { return { tokenUsage: id === 'e2e-a' ? { cachedTokens: 12000, inputTokens: 1000, outputTokens: 200 } : { cachedTokens: 2000, inputTokens: 400, outputTokens: 100 }, id, aliases: sessionAliases[id] || [], archived: false, parentSessionId: null, childTotal: 0, messageCount: 0, lastMessageTime: 1, busy: false } }
     class FixtureWebSocket {
       static instances = []
       static OPEN = 1
@@ -184,7 +196,7 @@ async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')
     }
     window.__emitRealtime = data => { for (const socket of FixtureWebSocket.instances) socket.onmessage?.({ data: JSON.stringify(data) }) }
     window.WebSocket = FixtureWebSocket
-  }, { freshBrowser, initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, colorMode, nodeDirectory, taskRows, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal })
+  }, { freshBrowser, initialTabs: tabs, activeId: activeTabId, splitPanes: split, splitSecondChat, splitDirection, initialLayout: layout, themeId, colorMode, nodeDirectory, taskRows, codeNewWindow, responsiveChat, chatMessages, timelineView, showScrollbar, terminal, projectSessionId, sessionAliases, unreadSessions })
   await page.goto(`${baseUrl}${hash}`, { waitUntil: 'domcontentloaded' })
   await page.bringToFront()
   await page.waitForFunction(() => !!window.foxwarmTest || !!document.querySelector('[data-foxwarm-popup-root="chat"]'), { timeout: 8_000 }).catch(async error => {
@@ -231,6 +243,112 @@ async function drag(page, from, to) {
   await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 12 })
   await page.mouse.up()
 }
+
+function projectPeerMessage(sessionId) {
+  return [{ role: 'user', parts: [{ system: `<foxwarm-message type="inter-agent" sourceSessionId="${sessionId}">\nHello from the peer.\n</foxwarm-message>` }], __meta: { seq: 1, timestamp: 1700000000000 } }]
+}
+
+async function projectNavigationState(page) {
+  return page.evaluate(() => ({
+    classic: JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state,
+    unread: JSON.parse(localStorage.getItem('foxwarm_session_idle_unread_v1') || '{}').unread || {},
+    auxiliary: [...document.querySelectorAll('[data-project-auxiliary-content]')].filter(node => node.getClientRects().length).map(node => node.dataset.projectAuxiliaryContent),
+    headers: [...document.querySelectorAll('[data-project-workspace] [data-session-header-subtitle]')].filter(node => node.getClientRects().length).map(node => node.textContent),
+  }))
+}
+
+async function waitForProjectConversation(page, sessionId) {
+  await page.waitForFunction(sessionId => {
+    const target = [...document.querySelectorAll('[data-project-auxiliary-content]')].find(node => node.dataset.projectAuxiliaryContent === `chat:${sessionId}`)
+    return target?.getClientRects().length && target.querySelector('[data-session-header-subtitle]')
+  }, {}, sessionId)
+}
+
+test('Project received-communication links display auxiliary Chat without changing or reading the hidden classic layout', async t => {
+  for (const { name, peer, keptTarget, aliases = {} } of [
+    { name: 'destination missing from classic', peer: 'e2e-c', keptTarget: false },
+    { name: 'destination already kept in classic', peer: 'e2e-c', keptTarget: true },
+    { name: 'exact encoded alias resolves the canonical conversation', peer: 'peer/旧 alias', keptTarget: true, aliases: { 'e2e-c': ['peer/旧 alias'] } },
+  ]) await t.test(name, async () => {
+    const page = await openFixture({
+      tabs: [system, chat('e2e-a'), ...(keptTarget ? [chat('e2e-c', false)] : [])],
+      projectSessionId: 'e2e-a', sessionAliases: aliases, responsiveChat: true,
+      timelineView: 'detailed', chatMessages: projectPeerMessage(peer), unreadSessions: ['e2e-b', 'e2e-c'],
+    })
+    try {
+      const link = `[data-project-workspace] a[href="#session/${encodeURIComponent(peer)}"]`
+      await page.waitForSelector(link, { visible: true })
+      const before = await projectNavigationState(page)
+      assert(before.unread['e2e-c'])
+      await clickReadyControl(page, link)
+      await waitForProjectConversation(page, peer)
+      await page.waitForFunction(() => !JSON.parse(localStorage.getItem('foxwarm_session_idle_unread_v1') || '{}').unread?.['e2e-c'])
+      const after = await projectNavigationState(page)
+      assert.deepEqual(after.classic, before.classic, 'the hidden classic preview, kept tabs, focus and active tab are unchanged')
+      assert.deepEqual(after.auxiliary, [`chat:${peer}`])
+      assert.equal(after.headers.length, 1)
+      assert(after.headers[0].includes(peer) || after.headers[0].includes('e2e-c'))
+      assert(after.unread['e2e-b'], 'an unrelated hidden conversation remains unread')
+      assert.equal((await state(page)).hash, `#tab/chat:${peer}`)
+      if (Object.keys(aliases).length) {
+        await page.waitForFunction(peer => window.__subscriptions.some(ids => ids.includes(peer)), {}, peer)
+        assert(await page.evaluate(peer => window.__historyReads.some(path => path.includes(encodeURIComponent(peer)) || path.includes('e2e-c')), peer))
+      }
+      // Returning to the work session then clicking the same real anchor must
+      // navigate again, rather than becoming inert because its hash is unchanged.
+      await page.evaluate(() => [...document.querySelectorAll('[data-project-workspace] button')].find(button => button.textContent.trim() === 'Back to work session').click())
+      await page.waitForSelector(link, { visible: true })
+      await clickReadyControl(page, link)
+      await waitForProjectConversation(page, peer)
+      assert.deepEqual((await projectNavigationState(page)).classic, before.classic)
+      await page.evaluate(() => { localStorage.setItem('foxwarm_workspace_mode_v1', 'classic'); window.dispatchEvent(new Event('foxwarm-workspace-mode-changed')) })
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-workbench-content-tab] [data-session-header-subtitle]')].some(node => node.getClientRects().length && node.textContent === 'session e2e-a'))
+      assert.deepEqual((await projectNavigationState(page)).classic, before.classic)
+    } finally { await page.close() }
+  })
+})
+
+test('initial Project conversation URLs open auxiliary Chat while saved classic hashes restore silently', async t => {
+  for (const hash of ['#session/e2e-c', '#tab/chat%3Ae2e-c']) for (const keptTarget of [false, true]) await t.test(`${hash} with ${keptTarget ? 'kept' : 'missing'} destination`, async () => {
+    const initialTabs = [system, chat('e2e-a'), ...(keptTarget ? [chat('e2e-c', false)] : [])]
+    const page = await openFixture({ tabs: initialTabs, hash, projectSessionId: 'e2e-b', responsiveChat: true, unreadSessions: ['e2e-a', 'e2e-c'] })
+    try {
+      await waitForProjectConversation(page, 'e2e-c')
+      await page.waitForFunction(() => !JSON.parse(localStorage.getItem('foxwarm_session_idle_unread_v1') || '{}').unread?.['e2e-c'])
+      const snapshot = await projectNavigationState(page)
+      assert.deepEqual(snapshot.classic.tabsById, Object.fromEntries(initialTabs.map(tab => [tab.id, tab])))
+      assert.deepEqual(snapshot.classic.root, { id: 'pane-main', kind: 'pane', tabIds: initialTabs.map(tab => tab.id), activeTabId: 'chat:e2e-a' })
+      assert(snapshot.unread['e2e-a'], 'the hidden restored classic selection is not acknowledged')
+      assert.deepEqual(snapshot.auxiliary, ['chat:e2e-c'])
+    } finally { await page.close() }
+  })
+  await t.test('remembered classic conversation restored while hidden is not acknowledged', async () => {
+    const page = await openFixture({ tabs: [], activeTabId: 'chat:e2e-c', projectSessionId: 'e2e-b', responsiveChat: true, unreadSessions: ['e2e-c'] })
+    try {
+      await page.waitForFunction(() => JSON.parse(localStorage.getItem('foxwarm_workbench_state_v4')).state.tabsById['chat:e2e-c'])
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-project-workspace] [data-session-header-subtitle]')].some(node => node.getClientRects().length && node.textContent === 'session e2e-b'))
+      const snapshot = await projectNavigationState(page)
+      assert.deepEqual(snapshot.auxiliary, [])
+      assert(snapshot.unread['e2e-c'], 'restoring a remembered hidden classic Chat is silent')
+    } finally { await page.close() }
+  })
+  for (const hash of ['', '#tab/chat%3Ae2e-a']) await t.test(hash ? 'saved classic tab hash' : 'saved classic preference without hash', async () => {
+    const page = await openFixture({ hash, projectSessionId: 'e2e-b', responsiveChat: true, unreadSessions: ['e2e-a'] })
+    try {
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-project-workspace] [data-session-header-subtitle]')].some(node => node.getClientRects().length && node.textContent === 'session e2e-b'))
+      const before = await projectNavigationState(page)
+      assert.deepEqual(before.auxiliary, [])
+      assert(before.unread['e2e-a'])
+      await page.reload({ waitUntil: 'domcontentloaded' })
+      await waitForWebUiReady(page)
+      await page.waitForFunction(() => [...document.querySelectorAll('[data-project-workspace] [data-session-header-subtitle]')].some(node => node.getClientRects().length && node.textContent === 'session e2e-b'))
+      const after = await projectNavigationState(page)
+      assert.deepEqual(after.classic, before.classic)
+      assert.deepEqual(after.auxiliary, [])
+      assert(after.unread['e2e-a'])
+    } finally { await page.close() }
+  })
+})
 
 test('pane collapse follows the direct split direction, releases space, and restores on tab selection', async () => {
   const layout = {

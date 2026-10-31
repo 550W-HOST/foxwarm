@@ -120,7 +120,7 @@ internal sealed partial class CodeWorkbench
         };
     }
 
-    private string Workspace(string folder, string? workspaceId = null)
+    private string Workspace(string folder, string? workspaceId)
     {
         if (!folder.StartsWith("foxwarm://", StringComparison.Ordinal))
             throw new CodeServiceException(
@@ -128,9 +128,9 @@ internal sealed partial class CodeWorkbench
                 "folderUri must use the foxwarm:// scheme."
             );
         _ = UriParts(folder);
+        var selectedPath = workspacePath;
         lock (workspaceGate)
         {
-            var selectedPath = workspacePath;
             if (workspaceId is not null)
             {
                 if (
@@ -150,34 +150,30 @@ internal sealed partial class CodeWorkbench
                 );
                 Directory.CreateDirectory(directory);
                 selectedPath = Path.Combine(directory, workspaceId + ".code-workspace");
-                var targetPath = Path.Combine(directory, workspaceId + ".target.json");
-                if (!File.Exists(targetPath))
+                var target = Path.Combine(directory, workspaceId + ".target.json");
+                if (!File.Exists(target))
                     File.WriteAllText(
-                        targetPath,
+                        target,
                         new JsonObject { ["initialFolderUri"] = folder }.ToJsonString()
                     );
+                JsonNode? saved;
                 try
                 {
-                    if (
-                        JsonNode
-                            .Parse(File.ReadAllText(targetPath))
-                            ?["initialFolderUri"]?.GetValue<string>() != folder
-                    )
-                        throw new CodeServiceException(
-                            "InvalidPath",
-                            "Project workspace already belongs to a different folder."
-                        );
+                    saved = JsonNode.Parse(File.ReadAllText(target));
                 }
-                catch (Exception error)
-                    when (error is System.Text.Json.JsonException or InvalidOperationException)
+                catch (System.Text.Json.JsonException error)
                 {
                     throw new CodeServiceException(
                         "InvalidPath",
                         "Project workspace target cannot be read.",
-                        400,
-                        error
+                        inner: error
                     );
                 }
+                if (saved?["initialFolderUri"]?.GetValue<string>() != folder)
+                    throw new CodeServiceException(
+                        "InvalidPath",
+                        "Project workspace already belongs to a different folder."
+                    );
             }
             if (!File.Exists(selectedPath))
             {
@@ -218,26 +214,24 @@ internal sealed partial class CodeWorkbench
                 { /* Keep malformed persisted workspaces for Code to report. */
                 }
             }
-            return FoxwarmUri(selectedPath);
         }
+        return FoxwarmUri(selectedPath);
     }
 
     internal string Bootstrap(HttpContext context)
     {
+        var address = publicAddress;
+        var origin = address.Origin;
+        var embedded = context.Request.Query["embedded"] == "true";
         var workspaceId = context.Request.Query["workspaceId"].FirstOrDefault();
         if (
             workspaceId is not null
-            && (
-                context.Request.Query["embedded"] != "true"
-                || string.IsNullOrEmpty(context.Request.Query["initialFolderUri"].FirstOrDefault())
-            )
+            && (!embedded || !context.Request.Query.ContainsKey("initialFolderUri"))
         )
             throw new CodeServiceException(
                 "InvalidPath",
-                "Project workspaces require an embedded folder target."
+                "A project workspace requires embedded mode and an explicit folder."
             );
-        var address = publicAddress;
-        var origin = address.Origin;
         var folder =
             context
                 .Request.Query[

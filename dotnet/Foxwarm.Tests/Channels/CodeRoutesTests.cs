@@ -666,57 +666,69 @@ public sealed class CodeRoutesTests
         await File.WriteAllTextAsync(workspace, "{broken workspace");
         await f.Client.GetStringAsync("/vscode-web/?embedded=true");
         Assert.Equal("{broken workspace", await File.ReadAllTextAsync(workspace));
+    }
 
-        var folder = "foxwarm://node+remote/srv/project";
-        var projectQuery =
-            "/vscode-web/?embedded=true&workspaceId=project-session-1&initialFolderUri="
-            + Uri.EscapeDataString(folder);
-        var projectHtml = await f.Client.GetStringAsync(projectQuery);
-        Assert.Contains("project-workspaces/project-session-1.code-workspace", projectHtml);
-        var projectPath = Path.Combine(
-            Path.GetDirectoryName(workspace)!,
-            "project-workspaces",
-            "project-session-1.code-workspace"
-        );
-        var project = JsonNode.Parse(await File.ReadAllTextAsync(projectPath))!;
-        Assert.Equal(folder, project["folders"]![0]!["uri"]!.GetValue<string>());
-        project["settings"]!["editor.fontSize"] = 21;
-        await File.WriteAllTextAsync(projectPath, project.ToJsonString());
-        await f.Client.GetStringAsync(projectQuery);
-        Assert.Equal(
-            21,
-            JsonNode.Parse(await File.ReadAllTextAsync(projectPath))!["settings"]![
-                "editor.fontSize"
-            ]!.GetValue<int>()
-        );
-        var secondHtml = await f.Client.GetStringAsync(
-            projectQuery.Replace("project-session-1", "project-session-2")
-        );
-        Assert.Contains("project-workspaces/project-session-2.code-workspace", secondHtml);
+    [Fact]
+    public async Task Project_workspaces_keep_independent_descriptors_and_reject_rebinding()
+    {
+        await using var f = await Fixture.Create();
+        foreach (
+            var file in new[]
+            {
+                "out/nls.messages.js",
+                "out/vs/workbench/workbench.web.main.internal.css",
+                "out/vs/workbench/workbench.web.main.internal.js",
+            }
+        )
+        {
+            var target = Path.Combine(f.Assets, file);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            await File.WriteAllTextAsync(target, "bootstrap fixture");
+        }
+        const string folder = "foxwarm://node+project-peer/srv/project";
+        string Url(string id, string root = folder) =>
+            "/vscode-web/?embedded=true&workspaceId="
+            + Uri.EscapeDataString(id)
+            + "&initialFolderUri="
+            + Uri.EscapeDataString(root);
+        foreach (var id in new[] { "work-one", "work-two" })
+        {
+            var html = await f.Client.GetStringAsync(Url(id));
+            Assert.Contains("project-workspaces/" + id + ".code-workspace", html);
+            var target = Path.Combine(
+                f.Data,
+                "state/vscode-web/project-workspaces",
+                id + ".code-workspace"
+            );
+            var workspace = JsonNode.Parse(await File.ReadAllTextAsync(target))!;
+            Assert.Equal(folder, workspace["folders"]![0]!["uri"]!.ToString());
+            workspace["settings"]!["editor.fontSize"] = id == "work-one" ? 15 : 19;
+            await File.WriteAllTextAsync(target, workspace.ToJsonString());
+            await f.Client.GetStringAsync(Url(id));
+            Assert.Equal(
+                id == "work-one" ? 15 : 19,
+                JsonNode.Parse(await File.ReadAllTextAsync(target))!["settings"]![
+                    "editor.fontSize"
+                ]!.GetValue<int>()
+            );
+        }
+        Assert.False(File.Exists(Path.Combine(f.Data, "state/vscode-web/foxwarm.code-workspace")));
         Assert.Equal(
             HttpStatusCode.BadRequest,
-            (
-                await f.Client.GetAsync(
-                    projectQuery.Replace(
-                        Uri.EscapeDataString(folder),
-                        Uri.EscapeDataString(CodeWorkbench.FoxwarmUri(f.Work))
-                    )
-                )
-            ).StatusCode
+            (await f.Client.GetAsync(Url("work-one", "foxwarm://node+master/other"))).StatusCode
         );
         Assert.Equal(
             HttpStatusCode.BadRequest,
-            (
-                await f.Client.GetAsync(
-                    projectQuery.Replace("project-session-1", Uri.EscapeDataString("../escape"))
-                )
-            ).StatusCode
+            (await f.Client.GetAsync(Url("../escape"))).StatusCode
         );
         Assert.Equal(
             HttpStatusCode.BadRequest,
-            (await f.Client.GetAsync("/vscode-web/?workspaceId=project-session-1")).StatusCode
+            (await f.Client.GetAsync("/vscode-web/?workspaceId=work-one")).StatusCode
         );
-        Assert.Equal("{broken workspace", await File.ReadAllTextAsync(workspace));
+        Assert.Equal(
+            HttpStatusCode.BadRequest,
+            (await f.Client.GetAsync("/vscode-web/?embedded=true&workspaceId=work-one")).StatusCode
+        );
     }
 
     [Theory]

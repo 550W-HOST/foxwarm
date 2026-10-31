@@ -200,6 +200,10 @@ public sealed class NodeServiceTransportTests
         await Assert.ThrowsAsync<CodeServiceException>(() =>
             f.Manager.Nodes.CommandServiceAsync(target, "input", new())
         );
+        var staleRead = await Assert.ThrowsAsync<CodeServiceException>(() =>
+            f.Manager.Nodes.RequestServiceAsync(target, "get", new(), default)
+        );
+        Assert.Equal("NodeUnavailable", staleRead.Code);
         var replacementTarget = f.Manager.Nodes.Service("one", "vscode-pty");
         Assert.NotEqual(target.ConnectionId, replacementTarget.ConnectionId);
         var replacementCall = f.Manager.Nodes.RequestServiceAsync(

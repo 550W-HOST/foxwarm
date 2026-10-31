@@ -113,6 +113,7 @@ internal sealed partial class WebUIChannel(
         );
         RegisterSetupRoutes(app);
         RegisterSessionNodeRoutes(app);
+        RegisterProjectRoutes(app);
         app.MapPost(
             "/api/sessions/{id}/cwd",
             async (string id, HttpRequest request) =>
@@ -210,7 +211,6 @@ internal sealed partial class WebUIChannel(
         ).Register(app);
         RegisterTerminalRoutes(app);
         RegisterAgentRoutes(app);
-        RegisterProjectRoutes(app);
         RegisterListRoutes(app);
         RegisterPresentationRoutes(app);
         RegisterRelationRoutes(app);
