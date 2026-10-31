@@ -1,0 +1,279 @@
+---
+import '@fontsource-variable/inter';
+import '@fontsource-variable/fraunces';
+import '../styles/home.css';
+import Screenshot from './Screenshot.astro';
+import Icon from './Icon.astro';
+import { strings, installCommands, githubUrl, siteUrl, type Lang } from '../i18n/home';
+
+import heroLight from '../assets/screens/hero-light.png';
+import heroDark from '../assets/screens/hero-dark.png';
+import memoryLight from '../assets/screens/memory-light.png';
+import memoryDark from '../assets/screens/memory-dark.png';
+import parallelLight from '../assets/screens/parallel-light.png';
+import parallelDark from '../assets/screens/parallel-dark.png';
+import nodesLight from '../assets/screens/nodes-light.png';
+import nodesDark from '../assets/screens/nodes-dark.png';
+
+interface Props { lang: Lang }
+const { lang } = Astro.props;
+const t = strings[lang];
+const other: Lang = lang === 'en' ? 'zh' : 'en';
+const featureShots: Record<string, { light: ImageMetadata; dark: ImageMetadata }> = {
+  memory: { light: memoryLight, dark: memoryDark },
+  parallel: { light: parallelLight, dark: parallelDark },
+  nodes: { light: nodesLight, dark: nodesDark }
+};
+const extraIcons = ['terminal', 'memory', 'skill', 'model', 'script', 'shield'] as const;
+const installTabs = [
+  { id: 'linux', label: t.install.tabs.linux, command: installCommands.linux, note: t.install.notes.linux, prompt: '$' },
+  { id: 'windows', label: t.install.tabs.windows, command: installCommands.windows, note: t.install.notes.windows, prompt: 'PS>' },
+  { id: 'docker', label: t.install.tabs.docker, command: installCommands.docker, note: t.install.notes.docker, prompt: '$' }
+];
+const docsHref = (page = '') => `/docs/${page}`;
+---
+<!doctype html>
+<html lang={t.htmlLang} data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{t.meta.title}</title>
+    <meta name="description" content={t.meta.description} />
+    <meta name="theme-color" content="#e2602c" />
+    <meta property="og:title" content={t.meta.ogTitle} />
+    <meta property="og:description" content={t.meta.description} />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={siteUrl + t.path} />
+    <meta property="og:image" content={siteUrl + heroLight.src} />
+    <meta property="og:locale" content={lang === 'en' ? 'en_US' : 'zh_CN'} />
+    <link rel="canonical" href={siteUrl + t.path} />
+    <link rel="alternate" hreflang="en" href={siteUrl + strings.en.path} />
+    <link rel="alternate" hreflang="zh-CN" href={siteUrl + strings.zh.path} />
+    <link rel="alternate" hreflang="x-default" href={siteUrl + strings.en.path} />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon-32x32.png" sizes="32x32" />
+    <script is:inline>
+      (() => {
+        let saved = null;
+        try { saved = localStorage.getItem('foxwarm-site-theme'); } catch {}
+        const preferred = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        document.documentElement.dataset.theme = saved || preferred;
+      })();
+    </script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">{t.nav.skip}</a>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href={t.path} aria-label="Foxwarm">
+          <img src="/favicon.svg" alt="" width="30" height="30" />
+          <span>Foxwarm</span>
+        </a>
+        <nav class="primary-nav" aria-label="Primary">
+          <a href="#features">{t.nav.features}</a>
+          <a href="#install">{t.nav.install}</a>
+          <a href={docsHref()}>{t.nav.docs}</a>
+        </nav>
+        <div class="header-actions">
+          <a class="lang-switch" href={strings[other].path} hreflang={strings[other].htmlLang} lang={strings[other].htmlLang} aria-label={t.nav.languageLabel}>
+            <Icon name="globe" /><span>{t.nav.language}</span>
+          </a>
+          <a class="icon-button" href={githubUrl} aria-label={t.nav.github}><Icon name="github" /></a>
+          <button class="icon-button theme-toggle" type="button" aria-label={t.nav.theme} title={t.nav.theme}>
+            <Icon name="sun" class="theme-icon-light" /><Icon name="moon" class="theme-icon-dark" />
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-glow" aria-hidden="true"></div>
+        <div class="container hero-copy">
+          <p class="eyebrow">{t.hero.eyebrow}</p>
+          <h1 id="hero-title"><span>{t.hero.titleLines[0]}</span> <span class="accent-line">{t.hero.titleLines[1]}</span></h1>
+          <p class="lede">{t.hero.lede}</p>
+          <div class="hero-actions">
+            <a class="button primary" href={docsHref('installing/')}>{t.hero.primary}</a>
+            <a class="button secondary" href={docsHref()}>{t.hero.secondary} <span aria-hidden="true">→</span></a>
+          </div>
+
+          <div class="install" id="install" data-tabs>
+            <div class="install-tabs" role="tablist" aria-label={t.nav.install}>
+              {installTabs.map((tab, index) => (
+                <button type="button" role="tab" id={`tab-${tab.id}`} aria-controls={`panel-${tab.id}`} aria-selected={index === 0 ? 'true' : 'false'} tabindex={index === 0 ? 0 : -1} data-tab={tab.id}>{tab.label}</button>
+              ))}
+            </div>
+            {installTabs.map((tab, index) => (
+              <div class="install-panel" role="tabpanel" id={`panel-${tab.id}`} aria-labelledby={`tab-${tab.id}`} hidden={index !== 0}>
+                <div class="command">
+                  <pre><code>{tab.command.split('\n').map((line) => (<span class="command-line"><span class="prompt" aria-hidden="true">{tab.prompt}</span>{line}</span>))}</code></pre>
+                  <button class="copy-button" type="button" data-copy={tab.command} data-copied={t.install.copied}>{t.install.copy}</button>
+                </div>
+                <p class="install-note">{tab.note} <a href={docsHref('installing/')}>{t.install.requirementsLink} →</a></p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div class="container hero-shot">
+          <Screenshot light={heroLight} dark={heroDark} alt={t.hero.screenshotAlt} eager widths={[960, 1440, 2000, 2880]} sizes="(min-width: 1260px) 1200px, 100vw" />
+        </div>
+      </section>
+
+      <section class="strip" aria-label={t.strip.label}>
+        <div class="container strip-inner">
+          <span class="strip-label">{t.strip.label}</span>
+          <ul>{t.strip.items.map((item) => <li>{item}</li>)}</ul>
+        </div>
+      </section>
+
+      <div id="features" class="features">
+        {t.features.map((feature, index) => (
+          <section class:list={['feature', { reverse: index % 2 === 1 }]} aria-labelledby={`feature-${feature.id}`}>
+            <div class="container feature-inner">
+              <div class="feature-copy">
+                <p class="eyebrow">{feature.eyebrow}</p>
+                <h2 id={`feature-${feature.id}`}>{feature.title}</h2>
+                <p class="feature-body">{feature.body}</p>
+                <ul class="checks">{feature.points.map((point) => <li><Icon name="check" />{point}</li>)}</ul>
+                <a class="text-link" href={feature.link.href}>{feature.link.label} <span aria-hidden="true">→</span></a>
+              </div>
+              <div class="feature-visual">
+                {featureShots[feature.id] ? (
+                  <Screenshot light={featureShots[feature.id].light} dark={featureShots[feature.id].dark} alt={feature.image.alt} widths={[640, 960, 1280, 1800]} sizes="(min-width: 1100px) 640px, 100vw" />
+                ) : (
+                  <div class="chat-demo" role="img" aria-label={feature.image.alt}>
+                    <div class="chat-head">
+                      <img src="/favicon.svg" alt="" width="34" height="34" />
+                      <div><strong>{t.channelsDemo.title}</strong><small>{t.channelsDemo.status}</small></div>
+                    </div>
+                    <div class="chat-body">
+                      {t.channelsDemo.messages.map((message) => (
+                        <div class:list={['bubble', message.from]}>
+                          <p>{message.text}</p>
+                          <time>{message.time}</time>
+                        </div>
+                      ))}
+                    </div>
+                    <div class="chat-badges" aria-hidden="true">
+                      <span>Telegram</span><span>Matrix</span><span>QQ</span><span>{lang === 'zh' ? '微信' : 'WeChat'}</span><span>{lang === 'zh' ? '企业微信' : 'WeCom'}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+        ))}
+      </div>
+
+      <section class="extras" aria-labelledby="extras-title">
+        <div class="container">
+          <div class="section-head">
+            <p class="eyebrow">{t.extras.eyebrow}</p>
+            <h2 id="extras-title">{t.extras.title}</h2>
+          </div>
+          <div class="extra-grid">
+            {t.extras.items.map((item, index) => (
+              <article>
+                <span class="extra-icon"><Icon name={extraIcons[index]} /></span>
+                <h3>{item.title}</h3>
+                <p>{item.body}</p>
+              </article>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section class="start" aria-labelledby="start-title">
+        <div class="container start-inner">
+          <div class="section-head">
+            <p class="eyebrow">{t.start.eyebrow}</p>
+            <h2 id="start-title">{t.start.title}</h2>
+            <p>{t.start.lede}</p>
+            <a class="text-link" href={docsHref('installing/')}>{t.start.guide} <span aria-hidden="true">→</span></a>
+          </div>
+          <ol class="steps">
+            {t.start.steps.map((step, index) => (
+              <li><span class="step-number">{index + 1}</span><div><h3>{step.title}</h3><p>{step.body}</p></div></li>
+            ))}
+          </ol>
+        </div>
+      </section>
+
+      <section class="final" aria-labelledby="final-title">
+        <div class="container">
+          <div class="final-card">
+            <img class="final-fox" src="/favicon.svg" alt="" width="64" height="64" />
+            <h2 id="final-title">{t.final.title}</h2>
+            <p>{t.final.body}</p>
+            <div class="hero-actions">
+              <a class="button primary" href={docsHref('installing/')}>{t.final.primary}</a>
+              <a class="button ghost" href={githubUrl}><Icon name="github" /> {t.final.secondary}</a>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-inner">
+        <a class="brand" href={t.path}><img src="/favicon.svg" alt="" width="24" height="24" /><span>Foxwarm</span></a>
+        <p>{t.footer.tagline}</p>
+        <nav aria-label="Footer">
+          <a href={docsHref()}>{t.footer.docs}</a>
+          <a href={githubUrl}>{t.footer.github}</a>
+          <a href={`${githubUrl}/blob/main/LICENSE`}>{t.footer.license}</a>
+          <a href={strings[other].path} hreflang={strings[other].htmlLang} lang={strings[other].htmlLang}>{t.nav.language}</a>
+        </nav>
+      </div>
+    </footer>
+
+    <script is:inline>
+      (() => {
+        const root = document.documentElement;
+        document.querySelector('.theme-toggle')?.addEventListener('click', () => {
+          const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+          root.dataset.theme = next;
+          try { localStorage.setItem('foxwarm-site-theme', next); } catch {}
+        });
+
+        for (const group of document.querySelectorAll('[data-tabs]')) {
+          const tabs = [...group.querySelectorAll('[role="tab"]')];
+          const select = (tab, focus) => {
+            for (const other of tabs) {
+              const active = other === tab;
+              other.setAttribute('aria-selected', String(active));
+              other.tabIndex = active ? 0 : -1;
+              document.getElementById(other.getAttribute('aria-controls')).hidden = !active;
+            }
+            if (focus) tab.focus();
+          };
+          tabs.forEach((tab, index) => {
+            tab.addEventListener('click', () => select(tab, false));
+            tab.addEventListener('keydown', (event) => {
+              const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+              if (!step) return;
+              event.preventDefault();
+              select(tabs[(index + step + tabs.length) % tabs.length], true);
+            });
+          });
+          const platform = (navigator.userAgentData?.platform || navigator.platform || '').toLowerCase();
+          if (platform.startsWith('win')) select(tabs.find((tab) => tab.dataset.tab === 'windows'), false);
+        }
+
+        for (const button of document.querySelectorAll('.copy-button')) {
+          button.addEventListener('click', async () => {
+            try {
+              await navigator.clipboard.writeText(button.dataset.copy || '');
+              const previous = button.textContent;
+              button.textContent = button.dataset.copied || 'Copied';
+              button.classList.add('copied');
+              setTimeout(() => { button.textContent = previous; button.classList.remove('copied'); }, 1500);
+            } catch {}
+          });
+        }
+      })();
+    </script>
+  </body>
+</html>

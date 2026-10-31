@@ -12,6 +12,7 @@ const siteOrigin = 'https://foxwarm.net';
 
 const requiredRoutes = [
   '/',
+  '/zh/',
   '/docs/',
   '/docs/installing/',
   '/docs/model-setup/',

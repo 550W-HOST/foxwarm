@@ -1,0 +1,20 @@
+---
+import { Picture } from 'astro:assets';
+
+interface Props {
+  light: ImageMetadata;
+  dark: ImageMetadata;
+  alt: string;
+  widths: number[];
+  sizes: string;
+  eager?: boolean;
+}
+const { light, dark, alt, widths, sizes, eager = false } = Astro.props;
+const loading = eager ? 'eager' : 'lazy';
+---
+<figure class="shot">
+  <div class="shot-frame">
+    <Picture class="shot-light" src={light} alt={alt} widths={widths} sizes={sizes} formats={['avif', 'webp']} fallbackFormat="png" loading={loading} fetchpriority={eager ? 'high' : 'auto'} decoding="async" />
+    <Picture class="shot-dark" src={dark} alt="" aria-hidden="true" widths={widths} sizes={sizes} formats={['avif', 'webp']} fallbackFormat="png" loading="lazy" decoding="async" />
+  </div>
+</figure>
