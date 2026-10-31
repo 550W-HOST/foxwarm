@@ -216,3 +216,90 @@ jobs:
           if-no-files-found: ignore
           include-hidden-files: false
           retention-days: 7
+
+  desktop:
+    name: Windows x64 Desktop package
+    runs-on: windows-2025
+    timeout-minutes: 35
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.21.0
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/webui/package-lock.json
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix packages/webui ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Prepare WebView2 Evergreen runtime for acceptance
+        shell: pwsh
+        run: |
+          $client = 'Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $versions = @(
+            (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\$client" -ErrorAction SilentlyContinue).pv
+            (Get-ItemProperty "HKCU:\SOFTWARE\$client" -ErrorAction SilentlyContinue).pv
+          )
+          if (-not ($versions | Where-Object { $_ -and [version]$_ -gt [version]'0.0.0.0' })) {
+            $installer = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+            Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $installer
+            $setup = Start-Process $installer -ArgumentList '/silent', '/install' -Wait -PassThru
+            if ($setup.ExitCode -ne 0) { throw "WebView2 installation failed: $($setup.ExitCode)" }
+          }
+          $runtimes = dotnet --list-runtimes
+          foreach ($framework in @('Microsoft.NETCore.App', 'Microsoft.WindowsDesktop.App', 'Microsoft.AspNetCore.App')) {
+            if (-not ($runtimes | Where-Object { $_ -like "$framework 10.*" })) { throw "Missing .NET 10 shared framework: $framework" }
+          }
+      - name: Publish complete framework-dependent Desktop
+        shell: bash
+        run: bash dotnet/scripts/publish-desktop.sh "$(cygpath -u "$RUNNER_TEMP")/desktop-publish"
+      - name: Create and extract distributable ZIP
+        shell: pwsh
+        run: |
+          $publish = Join-Path $env:RUNNER_TEMP 'desktop-publish'
+          $zip = Join-Path $env:RUNNER_TEMP 'foxwarm-desktop-win-x64-framework-dependent.zip'
+          [System.IO.Compression.ZipFile]::CreateFromDirectory($publish, $zip)
+          Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'desktop-extracted')
+      - name: Validate and launch the extracted Desktop package
+        shell: pwsh
+        run: |
+          # Elevated WebView2 hosts honor HKLM policy, not environment overrides.
+          # This app-specific policy exists only on the disposable acceptance runner.
+          $policy = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments'
+          New-Item -Path $policy -Force | Out-Null
+          New-ItemProperty -Path $policy -Name 'Foxwarm.Desktop.exe' -PropertyType String -Value '--remote-debugging-port=0' -Force | Out-Null
+          try {
+            node dotnet/scripts/qualify-desktop-package.mjs "$env:RUNNER_TEMP/desktop-extracted" "$env:RUNNER_TEMP/desktop-acceptance.json"
+            if ($LASTEXITCODE -ne 0) { throw "Desktop acceptance failed: $LASTEXITCODE" }
+          } finally {
+            Remove-ItemProperty -Path $policy -Name 'Foxwarm.Desktop.exe'
+          }
+      - name: Upload Desktop ZIP
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: foxwarm-desktop-win-x64-framework-dependent
+          path: ${{ runner.temp }}/foxwarm-desktop-win-x64-framework-dependent.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Upload Desktop acceptance summary
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-acceptance
+          path: ${{ runner.temp }}/desktop-acceptance.json
+          if-no-files-found: ignore
+          retention-days: 7

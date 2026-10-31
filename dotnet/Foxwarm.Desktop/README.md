@@ -31,6 +31,34 @@ port is occupied, it binds a new available port without connecting to the other
 process; browser-only theme/layout preferences start fresh for that new origin.
 No API keys or existing account settings are included.
 
+## Download a GitHub Actions package
+
+Open the repository's **Actions → Tests** workflow and select a successful run
+for the desired commit. Download the
+**foxwarm-desktop-win-x64-framework-dependent** artifact, then extract the
+`foxwarm-desktop-win-x64-framework-dependent.zip` inside it. The ZIP contains the
+complete Desktop application; launch `Foxwarm.Desktop.exe` from the extracted
+folder. Install the shared frameworks and WebView2 listed above first.
+Artifacts expire after 14 days; this is not an installer or an automatic update
+channel. The existing **Run workflow** action can build another package.
+
+The Windows packaging job uses the same delivery helper as local builds. It
+extracts the finished ZIP and checks the WebUI, native x64 dependencies, collected
+artifact/extension resources, licenses and framework-dependent runtime metadata.
+It then launches that extracted executable with disposable data and workspace,
+attaches to its actual WebView2 view, verifies native cookie sign-in and Setup,
+runs a native ToolScript turn against a local model fixture, and checks ordinary
+shutdown/restart persistence. It also executes the packaged esbuild/sharp
+dependencies. The ZIP is uploaded only after these checks succeed; a separate
+`desktop-acceptance` artifact records the acceptance result without user state,
+tokens or browser profiles.
+
+These checks do not cover tray interaction, Windows sign-out, power-loss
+recovery, optional Vector/embedding services or the unbundled Code workbench.
+WebView2 debugging is enabled only for acceptance, through the test child's
+environment or an app-specific policy on the disposable Windows runner. Normal
+Desktop startup does not enable it.
+
 ## Window and tray
 
 Closing the window hides it to the tray. Double-click the fox tray icon or use
