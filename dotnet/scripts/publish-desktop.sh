@@ -11,7 +11,10 @@ if [[ -n "$(find "$output" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
 fi
 cd "$root"
 npm run build:assets
+# SDK-added transitive references must use the same global properties as the
+# Desktop -> Core reference, or MSBuild compiles shared outputs twice in parallel.
 dotnet publish dotnet/Foxwarm.Desktop -c Release -r win-x64 --self-contained false \
+  -p:FoxwarmConsoleEntry=false -p:ArtifactTargetRid=win-x64 \
   -p:EnableWindowsTargeting=true -p:DebugType=None -p:DebugSymbols=false -o "$output"
 # Symbols and XML API reference files are build/debug artifacts, not runtime assets.
 find "$output" -type f \( -name '*.pdb' -o -name '*.xml' \) -delete
