@@ -216,6 +216,8 @@ public sealed partial class CompactLifecycleTests
             Assert.Equal(HttpStatusCode.OK, stopped.StatusCode);
             await plannerClosed.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await owner.Compactor.DrainAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            // Compact completion can precede the queued processor's admission.
+            await peer.RequestAt(9).WaitAsync(TimeSpan.FromSeconds(5));
             await owner.DrainForegroundAsync().WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(10, peer.RequestCount);
             var history = owner.Entry.Snapshot().History.Materialize();
