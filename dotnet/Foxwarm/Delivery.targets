@@ -180,7 +180,7 @@
     <ArtifactTargetRid Condition="'$(RuntimeIdentifier)' != ''"
       >$(RuntimeIdentifier)</ArtifactTargetRid>
     <ArtifactTargetRid Condition="'$(ArtifactTargetRid)' == ''"
-      >$(NETCoreSdkRuntimeIdentifier)</ArtifactTargetRid>
+      >$(NETCoreSdkPortableRuntimeIdentifier)</ArtifactTargetRid>
     <ArtifactRuntimeOutput>$(MSBuildProjectDirectory)/obj/artifact-runtime/$(ArtifactTargetRid)</ArtifactRuntimeOutput>
   </PropertyGroup>
   <Target Name="CollectArtifactRuntime" BeforeTargets="AssignTargetPaths">
