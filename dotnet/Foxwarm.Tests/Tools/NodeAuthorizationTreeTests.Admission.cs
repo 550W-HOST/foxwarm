@@ -9,6 +9,36 @@ namespace Foxwarm.Tests;
 public sealed partial class NodeAuthorizationTreeTests
 {
     [Fact]
+    public void Legacy_registry_without_tree_fields_keeps_credentials_and_roots_when_children_are_added()
+    {
+        using var temp = new TempDirectory();
+        var registry = new ApprovedNodeRegistry(temp.Path);
+        var credential = registry.Create("retained");
+        registry.Create("other");
+        var path = Path.Combine(temp.Path, "state", "nodes.json");
+        // The pre-tree reader/writer stored approvedNodes and pendingPairings only.
+        var old = Obj(File.ReadAllText(path));
+        old.Remove("providerNodes");
+        foreach (var row in old["approvedNodes"]!.AsObject())
+            row.Value!.AsObject().Remove("parentNode");
+        File.WriteAllText(path, old.ToJsonString());
+
+        var upgraded = new ApprovedNodeRegistry(temp.Path);
+        Assert.True(upgraded.Authenticate("retained", credential["authToken"]!.GetValue<string>()));
+        Assert.Null(upgraded.Forest().Parent("retained"));
+        Assert.Null(upgraded.Forest().Parent("other"));
+        Assert.Equal(new[] { "retained" }, upgraded.Forest().Chain("retained"));
+        upgraded.Create("child", "retained");
+
+        var reopened = new ApprovedNodeRegistry(temp.Path);
+        Assert.True(reopened.Authenticate("retained", credential["authToken"]!.GetValue<string>()));
+        Assert.Equal(new[] { "child", "retained" }, reopened.Forest().Chain("child"));
+        Assert.Null(reopened.Forest().Parent("other"));
+        Assert.Throws<InvalidDataException>(() => reopened.Remove("retained"));
+        Assert.Equal(3, reopened.ListApproved().Count);
+    }
+
+    [Fact]
     public async Task Configured_limits_refuse_native_files_and_provider_effects_and_root_provider_admission_uses_caller_provenance()
     {
         foreach (var invalid in new[] { "-1", "1.5", "null", "true", "2147483648" })

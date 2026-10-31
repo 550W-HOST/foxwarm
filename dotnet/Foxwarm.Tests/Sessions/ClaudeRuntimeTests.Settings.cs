@@ -56,7 +56,7 @@ public sealed partial class ClaudeRuntimeTests
                     """
                     [
                       {"action":"deny","tool":{"source":"node","name":"exec"},"node":{"exact":"master"}},
-                      {"action":"deny","tool":{"source":"node","name":["write","edit","apply_patch"]},"path":{"anyNotWithin":"${agent.dir}"}}
+                      {"action":"deny","tool":{"source":"node","name":["write","edit"]},"path":{"anyNotWithin":"${agent.dir}"}}
                     ]
                     """
                 )!

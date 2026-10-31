@@ -27,14 +27,7 @@ public sealed partial class ClaudeRuntimeTests
             new(
                 new JsonObject
                 {
-                    ["tool"] = Tools(
-                        "read",
-                        "write",
-                        "edit",
-                        "apply_patch",
-                        "exec",
-                        "node_create_auth_token"
-                    ),
+                    ["tool"] = Tools("read", "write", "edit", "exec", "node_create_auth_token"),
                     ["node"] = "box1",
                     ["action"] = "allow",
                 },
@@ -56,7 +49,7 @@ public sealed partial class ClaudeRuntimeTests
             new(
                 new JsonObject
                 {
-                    ["tool"] = Tools("read", "write", "edit", "apply_patch", "exec"),
+                    ["tool"] = Tools("read", "write", "edit", "exec"),
                     ["node"] = "c1",
                     ["action"] = "allow",
                 },
@@ -224,6 +217,17 @@ public sealed partial class ClaudeRuntimeTests
             {
                 ["calls"] = new JsonArray(
                     Remote("c1", "allowed.txt"),
+                    new JsonObject
+                    {
+                        ["name"] = "edit",
+                        ["args"] = new JsonObject
+                        {
+                            ["apply_patch"] =
+                                "*** Begin Patch\n*** Update File: "
+                                + Path.Combine(child.Directory, "allowed.txt")
+                                + "\n@@\n-delegated\n+edited through MCP\n*** End Patch",
+                        },
+                    },
                     Remote("box1", "denied.txt"),
                     Call(
                         "mcp_config",
@@ -259,25 +263,30 @@ public sealed partial class ClaudeRuntimeTests
         await f.RunAsync(text: null);
         Assert.Null(f.Owner.Entry.LastBackgroundProcessorFailure);
         var results = f.Lines("results.jsonl");
-        Assert.Equal(4, results.Length);
+        Assert.Equal(5, results.Length);
         Assert.True(
             !(results[0]["result"]?["isError"]?.GetValue<bool>() ?? false),
             results[0].ToJsonString()
         );
         Assert.Equal(
-            "delegated",
+            "edited through MCP",
             await File.ReadAllTextAsync(Path.Combine(child.Directory, "allowed.txt"))
         );
         Assert.False(File.Exists(Path.Combine(box.Directory, "denied.txt")));
-        Assert.True(results[1]["result"]!["isError"]!.GetValue<bool>());
-        Assert.Contains("tool_authorization_denied", results[1].ToJsonString());
+        Assert.False(results[1]["result"]?["isError"]?.GetValue<bool>() ?? false);
+        Assert.Contains(
+            f.Owner.Entry.Snapshot().History.Materialize(),
+            row => SessionWait.Text(row["parts"]?[0]?["functionCall"]?["name"]) == "edit"
+        );
         Assert.True(results[2]["result"]!["isError"]!.GetValue<bool>());
         Assert.Contains("tool_authorization_denied", results[2].ToJsonString());
+        Assert.True(results[3]["result"]!["isError"]!.GetValue<bool>());
+        Assert.Contains("tool_authorization_denied", results[3].ToJsonString());
         Assert.DoesNotContain(
             "escape",
             (await f.Main.Manager.OutboundMcp.ListServersAsync(default)).ToJsonString()
         );
-        Assert.False(results[3]["result"]?["isError"]?.GetValue<bool>() ?? false);
+        Assert.False(results[4]["result"]?["isError"]?.GetValue<bool>() ?? false);
         Assert.Single(planner.Entry.Snapshot().Queue);
         Assert.Equal("worker/run", planner.Entry.Snapshot().Queue[0].SourceSessionId);
         Assert.False(SessionBoundary.NeedsChildHandoff(f.Owner.Entry.Snapshot().AuthorityEnvelope));

@@ -27,7 +27,7 @@ Each rule layer is evaluated in order, and a call that matches no rule passes th
 
 ```javascript
 set_agent_rules({"agentName":"worker", "rules":[
-  {"tool":["read","write","edit","apply_patch","exec"], "node":"c1", "action":"allow"},
+  {"tool":["read","write","edit","exec"], "node":"c1", "action":"allow"},
   {"tool":"search_tools", "action":"allow"},
   {"tool":{"source":"builtin","name":"send_to_session"},
    "args":{"sessionId":{"session":{"relation":"parent"}}}, "action":"allow"},

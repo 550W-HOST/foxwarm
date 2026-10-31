@@ -223,6 +223,14 @@ public sealed partial class CompactLifecycleTests
     {
         await using var fixture = await CompactFixture.CreateAsync();
         await fixture.SeedAsync();
+        var requiredWait = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        fixture.Owner.Changed += _ =>
+        {
+            if (fixture.Owner.Compacting)
+                requiredWait.TrySetResult();
+        };
         fixture.Peer.NextUsage = 21000;
         fixture.Peer.NextTool = !queued;
         if (queued)
@@ -245,6 +253,8 @@ public sealed partial class CompactLifecycleTests
             );
         await fixture.Peer.PlanReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await fixture.ContinuationReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        // Continuation entry can still be committing provider-time input before phase publication.
+        await requiredWait.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.False(fixture.Continuation!.IsCompleted);
         var runtime = fixture.Owner.RuntimeSnapshot();
         Assert.Equal("compaction", runtime["active"]!["phase"]!.GetValue<string>());
