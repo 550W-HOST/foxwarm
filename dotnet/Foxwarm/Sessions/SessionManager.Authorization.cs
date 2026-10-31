@@ -193,8 +193,7 @@ internal sealed partial class SessionManager
                         "This executor has no physical path resolver."
                     )
                 ).AuthorizationFacts("read", resolved.Args)
-            : resolved.Source == "node"
-                && resolved.Name is "read" or "write" or "edit" or "apply_patch" or "exec"
+            : resolved.Source == "node" && resolved.Name is "read" or "write" or "edit" or "exec"
             || resolved.Source == "builtin"
                 && resolved.Name
                     is "node_create_auth_token"
@@ -441,19 +440,12 @@ internal sealed partial class SessionManager
                     )
                 );
         if (
-            resolved.Name == "apply_patch"
-            && SessionWait.Text(resolved.Args["input"]) is string patch
+            resolved.Name == "edit"
+            && SessionWait.Text(resolved.Args["apply_patch"]) is string patch
         )
-            foreach (
-                System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(
-                    patch,
-                    @"^\*\*\* (?:Add|Update|Delete) File: (.+)$",
-                    System.Text.RegularExpressions.RegexOptions.Multiline
-                )
-            )
-                paths.Add(
-                    new("input", match.Groups[1].Value.TrimEnd('\r'), null, resolved.ExecutionNode)
-                );
+            foreach (var operation in WorkspacePatch.Parse(patch))
+                paths.Add(new("apply_patch", operation.Path, null, resolved.ExecutionNode));
+
         return paths;
     }
 

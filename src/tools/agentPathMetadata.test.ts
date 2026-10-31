@@ -24,7 +24,7 @@ test('successful native file batch records per-call paths outside model response
   try {
     const message = await executeTools([
       { id: 'read-relative', name: 'read', args: { filePath: 'first.txt', startLine: 1 } },
-      { id: 'patch-two', name: 'apply_patch', args: { input: '*** Begin Patch\n*** Add File: $fw_tmp/' + id + '/second.txt\n+second\n*** Add File: $fw_tmp/' + id + '/third.txt\n+third\n*** End Patch' } },
+      { id: 'patch-two', name: 'edit', args: { apply_patch: '*** Begin Patch\n*** Add File: $fw_tmp/' + id + '/second.txt\n+second\n*** Add File: $fw_tmp/' + id + '/third.txt\n+third\n*** End Patch' } },
       { id: 'read-error', name: 'read', args: { filePath: '$unknown/missing' } },
     ], { sessionId: id, session }, session);
     const responses = message.message.parts.filter(part => part.functionResponse).map(part => part.functionResponse!);

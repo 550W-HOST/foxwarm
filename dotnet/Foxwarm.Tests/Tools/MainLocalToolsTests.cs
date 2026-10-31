@@ -761,10 +761,10 @@ public sealed partial class MainLocalToolsTests
 
         var patchText = new string('b', 1_048_600);
         var patch = await f.Call(
-            "apply_patch",
+            "edit",
             new JsonObject
             {
-                ["input"] =
+                ["apply_patch"] =
                     "*** Begin Patch\n*** Add File: large-patch.txt\n+"
                     + patchText
                     + "\n*** End Patch",
@@ -778,10 +778,10 @@ public sealed partial class MainLocalToolsTests
             [0x00, 0xFF, 0x10, 0x80]
         );
         var delete = await f.Call(
-            "apply_patch",
+            "edit",
             new JsonObject
             {
-                ["input"] = "*** Begin Patch\n*** Delete File: binary.bin\n*** End Patch",
+                ["apply_patch"] = "*** Begin Patch\n*** Delete File: binary.bin\n*** End Patch",
             }
         );
         Assert.Null(Error(delete));

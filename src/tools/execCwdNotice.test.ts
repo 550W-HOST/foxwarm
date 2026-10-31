@@ -60,7 +60,7 @@ test('exec cwd change notice is appended and names subsequent default-cwd tools'
 
     assert.ok(result.startsWith('command output'));
     assert.match(result, /\n\nSESSION CWD CHANGED: `\/tmp\/before` → `\/tmp\/after`\./);
-    assert.match(result, /default cwd for subsequent exec\/read\/edit\/write\/apply_patch tool calls/);
+    assert.match(result, /default cwd for subsequent exec\/read\/edit\/write tool calls/);
     assert.equal(result.indexOf('SESSION CWD CHANGED'), result.lastIndexOf('SESSION CWD CHANGED'));
     assert.ok(result.indexOf('SESSION CWD CHANGED') > result.indexOf('command output'));
   } finally {

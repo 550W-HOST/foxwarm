@@ -1,3 +1,4 @@
+import { UNIFIED_EDIT_DESCRIPTION, unifiedEditParameters } from '../../packages/shared/dist/unifiedEdit';
 import { MAX_CORE_NODE_ID_LENGTH } from '../../packages/shared/dist/nodeIdentity';
 import { DEFAULT_EXEC_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS, MIN_EXEC_TIMEOUT_SECONDS } from '../../packages/shared/dist/persistentExec';
 import { COMPACT_PLAN_TOOL_DEFINITION } from '../session/compactPlan';
@@ -137,54 +138,8 @@ const baseDefinitions = [
         {
             name: 'edit',
             defaultInject: true,
-            description: "Replace one exact occurrence of text in a file. Use apply_patch when a line-based patch is more suitable.",
-            parameters: {
-                type: 'object',
-                properties: { 
-                    filePath: { type: 'string' , description: "File to edit. Relative paths use the session working directory, or the agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected."},
-                    oldText: { type: 'string', description: "Exact text to replace; it must identify a single occurrence." },
-                    newText: { type: 'string', description: "Replacement text." },
-                },
-                required: ['filePath', 'oldText', 'newText']
-            }
-        },
-        {
-            name: 'apply_patch',
-            defaultInject: true,
-            description: `Add, modify, or delete files with a line-based patch. Relative paths in patch headers use the session working directory, or the agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected. Supply the patch as input.
-
-The patch must be enclosed in \`*** Begin Patch\` / \`*** End Patch\`. Each file operation starts with a header line:
-- \`*** Update File: <path>\` — modify an existing file
-- \`*** Add File: <path>\` — create a new file (all body lines must start with \`+\`)
-- \`*** Delete File: <path>\` — delete a file (no body lines)
-
-For Update File, the body uses line-based diff syntax:
-- Lines starting with a single space \` \` are context (must match the existing file content)
-- Lines starting with \`-\` are deletions (must match existing content)
-- Lines starting with \`+\` are insertions (new content)
-- \`@@\` or \`@@ <anchor text>\` starts a new section (anchor text helps locate the position in the file)
-- \`*** End of File\` marks that the following context is at the end of the file
-
-Example:
-\`\`\`
-*** Begin Patch
-*** Update File: src/app.ts
-@@ function main()
- import { foo } from './foo';
--const old = 'removed';
-+const newVar = 'added';
- console.log(newVar);
-*** Add File: src/newfile.ts
-+export const hello = 'world';
-*** End Patch
-\`\`\``,
-            parameters: {
-                type: 'object',
-                properties: {
-                    input: { type: 'string', description: "Complete patch text in the format described above." }
-                },
-                required: ['input']
-            }
+            description: UNIFIED_EDIT_DESCRIPTION,
+            parameters: unifiedEditParameters("File to edit. Relative paths use the session working directory, or the agent directory if unset. Absolute paths and ~/ paths are accepted subject to permissions. On Main and CLI Nodes, a leading $fw_agentdir or $fw_tmp expands to this Agent's directory or its tmp directory. Other leading $ names are rejected.")
         },
         {
             name: 'read_memory',

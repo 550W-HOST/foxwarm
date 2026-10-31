@@ -250,7 +250,7 @@ public sealed partial class ToolAuthorizationEffectsTests
             "*** Begin Patch\n*** Update File: allowed/exists\n@@\n-old\n+changed\n*** Update File: forbidden/second\n@@\n-untouched\n+changed\n*** End Patch";
         Assert.Equal(
             "tool_authorization_denied",
-            Error(await Call(execution.Tools, "apply_patch", new JsonObject { ["input"] = patch }))
+            Error(await Call(execution.Tools, "edit", new JsonObject { ["apply_patch"] = patch }))
         );
         Assert.Equal("old", await File.ReadAllTextAsync(Path.Combine(own, "allowed", "exists")));
         Assert.Equal(

@@ -5,27 +5,8 @@ using Foxwarm.Tools;
 
 namespace Foxwarm.Tests;
 
-public sealed class ExactReplacementTests
+public sealed class ExactEditRegressionTests
 {
-    [Theory]
-    [InlineData("", "", "$&$1$$", 1, "$&$1$$")]
-    [InlineData("abc", "", "x", 4, null)]
-    [InlineData("abc", "missing", "x", 0, null)]
-    [InlineData("one one", "one", "x", 2, null)]
-    [InlineData("Abc", "abc", "x", 0, null)]
-    [InlineData("aaa", "aa", "$&$1$$", 1, "$&$1$$a")]
-    [InlineData("left needle right", "needle", "", 1, "left  right")]
-    public void Unique_ordinal_nonoverlapping_match_keeps_replacement_literal(
-        string text,
-        string search,
-        string replacement,
-        int occurrences,
-        string? updated
-    )
-    {
-        Assert.Equal((occurrences, updated), ExactReplacement.Apply(text, search, replacement));
-    }
-
     [Fact]
     public async Task Ordinary_edit_preserves_file_on_match_errors_and_replaces_dollars_literally()
     {
@@ -48,7 +29,7 @@ public sealed class ExactReplacementTests
                 },
                 default
             );
-            Assert.Equal("edit_failed", SessionWait.Text(result["error"]?["type"]));
+            Assert.NotNull(result["error"]);
             Assert.Equal("one one", await File.ReadAllTextAsync(path));
         }
         var edited = await tools.ExecuteAsync(

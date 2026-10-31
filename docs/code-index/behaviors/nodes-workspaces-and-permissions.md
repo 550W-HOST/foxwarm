@@ -10,7 +10,7 @@ Session conversation and [turn ownership](messages-and-turns.md#which-boundary-a
 
 | Operation | Observable placement |
 | --- | --- |
-| Direct `read`, `write`, `edit`, `apply_patch`, `exec`, or `browse_*` | Uses the Session's selected Node. At `master`, uses the local handler; elsewhere, requires that exact Node's capability. |
+| Direct `read`, `write`, `edit`, `exec`, or `browse_*` | Uses the Session's selected Node. At `master`, uses the local handler; elsewhere, requires that exact Node's capability. |
 | `call_tool` with `source=node` | Uses its explicit `nodeId`, or the current Node if omitted. An explicit other-Node call does not import the current Node's cwd. |
 | Agent memory tools | Use the Agent's memory on Main, not an arbitrary `memory/` directory on the selected Node. |
 | Session, Task, topology, and Provider lifecycle operations | Retain their operation-specific owners. Selecting a Node does not turn management tools into remote shell tools. |

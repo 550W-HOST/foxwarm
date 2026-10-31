@@ -77,8 +77,7 @@ To shorten active L2 block B#48, use an entry with `level: 3`,
 `sourceKind: "block"`, `sourceStart: 48`, `sourceEnd: 48` and your summary.
 The array may also be JSON-encoded as the existing tool permits. File input uses
 the same source validation and application rules as direct input. If a rejected
-submission returns a saved plan file, correct the reported error with `edit` or
-`apply_patch` and resubmit that file instead of regenerating the plan.
+submission returns a saved plan file, correct the reported error with `edit` and resubmit that file instead of regenerating the plan.
 
 ```json
 {

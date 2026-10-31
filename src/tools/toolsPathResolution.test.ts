@@ -6,7 +6,7 @@ import path from 'path';
 import { getAgentDir, getAgentMemoryDir } from '../config';
 import * as sessionManager from '../sessionManager';
 import { checkToolPermission } from '../isolatedCheck';
-import { read, write, edit, apply_patch, apply_patch_memory, delete_memory, copy_between_nodes, definitions, modelFacingDefinitions, submit_compact_plan, callTool } from '../tools';
+import { read, write, edit, apply_patch_memory, delete_memory, copy_between_nodes, definitions, modelFacingDefinitions, submit_compact_plan, callTool } from '../tools';
 
 test('submit_compact_plan is present in regular tool definitions and guarded outside compact flow', async () => {
   assert.ok(definitions.some(def => def.name === 'submit_compact_plan'));
@@ -54,8 +54,8 @@ test('file tools resolve relative paths from session cwd', async () => {
     await edit({ filePath: 'note.txt', oldText: 'hello', newText: 'world' }, ctx as any);
     assert.equal(await fs.readFile(path.join(nestedDir, 'note.txt'), 'utf8'), 'world');
 
-    await apply_patch({
-      input: [
+    await edit({
+      apply_patch: [
         '*** Begin Patch',
         '*** Update File: note.txt',
         '@@',
@@ -83,7 +83,7 @@ test('native file tools record successful actual Agent paths in header order, no
     assert.equal(paths.splice(0)[0]?.resolved, path.join(dir, 'first.txt'));
     await edit({ filePath: `$fw_tmp/${unique}/first.txt`, oldText: 'first', newText: 'second' }, ctx as any);
     assert.equal(paths.splice(0)[0]?.resolved, path.join(dir, 'first.txt'));
-    await apply_patch({ input: `*** Begin Patch\n*** Update File: $fw_tmp/${unique}/first.txt\n@@\n-second\n+third $HOME\n*** Add File: $fw_tmp/${unique}/added.txt\n+new\n*** End Patch` }, ctx as any);
+    await edit({ apply_patch: `*** Begin Patch\n*** Update File: $fw_tmp/${unique}/first.txt\n@@\n-second\n+third $HOME\n*** Add File: $fw_tmp/${unique}/added.txt\n+new\n*** End Patch` }, ctx as any);
     assert.deepEqual(paths.splice(0), [
       { raw: `$fw_tmp/${unique}/first.txt`, resolved: path.join(dir, 'first.txt') },
       { raw: `$fw_tmp/${unique}/added.txt`, resolved: path.join(dir, 'added.txt') },

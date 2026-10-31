@@ -74,3 +74,5 @@ The existing service transfers whole-file base64 within its 30-second deadline; 
 - Existing outbound/OAuth, authorization, scoped/admin WebUI, Session and Node regressions retain their original owners and guarantees. Fixtures establish valid-path behavior, not a replacement for production header/origin/authorization checks.
 
 Vector and Windows-local tools have independent accepted owners; this unit does not implement external chat adapters. Session Worker hosting, managed controllers and Node Provider environment lifecycle remain explicit whole-delivery exclusions in the [delivery scope](../overview.md#d-dotnet-delivery-scope).
+
+Unified edit and old/new resident compatibility follow [D-node-thread-unified-edit](../threads/node-communication.md#d-node-thread-unified-edit): native Nodes support all forms; legacy external Nodes retain single/patch forms and reject batch or `replaceAll:true` before effects without extra file-read authority.

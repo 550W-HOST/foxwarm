@@ -34,7 +34,7 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 | `isToolScriptCall(call)` | ~7 | Identifies direct and unified builtin ToolScript execution calls, including historical descriptors |
 | `ToolScriptSubCallTag({ subCall })` | ~10 | Shared running indicator plus counted tag for one tool script sub-call |
 | `isLegacyDiffToolName(name)` | ~1 | Checks if tool name is legacy edit/edit_memory |
-| `isPatchToolName(name)` | ~1 | Checks if tool name is apply_patch/apply_patch_memory |
+| `isPatchCall(call)` | ~1 | Recognizes unified edit patch arguments and historical apply_patch/apply_patch_memory calls |
 | `hasLegacyDiffPayload(call)` | ~2 | Checks if call has oldText/newText args |
 | `countLogicalPayloadLines(text)` | ~5 | Counts legacy edit payload lines without treating empty text or a trailing terminator as an extra line |
 | `getLegacyEditLineCounts(oldText, newText)` | ~4 | Returns removed/added logical-line counts for a legacy edit preview |
@@ -57,6 +57,8 @@ Renders tool call/response timeline items in the chat web UI, displaying functio
 | `ExecOutputText({ text, command })` | ~5 | Renders exec output with inferred syntax highlighting or ANSI parsing |
 
 - A successful native file response may carry ordered per-call `resolvedPaths`. Code icons open the persisted target Node and absolute path while leaving the visible raw label and read line range intact; Update/Add headers use their own operation index. Older relative/`~` paths without metadata are not inferred from current cwd; older absolute paths retain their existing fallback. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch-node-execution.md#d-dispatch-native-agent-paths-and-code-targets).
+
+Unified `edit` patch calls use the existing patch summaries, hunks and Code actions; batch calls show their replacement count and one diff per item, with replace-all labels when selected. Historical standalone patch and memory cards remain readable.
 
 ## Dependencies
 

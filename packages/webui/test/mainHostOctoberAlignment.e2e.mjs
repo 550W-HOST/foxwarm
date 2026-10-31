@@ -189,7 +189,7 @@ try {
 
   // Bounded patch diagnostics remain useful through the native tool's paired provider error.
   await writeFile(join(own, 'patch-source'), Array.from({ length: 200 }, (_, i) => 'line-' + i).join('\n'))
-  state = await turn(actor, 'patch', [call('bad-patch', 'apply_patch', { input: '*** Begin Patch\n*** Update File: patch-source\n@@\n-' + 'absent'.repeat(4000) + '\n+replacement\n*** End Patch' })])
+  state = await turn(actor, 'patch', [call('bad-patch', 'edit', { apply_patch: '*** Begin Patch\n*** Update File: patch-source\n@@\n-' + 'absent'.repeat(4000) + '\n+replacement\n*** End Patch' })])
   assert(pair(state, 'bad-patch').response.error); assert(JSON.stringify(pair(state, 'bad-patch').response).length < 2200)
   assert((await readFile(join(own, 'patch-source'), 'utf8')).startsWith('line-0'))
 

@@ -97,13 +97,13 @@ internal sealed class NodeFileTools(NodePaths paths)
                 }
                 case "edit":
                 {
-                    var raw = RequiredPath(args, tool);
-                    var oldText = Text(args["oldText"]);
-                    var newText = Text(args["newText"]);
-                    if (oldText is null || newText is null)
-                        throw new InvalidDataException(
-                            "Edit tool requires oldText and newText. Use apply_patch for patch-style edits."
-                        );
+                    var edit = UnifiedEdit.Parse(args);
+                    if (edit.Patch is not null)
+                    {
+                        args = new JsonObject { ["input"] = edit.Patch };
+                        goto case "apply_patch";
+                    }
+                    var raw = edit.FilePath!;
                     var path = Resolve(raw);
                     if (Directory.Exists(path))
                         throw new NodeFileException(
@@ -111,21 +111,7 @@ internal sealed class NodeFileTools(NodePaths paths)
                             "EISDIR: illegal operation on a directory, read"
                         );
                     var content = Encoding.UTF8.GetString(await File.ReadAllBytesAsync(path));
-                    // Source edit uses JS replacement-string tokens; Main's callers intentionally use literals.
-                    var replacement = Replacement(content, oldText, newText);
-                    var (occurrences, updated) = ExactReplacement.Apply(
-                        content,
-                        oldText,
-                        replacement
-                    );
-                    if (occurrences == 0)
-                        throw new InvalidDataException(
-                            "Could not find oldText in file. Make sure whitespace matches exactly."
-                        );
-                    if (occurrences != 1)
-                        throw new InvalidDataException(
-                            $"Found {occurrences} occurrences of oldText in file. Edit tool only replaces once. Please make oldText more specific to match exactly one location."
-                        );
+                    var updated = edit.Apply(content);
                     await FileToolCore.WriteBytes(
                         path,
                         Encoding.UTF8.GetBytes(updated!),
@@ -363,37 +349,6 @@ internal sealed class NodeFileTools(NodePaths paths)
             Directory.Delete(path, recursive: true);
         else
             File.Delete(path);
-    }
-
-    private static string Replacement(string text, string search, string replacement)
-    {
-        var index = text.IndexOf(search, StringComparison.Ordinal);
-        if (index < 0 || !replacement.Contains('$'))
-            return replacement;
-        var result = new StringBuilder();
-        for (var i = 0; i < replacement.Length; i++)
-        {
-            if (replacement[i] == '$' && i + 1 < replacement.Length)
-            {
-                var token = replacement[i + 1];
-                var expanded = token switch
-                {
-                    '$' => "$",
-                    '&' => search,
-                    '`' => text[..index],
-                    '\'' => text[(index + search.Length)..],
-                    _ => null,
-                };
-                if (expanded is not null)
-                {
-                    result.Append(expanded);
-                    i++;
-                    continue;
-                }
-            }
-            result.Append(replacement[i]);
-        }
-        return result.ToString();
     }
 }
 

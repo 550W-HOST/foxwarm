@@ -107,7 +107,6 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
             }
         );
         definitions.Add(EditDefinition());
-        definitions.Add(PatchDefinition());
         return definitions;
     }
 
@@ -189,8 +188,8 @@ public sealed partial class WorkspaceTools : ITurnToolExecutor
         cancellationToken.ThrowIfCancellationRequested();
         var name = functionCall["name"]?.GetValue<string>();
         var args = functionCall["args"] as JsonObject;
-        if (name is "edit" or "apply_patch")
-            return await ExecuteEditPatchAsync(name, args, cancellationToken);
+        if (name == "edit")
+            return await ExecuteEditPatchAsync(args, cancellationToken);
         if (name is not ("read" or "write"))
             return Error("unknown_tool", "Unsupported workspace tool.");
         if (

@@ -1346,7 +1346,7 @@ async function runCompactJob(
       `Repair file: ${JSON.stringify(repairFile.filePath)}.`,
       'Any successful edits are retained in this same file. The excerpts below show its current contents without reformatting.',
       'Do not call read: it is unavailable and unnecessary here. Use your rejected tool call and these excerpts; match the file\'s actual whitespace and escaping rather than guessing them.',
-      'Repair the file into one JSON object containing the direct submit_compact_plan parameters. Do not add a tool name, call ID, or args wrapper. Use edit or apply_patch on this exact file only; a patch may contain only one Update File operation.',
+      'Repair the file into one JSON object containing the direct submit_compact_plan parameters. Do not add a tool name, call ID, or args wrapper. Use edit on this exact file only; a patch may contain only one Update File operation.',
       `Then call ${COMPACT_PLAN_TOOL_NAME} by itself with {"argsFilePath":${JSON.stringify(repairFile.filePath)}}.`,
       await repairFile.preview(transientSession, operation),
     ].join('\n')
@@ -1390,7 +1390,7 @@ async function runCompactJob(
         }
       }
       const call = toolCalls[0];
-      if (repairFile && toolCalls.length === 1 && (call.name === 'edit' || call.name === 'apply_patch')) {
+      if (repairFile && toolCalls.length === 1 && call.name === 'edit') {
         try {
           const controlError = getToolCancellationArgumentError(call);
           if (controlError) throw new Error(controlError);
@@ -1414,7 +1414,7 @@ async function runCompactJob(
           ? `Compact planning must be submitted by calling ${COMPACT_PLAN_TOOL_NAME}; plain text/no tool call cannot complete compaction.`
           : invalidToolName === COMPACT_PLAN_TOOL_NAME
           ? `Call ${COMPACT_PLAN_TOOL_NAME} exactly once, by itself.`
-          : `Do not call \`${invalidToolName}\`; ${repairFile ? 'only an exact-file edit or apply_patch repair, or a single plan submission, is accepted' : `the only accepted tool call during compaction is ${COMPACT_PLAN_TOOL_NAME}`}.`;
+          : `Do not call \`${invalidToolName}\`; ${repairFile ? 'only an exact-file edit repair, or a single plan submission, is accepted' : `the only accepted tool call during compaction is ${COMPACT_PLAN_TOOL_NAME}`}.`;
         nextPromptParts = [{
           system: [
             'COMPACT TOOL CALL INVALID.',

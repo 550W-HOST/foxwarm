@@ -50,7 +50,7 @@ import {
 export type { ToolContext, ToolArgs, UnifiedToolSource } from './tools/helpers';
 
 // Import sub-modules
-import { tool_read, tool_write, tool_edit, tool_apply_patch } from './tools/fileTools';
+import { tool_read, tool_write, tool_edit } from './tools/fileTools';
 import { tool_read_memory, tool_write_memory, tool_edit_memory, tool_delete_memory, tool_apply_patch_memory } from './tools/memoryTools';
 import { tool_exec } from './tools/execTools';
 import { tool_image_crop, tool_image_write_to_file } from './tools/imageTools';
@@ -131,7 +131,6 @@ export const write_memory = tool_write_memory;
 export const edit_memory = tool_edit_memory;
 export const delete_memory = tool_delete_memory;
 export const apply_patch_memory = tool_apply_patch_memory;
-export const apply_patch = tool_apply_patch;
 export const copy_between_nodes = tool_copy_between_nodes;
 export const image_crop = tool_image_crop;
 export const image_write_to_file = tool_image_write_to_file;

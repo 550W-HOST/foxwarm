@@ -131,10 +131,10 @@ public sealed partial class CompactLifecycleTests
                 else if (index == 6)
                     call = FunctionCall(
                         "failed-hunk",
-                        "apply_patch",
+                        "edit",
                         new JsonObject
                         {
-                            ["input"] =
+                            ["apply_patch"] =
                                 "*** Begin Patch\n*** Update File: "
                                 + path
                                 + "\n@@ repair-target\n-old-content-not-in-file\n+required-added-line-tail\n*** End Patch",
@@ -151,8 +151,8 @@ public sealed partial class CompactLifecycleTests
                         + "}\n*** End Patch";
                     call = FunctionCall(
                         "repair-after-deny",
-                        "apply_patch",
-                        new JsonObject { ["input"] = patch }
+                        "edit",
+                        new JsonObject { ["apply_patch"] = patch }
                     );
                 }
                 else
@@ -293,8 +293,8 @@ public sealed partial class CompactLifecycleTests
                 "edit",
                 "edit",
                 "edit",
-                "apply_patch",
-                "apply_patch",
+                "edit",
+                "edit",
                 "submit_compact_plan",
             },
             planner["toolCalls"]!.AsArray().Select(item => item!.GetValue<string>())

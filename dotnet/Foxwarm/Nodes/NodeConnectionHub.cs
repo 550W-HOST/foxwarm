@@ -3,6 +3,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Tools;
 
 namespace Foxwarm.Nodes;
 
@@ -165,8 +166,8 @@ internal sealed partial class NodeConnectionHub : IDisposable
         lock (gate)
         {
             var definitions = new JsonArray(
-                Require(id).Capabilities["tools"]!
-                    .AsArray()
+                UnifiedEdit
+                    .ProjectTools(Require(id).Capabilities["tools"]!.AsArray())
                     .OfType<JsonObject>()
                     .Select(tool =>
                         (JsonNode?)
@@ -244,13 +245,7 @@ internal sealed partial class NodeConnectionHub : IDisposable
     }
 
     private static JsonArray ExecutableDefinitions(Connection connection) =>
-        new(
-            connection.Capabilities["tools"]!
-                .AsArray()
-                .OfType<JsonObject>()
-                .Select(tool => (JsonNode?)tool.DeepClone())
-                .ToArray()
-        );
+        UnifiedEdit.ProjectTools(connection.Capabilities["tools"]!.AsArray());
 
     internal JsonArray ListPending()
     {

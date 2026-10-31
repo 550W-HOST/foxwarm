@@ -222,7 +222,7 @@ export class NodeClient {
   private getNodeCapabilities() {
     return {
       ...CLI_NODE_CAPABILITIES,
-      features: { execWaitCancellation: true, remoteExecBackgroundRegistration: true, programmaticToolData: true, ...(!this.toolCallInterceptor ? { externalToolOwner: 1 } : {}) },
+      features: { unifiedEdit: true, execWaitCancellation: true, remoteExecBackgroundRegistration: true, programmaticToolData: true, ...(!this.toolCallInterceptor ? { externalToolOwner: 1 } : {}) },
       services: {
         ...CLI_NODE_CAPABILITIES.services,
         ...(this.nodePtyService ? { 'vscode-pty': 1 } : {}),

@@ -71,7 +71,7 @@ internal static class CompactPlanInput
     }
 
     internal const string RepairGuidance =
-        "Plan validation failed. The submitted plan was saved to the file below. Correct the reported error with edit or apply_patch, then resubmit using argsFilePath.";
+        "Plan validation failed. The submitted plan was saved to the file below. Correct the reported error with edit, then resubmit using argsFilePath.";
 }
 
 // Uses ordinary file authorization and routing, including the captured selected Node/cwd.

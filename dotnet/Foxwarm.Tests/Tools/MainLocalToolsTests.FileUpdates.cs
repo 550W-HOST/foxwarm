@@ -9,10 +9,10 @@ public sealed partial class MainLocalToolsTests
     [Theory]
     [InlineData("write", 448)]
     [InlineData("edit", 448)]
-    [InlineData("apply_patch", 448)]
+    [InlineData("patch", 448)]
     [InlineData("write", 384)]
     [InlineData("edit", 384)]
-    [InlineData("apply_patch", 384)]
+    [InlineData("patch", 384)]
     public async Task Ordinary_updates_preserve_permissions_and_existing_hardlinks_through_symlinks(
         string operation,
         int mode
@@ -34,7 +34,10 @@ public sealed partial class MainLocalToolsTests
         }
         File.CreateSymbolicLink(link, "target.txt");
 
-        var result = await f.Call(operation, UpdateArguments(operation, "link.txt"));
+        var result = await f.Call(
+            operation == "patch" ? "edit" : operation,
+            UpdateArguments(operation, "link.txt")
+        );
 
         Assert.Null(Error(result));
         Assert.Equal((UnixFileMode)mode, File.GetUnixFileMode(target));
@@ -79,10 +82,10 @@ public sealed partial class MainLocalToolsTests
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
         );
         var result = await f.Call(
-            "apply_patch",
+            "edit",
             new JsonObject
             {
-                ["input"] =
+                ["apply_patch"] =
                     "*** Begin Patch\n*** Update File: script.sh\n@@\n-before\n+after\n*** Update File: missing.txt\n@@\n-before\n+after\n*** Add File: never.txt\n+never\n*** End Patch",
             }
         );
@@ -106,7 +109,7 @@ public sealed partial class MainLocalToolsTests
     [Theory]
     [InlineData("write")]
     [InlineData("edit")]
-    [InlineData("apply_patch")]
+    [InlineData("patch")]
     public async Task Ordinary_updates_authorize_the_physical_symlink_target_before_effects(
         string operation
     )
@@ -123,7 +126,10 @@ public sealed partial class MainLocalToolsTests
             default
         );
 
-        var result = await f.Call(operation, UpdateArguments(operation, "link.txt"));
+        var result = await f.Call(
+            operation == "patch" ? "edit" : operation,
+            UpdateArguments(operation, "link.txt")
+        );
 
         Assert.Equal("tool_authorization_denied", Error(result));
         Assert.Equal("before\n", await File.ReadAllTextAsync(outside));
@@ -147,7 +153,7 @@ public sealed partial class MainLocalToolsTests
             },
             _ => new JsonObject
             {
-                ["input"] =
+                ["apply_patch"] =
                     $"*** Begin Patch\n*** Update File: {path}\n@@\n-before\n+after\n*** End Patch",
             },
         };

@@ -69,7 +69,7 @@ Navigation invokes this external tool, not internal `view_session` or `recall`. 
 - First-party CLI Nodes must negotiate protocol v3 and advertise external-owner support.
 - Configured outbound MCP servers expose only the tools allowed by this external identity's rules.
 
-Supported Node tools are `read`, `write`, `edit`, `apply_patch`, and `exec`. Inbound MCP does not expose execution on `master`, executable providers, browser tabs, cross-Node copy, Node lifecycle changes, or general Agent/Session management. Agent isolation/binding belongs to [agent-management](../../agent-management/SKILL.md); Node bootstrap belongs to [node-setup](../../node-setup/SKILL.md).
+Supported Node tools are `read`, `write`, `edit`, and `exec`. Inbound MCP does not expose execution on `master`, executable providers, browser tabs, cross-Node copy, Node lifecycle changes, or general Agent/Session management. Agent isolation/binding belongs to [agent-management](../../agent-management/SKILL.md); Node bootstrap belongs to [node-setup](../../node-setup/SKILL.md).
 
 An `exec` result returns its actual `execId`. Read it with `foxwarm_exec_result` while the same MCP context lives; do not substitute a PID. Each context retains at most 20 command records, evicts completed records when needed, and rejects another start when 20 remain unresolved. Contexts expire after 15 minutes of inactivity; deletion/restart loses result ownership, not necessarily the already-started OS process. A dropped connection does not mean a mutation was cancelled. Do not automatically repeat an effect with an unknown outcome.
 

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Tools;
 
 namespace Foxwarm.Nodes;
 
@@ -76,6 +77,38 @@ internal sealed partial class NodeConnectionHub
                 throw new McpInboundSafeException(
                     "Node capability is not available to external callers."
                 );
+        }
+        if (tool == "edit")
+        {
+            var edit = UnifiedEdit.Parse(args);
+            if (connection.Capabilities["features"]?["unifiedEdit"]?.GetValue<bool>() != true)
+            {
+                if (edit.Patch is not null)
+                {
+                    if (
+                        !connection.Capabilities["tools"]!
+                            .AsArray()
+                            .Any(value => SessionWait.Text(value?["name"]) == "apply_patch")
+                    )
+                        throw new McpInboundSafeException("Legacy Node does not support patches.");
+                    tool = "apply_patch";
+                    args = new JsonObject { ["input"] = edit.Patch };
+                }
+                else
+                {
+                    if (args.ContainsKey("edits") || edit.Edits[0].ReplaceAll)
+                        throw new McpInboundSafeException(
+                            "Upgrade this Node to use batch edits or replaceAll from external callers. No call was sent."
+                        );
+                    args = new JsonObject
+                    {
+                        ["filePath"] = edit.FilePath,
+                        ["oldText"] = edit.Edits[0].OldText,
+                        ["newText"] = edit.Edits[0]
+                            .NewText.Replace("$", "$$", StringComparison.Ordinal),
+                    };
+                }
+            }
         }
         var id = "call_" + Guid.NewGuid().ToString("N");
         var completion = new TaskCompletionSource<JsonNode?>(

@@ -1,10 +1,10 @@
+import { parseUnifiedEdit, applyTextEdits } from '../../packages/shared/dist/unifiedEdit';
 import { constants } from 'node:fs';
 import { open, mkdir, mkdtemp, realpath, lstat, unlink, rmdir, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import { getAgentDir } from '../config';
 import { checkToolPermissionForSession } from '../isolatedCheck';
 import { applyUpdatePatch, parseApplyPatchInput } from '../../packages/shared/dist/applyPatch';
-import { applyExactReplacement } from '../../packages/shared/dist/exactReplacement';
 import type { FunctionCall, Session } from '../types';
 
 /** Private to one planning invocation; never stored on Session or in persisted operation state. */
@@ -108,22 +108,18 @@ export class CompactPlanRepairFile {
     const args = call.args || {};
     let target: unknown;
     let transform: (content: string) => string;
-    if (call.name === 'edit') {
-      if (typeof args.oldText !== 'string' || typeof args.newText !== 'string') {
-        throw new Error('edit requires oldText and newText strings.');
-      }
-      target = args.filePath;
-      transform = content => applyExactReplacement(content, args.oldText, args.newText, 'oldText');
-    } else if (call.name === 'apply_patch') {
-      if (typeof args.input !== 'string') throw new Error('apply_patch requires input string.');
-      const patches = parseApplyPatchInput(args.input);
-      if (patches.length !== 1 || patches[0].action !== 'update') {
-        throw new Error('Repair patches must update only the pending compact repair file.');
-      }
+    if (call.name !== 'edit') throw new Error('Only edit may repair compact arguments.');
+    const edit = parseUnifiedEdit(args);
+    if ('apply_patch' in edit) {
+      const patches = parseApplyPatchInput(edit.apply_patch);
+      if (patches.length !== 1 || patches[0].action !== 'update') throw new Error('Repair patches must update only the pending compact repair file.');
       const patch = patches[0];
       target = patch.filePath;
       transform = content => applyUpdatePatch(content, patch.lines, this.filePath);
-    } else throw new Error('Only edit or apply_patch may repair compact arguments.');
+    } else {
+      target = edit.filePath;
+      transform = content => applyTextEdits(content, edit.edits);
+    }
 
     await this.assertOwned(target, session, operation);
     // The exact parsed patch target is also supplied to the ordinary master-file permission policy.
