@@ -34,7 +34,8 @@ peer.listen(0, '127.0.0.1'); await once(peer, 'listening')
 await writeFile(host.modelPath, JSON.stringify({ default: 'local', providers: { local: { providerType: 'openai-responses', baseUrl: `http://127.0.0.1:${peer.address().port}`, models: ['wire'] } } }))
 const git = (...args) => execFileSync('git', ['-C', host.work, ...args], { encoding: 'utf8' }).trim()
 git('init', '-q'); git('config', 'user.name', 'Workbench Fixture'); git('config', 'user.email', 'fixture@example.invalid')
-await writeFile(join(host.work, 'notes.txt'), 'first\nselected second\nlast\n'); git('add', '.'); git('commit', '-qm', 'workbench fixture')
+const committedNotes = 'first\nselected second\nlast\n'
+await writeFile(join(host.work, 'notes.txt'), committedNotes); git('add', '.'); git('commit', '-qm', 'workbench fixture')
 const commit = git('rev-parse', 'HEAD')
 let sessionId
 const route = suffix => '/api/sessions/' + encodeURIComponent(sessionId) + suffix
@@ -142,7 +143,7 @@ try {
   await click(`[data-workbench-content-pane="${terminalPane.id}"] button[aria-label="Close pane"]`)
   await until(async () => (await host.api('GET', '/api/terminals/' + terminal.id)).status === 404, 'explicit terminal pane Close')
 
-  // Original official Code-OSS and browser FS/SCM/terminal extensions, with 1.128 assets.
+  // Original official Code-OSS and browser FS/SCM/terminal extensions.
   await chat(); await click('.foxwarm-chat-root button[title="Code"]')
   let code = await codeFrame(); await code.waitForSelector('.monaco-workbench', { timeout: 45000 })
   await page.evaluate(() => { window.parityCode = document.querySelector('[data-foxwarm-vscode-web-frame]'); window.parityCodeWindow = window.parityCode.contentWindow })
@@ -167,8 +168,24 @@ try {
       } catch { /* A transient webview bootstrap frame may detach before its content loads. */ }
     }
   }, 'official SCM commit webview', 30000)
-  await scm.click('button.file:not([disabled])'); code = await codeFrame()
-  await code.waitForSelector('.monaco-diff-editor', { timeout: 30000 })
+  // Code mounts the diff editor before its asynchronous content provider resolves.
+  const diffDeadline = Date.now() + 30000
+  const [gitContent] = await Promise.all([
+    page.waitForResponse(response => {
+      const url = new URL(response.url())
+      return url.pathname === '/api/vscode-web/git/content' && url.searchParams.get('nodeId') === 'master'
+        && url.searchParams.get('workspace') === host.work && url.searchParams.get('path') === 'notes.txt'
+        && url.searchParams.get('side') === 'base' && url.searchParams.get('ref') === commit
+    }, { timeout: 30000 }),
+    (async () => {
+      await scm.click('button.file:not([disabled])'); code = await codeFrame()
+      await code.waitForSelector('.monaco-diff-editor', { timeout: Math.max(1, diffDeadline - Date.now()) })
+    })(),
+  ])
+  assert.equal(gitContent.status(), 200); assert.equal(await gitContent.text(), committedNotes)
+  await code.waitForFunction(() => [...document.querySelectorAll('.monaco-diff-editor .modified .view-lines')].some(node => node.textContent.replaceAll('\u00a0', ' ').includes('selected second')), { timeout: Math.max(1, diffDeadline - Date.now()) })
+  assert.equal(await code.$$eval('.monaco-diff-editor .original .view-lines', nodes => nodes.map(node => node.textContent).join('').trim()), '')
+  assert.doesNotMatch(await code.$$eval('.monaco-diff-editor .modified .view-lines', nodes => nodes.map(node => node.textContent).join('')), /Official Code saved/)
   assert(http.some(row => row.path === '/api/vscode-web/git/content' && row.status === 200))
   await chat(); await page.evaluate(() => localStorage.setItem('foxwarm_code_open_new_window_v1', 'true'))
   await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForFunction(() => window.foxwarmTest?.switchToSession); await chat()
@@ -179,7 +196,7 @@ try {
   assert.deepEqual(errors, [])
   assert(!http.some(row => row.status >= 500 && row.path !== '/api/history/search'), JSON.stringify(http.filter(row => row.status >= 500)))
   const assets = JSON.parse(await readFile(join(workbenchDir, 'foxwarm-vscode-web-assets.json'), 'utf8'))
-  console.log(JSON.stringify({ result: 'passed', normalHost: true, originalApp: true, requests: requests.length, measuredRequests: modelRows.length, toolTiming: receipt.executionTiming, summary: summary.summary, codeAssets: assets, yamlAssistanceQualified: false, browserErrors, limits: ['No Vector search; real VECTOR_DISABLED response preserved.', 'Remote Node/OAuth/Anthropic use prior unchanged qualifications.', '1.141 runtime assets not prepared or qualified.'] }))
+  console.log(JSON.stringify({ result: 'passed', normalHost: true, originalApp: true, requests: requests.length, measuredRequests: modelRows.length, toolTiming: receipt.executionTiming, summary: summary.summary, codeAssets: assets, yamlAssistanceQualified: false, browserErrors, limits: ['No Vector search; real VECTOR_DISABLED response preserved.', 'Remote Node/OAuth/Anthropic use prior unchanged qualifications.'] }))
   await host.stop()
 } catch (error) { console.error(JSON.stringify({ host: host.output, browserErrors, httpFailures: http.filter(row => row.status >= 400), terminals: (await host.api('GET', '/api/terminals')).body, text: await page?.evaluate(() => document.body.innerText).catch(() => ''), frames: page?.frames().map(frame => frame.url()) })); throw error }
 finally { releaseFirst(); await host.cleanup(); peer.closeAllConnections(); await new Promise(done => peer.close(done)) }
