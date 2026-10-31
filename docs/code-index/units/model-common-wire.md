@@ -10,7 +10,7 @@ Ordinary and detached BTW instruction composition follows the [stable request-pr
 
 ## Stable methods and callers
 
-- `ConcreteRequestHistory` selects canonical history/prompt-visible parts for a concrete request without changing active Session JSON.
+- `ConcreteRequestHistory` selects canonical history/prompt-visible parts for a concrete request without changing active Session JSON. Before native metadata filtering and `__meta` removal, it uses [hosted search evidence](./model-responses.md) to project bounded, portable URL data, including across model/protocol switches.
 - `ConcreteRequestHistory.ProjectDisplayMetadata` removes top-level message `compaction` diagnostics and function-response display metadata from request copies. Trusted `toolScriptSubCalls` presence projects the outer native response into `{ output: formattedExecutionText }`, including empty subcall arrays. `LlmRequestJournalStore.CanonicalMessage` applies the same projection before canonical journaling; concrete preparation applies it before image hydration and provider serialization. Ordinary MCP values and result-owned metadata are not classifiers. Session/Archive/run history stays native; pruned historical outputs and guard summaries retain their existing formatter fallback.
 - `RequestHistory.FromSnapshot` materializes the exact captured immutable history with per-record provenance; `FromMutable` and request-only context deliberately carry none. Repair transfers that provenance only for unchanged selected rows; synthetic responses have none. `Messages` remains a request-owned projection, never active Session JSON.
 - `RequestHistoryRepair` repairs provider retry inputs at the supported safe point; it does not rebuild a missing Session authority.

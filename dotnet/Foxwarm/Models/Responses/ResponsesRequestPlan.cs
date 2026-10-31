@@ -88,6 +88,18 @@ internal static class ResponsesRequestPlan
             }
             body["reasoning"] = reasoning.DeepClone();
         }
+        // Inspect the final declarations, after extraFields and effort precedence.
+        if (
+            (body["tools"] as JsonArray ?? [])
+                .OfType<JsonObject>()
+                .Any(tool => SessionWait.Text(tool["type"]) is "web_search" or "web_search_preview")
+        )
+        {
+            var include = body["include"] as JsonArray ?? new JsonArray();
+            if (!include.Any(value => SessionWait.Text(value) == HostedSearchSources.Include))
+                include.Add(HostedSearchSources.Include);
+            body["include"] = include.DeepClone();
+        }
         return body;
     }
 }

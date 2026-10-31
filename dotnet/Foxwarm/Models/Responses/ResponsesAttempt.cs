@@ -93,6 +93,9 @@ internal sealed class ResponsesAttempt : IDisposable
                         )
                 )
                     break;
+                // Final-only source enrichment must precede immutable publication.
+                if (type == "web_search_call")
+                    break;
                 if (
                     type == "message"
                     && (

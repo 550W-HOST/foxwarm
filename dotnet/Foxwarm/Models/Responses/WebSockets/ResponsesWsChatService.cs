@@ -116,11 +116,16 @@ internal sealed class ResponsesWsChatService(
                     .Any(part =>
                         SessionWait.Text(part["functionCall"]?["argsParseError"]) is { Length: > 0 }
                     ) == true;
+            // The projected evidence was not emitted or cached by the provider.
+            // Send it in a full next request before exact-prefix reuse can resume.
+            var hostedSearch = (pending.Response["output"] as JsonArray ?? [])
+                .OfType<JsonObject>()
+                .Any(item => SessionWait.Text(item["type"]) == "web_search_call");
             var finalizer = new HistoryAppendFinalizer(rows =>
             {
                 try
                 {
-                    if (rows is null || unsafeReplay)
+                    if (rows is null || unsafeReplay || hostedSearch)
                     {
                         captured.Finalize(null);
                         return;

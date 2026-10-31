@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Foxwarm.Tests;
 
-public sealed class ResponsesPrefixCommitTests
+public sealed partial class ResponsesPrefixCommitTests
 {
     private static JsonObject Commentary(string text, string phase = "commentary") =>
         new()
@@ -67,22 +67,14 @@ public sealed class ResponsesPrefixCommitTests
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         Owner? owner = null;
-        var search = new JsonObject
-        {
-            ["type"] = "web_search_call",
-            ["id"] = "search",
-            ["status"] = "completed",
-            ["action"] = new JsonObject { ["type"] = "search", ["query"] = "q" },
-        };
         await using var peer = await StreamingModelPeer.StartAsync(
             websocket,
             async (context, number) =>
             {
                 if (number == 1)
                 {
-                    await context.Send(Done(2, Commentary("retained-prefix")));
+                    await context.Send(Done(1, Commentary("retained-prefix")));
                     await context.Send(Done(0, Reasoning()));
-                    await context.Send(Done(1, (JsonObject)search.DeepClone()));
                     var row = await delivered.Task.WaitAsync(TimeSpan.FromSeconds(5));
                     Assert.False(row["__meta"]!["llmSegment"]!["complete"]!.GetValue<bool>());
                     var disk = (await owner!.Store.LoadAsync("s"))!;
@@ -96,7 +88,6 @@ public sealed class ResponsesPrefixCommitTests
                 {
                     Assert.Contains("retained-prefix", context.Request.ToJsonString());
                     Assert.Contains("encrypted-replay", context.Request.ToJsonString());
-                    Assert.Contains("web_search_call", context.Request.ToJsonString());
                     await context.Send(Completed(Commentary("retry-final", "final_answer")));
                 }
             }
@@ -148,7 +139,7 @@ public sealed class ResponsesPrefixCommitTests
             10
         );
         Assert.Equal(0, rows[1]["__meta"]!["llmSegment"]!["outputStart"]!.GetValue<int>());
-        Assert.Equal(3, rows[1]["__meta"]!["llmSegment"]!["outputEndExclusive"]!.GetValue<int>());
+        Assert.Equal(2, rows[1]["__meta"]!["llmSegment"]!["outputEndExclusive"]!.GetValue<int>());
         Assert.Equal(
             3,
             owner.Entry.Snapshot().AuthorityEnvelope["stats"]![
@@ -641,40 +632,41 @@ public sealed class ResponsesPrefixCommitTests
             bool generated = false,
             Action<ResponsesStreamProgress>? observed = null,
             bool diagnostics = false,
-            bool priced = false
+            bool priced = false,
+            JsonObject? providerFields = null
         )
         {
-            var catalog = HostModels.Parse(
-                new JsonObject
+            var document = new JsonObject
+            {
+                ["default"] = "a/m",
+                ["providers"] = new JsonObject
                 {
-                    ["default"] = "a/m",
-                    ["providers"] = new JsonObject
+                    ["a"] = new JsonObject
                     {
-                        ["a"] = new JsonObject
-                        {
-                            ["providerType"] = websocket ? "openai-ws" : "openai-responses",
-                            ["baseUrl"] = uri.ToString(),
-                            ["models"] = priced
-                                ? new JsonArray(
-                                    new JsonObject
+                        ["providerType"] = websocket ? "openai-ws" : "openai-responses",
+                        ["baseUrl"] = uri.ToString(),
+                        ["models"] = priced
+                            ? new JsonArray(
+                                new JsonObject
+                                {
+                                    ["id"] = "m",
+                                    ["pricing"] = new JsonObject
                                     {
-                                        ["id"] = "m",
-                                        ["pricing"] = new JsonObject
-                                        {
-                                            ["cached"] = 1,
-                                            ["input"] = 2,
-                                            ["output"] = 3,
-                                        },
-                                    }
-                                )
-                                : new JsonArray("m"),
-                            ["keepReasoningOnError"] = keep,
-                            ["imageGeneration"] = new JsonObject { ["enabled"] = generated },
-                        },
+                                        ["cached"] = 1,
+                                        ["input"] = 2,
+                                        ["output"] = 3,
+                                    },
+                                }
+                            )
+                            : new JsonArray("m"),
+                        ["keepReasoningOnError"] = keep,
+                        ["imageGeneration"] = new JsonObject { ["enabled"] = generated },
                     },
                 },
-                new JsonObject()
-            );
+            };
+            foreach (var (key, value) in providerFields ?? new JsonObject())
+                document["providers"]!["a"]![key] = value?.DeepClone();
+            var catalog = HostModels.Parse(document, new JsonObject());
             var defaults = new ResponsesClientOptions(uri, "m", "a/m", "", "", 713);
             Journal = new(temp.Path);
             Store = new(temp.Path, "s");

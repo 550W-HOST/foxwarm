@@ -20,6 +20,8 @@ The Raw view and stored history are not rewritten. A historical response without
 
 ## Source entry points
 
+- [C# Responses request, streaming and replay](../units/model-responses.md)
+- [C# concrete request history](../units/model-common-wire.md)
 - [LLM routing and normalization](../units/src-llm.md)
 - [Responses conversion and streaming](../units/src-llm-openai.md)
 - [Shared Markdown rendering](../units/webui-chat-shared.md)

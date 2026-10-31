@@ -626,7 +626,32 @@ public sealed class ResponsesEventAccumulator
                 )
                 .All(x => x);
         if (!aligned)
-            return new JsonArray(streamed.Select(x => x.Item!.DeepClone()).ToArray());
+            return new JsonArray(
+                streamed
+                    .Select(entry =>
+                    {
+                        var item = entry.Item;
+                        if (
+                            String(item, "type") != "web_search_call"
+                            || String(item, "id") is not { Length: > 0 } id
+                        )
+                            return item.DeepClone();
+                        // Sparse/condensed finals may enrich only an unambiguous exact-ID search.
+                        var matches = (completed ?? [])
+                            .OfType<JsonObject>()
+                            .Where(candidate =>
+                                String(candidate, "type") == "web_search_call"
+                                && String(candidate, "id") == id
+                            )
+                            .ToArray();
+                        return
+                            matches.Length == 1
+                            && streamed.Count(candidate => String(candidate.Item, "id") == id) == 1
+                            ? MergeOutput(item, matches[0])
+                            : item.DeepClone();
+                    })
+                    .ToArray()
+            );
         var result = new JsonArray();
         for (var i = 0; i < streamed.Count; i++)
         {
@@ -707,6 +732,11 @@ public sealed class ResponsesEventAccumulator
         var merged = (JsonObject)existing.DeepClone();
         foreach (var pair in incoming)
             merged[pair.Key] = pair.Value?.DeepClone();
+        if (String(merged, "type") == "web_search_call")
+            merged["action"] = HostedSearchSources.MergeAction(
+                existing["action"],
+                incoming["action"]
+            );
         var ec = existing["content"] as JsonArray;
         var ic = incoming["content"] as JsonArray;
         if (ec is not null || ic is not null)
