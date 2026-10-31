@@ -1,6 +1,6 @@
 # Foxwarm one-line installer for Windows PowerShell.
 # Usage:
-#   irm https://foxwarm.550w.host/install-foxwarm.ps1 | iex
+#   irm https://foxwarm.net/install-foxwarm.ps1 | iex
 param(
   [string]$InstallDir,
   [string]$DataDir,

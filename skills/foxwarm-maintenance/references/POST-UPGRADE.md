@@ -5,7 +5,7 @@ changes relevant to that installation; changing source does not authorize a
 user-data migration or replacement of customized configuration.
 
 For the first update from TypeScript Main, read the dedicated
-[migration guide](https://foxwarm.550w.host/docs/typescript-migration/).
+[migration guide](https://foxwarm.net/docs/typescript-migration/).
 
 ## Source build and restart
 

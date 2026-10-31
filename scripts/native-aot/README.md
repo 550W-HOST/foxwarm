@@ -226,6 +226,27 @@ PTY/Code and trigger helpers, foreground effects and background survival/recover
 with the original capability and accepted ACK. Containers shared one modern host
 kernel; no older-kernel or CPU-floor claim follows from the older userspace run.
 
-This qualification is not a release notice/licensing audit. It has not assembled a redistribution notice bundle for static native
-dependencies. Keep applicable .NET, musl, ICU/data, OpenSSL and compiler-support
-notices when preparing a distributable package, and rebuild for their updates.
+## Complete static distribution
+
+The `distribution` target adds dependency notices and actual builder inventory to
+its output. Package it from a committed checkout:
+
+```sh
+docker build --platform=linux/amd64 --progress=plain \
+  -f scripts/native-aot/cli-linux-musl-x64.Dockerfile \
+  --target distribution --output type=local,dest=.temp/native-publish .
+python3 scripts/native-aot/package-cli.py \
+  --publish .temp/native-publish --output .temp/native-cli-downloads \
+  --source-commit "$(git rev-parse HEAD)" --source-epoch "$(git show -s --format=%ct HEAD)" \
+  --build-id '<release-build-reference>'
+```
+
+The complete archive, including licenses/notices, must fit the static asset size
+limit. Extract and qualify that archive with the existing probe before publishing.
+The independent workflow performs this sequence; publishing is opt-in and requires
+external account/environment configuration. It does not deploy the documentation
+site or change DNS. The public channel is
+`https://foxwarm.net/downloads/native-cli-node-latest-v3.tar.gz`.
+See [distribution ownership](../../docs/code-index/units/native-cli-distribution.md)
+for channel retention and publication boundaries. Collection of notices does not
+replace review of the actual dependency inputs and redistribution obligations.

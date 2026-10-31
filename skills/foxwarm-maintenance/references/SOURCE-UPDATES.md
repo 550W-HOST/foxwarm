@@ -22,8 +22,8 @@ Check these before building a source installation:
 
 Linux x64 and Windows x64 are the source installation targets; macOS Main is
 not supported by this workflow. For an existing TypeScript Main installation,
-first read the [migration guide](https://foxwarm.550w.host/docs/typescript-migration/).
-Optional Vector search has additional [native platform requirements](https://foxwarm.550w.host/docs/history-search/#enable-semantic-search).
+first read the [migration guide](https://foxwarm.net/docs/typescript-migration/).
+Optional Vector search has additional [native platform requirements](https://foxwarm.net/docs/history-search/#enable-semantic-search).
 
 ## Pull and restart
 

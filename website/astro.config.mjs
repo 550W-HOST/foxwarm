@@ -5,10 +5,10 @@ import starlight from '@astrojs/starlight';
 const github = 'https://github.com/550W-HOST/foxwarm';
 
 export default defineConfig({
-  site: 'https://foxwarm.550w.host',
+  site: 'https://foxwarm.net',
   output: 'static',
   integrations: [
-    sitemap({ filter: (page) => page !== 'https://foxwarm.550w.host/404/' }),
+    sitemap({ filter: (page) => page !== 'https://foxwarm.net/404/' }),
     starlight({
       title: 'Foxwarm',
       description: 'Self-hosted AI agents with persistent sessions, tools, and optional nodes and channels.',
