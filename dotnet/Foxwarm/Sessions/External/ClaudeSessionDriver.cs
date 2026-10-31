@@ -134,6 +134,7 @@ internal sealed class ClaudeSessionDriver(
         );
         host.RuntimeTools.ExternalRun = run;
         ToolAuthorizationUnavailableException? policyFailure = null;
+        run.Definitions = () => manager.RuntimeModelDefinitions(owner);
         run.Call = async (name, args, requestToken) =>
         {
             await run.Lane.WaitAsync(requestToken);
@@ -348,6 +349,7 @@ internal sealed class ClaudeSessionDriver(
             {
                 host.RuntimeTools.ExternalRun = null;
                 run.Call = null;
+                run.Definitions = null;
             }
             finally
             {
@@ -508,12 +510,9 @@ internal sealed class ClaudeSessionDriver(
         var names = (message["tools"] as JsonArray ?? []).Select(SessionWait.Text).ToArray();
         if (
             names.Any(n =>
-                n
-                    is not (
-                        "mcp__foxwarm__search_tools"
-                        or "mcp__foxwarm__call_tool"
-                        or "EndConversation"
-                    )
+                n is null
+                || n != "EndConversation"
+                    && !n.StartsWith("mcp__foxwarm__", StringComparison.Ordinal)
             ) || !names.Contains("mcp__foxwarm__call_tool")
         )
             throw new ClaudeRuntimeException(
@@ -521,8 +520,7 @@ internal sealed class ClaudeSessionDriver(
             );
         var servers = (message["mcp_servers"] as JsonArray ?? []).OfType<JsonObject>().ToArray();
         if (
-            !names.Contains("mcp__foxwarm__search_tools")
-            || servers.Length != 1
+            servers.Length != 1
             || SessionWait.Text(servers[0]["name"]) != "foxwarm"
             || SessionWait.Text(servers[0]["status"]) != "connected"
             || (message["plugins"] as JsonArray)?.Count > 0

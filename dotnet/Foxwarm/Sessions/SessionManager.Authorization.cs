@@ -513,7 +513,8 @@ internal sealed partial class SessionManager
     internal JsonArray ModelDefinitions(
         SessionOwner owner,
         JsonArray? explicitOverride = null,
-        string? selectedNode = null
+        string? selectedNode = null,
+        bool batchControls = true
     )
     {
         if (explicitOverride is not null)
@@ -534,7 +535,7 @@ internal sealed partial class SessionManager
                     selectedNode: node
                 )
             )
-            .Select(entry => (JsonNode?)ToolCallControls.ForModel(entry.Definition))
+            .Select(entry => (JsonNode?)ToolCallControls.ForModel(entry.Definition, batchControls))
             .ToList();
         foreach (
             var definition in (
@@ -557,10 +558,20 @@ internal sealed partial class SessionManager
                     && SessionWait.Text(entry.Definition["name"]) == name
                 ) && ToolVisible(owner, "node", name, node: node)
             )
-                definitions.Add(ToolCallControls.ForModel(definition));
+                definitions.Add(ToolCallControls.ForModel(definition, batchControls));
         }
         return new JsonArray(definitions.ToArray());
     }
+
+    // The external runtime receives the same visible model tool set as an internal Session.
+    // Each MCP request is one call, so response-wide batch controls are omitted.
+    internal JsonArray RuntimeModelDefinitions(SessionOwner owner) =>
+        new(
+            ModelDefinitions(owner, batchControls: false)
+                .OfType<JsonObject>()
+                .Select(definition => (JsonNode)ClaudeRuntimeToolSupport.Project(definition))
+                .ToArray()
+        );
 
     private static IReadOnlyList<AuthorizationPath> RemoteAuthorizationPaths(ResolvedTool resolved)
     {

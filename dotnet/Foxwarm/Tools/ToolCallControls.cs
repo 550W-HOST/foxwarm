@@ -7,11 +7,11 @@ internal static class ToolCallControls
 {
     private static readonly string[] Names = ["__cancelTool", "__cancelAllToolsThisTurn"];
 
-    internal static JsonObject ForModel(JsonObject definition)
+    internal static JsonObject ForModel(JsonObject definition, bool batchControls = true)
     {
         var copy = (JsonObject)definition.DeepClone();
         copy.Remove("defaultInject");
-        if (SessionWait.Text(copy["name"]) == "submit_compact_plan")
+        if (!batchControls || SessionWait.Text(copy["name"]) == "submit_compact_plan")
             return copy;
         var properties = copy["parameters"]!["properties"]!.AsObject();
         properties[Names[0]] = new JsonObject

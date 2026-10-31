@@ -90,19 +90,22 @@ internal sealed class RuntimeMcpService(SessionRuntimeCredentialStore credential
                     {
                         run.Require();
                         var declarations = new JsonArray(
-                            UnifiedToolDefinitions
-                                .All()
-                                .OfType<JsonObject>()
-                                .Where(d =>
-                                    SessionWait.Text(d["name"]) is "search_tools" or "call_tool"
+                            (
+                                run.Definitions
+                                ?? throw new InvalidOperationException(
+                                    "Runtime tool definitions are unavailable."
                                 )
+                            )()
+                                .OfType<JsonObject>()
                                 .Select(d =>
                                     (JsonNode)
                                         new JsonObject
                                         {
                                             ["name"] = d["name"]!.DeepClone(),
-                                            ["description"] = d["description"]!.DeepClone(),
-                                            ["inputSchema"] = d["parameters"]!.DeepClone(),
+                                            ["description"] = d["description"]?.DeepClone() ?? "",
+                                            ["inputSchema"] =
+                                                d["parameters"]?.DeepClone()
+                                                ?? new JsonObject { ["type"] = "object" },
                                         }
                                 )
                                 .ToArray()
@@ -118,7 +121,7 @@ internal sealed class RuntimeMcpService(SessionRuntimeCredentialStore credential
                     {
                         run.Require();
                         var name = request.Params?.Name ?? "";
-                        if (name is not ("search_tools" or "call_tool"))
+                        if (string.IsNullOrWhiteSpace(name))
                             throw new InvalidOperationException("Unknown runtime MCP tool.");
                         var args = request.Params?.Arguments is { } supplied
                             ? JsonSerializer

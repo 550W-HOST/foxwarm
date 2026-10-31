@@ -8,6 +8,7 @@ public sealed partial class ClaudeRuntimeTests
     [Theory]
     [InlineData("malformed")]
     [InlineData("plugins")]
+    [InlineData("extraTool")]
     [InlineData("partialCrash")]
     public async Task Invalid_protocol_and_observable_configuration_conflicts_interrupt_without_replay_or_late_publication(
         string fault

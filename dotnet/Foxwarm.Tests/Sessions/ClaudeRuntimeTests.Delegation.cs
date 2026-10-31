@@ -20,10 +20,64 @@ public sealed partial class ClaudeRuntimeTests
             "box1",
             rootCredential["authToken"]!.GetValue<string>()
         );
-        static JsonArray NodeScope(string node) =>
+        // Documented allowlist recipes: grant the needed capabilities, then deny everything else.
+        static JsonArray Tools(params string[] names) =>
+            new(names.Select(name => (JsonNode)name).ToArray());
+        static JsonArray PlannerRules() =>
             new(
-                new JsonObject { ["node"] = node, ["action"] = "allow" },
-                new JsonObject { ["node"] = "*", ["action"] = "deny" }
+                new JsonObject
+                {
+                    ["tool"] = Tools(
+                        "read",
+                        "write",
+                        "edit",
+                        "apply_patch",
+                        "exec",
+                        "node_create_auth_token"
+                    ),
+                    ["node"] = "box1",
+                    ["action"] = "allow",
+                },
+                new JsonObject
+                {
+                    ["tool"] = Tools(
+                        "create_agent",
+                        "set_agent_rules",
+                        "create_child_session",
+                        "send_to_session",
+                        "task",
+                        "search_tools"
+                    ),
+                    ["action"] = "allow",
+                },
+                new JsonObject { ["action"] = "deny" }
+            );
+        static JsonArray WorkerRules() =>
+            new(
+                new JsonObject
+                {
+                    ["tool"] = Tools("read", "write", "edit", "apply_patch", "exec"),
+                    ["node"] = "c1",
+                    ["action"] = "allow",
+                },
+                new JsonObject { ["tool"] = "search_tools", ["action"] = "allow" },
+                new JsonObject
+                {
+                    ["tool"] = new JsonObject
+                    {
+                        ["source"] = "builtin",
+                        ["name"] = "send_to_session",
+                    },
+                    ["args"] = new JsonObject
+                    {
+                        ["sessionId"] = new JsonObject
+                        {
+                            ["session"] = new JsonObject { ["relation"] = "parent" },
+                        },
+                    },
+                    ["action"] = "allow",
+                },
+                new JsonObject { ["action"] = "deny" }
             );
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
@@ -34,7 +88,7 @@ public sealed partial class ClaudeRuntimeTests
                 new JsonObject
                 {
                     ["agentId"] = "planner",
-                    ["rules"] = NodeScope("box1"),
+                    ["rules"] = PlannerRules(),
                     ["defaultNode"] = "box1",
                 }.ToJsonString(),
                 Encoding.UTF8,
@@ -110,7 +164,7 @@ public sealed partial class ClaudeRuntimeTests
                 new JsonObject
                 {
                     ["agentName"] = "worker",
-                    ["rules"] = NodeScope("c1"),
+                    ["rules"] = WorkerRules(),
                     ["defaultNode"] = "c1",
                 }
             )
@@ -128,10 +182,7 @@ public sealed partial class ClaudeRuntimeTests
         );
         Assert.NotNull(outOfScope["error"]);
         Assert.True(
-            JsonNode.DeepEquals(
-                NodeScope("box1"),
-                f.Main.Manager.AgentMetadata["planner"]!["rules"]
-            )
+            JsonNode.DeepEquals(PlannerRules(), f.Main.Manager.AgentMetadata["planner"]!["rules"])
         );
         Success(
             await Tool(
@@ -175,6 +226,10 @@ public sealed partial class ClaudeRuntimeTests
                     Remote("c1", "allowed.txt"),
                     Remote("box1", "denied.txt"),
                     Call(
+                        "mcp_config",
+                        new JsonObject { ["name"] = "escape", ["command"] = "true" }
+                    ),
+                    Call(
                         "send_to_session",
                         new JsonObject
                         {
@@ -204,7 +259,7 @@ public sealed partial class ClaudeRuntimeTests
         await f.RunAsync(text: null);
         Assert.Null(f.Owner.Entry.LastBackgroundProcessorFailure);
         var results = f.Lines("results.jsonl");
-        Assert.Equal(3, results.Length);
+        Assert.Equal(4, results.Length);
         Assert.True(
             !(results[0]["result"]?["isError"]?.GetValue<bool>() ?? false),
             results[0].ToJsonString()
@@ -216,7 +271,13 @@ public sealed partial class ClaudeRuntimeTests
         Assert.False(File.Exists(Path.Combine(box.Directory, "denied.txt")));
         Assert.True(results[1]["result"]!["isError"]!.GetValue<bool>());
         Assert.Contains("tool_authorization_denied", results[1].ToJsonString());
-        Assert.False(results[2]["result"]?["isError"]?.GetValue<bool>() ?? false);
+        Assert.True(results[2]["result"]!["isError"]!.GetValue<bool>());
+        Assert.Contains("tool_authorization_denied", results[2].ToJsonString());
+        Assert.DoesNotContain(
+            "escape",
+            (await f.Main.Manager.OutboundMcp.ListServersAsync(default)).ToJsonString()
+        );
+        Assert.False(results[3]["result"]?["isError"]?.GetValue<bool>() ?? false);
         Assert.Single(planner.Entry.Snapshot().Queue);
         Assert.Equal("worker/run", planner.Entry.Snapshot().Queue[0].SourceSessionId);
         Assert.False(SessionBoundary.NeedsChildHandoff(f.Owner.Entry.Snapshot().AuthorityEnvelope));

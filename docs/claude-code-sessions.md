@@ -21,16 +21,21 @@ Supply the handoff fields required by your tool schema when confirmation is enab
 
 ## Restrict Agent and Node access
 
-The CLI runs on Main; business tools use the Session's selected Node and normal Agent/ancestor rules. From an authorized ancestor or administrator, restrict an existing worker before assigning work:
+The CLI runs on Main and receives the same Foxwarm tools an ordinary Session would see, filtered by the same global, Agent and ancestor rules. Business tools run on the Session's selected Node.
+
+Each rule layer is evaluated in order, and a call that matches no rule passes that layer. A rule that names only Nodes therefore restricts Node operations but leaves management tools such as `mcp_config` (which can start commands on Main) and `set_config` to the global policy. To confine a worker, list what it needs and end with a catch-all deny. From an authorized ancestor or administrator, before assigning work:
 
 ```javascript
 set_agent_rules({"agentName":"worker", "rules":[
-  {"node":"c1", "action":"allow"},
-  {"node":"*", "action":"deny"}
+  {"tool":["read","write","edit","apply_patch","exec"], "node":"c1", "action":"allow"},
+  {"tool":"search_tools", "action":"allow"},
+  {"tool":{"source":"builtin","name":"send_to_session"},
+   "args":{"sessionId":{"session":{"relation":"parent"}}}, "action":"allow"},
+  {"action":"deny"}
 ]})
 ```
 
-Create the worker's Claude Code Session with `agentName: "worker"` and `node: "c1"`. This permits the c1 subtree and denies other Node targets; non-Node capabilities keep their existing policy. For parent creation, selector semantics and delegation, see [Node authorization forests](code-index/behaviors/nodes-workspaces-and-permissions.md#node-authorization-forests).
+Create the worker's Claude Code Session with `agentName: "worker"` and `node: "c1"`. The worker can use files and commands in the c1 subtree, discover tools and report to its parent Session; everything else is denied, and denied tools are hidden from its tool list. Add further grants such as `task` or memory tools as needed. An Agent that creates its own sub-Agents needs grants for `create_agent`, `set_agent_rules` and `create_child_session`, and for `node_create_auth_token` with the parent Node. For selector semantics and delegation, see [Node authorization forests](code-index/behaviors/nodes-workspaces-and-permissions.md#node-authorization-forests).
 
 ## Limits and precautions
 

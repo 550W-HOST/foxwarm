@@ -75,6 +75,7 @@ internal sealed class ClaudeRuntimeRun
     internal string Id { get; } = Guid.NewGuid().ToString("N");
     internal SemaphoreSlim Lane { get; } = new(1, 1);
     internal Func<string, JsonObject, CancellationToken, Task<JsonObject>>? Call { get; set; }
+    internal Func<JsonArray>? Definitions { get; set; }
     internal CancellationTokenSource Cancellation { get; } = new();
 
     internal ClaudeRuntimeRun(

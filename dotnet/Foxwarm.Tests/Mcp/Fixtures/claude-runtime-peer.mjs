@@ -53,12 +53,12 @@ async function emit(event) {
 }
 if (settings.descendant) { const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' }); await fs.writeFile(path.join(fixtureDirectory, 'descendant.pid'), String(child.pid)) }
 if (settings.malformed) { process.stdout.write('{broken\n'); await new Promise(() => { setInterval(() => {}, 1000) }) }
-await emit({ type: 'system', subtype: 'init', model: 'cli-configured-model', tools: ['mcp__foxwarm__search_tools', 'mcp__foxwarm__call_tool', 'EndConversation'], mcp_servers: [{ name: 'foxwarm', status: 'connected' }], plugins: settings.plugins ? [{ name: 'unexpected-plugin' }] : [] })
 const transport = new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: config.headers } })
 const client = new Client({ name: 'controlled-claude-peer', version: '1.0.0' })
 await client.connect(transport)
 const tools = await client.listTools()
 await fs.writeFile(path.join(fixtureDirectory, 'tools.json'), JSON.stringify(tools))
+await emit({ type: 'system', subtype: 'init', model: 'cli-configured-model', tools: [...tools.tools.map(tool => `mcp__foxwarm__${tool.name}`), ...(settings.extraTool ? ['Bash'] : []), 'EndConversation'], mcp_servers: [{ name: 'foxwarm', status: 'connected' }], plugins: settings.plugins ? [{ name: 'unexpected-plugin' }] : [] })
 async function waitFor(name) {
   await new Promise(resolve => {
     const done = () => { watcher.close(); resolve() }

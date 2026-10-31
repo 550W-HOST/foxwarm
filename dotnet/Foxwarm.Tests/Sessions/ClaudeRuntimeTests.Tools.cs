@@ -88,6 +88,72 @@ public sealed partial class ClaudeRuntimeTests
     }
 
     [Fact]
+    public async Task Runtime_lists_the_internal_visible_tool_set_and_dispatches_concrete_names()
+    {
+        await using var f = await ClaudeRuntimeFixture.CreateAsync();
+        await f.Main.Manager.SetAgentRulesAsync(
+            "main",
+            new JsonArray(new JsonObject { ["tool"] = "exec", ["action"] = "deny" })
+        );
+        var output = Path.Combine(f.Main.Manager.AgentDirectory("main"), "direct.txt");
+        await f.PeerAsync(
+            new JsonObject
+            {
+                ["calls"] = new JsonArray(
+                    new JsonObject
+                    {
+                        ["name"] = "write",
+                        ["args"] = new JsonObject { ["filePath"] = output, ["content"] = "direct" },
+                    },
+                    new JsonObject
+                    {
+                        ["name"] = "exec",
+                        ["args"] = new JsonObject { ["command"] = "true" },
+                    }
+                ),
+            }
+        );
+        await f.RunAsync();
+        var listed = JsonNode.Parse(File.ReadAllText(Path.Combine(f.PeerDirectory, "tools.json")))![
+            "tools"
+        ]!
+            .AsArray()
+            .OfType<JsonObject>()
+            .ToArray();
+        var names = listed.Select(t => t["name"]!.GetValue<string>()).ToHashSet();
+        var expected = f
+            .Main.Manager.ModelDefinitions(f.Owner)
+            .OfType<JsonObject>()
+            .Select(d => d["name"]!.GetValue<string>())
+            .ToHashSet();
+        Assert.Equal(expected, names);
+        Assert.Contains("write", names);
+        Assert.Contains("call_tool", names);
+        Assert.DoesNotContain("exec", names);
+        Assert.DoesNotContain("wait", names);
+        var schemas = new JsonArray(
+            listed.Select(t => (JsonNode)t.DeepClone()).ToArray()
+        ).ToJsonString();
+        Assert.DoesNotContain("__cancelAllToolsThisTurn", schemas);
+        Assert.DoesNotContain("__cancelTool", schemas);
+        var send = listed.FirstOrDefault(t => t["name"]!.GetValue<string>() == "send_to_session");
+        if (send is not null)
+            Assert.Equal(
+                "[\"continue\"]",
+                send["inputSchema"]!["properties"]!["afterSend"]!["enum"]!.ToJsonString()
+            );
+        var results = f.Lines("results.jsonl");
+        Assert.NotEqual(true, results[0]["result"]!["isError"]?.GetValue<bool>());
+        Assert.Equal("direct", File.ReadAllText(output));
+        Assert.True(results[1]["result"]!["isError"]!.GetValue<bool>());
+        Assert.Contains("tool_authorization_denied", results[1].ToJsonString());
+        Assert.Contains(
+            f.Owner.Entry.Snapshot().History.Materialize(),
+            row => SessionWait.Text(row["parts"]?[0]?["functionCall"]?["name"]) == "write"
+        );
+    }
+
+    [Fact]
     public async Task Policy_changes_recheck_the_exact_Agent_at_every_effect_and_bound_identity_cannot_be_overridden()
     {
         await using var f = await ClaudeRuntimeFixture.CreateAsync(

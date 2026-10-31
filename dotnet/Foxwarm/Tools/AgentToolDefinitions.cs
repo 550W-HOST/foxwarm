@@ -293,7 +293,7 @@ internal static class AgentToolDefinitions
                         ),
                         ["toolRules"] = CreationIsolationRules(),
                         ["rules"] = LocalRules(
-                            "Initial local authorization rules for the new Agent. Omit for an empty layer; ancestor rules still apply."
+                            "Initial local authorization rules for the new Agent, evaluated in order. Calls that match no rule pass this layer, so end with {\"action\":\"deny\"} to allow only the listed capabilities. Omit for an empty layer; ancestor rules still apply."
                         ),
                         ["defaultNode"] = String(
                             "Default execution Node for new Sessions in this Agent. This chooses initial placement and does not grant access."
@@ -310,7 +310,7 @@ internal static class AgentToolDefinitions
                     {
                         ["agentName"] = String("Agent whose local rules to replace."),
                         ["rules"] = LocalRules(
-                            "Complete replacement rule list. An empty list removes this layer's rules. Caller selectors are not accepted."
+                            "Complete replacement rule list, evaluated in order. Calls that match no rule pass this layer, so end with {\"action\":\"deny\"} to allow only the listed capabilities. An empty list removes this layer's rules. Caller selectors are not accepted."
                         ),
                     },
                     "agentName",
