@@ -265,6 +265,25 @@ if (hostname === parentOriginHash || hostname.startsWith(parentOriginHash + '.')
       const repeatedEmbedded = await fetch(`${baseUrl}/vscode-web?embedded=true&initialFolderUri=${encodeURIComponent(folderUri)}`, { headers: cookieHeaders() });
       assert.equal(repeatedEmbedded.status, 200);
       assert.equal((await fs.readJson(workspacePath) as { settings: Record<string, unknown> }).settings['redhat.telemetry.enabled'], true);
+
+      const projectFolder = 'foxwarm://node+worker-a/srv/project';
+      const projectQuery = `embedded=true&workspaceId=work-session-1&initialFolderUri=${encodeURIComponent(projectFolder)}`;
+      const projectWorkbench = await fetch(`${baseUrl}/vscode-web?${projectQuery}`, { headers: cookieHeaders() });
+      assert.equal(projectWorkbench.status, 200);
+      assert.match(await projectWorkbench.text(), /project-workspaces\/work-session-1\.code-workspace/);
+      const projectPath = path.join(path.dirname(workspacePath), 'project-workspaces', 'work-session-1.code-workspace');
+      assert.deepEqual((await fs.readJson(projectPath) as { folders: unknown[] }).folders, [{ uri: projectFolder }]);
+
+      const secondQuery = `embedded=true&workspaceId=work-session-2&initialFolderUri=${encodeURIComponent(projectFolder)}`;
+      const secondWorkbench = await fetch(`${baseUrl}/vscode-web?${secondQuery}`, { headers: cookieHeaders() });
+      assert.equal(secondWorkbench.status, 200);
+      assert.match(await secondWorkbench.text(), /project-workspaces\/work-session-2\.code-workspace/);
+      assert.equal((await fetch(`${baseUrl}/vscode-web?${projectQuery}`, { headers: cookieHeaders() })).status, 200);
+      const wrongFolder = `embedded=true&workspaceId=work-session-1&initialFolderUri=${encodeURIComponent(folderUri)}`;
+      assert.equal((await fetch(`${baseUrl}/vscode-web?${wrongFolder}`, { headers: cookieHeaders() })).status, 400);
+      const traversal = `embedded=true&workspaceId=${encodeURIComponent('../escape')}&initialFolderUri=${encodeURIComponent(folderUri)}`;
+      assert.equal((await fetch(`${baseUrl}/vscode-web?${traversal}`, { headers: cookieHeaders() })).status, 400);
+      assert.equal((await fetch(`${baseUrl}/vscode-web?workspaceId=work-session-1`, { headers: cookieHeaders() })).status, 400);
     }, installation);
   });
 });

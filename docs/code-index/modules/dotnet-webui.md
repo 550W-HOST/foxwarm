@@ -20,3 +20,5 @@ The .NET HTTP/WebSocket surface consumed by the React WebUI. `HttpServer` owns a
 - [.NET WebUI boundary](../threads/dotnet-webui-boundary.md)
 - [Session ownership and persistence](../threads/session-ownership-and-persistence.md)
 - [Tasks, timers, waits, and notifications](../threads/tasks-timers-and-waits.md)
+
+- [Managed Project workspaces](../units/dotnet-project-workspaces.md) — administrator Project membership, initial Session placement and recovery for the optional shared browser shell.

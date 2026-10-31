@@ -120,7 +120,7 @@ internal sealed partial class CodeWorkbench
         };
     }
 
-    private string Workspace(string folder)
+    private string Workspace(string folder, string? workspaceId)
     {
         if (!folder.StartsWith("foxwarm://", StringComparison.Ordinal))
             throw new CodeServiceException(
@@ -128,13 +128,58 @@ internal sealed partial class CodeWorkbench
                 "folderUri must use the foxwarm:// scheme."
             );
         _ = UriParts(folder);
+        var selectedPath = workspacePath;
         lock (workspaceGate)
         {
-            if (!File.Exists(workspacePath))
+            if (workspaceId is not null)
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(workspacePath)!);
+                if (
+                    !Regex.IsMatch(
+                        workspaceId,
+                        "^[A-Za-z0-9_-]{1,100}$",
+                        RegexOptions.CultureInvariant
+                    )
+                )
+                    throw new CodeServiceException(
+                        "InvalidPath",
+                        "Invalid project workspace identifier."
+                    );
+                var directory = Path.Combine(
+                    Path.GetDirectoryName(workspacePath)!,
+                    "project-workspaces"
+                );
+                Directory.CreateDirectory(directory);
+                selectedPath = Path.Combine(directory, workspaceId + ".code-workspace");
+                var target = Path.Combine(directory, workspaceId + ".target.json");
+                if (!File.Exists(target))
+                    File.WriteAllText(
+                        target,
+                        new JsonObject { ["initialFolderUri"] = folder }.ToJsonString()
+                    );
+                JsonNode? saved;
+                try
+                {
+                    saved = JsonNode.Parse(File.ReadAllText(target));
+                }
+                catch (System.Text.Json.JsonException error)
+                {
+                    throw new CodeServiceException(
+                        "InvalidPath",
+                        "Project workspace target cannot be read.",
+                        inner: error
+                    );
+                }
+                if (saved?["initialFolderUri"]?.GetValue<string>() != folder)
+                    throw new CodeServiceException(
+                        "InvalidPath",
+                        "Project workspace already belongs to a different folder."
+                    );
+            }
+            if (!File.Exists(selectedPath))
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(selectedPath)!);
                 File.WriteAllText(
-                    workspacePath,
+                    selectedPath,
                     new JsonObject
                     {
                         ["folders"] = new JsonArray(new JsonObject { ["uri"] = folder }),
@@ -146,7 +191,7 @@ internal sealed partial class CodeWorkbench
             {
                 try
                 {
-                    if (JsonNode.Parse(File.ReadAllText(workspacePath)) is JsonObject workspace)
+                    if (JsonNode.Parse(File.ReadAllText(selectedPath)) is JsonObject workspace)
                     {
                         var settings = workspace["settings"] as JsonObject;
                         var changed = settings is null;
@@ -160,7 +205,7 @@ internal sealed partial class CodeWorkbench
                             }
                         if (changed)
                             File.WriteAllText(
-                                workspacePath,
+                                selectedPath,
                                 workspace.ToJsonString(new() { WriteIndented = true })
                             );
                     }
@@ -170,13 +215,23 @@ internal sealed partial class CodeWorkbench
                 }
             }
         }
-        return FoxwarmUri(workspacePath);
+        return FoxwarmUri(selectedPath);
     }
 
     internal string Bootstrap(HttpContext context)
     {
         var address = publicAddress;
         var origin = address.Origin;
+        var embedded = context.Request.Query["embedded"] == "true";
+        var workspaceId = context.Request.Query["workspaceId"].FirstOrDefault();
+        if (
+            workspaceId is not null
+            && (!embedded || !context.Request.Query.ContainsKey("initialFolderUri"))
+        )
+            throw new CodeServiceException(
+                "InvalidPath",
+                "A project workspace requires embedded mode and an explicit folder."
+            );
         var folder =
             context
                 .Request.Query[
@@ -202,7 +257,9 @@ internal sealed partial class CodeWorkbench
         var configuration = new JsonObject
         {
             [context.Request.Query["embedded"] == "true" ? "workspaceUri" : "folderUri"] = UriParts(
-                context.Request.Query["embedded"] == "true" ? Workspace(folder) : folder
+                context.Request.Query["embedded"] == "true"
+                    ? Workspace(folder, workspaceId)
+                    : folder
             ),
             ["callbackRoute"] = route + "/callback",
             ["productConfiguration"] = new JsonObject

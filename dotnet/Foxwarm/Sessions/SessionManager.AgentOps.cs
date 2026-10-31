@@ -161,7 +161,8 @@ internal sealed partial class SessionManager
         string? initialNode = null,
         (string? Model, string? Effort)? inherited = null,
         IReadOnlyList<string>? selectedFiles = null,
-        string? parentSessionId = null
+        string? parentSessionId = null,
+        string? initialCwd = null
     )
     {
         using var operation = TrackCreation();
@@ -187,7 +188,8 @@ internal sealed partial class SessionManager
                     inherited,
                     forceModel,
                     selectedFiles: selectedFiles,
-                    initialNode: initialNode
+                    initialNode: initialNode,
+                    initialCwd: initialCwd
                 );
             }
             finally
@@ -483,7 +485,8 @@ internal sealed partial class SessionManager
         string? timerNode = null,
         string? initialNode = null,
         (string? Model, string? Effort)? childDefaults = null,
-        bool agentMainCreation = false
+        bool agentMainCreation = false,
+        string? initialCwd = null
     )
     {
         using var membership = BeginAgentAdmission(agentName);
@@ -541,6 +544,8 @@ internal sealed partial class SessionManager
                     if (displayName is not null)
                         state.AuthorityEnvelope["displayName"] = displayName;
                     state.AuthorityEnvelope["currentNode"] = selectedNode ?? "master";
+                    if (initialCwd is not null)
+                        state.AuthorityEnvelope["cwd"] = initialCwd;
                     if (model is not null)
                         state.AuthorityEnvelope["model"] = model;
                     if (effort is not null)

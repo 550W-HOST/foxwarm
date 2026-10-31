@@ -1,6 +1,8 @@
 # Unit: WebUI Setup view
 
 Files: packages/webui/src/components/SetupView.tsx, packages/webui/src/components/WebUiBrandingSettings.tsx, packages/webui/src/setupModels.ts, packages/webui/test/setupModels.test.mjs, packages/webui/test/setupModels.e2e.mjs
+
+Workspace experience selection is browser-local; its navigation and resource contracts are owned by [Project workspaces](./webui-project-workspaces.md).
 Secondary files: packages/webui/package.json, packages/webui/src/yamlConfigSchemas.ts, packages/webui/src/components/SimpleCodeEditor.tsx, packages/webui/src/components/ThemeManager.tsx
 
 ## Purpose
@@ -9,7 +11,7 @@ Authenticated setup/configuration UI for first-run model configuration and later
 
 ## Export
 
-- default `SetupView({ forced?, onClose?, onSetupChanged?, focusModelsRequest? })`.
+- default `SetupView({ instanceId?, forced?, onClose?, onSetupChanged?, focusModelsRequest? })`.
 
 ## API contract
 
@@ -37,6 +39,7 @@ Config-save feedback preserves the .NET `reload.available: false` restart notice
 - Setup presents Appearance, Models and Config as an accessible three-section surface without a nested enclosing card. At 700px pane width and above, section navigation is a left rail; narrower panes use a compact horizontal row. All labels have consistent leading icons, with configuration-state icons aligned separately. Tablist orientation follows actual pane width, and arrow keys/Home/End retain roving focus. Appearance is first and selected by default. Inactive panels are hidden while both editor instances remain mounted, preserving Monaco model/diagnostic lifecycle and each tab's local state without visibly stacking the editors.
 - The former checklist is removed. Completion/attention icons appear in the tab labels: Models reflects usable model configuration; Config reflects enabled channel health and omits its icon when no enabled channel provides a meaningful status. Disabled channels do not create attention state.
 - The two editors use distinct model URIs and static frontend schemas. Suggestions/markers are advisory and never disable Save; canonical behavior is [D-editor-local-yaml-assistance](./webui-editor.md#d-editor-local-yaml-assistance).
+- A retained Project settings view supplies an `instanceId` to scope Monaco model URIs and section/tab accessibility IDs independently from the original settings view. YAML basenames remain unchanged so both instances use the same schemas. App delivers Models-focus requests only to the active shell.
 - Models and Config use the full available Setup content width and a pane-height editor section that grows with the active workbench/embedded pane instead of a fixed viewport cap. Only the section heading and Save/status row share its height budget; later channel/Weixin modules follow below without shrinking the editor. The active panel is the single Setup content scroller and keeps the small-window editor minimum and later modules reachable. Monaco and the plain-text fallback share the same container contract; Appearance keeps its narrower reading width.
 - Model suggestions are derived from current unsaved YAML: defaults include concrete and virtual keys, while virtual targets include concrete keys only. History compatibility fields use the local concrete model/provider suggestions described in [WebUI editor](./webui-editor.md#behavior).
 - App-config save uses the shared Main installer, hot-applies access identities, reloads every managed channel, and reports started results. Feedback distinguishes saved changes from incomplete application or remaining settings requiring restart; it does not claim all app fields are live. See [D-config-live-install](./src-config.md#d-config-live-install).
