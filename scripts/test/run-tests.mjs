@@ -96,7 +96,8 @@ function managedGroup() {
     name: 'managed',
     steps: [
       { ...directStep('restore', 'dotnet', ['restore', 'dotnet/Foxwarm.sln'], 600_000), prepareDependencies: true },
-      directStep('dotnet', 'dotnet', ['test', 'dotnet/Foxwarm.sln', '--no-restore', '--logger', 'console;verbosity=minimal'], 1_200_000),
+      // Includes the build and serial suite; a complete CI invocation already takes nearly 20 minutes.
+      directStep('dotnet', 'dotnet', ['test', 'dotnet/Foxwarm.sln', '--no-restore', '--logger', 'console;verbosity=minimal'], 1_800_000),
     ],
     env: { FOXWARM_TS_ROOT: repoRoot },
   }

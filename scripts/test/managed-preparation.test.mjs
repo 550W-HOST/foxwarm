@@ -21,7 +21,7 @@ async function fixture(t) {
   await fs.mkdir(bin)
   const timerPreload = path.join(root, 'timer.cjs')
   await fs.writeFile(timerPreload, `const original = global.setTimeout;
-global.setTimeout = (callback, delay, ...args) => original(callback, delay === 1_200_000 ? 1000 : delay, ...args);
+global.setTimeout = (callback, delay, ...args) => original(callback, delay === 1_800_000 ? 1000 : delay, ...args);
 `)
   await fs.writeFile(path.join(bin, 'dotnet'), `#!${process.execPath}
 const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
