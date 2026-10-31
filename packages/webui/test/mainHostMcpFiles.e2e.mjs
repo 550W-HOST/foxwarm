@@ -29,7 +29,7 @@ rules:
     args: {filePath: {oneOf: ${JSON.stringify([...binaryFiles, boundaryFile])}}}
 - id: effects
   action: allow
-  match: {externalId: alpha, tool: {source: node, name: [exec, apply_patch]}, targetNode: [ts-files, managed-files]}
+  match: {externalId: alpha, tool: {source: node, name: [exec, edit]}, targetNode: [ts-files, managed-files]}
 - id: placement
   action: allow
   match: {externalId: alpha, tool: {source: builtin, name: node}}
