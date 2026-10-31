@@ -208,6 +208,8 @@ try {
   await page.reload({ waitUntil: 'domcontentloaded' }); await waitForWebUiReady(page); await page.waitForFunction(() => window.foxwarmTest?.switchToSession)
   await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('.foxwarm-chat-root')
   stage('workbench and workspace restore')
+  // The retained Chat can match before asynchronous Session navigation commits.
+  await page.waitForFunction(() => decodeURIComponent(location.hash) === '#tab/chat:main' && !document.querySelector('[data-pane-navigation-pending]'))
   await page.click('button[title="Open notes.txt in Code"]'); code = await codeFrame(page); await code.waitForSelector('.monaco-workbench', { timeout: 30000 })
   const persisted = JSON.parse(await readFile(join(owned.data, 'state/vscode-web/foxwarm.code-workspace'), 'utf8')); assert(persisted.folders.length >= 3); assert.equal(persisted.settings['yaml.schemaStore.enable'], false)
   assert.equal((await owned.api('GET', '/api/vscode-web/git/commit?workspace=' + encodeURIComponent(owned.work) + '&id=' + rootCommit)).body.comparison.mode, 'empty-tree')
