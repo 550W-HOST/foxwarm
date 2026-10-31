@@ -230,8 +230,24 @@ try {
   plans.set('base/cross', [body => { assert(prompt(body).includes('BASE-V2') && !prompt(body).includes('LEAF-V1') && !prompt(body).includes('TARGET-LEAF-ONLY')); return [text('CHILD-BASE-DONE'), text('[NO_ACTION]')] }])
   plans.get('leaf/main').push([call('child-base', 'create_child_session', { agentName: 'base', suffix: 'cross', message: 'CROSS-KNOWLEDGE', afterSend: 'finish' })])
   await send('leaf/main', 'CHILD-BASE'); await final('base/cross', 'CHILD-BASE-DONE'); await idle('leaf/main')
-  await turn('leaf/main', 'MODEL-AGENT', [call('new-agent', 'create_agent', { agentName: 'model-made', inherit: 'base', createMainSession: false })])
-  assert.equal((await request('GET', '/api/agents')).body.agents.find(agent => agent.id === 'model-made').inherit, 'base')
+  // Browser-created leaf is top-level in the creator tree, even though its memory inherits base.
+  // A model-created child may inherit leaf; that memory graph does not make base its creator ancestor.
+  await turn('leaf/main', 'MODEL-AGENT', [call('new-agent', 'create_agent', { agentName: 'model-made', inherit: 'leaf', createMainSession: false })])
+  const createdAgent = toolValue(await history('leaf/main'), 'new-agent')
+  assert(!createdAgent.error, JSON.stringify(createdAgent))
+  assert.equal((await request('GET', '/api/agents')).body.agents.find(agent => agent.id === 'model-made').inherit, 'leaf')
+  await turn('leaf/main', 'UNRELATED-AGENT', [call('unrelated-agent', 'create_agent', { agentName: 'model-unrelated', inherit: 'base', createMainSession: false })])
+  const rejectedAgent = toolValue(await history('leaf/main'), 'unrelated-agent')
+  assert(rejectedAgent.error, JSON.stringify(rejectedAgent))
+  assert.equal(rejectedAgent.error.type, 'agent_tool_error'); assert.match(rejectedAgent.error.message, /strict creator ancestors/)
+  const creatorMetadata = JSON.parse(await readFile(join(dataRoot, 'state', 'agents.json'), 'utf8'))
+  assert.equal(creatorMetadata.leaf.createdBy, undefined)
+  assert.equal(creatorMetadata['model-made'].createdBy, 'leaf'); assert.equal(creatorMetadata['model-made'].inherit, 'leaf')
+  // Inheritance follows Agent publication; rejection retains the created Agent with no inheritance.
+  assert.equal(creatorMetadata['model-unrelated'].createdBy, 'leaf'); assert.equal(creatorMetadata['model-unrelated'].inherit, undefined)
+  assert.equal((await request('GET', '/api/agents')).body.agents.find(agent => agent.id === 'model-unrelated').inherit, null)
+  assert.equal((await request('GET', `${path('model-made/main')}/state`)).status, 404)
+  assert.equal((await request('GET', `${path('model-unrelated/main')}/state`)).status, 404)
 
   // Explicit refresh keeps recorded A; the next real B request rebuilds strictly using B conditions.
   assert.equal((await request('POST', `${path('leaf/main')}/model`, { model: 'b/two' })).status, 200)
