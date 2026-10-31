@@ -90,7 +90,10 @@ try {
   assert((await a.api('GET', '/api/sessions/receiver/history')).body.session.runtimeState.waiting.waitForInput)
   const replyText = '  EXPLICIT-DIRECT-REPLY\n\t  '
   success(await run(b, 'target', 'send_to_channel', { channelTargetId: target, message: replyText }))
-  await until(async () => bodyText(await saved(a, 'receiver')).includes(replyText), 'reply wakes real normal User queue/provider')
+  // Canonical User history commits before request preparation and provider dispatch.
+  await until(async () => bodyText(await saved(a, 'receiver')).includes(replyText)
+    && requests.some(request => request.input.some(item => item.role === 'user' && providerText(item).includes(replyText))),
+  'reply persists and wakes a real normal User provider request')
   const reply = (await saved(a, 'receiver')).history.find(message => message.parts?.some(part => part.text === replyText))
   assert.equal(reply.role, 'user'); assert(!reply.sourceSessionId); assert(!reply.source)
   assert(reply.parts[0].system.includes('server="peer"')); assert(reply.parts[0].system.includes('endpoint="' + target + '"'))
