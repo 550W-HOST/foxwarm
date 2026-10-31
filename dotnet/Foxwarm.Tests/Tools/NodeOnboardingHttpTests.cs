@@ -103,6 +103,36 @@ public sealed class NodeOnboardingHttpTests
     }
 
     [Fact]
+    public async Task Public_templates_use_the_Main_protocol_channel_and_share_the_Docker_launcher()
+    {
+        await using var fixture = await Fixture.Start();
+        using var client = new HttpClient { BaseAddress = fixture.Admin.BaseAddress };
+        var protocol = NodeConnectionHub.Protocol(new JsonObject());
+        var current = protocol["master"]!["max"]!.GetValue<int>();
+        var download = $"https://foxwarm.net/downloads/native-cli-node-latest-v{current}.tar.gz";
+        foreach (
+            var name in new[]
+            {
+                "run.sh",
+                "run-interactive.sh",
+                "run-cli-node.sh",
+                "docker-compose.yaml",
+            }
+        )
+        {
+            var text = await client.GetStringAsync("node/" + name);
+            Assert.Contains(download, text);
+            Assert.DoesNotContain("__FOXWARM_NATIVE_CLI_URL__", text);
+        }
+        var launcher = await client.GetStringAsync("node/start-sandbox-node.sh");
+        Assert.Contains("native-cli-node-linux-x64/Foxwarm.CliNode", launcher);
+        Assert.Contains("NODE_CREDENTIALS_FILE", launcher);
+        Assert.Contains("client.bundle.js", launcher);
+        var windows = await client.GetStringAsync("node/run.ps1");
+        Assert.DoesNotContain(download, windows);
+    }
+
+    [Fact]
     public async Task Explicit_creation_and_regeneration_share_persisted_credentials_for_every_original_launcher()
     {
         await using var fixture = await Fixture.Start();

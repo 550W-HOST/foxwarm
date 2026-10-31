@@ -57,7 +57,7 @@ Every container above shared the same **6.12.101+deb13-amd64** host kernel. No o
 
 The smoke Dockerfile contains no .NET runtime. Its explicit `/test-driver/node` drives only the test protocol peer and is not placed on PATH. Repo fixtures and installed test dependencies are mounted read-only. Tests run nonroot with network disabled, a read-only root, owned executable temporary storage, dropped capabilities, no new privileges and explicit Docker memory/CPU/PID limits. They do not contact standing Main instances or use installation configuration/tokens/data. The [test inventory](./test-runner.md) classifies this fixture as a manual smoke check, not a routine browser job requiring an unavailable native artifact and certificate.
 
-Public build/probe instructions in `scripts/native-aot/README.md` describe the commands and environment inputs. The smoke image's explicit `INSTALL_CHROMIUM=1` argument provisions distro Chromium on the Debian publication lane; the default probe image does not install a browser. This is a focused packaging qualification; it neither replaces the existing complete CLI interoperability suites nor changes bootstrap selection.
+Public build/probe instructions in `scripts/native-aot/README.md` describe the commands and environment inputs. The smoke image's explicit `INSTALL_CHROMIUM=1` argument provisions distro Chromium on the Debian publication lane; the default probe image does not install a browser. This is a focused packaging qualification; it does not replace the existing complete CLI interoperability suites. [Native onboarding](./native-node-bootstrap.md) owns generated-command selection separately.
 
 ## Explicit static-musl qualification
 

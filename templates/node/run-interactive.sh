@@ -10,7 +10,7 @@ STATE_DIR="./data"
 SOURCE_DIR="./foxwarm-node"
 AUTO_APPROVE=""
 TIMEOUT=""
-EXTRA_ARGS=""
+NODE_BIN=""
 
 usage() {
   cat <<'EOF'
@@ -74,7 +74,7 @@ if [ -z "$HOST" ]; then
   exit 1
 fi
 
-for cmd in curl tar node; do
+for cmd in curl tar uname; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "Error: $cmd is required" >&2
     exit 1
@@ -95,34 +95,50 @@ fi
 ABS_STATE_DIR="$(cd "$STATE_DIR" && pwd)"
 ABS_SOURCE_DIR="$(cd "$SOURCE_DIR" && pwd)"
 
-echo "Downloading node source from $HOST/node/source.tar.gz ..."
-curl -fsSL "$HOST/node/source.tar.gz" | tar -xzf - -C "$ABS_SOURCE_DIR"
-
-NODE_TUI_ENTRYPOINT="$ABS_SOURCE_DIR/packages/cli-node/dist/tui.bundle.js"
-if [ -f "$NODE_TUI_ENTRYPOINT" ]; then
-  echo "Using bundled interactive node client from source archive; skipping npm install."
-else
-  if ! command -v npm >/dev/null 2>&1; then
-    echo "Error: npm is required only when the downloaded bundle is missing and a source build fallback is needed" >&2
+if [ "$(uname -s)/$(uname -m)" = "Linux/x86_64" ]; then
+  echo "Downloading native Linux x64 node client ..."
+  curl -fsSL "__FOXWARM_NATIVE_CLI_URL__" -o "$ABS_SOURCE_DIR/native-cli-node.tar.gz"
+  tar -xzf "$ABS_SOURCE_DIR/native-cli-node.tar.gz" -C "$ABS_SOURCE_DIR"
+  rm "$ABS_SOURCE_DIR/native-cli-node.tar.gz"
+  NODE_BIN="$ABS_SOURCE_DIR/native-cli-node-linux-x64/Foxwarm.CliNode"
+  if [ ! -x "$NODE_BIN" ]; then
+    echo "Error: downloaded native node executable is missing: $NODE_BIN" >&2
     exit 1
   fi
-  echo "Bundled interactive node client not found; installing minimal package dependencies and building fallback ..."
-  (cd "$ABS_SOURCE_DIR/packages/shared" && npm ci && npm run build)
-  (cd "$ABS_SOURCE_DIR/packages/cli-node" && npm ci && npm run build)
+  set -- "$NODE_BIN" --interactive --host "$HOST" --id "$NODE_ID"
+else
+  if ! command -v node >/dev/null 2>&1; then
+    echo "Error: Node.js is required on platforms without a native package" >&2
+    exit 1
+  fi
+  echo "Downloading node source from $HOST/node/source.tar.gz ..."
+  curl -fsSL "$HOST/node/source.tar.gz" | tar -xzf - -C "$ABS_SOURCE_DIR"
+
   NODE_TUI_ENTRYPOINT="$ABS_SOURCE_DIR/packages/cli-node/dist/tui.bundle.js"
-fi
+  if [ -f "$NODE_TUI_ENTRYPOINT" ]; then
+    echo "Using bundled interactive node client from source archive; skipping npm install."
+  else
+    if ! command -v npm >/dev/null 2>&1; then
+      echo "Error: npm is required only when the downloaded bundle is missing and a source build fallback is needed" >&2
+      exit 1
+    fi
+    echo "Bundled interactive node client not found; installing minimal package dependencies and building fallback ..."
+    (cd "$ABS_SOURCE_DIR/packages/shared" && npm ci && npm run build)
+    (cd "$ABS_SOURCE_DIR/packages/cli-node" && npm ci && npm run build)
+    NODE_TUI_ENTRYPOINT="$ABS_SOURCE_DIR/packages/cli-node/dist/tui.bundle.js"
+  fi
 
-# ─── Verify build ───
-if [ ! -f "$NODE_TUI_ENTRYPOINT" ]; then
-  NODE_TUI_ENTRYPOINT="$ABS_SOURCE_DIR/packages/cli-node/dist/tui.js"
-fi
-if [ ! -f "$NODE_TUI_ENTRYPOINT" ]; then
-  echo "Error: cli-node TUI not found after build" >&2
-  exit 1
-fi
+  # ─── Verify build ───
+  if [ ! -f "$NODE_TUI_ENTRYPOINT" ]; then
+    NODE_TUI_ENTRYPOINT="$ABS_SOURCE_DIR/packages/cli-node/dist/tui.js"
+  fi
+  if [ ! -f "$NODE_TUI_ENTRYPOINT" ]; then
+    echo "Error: cli-node TUI not found after build" >&2
+    exit 1
+  fi
 
-# ─── Build command ───
-set -- "$NODE_TUI_ENTRYPOINT" --host "$HOST" --id "$NODE_ID"
+  set -- node "$NODE_TUI_ENTRYPOINT" --host "$HOST" --id "$NODE_ID"
+fi
 
 if [ -n "$PAIRING" ]; then
   set -- "$@" --token "$PAIRING"
@@ -162,4 +178,9 @@ fi
 echo ""
 
 # Run interactively (foreground, stdin attached)
-exec node "$@"
+# curl | bash consumes stdin for the script; attach the controlling terminal
+# before entering the interactive client.
+if [ -n "${NODE_BIN:-}" ]; then
+  exec "$@" </dev/tty
+fi
+exec "$@"

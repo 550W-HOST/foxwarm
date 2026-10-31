@@ -73,6 +73,8 @@ internal sealed partial class NodeConnectionHub : IDisposable
         );
     }
 
+    internal const int CurrentProtocolVersion = 3;
+
     internal static JsonObject Protocol(JsonObject message)
     {
         var legacy = !message.ContainsKey("nodeProtocol");
@@ -93,16 +95,16 @@ internal sealed partial class NodeConnectionHub : IDisposable
             throw new InvalidDataException(
                 "nodeProtocol must satisfy 1 <= min <= max <= 1000000 with only integer min and max fields."
             );
-        var compatible = min <= 3 && max >= 1;
+        var compatible = min <= CurrentProtocolVersion && max >= 1;
         var result = new JsonObject
         {
             ["status"] = compatible ? "compatible" : "upgrade-required",
             ["client"] = range.DeepClone(),
-            ["master"] = new JsonObject { ["min"] = 1, ["max"] = 3 },
+            ["master"] = new JsonObject { ["min"] = 1, ["max"] = CurrentProtocolVersion },
             ["legacyClient"] = legacy,
         };
         if (compatible)
-            result["negotiated"] = (int)Math.Min(max, 3);
+            result["negotiated"] = (int)Math.Min(max, CurrentProtocolVersion);
         return result;
     }
 

@@ -29,13 +29,17 @@ until curl -fsS "${NODE_MASTER_URL%/}/login.html" >/dev/null 2>&1; do
   sleep 1
 done
 
-NODE_CLIENT_ENTRYPOINT="packages/cli-node/dist/client.bundle.js"
-if [ ! -f "$NODE_CLIENT_ENTRYPOINT" ]; then
-  NODE_CLIENT_ENTRYPOINT="packages/cli-node/dist/client.js"
+if [ -x native-cli-node-linux-x64/Foxwarm.CliNode ]; then
+  set -- "$PWD/native-cli-node-linux-x64/Foxwarm.CliNode" "$@"
+else
+  NODE_CLIENT_ENTRYPOINT="packages/cli-node/dist/client.bundle.js"
+  if [ ! -f "$NODE_CLIENT_ENTRYPOINT" ]; then
+    NODE_CLIENT_ENTRYPOINT="packages/cli-node/dist/client.js"
+  fi
+  set -- node "$NODE_CLIENT_ENTRYPOINT" "$@"
 fi
 
-exec node "$NODE_CLIENT_ENTRYPOINT" \
+exec "$@" \
   --host "$NODE_MASTER_URL" \
   --id "$NODE_IDENTIFIER" \
-  --credentials-file "$NODE_CREDENTIALS_PATH" \
-  "$@"
+  --credentials-file "$NODE_CREDENTIALS_PATH"

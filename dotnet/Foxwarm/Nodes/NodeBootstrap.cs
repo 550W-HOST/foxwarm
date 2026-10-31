@@ -19,7 +19,11 @@ internal sealed class NodeBootstrap(
         "run-interactive.sh",
         "run.ps1",
         "docker-compose.yaml",
+        "start-sandbox-node.sh",
     ];
+    internal static string NativeDownloadUrl =>
+        $"https://foxwarm.net/downloads/native-cli-node-latest-v{NodeConnectionHub.CurrentProtocolVersion}.tar.gz";
+
     private static readonly string[] Sources =
     [
         "packages/shared",
@@ -212,7 +216,10 @@ internal sealed class NodeBootstrap(
                 "/node/" + template,
                 async (HttpContext context) =>
                 {
-                    var path = Path.Combine(AppContext.BaseDirectory, "templates", "node", name);
+                    var path =
+                        name == "start-sandbox-node.sh"
+                            ? Path.Combine(AppContext.BaseDirectory, "scripts", name)
+                            : Path.Combine(AppContext.BaseDirectory, "templates", "node", name);
                     if (!File.Exists(path))
                     {
                         context.Response.StatusCode = 503;
@@ -225,9 +232,10 @@ internal sealed class NodeBootstrap(
                     var text = await File.ReadAllTextAsync(path, context.RequestAborted);
                     await context.Response.WriteAsync(
                         text.Replace(
-                            "__FOXWARM_DEFAULT_BASE_URL__",
-                            InferRequestBaseUrl(context.Request)
-                        ),
+                                "__FOXWARM_DEFAULT_BASE_URL__",
+                                InferRequestBaseUrl(context.Request)
+                            )
+                            .Replace("__FOXWARM_NATIVE_CLI_URL__", NativeDownloadUrl),
                         context.RequestAborted
                     );
                 }

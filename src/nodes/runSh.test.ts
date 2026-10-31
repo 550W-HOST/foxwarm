@@ -25,6 +25,8 @@ async function makeFixture(options: { isolatedPath?: boolean; tmux?: boolean; us
   await fs.ensureDir(bin);
   await fs.ensureDir(calls);
 
+  // Exercise retained non-native delivery regardless of the test host architecture.
+  await writeExecutable(path.join(bin, 'uname'), '#!/bin/sh\necho Darwin\n');
   await writeExecutable(path.join(bin, 'curl'), '#!/bin/sh\nexit 0\n');
   await writeExecutable(path.join(bin, 'tar'), `#!/bin/sh
 set -eu
@@ -140,6 +142,23 @@ test('run.sh prepares every local artifact beneath --dir and supports spaces', a
     await execFileAsync('/bin/sh', ['-n', path.join(installDir, 'run-node-client.sh')]);
     const envFile = await fs.readFile(path.join(installDir, '.env'), 'utf8');
     assert.match(envFile, /NODE_INSTALL_DIR='.*install root/);
+  } finally {
+    await fs.remove(fixture.root);
+  }
+});
+
+test('Linux ARM retains the JavaScript delivery path', async () => {
+  const fixture = await makeFixture();
+  const installDir = path.join(fixture.root, 'arm-install');
+  try {
+    await writeExecutable(path.join(fixture.bin, 'uname'), '#!/bin/sh\ncase "$1" in -s) echo Linux;; *) echo aarch64;; esac\n');
+    await runScript([
+      `--dir=${installDir}`, '--host=http://master', '--auth-token=fixture',
+      '--node-id=arm-node', '--prepare-only',
+    ], fixture.env);
+    const launcher = await fs.readFile(path.join(installDir, 'run-node-client.sh'), 'utf8');
+    assert.match(launcher, /client\.bundle\.js/);
+    assert.doesNotMatch(launcher, /Foxwarm\.CliNode/);
   } finally {
     await fs.remove(fixture.root);
   }
