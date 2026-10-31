@@ -1,7 +1,7 @@
 # Unit: webui-project-workspaces
 
 Files: packages/webui/src/components/ProjectWorkspace.tsx, packages/webui/src/projectWorkspace.ts, packages/webui/src/workspaceMode.ts, packages/webui/test/projectWorkspace.e2e.mjs
-Secondary files: packages/webui/src/App.tsx, packages/webui/src/components/SetupView.tsx, packages/webui/src/components/ProjectCodeFrame.tsx, src/channels/webuiProjects.ts, src/projectStore.ts, src/channels/webuiProjects.test.ts
+Secondary files: packages/webui/src/App.tsx, packages/webui/src/components/SetupView.tsx, packages/webui/src/components/ProjectCodeFrame.tsx, dotnet/Foxwarm/Channels/WebUi/WebUIChannel.Projects.cs, dotnet/Foxwarm/Sessions/ProjectStore.cs, dotnet/Foxwarm.Tests/Channels/WebUiStartupTests.Projects.cs
 
 ## Purpose
 
@@ -23,4 +23,4 @@ Project metadata is stored in Main's `projects.sqlite`; Session runtime state re
 
 `projectWorkspace.e2e.mjs` runs the actual component against a synthetic Project API. It checks independent session selection, retaining hidden Agent drafts, Terminal and Code content across switches, idempotent Agent tab creation, selection restoration, explicit association of an existing conversation and Node default-directory resolution.
 
-`projectWorkspaceApp.e2e.mjs` uses the owned application harness to verify real Agent and Terminal creation, model settings and management navigation within Project on desktop and mobile, draft and Code frame retention, mode switching, reload and missing-terminal behavior.
+`projectWorkspaceApp.e2e.mjs` uses the owned managed application harness to verify real Agent and Terminal creation, model settings and management navigation within Project on desktop and mobile, draft and Code frame retention, mode switching, reload and missing-terminal behavior.

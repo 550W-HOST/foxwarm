@@ -210,6 +210,7 @@ internal sealed partial class WebUIChannel(
         ).Register(app);
         RegisterTerminalRoutes(app);
         RegisterAgentRoutes(app);
+        RegisterProjectRoutes(app);
         RegisterListRoutes(app);
         RegisterPresentationRoutes(app);
         RegisterRelationRoutes(app);
