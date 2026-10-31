@@ -78,6 +78,7 @@ public sealed class ImageCodecTests
         Assert.Equal(2, result.Width);
         Assert.Equal(3, result.Height);
         Assert.Equal(SKEncodedOrigin.TopLeft, result.Origin);
+        Assert.Equal((result.Width, result.Height), (converted.Width, converted.Height));
     }
 
     [Theory]
@@ -110,7 +111,7 @@ public sealed class ImageCodecTests
         Assert.Equal("image/jpeg", opaque.MimeType);
         var large = Raster(SKEncodedImageFormat.Png, 4097, 2);
         var resized = RasterCodec.Optimize(large, "image/png", "webp");
-        Assert.Equal(4096, RasterCodec.Inspect(resized.Bytes, resized.MimeType).Width);
+        Assert.Equal(2560, RasterCodec.Inspect(resized.Bytes, resized.MimeType).Width);
         var gif = Convert.FromBase64String(
             "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
         );
@@ -118,6 +119,30 @@ public sealed class ImageCodecTests
         Assert.Equal("image/webp", normalized.MimeType);
         Assert.Equal(1, RasterCodec.Inspect(normalized.Bytes, normalized.MimeType).Width);
         Assert.Throws<ImageInputException>(() => RasterCodec.ValidatePixels(8193, 8192));
+    }
+
+    [Theory]
+    [InlineData(390, 3600, 277, 2560, "webp")]
+    [InlineData(3138, 786, 2560, 641, "jpeg")]
+    [InlineData(2561, 1, 2560, 1, "webp")]
+    [InlineData(2560, 1, 2560, 1, "webp")]
+    [InlineData(2200, 2200, 2048, 2048, "webp")]
+    public void Provider_variant_dimensions_match_encoded_pixels_and_both_resize_limits(
+        int width,
+        int height,
+        int sentWidth,
+        int sentHeight,
+        string output
+    )
+    {
+        var bytes = Raster(SKEncodedImageFormat.Png, width, height);
+        var variant = RasterCodec.Optimize(bytes, "image/png", output);
+        var encoded = RasterCodec.Inspect(variant.Bytes, variant.MimeType);
+        Assert.Equal((sentWidth, sentHeight), (encoded.Width, encoded.Height));
+        Assert.Equal((sentWidth, sentHeight), (variant.Width, variant.Height));
+        Assert.True((long)encoded.Width * encoded.Height <= 4 * 1024 * 1024);
+        if (width == sentWidth && height == sentHeight)
+            Assert.Same(bytes, variant.Bytes);
     }
 
     private static byte[] Heif(string name)

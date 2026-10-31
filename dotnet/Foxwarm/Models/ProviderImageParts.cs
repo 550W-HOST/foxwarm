@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
 using Foxwarm.Tools;
@@ -6,6 +7,16 @@ namespace Foxwarm.Models;
 
 internal static class ProviderImageParts
 {
+    private sealed record Dimensions(int Width, int Height);
+
+    private static readonly ConditionalWeakTable<JsonObject, Dimensions> SentDimensions = new();
+
+    internal static void SetSentDimensions(JsonObject part, int? width, int? height)
+    {
+        if (width is > 0 && height is > 0)
+            SentDimensions.Add(part, new Dimensions(width.Value, height.Value));
+    }
+
     internal static bool IsImage(JsonObject part) =>
         part["inlineData"] is JsonObject
         || part["inlineDataRef"] is JsonObject
@@ -88,11 +99,27 @@ internal static class ProviderImageParts
                             System.Globalization.CultureInfo.InvariantCulture
                         )
                     : "";
+            var resized =
+                size.Length > 0
+                && SentDimensions.TryGetValue(part, out var sent)
+                && (sent.Width != width || sent.Height != height)
+                    ? FormattableString.Invariant($", sent_size={sent.Width}x{sent.Height}")
+                    : "";
             blocks.Add(
                 new JsonObject
                 {
                     ["type"] = textType,
-                    ["text"] = "[IMAGE: id=" + JsonValue.Create(id)!.ToJsonString() + size + "]",
+                    ["text"] =
+                        "[IMAGE: id="
+                        + JsonValue.Create(id)!.ToJsonString()
+                        + size
+                        + resized
+                        + "]"
+                        + (
+                            resized.Length > 0
+                                ? " image_crop coordinates use the original size."
+                                : ""
+                        ),
                 }
             );
         }

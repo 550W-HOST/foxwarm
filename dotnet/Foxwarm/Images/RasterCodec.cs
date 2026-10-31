@@ -7,7 +7,12 @@ internal static class RasterCodec
 {
     internal sealed record Probe(int Width, int Height, string MimeType, SKEncodedOrigin Origin);
 
-    internal sealed record Variant(byte[] Bytes, string MimeType);
+    internal sealed record Variant(
+        byte[] Bytes,
+        string MimeType,
+        int? Width = null,
+        int? Height = null
+    );
 
     internal static bool IsSafeRaster(string mime) =>
         mime is "image/png" or "image/jpeg" or "image/webp" or "image/gif";
@@ -54,6 +59,7 @@ internal static class RasterCodec
         var gif = mime == "image/gif";
         var compatibility = outputFormat == "jpeg" && mime == "image/webp";
         SKBitmap bitmap;
+        Probe? sourceProbe = null;
         if (heif)
         {
             var decoded = HeifDecoder.DecodeImage(bytes);
@@ -74,7 +80,7 @@ internal static class RasterCodec
         }
         else
         {
-            var probe = Inspect(bytes, mime);
+            var probe = sourceProbe = Inspect(bytes, mime);
             var swapped =
                 probe.Origin
                 is SKEncodedOrigin.LeftTop
@@ -86,11 +92,11 @@ internal static class RasterCodec
             var pixels = (long)width * height;
             var scale = Math.Min(
                 1,
-                Math.Min(4096d / Math.Max(width, height), Math.Sqrt(4d * 1024 * 1024 / pixels))
+                Math.Min(2560d / Math.Max(width, height), Math.Sqrt(4d * 1024 * 1024 / pixels))
             );
             var threshold = Math.Min(1_000_000d, 96 * 1024 + 0.5 * pixels);
             if (!gif && scale >= 1 && !compatibility && bytes.Length <= threshold)
-                return new(bytes, mime);
+                return new(bytes, mime, probe.Width, probe.Height);
             using var data = SKData.CreateCopy(bytes);
             using var codec = SKCodec.Create(data)!;
             using var raw = new SKBitmap(
@@ -110,7 +116,7 @@ internal static class RasterCodec
             var scale = Math.Min(
                 1,
                 Math.Min(
-                    4096d / Math.Max(bitmap.Width, bitmap.Height),
+                    2560d / Math.Max(bitmap.Width, bitmap.Height),
                     Math.Sqrt(4d * 1024 * 1024 / pixels)
                 )
             );
@@ -150,8 +156,8 @@ internal static class RasterCodec
                 ?? throw new ImageInputException("Provider image encoding failed.");
             var result = encoded.ToArray();
             if (!heif && !gif && scale >= 1 && !compatibility && result.Length >= bytes.Length)
-                return new(bytes, mime);
-            return new(result, resultMime);
+                return new(bytes, mime, sourceProbe!.Width, sourceProbe.Height);
+            return new(result, resultMime, target.Width, target.Height);
         }
     }
 

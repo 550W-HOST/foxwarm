@@ -117,6 +117,7 @@ internal sealed partial class ImageBlobStore
                             continue;
                         }
                         variant = await OptimizeAsync(bytes, mime, outputFormat);
+                        ProviderImageParts.SetSentDimensions(part, variant.Width, variant.Height);
                     }
                     catch (ImageInputException)
                         when (reference is null && !RasterCodec.IsHeif(mime))
@@ -166,9 +167,9 @@ internal sealed partial class ImageBlobStore
                 if (response.Part != file.Part)
                     parts.Remove(file.Part);
             }
-            message["parts"] = new JsonArray(
-                parts.Select(part => (JsonNode)part.DeepClone()).ToArray()
-            );
+            // Retain request-local metadata on the already cloned parts.
+            (message["parts"] as JsonArray)?.Clear();
+            message["parts"] = new JsonArray(parts.Select(part => (JsonNode)part).ToArray());
             result.Add(message);
         }
         ProviderImageDedup.Apply(result, protocol);
@@ -282,7 +283,7 @@ internal sealed partial class ImageBlobStore
                         + mime
                         + "\0"
                         + output
-                        + "\0skia4.153.1-heif1.23.5-v1"
+                        + "\0skia4.153.1-heif1.23.5-edge2560-v2"
                 )
             )
         );
@@ -332,9 +333,11 @@ internal sealed partial class ImageBlobStore
                         )
                     )
                     {
-                        if (!passthrough)
-                            _ = RasterCodec.Inspect(payload, resultMime);
-                        return new(passthrough ? bytes : payload, resultMime);
+                        var resultBytes = passthrough ? bytes : payload;
+                        var probe = RasterCodec.IsSafeRaster(resultMime)
+                            ? RasterCodec.Inspect(resultBytes, resultMime)
+                            : null;
+                        return new(resultBytes, resultMime, probe?.Width, probe?.Height);
                     }
                 }
             }

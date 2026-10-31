@@ -4,7 +4,7 @@ This document covers the .NET host's image-input prerequisites, not image genera
 
 ## Raster input
 
-`Foxwarm.csproj` pins `SkiaSharp` and `SkiaSharp.NativeAssets.Linux.NoDependencies` to **4.153.1**. NuGet restore and publish provide that raster dependency. The qualified runtime is Linux x64 with .NET 10. PNG, JPEG, GIF and WebP dimensions are probed without pixel allocation. Visual ingress/provider admission treats originals above 32 MiB or the pixel limit as ordinary files; canonical storage retains original raster bytes without imposing the vision cap. GIF contributes its first frame. The Source input limit is `64 * 1024 * 1024` pixels; provider optimization proportionally targets at most `4 * 1024 * 1024` pixels and a 4096-pixel longest side.
+`Foxwarm.csproj` pins `SkiaSharp` and `SkiaSharp.NativeAssets.Linux.NoDependencies` to **4.153.1**. NuGet restore and publish provide that raster dependency. The qualified runtime is Linux x64 with .NET 10. PNG, JPEG, GIF and WebP dimensions are probed without pixel allocation. Visual ingress/provider admission treats originals above 32 MiB or the pixel limit as ordinary files; canonical storage retains original raster bytes without imposing the vision cap. GIF contributes its first frame. The Source input limit is `64 * 1024 * 1024` pixels; provider optimization proportionally targets at most `4 * 1024 * 1024` pixels and a 2560-pixel longest side in the maintained C# host.
 
 The selected Skia encoder has its own disposable cache policy identity; encoded bytes are not claimed identical to Source's encoder. Original canonical/download bytes are never replaced by provider variants.
 

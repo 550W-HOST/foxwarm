@@ -112,7 +112,7 @@ internal static class MainLocalToolDefinitions
             ),
             Tool(
                 "image_crop",
-                "Crop an image from this session, including a generated image or one returned by a tool. Returns a new visible image/reference, which can be cropped, saved, or delivered again. GIF input uses its first frame and returns a PNG, without animation.",
+                "Crop an image from this session, including a generated image or one returned by a tool. Returns a new visible image/reference, which can be cropped, saved, or delivered again. GIF input uses its first frame and returns a PNG, without animation. Coordinates and dimensions refer to the original image, before resizing for model input.",
                 Parameters(
                     new JsonObject
                     {
