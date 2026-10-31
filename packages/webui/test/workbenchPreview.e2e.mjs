@@ -197,6 +197,8 @@ async function openFixture({ freshBrowser = false, tabs = [system, chat('e2e-a')
 
 async function clickReadyControl(page, selector) {
   await page.waitForSelector(selector, { visible: true })
+  // A control inside the viewport may still sit behind the floating mobile nav.
+  await page.$eval(selector, element => element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }))
   await page.hover(selector)
   await page.waitForFunction(selector => {
     const element = document.querySelector(selector)
