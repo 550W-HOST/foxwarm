@@ -1,6 +1,6 @@
 # Unit: webui-chat-shared
 
-Files: packages/webui/src/components/chatShared.tsx, packages/webui/src/components/markdownRenderer.ts, packages/webui/src/components/MarkdownHtmlSegment.tsx, packages/webui/src/components/mermaidPolicy.ts, packages/webui/test/chatSharedMetadata.test.mjs, packages/webui/test/markdownRenderer.test.mjs, packages/webui/test/mermaidPolicy.test.mjs
+Files: packages/webui/src/components/chatShared.tsx, packages/webui/src/components/markdownRenderer.ts, packages/webui/src/components/webSearchCitations.ts, packages/webui/src/components/MarkdownHtmlSegment.tsx, packages/webui/src/components/mermaidPolicy.ts, packages/webui/test/chatSharedMetadata.test.mjs, packages/webui/test/markdownRenderer.test.mjs, packages/webui/test/mermaidPolicy.test.mjs
 Secondary files: packages/webui/src/components/SpecialBlock.tsx, packages/webui/test/specialBlocks.e2e.mjs
 
 ## Purpose
@@ -13,6 +13,7 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 - `renderMarkdown` — converts markdown text to sanitized HTML, with KaTeX math support for `\(...\)` and `\[...\]` only
 - `renderMarkdownSegments` / `renderMarkdownSegmentsWithSanitizer` — render the same complete lexer result as stable top-level ordinary HTML segments
 - `renderMarkdownWithSanitizer` — testable markdown renderer variant that accepts an injected sanitizer
+- `prepareWebSearchCitations` / `uniqueWebSearchCitations` / `safeWebSearchUrl` — current-text-part citation lexemes, exact annotation-span matching, safe URL normalization, and source-list deduplication; see [hosted-search citation integrity](../threads/web-search-citations.md#d-hosted-search-citation-integrity).
 - `renderAssistantMarkdownSegments` / `renderAssistantMarkdownSegmentsWithSanitizer` — render assistant Markdown into sanitized HTML, interactive display-LaTeX, and Mermaid segments without introducing a second parser
 - `SpecialBlock` / `MermaidDiagram` — reusable per-block rendered/raw/copy surface and lazy strict Mermaid renderer
 - `MarkdownHtmlSegment` — memoized sanitized-HTML leaf whose stable token key lets unchanged streamed blocks retain DOM identity
@@ -74,6 +75,8 @@ Shared utilities, types, and rendering helpers for the chat UI components. Provi
 
 - `FunctionResponse.__meta.resolvedPaths` is WebUI-only per-call data; Code icons use it without changing the displayed tool response or labels. See [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch-node-execution.md#d-dispatch-native-agent-paths-and-code-targets).
 ## Behavior
+
+- Assistant citation parsing uses position-bearing lexer placeholders and restores literal token fields before rendering. Only unambiguous whole-marker annotation spans resolve links; UTF-16 and Unicode code-point candidates are bounds-checked independently. Unresolved references retain bounded inspectable IDs, while Raw/copy retains complete source. The shared sanitizer and external-link handler still own link safety. The end-to-end contract belongs to [hosted-search citation integrity](../threads/web-search-citations.md#d-hosted-search-citation-integrity).
 
 - `ToolTag` defaults to the existing non-tool label treatment. Call/result and ToolScript tags explicitly set `toolCall`, exposed as `data-tool-call-tag`; counted `ToolTagItem` entries preserve that identity through summarization. These real-tool labels keep their original case even under an uppercase theme recipe. System/Event/Task, CTX-BLOCK and hosted Web Search labels keep their existing colors and label treatments. Reasoning uses the icon/count presentation below.
 

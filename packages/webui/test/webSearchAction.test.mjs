@@ -54,3 +54,18 @@ test('rejects malformed and unknown hosted output items', () => {
   assert.equal(getWebSearchAction({ type: 'web_search_call', action: { type: 'search', query: ' ' } }), null)
   assert.equal(getWebSearchAction({ type: 'web_search_call', action: { type: 'find_in_page', pattern: 'term' } }), null)
 })
+
+test('retains only safe deduplicated sources on their own search action, without ID or positional mapping', () => {
+  const action = getWebSearchAction({ type: 'web_search_call', action: { type: 'search', query: 'scoped query', sources: [
+    { type: 'url', url: 'https://example.com/a', title: 'First' },
+    { type: 'url', url: 'https://example.com/a', title: 'Duplicate' },
+    { type: 'url', url: 'https://example.com/b' },
+    { type: 'url', url: 'javascript:alert(1)' },
+    { type: 'url', url: 'https://' },
+    null,
+  ] } })
+  assert.deepEqual(action.sources.map(source => source.url), ['https://example.com/a', 'https://example.com/b'])
+  assert.equal(action.sources[0].title, 'First')
+  assert.equal(action.sources[1].title, 'https://example.com/b')
+  assert.equal(getWebSearchAction({ type: 'web_search_call', action: { type: 'search', query: 'another query' } }).sources, undefined)
+})

@@ -37,6 +37,7 @@ import { getReasoningRuns, type ReasoningRunPart, type ReasoningBadgeInfo, type 
 import ReasoningTokenBadge from './ReasoningTokenBadge'
 import MarkdownHtmlSegment from './MarkdownHtmlSegment'
 import WebSearchCard from './WebSearchCard'
+import { uniqueWebSearchCitations, type CitationRenderOptions } from './webSearchCitations'
 import { getWebSearchAction, type WebSearchAction } from '../webSearchAction'
 import ContextBlockCard, { getContextBlockMetaFromMessage } from './ContextBlockCard'
 import JsonInspectorDialog from './JsonInspectorDialog'
@@ -369,8 +370,8 @@ const ModelUsageAnchor = memo(function ModelUsageAnchor({ usage, isMobile, callC
   )
 })
 
-const MarkdownContent = memo(function MarkdownContent({ text, className, artifactSessionId, streaming }: { text: string; className: string; artifactSessionId?: string; streaming?: boolean }) {
-  const segments = useMemo(() => renderAssistantMarkdownSegments(text, { enabled: !!artifactSessionId, streaming }), [text, artifactSessionId, streaming])
+const MarkdownContent = memo(function MarkdownContent({ text, className, artifactSessionId, streaming, citations }: { text: string; className: string; artifactSessionId?: string; streaming?: boolean; citations?: CitationRenderOptions | false }) {
+  const segments = useMemo(() => renderAssistantMarkdownSegments(text, { enabled: !!artifactSessionId, streaming }, citations), [text, artifactSessionId, streaming, citations])
   return (
     <div className={`min-w-0 max-w-full ${className}`} onClick={handleMarkdownLinkClick}>
       {segments.map((segment) => {
@@ -783,33 +784,12 @@ const SystemLikeMessageCard = memo(function SystemLikeMessageCard({ msg, message
   )
 })
 
-type WebSearchCitation = {
-  url: string
-  title: string
-}
-
-const normalizeWebSearchCitation = (annotation: OpenAIResponsesAnnotation): WebSearchCitation | null => {
-  if (!annotation || typeof annotation !== 'object') return null
-  const nested = annotation.url_citation && typeof annotation.url_citation === 'object' ? annotation.url_citation : annotation
-  const url = typeof nested.url === 'string' ? nested.url.trim() : ''
-  if (!/^https?:\/\//i.test(url)) return null
-  const title = typeof nested.title === 'string' && nested.title.trim() ? nested.title.trim() : url
-  return { url, title }
-}
-
 const WebSearchCitationLinks = memo(function WebSearchCitationLinks({ annotations }: { annotations?: OpenAIResponsesAnnotation[] }) {
-  const citations = useMemo(() => {
-    const unique = new Map<string, WebSearchCitation>()
-    for (const annotation of annotations || []) {
-      const citation = normalizeWebSearchCitation(annotation)
-      if (citation && !unique.has(citation.url)) unique.set(citation.url, citation)
-    }
-    return [...unique.values()]
-  }, [annotations])
+  const citations = useMemo(() => uniqueWebSearchCitations(annotations), [annotations])
 
   if (citations.length === 0) return null
   return (
-    <div className="my-2 flex min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-xs text-fw-text-muted" onClick={handleMarkdownLinkClick}>
+    <div className="my-2 flex min-w-0 max-w-full flex-col items-start gap-1 text-xs text-fw-text-muted" onClick={handleMarkdownLinkClick}>
       <span className="font-semibold">Sources:</span>
       {citations.map((citation, index) => (
         <a
@@ -819,7 +799,7 @@ const WebSearchCitationLinks = memo(function WebSearchCitationLinks({ annotation
           target="_blank"
           rel="noopener noreferrer"
           title={citation.title}
-          className="max-w-full truncate text-fw-accent underline hover:text-fw-accent dark:text-fw-accent dark:hover:text-fw-accent"
+          className="max-w-full whitespace-normal [overflow-wrap:anywhere] text-fw-accent underline hover:text-fw-accent dark:text-fw-accent dark:hover:text-fw-accent"
         >
           [{index + 1}] {citation.title}
         </a>
@@ -835,7 +815,15 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, sessi
   const [copied, setCopied] = useState(false)
   const copyResetTimeoutRef = useRef<number | null>(null)
   const [jsonSnapshot, setJsonSnapshot] = useState<string | null>(null)
-  const renderedSegments = useMemo(() => splitCommitMarkers(text), [text])
+  const renderedSegments = useMemo(() => {
+    let cursor = 0
+    return splitCommitMarkers(text).map(segment => {
+      const raw = segment.kind === 'markdown' ? segment.text : segment.raw
+      const sourceOffset = text.indexOf(raw, cursor)
+      cursor = sourceOffset + raw.length
+      return { ...segment, citations: { sourceText: text, sourceOffset, annotations } }
+    })
+  }, [text, annotations])
 
   useEffect(() => {
     return () => {
@@ -895,6 +883,7 @@ const AssistantTextCard = memo(function AssistantTextCard({ text, message, sessi
               <MarkdownContent
                 key={`markdown-${index}`}
                 text={segment.text}
+                citations={segment.citations}
                 artifactSessionId={sessionId}
                 streaming={!!message.__meta?.streaming}
                 className="foxwarm-markdown prose prose-sm dark:prose-invert max-w-none prose-pre:bg-fw-assistant-code-surface prose-pre:text-fw-assistant-code-text prose-p:my-2 prose-headings:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0"
@@ -1065,7 +1054,7 @@ const MessageRow = memo(function MessageRow({
             : ''
         }`}
       >
-        {row.communication ? <SessionMessageCard communication={row.communication} searchReveal={rowSearchTarget?.surface === 'communication'}><MarkdownContent text={row.communication.message} className="prose prose-sm dark:prose-invert max-w-none break-words text-fw-text" /></SessionMessageCard> : sessionNotice ? <SystemEventCard notice={sessionNotice} reveal={!!rowSearchTarget} /> : systemLikeMessage ? (
+        {row.communication ? <SessionMessageCard communication={row.communication} searchReveal={rowSearchTarget?.surface === 'communication'}><MarkdownContent citations={false} text={row.communication.message} className="prose prose-sm dark:prose-invert max-w-none break-words text-fw-text" /></SessionMessageCard> : sessionNotice ? <SystemEventCard notice={sessionNotice} reveal={!!rowSearchTarget} /> : systemLikeMessage ? (
           <SystemLikeMessageCard msg={msg} messageKey={messageKey} searchReveal={rowSearchTarget?.surface === 'system'} />
         ) : msg.role === 'user' ? (
           <>

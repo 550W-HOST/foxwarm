@@ -1,11 +1,24 @@
+import { safeWebSearchUrl, type WebSearchCitation } from './components/webSearchCitations'
+
 export type WebSearchAction =
-  | { type: 'search'; query: string; queries: string[] }
+  | { type: 'search'; query: string; queries: string[]; sources?: WebSearchCitation[] }
   | { type: 'open_page'; url: string }
 
 const cleanString = (value: unknown): string | null => {
   if (typeof value !== 'string') return null
   const trimmed = value.trim()
   return trimmed || null
+}
+
+const getSearchSources = (sources: unknown[]): WebSearchCitation[] => {
+  const unique = new Map<string, WebSearchCitation>()
+  for (const source of sources) {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) continue
+    const record = source as Record<string, unknown>
+    const url = safeWebSearchUrl(record.url)
+    if (url && !unique.has(url)) unique.set(url, { url, title: cleanString(record.title) || url })
+  }
+  return [...unique.values()]
 }
 
 export const getWebSearchAction = (outputItem: unknown): WebSearchAction | null => {
@@ -24,12 +37,13 @@ export const getWebSearchAction = (outputItem: unknown): WebSearchAction | null 
       type: 'search',
       query: primaryQuery,
       queries: [...new Set([primaryQuery, ...queries])],
+      ...(Array.isArray(action.sources) ? { sources: getSearchSources(action.sources) } : {}),
     }
   }
 
   if (action.type === 'open_page') {
-    const url = cleanString(action.url)
-    return url && /^https?:\/\//i.test(url) ? { type: 'open_page', url } : null
+    const url = safeWebSearchUrl(action.url)
+    return url ? { type: 'open_page', url } : null
   }
 
   return null

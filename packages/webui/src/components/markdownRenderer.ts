@@ -3,6 +3,7 @@ import DOMPurify from 'dompurify'
 import katex from 'katex'
 import { Marked } from 'marked'
 import type { Token, Tokens, TokenizerAndRendererExtension } from 'marked'
+import { prepareWebSearchCitations, type CitationLexeme, type CitationRenderOptions } from './webSearchCitations'
 
 type MathToken = Tokens.Generic & {
   text: string
@@ -247,10 +248,28 @@ const artifactReferenceExtension: TokenizerAndRendererExtension = {
   renderer(token) { return `<pre><code>${escapeHtml(token.raw.trimEnd())}</code></pre>` },
 }
 
+let activeCitationContext: { prefix: string; lexemes: CitationLexeme[] } | null = null
+const citationExtension: TokenizerAndRendererExtension = {
+  name: 'webSearchCitation',
+  level: 'inline',
+  start(src) {
+    if (!activeCitationContext) return undefined
+    const position = src.indexOf(activeCitationContext.prefix)
+    return position >= 0 ? position : undefined
+  },
+  tokenizer(src) {
+    if (this.lexer.state.inRawBlock || !activeCitationContext || !src.startsWith(activeCitationContext.prefix)) return undefined
+    const match = /^(\d+)\uE001/.exec(src.slice(activeCitationContext.prefix.length))
+    const item = match ? activeCitationContext.lexemes[Number(match[1])] : undefined
+    return item && src.startsWith(item.placeholder) ? { type: 'webSearchCitation', raw: item.placeholder, html: item.html } : undefined
+  },
+  renderer(token) { return token.html as string },
+}
+
 const markdown = new Marked({
   breaks: true,
   gfm: true,
-  extensions: [artifactReferenceExtension, displayMathBlockExtension, displayMathPrefixExtension, displayMathExtension, inlineMathExtension],
+  extensions: [citationExtension, artifactReferenceExtension, displayMathBlockExtension, displayMathPrefixExtension, displayMathExtension, inlineMathExtension],
 })
 
 const sanitizeHtml = (html: string, allowTableScrollWrapper = false): string => {
@@ -260,10 +279,10 @@ const sanitizeHtml = (html: string, allowTableScrollWrapper = false): string => 
     ALLOWED_TAGS: [
       'p', 'br', 'strong', 'em', 'u', 's', 'code', 'pre', 'blockquote',
       'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'a',
-      ...(allowTableScrollWrapper ? ['div'] : []),
+      ...(allowTableScrollWrapper ? ['div', 'span'] : []),
       'table', 'thead', 'tbody', 'tr', 'th', 'td',
     ],
-    ALLOWED_ATTR: ['class', 'href', 'target', 'rel'],
+    ALLOWED_ATTR: ['class', 'href', 'target', 'rel', ...(allowTableScrollWrapper ? ['title'] : [])],
     ALLOW_UNKNOWN_PROTOCOLS: false,
     ALLOWED_URI_REGEXP: /^(?:https?|mailto|tel):/i,
   })
@@ -333,14 +352,50 @@ export const renderMarkdownSegments = (text: string): Array<Extract<MarkdownRend
   renderMarkdownSegmentsWithSanitizer(text)
 )
 
+// This parser-only wrapper groups preceding siblings, not authored nesting.
+// Expose those siblings before projecting interactive blocks so later math
+// cannot turn an already rendered artifact/Mermaid block into literal HTML.
+const assistantTopLevelTokens = (tokens: Token[]): Token[] => tokens.flatMap(token =>
+  token.type === 'displayMathPrefix' && Array.isArray(token.tokens)
+    ? assistantTopLevelTokens(token.tokens)
+    : [token],
+)
+
+const lexAssistantMarkdown = (text: string, citations: CitationRenderOptions): Token[] => {
+  const prepared = prepareWebSearchCitations(text, citations)
+  const previousContext = activeCitationContext
+  let tokens: Token[]
+  try {
+    activeCitationContext = prepared
+    tokens = markdown.lexer(prepared.text)
+  } finally { activeCitationContext = previousContext }
+  if (prepared.lexemes.length) {
+    // Code and HTML tokens are opaque to inline extensions. Restore their
+    // literal source, along with special-block raw text and link definitions.
+    const placeholders = new Map(prepared.lexemes.map(item => [item.placeholder, item.raw]))
+    const placeholderPattern = new RegExp(`${prepared.prefix}\\d+\uE001`, 'g')
+    const restore = (value: unknown): void => {
+      if (!value || typeof value !== 'object') return
+      for (const [key, child] of Object.entries(value)) {
+        if (typeof child === 'string') {
+          (value as Record<string, unknown>)[key] = child.replace(placeholderPattern, marker => placeholders.get(marker) ?? marker)
+        } else restore(child)
+      }
+    }
+    restore(tokens)
+  }
+  return tokens
+}
+
 export const renderAssistantMarkdownSegmentsWithSanitizer = (
   text: string,
   sanitizer?: HtmlSanitizer,
   artifacts?: { enabled: boolean; streaming?: boolean },
+  citations: CitationRenderOptions | false = {},
 ): MarkdownRenderSegment[] => {
   const segments: MarkdownRenderSegment[] = []
 
-  for (const [tokenIndex, token] of markdown.lexer(text).entries()) {
+  for (const [tokenIndex, token] of assistantTopLevelTokens(citations === false ? markdown.lexer(text) : lexAssistantMarkdown(text, { streaming: artifacts?.streaming, ...citations })).entries()) {
     if (artifacts?.enabled && token.type === 'artifactReference') {
       if (token.reference) { segments.push({ kind: 'artifact', tokenIndex, reference: token.reference }); continue }
       if (artifacts.streaming && token.pending) continue
@@ -361,17 +416,17 @@ export const renderAssistantMarkdownSegmentsWithSanitizer = (
       continue
     }
     const wrapTables = tokenContainsTable(token)
-    const html = renderMarkdownTokens([token], sanitizer ?? (wrapTables ? sanitizeAssistantHtml : sanitizeHtml), wrapTables)
+    const html = renderMarkdownTokens([token], sanitizer ?? sanitizeAssistantHtml, wrapTables)
     if (html) segments.push({ kind: 'html', tokenIndex, html })
   }
   return segments
 }
 
-export const renderAssistantMarkdownSegments = (text: string, artifacts?: { enabled: boolean; streaming?: boolean }): MarkdownRenderSegment[] => (
-  renderAssistantMarkdownSegmentsWithSanitizer(text, undefined, artifacts)
+export const renderAssistantMarkdownSegments = (text: string, artifacts?: { enabled: boolean; streaming?: boolean }, citations?: CitationRenderOptions | false): MarkdownRenderSegment[] => (
+  renderAssistantMarkdownSegmentsWithSanitizer(text, undefined, artifacts, citations)
 )
 /** Reuse the same top-level lexer contract for reply-tail deduplication. */
 export function assistantArtifactReferences(text: string): ArtifactReference[] {
   if (!text.includes('<foxwarm-artifact')) return []
-  return markdown.lexer(text).flatMap(token => token.type === 'artifactReference' && token.reference ? [token.reference as ArtifactReference] : [])
+  return assistantTopLevelTokens(markdown.lexer(text)).flatMap(token => token.type === 'artifactReference' && token.reference ? [token.reference as ArtifactReference] : [])
 }
