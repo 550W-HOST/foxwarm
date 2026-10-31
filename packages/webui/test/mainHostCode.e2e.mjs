@@ -23,6 +23,24 @@ function observeNativeDialogs(page, surface) {
     console.error(JSON.stringify({ fixture: 'mainHostCode', stage: currentStage, event: 'native-dialog', surface, type: dialog.type(), message: dialog.message().slice(0, 2048), elapsedMs: Date.now() - startedAt }))
   })
 }
+function observePrefixNavigation(page) {
+  const pending = new Map(), failed = [], events = [], responses = []
+  const path = url => new URL(url || 'about:blank').pathname.slice(0, 256)
+  const record = (list, value) => { list.push({ ...value, elapsedMs: Date.now() - startedAt }); if (list.length > 8) list.shift() }
+  page.on('request', request => pending.set(request, { path: path(request.url()), type: request.resourceType(), elapsedMs: Date.now() - startedAt }))
+  page.on('response', response => {
+    const request = pending.get(response.request()); if (request) request.status = response.status()
+    record(responses, { path: path(response.url()), status: response.status() })
+  })
+  page.on('requestfinished', request => pending.delete(request))
+  page.on('requestfailed', request => {
+    record(failed, { path: path(request.url()), type: request.resourceType(), error: request.failure()?.errorText.slice(0, 256) })
+    pending.delete(request)
+  })
+  page.on('framenavigated', frame => { if (frame === page.mainFrame()) record(events, { event: 'navigated', path: path(frame.url()) }) })
+  for (const event of ['domcontentloaded', 'load']) page.on(event, () => record(events, { event }))
+  return () => ({ events, responses, failed, pendingCount: pending.size, pending: [...pending.values()].slice(-16) })
+}
 stage('owned fixture preparation')
 
 const workbenchDir = resolve('dotnet/Foxwarm/bin/Debug/net10.0/packages/vscode-web/assets/vscode-web')
@@ -39,7 +57,7 @@ const rootCommit = git('rev-parse', 'HEAD')
 git('mv', 'old.txt', 'notes.txt'); await writeFile(join(owned.work, 'binary.bin'), Buffer.from([0, 17, 255])); git('add', '.'); git('commit', '-qm', 'rename and binary fixture')
 const commit = git('rev-parse', 'HEAD'), requests = [], failures = [], browserErrors = [], codeResponses = []
 await mkdir(join(owned.work, 'memory')); await writeFile(join(owned.work, 'memory/ONBOOT.md'), ' \n')
-let appPage, extraPage, prefixProxy, declaredProxy; const declaredMode = process.env.FOXWARM_CODE_DECLARED_PROXY; let proxyUpgrades = 0
+let appPage, extraPage, prefixProxy, declaredProxy, prefixNavigation, browserVersion; const declaredMode = process.env.FOXWARM_CODE_DECLARED_PROXY; let proxyUpgrades = 0
 if (declaredMode) {
   const prefix = '/published/main/'
   const forward = (request, response) => {
@@ -99,7 +117,7 @@ async function frameText(page, pattern) {
 }
 try {
   stage('host startup and App login')
-  await owned.start(); assert.equal((await owned.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'main' })).status, 200); assert.equal((await owned.api('POST', '/api/sessions/main/cwd', { cwd: owned.work })).status, 200); const page = await owned.openApp()
+  await owned.start(); assert.equal((await owned.api('POST', '/api/sessions', { agentId: 'main', sessionId: 'main' })).status, 200); assert.equal((await owned.api('POST', '/api/sessions/main/cwd', { cwd: owned.work })).status, 200); const page = await owned.openApp(); browserVersion = await page.browser().version()
   await page.evaluate(() => window.foxwarmTest.switchToSession('main')); await page.waitForSelector('.foxwarm-chat-root')
   assert.equal(await page.evaluate(() => document.querySelector('meta[name="foxwarm-host"]')?.content), 'dotnet')
   assert.equal(await page.evaluate(() => localStorage.getItem('foxwarm_token')), owned.token)
@@ -235,7 +253,7 @@ try {
     const upstream = httpRequest(owned.origin + request.url.slice('/fixture'.length), { method: request.method, headers }, result => { response.writeHead(result.statusCode, result.headers); result.pipe(response) })
     upstream.on('error', error => response.destroy(error)); request.pipe(upstream)
   }); prefixProxy.listen(0, '127.0.0.1'); await once(prefixProxy, 'listening')
-  const prefixed = await page.browser().newPage(); extraPage = prefixed; const prefixResponses = []; prefixed.on('response', response => prefixResponses.push({ url: response.url(), status: response.status() })); const prefixUrl = new URL('http://127.0.0.1:' + prefixProxy.address().port + '/fixture/vscode-web/')
+  const prefixed = await page.browser().newPage(); extraPage = prefixed; observeNativeDialogs(prefixed, 'prefixed-code'); prefixed.on('pageerror', error => browserErrors.push(error.message)); prefixNavigation = observePrefixNavigation(prefixed); const prefixResponses = []; prefixed.on('response', response => prefixResponses.push({ url: response.url(), status: response.status() })); const prefixUrl = new URL('http://127.0.0.1:' + prefixProxy.address().port + '/fixture/vscode-web/')
   prefixUrl.searchParams.set('folderUri', configuration.folderUri.scheme + '://' + configuration.folderUri.authority + configuration.folderUri.path); prefixUrl.searchParams.set('openFilePath', join(owned.work, 'notes.txt'))
   assert.equal((await prefixed.goto(prefixUrl.toString(), { waitUntil: 'domcontentloaded' })).status(), 200)
   await prefixed.waitForSelector('.monaco-workbench', { timeout: 30000 })
@@ -306,7 +324,7 @@ try {
 } catch (error) {
   // Cached frame URLs remain available when the initiating browser operation cannot respond.
   const path = url => new URL(url || 'about:blank').pathname.slice(0, 256)
-  console.error(JSON.stringify({ stage: currentStage, browserErrors: browserErrors.slice(-8).map(value => value.slice(0, 512)), failedRequests: codeResponses.filter(row => row.status >= 500).slice(-8).map(row => ({ path: path(row.url), status: row.status })), host: owned.output, frames: [...(appPage?.frames() || []), ...(extraPage?.isClosed() ? [] : extraPage?.frames() || [])].slice(-16).map(frame => ({ path: path(frame.url()) })) }))
+  console.error(JSON.stringify({ stage: currentStage, browserVersion, prefixNavigation: prefixNavigation?.(), browserErrors: browserErrors.slice(-8).map(value => value.slice(0, 512)), failedRequests: codeResponses.filter(row => row.status >= 500).slice(-8).map(row => ({ path: path(row.url), status: row.status })), host: owned.output, frames: [...(appPage?.frames() || []), ...(extraPage?.isClosed() ? [] : extraPage?.frames() || [])].slice(-16).map(frame => ({ path: path(frame.url()) })) }))
   throw error
 }
 finally { releaseHold(); await owned.cleanup(); if (declaredProxy) { declaredProxy.closeAllConnections(); await new Promise(done => declaredProxy.close(done)) } if (prefixProxy) await new Promise(done => prefixProxy.close(done)); await new Promise(done => peer.close(done)) }
