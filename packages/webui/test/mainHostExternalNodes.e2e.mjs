@@ -291,7 +291,9 @@ try {
   const rejectPending = await rejectRequest.take('pair_pending'); assert.equal((await fixture.api('POST', '/api/nodes/onboarding/reject', { pendingId: rejectPending.pendingId })).status, 200); await rejectRequest.take('pair_rejected')
   // Browser extension uses the unchanged MV3 service worker, real Chrome tabs and its 25-second JSON heartbeat.
   const extension = resolve('packages/browser-node')
-  browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium', headless: true, userDataDir: join(fixture.root, 'extension-browser'), args: ['--no-sandbox', '--disable-dev-shm-usage', '--disable-extensions-except=' + extension, '--load-extension=' + extension] })
+  // Install after Puppeteer's root auto-attachment is ready, before Chrome creates the worker.
+  browser = await puppeteer.launch({ executablePath: process.env.FOXWARM_CHROMIUM || '/usr/bin/chromium', headless: true, pipe: true, enableExtensions: true, userDataDir: join(fixture.root, 'extension-browser'), args: ['--no-sandbox', '--disable-dev-shm-usage'] })
+  await browser.installExtension(extension)
   const target = await browser.waitForTarget(target => target.type() === 'service_worker' && target.url().endsWith('/background/main.js'), { timeout: 15000 })
   const popup = await browser.newPage()
   const extensionId = new URL(target.url()).host
