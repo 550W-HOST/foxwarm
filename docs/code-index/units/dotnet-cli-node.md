@@ -107,7 +107,7 @@ The protocol registration fixture includes the six ordinary native capabilities 
 
 `CliNodeExecTests`, `CliNodeExternalLaunchUncertaintyTests` and the Session/external process fixtures cover prelaunch cancellation, uncertain persistence, output/status, current cwd, exact signed reservations, ACK rejection/retry, expiry, release and shutdown. Normal inbound-MCP and Main/model fixtures exercise real external/Session owners rather than a synthetic model service. Existing Source wrappers can finish under their original interpreter; recovery never replays their commands.
 
-`dotnetCliNodeExecMain.e2e.mjs` waits for the client's local registration status before reading its saved credentials; Main's online Node snapshot precedes that client-side save.
+`dotnetCliNodeExecMain.e2e.mjs` waits for the client's local registration status before reading its saved credentials; Main's online Node snapshot precedes that client-side save. `dotnetCliNodeProtocol.e2e.mjs` uses the same local status fence for explicit-credential replacement and invalid-credential pairing fallback: a peer's registration observation precedes the client's non-atomic save, while `[registered]` follows the completed write and permission update. The existing deadlines and persisted-ID assertions still apply.
 
 Code and PTY process fixtures compare Source/managed/native services, limits, actual shells and same-executable helper IPC. Normal Main/original-App/official-terminal fixtures exercise control ownership, streaming, detach/reattach, same-PID rediscovery and list/create races. Optional-backend absence retains independent services; Windows runtime remains unqualified.
 

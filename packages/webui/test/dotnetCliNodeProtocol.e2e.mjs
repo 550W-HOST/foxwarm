@@ -176,7 +176,8 @@ try {
   })
   const credentialPath = join(root, 'precedence/credentials.json'); await mkdir(join(root, 'precedence')); await writeFile(credentialPath, JSON.stringify({ nodeId: 'stale', authToken: 'stale-secret' }))
   let client = await launch('precedence', auth.origin, ['--id', 'explicit', '--auth-token', 'explicit-secret', '--credentials-file', credentialPath])
-  await until(() => states.length === 1, 'explicit registration'); await until(async () => JSON.parse(await readFile(credentialPath, 'utf8')).nodeId === 'explicit', 'saved explicit credential')
+  // Peer registration precedes the client's save; its local status follows the closed credential write.
+  await until(() => states.length === 1, 'explicit registration'); await until(async () => client.output.includes('[registered]') && JSON.parse(await readFile(credentialPath, 'utf8')).nodeId === 'explicit', 'saved explicit credential')
   assert(queries[0].includes('id=explicit&auth=explicit-secret')); assert(!client.output.includes('explicit-secret')); await stop(client)
   client = await launch('precedence', auth.origin, ['--credentials-file', credentialPath]); await until(() => states.length === 2, 'file-only restart'); assert(queries[1].includes('id=explicit&auth=explicit-secret')); await stop(client)
   client = await launch('pairing', auth.origin, ['--id', 'requested', '--token', 'pair-secret', '--credentials-file', join(root, 'pairing/credentials.json')])
@@ -194,7 +195,7 @@ try {
     })
   })
   client = await launch('fallback', fallback.origin, ['--id', 'old', '--auth-token', 'expired', '--token', 'fallback-pair', '--credentials-file', join(root, 'fallback/credentials.json')])
-  await until(async () => fallbackConnections === 3 && await readFile(join(client.cwd, 'credentials.json'), 'utf8').then(text => JSON.parse(text).nodeId === 'replacement', () => false), 'invalid credentials fall back through real reconnect', 12000); await stop(client)
+  await until(async () => fallbackConnections === 3 && client.output.includes('[registered]') && await readFile(join(client.cwd, 'credentials.json'), 'utf8').then(text => JSON.parse(text).nodeId === 'replacement', () => false), 'invalid credentials fall back through real reconnect', 12000); await stop(client)
 
   for (const kind of ['invalid', 'rejected']) {
     let count = 0
