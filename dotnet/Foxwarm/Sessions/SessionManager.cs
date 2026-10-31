@@ -180,6 +180,13 @@ internal sealed partial class SessionManager : IAsyncDisposable
         executor.RemoteIdentityReserved = (session, id) =>
             Find(session) is { } owner && Nodes.ExecClaims.Has(owner, id, activeOnly: false);
         Nodes.LocalExecActive = (owner, id) => executor.IsOwnedActive(owner.Id, id);
+        Nodes.ReadEditSource = async (owner, node, file, cwd, token) =>
+        {
+            var files = IdentityWorkspace(owner);
+            await AuthorizeNodeFileAsync(owner, node, file, "read", files, token);
+            var source = await ReadResidentSourceAsync(owner, node, file, cwd, files, token);
+            return System.Text.Encoding.UTF8.GetString(source.Bytes);
+        };
         Nodes.SessionEvent = AdmitNodeSessionEventAsync;
         Nodes.SessionRequest = HandleNodeSessionRequestAsync;
         Nodes.BackgroundRegistration = RegisterRemoteExecBackgroundAsync;

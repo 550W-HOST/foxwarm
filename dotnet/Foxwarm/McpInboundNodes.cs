@@ -15,7 +15,7 @@ internal sealed class McpInboundNodes(
     private const string ExternalPathDescription =
         "Path on this Node. Relative paths use this external connection's working directory when this Node is selected, otherwise the Node process working directory. Absolute and ~/ paths are accepted. Agent directories and $fw_agentdir/$fw_tmp path variables are unavailable.";
 
-    private static readonly string[] supported = ["read", "write", "edit", "apply_patch", "exec"];
+    private static readonly string[] supported = ["read", "write", "edit", "exec"];
 
     private static IReadOnlyList<AuthorizationPath> Paths(string node, string name, JsonObject args)
     {
@@ -29,16 +29,16 @@ internal sealed class McpInboundNodes(
             Add("filePath", SessionWait.Text(args["filePath"]));
         if (name == "exec")
             Add("cwd", SessionWait.Text(args["cwd"]));
-        if (name == "apply_patch" && args.Count > 0)
+        if (name == "edit" && args.ContainsKey("apply_patch"))
         {
-            if (SessionWait.Text(args["input"]) is not string input)
+            if (SessionWait.Text(args["apply_patch"]) is not string input)
                 throw new McpInboundSafeException(
                     "apply_patch requires an input string. No call was sent."
                 );
             try
             {
                 foreach (var operation in WorkspacePatch.Parse(input))
-                    Add("input", operation.Path);
+                    Add("apply_patch", operation.Path);
             }
             catch (Exception error) when (error is InvalidDataException)
             {
@@ -104,10 +104,6 @@ internal sealed class McpInboundNodes(
                 if (name == "exec")
                     descriptor["description"] =
                         "Run a shell command on this Node using its process environment, not a login shell or an Agent environment. No Agent directory variables are injected. Output is saved to a command log and returned as a bounded preview. A command exceeding timeout continues in the background with an execId; timeout does not kill it. Use foxwarm_exec_result to retrieve results within this same MCP context. Selecting this Node preserves its connection-local working directory between calls; pass cwd to override it.";
-                else if (name == "apply_patch")
-                    descriptor["description"] =
-                        "Add, modify, or delete files using *** Begin Patch / *** End Patch. "
-                        + ExternalPathDescription;
                 else if (name == "read")
                     descriptor["description"] =
                         descriptor["description"]!.GetValue<string>()
@@ -134,8 +130,7 @@ internal sealed class McpInboundNodes(
         {
             "read" => ["filePath", "startLine", "endLine"],
             "write" => ["filePath", "content", "overwrite", "createDirs"],
-            "edit" => ["filePath", "oldText", "newText"],
-            "apply_patch" => ["input"],
+            "edit" => ["filePath", "oldText", "newText", "replaceAll", "edits", "apply_patch"],
             "exec" => ["command", "cwd", "timeout"],
             _ => [],
         };
@@ -143,10 +138,17 @@ internal sealed class McpInboundNodes(
             throw new McpInboundSafeException(
                 $"Unsupported {name} arguments. Accepted fields: {string.Join(", ", fields)}.{(name == "exec" ? " timeout is measured in seconds." : "")} No call was sent."
             );
-        if (name == "apply_patch" && !args.ContainsKey("input"))
-            throw new McpInboundSafeException(
-                "apply_patch requires an input string. No call was sent."
-            );
+        if (name == "edit")
+        {
+            try
+            {
+                _ = UnifiedEdit.Parse(args);
+            }
+            catch (InvalidDataException error)
+            {
+                throw new McpInboundSafeException(error.Message);
+            }
+        }
         var permission = Permission(context, node, name, args);
         await authorization.RequireAsync(context, permission, token);
         if (

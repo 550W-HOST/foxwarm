@@ -106,10 +106,10 @@ public sealed partial class CompactLifecycleTests
                         managerForPeer!.Authorization.Invalidate();
                         call = FunctionCall(
                             "patch",
-                            "apply_patch",
+                            "edit",
                             new JsonObject
                             {
-                                ["input"] =
+                                ["apply_patch"] =
                                     "*** Begin Patch\n*** Update File: "
                                     + repairPath
                                     + "\n-{\"replaceAsBlocks\":\n+"

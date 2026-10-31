@@ -71,7 +71,7 @@ try {
   assert(result(state, 'create-unsupported').error); assert(result(state, 'inspect-unsupported').error); assert(result(state, 'destroy-unsupported').error)
   assert.equal((await fixture.api('POST', route + '/node', { nodeId: node })).status, 200)
   const patch = '*** Begin Patch\n*** Update File: sample.txt\n@@\n-β\n+gamma\n*** Add File: added.txt\n+new\n*** End Patch'
-  state = await turn('files', [call('files', 'run_script', { code: "call_tool('write', {'filePath':'sample.txt','content':'alpha\\nβ\\n'})\ncall_tool('edit', {'filePath':'sample.txt','oldText':'alpha','newText':'changed'})\ncall_tool('apply_patch', {'input':" + JSON.stringify(patch) + "})\nreturn call_tool('read', {'filePath':'sample.txt'})['content']" })])
+  state = await turn('files', [call('files', 'run_script', { code: "call_tool('write', {'filePath':'sample.txt','content':'alpha\\nβ\\n'})\ncall_tool('edit', {'filePath':'sample.txt','oldText':'alpha','newText':'changed'})\ncall_tool('edit', {'apply_patch':" + JSON.stringify(patch) + "})\nreturn call_tool('read', {'filePath':'sample.txt'})['content']" })])
   assert.equal(result(state, 'files').result, 'changed\ngamma\n')
   assert.equal(await readFile(join(cwd, 'sample.txt'), 'utf8'), 'changed\ngamma\n')
   assert.equal(await readFile(join(cwd, 'added.txt'), 'utf8'), 'new')

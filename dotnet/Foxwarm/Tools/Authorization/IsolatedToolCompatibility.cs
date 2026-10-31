@@ -167,7 +167,7 @@ internal static class IsolatedToolCompatibility
         if (unknownNode)
             return true;
         return source == "node"
-            ? node != "master" || name is "read" or "write" or "edit" or "apply_patch"
+            ? node != "master" || name is "read" or "write" or "edit"
             : source == "builtin"
                 && (
                     DefaultBuiltins.Contains(name)
@@ -228,7 +228,7 @@ internal static class IsolatedToolCompatibility
         if (
             request.Source == "node"
                 && request.TargetNode == "master"
-                && request.Name is "read" or "write" or "edit" or "apply_patch"
+                && request.Name is "read" or "write" or "edit"
             || request.Source == "builtin"
                 && request.Name
                     is "node_create_auth_token"

@@ -43,7 +43,7 @@ public sealed class ExecutableNodeProviderTests
         Assert.Contains(nodes, value => value?["id"]?.GetValue<string>() == "one/target");
         Assert.Contains(nodes, value => value?["id"]?.GetValue<string>() == "two/target");
         Assert.Equal(
-            new[] { "read", "write", "edit", "apply_patch", "exec" },
+            new[] { "read", "write", "edit", "exec" },
             registry.Definitions("one/target").Select(value => value!["name"]!.GetValue<string>())
         );
         Assert.Single(registry.Definitions("one/readonly"));

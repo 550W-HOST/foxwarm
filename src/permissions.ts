@@ -29,7 +29,7 @@ const MASTER_DEFAULT_BUILTINS = new Set([
   'create_timer', 'list_timers', 'update_timer', 'delete_timer',
 ]);
 const REMOTE_DEFAULT_BUILTINS = new Set(['send_file', 'image_write_to_file']);
-const MASTER_DEFAULT_NODE_TOOLS = new Set(['read', 'write', 'edit', 'apply_patch']);
+const MASTER_DEFAULT_NODE_TOOLS = new Set(['read', 'write', 'edit']);
 
 export function isPermissionNeutralBuiltinDispatcher(tool: string): boolean {
   return tool === 'call_tool';

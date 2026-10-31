@@ -135,7 +135,7 @@ async function main(): Promise<void> {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'foxwarm-tool-loop-selftest-'));
 
   try {
-    await test('session continues across apply_patch -> read -> exec -> final response', async () => {
+    await test('session continues across edit patch -> read -> exec -> final response', async () => {
       const sessionId = makeSessionId('selftest_tool_chain');
       createdSessionIds.push(sessionId);
       await ensureSession(sessionId);
@@ -149,8 +149,8 @@ async function main(): Promise<void> {
         callIndex += 1;
 
         if (callIndex === 1) {
-          const toolCall = { id: 'apply-1', name: 'apply_patch', args: {
-            input: [
+          const toolCall = { id: 'apply-1', name: 'edit', args: {
+            apply_patch: [
               '*** Begin Patch',
               `*** Update File: ${sampleFile}`,
               '@@',
@@ -192,7 +192,7 @@ async function main(): Promise<void> {
       assert.strictEqual(finalSession.busy, false);
       assert.strictEqual(finalSession.queue.length, 0);
       assert.strictEqual(await fs.readFile(sampleFile, 'utf8'), 'beta\nomega\n');
-      assert(finalSession.history.some(msg => msg.role === 'tool' && msg.parts.some(part => part.functionResponse?.name === 'apply_patch')));
+      assert(finalSession.history.some(msg => msg.role === 'tool' && msg.parts.some(part => part.functionResponse?.name === 'edit')));
       assert(finalSession.history.some(msg => msg.role === 'tool' && msg.parts.some(part => part.functionResponse?.name === 'read')));
       assert(finalSession.history.some(msg => msg.role === 'tool' && msg.parts.some(part => part.functionResponse?.name === 'exec')));
       assertLastModelText(finalSession, 'SELFTEST_DONE');

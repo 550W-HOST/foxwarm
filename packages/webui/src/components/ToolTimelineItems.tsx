@@ -53,17 +53,18 @@ export const getToolCallSearchText = (call: FunctionCall): string => {
   const args = call.args || {}
   if (call.name === 'read') return `${args.filePath || ''}${args.startLine || args.endLine ? ` (lines ${args.startLine || 1}-${args.endLine || 'end'})` : ''}`
   if (call.name === 'write') return [args.filePath, args.content].filter(value => typeof value === 'string').join('\u0000')
+  if (hasEditBatch(call)) return [args.filePath, ...args.edits.map((edit: { oldText: string; newText: string }) => getUnifiedDiffSearchText(edit.oldText, edit.newText))].join('\u0000')
   if (isLegacyDiffToolName(call.name) && hasLegacyDiffPayload(call)) return [args.filePath, getUnifiedDiffSearchText(args.oldText, args.newText)].join('\u0000')
-  if (isPatchToolName(call.name)) {
+  if (isPatchCall(call)) {
     try {
-      return parseApplyPatchPreview(args.input).flatMap(operation => [
+      return parseApplyPatchPreview(patchText(call)).flatMap(operation => [
         operation.filePath,
         ...(operation.action === 'update' ? operation.hunks.flatMap(hunk => {
           const snippets = buildPatchHunkSnippets(hunk)
           return [...hunk.anchors, getUnifiedDiffSearchText(snippets.oldText, snippets.newText)]
         }) : operation.action === 'add' ? operation.lines : []),
       ]).join('\u0000')
-    } catch { return String(args.input || JSON.stringify(args, null, 2)) }
+    } catch { return String(patchText(call) || JSON.stringify(args, null, 2)) }
   }
   if (call.name === 'exec') return String(args.command || '')
   if (call.name === 'send_to_session') return [args.sessionId, typeof args.message === 'string' ? args.message : formatCompactObjectPreview(args.message)].join('\u0000')
@@ -278,7 +279,9 @@ const ToolCodePath = memo(function ToolCodePath({ filePath, lines, onOpenCodeFil
 
 
 const isLegacyDiffToolName = (name: string): boolean => name === 'edit' || name === 'edit_memory'
-const isPatchToolName = (name: string): boolean => name === 'apply_patch' || name === 'apply_patch_memory'
+const isPatchCall = (call: FunctionCall): boolean => call.name === 'apply_patch' || call.name === 'apply_patch_memory' || (call.name === 'edit' && typeof call.args?.apply_patch === 'string')
+const patchText = (call: FunctionCall): string => call.name === 'edit' ? call.args.apply_patch : call.args.input
+const hasEditBatch = (call: FunctionCall): boolean => call.name === 'edit' && Array.isArray(call.args?.edits) && call.args.edits.every((item: any) => item && typeof item.oldText === 'string' && typeof item.newText === 'string')
 const isInterSessionToolName = (name: string): boolean => name === 'send_to_session' || name === 'create_child_session'
 const isSpecialSessionAlias = (sessionId: string): boolean => sessionId === '<main>' || sessionId === '<parent>'
 
@@ -308,7 +311,11 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
     return <ToolCodePath collapsed filePath={call.args.filePath} target={resolvedCodePath(options.resolvedPaths, call.args.filePath)} onOpenCodeFile={options.onOpenCodeFile} />
   }
 
-  if (isLegacyDiffToolName(call.name)) {
+  if (hasEditBatch(call)) {
+    return <span className="flex items-center gap-2 min-w-0"><span className="shrink-0 text-xs text-fw-text-muted">{call.args.edits.length} replacements</span><ToolCodePath collapsed filePath={call.args.filePath} target={resolvedCodePath(options.resolvedPaths, call.args.filePath)} onOpenCodeFile={options.onOpenCodeFile} /></span>
+  }
+
+  if (isLegacyDiffToolName(call.name) && !isPatchCall(call)) {
     const hasLegacyDiff = hasLegacyDiffPayload(call)
     const lineCounts = hasLegacyDiff ? getLegacyEditLineCounts(call.args.oldText, call.args.newText) : null
     return (
@@ -329,15 +336,15 @@ const renderToolCallPreview = (call: FunctionCall, options: { partial?: boolean;
     )
   }
 
-  if (isPatchToolName(call.name)) {
+  if (isPatchCall(call)) {
     try {
-      const operations = parseApplyPatchPreview(call.args.input)
+      const operations = parseApplyPatchPreview(patchText(call))
       const totalHunks = operations.reduce((sum, operation) => sum + (operation.action === 'update' ? operation.hunks.length : 0), 0)
       const fileSummary = operations.length === 1 ? operations[0].filePath : `${operations[0].filePath} +${operations.length - 1} more`
       return (
         <span className="flex items-center gap-2 min-w-0">
           <span className="shrink-0 text-xs text-fw-text-muted">{operations.length} op{operations.length > 1 ? 's' : ''}{totalHunks > 0 ? ` • ${totalHunks} hunk${totalHunks > 1 ? 's' : ''}` : ''}</span>
-          {call.name === 'apply_patch' && operations.length === 1
+          {call.name !== 'apply_patch_memory' && operations.length === 1
             ? <ToolCodePath collapsed filePath={operations[0].filePath} target={resolvedCodePath(options.resolvedPaths, operations[0].filePath)} onOpenCodeFile={options.onOpenCodeFile} />
             : <span className="truncate">{fileSummary}</span>}
         </span>
@@ -419,11 +426,22 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     )
   }
 
-  if (isLegacyDiffToolName(call.name)) {
+  if (hasEditBatch(call)) {
+    return <div className="space-y-2">
+      <div className="text-xs text-fw-text"><ToolCodePath filePath={call.args.filePath} target={resolvedCodePath(options.resolvedPaths, call.args.filePath)} onOpenCodeFile={options.onOpenCodeFile} /></div>
+      {call.args.edits.map((edit: { oldText: string; newText: string; replaceAll?: boolean }, index: number) => <div key={index}>
+        {edit.replaceAll && <div className="text-xs text-fw-text-muted">Replace all occurrences</div>}
+        <DiffPreview oldText={edit.oldText} newText={edit.newText} diffViewMode={diffViewMode} filePath={call.args.filePath} />
+      </div>)}
+    </div>
+  }
+
+  if (isLegacyDiffToolName(call.name) && !isPatchCall(call)) {
     const hasLegacyDiff = hasLegacyDiffPayload(call)
     return hasLegacyDiff ? (
       <div className="space-y-2">
         <div className="text-xs text-fw-text">{call.name === 'edit' ? <ToolCodePath filePath={call.args.filePath} target={resolvedCodePath(options.resolvedPaths, call.args.filePath)} onOpenCodeFile={options.onOpenCodeFile} /> : call.args.filePath}</div>
+        {call.args.replaceAll && <div className="text-xs text-fw-text-muted">Replace all occurrences</div>}
         <DiffPreview oldText={call.args.oldText} newText={call.args.newText} diffViewMode={diffViewMode} filePath={call.args.filePath} />
       </div>
     ) : (
@@ -431,16 +449,16 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
     )
   }
 
-  if (isPatchToolName(call.name)) {
+  if (isPatchCall(call)) {
     try {
-      const operations = parseApplyPatchPreview(call.args.input)
+      const operations = parseApplyPatchPreview(patchText(call))
       return (
         <div className="space-y-4">
           {operations.map((operation, operationIdx) => {
             if (operation.action === 'update') {
               return (
                 <div key={operationIdx} className="">
-                  <div className="text-xs font-semibold text-fw-text"><ToolCodePath prefix="Update " filePath={operation.filePath} target={resolvedCodePath(options.resolvedPaths, operation.filePath, operationIdx)} onOpenCodeFile={call.name === 'apply_patch' ? options.onOpenCodeFile : undefined} /></div>
+                  <div className="text-xs font-semibold text-fw-text"><ToolCodePath prefix="Update " filePath={operation.filePath} target={resolvedCodePath(options.resolvedPaths, operation.filePath, operationIdx)} onOpenCodeFile={call.name !== 'apply_patch_memory' ? options.onOpenCodeFile : undefined} /></div>
                   <div>
                     {operation.hunks.map((hunk, hunkIdx) => {
                       const snippets = buildPatchHunkSnippets(hunk)
@@ -464,7 +482,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
             if (operation.action === 'add') {
               return (
                 <div key={operationIdx} className="space-y-1">
-                  <div className="text-xs font-semibold text-fw-diff-added-text"><ToolCodePath prefix="Add " filePath={operation.filePath} target={resolvedCodePath(options.resolvedPaths, operation.filePath, operationIdx)} onOpenCodeFile={call.name === 'apply_patch' ? options.onOpenCodeFile : undefined} /></div>
+                  <div className="text-xs font-semibold text-fw-diff-added-text"><ToolCodePath prefix="Add " filePath={operation.filePath} target={resolvedCodePath(options.resolvedPaths, operation.filePath, operationIdx)} onOpenCodeFile={call.name !== 'apply_patch_memory' ? options.onOpenCodeFile : undefined} /></div>
                   <DiffPreview oldText="" newText={operation.lines.join('\n')} diffViewMode={diffViewMode} filePath={operation.filePath} />
                 </div>
               )
@@ -475,7 +493,7 @@ const renderToolCallExpandedContent = (call: FunctionCall, diffViewMode: 'unifie
       )
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e)
-      return <pre className="whitespace-pre-wrap text-xs bg-fw-surface dark:bg-fw-canvas p-2 rounded border border-fw-border-strong dark:border-fw-border-strong cursor-text">{error}\n\n{call.args.input || JSON.stringify(call.args, null, 2)}</pre>
+      return <pre className="whitespace-pre-wrap text-xs bg-fw-surface dark:bg-fw-canvas p-2 rounded border border-fw-border-strong dark:border-fw-border-strong cursor-text">{error}\n\n{patchText(call) || JSON.stringify(call.args, null, 2)}</pre>
     }
   }
 
@@ -736,7 +754,7 @@ const ToolCallResponseItem = memo(function ToolCallResponseItem({
   const primaryLabel = call ? getToolDisplayLabel(call) : primaryName
   const hasResponseContent = responses.length > 0 || imageParts.length > 0
   const showRunning = runningTool && !!call && !hasResponseContent && !partialToolCall
-  const showDiffToggles = !!call && !partialToolCall && (isLegacyDiffToolName(call.name) || isPatchToolName(call.name))
+  const showDiffToggles = !!call && !partialToolCall && (isLegacyDiffToolName(call.name) || isPatchCall(call))
 
   const responsePreview = useMemo(() => {
     if (hideCollapsedContent) return null

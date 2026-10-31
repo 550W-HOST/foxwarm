@@ -1,6 +1,6 @@
 # Unit: src-node-providers
 
-Files: src/nodes/providerRegistry.ts, src/nodes/providerNamespace.ts, src/nodes/providers.ts, src/nodes/executableProvider.ts, src/nodes/providerExecBackend.ts
+Files: `src/nodes/unifiedEditCompatibility.test.ts`, src/nodes/providerRegistry.ts, src/nodes/providerNamespace.ts, src/nodes/providers.ts, src/nodes/executableProvider.ts, src/nodes/providerExecBackend.ts
 Secondary files: src/nodeExecutionService.ts, src/nodes/manager.ts, src/nodeExecution.test.ts, src/nodes/executableProvider.test.ts, src/nodes/executableProviderTestFixture.ts, src/nodes/providerExec.test.ts, src/nodes/providerTransfer.test.ts, src/nodes/primitiveExecTestFixture.ts, src/nodes/providerExecRestartTestFixture.ts, docs/executable-node-provider-protocol.md
 
 ## Purpose
@@ -37,7 +37,7 @@ Production has fixed master/authenticated-remote adapters plus startup-configure
 ## Capability, path and authority contracts
 
 - Executable-provider Core IDs are `provider-id/local-id` (up to 193 characters); local adapter IDs remain slash-free and at most 128 characters. Native master/CLI IDs stay unchanged. Namespace and persisted-recovery compatibility are canonical in [generic providers](../threads/tool-dispatch-node-execution.md#d-dispatch-generic-node-providers).
-- Primitive filesystem access derives `read` or the complete canonical `read/write/edit/apply_patch` set. Exec additionally requires a readable filesystem, `startExec` and `pollExec`; its output must be readable at the returned target path. Unsupported combinations fail without Main fallback.
+- Primitive filesystem access derives `read` or the complete canonical `read/write/edit` set. Exec additionally requires a readable filesystem, `startExec` and `pollExec`; its output must be readable at the returned target path. Unsupported combinations fail without Main fallback.
 - Core/shared owns read formatting, exact replacement and patch grammar/partial effects. Providers own target-relative path resolution, home/URI/separator/symlink semantics, errors and actual restrictions. Main does not resolve opaque target paths or invent a target Agent directory. Leading native Agent tokens are rejected; see [D-dispatch-native-agent-paths-and-code-targets](../threads/tool-dispatch-node-execution.md#d-dispatch-native-agent-paths-and-code-targets).
 - Core authorizes the original raw call and exact Node once. Internal primitive operations are not new model calls, statistics or history entries. The source facade separately authorizes complete ToolScript `read` and uses one exact routing snapshot.
 - External executable file/process primitives contain only immutable target data, not a Session, Agent, callback, programmatic flag, notification address or Main environment/credentials. Lifecycle retains its bounded authorized Main source/context envelope. The executable itself is trusted administrator-configured code, not a security boundary.

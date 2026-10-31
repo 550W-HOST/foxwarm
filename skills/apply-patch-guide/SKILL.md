@@ -1,9 +1,11 @@
 ---
 name: apply-patch-guide
-description: "How to use the apply_patch tool: patch format, syntax rules, and worked examples. Load this when you need to construct an apply_patch input and are unsure of the format."
+description: "Use the edit tool with apply_patch patch text: format, syntax rules, and worked examples. Load this when constructing patch text and unsure of the format."
 ---
 
 # apply_patch Format Guide
+
+Pass the patch as `edit({ apply_patch: "..." })`. Do not combine patch text with `filePath`, `oldText`, `newText`, `replaceAll` or `edits`. Patches apply file operations in order; earlier changes remain if a later operation fails.
 
 ## Basic Structure
 

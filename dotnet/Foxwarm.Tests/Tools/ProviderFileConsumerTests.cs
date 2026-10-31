@@ -9,6 +9,69 @@ namespace Foxwarm.Tests;
 
 public sealed partial class ProviderFileConsumerTests
 {
+    [Fact]
+    public async Task Unified_edits_use_the_provider_namespace_with_one_write_and_validate_conflicts_before_effects()
+    {
+        await using var f = await Fixture.Create();
+        await f.Manager.SelectNodeAsync(f.Owner, f.Node);
+        Success(
+            await f.Call(
+                "write",
+                new JsonObject
+                {
+                    ["filePath"] = "edit.txt",
+                    ["content"] = "a b a",
+                    ["createDirs"] = true,
+                }
+            )
+        );
+        var before = (await f.Requests()).Length;
+        Success(
+            await f.Call(
+                "edit",
+                JsonNode
+                    .Parse(
+                        """{"filePath":"edit.txt","edits":[{"oldText":"a","newText":"b","replaceAll":true},{"oldText":"b","newText":"$&"}]}"""
+                    )!
+                    .AsObject()
+            )
+        );
+        Assert.Equal("b $& b", await File.ReadAllTextAsync(f.FilePath("edit.txt")));
+        Assert.Single(
+            (await f.Requests())
+                .Skip(before)
+                .Where(call => SessionWait.Text(call["request"]?["operation"]) == "write")
+        );
+        before = (await f.Requests()).Length;
+        var failed = await f.Call(
+            "edit",
+            JsonNode
+                .Parse(
+                    """{"filePath":"edit.txt","edits":[{"oldText":"b","newText":"changed","replaceAll":true},{"oldText":"missing","newText":""}]}"""
+                )!
+                .AsObject()
+        );
+        Assert.NotNull(failed["error"]);
+        Assert.Equal("b $& b", await File.ReadAllTextAsync(f.FilePath("edit.txt")));
+        Assert.DoesNotContain(
+            (await f.Requests()).Skip(before),
+            call => SessionWait.Text(call["request"]?["operation"]) == "write"
+        );
+        Success(
+            await f.Call(
+                "edit",
+                new JsonObject
+                {
+                    ["filePath"] = "edit.txt",
+                    ["oldText"] = "b",
+                    ["newText"] = "$$",
+                    ["replaceAll"] = true,
+                }
+            )
+        );
+        Assert.Equal("$$ $& $$", await File.ReadAllTextAsync(f.FilePath("edit.txt")));
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         internal readonly TempDirectory Temp = new();
@@ -188,7 +251,7 @@ public sealed partial class ProviderFileConsumerTests
         Assert.Contains("δelta", await File.ReadAllTextAsync(f.FilePath("nested/text.txt")));
         var patch =
             "*** Begin Patch\n*** Add File: other/new.txt\n+created\n*** Update File: nested/text.txt\n@@\n-alpha\n+first\n*** End Patch";
-        Success(await f.Call("apply_patch", new JsonObject { ["input"] = patch }));
+        Success(await f.Call("edit", new JsonObject { ["apply_patch"] = patch }));
         Assert.Contains("first", await File.ReadAllTextAsync(f.FilePath("nested/text.txt")));
         var listing = await f.Call("read", Args("opaque://root/nested"));
         Success(listing);
@@ -330,10 +393,10 @@ public sealed partial class ProviderFileConsumerTests
             call => call["operation"]!.GetValue<string>() == "filesystem"
         );
         var partial = await f.Call(
-            "apply_patch",
+            "edit",
             new JsonObject
             {
-                ["input"] =
+                ["apply_patch"] =
                     "*** Begin Patch\n*** Add File: partial.txt\n+retained\n*** Delete File: absent.txt\n*** Add File: never.txt\n+never\n*** End Patch",
             }
         );

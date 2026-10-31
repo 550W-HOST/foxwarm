@@ -36,7 +36,7 @@ Each Agent receives its own allow rules followed by a deny-all for that caller. 
 | Capability | Allowed scope |
 | --- | --- |
 | Node tools | Any concrete Node capability on the declared non-master Node, subject to its advertised capabilities and normal tool validation. No master `exec`, including with a `"master"` mapping. |
-| Master files | Node-source `read`, `write`, `edit`, `apply_patch`; every selected path must be inside `${agent.dir}`. Patch containment covers all operations. |
+| Master files | Node-source `read`, `write`, `edit`; every selected path must be inside `${agent.dir}`. Patch containment covers all operations. |
 | Memory | Builtin memory CRUD and `apply_patch_memory`; every path inside `${agent.memoryDir}`. |
 | Copy | Explicit master/master, master/declared-Node, declared-Node/master, declared-Node/declared-Node pairs. Each master leg must stay inside `${agent.dir}`. Remote legs do not use host containment. |
 | File delivery | Current Session attachments only, using the tool's default target or canonical self/alias. `channelTargetId` must be absent. File paths must be own-Agent on master, or use the declared Node. |

@@ -57,7 +57,7 @@ These files have no exports — they are standalone self-test scripts executed v
 
 - Monkey-patches `llm.chat`, `toolExecutor.executeTools`, `sessionManager.processSessionCompactionRequest`, `axios.post`, and vector indexing to isolate the message router logic.
 - Queue drain tests verify that structured events, message events, and compaction items queued mid-tool-execution are consumed in the correct order within the same turn.
-- Tool loop stall tests verify multi-step tool chains (apply_patch → read → exec → final response) complete without stalling.
+- Tool loop stall tests verify multi-step tool chains (edit patch → read → exec → final response) complete without stalling.
 - Child/parent session tests verify child sessions can read files, send results to parents, and that parent sessions process those notifications.
 - Compaction-triggered tests hold the asynchronous planner while the normal tool continuation completes, then release it and commit at the next owned safe point. They preserve exact provider/planner call counts, canonical tool pairing, archived responses, retained continuation rows, and idle cleanup. Completed-job priority is covered by the runner/history regression tests.
 - Failure propagation tests verify that network errors during LLM calls surface as error messages in session history.

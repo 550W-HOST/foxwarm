@@ -71,13 +71,12 @@ internal sealed class CompactPlanRepairFile : IAsyncDisposable
         var args =
             call["args"] as JsonObject
             ?? throw new InvalidDataException("Repair tool arguments must be an object.");
-        if (name == "edit")
-            RequirePath(SessionWait.Text(args["filePath"]));
-        else if (name == "apply_patch")
+        var edit = name == "edit" ? UnifiedEdit.Parse(args) : null;
+        if (edit is { Patch: null })
+            RequirePath(edit.FilePath);
+        else if (edit?.Patch is not null)
         {
-            var input =
-                SessionWait.Text(args["input"])
-                ?? throw new InvalidDataException("apply_patch requires input string.");
+            var input = edit.Patch;
             var patches = WorkspacePatch.Parse(input);
             if (patches.Length != 1 || patches[0].Action != "update")
                 throw new InvalidDataException(
@@ -86,10 +85,8 @@ internal sealed class CompactPlanRepairFile : IAsyncDisposable
             RequirePath(patches[0].Path);
         }
         else
-            throw new InvalidDataException(
-                "Only edit or apply_patch may repair compact arguments."
-            );
-        await files.ExecuteAsync(name, args, token);
+            throw new InvalidDataException("Only edit may repair compact arguments.");
+        await files.ExecuteAsync("edit", args, token);
         content = await files.ReadAsync(FilePath, token);
     }
 
@@ -106,10 +103,11 @@ internal sealed class CompactPlanRepairFile : IAsyncDisposable
         try
         {
             await files.ExecuteAsync(
-                "apply_patch",
+                "edit",
                 new JsonObject
                 {
-                    ["input"] = "*** Begin Patch\n*** Delete File: " + FilePath + "\n*** End Patch",
+                    ["apply_patch"] =
+                        "*** Begin Patch\n*** Delete File: " + FilePath + "\n*** End Patch",
                 },
                 CancellationToken.None
             );

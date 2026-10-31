@@ -1,6 +1,6 @@
 # Unit: shared-node-tools
 
-Files: packages/shared/src/nodeIdentity.ts, packages/shared/src/exactReplacement.ts, packages/shared/src/exactReplacement.test.ts, packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/rasterImageMime.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/agentPathVariables.ts, packages/shared/src/agentPathVariables.test.ts, packages/shared/src/resolvedPathMetadata.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/nodeFileTransfer.test.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/toolResponseFormatting.test.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
+Files: packages/shared/src/nodeIdentity.ts, packages/shared/src/unifiedEdit.ts, packages/shared/src/unifiedEdit.test.ts, packages/shared/src/exactReplacement.ts, packages/shared/src/exactReplacement.test.ts, packages/shared/src/fileOperations.ts, packages/shared/src/fileToolCore.ts, packages/shared/src/fileToolCore.test.ts, packages/shared/src/rasterImageMime.ts, packages/shared/src/nodeTools.ts, packages/shared/src/nodeTools.test.ts, packages/shared/src/agentPathVariables.ts, packages/shared/src/agentPathVariables.test.ts, packages/shared/src/resolvedPathMetadata.ts, packages/shared/src/nodeCapabilities.ts, packages/shared/src/nodeFileTransfer.ts, packages/shared/src/nodeFileTransfer.test.ts, packages/shared/src/execCwd.ts, packages/shared/src/index.ts, packages/shared/src/tokenCount.ts, packages/shared/src/toolResponseFormatting.ts, packages/shared/src/toolResponseFormatting.test.ts, packages/shared/src/foxwarmMarkup.ts, packages/shared/src/webuiToolRendering.ts, packages/shared/src/webuiToolRendering.test.ts
 Secondary files: packages/shared/src/outputTruncation.ts, packages/shared/src/outputTruncation.test.ts
 
 Trusted foreground exec signals enter the shared wait and launch fence, not process termination. Interruption uses the existing background-registration and completion path under [Stop and Run queued](../threads/message-processing-pipeline.md#d-pipeline-control-commands).
@@ -17,7 +17,8 @@ Provides shared file system tools, shell execution, browser automation, and util
 - `read`, `write`, `edit`, `apply_patch`, `exec`, `get_default_cwd` — file and shell tool functions
 - `readFileToolPath`, `writeFileToolPath`, `applyPatchOperations`, `readDirectoryListing`, `findWriteParentIssue`, `formatWriteParentIssueMessage` — shared file read/write/patch core used by Main and Node wrappers
 - `detectRasterImageMimeType`, `RASTER_IMAGE_HEADER_BYTES`, `RasterImageMimeType` — pure raster-signature recognition shared by file reads and provider image acceptance; recognition does not decode or validate an image
-- `applyExactReplacement` — pure exact single-match text replacement used directly by Main, Node, and compact repair
+- `parseUnifiedEdit`, `applyTextEdits`, `unifiedEditParameters`, `projectUnifiedEditTools` — shared edit forms, literal original-source matching, schema and model-catalog projection
+- `applyExactReplacement` — retained single-match helper for memory tools and legacy-peer fixtures
 - `requireToolFilePath` — shared required-path validation called by Main and Node read/edit wrappers before path resolution
 - `FileOperations`, `nativeFileOperations`, `readWholeFile`, `fileOperationPathExists` — low-level target-local stat/ranged-read/list/write/mkdir/remove contract, native implementation, and composition helpers
 - `NodeToolContext.resolveFilePath` / async-capable `dirnameFilePath` — optional target-namespace path seam used by primitive Node providers so Core can compose canonical file tools while the provider owns its namespace parent relation
@@ -64,9 +65,9 @@ Provides shared file system tools, shell execution, browser automation, and util
 | `resolveToolPath(filePath, ctx)` | ~27 | Resolves a node tool file path using session context |
 | `read(args, ctx)` | ~107 | Tool: reads a file or directory |
 | `write(args, ctx)` | ~112 | Tool: writes content to a file; requires existing parent dirs unless `createDirs=true` |
-| `edit(args, ctx)` | ~120 | Tool: replaces exact text in a file |
+| `edit(args, ctx)` | file tools | One model tool for exact single/batch/replaceAll replacements or patches |
 | `applyPatchOperations(input, resolveOperationPath, fileOperations, dirname)` (fileToolCore) | shared executor | Applies add/update/delete operations sequentially with partial-success summaries and an optional asynchronous target-owned parent |
-| `apply_patch(args, ctx)` | ~155 | Tool: applies OpenAI-style patch envelopes |
+| `apply_patch(args, ctx)` | file tools | Retained CLI wire handler for older Main; executes existing patch core |
 | `exec(args, ctx)` | ~160 | Tool: executes shell commands with timeout and background support |
 | `get_default_cwd(args, ctx)` | ~230 | Tool: returns the default working directory |
 | `SharedBrowserManager` (class) | ~235 | Manages Puppeteer browser tabs with open/get/close/interact |
@@ -122,12 +123,20 @@ Provides shared file system tools, shell execution, browser automation, and util
 - `initializeNodeToolExecRecovery()` discovers persisted per-agent exec registries at authenticated node startup and initializes their managers, including already-finished entries; recovery does not wait for a later tool call.
 - Node-side `exec` shares master-side timeout resolution: finite values above 60 seconds clamp to 60 and emit the requested/effective warning in the immediate foreground or background-switch result; invalid and below-minimum values still reject.
 - `read` and `edit` reject missing or blank `filePath` values before path resolution with `read requires filePath.` or `edit requires filePath.`; valid paths retain the existing resolution and operation behavior.
-- `edit` uses shared `exactReplacement` single-occurrence matching. Search text is literal; replacement text keeps JavaScript `String.replace` substitutions. `exactReplacement.test.ts` covers literal metacharacters/whitespace, missing and multiple matches, non-overlapping matching, dollar substitutions, and the existing empty-search behavior. Validation and file operations remain wrapper-owned.
+- Current `edit` uses `unifiedEdit` literal replacement semantics described below. The older `exactReplacement` helper retains its memory-tool behavior and serves legacy compatibility tests.
 - File existence checks treat only canonical `ENOENT` as missing; permission, protocol, malformed-provider, and other stat failures propagate so patch Add cannot overwrite an existing target after an indeterminate lookup.
 - `write` refuses to overwrite unless explicitly told, and requires parent directories to already exist unless `createDirs=true` is passed. The native backend retains `w`/`wx` behavior, so symlinked parent directories work naturally; friendly parent errors are generated only after write failure.
 - Shared cached-write retry formatting emits the executable `write({ ... })` call for the failing path, states that the scoped ref may use another independently authorized `filePath`, explicitly prohibits including `content` alongside `contentRef`, and directs intentional replacements to omit `contentRef` and submit only the new content plus the desired path and required flags; the canonical guidance contract is [D-tools-write-contentref-retry-guidance](./src-tools.md#d-tools-write-contentref-retry-guidance).
 
 ## Design Decisions
+
+### D-unified-edit
+
+[2026-10-31] One model-facing `edit` accepts exactly one form: `filePath` plus `oldText`/`newText` and optional `replaceAll`; `filePath` plus nonempty `edits[{oldText,newText,replaceAll?}]`; or `apply_patch` alone. Mixed forms and top-level `replaceAll` with a batch reject. There are no aliases or mode selectors. Memory tools remain separate.
+
+Replacement search and output are literal. `oldText` must be nonempty; empty `newText` deletes. Missing matches fail even with `replaceAll:true`; default/false requires one nonoverlapping match, while true replaces all nonoverlapping matches. Every batch item matches the original source, not preceding replacements. Ranges from different items must not overlap; adjacency is valid. Validate the complete batch before one file write. No fuzzy matching, sequential batch effects or rollback is added. Patch parsing, add/update/delete, operation order and partial-file effects retain the existing patch executor.
+
+The shared TypeScript implementation owns validation, matching and catalog/schema projection for retained Main, CLI and primitive providers; `UnifiedEdit` in NodePrimitives supplies the same semantics to managed Main and CLI. Native successful-path metadata, path expansion, physical authorization and approval remain wrapper-owned. All patch headers become authorization path facts under the `apply_patch` argument. The standalone model `apply_patch` registration is removed; the [legacy resident wire adapter](../threads/node-communication.md#d-node-thread-unified-edit) owns rolling upgrades.
 
 ### D-file-read-raster-classification
 
@@ -143,7 +152,7 @@ Non-image file reads above 1 MiB must not full-read or decode their source befor
 - `SharedBrowserManager` lazily launches a headless Puppeteer instance and manages tabs by UUID
 - Shared browser screenshots write current structured inline data. Old remote-node screenshot shapes are read only under [D-node-thread-tool-result-compatibility](../threads/node-communication.md#d-node-thread-tool-result-compatibility).
 - Shared Node `browse_get` returns page HTML when screenshot is absent/false, a viewport image for `true`, and a full-page image for the literal `full`; unlike the master browser wrapper, a string path is not a screenshot-save destination.
-- `CLI_NODE_CAPABILITIES` keeps the same tool names and schema constraints while using Node-specific caller copy for path defaults and the browser screenshot distinction. Tests cover schema/runtime behavior without pinning editorial wording.
+- `CLI_NODE_CAPABILITIES` advertises unified `edit` plus the legacy `apply_patch` wire definition for older Main. Current Main projects only `edit` to models. Node-specific path copy and the browser screenshot distinction remain environment-owned. Tests cover schema/runtime behavior without pinning editorial wording.
 - Directory reads are paginated (50 items default) with navigation hints
 - File and directory read `startLine`/`endLine` values of `0` are treated as omitted, matching master-side read compatibility for optional numeric placeholders
 - Native CLI transfer functions enforce path traversal restrictions by default and retain unique temporary publication/cleanup. Primitive transfer composition instead uses bounded binary reads and 1 MiB writes (`w`/`wx` first, `a` later); a later failure leaves the ordinary partial prefix without replay or rollback. Metadata/digest receipt builders are shared with native Main/CLI wrappers. FileOperations supports binary append, and ordinary model file tools retain their existing create/replace semantics.

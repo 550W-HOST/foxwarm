@@ -87,10 +87,10 @@ public sealed class WorkspacePatchTests
         var repeated = await tools.ExecuteAsync(
             new System.Text.Json.Nodes.JsonObject
             {
-                ["name"] = "apply_patch",
+                ["name"] = "edit",
                 ["args"] = new System.Text.Json.Nodes.JsonObject
                 {
-                    ["input"] =
+                    ["apply_patch"] =
                         "*** Begin Patch\n*** Update File: input.txt\n@@ anchor\n-first\n+FIRST\n@@ anchor\n-anchor\n+SECOND\n*** End Patch",
                 },
             },
@@ -105,10 +105,10 @@ public sealed class WorkspacePatchTests
         var eof = await tools.ExecuteAsync(
             new System.Text.Json.Nodes.JsonObject
             {
-                ["name"] = "apply_patch",
+                ["name"] = "edit",
                 ["args"] = new System.Text.Json.Nodes.JsonObject
                 {
-                    ["input"] =
+                    ["apply_patch"] =
                         "*** Begin Patch\n*** Update File: input.txt\n@@\n a\n+X\n b\n@@\n-b\n+B\n*** End of File\n*** End Patch",
                 },
             },
@@ -119,10 +119,10 @@ public sealed class WorkspacePatchTests
         var malformed = await tools.ExecuteAsync(
             new System.Text.Json.Nodes.JsonObject
             {
-                ["name"] = "apply_patch",
+                ["name"] = "edit",
                 ["args"] = new System.Text.Json.Nodes.JsonObject
                 {
-                    ["input"] =
+                    ["apply_patch"] =
                         "*** Begin Patch\n*** Add File: never.txt\n+not-written\n*** Update File: input.txt\n*** End Patch",
                 },
             },

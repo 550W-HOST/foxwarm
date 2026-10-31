@@ -130,10 +130,10 @@ public sealed class MainNativePathTests
         metadata = null;
         var partial = await files.ExecuteAsync(
             Call(
-                "apply_patch",
+                "edit",
                 new JsonObject
                 {
-                    ["input"] =
+                    ["apply_patch"] =
                         "*** Begin Patch\n*** Add File: link/added\n+added\n*** Update File: missing\n-old\n+new\n*** End Patch",
                 }
             ),
@@ -145,10 +145,10 @@ public sealed class MainNativePathTests
         Assert.Equal("added", await File.ReadAllTextAsync(Path.Combine(actual, "added")));
         await files.ExecuteAsync(
             Call(
-                "apply_patch",
+                "edit",
                 new JsonObject
                 {
-                    ["input"] = "*** Begin Patch\n*** Delete File: leaf\n*** End Patch",
+                    ["apply_patch"] = "*** Begin Patch\n*** Delete File: leaf\n*** End Patch",
                 }
             ),
             default

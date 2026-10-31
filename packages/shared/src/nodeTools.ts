@@ -1,4 +1,4 @@
-import { applyExactReplacement } from './exactReplacement';
+import { parseUnifiedEdit, applyTextEdits } from './unifiedEdit';
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import type { Dirent } from 'node:fs';
@@ -88,13 +88,13 @@ export async function write(args: ToolArgs, ctx: NodeToolContext = {}) {
 }
 
 export async function edit(args: ToolArgs, ctx: NodeToolContext = {}) {
-  const filePath = requireToolFilePath(args.filePath, 'edit');
-  const { oldText, newText } = args;
-  if (typeof oldText !== 'string' || typeof newText !== 'string') throw new Error('Edit tool requires oldText and newText. Use apply_patch for patch-style edits.');
+  const edit = parseUnifiedEdit(args);
+  if ('apply_patch' in edit) return apply_patch({ input: edit.apply_patch }, ctx);
+  const { filePath, edits } = edit;
   const fullPath = resolveToolPath(filePath, ctx);
   const operations = ctx.fileOperations || nativeFileOperations;
   const content = (await readWholeFile(operations, fullPath)).toString('utf8');
-  await operations.write(fullPath, applyExactReplacement(content, oldText, newText, 'oldText'), 'w');
+  await operations.write(fullPath, applyTextEdits(content, edits), 'w');
   ctx.onResolvedPaths?.([{ raw: filePath, resolved: fullPath }]);
   return 'File edited successfully';
 }

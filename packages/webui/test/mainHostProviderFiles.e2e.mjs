@@ -20,8 +20,8 @@ const model = createServer(async (request, response) => {
   try {
     let raw = ''; for await (const chunk of request) raw += chunk
     const body = JSON.parse(raw); modelCalls++
-    const fileTools = body.tools.filter(tool => ['read', 'write', 'edit', 'apply_patch', 'exec'].includes(tool.name))
-    assert.deepEqual(fileTools.map(tool => tool.name).sort(), ['apply_patch', 'edit', 'exec', 'read', 'write'])
+    const fileTools = body.tools.filter(tool => ['read', 'write', 'edit', 'exec'].includes(tool.name))
+    assert.deepEqual(fileTools.map(tool => tool.name).sort(), ['edit', 'exec', 'read', 'write'])
     const complete = body.input.some(row => row.type === 'function_call_output' && row.call_id === 'provider-write')
     const output = complete
       ? [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'PROVIDER-FILES-DONE' }] }]

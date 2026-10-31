@@ -56,7 +56,7 @@ internal sealed partial class SessionToolExecutor(
     internal Action<JsonNode?>? RemoteCodePaths(ResolvedTool resolved)
     {
         var active = invocation.Value;
-        if (active is null || resolved.Name is not ("read" or "write" or "edit" or "apply_patch"))
+        if (active is null || resolved.Name is not ("read" or "write" or "edit"))
             return null;
         var nodeId = resolved.ExecutionNode;
         return raw =>
@@ -359,6 +359,7 @@ internal sealed partial class SessionToolExecutor(
                 name switch
                 {
                     "exec" => Text(args["command"]),
+                    "edit" when args.ContainsKey("apply_patch") => Text(args["apply_patch"]),
                     "edit" or "write" or "edit_memory" or "write_memory" or "delete_memory" => Text(
                         args["filePath"]
                     ),
@@ -707,7 +708,7 @@ internal sealed partial class SessionToolExecutor(
             (SessionWait.Text(copy["output"]) ?? "(No output)")
             + "\n\n"
             + notice
-            + " This cwd will be used as the default cwd for subsequent exec/read/edit/write/apply_patch tool calls.";
+            + " This cwd will be used as the default cwd for subsequent exec/read/edit/write tool calls.";
         return copy;
     }
 
@@ -804,7 +805,7 @@ internal sealed partial class SessionToolExecutor(
             string,
             Func<SessionToolExecutor, JsonObject, CancellationToken, Task<JsonObject>>
         >(StringComparer.Ordinal);
-        foreach (var name in new[] { "read", "write", "edit", "apply_patch" })
+        foreach (var name in new[] { "read", "write", "edit" })
             handlers[name] = (owner, args, token) => owner.ExecuteWorkspaceAsync(name, args, token);
         handlers["exec"] = (owner, args, token) => owner.ExecuteExecAsync(args, token);
         handlers["artifact"] = (owner, args, token) => owner.ExecuteArtifactAsync(args, token);
@@ -945,9 +946,7 @@ internal sealed partial class SessionToolExecutor(
         foreach (var definition in definitions.OfType<JsonObject>())
         {
             var name = SessionWait.Text(definition["name"])!;
-            var source = name is "read" or "write" or "edit" or "apply_patch" or "exec"
-                ? "node"
-                : "builtin";
+            var source = name is "read" or "write" or "edit" or "exec" ? "node" : "builtin";
             registry.Register(
                 definition,
                 source,

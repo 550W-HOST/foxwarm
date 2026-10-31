@@ -52,7 +52,7 @@ async function syncSessionCwd(ctx: ToolContext, nextCwd: string | null | undefin
         else trustedSession.cwd = normalizedNext;
         if (previous !== normalizedNext) await persist!();
         if (previous === normalizedNext || normalizedNext === null) return null;
-        const defaultNote = 'This cwd will be used as the default cwd for subsequent exec/read/edit/write/apply_patch tool calls.';
+        const defaultNote = 'This cwd will be used as the default cwd for subsequent exec/read/edit/write tool calls.';
         return previous
             ? `SESSION CWD CHANGED: \`${previous}\` → \`${normalizedNext}\`. ${defaultNote}`
             : `SESSION CWD CHANGED: \`${normalizedNext}\`. ${defaultNote}`;
@@ -60,7 +60,7 @@ async function syncSessionCwd(ctx: ToolContext, nextCwd: string | null | undefin
     if (!ctx.sessionId) return null;
     const syncResult = await sessionRuntime.updateSettings(ctx.sessionId, { cwd: normalizedNext });
     if (!syncResult.changed.includes('cwd') || !syncResult.current.cwd) return null;
-    const defaultNote = 'This cwd will be used as the default cwd for subsequent exec/read/edit/write/apply_patch tool calls.';
+    const defaultNote = 'This cwd will be used as the default cwd for subsequent exec/read/edit/write tool calls.';
     return syncResult.previous.cwd
         ? `SESSION CWD CHANGED: \`${syncResult.previous.cwd}\` → \`${syncResult.current.cwd}\`. ${defaultNote}`
         : `SESSION CWD CHANGED: \`${syncResult.current.cwd}\`. ${defaultNote}`;

@@ -69,7 +69,7 @@ internal static partial class CompactPrompt
                 ? "Compact planning must be submitted by calling submit_compact_plan; plain text/no tool call cannot complete compaction."
             : wrongName is null or "submit_compact_plan"
                 ? "Call submit_compact_plan exactly once, by itself."
-            : $"Do not call `{wrongName}`; {(repairPending ? "only an exact-file edit or apply_patch repair, or a single plan submission, is accepted" : "the only accepted tool call during compaction is submit_compact_plan")}.";
+            : $"Do not call `{wrongName}`; {(repairPending ? "only an exact-file edit repair, or a single plan submission, is accepted" : "the only accepted tool call during compaction is submit_compact_plan")}.";
         return string.Join(
             ' ',
             "COMPACT TOOL CALL INVALID.",

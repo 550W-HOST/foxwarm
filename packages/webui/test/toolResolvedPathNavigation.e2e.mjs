@@ -45,22 +45,23 @@ after(async () => {
   if (server) await new Promise(resolve => server.close(resolve))
 })
 
-test('Code icons use historical per-response Node and resolved path, preserve raw label and read lines', async () => {
+for (const patchTool of ['apply_patch', 'edit']) test(`Code icons use per-response Node and resolved path with ${patchTool}, preserve raw label and read lines`, async () => {
   await page.goto(url)
-  await page.evaluate(() => {
+  await page.evaluate(patchTool => {
     window.renderCase('read', { id: 'read-a', name: 'read', args: { filePath: '~/file.txt', startLine: 2, endLine: 4 } },
       { tool_use_id: 'read-a', name: 'read', response: { output: 'ok' }, __meta: { resolvedPaths: [{ raw: '~/file.txt', resolved: '/home/owner/file.txt', nodeId: 'remote-a' }] } })
     window.renderCase('relative', { id: 'write-b', name: 'write', args: { filePath: './relative.txt', content: 'ok' } },
       { tool_use_id: 'write-b', name: 'write', response: { output: 'ok' }, __meta: { resolvedPaths: [{ raw: './relative.txt', resolved: '/earlier/cwd/relative.txt', nodeId: 'master' }] } })
-    window.renderCase('patch', { id: 'patch-c', name: 'apply_patch', args: { input: '*** Begin Patch\n*** Add File: $fw_tmp/a.txt\n+a\n*** Delete File: $fw_tmp/removed.txt\n*** Add File: $fw_tmp/b.txt\n+b\n*** End Patch' } },
-      { tool_use_id: 'patch-c', name: 'apply_patch', response: { output: 'ok' }, __meta: { resolvedPaths: [
+    const patch = '*** Begin Patch\n*** Add File: $fw_tmp/a.txt\n+a\n*** Delete File: $fw_tmp/removed.txt\n*** Add File: $fw_tmp/b.txt\n+b\n*** End Patch'
+    window.renderCase('patch', { id: 'patch-c', name: patchTool, args: patchTool === 'edit' ? { apply_patch: patch } : { input: patch } },
+      { tool_use_id: 'patch-c', name: patchTool, response: { output: 'ok' }, __meta: { resolvedPaths: [
         { raw: '$fw_tmp/a.txt', resolved: '/agent/tmp/a.txt', nodeId: 'remote-a' },
         { raw: '$fw_tmp/removed.txt', resolved: '/agent/tmp/removed.txt', nodeId: 'remote-a' },
         { raw: '$fw_tmp/b.txt', resolved: '/agent/tmp/b.txt', nodeId: 'remote-a' },
       ] } })
     window.renderCase('historical', { id: 'old-d', name: 'read', args: { filePath: '~/old.txt' } },
       { tool_use_id: 'old-d', name: 'read', response: { output: 'ok' } })
-  })
+  }, patchTool)
   await page.waitForFunction(() => document.querySelectorAll('#read .foxwarm-tool-code-open, #relative .foxwarm-tool-code-open').length === 2)
   assert.equal(await page.$eval('#read .foxwarm-tool-code-path', element => element.textContent), '~/file.txt')
   assert.equal(await page.$$eval('#historical .foxwarm-tool-code-open', buttons => buttons.length), 0)

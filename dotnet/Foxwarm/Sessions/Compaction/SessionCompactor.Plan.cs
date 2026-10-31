@@ -154,7 +154,7 @@ internal sealed partial class SessionCompactor
                 if (
                     repairFile is not null
                     && calls.Length == 1
-                    && calls[0]?["name"]?.GetValue<string>() is "edit" or "apply_patch"
+                    && calls[0]?["name"]?.GetValue<string>() is "edit"
                 )
                 {
                     try
@@ -343,7 +343,7 @@ internal sealed partial class SessionCompactor
     private static string RepairInstructions(CompactPlanRepairFile? repairFile) =>
         repairFile is null
             ? "Submit corrected direct plan fields with submit_compact_plan."
-            : $"{CompactPlanInput.RepairGuidance} Repair the JSON arguments in {JsonSerializer.Serialize(repairFile.FilePath)} (nodeId={JsonSerializer.Serialize(repairFile.Node)}, cwd={JsonSerializer.Serialize(repairFile.Cwd)}) using edit or apply_patch (one update only). Then call submit_compact_plan by itself with {{\"argsFilePath\":{JsonSerializer.Serialize(repairFile.FilePath)}}}. Only this exact file is available for repair; ordinary tool permissions still apply. Current file preview (beginning/end):\n{repairFile.Preview()}\n{(repairFile.StructuredFallback ? "This file was saved by serializing the provider's structured arguments." : "This file was saved from the original provider arguments.")}";
+            : $"{CompactPlanInput.RepairGuidance} Repair the JSON arguments in {JsonSerializer.Serialize(repairFile.FilePath)} (nodeId={JsonSerializer.Serialize(repairFile.Node)}, cwd={JsonSerializer.Serialize(repairFile.Cwd)}) using edit (patches must contain one update only). Then call submit_compact_plan by itself with {{\"argsFilePath\":{JsonSerializer.Serialize(repairFile.FilePath)}}}. Only this exact file is available for repair; ordinary tool permissions still apply. Current file preview (beginning/end):\n{repairFile.Preview()}\n{(repairFile.StructuredFallback ? "This file was saved by serializing the provider's structured arguments." : "This file was saved from the original provider arguments.")}";
 
     private static string PlanRejected(string reason, CompactPlanRepairFile? repairFile) =>
         repairFile is null

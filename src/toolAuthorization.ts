@@ -703,10 +703,10 @@ export function buildToolAuthorizationRequest(options: {
     addPath(paths, { arg: 'sourcePath', raw: args.sourcePath, targetNode: typeof args.sourceNode === 'string' ? args.sourceNode : targetNode, agentName, resolveMasterPath: transferResolver });
     addPath(paths, { arg: 'targetPath', raw: args.targetPath, targetNode: typeof args.targetNode === 'string' ? args.targetNode : targetNode, agentName, resolveMasterPath: transferResolver });
   }
-  if ((options.tool.source === 'node' && options.tool.name === 'apply_patch')
+  if ((options.tool.source === 'node' && options.tool.name === 'edit' && typeof args.apply_patch === 'string')
     || (options.tool.source === 'builtin' && options.tool.name === 'apply_patch_memory')) {
-    for (const patchPath of extractPatchPaths(args.input)) addPath(paths, {
-      arg: 'input', raw: patchPath, targetNode: options.tool.name === 'apply_patch_memory' ? 'master' : targetNode,
+    for (const patchPath of extractPatchPaths(options.tool.name === 'edit' ? args.apply_patch : args.input)) addPath(paths, {
+      arg: options.tool.name === 'edit' ? 'apply_patch' : 'input', raw: patchPath, targetNode: options.tool.name === 'apply_patch_memory' ? 'master' : targetNode,
       agentName, session: options.session, memory: options.tool.name === 'apply_patch_memory',
     });
   }

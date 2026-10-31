@@ -128,10 +128,10 @@ test('Node primitives use the current concrete Node; ordinary builtins use resol
   action: deny`);
   const owner = session('model-worker/main', 'node-a');
   const before = names(await resolveSessionToolDefinitions(owner));
-  for (const name of ['read', 'write', 'edit', 'apply_patch', 'exec', 'task']) assert.ok(!before.includes(name), name);
+  for (const name of ['read', 'write', 'edit', 'exec', 'task']) assert.ok(!before.includes(name), name);
   owner.currentNode = 'node-b';
   const after = names(await resolveSessionToolDefinitions(owner));
-  for (const name of ['read', 'write', 'edit', 'apply_patch', 'exec']) assert.ok(after.includes(name), name);
+  for (const name of ['read', 'write', 'edit', 'exec']) assert.ok(after.includes(name), name);
   assert.ok(!after.includes('task'));
 });
 

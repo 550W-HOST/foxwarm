@@ -1,3 +1,5 @@
+import { parseUnifiedEdit, applyTextEdits } from '../../packages/shared/dist/unifiedEdit';
+import { readWholeFile } from '../../packages/shared/dist/fileOperations';
 import { checkPathAccess } from '../utils/agentPathAccess';
 import { applyPatchOperations } from '../../packages/shared/dist/fileToolCore';
 import {
@@ -6,7 +8,6 @@ import {
     resolveAgentPath,
     readResolvedPath,
     writeResolvedPath,
-    editResolvedPath,
     requireToolFilePath,
     enforceIsolatedPathAccess,
     shouldEnforceIsolatedMasterPathAccess,
@@ -87,17 +88,20 @@ export async function tool_write(args: ToolArgs, ctx: ToolContext) {
 }
 
 export async function tool_edit(args: ToolArgs, ctx: ToolContext) {
-    const filePath = requireToolFilePath(args.filePath, 'edit');
-    const { oldText, newText } = args;
+    const edit = parseUnifiedEdit(args);
+    if ('apply_patch' in edit) return tool_apply_patch({ input: edit.apply_patch }, ctx);
+    const { filePath, edits } = edit;
     const agentName = ctx.session?.agent || 'main';
     const fullPath = resolveAgentPath(filePath, agentName, ctx.session?.cwd);
     enforceIsolatedPathAccess(ctx, fullPath, agentName);
-    await editResolvedPath(fullPath, oldText, newText, ctx.fileOperations || nativeFileOperations);
+    const operations = ctx.fileOperations || nativeFileOperations;
+    const content = (await readWholeFile(operations, fullPath)).toString('utf8');
+    await operations.write(fullPath, applyTextEdits(content, edits), 'w');
     ctx.onResolvedPaths?.([{ raw: filePath, resolved: fullPath }]);
     return 'File edited successfully';
 }
 
-export async function tool_apply_patch(args: ToolArgs, ctx: ToolContext) {
+async function tool_apply_patch(args: ToolArgs, ctx: ToolContext) {
     const { input } = args;
 
     if (!input || typeof input !== 'string') {

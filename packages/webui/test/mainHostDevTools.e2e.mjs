@@ -62,7 +62,7 @@ try {
       const chunks = []; for await (const chunk of req) chunks.push(chunk)
       const body = JSON.parse(Buffer.concat(chunks).toString())
       assert.equal(req.url, '/responses'); assert.equal(req.headers.authorization, `Bearer ${providerToken}`)
-      for (const name of ['read', 'edit', 'apply_patch', 'exec'])
+      for (const name of ['read', 'edit', 'exec'])
         assert(body.tools.some(tool => tool.name === name), 'Workflow tool is available: ' + name)
       const payload = JSON.stringify(body.input)
       const latest = body.input.filter(item => item.type === 'message' && item.role === 'user')
@@ -76,10 +76,10 @@ try {
           () => call('edit-once', 'edit', { filePath: 'src.txt', oldText: 'old', newText: 'new' }),
           () => call('edit-duplicate', 'edit', { filePath: 'src.txt', oldText: 'duplicate', newText: 'same' }),
           () => call('edit-empty', 'edit', { filePath: 'empty.txt', oldText: '', newText: 'seed' }),
-          () => call('patch-add-update', 'apply_patch', { input: '*** Begin Patch\n*** Add File: nested/sub/new.txt\n+new content\n*** Update File: src.txt\n@@\n-new\n+patched\n duplicate\n duplicate\n*** Update File: anchor.txt\n@@ header\n-old\n+fresh\n*** End Patch' }),
-          () => call('patch-unsafe', 'apply_patch', { input: '*** Begin Patch\n*** Add File: denied-first.txt\n+must not appear\n*** Add File: ' + join(root, 'outside.txt') + '\n+never\n*** End Patch' }),
-          () => call('patch-symlink', 'apply_patch', { input: '*** Begin Patch\n*** Update File: symlink\n@@\n-untouched\n+changed\n*** End Patch' }),
-          () => call('patch-partial', 'apply_patch', { input: '*** Begin Patch\n*** Add File: partial.txt\n+already committed\n*** Update File: missing.txt\n@@\n-before\n+after\n*** End Patch' }),
+          () => call('patch-add-update', 'edit', { apply_patch: '*** Begin Patch\n*** Add File: nested/sub/new.txt\n+new content\n*** Update File: src.txt\n@@\n-new\n+patched\n duplicate\n duplicate\n*** Update File: anchor.txt\n@@ header\n-old\n+fresh\n*** End Patch' }),
+          () => call('patch-unsafe', 'edit', { apply_patch: '*** Begin Patch\n*** Add File: denied-first.txt\n+must not appear\n*** Add File: ' + join(root, 'outside.txt') + '\n+never\n*** End Patch' }),
+          () => call('patch-symlink', 'edit', { apply_patch: '*** Begin Patch\n*** Update File: symlink\n@@\n-untouched\n+changed\n*** End Patch' }),
+          () => call('patch-partial', 'edit', { apply_patch: '*** Begin Patch\n*** Add File: partial.txt\n+already committed\n*** Update File: missing.txt\n@@\n-before\n+after\n*** End Patch' }),
           () => call('nonzero', 'exec', { command: "printf 'start  \\n'; exit 7", timeout: 2 }),
           () => call('env', 'exec', { command: `printf '%s' "$FOXWARM_DATA_DIR"`, timeout: 2 }),
           () => call('big', 'exec', { command: "python3 -c \"import sys;sys.stdout.buffer.write(b'A'*16383 + b'\\\\xc3\\\\xa9' + b'B'*1100000)\"", timeout: 3 }),
@@ -143,7 +143,8 @@ try {
   }
   assert.equal(responseOf('inspect')?.output.includes('old'), true)
   assert.match(JSON.stringify(responseOf('edit-duplicate')), /2 occurrences/)
-  assert.equal(await readFile(join(workRoot, 'empty.txt'), 'utf8'), 'seed')
+  assert(responseOf('edit-empty')?.error)
+  assert.equal(await readFile(join(workRoot, 'empty.txt'), 'utf8'), '')
   assert.match(JSON.stringify(responseOf('patch-partial')), /Operations already applied/)
   assert.equal(responseOf('patch-unsafe')?.error?.type, 'tool_authorization_denied')
   assert.equal(responseOf('patch-symlink')?.error?.type, 'tool_authorization_denied')

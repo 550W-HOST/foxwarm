@@ -22,3 +22,5 @@ Main-local entry from an HTTP-verified external principal and a generated live e
 `mcpInboundNodeOwnership.test.ts` deterministically holds the capability and post-reservation provider lookups across release, asserts no late Node effects or records, and tests completed-record eviction versus all-active saturation. The real paired fixture separately proves that an already-started background process survives DELETE.
 
 The cross-module protocol is canonical in [D-node-thread-core-protocol-compatibility](../threads/node-communication.md#d-node-thread-core-protocol-compatibility); authorization and wrapper behavior in [D-dispatch-mcp-inbound-bridge](../threads/tool-dispatch-mcp.md#d-dispatch-mcp-inbound-bridge).
+
+Unified edit and old/new resident compatibility follow [D-node-thread-unified-edit](../threads/node-communication.md#d-node-thread-unified-edit): native Nodes support all forms; legacy external Nodes retain single/patch forms and reject batch or `replaceAll:true` before effects without extra file-read authority.

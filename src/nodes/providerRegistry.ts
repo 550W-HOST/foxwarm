@@ -1,3 +1,4 @@
+import { parseUnifiedEdit, applyTextEdits, projectUnifiedEditTools } from '../../packages/shared/dist/unifiedEdit';
 import { namespaceNodeProvider } from './providerNamespace';
 import { isCoreNodeId, splitProviderNodeId } from '../../packages/shared/dist/nodeIdentity';
 import { listApprovedNodes } from './registry';
@@ -16,7 +17,7 @@ import { nodesManager } from './manager';
 import { CLI_NODE_CAPABILITIES } from '../../packages/shared/dist/nodeCapabilities';
 import type { ExternalNodeOwner } from '../../packages/shared/dist/nodeProtocol';
 import { describeNodeProtocolCompatibility, type NodeProtocolCompatibility } from '../../packages/shared/dist/nodeProtocol';
-import { read, write, edit, apply_patch } from '../../packages/shared/dist/nodeTools';
+import { read, write, edit } from '../../packages/shared/dist/nodeTools';
 import { parseApplyPatchInput } from '../../packages/shared/dist/applyPatch';
 import { rejectUnsupportedAgentPathVariable } from '../../packages/shared/dist/agentPathVariables';
 import type { FileOperations, FileOperationStat, FileOperationDirectoryEntry } from '../../packages/shared/dist/fileOperations';
@@ -428,7 +429,7 @@ export class NodeProviderRegistry {
     const names = new Set<string>();
     if (descriptor.primitiveBackends.filesystem) names.add('read');
     if (descriptor.primitiveBackends.filesystem === 'read-write') {
-      names.add('write'); names.add('edit'); names.add('apply_patch');
+      names.add('write'); names.add('edit');
     }
     if (descriptor.primitiveBackends.exec) names.add('exec');
     const tools = CLI_NODE_CAPABILITIES.tools
@@ -451,12 +452,12 @@ export class NodeProviderRegistry {
       return this.invokePrimitiveExec(provider, request, options);
     }
     const access = descriptor.primitiveBackends?.filesystem;
-    const mutation = request.toolName === 'write' || request.toolName === 'edit' || request.toolName === 'apply_patch';
+    const mutation = request.toolName === 'write' || request.toolName === 'edit';
     if (!access || (mutation && access !== 'read-write') || !provider.invokeFilesystem) {
       throw new NodeProviderError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`);
     }
-    if (request.toolName === 'apply_patch' && typeof request.args.input === 'string') {
-      for (const operation of parseApplyPatchInput(request.args.input)) rejectUnsupportedAgentPathVariable(operation.filePath);
+    if (request.toolName === 'edit' && typeof request.args.apply_patch === 'string') {
+      for (const operation of parseApplyPatchInput(request.args.apply_patch)) rejectUnsupportedAgentPathVariable(operation.filePath);
     } else {
       rejectUnsupportedAgentPathVariable(request.args.filePath);
     }
@@ -469,7 +470,7 @@ export class NodeProviderRegistry {
       resolveFilePath: (filePath: string) => filePath,
       dirnameFilePath: providerParent,
     };
-    const tool = { read, write, edit, apply_patch }[request.toolName as 'read' | 'write' | 'edit' | 'apply_patch'];
+    const tool = { read, write, edit }[request.toolName as 'read' | 'write' | 'edit'];
     if (!tool) throw new NodeProviderError('NODE_EXECUTION_TOOL_UNAVAILABLE', `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`);
     return tool(request.args, context);
   }
@@ -920,7 +921,7 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
       provider: this.id,
       type: typeof node.type === 'string' && node.type ? node.type : 'remote',
       availability: 'ready',
-      tools: advertised,
+      tools: projectUnifiedEditTools(advertised),
       ...(compatibility ? { protocolCompatibility: compatibility } : {}),
       ...(typeof node.lastActivity === 'number' ? { lastActivity: node.lastActivity } : {}),
     };
@@ -936,7 +937,7 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
         provider: this.id,
         type: node.type,
         availability: 'ready' as const,
-        tools: node.tools,
+        tools: projectUnifiedEditTools(node.tools),
         ...(this.descriptorForRuntimeNode(node.id)?.protocolCompatibility ? { protocolCompatibility: this.descriptorForRuntimeNode(node.id)!.protocolCompatibility } : {}),
         ...(typeof activity.get(node.id) === 'number' ? { lastActivity: activity.get(node.id) } : {}),
       }));
@@ -980,6 +981,28 @@ export class AuthenticatedRemoteNodeProvider implements NodeProvider {
         'NODE_EXECUTION_TOOL_UNAVAILABLE',
         `Tool \`${request.toolName}\` not available on node \`${request.nodeId}\`.`,
       );
+    }
+    if (request.toolName === 'edit') {
+      const edit = parseUnifiedEdit(request.args);
+      if (node.capabilities?.features?.unifiedEdit !== true) {
+        if ('apply_patch' in edit) {
+          if (!node.tools.has('apply_patch')) throw new NodeProviderError('NODE_EDIT_UNSUPPORTED', 'Legacy Node does not support patches.');
+          request = { ...request, toolName: 'apply_patch', args: { input: edit.apply_patch } };
+        } else {
+          let { oldText, newText } = edit.edits[0];
+          if (Object.prototype.hasOwnProperty.call(request.args, 'edits') || edit.edits[0].replaceAll === true) {
+            if (request.sourceSessionId === undefined) throw new NodeProviderError('NODE_EDIT_UPGRADE_REQUIRED', 'Upgrade this Node to use batch edits or replaceAll from external callers.');
+            const { checkToolPermission } = await import('../isolatedCheck');
+            await checkToolPermission({ source: 'node', node: request.nodeId, tool: 'read' }, request.sourceSessionId, request.nodeId, { filePath: edit.filePath });
+            const source = await this.readFile({ sourceSessionId: request.sourceSessionId, nodeId: request.nodeId, toolName: 'read', args: { filePath: edit.filePath }, context: { agent: request.context.agent!, currentNode: request.context.currentNode, cwd: request.context.cwd } }, options);
+            oldText = source.toString('utf8');
+            newText = applyTextEdits(oldText, edit.edits);
+          }
+          request = { ...request, args: { filePath: edit.filePath, oldText, newText: newText.replace(/\$/g, () => '$$') } };
+        }
+        // A reconnect between approved read and mutation must not move the effect to another peer.
+        if (nodesManager.getNode(request.nodeId) !== node) throw new NodeProviderError('NODE_EDIT_CONNECTION_CHANGED', 'Node connection changed before editing.');
+      }
     }
     if (request.owner) {
       return nodesManager.executeExternalTool(request.nodeId, request.toolName, request.args, request.owner,

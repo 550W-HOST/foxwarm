@@ -1246,7 +1246,6 @@ test('default model-facing tool names stay consolidated', () => {
     'read',
     'write',
     'edit',
-    'apply_patch',
     'read_memory',
     'write_memory',
     'edit_memory',
@@ -1317,7 +1316,7 @@ test('consolidated resource tool schemas expose their approved actions', () => {
 });
 
 test('builtin file/browser tool schemas no longer expose node selector parameters', () => {
-  for (const name of ['read', 'write', 'edit', 'apply_patch', 'browse_open', 'browse_list', 'browse_get', 'browse_close', 'browse_interact']) {
+  for (const name of ['read', 'write', 'edit', 'browse_open', 'browse_list', 'browse_get', 'browse_close', 'browse_interact']) {
     const def = definitions.find(entry => entry.name === name);
     assert.ok(def, `${name} should exist`);
     assert.equal(Object.prototype.hasOwnProperty.call(def?.parameters?.properties || {}, 'node'), false, `${name} should not expose node parameter`);

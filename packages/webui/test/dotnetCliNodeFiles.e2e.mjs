@@ -80,7 +80,7 @@ for (const runtime of ['source', 'dotnet']) {
     state = await turn(id, 'file-tools', [[
       call('write', 'write', { filePath: 'nested/data.txt', content: 'first\r\nsecond\nlast', createDirs: true }),
       call('edit', 'edit', { filePath: 'nested/data.txt', oldText: 'second', newText: 'SECOND' }),
-      call('patch', 'apply_patch', { input: '*** Begin Patch\n*** Update File: nested/data.txt\n@@\n-first\n+FIRST\n*** End Patch' }),
+      call('patch', 'edit', { apply_patch: '*** Begin Patch\n*** Update File: nested/data.txt\n@@\n-first\n+FIRST\n*** End Patch' }),
       call('read', 'read', { filePath: 'nested/data.txt', startLine: 2, endLine: 3 }),
       call('agent-write', 'write', { filePath: '$fw_tmp/agent.txt', content: 'agent-owned', createDirs: true }),
     ]])
@@ -116,8 +116,14 @@ for (const runtime of ['source', 'dotnet']) {
     good(state, 'image'); good(state, 'export'); good(state, 'delivery'); assert.deepEqual(await readFile(join(cwd, 'exported.png')), png)
     assert(requests.some(({ key, body }) => key === 'image' && JSON.stringify(body).includes('input_image')))
     assert(!requests.some(({ body }) => JSON.stringify(body).includes('__foxwarmResolvedToolPaths')))
-    state = await turn(id, 'partial', [[call('partial', 'apply_patch', { input: '*** Begin Patch\n*** Add File: kept.txt\n+kept\n*** Update File: missing.txt\n-old\n+new\n*** End Patch' })]])
+    state = await turn(id, 'partial', [[call('partial', 'edit', { apply_patch: '*** Begin Patch\n*** Add File: kept.txt\n+kept\n*** Update File: missing.txt\n-old\n+new\n*** End Patch' })]])
     assert(pair(state, 'partial').error); assert.equal(await readFile(join(cwd, 'kept.txt'), 'utf8'), 'kept')
+
+    state = await turn(id, 'unified-edit', [[
+      call('batch', 'edit', { filePath: 'nested/data.txt', edits: [{ oldText: 'FIRST', newText: 'SECOND' }, { oldText: 'SECOND', newText: '$&\n' }] }),
+    ], [call('all', 'edit', { filePath: 'nested/data.txt', oldText: '$', newText: '$$', replaceAll: true })]])
+    good(state, 'batch'); good(state, 'all')
+    assert.equal(await readFile(join(cwd, 'nested/data.txt'), 'utf8'), 'SECOND\r\n$$&\n\r\nlast')
 
     await stop(cli); cli = await launch([]); await online()
     state = await turn(id, 'credential-restart', [[call('restart-read', 'read', { filePath: 'nested/data.txt' })]])

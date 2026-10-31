@@ -114,6 +114,8 @@ function buildToolArgsPreview(call: FunctionCall): string {
         argValue = call.rawArgsText;
     } else if (call.name === 'exec') {
         argValue = call.args?.command;
+    } else if (call.name === 'edit' && typeof call.args?.apply_patch === 'string') {
+        argValue = call.args.apply_patch;
     } else if (call.name === 'edit' || call.name === 'write' || call.name === 'edit_memory' || call.name === 'write_memory' || call.name === 'delete_memory') {
         argValue = call.args?.filePath;
     } else if (call.name === 'apply_patch' || call.name === 'apply_patch_memory') {

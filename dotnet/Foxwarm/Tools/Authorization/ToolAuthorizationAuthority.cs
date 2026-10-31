@@ -194,15 +194,15 @@ public sealed partial class WorkspaceTools
         )
             return [];
         string? raw = SessionWait.Text(args[name == "exec" ? "cwd" : "filePath"]);
-        if (name == "apply_patch")
+        if (name == "edit" && args.ContainsKey("apply_patch"))
         {
             var input =
-                SessionWait.Text(args["input"])
+                SessionWait.Text(args["apply_patch"])
                 ?? throw new InvalidDataException("apply_patch requires input.");
             return WorkspacePatch
                 .Parse(input)
                 .Select(operation => new AuthorizationPath(
-                    "input",
+                    "apply_patch",
                     operation.Path,
                     AuthorizationPaths.CanonicalPotential(ResolvePatchPath(operation.Path, true))
                 ))

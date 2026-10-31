@@ -2226,7 +2226,7 @@ test('malformed raw compact arguments retain one file through JSON and range ret
         case 2: toolCall = { name: 'submit_compact_plan', args: { argsFilePath: filePath } }; break;
         case 3: toolCall = { name: 'edit', args: { filePath, oldText: '\n  ]\n', newText: '\n  ]\n}\n' } }; break;
         case 4: toolCall = { name: 'submit_compact_plan', args: { argsFilePath: filePath } }; break;
-        case 5: toolCall = { name: 'apply_patch', args: { input: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-      "sourceEnd": 999,\n+      "sourceEnd": 2,\n*** End Patch` } }; break;
+        case 5: toolCall = { name: 'edit', args: { apply_patch: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-      "sourceEnd": 999,\n+      "sourceEnd": 2,\n*** End Patch` } }; break;
         case 6: toolCall = { name: 'exec', args: { command: 'must never execute' } }; break;
         case 7: toolCall = { name: 'read', args: { filePath } }; break;
         case 8: toolCall = { name: 'write_memory', args: { filePath: 'must-not-exist.md', content: 'must not write' } }; break;
@@ -2252,7 +2252,7 @@ test('malformed raw compact arguments retain one file through JSON and range ret
     assert(planner);
     assert.equal(planner.steps, 11);
     assert.deepEqual(planner.toolCalls, [
-      'submit_compact_plan', 'submit_compact_plan', 'edit', 'submit_compact_plan', 'apply_patch',
+      'submit_compact_plan', 'submit_compact_plan', 'edit', 'submit_compact_plan', 'edit',
       'exec', 'read', 'read', 'write_memory', 'submit_compact_plan', 'submit_compact_plan', 'submit_compact_plan',
     ]);
     assert.equal(planner.usage, undefined, 'missing provider usage is not fabricated');

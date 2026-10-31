@@ -125,7 +125,7 @@ public sealed class CliNodeFileTests
     }
 
     [Fact]
-    public async Task Shared_exact_match_keeps_Main_literal_replacement_and_Cli_Source_tokens_distinct()
+    public async Task Cli_edit_keeps_replacement_data_literal()
     {
         using var temp = new TempDirectory();
         var path = Path.Combine(temp.Path, "input.txt");
@@ -143,11 +143,7 @@ public sealed class CliNodeFileTests
             null,
             false
         );
-        Assert.Equal("before:$-old-before:-:after-$1:after", await File.ReadAllTextAsync(path));
-        Assert.Equal(
-            "before:$$-$&-$`-$'-$1:after",
-            ExactReplacement.Apply("before:old:after", "old", "$$-$&-$`-$'-$1").Updated
-        );
+        Assert.Equal("before:$$-$&-$`-$'-$1:after", await File.ReadAllTextAsync(path));
     }
 
     [Fact]

@@ -21,3 +21,5 @@ export * from './fileDelivery';
 export * from './sessionNotice';
 
 export * from './sessionControlFeedback';
+
+export * from './unifiedEdit';

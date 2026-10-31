@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using System.Text.Json.Nodes;
 using Foxwarm.Sessions;
+using Foxwarm.Tools;
 
 namespace Foxwarm.Nodes;
 
@@ -8,6 +9,14 @@ internal sealed partial class NodeConnectionHub
 {
     internal RemoteExecAuthority ExecClaims { get; }
     internal Func<SessionOwner, string, bool>? LocalExecActive { get; set; }
+    internal Func<
+        SessionOwner,
+        string,
+        string,
+        string?,
+        CancellationToken,
+        Task<string>
+    >? ReadEditSource { get; set; }
     internal Func<string, JsonObject, Task>? SessionEvent { get; set; }
     internal Func<string, JsonObject, Task>? BackgroundRegistration { get; set; }
 
@@ -69,6 +78,55 @@ internal sealed partial class NodeConnectionHub
                     .Any(value => SessionWait.Text(value?["name"]) == tool)
             )
                 throw new InvalidDataException("Tool is not advertised by Node: " + tool);
+        }
+        if (tool == "edit")
+        {
+            var edit = UnifiedEdit.Parse(args);
+            if (connection.Capabilities["features"]?["unifiedEdit"]?.GetValue<bool>() != true)
+            {
+                if (edit.Patch is not null)
+                {
+                    if (
+                        !connection.Capabilities["tools"]!
+                            .AsArray()
+                            .Any(value => SessionWait.Text(value?["name"]) == "apply_patch")
+                    )
+                        throw new InvalidDataException("Legacy Node does not support patches.");
+                    tool = "apply_patch";
+                    args = new JsonObject { ["input"] = edit.Patch };
+                }
+                else
+                {
+                    var oldText = edit.Edits[0].OldText;
+                    var newText = edit.Edits[0].NewText;
+                    if (args.ContainsKey("edits") || edit.Edits[0].ReplaceAll)
+                    {
+                        if (owner is null)
+                            throw new InvalidOperationException(
+                                "Legacy Node batch editing requires a Session-owned complete file read."
+                            );
+                        if (ReadEditSource is null)
+                            throw new InvalidOperationException(
+                                "Complete Node file reads are unavailable."
+                            );
+                        oldText = await ReadEditSource(
+                            owner,
+                            id,
+                            edit.FilePath!,
+                            currentNode == id ? cwd : null,
+                            token
+                        );
+                        newText = edit.Apply(oldText);
+                    }
+                    args = new JsonObject
+                    {
+                        ["filePath"] = edit.FilePath,
+                        ["oldText"] = oldText,
+                        // Legacy CLI uses JavaScript replacement-string expansion.
+                        ["newText"] = newText.Replace("$", "$$", StringComparison.Ordinal),
+                    };
+                }
+            }
         }
         if (tool != "exec")
             return await ExecuteOnceAsync(

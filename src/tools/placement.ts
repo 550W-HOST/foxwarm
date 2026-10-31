@@ -25,7 +25,6 @@ export const BUILTIN_TOOL_PLACEMENTS = {
   read: { owner: 'node-environment' },
   write: { owner: 'node-environment' },
   edit: { owner: 'node-environment' },
-  apply_patch: { owner: 'node-environment' },
   read_memory: { owner: 'session-owner' },
   write_memory: { owner: 'session-owner' },
   edit_memory: { owner: 'session-owner' },
