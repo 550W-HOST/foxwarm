@@ -83,7 +83,9 @@ Plan operations may carry an integer `frictionScore` from 0 through 100. Missing
 
 `ContextPreviewFilterTests` exercises the real message observation handler and exact Archive recall with CRLF literal/include/exclude filters, unchanged canonical text and bounded output, plus folded tool-result match notices.
 
-`packages/webui/test/mainHostModelCompact.e2e.mjs` checks reversed exact-range normalization through actual model recall: selected source sequence order, tool name/arguments and result content remain visible in the bounded full preview. Structured Archive records separately verify provider call/response identity; exact inspection leaves source Archive rows, blocks and active authority unchanged.
+`packages/webui/test/mainHostModelCompact.e2e.mjs` checks reversed exact-range normalization through actual model recall: selected source sequence order, tool name/arguments and result content remain visible in the bounded full preview. Structured Archive records separately verify provider call/response identity; exact inspection leaves source Archive rows, blocks and active authority unchanged. Manual planner starts wait for busy, foreground processing and prior compact-operation settlement, then assert correlated admission through the [command receipt contract](./dotnet-command-administration.md#parser-and-failure-boundaries). Held-planner cancellation still verifies connection closure, queued-input continuation and no block publication.
+
+`CompactLifecycleTests.Admission.cs` holds the existing finalization callback after normal busy release in an owned normal Main host. Eight real HTTP/provider turns leave eligible compact candidates; the original busy-only/text-receipt sequence produces HTTP 200 without starting a planner. After foreground settlement, correlated admission starts the held provider; cancellation closes it and resumes queued input without publishing a block.
 
 `ContextPreviewRenderer.Commands` supplies the active-offset, per-message bounded `/messages` presentation used by [public command administration](./dotnet-command-administration.md), separately from recall page budgets and Archive seqs.
 
