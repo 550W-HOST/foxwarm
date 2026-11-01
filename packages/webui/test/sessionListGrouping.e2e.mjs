@@ -1,0 +1,144 @@
+import { appE2eRuntime } from '../../../test/app-e2e/runtime.mjs'
+import { waitForWebUiReady } from './webuiReadiness.mjs'
+import test, { after, before } from 'node:test'
+import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import puppeteer from 'puppeteer-core'
+
+const { baseUrl, tokenFile } = appE2eRuntime()
+const chromiumPath = process.env.FOXWARM_E2E_CHROMIUM || '/usr/bin/chromium'
+let browser
+let token
+
+async function api(method, route, body) {
+  const response = await fetch(`${baseUrl}/api/${route}`, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  const payload = await response.json().catch(() => ({}))
+  assert.ok(response.ok, `${method} ${route}: ${response.status} ${JSON.stringify(payload)}`)
+  return payload
+}
+
+async function openList(focusSessionId) {
+  const page = await browser.newPage()
+  await page.setViewport({ width: 1440, height: 900 })
+  await page.goto(`${baseUrl}/#token=${encodeURIComponent(token)}`, { waitUntil: 'domcontentloaded' })
+  await waitForWebUiReady(page)
+  await page.waitForSelector('[data-session-list-scroll-container]', { timeout: 15_000 })
+  if (focusSessionId) {
+    await page.waitForFunction(() => !!window.foxwarmTest?.switchToSession)
+    await page.evaluate(id => window.foxwarmTest.switchToSession(id), focusSessionId)
+  }
+  return page
+}
+
+const rowSelector = id => `[data-session-id="${id}"]`
+
+// Facts about a rendered Session row and its wrapper in the Sidebar tree.
+const describeRow = (page, id) => page.$eval(rowSelector(id), row => {
+  const wrapper = row.parentElement
+  const guide = wrapper.querySelector(':scope > [data-session-indent-guide]')
+  const title = row.querySelector('.truncate')
+  return {
+    grouped: wrapper.hasAttribute('data-session-grouped'),
+    guide: !!guide && guide.getBoundingClientRect().height > 0,
+    weight: title ? getComputedStyle(title).fontWeight : null,
+    text: row.textContent,
+  }
+})
+
+async function expand(page, id) {
+  const toggle = await page.waitForSelector(`${rowSelector(id)} button[aria-label="Expand child sessions"]`, { timeout: 10_000 })
+  await toggle.click()
+}
+
+before(async () => {
+  token = (await readFile(tokenFile, 'utf8')).trim()
+  await api('POST', 'agents', { agentId: 'grp' })
+  await api('POST', 'sessions', { agentId: 'grp', sessionId: 'real', parentSessionId: 'grp/main' })
+  await api('POST', 'sessions', { agentId: 'grp', sessionId: 'loose' })
+  // An Agent without its main Session groups two or more top-level rows virtually.
+  await api('POST', 'agents', { agentId: 'vg' })
+  await api('DELETE', `sessions/${encodeURIComponent('vg/main')}`)
+  await api('POST', 'sessions', { agentId: 'vg', sessionId: 'a' })
+  await api('POST', 'sessions', { agentId: 'vg', sessionId: 'b' })
+  browser = await puppeteer.launch({ executablePath: chromiumPath, headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] })
+})
+
+after(async () => {
+  await browser?.close()
+})
+
+test('Sidebar groups top-level Sessions under their Agent host and marks only real children with guides', async () => {
+  const page = await openList()
+  try {
+    await page.waitForSelector(rowSelector('grp/main'), { timeout: 10_000 })
+    await page.waitForSelector('[data-session-group="vg"]', { timeout: 10_000 })
+    assert.equal(await page.$(rowSelector('grp/loose')), null, 'grouped rows start inside their collapsed host')
+    assert.equal(await page.$(rowSelector('vg/a')), null)
+
+    await expand(page, 'grp/main')
+    await page.waitForSelector(rowSelector('grp/loose'))
+    await page.waitForSelector(rowSelector('grp/real'))
+    const real = await describeRow(page, 'grp/real')
+    const loose = await describeRow(page, 'grp/loose')
+    assert.equal(real.grouped, false)
+    assert.equal(real.guide, true, 'a real child carries an indent guide')
+    assert.equal(loose.grouped, true)
+    assert.equal(loose.guide, false, 'a grouped row carries no guide')
+    assert.ok(Number(loose.weight) < Number(real.weight), `grouped title is muted: ${loose.weight} vs ${real.weight}`)
+    assert.match(loose.text, /\/loose/)
+
+    // The virtual group is a collapsible host, not a Session.
+    const group = await page.$('[data-session-group="vg"]')
+    assert.match(await group.evaluate(element => element.textContent), /vg\s*2/)
+    await group.click({ button: 'right' })
+    await new Promise(resolve => setTimeout(resolve, 200))
+    assert.equal(await page.$('[role="menu"]'), null, 'the virtual group has no Session context menu')
+    await group.click()
+    await page.waitForSelector(rowSelector('vg/a'))
+    await page.waitForSelector(rowSelector('vg/b'))
+    assert.equal((await describeRow(page, 'vg/a')).guide, false)
+    assert.equal(await page.$eval('[data-session-group="vg"]', element => element.getAttribute('aria-expanded')), 'true')
+  } finally {
+    await page.close()
+  }
+})
+
+test('Opening a grouped Session expands its virtual group host', async () => {
+  const page = await openList('vg/b')
+  try {
+    await page.waitForSelector(rowSelector('vg/b'), { visible: true, timeout: 10_000 })
+    assert.equal(await page.$eval('[data-session-group="vg"]', element => element.getAttribute('aria-expanded')), 'true')
+  } finally {
+    await page.close()
+  }
+})
+
+test('Create child session opens the New session dialog for the row and creates a fresh child', async () => {
+  const page = await openList()
+  try {
+    await expand(page, 'grp/main')
+    const row = await page.waitForSelector(rowSelector('grp/real'))
+    await row.click({ button: 'right' })
+    const item = await page.waitForSelector('xpath/.//*[@role="menuitem"][contains(., "Create child session")]', { timeout: 5_000 })
+    await item.click()
+    await page.waitForSelector('[data-creation-parent="grp/real"]', { timeout: 5_000 })
+    assert.equal(await page.$eval('#creation-dialog-title', element => element.textContent), 'New child session')
+    assert.equal(await page.$eval('[aria-label="Choose an agent"] button[aria-pressed="true"]', element => element.textContent), 'grp')
+    await page.type('form[role="dialog"] input', 'made')
+    await page.click('form[role="dialog"] button[type="submit"]')
+    await page.waitForSelector('[data-creation-parent]', { hidden: true, timeout: 10_000 })
+
+    const exact = await api('POST', 'session-list/by-id', { ids: ['grp/made'] })
+    assert.equal(exact.results[0].session.parentSessionId, 'grp/real')
+    const history = JSON.stringify(await api('GET', `sessions/${encodeURIComponent('grp/made')}/history`))
+    assert.match(history, /event=\\"user-child-created\\" parentSessionId=\\"grp\/real\\"/)
+    await page.waitForSelector(rowSelector('grp/made'), { timeout: 10_000 })
+    assert.equal((await describeRow(page, 'grp/made')).guide, true)
+  } finally {
+    await page.close()
+  }
+})

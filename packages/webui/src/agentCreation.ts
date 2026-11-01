@@ -20,10 +20,11 @@ export function validateSessionId(sessionId: string): string | null {
   return null
 }
 
-export function buildSessionCreationBody(agentId: string, sessionId: string, runtime: SessionRuntimeKind = 'foxwarm'): { agentId: string; sessionId?: string; runtime?: SessionRuntimeKind } {
-  const body: { agentId: string; sessionId?: string; runtime?: SessionRuntimeKind } = { agentId }
+export function buildSessionCreationBody(agentId: string, sessionId: string, runtime: SessionRuntimeKind = 'foxwarm', parentSessionId?: string): { agentId: string; sessionId?: string; runtime?: SessionRuntimeKind; parentSessionId?: string } {
+  const body: { agentId: string; sessionId?: string; runtime?: SessionRuntimeKind; parentSessionId?: string } = { agentId }
   if (runtime !== 'foxwarm') body.runtime = runtime
   const trimmed = sessionId.trim()
   if (trimmed) body.sessionId = trimmed
+  if (parentSessionId) body.parentSessionId = parentSessionId
   return body
 }

@@ -103,3 +103,14 @@ export function getSessionListDisplayId(sessionId: string, parentSessionId?: str
 
   return sessionId
 }
+
+/** Virtual Agent group keys begin with a slash, which no Session ID can. */
+export function isSidebarGroupId(id: string): boolean {
+  return id.startsWith('//agent/')
+}
+
+/** Label for a row shown under its Agent host (main Session or virtual group) without being its real child. */
+export function getSessionListGroupedDisplayId(sessionId: string, hostId: string): string {
+  const hostAgent = isSidebarGroupId(hostId) ? hostId.slice('//agent/'.length) : hostId.endsWith('/main') ? hostId.slice(0, -'/main'.length) : ''
+  return hostAgent && sessionId.startsWith(`${hostAgent}/`) ? sessionId.slice(hostAgent.length) : sessionId
+}

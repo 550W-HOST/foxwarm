@@ -10,6 +10,13 @@ type ClaudeAvailability = {
   reason?: string
 }
 
+/** Opens the New session dialog for a child of an existing Session. */
+export interface ChildSessionRequest {
+  parentSessionId: string
+  parentLabel: string
+  agent?: string
+}
+
 interface AgentCreationMenuProps {
   agents: AgentSummary[]
   currentAgent?: string
@@ -17,7 +24,9 @@ interface AgentCreationMenuProps {
   triggerLabel?: string
   triggerClassName?: string
   onCreateAgent: (agentId: string, inheritAgent?: string) => Promise<void>
-  onCreateSession: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code') => Promise<void>
+  onCreateSession: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code', parentSessionId?: string) => Promise<void>
+  childRequest?: ChildSessionRequest | null
+  onChildRequestHandled?: () => void
 }
 
 export default function AgentCreationMenu({
@@ -28,6 +37,8 @@ export default function AgentCreationMenu({
   triggerClassName,
   onCreateAgent,
   onCreateSession,
+  childRequest,
+  onChildRequestHandled,
 }: AgentCreationMenuProps) {
   const [mode, setMode] = useState<CreationMode | null>(null)
   const [agentId, setAgentId] = useState('')
@@ -36,6 +47,7 @@ export default function AgentCreationMenu({
   const [sessionId, setSessionId] = useState('')
   const [runtime, setRuntime] = useState<'foxwarm' | 'claude-code'>('foxwarm')
   const [claudeAvailability, setClaudeAvailability] = useState<ClaudeAvailability>({ status: 'checking' })
+  const [parent, setParent] = useState<ChildSessionRequest | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -102,14 +114,21 @@ export default function AgentCreationMenu({
     return () => controller.abort()
   }, [mode])
 
-  const openSessionModal = () => {
+  const openSessionModal = (request: ChildSessionRequest | null = null) => {
     setMode('session')
-    setSessionAgent(defaultAgent)
+    setParent(request)
+    setSessionAgent(request?.agent && agents.some(agent => agent.id === request.agent) ? request.agent : defaultAgent)
     setSessionId('')
     setRuntime('foxwarm')
     setClaudeAvailability({ status: 'checking' })
     setError('')
   }
+
+  useEffect(() => {
+    if (!childRequest) return
+    openSessionModal(childRequest)
+    onChildRequestHandled?.()
+  }, [childRequest])
 
   const openAgentModal = () => {
     setMode('agent')
@@ -156,7 +175,7 @@ export default function AgentCreationMenu({
       if (mode === 'agent') {
         await onCreateAgent(agentId.trim(), inheritAgent || undefined)
       } else {
-        await onCreateSession(sessionAgent, sessionId.trim() || undefined, runtime)
+        await onCreateSession(sessionAgent, sessionId.trim() || undefined, runtime, parent?.parentSessionId)
       }
       setMode(null)
     } catch (cause) {
@@ -171,7 +190,7 @@ export default function AgentCreationMenu({
       <button
         ref={triggerRef}
         type="button"
-        onClick={openSessionModal}
+        onClick={() => openSessionModal()}
         className={triggerClassName ?? (compact
           ? 'inline-flex items-center justify-center rounded-lg border border-fw-border-strong px-2 transition-colors bg-fw-neutral-surface text-fw-text hover:bg-fw-hover dark:bg-fw-surface-raised/60 dark:text-fw-text-strong dark:hover:bg-fw-hover'
           : 'inline-flex h-8 w-8 items-center justify-center rounded-lg text-fw-text-muted hover:bg-fw-hover hover:text-fw-text-strong dark:text-fw-text-muted dark:hover:bg-fw-hover dark:hover:text-fw-text-inverse transition')}
@@ -189,7 +208,7 @@ export default function AgentCreationMenu({
         }}>
           <form onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="creation-dialog-title" className="max-h-[calc(100dvh-2rem)] w-full min-w-0 max-w-md overflow-y-auto rounded-xl border border-fw-border bg-fw-surface p-5 shadow-xl dark:border-fw-border dark:bg-fw-surface">
             <div className="mb-4 flex items-center justify-between gap-3">
-              <h2 id="creation-dialog-title" className="text-lg font-semibold text-fw-text-strong">{mode === 'agent' ? 'New agent' : 'New session'}</h2>
+              <h2 id="creation-dialog-title" className="text-lg font-semibold text-fw-text-strong">{mode === 'agent' ? 'New agent' : parent ? 'New child session' : 'New session'}</h2>
               <button type="button" onClick={closeDialog} disabled={loading} className="rounded-md p-1 text-fw-text-muted hover:bg-fw-hover disabled:opacity-50 dark:text-fw-text-muted dark:hover:bg-fw-hover" aria-label={mode === 'agent' ? 'Back to new session' : 'Close'}>
                 <X className="h-5 w-5" />
               </button>
@@ -212,6 +231,11 @@ export default function AgentCreationMenu({
               </div>
             ) : (
               <div className="space-y-4">
+                {parent && (
+                  <p className="min-w-0 truncate text-sm text-fw-text-muted" data-creation-parent={parent.parentSessionId} title={parent.parentSessionId}>
+                    Parent: <span className="font-medium text-fw-text-strong">{parent.parentLabel}</span>
+                  </p>
+                )}
                 <fieldset disabled={loading} className="min-w-0">
                   <legend className="text-sm font-medium text-fw-text-strong">Agent</legend>
                   <div className="mt-2 flex min-w-0 flex-wrap gap-2" aria-label="Choose an agent">

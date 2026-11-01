@@ -2,14 +2,15 @@ import { getSessionRuntimeTone } from '../sessionRuntimeState'
 import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { useDndContext, useDraggable, useDroppable } from '@dnd-kit/core'
 import { API_BASE_PATH } from '../config'
-import { SlidersHorizontal, MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, List, GitBranch, Server, Copy } from 'lucide-react'
+import { SlidersHorizontal, MoreVertical, Archive, ArchiveRestore, GitFork, Pencil, Trash2, ArrowUpFromDot, Search, X, CornerDownRight, ListTree, Clock3, Rows3, Pin, PinOff, Bell, BellRing, List, GitBranch, Server, Copy, Bot, SquarePlus } from 'lucide-react'
 import RuntimeBusySpinner from './RuntimeBusySpinner'
 import MobilePageHeader from './MobilePageHeader'
 import ContextMenu, { type ContextMenuAnchorRect, type ContextMenuEntry } from './ContextMenu'
 import { copyTextToClipboard } from './chatShared'
 import { getSessionRuntimeSummary, getSessionRuntimeStateName, type SessionRuntimeState } from '../sessionRuntimeState'
 import { type SessionIdleNotificationMode } from '../sessionIdleNotifications'
-import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListAutoExpandedPath, getSessionListChildDisclosure, getSessionListDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
+import { collapseSessionListExpandedBranch, compareSessionListSessions, getSessionListAutoExpandedPath, getSessionListChildDisclosure, getSessionListDisplayId, getSessionListGroupedDisplayId, shouldElevateSessionToRoot, type SessionListOrderMode } from '../sessionListPresentation'
+import type { ChildSessionRequest } from './AgentCreationMenu'
 import { shouldActivateSessionListDrag, shouldEnableSessionListDrag } from '../sessionListDrag'
 import { useSessionListCompact } from '../sessionListDensity'
 import { getResolvedSessionNodeId } from '../sessionNode'
@@ -22,6 +23,10 @@ export interface Session {
   sequenceMessageCount?: number
   lastMessageTime: number
   parentSessionId: string | null
+  /** Sidebar presentation parent: a real parent, an Agent main host, or a virtual group. */
+  sidebarParentId?: string | null
+  /** Present only on a virtual Agent group row, which is not a Session. */
+  presentationGroup?: { kind: 'agent'; agent: string }
   childSessions?: string[]
   childTotal?: number
   aliases?: string[]
@@ -79,6 +84,7 @@ interface SessionListCoreProps {
   idleNotificationModes?: Record<string, SessionIdleNotificationMode>
   unreadSessionIds?: ReadonlySet<string>
   onToggleIdleNotificationMode?: (sessionId: string, mode: SessionIdleNotificationMode) => void
+  onCreateChildSession?: (request: ChildSessionRequest) => void
   bounded?: BoundedSessionListPresentationProps
 }
 
@@ -480,7 +486,7 @@ function DraggableSessionRow({
   )
 }
 
-export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, mobileHeaderActions, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, unreadSessionIds = new Set(), onToggleIdleNotificationMode, bounded }: SessionListCoreProps) {
+export default function SessionListCore({ sessions, currentSession, onSelectSession, onKeepSession, mobileHeaderActions, toolbarContainerClassName = 'p-2 pb-1', listContainerClassName = 'p-2 pt-1', dragEnabled = true, idleNotificationModes = {}, unreadSessionIds = new Set(), onToggleIdleNotificationMode, onCreateChildSession, bounded }: SessionListCoreProps) {
   const { active } = useDndContext()
   const [compact, toggleCompact] = useSessionListCompact()
   const [primaryPointerCoarse, setPrimaryPointerCoarse] = useState(() => window.matchMedia?.('(pointer: coarse)').matches ?? false)
@@ -601,11 +607,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     return aliasMap.get(sessionId) || null
   }
 
-  const normalizedParentMap = useMemo(() => {
+  // Bounded tree modes place rows by the server's Sidebar presentation parent; search
+  // and Flat keep real relations. Real parents remain the authority for every action.
+  const usePresentationParents = !!bounded && !isFiltering && viewMode !== 'flat-time'
+  const buildParentMap = (parentOf: (session: Session) => string | null | undefined) => {
     const map = new Map<string, string | null>()
 
     for (const session of sessions) {
-      const resolvedParentId = resolveSessionId(session.parentSessionId)
+      const resolvedParentId = resolveSessionId(parentOf(session))
       map.set(
         session.id,
         resolvedParentId && resolvedParentId !== session.id && sessionMap.has(resolvedParentId)
@@ -615,7 +624,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     }
 
     return map
-  }, [sessions, sessionMap, aliasMap])
+  }
+  const realParentMap = useMemo(() => buildParentMap(session => session.parentSessionId), [sessions, sessionMap, aliasMap])
+  const normalizedParentMap = useMemo(
+    () => usePresentationParents
+      ? buildParentMap(session => session.sidebarParentId === undefined ? session.parentSessionId : session.sidebarParentId)
+      : realParentMap,
+    [sessions, sessionMap, aliasMap, usePresentationParents, realParentMap],
+  )
 
   const visibleSessionIds = useMemo(() => {
     if (!isFiltering || bounded) {
@@ -698,6 +714,23 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       cursor = visibleParentMap.get(cursor) || normalizedParentMap.get(cursor) || null
     }
     return false
+  }
+
+  // Drop validity follows real relations: grouping never makes a row a real descendant.
+  const isRealDescendantOf = (candidateSessionId: string | null | undefined, ancestorSessionId: string | null | undefined): boolean => {
+    if (!candidateSessionId || !ancestorSessionId || candidateSessionId === ancestorSessionId) return false
+    let cursor = realParentMap.get(candidateSessionId) || null
+    const seen = new Set<string>()
+    while (cursor && !seen.has(cursor)) {
+      if (cursor === ancestorSessionId) return true
+      seen.add(cursor)
+      cursor = realParentMap.get(cursor) || null
+    }
+    return false
+  }
+  const isGroupedSession = (session: Session | undefined): boolean => {
+    if (!session || !usePresentationParents || session.sidebarParentId === undefined || session.pinned) return false
+    return (resolveSessionId(session.sidebarParentId) || session.sidebarParentId) !== (resolveSessionId(session.parentSessionId) || session.parentSessionId || null)
   }
 
   useEffect(() => {
@@ -1168,18 +1201,24 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const showBranchRetry = !!bounded && (branchLoadState?.status === 'error' || (!boundedChildPage && !branchLoadState))
     const showMoreChildren = hiddenCount > 0 && (!bounded || (!!boundedChildPage && !branchLoadState))
     const contentPaddingLeft = `${12 + level * 16}px`
+    const isGroup = !!session.presentationGroup
 
     // Get display ID (with parent prefix removed if applicable)
     const isDirectChild = !!parentSession && resolveSessionId(session.parentSessionId) === parentSession.id
-    const displayId = getSessionListDisplayId(session.id, parentSession?.id, isDirectChild)
+    // A grouped row is shown under its Agent host without being its real child.
+    const groupedRow = !!parentSession && !isDirectChild && isGroupedSession(session)
+    const displayId = groupedRow
+      ? getSessionListGroupedDisplayId(session.id, parentSession!.id)
+      : getSessionListDisplayId(session.id, parentSession?.id, isDirectChild)
 
     const isCurrentSession = resolvedCurrentSessionId === session.id
     const runtimeStateName = getSessionRuntimeStateName(session)
     const showRuntimeBadge = session.runtimeState ? runtimeStateName !== 'idle' || !!session.runtimeState.compaction : !!session.busy
     const resolvedNodeId = getResolvedSessionNodeId(session)
     const rowParentSessionId = visibleParentMap.get(session.id) || null
-    const targetParentWouldCreateCycle = rowParentSessionId
-      ? rowParentSessionId === draggingSessionId || isDescendantOf(rowParentSessionId, draggingSessionId)
+    const realRowParentSessionId = groupedRow ? realParentMap.get(session.id) || null : rowParentSessionId
+    const targetParentWouldCreateCycle = realRowParentSessionId
+      ? realRowParentSessionId === draggingSessionId || isRealDescendantOf(realRowParentSessionId, draggingSessionId)
       : false
     const disableSidebarDrop = !draggingSessionId
       || !sessionDragEnabled
@@ -1188,8 +1227,14 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       || draggingPinnedSession
       || !!session.pinned
       || draggingSessionId === session.id
-      || isDescendantOf(session.id, draggingSessionId)
+      || isRealDescendantOf(session.id, draggingSessionId)
       || targetParentWouldCreateCycle
+    // Sibling order drops write the real parent. They are unavailable where that would
+    // silently reparent a row that only appears in the same Sidebar group.
+    const draggingSession = draggingSessionId ? sessionMap.get(draggingSessionId) : undefined
+    const reorderWouldReparent = groupedRow || (isGroupedSession(draggingSession)
+      && !!rowParentSessionId
+      && rowParentSessionId === (resolveSessionId(draggingSession?.sidebarParentId) || draggingSession?.sidebarParentId))
 
     const nodeBadge = resolvedNodeId !== 'master' && (
       <span
@@ -1239,10 +1284,56 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       )
     )
 
+    // Real parent-child relations carry one guide per nesting level; grouped rows do not.
+    const guide = (guideLevel: number) => (
+      <span aria-hidden="true" data-session-indent-guide className="pointer-events-none absolute inset-y-0 z-[1] w-px bg-fw-border-strong" style={{ left: `${20 + guideLevel * 16}px` }} />
+    )
+    const branchRow = (key: string, content: ReactNode) => (
+      <div key={key} className="relative">{!isGroup && guide(level)}{content}</div>
+    )
+    const groupTotal = childTotal ?? 0
+
     return (
       <div
         key={session.id}
+        className="relative"
+        data-session-grouped={groupedRow || undefined}
       >
+        {parentSession && !groupedRow && guide(level - 1)}
+        {isGroup ? (
+          <div
+            role="button"
+            tabIndex={0}
+            data-session-group={session.presentationGroup!.agent}
+            aria-expanded={hasChildren ? isExpanded : undefined}
+            aria-label={`${session.presentationGroup!.agent}: ${groupTotal} ${groupTotal === 1 ? 'session' : 'sessions'}`}
+            title={`${session.presentationGroup!.agent} · ${groupTotal} ${groupTotal === 1 ? 'session' : 'sessions'}`}
+            className={`session-row relative flex items-center rounded cursor-pointer hover:bg-fw-hover dark:hover:bg-fw-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-fw-focus-ring/40 ${compact ? 'session-row-compact mt-0.5' : 'mt-1'} ${session.archived ? 'opacity-70' : ''}`}
+            onClick={() => { if (hasChildren) toggleExpand(session.id) }}
+            onKeyDown={(event) => {
+              if ((event.key === 'Enter' || event.key === ' ') && hasChildren) { event.preventDefault(); toggleExpand(session.id) }
+            }}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <div className="flex flex-1 min-w-0 items-center gap-1.5 py-1 pr-2 min-h-10" style={{ paddingLeft: contentPaddingLeft }}>
+              <span className="session-compact-disclosure inline-flex w-4 shrink-0 justify-center text-fw-text-muted" aria-hidden="true">
+                {hasChildren && (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={isExpanded ? 'M19 9l-7 7-7-7' : 'M9 5l7 7-7 7'} />
+                  </svg>
+                )}
+              </span>
+              <Bot className="h-3.5 w-3.5 shrink-0 text-fw-text-muted" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate text-sm font-medium text-fw-text">{session.presentationGroup!.agent}</span>
+              {descendantBusyCount > 0 && (
+                <span role="img" aria-label="Active descendant sessions" title={`${descendantBusyCount} active descendant ${descendantBusyCount === 1 ? 'session' : 'sessions'}`} className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-fw-accent" data-descendant-activity>
+                  <GitBranch className="h-3.5 w-3.5" strokeWidth={1.5} aria-hidden="true" />
+                </span>
+              )}
+              <span className="shrink-0 text-xs tabular-nums text-fw-text-muted">{groupTotal}</span>
+            </div>
+          </div>
+        ) : (
         <DraggableSessionRow
           session={session}
           className={`group session-row relative flex items-center rounded cursor-pointer active:cursor-grabbing ${compact ? 'session-row-compact mt-0.5' : 'mt-1'} ${
@@ -1261,13 +1352,13 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 session={session}
                 parentSessionId={rowParentSessionId}
                 disabled={disableSidebarDrop}
-                allowReorder={allowSidebarOrder}
+                allowReorder={allowSidebarOrder && !reorderWouldReparent}
                 allowParentDrop={allowParentDrop}
               />
               {compact ? (
                 <div className="flex flex-1 min-w-0 items-center gap-1.5 py-1 pr-2 min-h-10" style={{ paddingLeft: contentPaddingLeft }}>
                   {hasChildren ? disclosure : viewMode !== 'flat-time' && !isFiltering ? <span className="session-compact-disclosure w-4 shrink-0" aria-hidden="true" /> : null}
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-fw-text-strong" title={`${session.displayName || displayId} · ${session.id}`}>
+                  <span className={`min-w-0 flex-1 truncate text-sm ${groupedRow ? 'font-normal text-fw-text' : 'font-medium text-fw-text-strong'}`} title={`${session.displayName || displayId} · ${session.id}`}>
                     {session.displayName || displayId}{session.runtime === 'claude-code' && <span className="ml-1 text-xs font-normal text-fw-text-muted">Claude Code</span>}
                     {mobileList && activityTime(session.lastMessageTime) && <span className="mt-0.5 block truncate text-xs font-normal text-fw-text-muted">{session.agent ? `${session.agent} · ` : ''}{activityTime(session.lastMessageTime)}</span>}
                   </span>
@@ -1296,7 +1387,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               ) : (
               <div className="flex flex-1 min-w-0 items-start py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>
                 <div className="min-w-0 flex-1">
-                  <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-fw-text-strong">
+                  <div className={`flex min-w-0 items-center gap-1.5 text-sm ${groupedRow ? 'font-normal text-fw-text' : 'font-medium text-fw-text-strong'}`}>
                     <span className="min-w-0 flex-1 truncate" data-session-title>
                       {session.displayName || displayId}{session.runtime === 'claude-code' && <span className="ml-1 text-xs font-normal text-fw-text-muted">Claude Code</span>}
                       {unreadSessionIds.has(session.id) && (
@@ -1353,11 +1444,12 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               </button>
           </>
         </DraggableSessionRow>
+        )}
 
         {hasChildren && isExpanded && (
           <div>
             {visibleChildren.map(child => renderSession(child, level + 1, session))}
-            {showBranchLoading && (
+            {showBranchLoading && branchRow('loading', (
               <div
                 data-session-branch-loading={session.id}
                 aria-live="polite"
@@ -1366,8 +1458,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               >
                 {boundedChildPage ? 'Loading more child sessions…' : 'Loading child sessions…'}
               </div>
-            )}
-            {showBranchRetry && (
+            ))}
+            {showBranchRetry && branchRow('retry', (
               <button
                 type="button"
                 data-session-branch-retry={session.id}
@@ -1381,8 +1473,8 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                   ? boundedChildPage ? 'Failed to load more child sessions. Retry' : 'Failed to load child sessions. Retry'
                   : 'Child sessions are not loaded. Retry'}
               </button>
-            )}
-            {showMoreChildren && (
+            ))}
+            {showMoreChildren && branchRow('more', (
               <button
                 onClick={() => toggleShowMore(session.id)}
                 className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
@@ -1390,7 +1482,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               >
                 {`▼ Show ${Math.min(hiddenCount, MORE_VISIBLE_CHILDREN_STEP)} more...`}
               </button>
-            )}
+            ))}
             {!bounded && hiddenCount <= 0 && children.length > DEFAULT_VISIBLE_CHILDREN && (
               <button
                 onClick={() => toggleShowMore(session.id)}
@@ -1452,6 +1544,15 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
         label: 'Fork',
         onSelect: () => { void forkSession(contextMenu.sessionId) },
       },
+      ...(onCreateChildSession ? [{
+        key: 'create-child',
+        icon: <SquarePlus size={14} />,
+        label: 'Create child session',
+        onSelect: () => {
+          setContextMenu(null)
+          onCreateChildSession({ parentSessionId: contextMenu.sessionId, parentLabel: session?.displayName || contextMenu.sessionId, agent: session?.agent })
+        },
+      }] : []),
       {
         key: 'idle-notification',
         icon: idleNotificationMode

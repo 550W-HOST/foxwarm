@@ -5,7 +5,8 @@ import type { SessionIdleNotificationMode } from '../sessionIdleNotifications'
 import CreateTabButton from './CreateTabButton'
 import CodeLaunchButton from './CodeLaunchButton'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
-import AgentCreationMenu from './AgentCreationMenu'
+import { useState } from 'react'
+import AgentCreationMenu, { type ChildSessionRequest } from './AgentCreationMenu'
 import type { AgentSummary } from '../agentCreation'
 import type { WebUiNodeTarget } from '../nodeTargets'
 
@@ -35,7 +36,7 @@ interface SidebarProps {
   onCodeOpenInNewWindowChange: (enabled: boolean) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
   onCreateAgent: (agentId: string, inheritAgent?: string) => Promise<void>
-  onCreateSession: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code') => Promise<void>
+  onCreateSession: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code', parentSessionId?: string) => Promise<void>
   onToggleCollapsed: () => void
   isPeek?: boolean
   idleNotificationModes: Record<string, SessionIdleNotificationMode>
@@ -78,6 +79,7 @@ export default function Sidebar({
   onToggleIdleNotificationMode,
   bounded,
 }: SidebarProps) {
+  const [childRequest, setChildRequest] = useState<ChildSessionRequest | null>(null)
   const defaultNodeId = currentSessionRecord?.currentNode || 'master'
   const defaultPath = currentSessionRecord?.cwd || '/'
 
@@ -117,6 +119,8 @@ export default function Sidebar({
               compact
               onCreateAgent={onCreateAgent}
               onCreateSession={onCreateSession}
+              childRequest={childRequest}
+              onChildRequestHandled={() => setChildRequest(null)}
             />
           </div>
           <CodeLaunchButton
@@ -153,6 +157,7 @@ export default function Sidebar({
           unreadSessionIds={unreadSessionIds}
           onToggleIdleNotificationMode={onToggleIdleNotificationMode}
           bounded={bounded}
+          onCreateChildSession={setChildRequest}
           toolbarContainerClassName="p-2 pb-1"
           listContainerClassName="p-2 pt-1"
         />

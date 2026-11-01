@@ -366,6 +366,18 @@ test('session list labels omit parent and agent-main prefixes for child rows', a
   assert.equal(getSessionListDisplayId('standalone', null), 'standalone')
 })
 
+test('grouped rows shorten their Agent prefix under a main host or virtual group only', async () => {
+  const { getSessionListGroupedDisplayId, isSidebarGroupId } = await loadTypeScriptModule('../src/sessionListPresentation.ts')
+
+  assert.equal(getSessionListGroupedDisplayId('agent/task', 'agent/main'), '/task')
+  assert.equal(getSessionListGroupedDisplayId('agent/task', '//agent/agent'), '/task')
+  assert.equal(getSessionListGroupedDisplayId('0905_kg1ns', 'main'), '0905_kg1ns')
+  assert.equal(getSessionListGroupedDisplayId('0905_kg1ns', '//agent/main'), '0905_kg1ns')
+  assert.equal(getSessionListGroupedDisplayId('other/task', 'agent/main'), 'other/task')
+  assert.equal(isSidebarGroupId('//agent/main'), true)
+  assert.equal(isSidebarGroupId('agent/main'), false)
+})
+
 test('overlapping global session refreshes cannot let an older response hide a new child', async () => {
   const {
     applyLatestSessionListRequest,

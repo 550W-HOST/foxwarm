@@ -4,7 +4,7 @@ import { DndContext } from '@dnd-kit/core'
 import { Bot, Workflow, ClipboardList } from 'lucide-react'
 import Chat from './components/Chat'
 import SessionListCore from './components/SessionListCore'
-import AgentCreationMenu from './components/AgentCreationMenu'
+import AgentCreationMenu, { type ChildSessionRequest } from './components/AgentCreationMenu'
 import GlobalUiSettingsMenu from './components/GlobalUiSettingsMenu'
 import CreateTabButton from './components/CreateTabButton'
 import { API_BASE_PATH } from './config'
@@ -113,9 +113,9 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
     openSession(data.sessionId)
   }
 
-  const createSession = async (agentId: string, sessionId?: string, runtime: 'foxwarm' | 'claude-code' = 'foxwarm') => {
+  const createSession = async (agentId: string, sessionId?: string, runtime: 'foxwarm' | 'claude-code' = 'foxwarm', parentSessionId?: string) => {
     const response = await fetch(`${API_BASE_PATH}/sessions`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildSessionCreationBody(agentId, sessionId || '', runtime)),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildSessionCreationBody(agentId, sessionId || '', runtime, parentSessionId)),
     })
     const data = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(data.error || 'Failed to create session')
@@ -124,6 +124,7 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
     openSession(data.sessionId)
   }
 
+  const [childRequest, setChildRequest] = useState<ChildSessionRequest | null>(null)
   const currentRecord = sessions.find(item => item.id === currentSession || item.aliases?.includes(currentSession))
   const agentsActive = activeTarget?.kind === 'agents'
   return (
@@ -170,7 +171,7 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
               <Workflow className="h-4 w-4" />
               <span>Agents</span>
             </button>
-            <AgentCreationMenu agents={agents} currentAgent={currentRecord?.agent} compact onCreateAgent={createAgent} onCreateSession={createSession} />
+            <AgentCreationMenu agents={agents} currentAgent={currentRecord?.agent} compact onCreateAgent={createAgent} onCreateSession={createSession} childRequest={childRequest} onChildRequestHandled={() => setChildRequest(null)} />
           </div>
           {nodeTargets.some(node => node.id === (currentRecord?.currentNode || 'master') && getNodeTargetAvailability(node, 'vscode-pty').available) && <div className="mt-2">
             <CreateTabButton
@@ -181,7 +182,7 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
           </div>}
         </div>
         <div className="min-h-0 flex-1 border-t border-fw-border">
-          <SessionListCore sessions={sidebarSessions} currentSession={currentSession} onSelectSession={openSession} onKeepSession={openSession} toolbarContainerClassName="p-2 pb-1" listContainerClassName="p-2 pt-1" dragEnabled={false} idleNotificationModes={idleNotificationModes} unreadSessionIds={unreadSessionIds} onToggleIdleNotificationMode={toggleIdleNotificationMode} bounded={boundedPresentation} />
+          <SessionListCore sessions={sidebarSessions} currentSession={currentSession} onSelectSession={openSession} onKeepSession={openSession} toolbarContainerClassName="p-2 pb-1" listContainerClassName="p-2 pt-1" dragEnabled={false} idleNotificationModes={idleNotificationModes} unreadSessionIds={unreadSessionIds} onToggleIdleNotificationMode={toggleIdleNotificationMode} bounded={boundedPresentation} onCreateChildSession={setChildRequest} />
         </div>
       </div>
     </DndContext>

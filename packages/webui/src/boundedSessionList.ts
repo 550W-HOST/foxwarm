@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { API_BASE_PATH } from './config'
 import type { Session } from './components/SessionListCore'
 import { createSessionListRefreshScheduler, requestSessionListStreamOpenResync, type SessionListRefreshScheduler } from './sessionListRefresh'
-import type { SessionListOrderMode } from './sessionListPresentation'
+import { isSidebarGroupId, type SessionListOrderMode } from './sessionListPresentation'
 import { applyExactMissTombstone, captureExactAliasKeys, chunkBoundedIds, createEpochRows, mergeDeltaRows, mergeHttpRows, preserveKnownChildTotals, preserveKnownSequenceMessageCounts, pruneEpochRows, replayAtomicWindows, replayCursorBranches, replayCursorWindow, trackHttpRowsRequest } from './boundedSessionReplay'
 import { dispatchSessionIdleDeleted, getSessionIdleUnreadIds, SESSION_IDLE_UNREAD_EVENT } from './sessionIdleAttention'
 import { webUiRealtime } from './realtime'
@@ -255,7 +255,8 @@ export function useBoundedSessionList(options: { focusIds: string[]; exactIds?: 
   const loadMoreRoots = useCallback(async () => { const current = stateRef.current; await replayOwnedWindows(current.rootTarget + 50, new Map(branchTargetsRef.current)) }, [replayOwnedWindows])
   const loadMoreChildren = useCallback(async (id: string) => { const current = stateRef.current; const targets = new Map(branchTargetsRef.current); targets.set(id, (targets.get(id) || current.childPages.get(id)?.ids.length || 0) + 10); branchTargetsRef.current = targets; await replayBranchIntent([id], targets) }, [replayBranchIntent])
 
-  const subscriptionIds = useMemo(() => dedupe([...exactIds, ...(state.searchIds || []), ...structuralIds(state)]), [exactIds.join('\0'), (state.searchIds || []).join('\0'), structuralIds(state).join('\0')])
+  // Virtual Agent groups are server presentation rows, not subscribable Sessions.
+  const subscriptionIds = useMemo(() => dedupe([...exactIds, ...(state.searchIds || []), ...structuralIds(state)]).filter(id => !isSidebarGroupId(id)), [exactIds.join('\0'), (state.searchIds || []).join('\0'), structuralIds(state).join('\0')])
   useEffect(() => {
     if (options.connectStream === false) return
     let legacyPending = false; let legacyTimer: number | null = null

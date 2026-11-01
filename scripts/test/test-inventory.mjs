@@ -8,6 +8,7 @@ export const appRuntimeE2e = [
   'packages/webui/test/scrollState.e2e.mjs',
   'packages/webui/test/sessionHeader.e2e.mjs',
   'packages/webui/test/sessionListDrag.e2e.mjs',
+  'packages/webui/test/sessionListGrouping.e2e.mjs',
   'packages/webui/test/sessionListLiveRefresh.e2e.mjs',
   'packages/webui/test/systemTabs.e2e.mjs',
 ]

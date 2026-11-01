@@ -37,8 +37,9 @@ export default function CollapsedSidebar({
   onToggleCollapsed,
   unreadSessionIds = new Set(),
 }: CollapsedSidebarProps) {
+  // The rail shows openable Sidebar roots; virtual Agent groups are not Sessions.
   const rootSessions = sessions
-    .filter((s) => (s.pinned || !s.parentSessionId) && !s.archived)
+    .filter((s) => !s.presentationGroup && (s.pinned || !(s.sidebarParentId === undefined ? s.parentSessionId : s.sidebarParentId)) && !s.archived)
 
   return (
     <div className="foxwarm-sidebar-panel h-full w-12 flex flex-col items-center bg-fw-sidebar-surface border-r border-fw-border">
