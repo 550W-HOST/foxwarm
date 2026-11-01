@@ -16,7 +16,7 @@ const unix = { skip: process.platform === 'win32' && 'Unix executable fixture' }
 
 // Exercise the real CLI and inventory against a small tracked checkout. Test
 // programs record which component ran; no production application is started.
-async function fixture(t) {
+async function fixture(t, { browserPreparation = '' } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'fw-test-routing-'))
   t.after(() => fs.rm(root, { recursive: true, force: true }))
   const journal = path.join(root, 'calls.jsonl')
@@ -63,7 +63,29 @@ require('node:test')(${JSON.stringify(title)}, () => {
     // mjs fixtures use createRequire solely to reuse the tiny CJS test program.
     await write(file, (file.endsWith('.mjs') ? "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\n" : '') + program(label))
   }
-  await write('scripts/test/prepare-browser.mjs', `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(journal)}, JSON.stringify('browser-prepare') + '\\n');\n`)
+  await write('scripts/test/prepare-browser.mjs', `
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+assert.equal(process.env.HTTPS_PROXY, 'http://toolchain-proxy.invalid:8123');
+assert.equal(process.env.OPENAI_API_KEY, 'synthetic-caller-key');
+assert.equal(process.env.CONFIG_PATH, ${JSON.stringify(path.join(root, 'caller.yaml'))});
+const record = label => fs.appendFileSync(${JSON.stringify(journal)}, JSON.stringify(label) + '\\n');
+record('browser-prepare');
+if (${JSON.stringify(browserPreparation)} === 'pending') {
+  process.on('SIGTERM', () => { record('browser-stopped-with-zero'); process.exit(0); });
+  setInterval(() => {}, 1000);
+} else {
+  if (${JSON.stringify(browserPreparation)} === 'slow') await new Promise(resolve => setTimeout(resolve, 2000));
+  record('browser-ready');
+}
+`)
+  // Compress only the aggregate preparation deadlines in this owned runner process.
+  // A slow producer outlasts the old budget but completes within the corrected one.
+  await write('timer.cjs', `const original = global.setTimeout;
+global.setTimeout = (callback, delay, ...args) => original(callback,
+  delay === 600_000 ? 1000 : delay === 900_000 ? 5000 : delay, ...args);
+`)
+
   await write('scripts/multicaBridge.test.js', program('published-bin', 'public package bin fixture'))
   await write('packages/vscode-web/test/example.test.mjs', '// owned by the npm group\n')
   await write('dotnet/Foxwarm.Tests/Example.cs', '// owned by dotnet test\n')
@@ -88,10 +110,11 @@ if (${JSON.stringify(name)} === 'dotnet' && args[0] === 'test' && process.env.FI
       try {
         const result = await execute(process.execPath, ['scripts/test/run-tests.mjs', target], {
           cwd: root, timeout: 30_000, maxBuffer: 4 * 1024 * 1024,
-          env: { ...process.env, NODE_OPTIONS: '', NODE_TEST_CONTEXT: undefined, FOXWARM_TEST_RUN_ROOT: '',
+          env: { ...process.env, NODE_OPTIONS: browserPreparation ? `--require=${path.join(root, 'timer.cjs')}` : '', NODE_TEST_CONTEXT: undefined, FOXWARM_TEST_RUN_ROOT: '',
             FOXWARM_TEST_ARTIFACT_DIR: path.join(root, 'artifacts'),
             FOXWARM_E2E_CHROMIUM: path.join(root, 'chromium'),
             PATH: path.join(root, 'bin') + path.delimiter + process.env.PATH,
+            HTTPS_PROXY: 'http://toolchain-proxy.invalid:8123',
             OPENAI_API_KEY: 'synthetic-caller-key', CONFIG_PATH: path.join(root, 'caller.yaml'),
             FIXTURE_MANAGED_FAIL: managedFail ? '1' : '' },
         })
@@ -99,6 +122,10 @@ if (${JSON.stringify(name)} === 'dotnet' && args[0] === 'test' && process.env.FI
       } catch (error) { return error }
     },
     async calls() { return (await fs.readFile(journal, 'utf8')).trim().split('\n').map(JSON.parse) },
+    async summary() {
+      const [run] = await fs.readdir(path.join(root, 'artifacts'))
+      return JSON.parse(await fs.readFile(path.join(root, 'artifacts', run, 'summary.json'), 'utf8'))
+    },
   }
 }
 
@@ -144,4 +171,26 @@ test('default unit routing still propagates managed failures', unix, async t => 
   assert.ok(calls.some(call => call.startsWith('dotnet:test ')))
   assert.ok(calls.includes('runtime-helpers'))
   assert.equal(calls.some(call => /reference|selftest/.test(call)), false)
+})
+
+test('browser preparation can outlast the former aggregate budget before isolated fixtures start', unix, async t => {
+  const f = await fixture(t, { browserPreparation: 'slow' })
+  const result = await f.run('browser')
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  assert.deepEqual(await f.calls(), ['browser-prepare', 'browser-ready', 'webui-browser'])
+  const summary = await f.summary()
+  assert.deepEqual(summary.map(step => step.step), ['prepare', 'example.e2e.mjs'])
+  assert.equal(summary[0].timedOut, false)
+})
+
+test('browser preparation deadline fences fixtures even when the terminated producer exits zero', unix, async t => {
+  const f = await fixture(t, { browserPreparation: 'pending' })
+  const result = await f.run('browser')
+  assert.equal(result.code, 1, result.stdout + result.stderr)
+  assert.deepEqual(await f.calls(), ['browser-prepare', 'browser-stopped-with-zero'])
+  const summary = await f.summary()
+  assert.equal(summary.length, 1)
+  assert.equal(summary[0].step, 'prepare')
+  assert.equal(summary[0].timedOut, true)
+  assert.equal(summary[0].code, 1)
 })

@@ -189,7 +189,8 @@ function browserGroup() {
   return {
     name: 'webui-browser',
     steps: [
-      { ...directStep('prepare', process.execPath, ['scripts/test/prepare-browser.mjs'], 600_000), prepareDependencies: true },
+      // Cold Code assets plus the serial managed builds take nearly ten minutes in CI.
+      { ...directStep('prepare', process.execPath, ['scripts/test/prepare-browser.mjs'], 900_000), prepareDependencies: true },
       ...files.map(file => nodeTestStep(path.basename(file), [file], {
       concurrency: 1,
       // Workbench exercises many complete application mounts and navigation paths.
