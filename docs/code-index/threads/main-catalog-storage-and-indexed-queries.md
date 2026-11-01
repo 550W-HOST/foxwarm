@@ -302,4 +302,3 @@ lifecycle path (descendant previews, stop/delete/archive cascades) keep real
 `parent_session_id`. Membership changes advance the catalog revision, so
 clients converge through the existing presentation-revision invalidation and
 bounded replay rather than per-row regroup deltas.
-
