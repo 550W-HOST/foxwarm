@@ -11,7 +11,7 @@ const timeFormatter = new URL('../src/components/timelineTime.ts', import.meta.u
 let browser, server, fixture, stylesheet, baseUrl
 
 const source = `
-import React from 'react'
+import React, { useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import HistorySearchView from ${JSON.stringify(entry)}
 import { initializeThemeRuntime, setThemeSelection } from ${JSON.stringify(themeRuntime)}
@@ -34,6 +34,11 @@ window.fetch = async (input, options = {}) => {
   const url = new URL(input, location.href)
   window.__requests.push(url.pathname + url.search)
   const response = body => Promise.resolve(new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } }))
+  if (url.pathname.endsWith('/api/setup/status')) {
+    const capability = { capabilities: { historySearch: { available: false, reason: 'Conversation search is not enabled on this server.' } } }
+    if (new URLSearchParams(location.search).has('availability')) return new Promise(resolve => { window.__resolveAvailability = () => resolve(response(capability)) })
+    return response({ capabilities: { historySearch: { available: true } } })
+  }
   if (url.pathname.endsWith('/api/session-list/by-id')) {
     const body = JSON.parse(options.body)
     window.__nameRequests.push(body)
@@ -71,7 +76,15 @@ window.fetch = async (input, options = {}) => {
   if (url.pathname.endsWith('/context-blocks/3/expand')) return response({ sessionId: 'beta', blockId: 3, expansionKind: 'messages', messages: [msg('user', 20, [{ text: 'nested beta detail' }])] })
   return response({})
 }
-createRoot(document.getElementById('app')).render(<HistorySearchView isMobile={false} timelineView="grouped" showUsageBadge={false} showUserMessageMetadata={false} knownSessions={['alpha', 'beta']} />)
+function Fixture() {
+  const [visible, setVisible] = useState(true)
+  window.fixtureSetVisible = setVisible
+  const view = <HistorySearchView visible={visible} isMobile={false} timelineView="grouped" showUsageBadge={false} showUserMessageMetadata={false} knownSessions={['alpha', 'beta']} />
+  return new URLSearchParams(location.search).has('availability')
+    ? <><input id="outside-input" /><div style={{ display: visible ? 'block' : 'none' }}>{view}</div></>
+    : view
+}
+createRoot(document.getElementById('app')).render(<Fixture />)
 `
 
 before(async () => {
@@ -263,5 +276,29 @@ test('a pasted range continues inside its bound before ordinary later browsing',
     const requests = await page.evaluate(() => window.__requests.filter(url => url.includes('/history/window')))
     assert.equal(requests.some(url => url.includes('afterSeq=10') && url.includes('targetEndSeq=200')), true)
     assert.equal(requests.some(url => url.includes('afterSeq=11') && !url.includes('targetEndSeq')), true)
+  } finally { await page.close() }
+})
+
+
+test('shown search focuses once, async availability keeps scope focus, and disabled search still opens exact references', async () => {
+  const page = await browser.newPage()
+  try {
+    await page.goto(baseUrl + '?availability=delayed')
+    await page.waitForFunction(() => document.activeElement?.hasAttribute('data-history-query-input'))
+    await page.waitForFunction(() => typeof window.__resolveAvailability === 'function')
+    await page.focus('[data-history-session-input]')
+    await page.evaluate(() => window.__resolveAvailability())
+    await page.waitForFunction(() => document.querySelector('[data-history-search-hint]')?.textContent.includes('not enabled'))
+    assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-history-session-input')), true)
+    assert.match(await page.$eval('[data-history-search-hint]', node => node.textContent), /exact message references/)
+    await page.evaluate(() => { window.savedHistoryInput = document.querySelector('[data-history-query-input]'); window.fixtureSetVisible(false) })
+    await page.focus('#outside-input')
+    await page.evaluate(() => window.fixtureSetVisible(true))
+    await page.waitForFunction(() => document.activeElement === window.savedHistoryInput)
+    await page.type('[data-history-query-input]', 'sessionId=alpha msg#10-11')
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(() => document.querySelector('[data-history-search-results]')?.textContent.includes('exact archive message'))
+    assert.equal(await page.evaluate(() => window.__requests.some(url => url.includes('/history/search?'))), false)
+    assert.equal(await page.evaluate(() => window.__requests.some(url => url.includes('/history/window?'))), true)
   } finally { await page.close() }
 })

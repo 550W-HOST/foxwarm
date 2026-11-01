@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Http.Features;
@@ -8,6 +9,57 @@ namespace Foxwarm.Code;
 internal sealed partial class CodeWorkbench
 {
     private static readonly FileExtensionContentTypeProvider Mime = new();
+
+    private string UnavailableHtml() =>
+        $$"""
+            <!doctype html>
+            <html lang="en">
+            <head>
+              <meta charset="utf-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1" />
+              <title>Code is not built · Foxwarm</title>
+              <style>
+                :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+                * { box-sizing: border-box; }
+                body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #f3f4f6; color: #111827; padding: 24px; }
+                main { width: min(720px, 100%); border: 1px solid #d1d5db; border-radius: 16px; background: white; padding: clamp(24px, 5vw, 44px); box-shadow: 0 16px 50px rgba(15, 23, 42, .09); }
+                .eyebrow { margin: 0 0 10px; color: #2563eb; font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+                h1 { margin: 0; font-size: clamp(28px, 5vw, 42px); letter-spacing: -.03em; }
+                p { color: #4b5563; line-height: 1.6; }
+                .option { margin-top: 18px; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; }
+                .option strong { display: block; margin-bottom: 8px; }
+                code { display: block; overflow-x: auto; border-radius: 8px; background: #111827; color: #f9fafb; padding: 12px 14px; white-space: nowrap; }
+                .hint { margin-top: 20px; font-size: 13px; color: #6b7280; }
+                .path { overflow-wrap: anywhere; }
+                @media (prefers-color-scheme: dark) {
+                  body { background: #030712; color: #f9fafb; }
+                  main { border-color: #374151; background: #111827; box-shadow: none; }
+                  p, .hint { color: #9ca3af; }
+                  .option { border-color: #374151; }
+                  code { background: #030712; }
+                }
+              </style>
+            </head>
+            <body>
+              <main>
+                <p class="eyebrow">Optional component</p>
+                <h1>Code is not built</h1>
+                <p>This Foxwarm installation does not currently include the optional browser workbench assets. Choose one preparation method, then reload this page.</p>
+                <section class="option">
+                  <strong>Build the MIT-licensed Code - OSS workbench from source</strong>
+                  <code>npm run build:code</code>
+                </section>
+                <section class="option">
+                  <strong>Download Microsoft's prebuilt workbench for development or licensed internal use</strong>
+                  <code>npm run download:code</code>
+                </section>
+                <p class="hint">Both commands are intentionally excluded from the normal <code style="display:inline;padding:2px 5px">npm run build</code> because preparing Code is large and slow. Assets are expected at <span class="path">{{WebUtility.HtmlEncode(
+                assetRoot
+            )}}</span>.</p>
+              </main>
+            </body>
+            </html>
+            """;
 
     internal bool IsCapabilityRequest(HttpContext context) =>
         context.Request.Method == "GET" && PreFile(context.Request.Path, out _);
@@ -493,7 +545,7 @@ internal sealed partial class CodeWorkbench
                         {
                             context.Response.StatusCode = 503;
                             await context.Response.WriteAsync(
-                                "<!doctype html><meta charset=\"utf-8\"><title>Code is unavailable</title><h1>Code assets are not prepared</h1><p>Prepare the official Code workbench assets and restart Code.</p>",
+                                UnavailableHtml(),
                                 context.RequestAborted
                             );
                         }

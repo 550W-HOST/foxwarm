@@ -12,6 +12,8 @@ Agent routes delegate catalog/AgentMemory/SessionManager Agent operations. Trust
 
 `GET /api/setup/status` includes `capabilities.claudeCode: {available, reason}` for the shared New Session selector. This is a local launcher check from active startup configuration, not account or model health; the [Claude runtime unit](./session-claude-runtime.md#launcher-availability) owns its prerequisite, creation and retry semantics.
 
+The same status response includes `capabilities.historySearch: {available, reason}` using the active Vector service's enabled/ready state, without probing its embedding endpoint. The [History viewer](./webui-history-search.md) uses it for an input-area hint while exact Archive message references retain their independent path.
+
 ## Contract and side effects
 
 Setup/Agent changes are authenticated and explicit. Setup save success means the validated file was installed. Shared access identities and registered inbound MCP apply live; external-channel installation returns actual managed reload and partial results. Unsupported adapters remain unavailable rather than being reported as successfully applied. Model/settings updates are staged through manager/save-lane boundaries where they affect a Session. Agent memory selection can affect later prompts but does not rewrite active history. Unsupported remote/managed/child fields return explicit validation errors rather than being stored as accepted consumers.

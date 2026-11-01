@@ -30,6 +30,18 @@ internal sealed partial class WebUIChannel
                             ["channels"] = configuration.ChannelDiagnostics(webUiRunning: true),
                             ["capabilities"] = new JsonObject
                             {
+                                ["historySearch"] = new JsonObject
+                                {
+                                    ["available"] =
+                                        sessions.Vector.Configuration.Enabled
+                                        && sessions.Vector.Ready,
+                                    ["reason"] =
+                                        !sessions.Vector.Configuration.Enabled
+                                            ? "Conversation search is not enabled on this server."
+                                        : !sessions.Vector.Ready
+                                            ? "Conversation search is temporarily unavailable."
+                                        : null,
+                                },
                                 ["claudeCode"] = new JsonObject
                                 {
                                     ["available"] = claudeUnavailable is null,

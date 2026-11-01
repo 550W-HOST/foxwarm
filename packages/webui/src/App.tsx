@@ -1590,7 +1590,7 @@ function App() {
     ;(window as any).foxwarmTest = helper
   }, [focusedActiveTab, sessions])
 
-  const renderTabContent = (tab: WorkbenchTab, onBack?: () => void) => {
+  const renderTabContent = (tab: WorkbenchTab, onBack?: () => void, visible = true) => {
     const sourcePaneId = findPaneContainingTab(root, tab.id)?.id
 
     if (tab.type === 'chat') {
@@ -1648,7 +1648,7 @@ function App() {
     if (tab.type === 'logs') return <Suspense fallback={<LazyViewFallback label="Loading logs…" />}><LogsView onBack={onBack} /></Suspense>
 
     if (tab.type === 'search') return <HistorySearchView
-      mobileHome={tab.id.startsWith('mobile:')} tabId={tab.id} isMobile={isMobile} timelineView={timelineView}
+      visible={visible} mobileHome={tab.id.startsWith('mobile:')} tabId={tab.id} isMobile={isMobile} timelineView={timelineView}
       showUsageBadge={showUsageBadge} showUserMessageMetadata={showUserMessageMetadata}
       knownSessions={sidebarSessions.map(session => session.id)} onBack={onBack} onOpenSession={openChatTab}
       initialDraft={{ query: tab.searchQuery || '', agentName: tab.searchAgentName || '', sessionId: tab.searchSessionId || '' }}
@@ -2010,7 +2010,7 @@ function App() {
     return <WorkbenchContentHost key={tab.id} {...props} tab={tab} visible={visible}
       navigationPending={pendingChatNavigation?.paneId === pane.id ? pendingChatNavigation : null}
       canClose={!(tab.type === 'setup' && setupOobe)}
-      renderContent={() => renderTabContent(tab, isMobile ? handleBackToList : undefined)} />
+      renderContent={() => renderTabContent(tab, isMobile ? handleBackToList : undefined, visible)} />
   })}</WorkbenchContentLayer></SessionMessageNamesContext.Provider>
 
   const renderWorkbenchSurface = (content: ReactNode) => (
@@ -2073,7 +2073,7 @@ function App() {
     return renderWorkbenchSurface(<>
       <div style={{display: showHome ? 'contents' : 'none'}}>
         <SessionList
-          renderPage={page => renderTabContent({id: `mobile:${page}`, type: page, title: page === 'setup' ? 'Settings' : page === 'tasks' ? 'Tasks' : 'Search'})}
+          renderPage={(page, visible) => renderTabContent({id: `mobile:${page}`, type: page, title: page === 'setup' ? 'Settings' : page === 'tasks' ? 'Tasks' : 'Search'}, undefined, showHome && visible)}
           sessions={sidebarSessions}
           agents={agents}
           currentSession={currentContextSessionId}

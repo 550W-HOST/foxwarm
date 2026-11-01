@@ -84,6 +84,24 @@ public sealed class CodeRoutesTests
     }
 
     [Fact]
+    public async Task Missing_Code_assets_return_the_actionable_noncacheable_setup_page()
+    {
+        await using var f = await Fixture.Create();
+        using var response = await f.Client.GetAsync("/vscode-web");
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("text/html", response.Content.Headers.ContentType!.MediaType);
+        Assert.True(response.Headers.CacheControl!.NoStore);
+        var html = await response.Content.ReadAsStringAsync();
+        Assert.Contains("<!doctype html>", html);
+        Assert.Contains("Code is not built", html);
+        Assert.Contains("npm run build:code", html);
+        Assert.Contains("npm run download:code", html);
+        Assert.Contains(WebUtility.HtmlEncode(f.Assets), html);
+        using var asset = await f.Client.GetAsync("/vscode-web/static/out/nls.messages.js");
+        Assert.Equal(HttpStatusCode.NotFound, asset.StatusCode);
+    }
+
+    [Fact]
     public async Task Local_Code_native_metadata_and_link_errors_follow_the_filesystem_service_contract()
     {
         if (!OperatingSystem.IsLinux())

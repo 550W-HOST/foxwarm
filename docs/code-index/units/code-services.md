@@ -28,6 +28,8 @@ Code workbench assets use `<resource-root>/packages/vscode-web/assets/vscode-web
 
 Direct launches without a folder request open the application root. Embedded launches retain selected `state/vscode-web/foxwarm.code-workspace`; persisted folders, explicit settings and malformed files keep their existing behavior. Managed webviews retain the same-public-origin process capability. Source retains its automatic hashed localhost origin and same-origin capability fallback elsewhere. No configured-origin, default-folder or workspace-path environment branch participates.
 
+When required workbench assets are missing, authenticated `/vscode-web` returns the original Source-style complete setup page with status 503 and `Cache-Control: no-store`. `UnavailableHtml` includes the `npm run build:code` and `npm run download:code` preparation choices, light/dark responsive styling and the HTML-escaped expected asset directory. The Code launcher remains available; individual missing static assets remain 404. This preserves the optional-workbench preparation path rather than adding a launch capability gate.
+
 ## Asset adaptation and version evidence
 
 The authenticated static route adapts only `out/vs/workbench/workbench.web.main.internal.js` from the installed optional asset directory. `PatchWorkbench` matches the Source-supported webview-origin hash helper and clipboard-probe bodies, capturing current generated identifiers rather than pinning minifier names. Only the first supported helper/probe is rewritten; changed shapes fail with an explicit unavailable response. The original asset file is not modified. Capability bootstrap/CSP rewriting, normal auth and deployment-relative URLs keep their existing owners.
@@ -36,7 +38,7 @@ The source preparation pin is Code-OSS 1.141.0; route-shape tests do not prove a
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Channels/CodeRoutesTests.cs` (real served files/Git, native metadata/link/error/partial-rename behavior, missing Git, renamed asset identifiers, unchanged source bytes and auth); `packages/webui/test/mainHostWorkbenchParity.e2e.mjs` (normal host/original App, optional official Code-OSS FS/SCM/PTY extensions, exact immutable Git content status/body and rendered diff within one 30-second bound rather than treating the mounted editor shell as loaded content); `NodeServiceTransportTests.cs`; `packages/webui/test/mainHostNodeCode.e2e.mjs` (owned hosts, unchanged official CLI, original WebUI and optional official workbench/browser extensions).
+`dotnet/Foxwarm.Tests/Channels/CodeRoutesTests.cs` (missing-assets setup page/status/cache contract, real served files/Git, native metadata/link/error/partial-rename behavior, missing Git, renamed asset identifiers, unchanged source bytes and auth); `packages/webui/test/mainHostWorkbenchParity.e2e.mjs` (normal host/original App, optional official Code-OSS FS/SCM/PTY extensions, exact immutable Git content status/body and rendered diff within one 30-second bound rather than treating the mounted editor shell as loaded content); `NodeServiceTransportTests.cs`; `packages/webui/test/mainHostNodeCode.e2e.mjs` (owned hosts, unchanged official CLI, original WebUI and optional official workbench/browser extensions).
 
 `packages/webui/test/dotnetCliNodeCodeMain.e2e.mjs` exercises the .NET CLI with normal Source/.NET Main, original App and prepared official FS/SCM extensions, without claiming remote PTY support.
 

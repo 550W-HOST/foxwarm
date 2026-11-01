@@ -13,7 +13,7 @@ import type { WebUiNodeTarget } from '../nodeTargets'
 
 type HomeTab = 'sessions' | 'tasks' | 'search' | 'setup'
 interface SessionListProps {
-  renderPage: (tab: Exclude<HomeTab, 'sessions'>) => ReactNode
+  renderPage: (tab: Exclude<HomeTab, 'sessions'>, visible: boolean) => ReactNode
   sessions: Session[]
   agents: AgentSummary[]
   currentSession?: string
@@ -133,7 +133,7 @@ export default function SessionList({
       </div>
       </section>
       {homeTabs.filter(tab => tab.id !== 'sessions' && visited.has(tab.id)).map(tab => <section key={tab.id} id={`mobile-panel-${tab.id}`} role="tabpanel" aria-labelledby={`mobile-tab-${tab.id}`}
-        className="mobile-primary-panel min-h-0 flex-1 flex-col overflow-hidden" style={{display: primaryTab === tab.id ? 'flex' : 'none'}}>{renderPage(tab.id as Exclude<HomeTab, 'sessions'>)}</section>)}
+        className="mobile-primary-panel min-h-0 flex-1 flex-col overflow-hidden" style={{display: primaryTab === tab.id ? 'flex' : 'none'}}>{renderPage(tab.id as Exclude<HomeTab, 'sessions'>, primaryTab === tab.id)}</section>)}
       <nav data-sidebar-footer role="tablist" aria-label="Main navigation" className="mobile-glass-surface mobile-primary-nav flex items-center gap-1 px-2 py-1.5"
         onKeyDown={event => {
           if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return

@@ -93,7 +93,8 @@ function HistoryRangeRow({ result, direction, onLoad }: {
 
 export type HistorySearchDraft = { query: string; agentName: string; sessionId: string }
 
-export default function HistorySearchView({ mobileHome = false, tabId, isMobile, timelineView, showUsageBadge, showUserMessageMetadata, knownSessions = [], onBack, onOpenSession, initialDraft, onDraftChange, onSearchStarted, header }: {
+export default function HistorySearchView({ visible = true, mobileHome = false, tabId, isMobile, timelineView, showUsageBadge, showUserMessageMetadata, knownSessions = [], onBack, onOpenSession, initialDraft, onDraftChange, onSearchStarted, header }: {
+  visible?: boolean
   mobileHome?: boolean
   tabId?: string
   isMobile: boolean
@@ -113,6 +114,8 @@ export default function HistorySearchView({ mobileHome = false, tabId, isMobile,
   const instanceId = useId().replace(/[^a-zA-Z0-9_-]/g, '')
   const queryInputId = `history-search-query-${instanceId}`
   const sessionDatalistId = `history-known-sessions-${instanceId}`
+  const queryInputRef = useRef<HTMLInputElement>(null)
+  const [searchHint, setSearchHint] = useState('')
   const [query, setQuery] = useState(initialDraft?.query || '')
   const [agentName, setAgentName] = useState(initialDraft?.agentName || '')
   const [sessionId, setSessionId] = useState(initialDraft?.sessionId || '')
@@ -123,6 +126,25 @@ export default function HistorySearchView({ mobileHome = false, tabId, isMobile,
   const [searched, setSearched] = useState(false)
   const generation = useRef(0)
   const requests = useRef(new Set<AbortController>())
+
+  useEffect(() => {
+    if (visible) queryInputRef.current?.focus({ preventScroll: true })
+  }, [visible])
+
+  useEffect(() => {
+    if (!visible) return
+    const controller = new AbortController()
+    setSearchHint('Checking search availability…')
+    void readHistory('/setup/status', controller.signal).then(status => {
+      const capability = status?.capabilities?.historySearch
+      if (typeof capability?.available !== 'boolean') throw new Error('Search status missing')
+      if (!controller.signal.aborted) setSearchHint(capability.available ? ''
+        : `${capability.reason || 'Conversation search is unavailable.'} You can still open exact message references such as sessionId=… msg#123.`)
+    }).catch(() => {
+      if (!controller.signal.aborted) setSearchHint('Search availability could not be checked. You can still open exact message references.')
+    })
+    return () => controller.abort()
+  }, [visible])
 
   const invalidate = () => {
     generation.current += 1
@@ -274,7 +296,7 @@ export default function HistorySearchView({ mobileHome = false, tabId, isMobile,
         <form id={`history-form-${instanceId}`} onSubmit={submit} className="space-y-3 rounded-lg border border-fw-border bg-fw-surface p-4">
           <label className="block text-sm font-medium" htmlFor={queryInputId}>Search or message reference</label>
           <div className="flex gap-2">
-            <input id={queryInputId} data-history-query-input value={query} onChange={event => { const value = event.target.value; setQuery(value); onDraftChange?.({ query: value, agentName, sessionId }) }} placeholder="Search conversations or paste sessionId=… msg#123" className="min-w-0 flex-1 rounded border border-fw-border bg-fw-canvas px-3 py-2 text-fw-text-strong" />
+            <input ref={queryInputRef} id={queryInputId} data-history-query-input value={query} onChange={event => { const value = event.target.value; setQuery(value); onDraftChange?.({ query: value, agentName, sessionId }) }} placeholder="Search conversations or paste sessionId=… msg#123" className="min-w-0 flex-1 rounded border border-fw-border bg-fw-canvas px-3 py-2 text-fw-text-strong" />
             {!mobileHome && <button type="submit" disabled={loading} className="inline-flex items-center gap-1 rounded bg-fw-accent px-3 py-2 text-fw-accent-text disabled:opacity-50"><Search size={16} /> Search</button>}
           </div>
           <div className="flex flex-wrap gap-2">
@@ -286,6 +308,7 @@ export default function HistorySearchView({ mobileHome = false, tabId, isMobile,
               <datalist id={sessionDatalistId} data-history-session-list>{knownSessions.map(id => <option key={id} value={id} />)}</datalist>
             </label>
           </div>
+          {searchHint && <p data-history-search-hint role="status" className="text-xs text-fw-text-muted">{searchHint}</p>}
         </form>
         {loading && <p role="status">Searching…</p>}
         {error && <p role="alert" className="rounded border border-fw-warning p-3 text-fw-warning">{error}</p>}
