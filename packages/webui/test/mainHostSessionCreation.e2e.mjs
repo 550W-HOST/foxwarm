@@ -16,6 +16,14 @@ const launched = join(fixture.root, 'wrapper-invoked')
 await writeFile(configPath, `bot: {httpPort: ${fixture.port}}\nvector: false\nclaudeCode: {executable: ${JSON.stringify(launcher)}}\n`)
 await writeFile(fixture.modelPath, JSON.stringify({ default: 'local/wire', providers: { local: { providerType: 'openai-responses', baseUrl: 'http://127.0.0.1:1', models: ['wire'] } } }))
 const roots = async () => (await fixture.api('GET', '/api/session-list/sidebar?limit=50')).body.sessions.map(row => row.id)
+// Top-level Sessions are shown under their Agent's main Session; read the rows beside the one shown.
+const sidebarSiblings = async id => {
+  const exact = (await fixture.api('POST', '/api/session-list/by-id', { ids: [id] })).body
+  const parent = exact.results[0]?.session?.sidebarParentId
+  if (!parent) return roots()
+  const page = await fixture.api('POST', '/api/session-list/children', { parents: [{ parentSessionId: parent }] })
+  return page.body.children[0].sessions.map(row => row.id)
+}
 const saved = async id => JSON.parse(await readFile(join(fixture.data, 'state/sessions', id + '.json'), 'utf8'))
 let page
 async function openDialog() {
@@ -29,7 +37,7 @@ async function submit(path) {
   const actual = await response, body = await actual.json()
   assert.equal(actual.status(), path === '/api/agents' ? 201 : 200, JSON.stringify(body))
   await page.waitForSelector('[role="dialog"]', { hidden: true })
-  await until(async () => (await roots())[0] === body.sessionId, 'created root first')
+  await until(async () => (await sidebarSiblings(body.sessionId))[0] === body.sessionId, 'created Session first')
   return body.sessionId
 }
 try {
@@ -60,7 +68,9 @@ try {
   await page.click('[role="dialog"] button[aria-label="New agent"]')
   await page.type('[role="dialog"] input[placeholder="my-agent"]', 'frontend-agent')
   assert.equal(await submit('/api/agents'), 'frontend-agent/main')
-  assert.deepEqual((await roots()).slice(0, 4), ['frontend-agent/main', 'browser/Explicit_ID', scoped, ordinary])
+  // The lone unparented main-Agent Session stays top-level; browser Sessions are shown under browser/main.
+  assert.deepEqual((await roots()).slice(0, 2), ['frontend-agent/main', ordinary])
+  assert.deepEqual((await sidebarSiblings(scoped)).slice(0, 2), ['browser/Explicit_ID', scoped])
   for (const id of [ordinary, scoped, 'browser/Explicit_ID', 'frontend-agent/main']) {
     const state = await saved(id)
     const history = await fixture.api('GET', '/api/sessions/' + encodeURIComponent(id) + '/history')
@@ -73,7 +83,9 @@ try {
   }
   await page.reload({ waitUntil: 'networkidle0' })
   await page.waitForSelector('.foxwarm-chat-root')
-  assert.deepEqual((await roots()).slice(0, 4), ['frontend-agent/main', 'browser/Explicit_ID', scoped, ordinary])
+  // The lone unparented main-Agent Session stays top-level; browser Sessions are shown under browser/main.
+  assert.deepEqual((await roots()).slice(0, 2), ['frontend-agent/main', ordinary])
+  assert.deepEqual((await sidebarSiblings(scoped)).slice(0, 2), ['browser/Explicit_ID', scoped])
   // The original App discovers a wrapper installed after startup without executing it.
   await writeFile(launcher, `#!/bin/sh\nprintf invoked > '${launched}'\n`, { mode: 0o700 })
   await openDialog()

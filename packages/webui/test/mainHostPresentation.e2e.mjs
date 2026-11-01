@@ -61,7 +61,9 @@ try {
   socket.on('message', raw => frames.push(JSON.parse(String(raw)))); await once(socket, 'open')
   socket.send(JSON.stringify({ type: 'set-subscriptions', revision: 1, sessionIds: [], sessionListIds: ['root', 'child', 'foreign'], sessionListActive: true }))
   await until(() => frames.some(frame => frame.type === 'subscriptions-applied'), 'Main-only watch applied')
-  const first = await fixture.api('GET', '/api/session-list/sidebar?limit=3&childLimit=2'), cursor = first.body.nextCursor
+  // Unparented main-Agent rows share one Agent group row; a one-row page still leaves a continuation cursor.
+  const first = await fixture.api('GET', '/api/session-list/sidebar?limit=1&childLimit=2'), cursor = first.body.nextCursor
+  assert(cursor)
   const archived = await action('root-alias', 'archive', { includeDescendants: true })
   assert.equal(archived.matchedCount, 1004); assert.equal(archived.changedCount, 1002); assert(archived.matchedSessionIds.includes('grandchild'))
   const unarchived = await action('root', 'archive', { archived: false, includeDescendants: true }); assert.deepEqual(unarchived.matchedSessionIds, ['root']); assert.equal(unarchived.includeDescendants, false); assert.equal((await dto('child')).archived, true)
@@ -75,7 +77,7 @@ try {
   await action('self', 'pin', { pinned: true }); await action('self', 'archive', {})
   const exactTree = await action('A', 'archive', { includeDescendants: true }); assert.deepEqual(exactTree.matchedSessionIds, ['A', 'alias-child']); assert.equal((await dto('B')).archived, false); assert.equal((await dto('ambiguous-child')).archived, false)
   await action('root', 'move', { parentSessionId: 'ui-child' }, 400)
-  assert.equal((await fixture.api('GET', '/api/session-list/sidebar?limit=3&childLimit=2&cursor=' + encodeURIComponent(cursor))).body.reset, true)
+  assert.equal((await fixture.api('GET', '/api/session-list/sidebar?limit=1&childLimit=2&cursor=' + encodeURIComponent(cursor))).body.reset, true)
   await until(() => frames.some(frame => frame.type === 'session-list-invalidated'), 'committed mutation invalidates watch')
    assert.equal(requests.length, 0)
   for (const [id, bytes] of originals) assert.equal(await readFile(join(sessions, id + '.json'), 'utf8'), bytes, id + ' byte-identical')
@@ -106,6 +108,15 @@ try {
   await page.evaluate(() => { location.hash = 'architecture' }); await page.waitForSelector('.foxwarm-architecture-surface-tab'); await page.waitForSelector('[data-session-id="ui-child"]')
   await page.click('button[aria-label^="Session list mode"]'); await page.waitForFunction(() => document.querySelector('button[aria-label^="Session list mode"]')?.getAttribute('aria-label') === 'Session list mode: Time')
   await sleep(500)
+  // target is an unparented main-Agent row inside the main Agent group; load the group's own rows (its
+  // continuation is one indentation level in, unlike root's cold children) until it is shown.
+  for (let attempt = 0; attempt < 10 && !(await page.$('[data-session-id="target"]')); attempt++) {
+    await page.evaluate(() => {
+      const group = document.querySelector('[data-session-group="main"]')
+      if (group?.getAttribute('aria-expanded') !== 'true') group?.click()
+      else [...document.querySelectorAll('button')].find(item => /Show .* more\.\.\./.test(item.textContent) && item.style.paddingLeft === '44px')?.click()
+    }); await sleep(300)
+  }
   await page.$eval('[data-session-id="ui-child"]', node => node.scrollIntoView({ block: 'nearest' })); await sleep(200)
   const rectangles = await page.evaluate(() => ['ui-child', 'target'].map(id => { const r = document.querySelector('[data-session-id="' + id + '"]')?.getBoundingClientRect(); return r && { x: r.x, y: r.y, width: r.width, height: r.height } }))
   const [a, b] = rectangles; assert(a && b); console.log('Original drag rectangles: ' + JSON.stringify(rectangles))

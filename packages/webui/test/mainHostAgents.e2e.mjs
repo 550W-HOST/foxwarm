@@ -401,7 +401,8 @@ try {
   const exact = (await request('POST', '/api/session-list/by-id' , { ids: [parentId, 'no-such-session'], includePaths: true })).body
   assert.equal(exact.results[0].session.displayName, 'Alpha named parent'); assert.equal(exact.results[1].session, null)
   const childPage = (await request('POST', '/api/session-list/children', { mode: 'default', limit: 2, parents: [{ parentSessionId: parentId }] })).body
-  assert.equal(childPage.children[0].sessions.length, 2); assert.equal(childPage.children[0].total, 8)
+  // 8 real children plus the 54 other top-level alpha Sessions shown under alpha/main (secondId and 53 page_*).
+  assert.equal(childPage.children[0].sessions.length, 2); assert.equal(childPage.children[0].total, 62)
   const childMore = (await request('POST', '/api/session-list/children', { mode: 'default', limit: 2,
     parents: [{ parentSessionId: parentId, cursor: childPage.children[0].nextCursor }] })).body
   assert(!childMore.reset); assert(childMore.children[0].sessions.every(row => !childPage.children[0].sessions.some(first => first.id === row.id)))
@@ -410,8 +411,16 @@ try {
   assert.equal((await request('GET', `/api/session-list/sidebar?limit=2&cursor=${encodeURIComponent(beforeListChange)}`)).body.reset, true)
   const metadataSearch = (await request('GET', '/api/session-list/search?q=Alpha%20named&limit=10')).body
   assert(metadataSearch.sessions.some(row => row.id === parentId))
-  await until(async () => page.evaluate(() => document.querySelector('button') && [...document.querySelectorAll('button')].some(item => /Show .* more\.\.\./.test(item.textContent))), 'original Sidebar load-more root cursor')
-  await page.evaluate(() => [...document.querySelectorAll('button')].find(item => /Show .* more\.\.\./.test(item.textContent))?.click())
+  // The alpha Sessions are shown under alpha/main; reveal more than 50 through its bounded continuations.
+  await until(async () => page.evaluate(() => !!document.querySelector('[data-session-id="alpha/main"] button[aria-label="Collapse child sessions"]')
+    || (document.querySelector('[data-session-id="alpha/main"] button[aria-label="Expand child sessions"]')?.click(), false)), 'alpha/main expanded')
+  for (let attempt = 0; attempt < 12; attempt++) {
+    if (await page.evaluate(() => document.querySelectorAll('[data-session-id]').length > 50)) break
+    await until(async () => page.evaluate(() => [...document.querySelectorAll('button')].some(item => /Show .* more\.\.\./.test(item.textContent))), 'original Sidebar load-more cursor')
+    const before = await page.evaluate(() => document.querySelectorAll('[data-session-id]').length)
+    await page.evaluate(() => [...document.querySelectorAll('button')].find(item => /Show .* more\.\.\./.test(item.textContent))?.click())
+    await until(async () => page.evaluate(count => document.querySelectorAll('[data-session-id]').length > count, before), 'original Sidebar continuation page')
+  }
   await until(async () => page.evaluate(() => document.querySelectorAll('[data-session-id]').length > 50), 'original Sidebar bounded next page')
   await page.type('input[aria-label="Search sessions"]', 'Alpha named')
   await until(async () => page.evaluate(id => !!document.querySelector(`[data-session-id="${id}"]`)
