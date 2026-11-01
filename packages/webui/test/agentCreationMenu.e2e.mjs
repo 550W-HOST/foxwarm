@@ -226,6 +226,8 @@ test('New agent uses the shared Agent settings: start location, and isolation th
   await page.waitForSelector('[data-agent-settings]')
   assert.equal(await page.$eval('[data-agent-settings-isolation-section]', details => details.open), false, 'isolation starts collapsed')
   await page.waitForSelector('select[data-agent-default-node] option[value="build-box"]')
+  assert.equal(await page.$eval('select[data-agent-default-node] option[value=""]', option => option.textContent), 'master (default)')
+  assert.equal(await page.$eval('input[data-agent-default-cwd]', input => input.placeholder), 'Absolute path on master')
   await page.type('input[placeholder="my-agent"]', 'builder')
   await page.select('select[data-agent-default-node]', 'build-box')
   assert.equal(await page.$eval('input[data-agent-default-cwd]', input => input.placeholder), 'Absolute path on Build box')
@@ -248,6 +250,7 @@ test('New agent uses the shared Agent settings: start location, and isolation th
     { id: 'main' },
     { id: 'research', defaultNode: 'build-box', defaultCwd: '/srv/research' },
     { id: 'release_ops', isolated: true, isolatedNode: 'build-box', defaultCwd: '/srv/ops' },
+    { id: 'notes', defaultCwd: '/srv/notes' },
   ]))
   await openSessionDialog()
   await page.waitForFunction(() => document.querySelector('[data-creation-start-location]')?.textContent === 'Starts on Build box · /srv/research')
@@ -255,6 +258,8 @@ test('New agent uses the shared Agent settings: start location, and isolation th
   assert.equal(await page.$('[data-creation-start-location]'), null, 'no line without placement settings')
   await page.click('button[title="release_ops"]')
   assert.equal(await page.$eval('[data-creation-start-location]', line => line.textContent), 'Starts on Build box', 'the working directory belongs to the default Node only')
+  await page.click('button[title="notes"]')
+  assert.equal(await page.$eval('[data-creation-start-location]', line => line.textContent), 'Starts on master · /srv/notes')
 })
 
 test('validation, request errors, and pending creation remain visible and keyboard-safe', async () => {

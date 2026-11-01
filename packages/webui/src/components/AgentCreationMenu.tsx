@@ -284,7 +284,7 @@ export default function AgentCreationMenu({
                   {agents.length === 0 && <p className="mt-2 text-xs text-fw-text-muted">No agents yet. Create one to start a session.</p>}
                   {startLocation && (
                     <p data-creation-start-location className="mt-2 min-w-0 truncate text-xs text-fw-text-muted" title={startLocation.cwd || undefined}>
-                      Starts on {startLocation.node === 'master' ? 'Main' : nodeDisplayName(nodes, startLocation.node)}
+                      Starts on {nodeDisplayName(nodes, startLocation.node)}
                       {startLocation.cwd && <> · <span className="font-mono">{startLocation.cwd}</span></>}
                     </p>
                   )}

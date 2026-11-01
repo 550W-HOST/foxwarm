@@ -110,7 +110,7 @@ export default function AgentSettingsFields({ value, onChange, agentId, agents, 
         <label className={labelClass}>
           Node
           <select data-agent-default-node value={startNode === 'master' ? '' : startNode} disabled={disabled || !!value.isolatedNode} onChange={event => set({ defaultNode: event.target.value })} className={controlClass}>
-            <option value="">Main (default)</option>
+            <option value="">{nodeDisplayName(nodes, 'master')} (default)</option>
             {nodeOptions.filter(node => node.id !== 'master').map(node => (
               <option key={node.id} value={node.id}>{node.displayName}{node.online ? '' : ' · offline'}</option>
             ))}
@@ -119,7 +119,7 @@ export default function AgentSettingsFields({ value, onChange, agentId, agents, 
         </label>
         <label className={labelClass}>
           Working directory
-          <input data-agent-default-cwd value={value.defaultCwd} disabled={disabled} onChange={event => set({ defaultCwd: event.target.value })} placeholder={`Absolute path on ${startNode && startNode !== 'master' ? nodeDisplayName(nodeOptions, startNode) : 'Main'}`} spellCheck={false} autoComplete="off" className={`${controlClass} font-mono`} />
+          <input data-agent-default-cwd value={value.defaultCwd} disabled={disabled} onChange={event => set({ defaultCwd: event.target.value })} placeholder={`Absolute path on ${nodeDisplayName(nodeOptions, startNode || 'master')}`} spellCheck={false} autoComplete="off" className={`${controlClass} font-mono`} />
           <span className={hintClass}>Existing sessions keep their current directory.</span>
         </label>
       </section>
