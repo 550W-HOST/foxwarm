@@ -150,9 +150,14 @@ try {
   assert(value(observed, 'current-status').output.includes(join(dataRoot, 'agents', 'team')) && value(observed, 'current-status').output.includes('token estimate'))
   assert(!value(observed, 'current-list').output.includes('other/main')); assert(value(observed, 'all-list').output.includes('Found 4 session(s)'))
   assert(value(observed, 'rename').output.includes('changed from unset to "Observed name"')); assert(value(observed, 'rename-noop').output.includes('unchanged'))
-  // Open the renamed Session through the App's Session route; its Chat shows the new name.
+  // The active target Chat must show both its identity and the renamed header.
   await page.evaluate(id => { location.hash = '#session/' + encodeURIComponent(id) }, target)
-  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.innerText.includes('Observed name'))
+  await page.waitForFunction(id => {
+    const subtitle = document.querySelector('.foxwarm-chat-root [data-session-header-subtitle]')
+    return location.hash === '#tab/' + encodeURIComponent('chat:' + id)
+      && subtitle?.textContent.split(' · ')[0] === 'session ' + id
+      && subtitle.parentElement?.previousElementSibling?.textContent === 'Observed name'
+  }, {}, target)
   held.release(); await final(target, 'HELD-DONE')
 
   // Real canonical history and tool effect: full hidden content is searchable, display remains folded.

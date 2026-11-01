@@ -165,14 +165,38 @@ public sealed class SessionSidebarGroupingTests
                 file,
                 """
                 SELECT count(*) FROM (
-                  SELECT parent_key,session_count FROM catalog_sidebar_count
-                  EXCEPT SELECT sidebar_parent,count(*) FROM session_catalog WHERE sidebar_parent IS NOT NULL GROUP BY sidebar_parent
+                  SELECT * FROM (
+                    SELECT parent_key,session_count FROM catalog_sidebar_count
+                    EXCEPT SELECT sidebar_parent,count(*) FROM session_catalog WHERE sidebar_parent IS NOT NULL GROUP BY sidebar_parent)
                   UNION ALL
-                  SELECT sidebar_parent,count(*) FROM session_catalog WHERE sidebar_parent IS NOT NULL GROUP BY sidebar_parent
-                  EXCEPT SELECT parent_key,session_count FROM catalog_sidebar_count)
+                  SELECT * FROM (
+                    SELECT sidebar_parent,count(*) FROM session_catalog WHERE sidebar_parent IS NOT NULL GROUP BY sidebar_parent
+                    EXCEPT SELECT parent_key,session_count FROM catalog_sidebar_count))
                 """
             )
         );
+
+    [Fact]
+    public void Sidebar_count_assertion_rejects_an_extra_stored_row()
+    {
+        using var temp = new TempDirectory();
+        using (var catalog = new SessionCatalog(temp.Path))
+            catalog.Upsert([
+                SessionCatalogTests.Row("main", 2),
+                SessionCatalogTests.Row("loose", 1),
+            ]);
+        var file = Path.Combine(temp.Path, "state", "catalog.sqlite");
+        AssertSidebarCountsExact(file);
+        using (var db = new SqliteConnection($"Data Source={file};Pooling=False"))
+        {
+            db.Open();
+            using var command = db.CreateCommand();
+            command.CommandText =
+                "INSERT INTO catalog_sidebar_count(parent_key,session_count) VALUES('unused-parent',2)";
+            command.ExecuteNonQuery();
+        }
+        Assert.Throws<Xunit.Sdk.EqualException>(() => AssertSidebarCountsExact(file));
+    }
 
     [Fact]
     public void A_catalog_without_sidebar_objects_gains_them_without_a_version_change()

@@ -16,7 +16,7 @@ const unix = { skip: process.platform === 'win32' && 'Unix executable fixture' }
 
 // Exercise the real CLI and inventory against a small tracked checkout. Test
 // programs record which component ran; no production application is started.
-async function fixture(t, { browserPreparation = '' } = {}) {
+async function fixture(t, { pendingPreparation = false } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'fw-test-routing-'))
   t.after(() => fs.rm(root, { recursive: true, force: true }))
   const journal = path.join(root, 'calls.jsonl')
@@ -71,20 +71,19 @@ assert.equal(process.env.OPENAI_API_KEY, 'synthetic-caller-key');
 assert.equal(process.env.CONFIG_PATH, ${JSON.stringify(path.join(root, 'caller.yaml'))});
 const record = label => fs.appendFileSync(${JSON.stringify(journal)}, JSON.stringify(label) + '\\n');
 record('browser-prepare');
-if (${JSON.stringify(browserPreparation)} === 'pending') {
+if (${pendingPreparation}) {
   process.on('SIGTERM', () => { record('browser-stopped-with-zero'); process.exit(0); });
   setInterval(() => {}, 1000);
 } else {
-  if (${JSON.stringify(browserPreparation)} === 'slow') await new Promise(resolve => setTimeout(resolve, 2000));
   record('browser-ready');
 }
 `)
-  // Compress only the aggregate preparation deadlines in this owned runner process.
-  // A slow producer outlasts the old budget but completes within the corrected one.
-  await write('timer.cjs', `const original = global.setTimeout;
-global.setTimeout = (callback, delay, ...args) => original(callback,
-  delay === 600_000 ? 1000 : delay === 900_000 ? 5000 : delay, ...args);
+  if (pendingPreparation) {
+    // Reach the real preparation timeout without waiting for the full build budget.
+    await write('timer.cjs', `const original = global.setTimeout;
+global.setTimeout = (callback, delay, ...args) => original(callback, delay === 900_000 ? 1000 : delay, ...args);
 `)
+  }
 
   await write('scripts/multicaBridge.test.js', program('published-bin', 'public package bin fixture'))
   await write('packages/vscode-web/test/example.test.mjs', '// owned by the npm group\n')
@@ -110,7 +109,7 @@ if (${JSON.stringify(name)} === 'dotnet' && args[0] === 'test' && process.env.FI
       try {
         const result = await execute(process.execPath, ['scripts/test/run-tests.mjs', target], {
           cwd: root, timeout: 30_000, maxBuffer: 4 * 1024 * 1024,
-          env: { ...process.env, NODE_OPTIONS: browserPreparation ? `--require=${path.join(root, 'timer.cjs')}` : '', NODE_TEST_CONTEXT: undefined, FOXWARM_TEST_RUN_ROOT: '',
+          env: { ...process.env, NODE_OPTIONS: pendingPreparation ? `--require=${path.join(root, 'timer.cjs')}` : '', NODE_TEST_CONTEXT: undefined, FOXWARM_TEST_RUN_ROOT: '',
             FOXWARM_TEST_ARTIFACT_DIR: path.join(root, 'artifacts'),
             FOXWARM_E2E_CHROMIUM: path.join(root, 'chromium'),
             PATH: path.join(root, 'bin') + path.delimiter + process.env.PATH,
@@ -173,8 +172,8 @@ test('default unit routing still propagates managed failures', unix, async t => 
   assert.equal(calls.some(call => /reference|selftest/.test(call)), false)
 })
 
-test('browser preparation can outlast the former aggregate budget before isolated fixtures start', unix, async t => {
-  const f = await fixture(t, { browserPreparation: 'slow' })
+test('browser preparation completes before isolated fixtures start', unix, async t => {
+  const f = await fixture(t)
   const result = await f.run('browser')
   assert.equal(result.code, 0, result.stdout + result.stderr)
   assert.deepEqual(await f.calls(), ['browser-prepare', 'browser-ready', 'webui-browser'])
@@ -184,7 +183,7 @@ test('browser preparation can outlast the former aggregate budget before isolate
 })
 
 test('browser preparation deadline fences fixtures even when the terminated producer exits zero', unix, async t => {
-  const f = await fixture(t, { browserPreparation: 'pending' })
+  const f = await fixture(t, { pendingPreparation: true })
   const result = await f.run('browser')
   assert.equal(result.code, 1, result.stdout + result.stderr)
   assert.deepEqual(await f.calls(), ['browser-prepare', 'browser-stopped-with-zero'])

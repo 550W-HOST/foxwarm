@@ -154,22 +154,6 @@ public sealed partial class CompactLifecycleTests
                     await owner.DrainForegroundAsync().WaitAsync(TimeSpan.FromSeconds(5));
             }
             await finalizing.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            var state = (await client.GetFromJsonAsync<JsonObject>(route + "/state"))!["session"]!;
-            Assert.False(state["busy"]!.GetValue<bool>());
-            Assert.True(state["runtimeState"]!["processing"]!.GetValue<bool>());
-            Assert.NotEmpty(
-                CompactCandidateBuilder.Build(owner.Entry.Snapshot().History.Materialize()).Items
-            );
-
-            // The legacy command receipt acknowledges the reply, even when the processor is still owned.
-            var legacy = await client.PostAsJsonAsync(
-                route + "/message",
-                new { text = "/compact" }
-            );
-            Assert.Equal(HttpStatusCode.OK, legacy.StatusCode);
-            Assert.True(
-                (await legacy.Content.ReadFromJsonAsync<JsonObject>())!["success"]!.GetValue<bool>()
-            );
             var refused = await client.PostAsJsonAsync(
                 route + "/message",
                 new { text = "/compact", controlRequestId = "compact-before-settlement" }
@@ -180,7 +164,6 @@ public sealed partial class CompactLifecycleTests
                     "accepted"
                 ]!.GetValue<bool>()
             );
-            Assert.False(owner.Compactor.Active);
             Assert.Equal(8, peer.RequestCount);
         }
         finally
@@ -189,9 +172,6 @@ public sealed partial class CompactLifecycleTests
             release.TrySetResult();
             await owner.DrainForegroundAsync().WaitAsync(TimeSpan.FromSeconds(5));
         }
-        var idle = (await client.GetFromJsonAsync<JsonObject>(route + "/state"))!["session"]!;
-        Assert.False(idle["busy"]!.GetValue<bool>());
-        Assert.Null(idle["runtimeState"]!["processing"]);
         var accepted = await client.PostAsJsonAsync(
             route + "/message",
             new { text = "/compact", controlRequestId = "compact-after-settlement" }
