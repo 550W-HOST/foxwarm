@@ -18,6 +18,9 @@ internal sealed partial class WebUIChannel
                 try
                 {
                     var models = configuration.Diagnostics();
+                    var claudeUnavailable = Sessions
+                        .ClaudeRuntimeConfiguration.Capture(configuration.AppConfiguration)
+                        .UnavailableReason(sessions);
                     return Results.Ok(
                         new JsonObject
                         {
@@ -27,6 +30,11 @@ internal sealed partial class WebUIChannel
                             ["channels"] = configuration.ChannelDiagnostics(webUiRunning: true),
                             ["capabilities"] = new JsonObject
                             {
+                                ["claudeCode"] = new JsonObject
+                                {
+                                    ["available"] = claudeUnavailable is null,
+                                    ["reason"] = claudeUnavailable,
+                                },
                                 ["managedChannels"] = configuration.ManagedChannels is not null,
                                 ["externalChannelMessage"] =
                                     "External channels are not running in this host.",

@@ -1,9 +1,14 @@
 import { createPortal } from 'react-dom'
 import { useEffect, useRef, useState } from 'react'
 import { Plus, X } from 'lucide-react'
+import { makeApiUrl } from '../config'
 import { RANDOM_SESSION_ID_PLACEHOLDER, validateAgentId, validateSessionId, type AgentSummary } from '../agentCreation'
 
 type CreationMode = 'agent' | 'session'
+type ClaudeAvailability = {
+  status: 'checking' | 'available' | 'unavailable' | 'error'
+  reason?: string
+}
 
 interface AgentCreationMenuProps {
   agents: AgentSummary[]
@@ -30,6 +35,7 @@ export default function AgentCreationMenu({
   const [sessionAgent, setSessionAgent] = useState('')
   const [sessionId, setSessionId] = useState('')
   const [runtime, setRuntime] = useState<'foxwarm' | 'claude-code'>('foxwarm')
+  const [claudeAvailability, setClaudeAvailability] = useState<ClaudeAvailability>({ status: 'checking' })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -73,16 +79,41 @@ export default function AgentCreationMenu({
     setSessionAgent(defaultAgent)
   }, [agents, defaultAgent, mode, sessionAgent])
 
+  useEffect(() => {
+    if (mode !== 'session') return
+    const controller = new AbortController()
+    setClaudeAvailability({ status: 'checking' })
+    void fetch(makeApiUrl('/setup/status'), { signal: controller.signal })
+      .then(async response => {
+        if (!response.ok) throw new Error('Runtime status request failed')
+        const value = (await response.json())?.capabilities?.claudeCode
+        if (typeof value?.available !== 'boolean') throw new Error('Runtime status missing')
+        if (!controller.signal.aborted) setClaudeAvailability({
+          status: value.available ? 'available' : 'unavailable',
+          reason: typeof value.reason === 'string' ? value.reason : 'Claude Code is unavailable on this server.',
+        })
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setClaudeAvailability({
+          status: 'error',
+          reason: 'Could not check Claude Code availability. Reopen this dialog to retry.',
+        })
+      })
+    return () => controller.abort()
+  }, [mode])
+
   const openSessionModal = () => {
     setMode('session')
     setSessionAgent(defaultAgent)
     setSessionId('')
     setRuntime('foxwarm')
+    setClaudeAvailability({ status: 'checking' })
     setError('')
   }
 
   const openAgentModal = () => {
     setMode('agent')
+    setClaudeAvailability({ status: 'checking' })
     setAgentId('')
     setInheritAgent('')
     setError('')
@@ -111,6 +142,9 @@ export default function AgentCreationMenu({
       }
     } else if (mode === 'session') {
       if (!sessionAgent) return setError('Choose an agent.')
+      if (runtime === 'claude-code' && claudeAvailability.status !== 'available') {
+        return setError(claudeAvailability.reason || 'Checking Claude Code availability…')
+      }
       const validationError = validateSessionId(sessionId)
       if (validationError) return setError(validationError)
     } else {
@@ -222,9 +256,15 @@ export default function AgentCreationMenu({
                   Runtime
                   <select aria-label="Session runtime" value={runtime} onChange={event => setRuntime(event.target.value as 'foxwarm' | 'claude-code')} className="mt-1 w-full rounded-lg border border-fw-border-strong bg-fw-surface px-3 py-2">
                     <option value="foxwarm">Foxwarm</option>
-                    <option value="claude-code">Claude Code</option>
+                    <option value="claude-code" disabled={claudeAvailability.status !== 'available'}>
+                      Claude Code{claudeAvailability.status === 'checking' ? ' — checking…' : claudeAvailability.status === 'error' ? ' — status unavailable' : claudeAvailability.status === 'unavailable' ? ' — unavailable' : ''}
+                    </option>
                   </select>
-                  {runtime === 'claude-code' && <span className="mt-1 block text-xs font-normal text-fw-text-muted">Uses the installed Claude Code model and login.</span>}
+                  <span aria-live="polite" className="mt-1 block text-xs font-normal text-fw-text-muted">
+                    {claudeAvailability.status === 'checking' ? 'Checking Claude Code availability…'
+                      : claudeAvailability.status !== 'available' ? claudeAvailability.reason
+                      : runtime === 'claude-code' ? 'Uses the installed Claude Code model and login. Login and model access are checked when the session runs.' : null}
+                  </span>
                 </label>
               </div>
             )}
@@ -233,7 +273,7 @@ export default function AgentCreationMenu({
 
             <div className="mt-5 flex justify-end gap-2">
               <button type="button" onClick={closeDialog} disabled={loading} className="rounded-lg px-3 py-2 text-sm text-fw-text hover:bg-fw-hover disabled:opacity-50 dark:text-fw-text dark:hover:bg-fw-hover">Cancel</button>
-              <button type="submit" disabled={loading || (mode === 'session' && agents.length === 0)} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:cursor-not-allowed disabled:opacity-50">
+              <button type="submit" disabled={loading || (mode === 'session' && (agents.length === 0 || (runtime === 'claude-code' && claudeAvailability.status !== 'available')))} className="rounded-lg bg-fw-accent px-4 py-2 text-sm font-medium text-fw-accent-text hover:bg-fw-accent disabled:cursor-not-allowed disabled:opacity-50">
                 {loading ? 'Creating…' : 'Create'}
               </button>
             </div>

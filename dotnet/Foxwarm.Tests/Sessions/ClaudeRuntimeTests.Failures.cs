@@ -163,6 +163,60 @@ public sealed partial class ClaudeRuntimeTests
     }
 
     [Fact]
+    public async Task Missing_configured_executable_does_not_advance_input_or_create_a_resume_checkpoint()
+    {
+        await using var f = await ClaudeRuntimeFixture.CreateAsync();
+        var launcher = Path.Combine(f.Temp.Path, "claude-peer");
+        File.Move(launcher, launcher + ".saved");
+        try
+        {
+            await f.RunAsync("not submitted to a missing executable");
+        }
+        finally
+        {
+            File.Move(launcher + ".saved", launcher);
+        }
+        Assert.NotNull(f.Owner.Entry.LastBackgroundProcessorFailure);
+        var checkpoint = f.Owner.Entry.Snapshot().AuthorityEnvelope["externalRuntime"]!;
+        Assert.Equal("new", checkpoint["status"]!.GetValue<string>());
+        Assert.Null(checkpoint["sessionId"]);
+        Assert.Null(checkpoint["submittedThroughSeq"]);
+        Assert.False(File.Exists(Path.Combine(f.PeerDirectory, "inputs.jsonl")));
+        await new SessionRuntime(f.Main.Manager).ContinueAsync(f.Owner.Id);
+        var input = Assert.Single(f.Lines("inputs.jsonl"));
+        Assert.False(input["resumed"]!.GetValue<bool>());
+        Assert.Contains("not submitted to a missing executable", input["input"]!.ToJsonString());
+    }
+
+    [Fact]
+    public async Task Missing_launcher_on_resume_preserves_frontier_and_retries_only_unsent_input()
+    {
+        await using var f = await ClaudeRuntimeFixture.CreateAsync();
+        await f.RunAsync("first input");
+        var previous = f.Owner.Entry.Snapshot().AuthorityEnvelope["externalRuntime"]!.DeepClone();
+        var launcher = Path.Combine(f.Temp.Path, "claude-peer");
+        File.Move(launcher, launcher + ".saved");
+        try
+        {
+            await f.RunAsync("second input");
+        }
+        finally
+        {
+            File.Move(launcher + ".saved", launcher);
+        }
+        Assert.IsType<ClaudeRuntimeException>(f.Owner.Entry.LastBackgroundProcessorFailure);
+        var checkpoint = f.Owner.Entry.Snapshot().AuthorityEnvelope["externalRuntime"]!;
+        foreach (var key in new[] { "sessionId", "submittedThroughSeq", "status", "transcript" })
+            Assert.True(JsonNode.DeepEquals(previous[key], checkpoint[key]), key);
+        Assert.Single(f.Lines("inputs.jsonl"));
+        await new SessionRuntime(f.Main.Manager).ContinueAsync(f.Owner.Id);
+        var input = f.Lines("inputs.jsonl")[1];
+        Assert.True(input["resumed"]!.GetValue<bool>());
+        Assert.Contains("second input", input["input"]!.ToJsonString());
+        Assert.DoesNotContain("first input", input["input"]!.ToJsonString());
+    }
+
+    [Fact]
     public async Task Native_EndConversation_and_empty_success_finish_without_business_tool_replay_or_another_model_loop()
     {
         await using var f = await ClaudeRuntimeFixture.CreateAsync(

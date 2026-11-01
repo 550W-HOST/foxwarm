@@ -17,6 +17,10 @@ let browser
 let page
 let server
 let fixtureUrl
+let runtimeState = { available: true, reason: null }
+let runtimeStatus = 200
+let runtimeGate = null
+let runtimeRequests = []
 
 const initialAgents = [
   { id: 'main' },
@@ -82,7 +86,7 @@ async function buildFixtureBundle() {
               onCreateSession,
             })
           ),
-          React.createElement('p', { className: 'mt-4 text-sm text-fw-text-muted' }, 'Mock sidebar preview. No network requests are made.')
+          React.createElement('p', { className: 'mt-4 text-sm text-fw-text-muted' }, 'Owned sidebar fixture.')
         )
       )
     }
@@ -121,6 +125,10 @@ async function openSessionDialog() {
 }
 
 async function resetFixture() {
+  runtimeState = { available: true, reason: null }
+  runtimeStatus = 200
+  runtimeGate = null
+  runtimeRequests = []
   await page.setViewport({ width: 1100, height: 760, deviceScaleFactor: 1, isMobile: false, hasTouch: false })
   await page.goto(fixtureUrl, { waitUntil: 'load' })
   await page.waitForFunction(() => !!window.fixture)
@@ -133,7 +141,14 @@ before(async () => {
   const css = await readFile(new URL(cssAsset, assetsDirectory), 'utf8')
   const bundle = await buildFixtureBundle()
 
-  server = createServer((_request, response) => {
+  server = createServer(async (request, response) => {
+    if (request.url.endsWith('/api/setup/status')) {
+      runtimeRequests.push(request.url)
+      if (runtimeGate) await runtimeGate
+      response.writeHead(runtimeStatus, { 'Content-Type': 'application/json' })
+      response.end(JSON.stringify({ capabilities: { claudeCode: runtimeState } }))
+      return
+    }
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
     response.end(`<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style><style>html,body{margin:0;min-height:100%;overflow-x:hidden}</style></head><body><div id="root"></div><script>${bundle}</script></body></html>`)
   })
@@ -298,10 +313,82 @@ test('creation carries the chosen runtime and each new dialog defaults back to F
   await resetFixture()
   await openSessionDialog()
   assert.equal(await page.$eval('select[aria-label="Session runtime"]', select => select.value), 'foxwarm')
+  await page.waitForFunction(() => !document.querySelector('option[value="claude-code"]')?.disabled)
   await page.select('select[aria-label="Session runtime"]', 'claude-code')
   await clickButtonByText('Create')
   await page.waitForSelector('[role="dialog"]', { hidden: true })
   assert.deepEqual(await page.evaluate(() => window.fixtureCalls.at(-1)), { type: 'session', agentId: 'research', sessionId: null, runtime: 'claude-code' })
   await openSessionDialog()
   assert.equal(await page.$eval('select[aria-label="Session runtime"]', select => select.value), 'foxwarm')
+})
+
+
+test('unavailable launchers are disabled with the server reason while Foxwarm creation stays usable', async () => {
+  await resetFixture()
+  runtimeState = { available: false, reason: 'Install the configured launcher on Main.' }
+  await openSessionDialog()
+  await page.waitForFunction(() => document.querySelector('[role="dialog"]')?.textContent.includes('Install the configured launcher'))
+  assert.equal(await page.$eval('option[value="claude-code"]', option => option.disabled), true)
+  assert.match(await page.$eval('option[value="claude-code"]', option => option.textContent), /unavailable/)
+  await clickButtonByText('Create')
+  await page.waitForSelector('[role="dialog"]', { hidden: true })
+  assert.equal(await page.evaluate(() => window.fixtureCalls.at(-1).runtime), 'foxwarm')
+
+  runtimeState = { available: true, reason: null }
+  await openSessionDialog()
+  await page.waitForFunction(() => !document.querySelector('option[value="claude-code"]')?.disabled)
+  assert.equal(runtimeRequests.length, 2, 'reopening checks changed launcher state')
+})
+
+test('loading, failed requests and absent capability data never enable Claude Code', async () => {
+  await resetFixture()
+  let release
+  runtimeGate = new Promise(resolve => { release = resolve })
+  await openSessionDialog()
+  assert.equal(await page.$eval('option[value="claude-code"]', option => option.disabled), true)
+  assert.match(await page.$eval('option[value="claude-code"]', option => option.textContent), /checking/)
+  runtimeStatus = 503
+  release()
+  await page.waitForFunction(() => document.querySelector('[role="dialog"]')?.textContent.includes('Could not check'))
+  assert.equal(await page.$eval('option[value="claude-code"]', option => option.disabled), true)
+  await page.keyboard.press('Escape')
+  runtimeGate = null
+  runtimeStatus = 200
+  runtimeState = undefined
+  await openSessionDialog()
+  await page.waitForFunction(() => document.querySelector('[role="dialog"]')?.textContent.includes('Could not check'))
+  assert.equal(await page.$eval('option[value="claude-code"]', option => option.disabled), true)
+  await clickButtonByText('Create')
+  await page.waitForSelector('[role="dialog"]', { hidden: true })
+  assert.equal(await page.evaluate(() => window.fixtureCalls.at(-1).runtime), 'foxwarm')
+})
+
+test('availability requests respect the deployment base path', async () => {
+  await resetFixture()
+  await page.goto(fixtureUrl + '/preview/', { waitUntil: 'load' })
+  await page.waitForFunction(() => !!window.fixture)
+  await openSessionDialog()
+  await page.waitForFunction(() => !document.querySelector('option[value="claude-code"]')?.disabled)
+  assert.equal(runtimeRequests.at(-1), '/preview/api/setup/status')
+})
+
+
+test('returning from New agent rechecks a selected Claude runtime and prevents unavailable submission', async () => {
+  await resetFixture()
+  await openSessionDialog()
+  await page.waitForFunction(() => !document.querySelector('option[value="claude-code"]')?.disabled)
+  await page.select('select[aria-label="Session runtime"]', 'claude-code')
+  await page.click('button[aria-label="New agent"]')
+  runtimeState = { available: false, reason: 'The launcher is no longer installed.' }
+  await clickButtonByText('Cancel')
+  await page.waitForFunction(() => document.querySelector('[role="dialog"]')?.textContent.includes('no longer installed'))
+  assert.equal(await page.$eval('select[aria-label="Session runtime"]', select => select.value), 'claude-code')
+  assert.equal(await page.$eval('[role="dialog"] button[type="submit"]', button => button.disabled), true)
+  await page.focus('input[placeholder^="Random ID"]')
+  await page.keyboard.press('Enter')
+  assert.deepEqual(await page.evaluate(() => window.fixtureCalls), [])
+  await page.select('select[aria-label="Session runtime"]', 'foxwarm')
+  await clickButtonByText('Create')
+  await page.waitForSelector('[role="dialog"]', { hidden: true })
+  assert.equal(await page.evaluate(() => window.fixtureCalls.at(-1).runtime), 'foxwarm')
 })

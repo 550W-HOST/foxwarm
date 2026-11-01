@@ -30,11 +30,6 @@ internal sealed class ClaudeSessionDriver(
             throw new PlatformNotSupportedException(
                 "Claude Code Session hosting currently requires Linux."
             );
-        var endpoint =
-            manager.RuntimeMcpEndpoint
-            ?? throw new ClaudeRuntimeException(
-                "Runtime MCP endpoint is unavailable; start the Main HTTP listener first."
-            );
         var config = ClaudeRuntimeConfiguration.Capture(
             manager.Models.ConfigurationOwner?.AppConfiguration
         );
@@ -47,6 +42,9 @@ internal sealed class ClaudeSessionDriver(
         var resume = SessionWait.Text(checkpoint["sessionId"]);
         var externalId = resume ?? Guid.NewGuid().ToString();
         var cwd = ContextDirectory(manager.DataRoot, externalId);
+        if (config.UnavailableReason(manager, cwd) is { } unavailable)
+            throw new ClaudeRuntimeException(unavailable);
+        var endpoint = manager.RuntimeMcpEndpoint!;
         if (resume is not null && SessionWait.Text(checkpoint["cwd"]) != cwd)
             throw new ClaudeRuntimeException(
                 "Claude Code context does not use this Main's private runtime directory. Clear this Session to start a new private context; previous input will not be replayed."
