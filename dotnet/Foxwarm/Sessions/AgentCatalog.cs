@@ -189,6 +189,7 @@ internal sealed partial class AgentCatalog
         string? createdBy = null,
         JsonArray? rules = null,
         string? defaultNode = null,
+        string? defaultCwd = null,
         string? preparationName = null,
         bool restoreRetained = false,
         Action<bool>? publication = null
@@ -231,6 +232,7 @@ internal sealed partial class AgentCatalog
                     || createdBy is not null
                     || rules is not null
                     || defaultNode is not null
+                    || defaultCwd is not null
                 )
                     throw new InvalidDataException(
                         "Restoration does not accept metadata overrides."
@@ -253,6 +255,7 @@ internal sealed partial class AgentCatalog
             ValidateCreatorAdmission(createdBy, MetadataSnapshot());
             _ = Foxwarm.Tools.AgentRulePolicy.Parse(rules ?? new JsonArray());
             ValidateDefaultNode(defaultNode ?? DefaultNode(name));
+            ValidateDefaultCwd(defaultCwd ?? DefaultCwd(name));
             ValidateInheritance(name, inherit);
             ValidateCreatorInheritance(
                 name,
@@ -268,6 +271,8 @@ internal sealed partial class AgentCatalog
                 initialMetadata["rules"] = rules.DeepClone();
             if (defaultNode is not null)
                 initialMetadata["defaultNode"] = defaultNode;
+            if (defaultCwd is not null)
+                initialMetadata["defaultCwd"] = defaultCwd;
             if (inherit is not null)
                 initialMetadata["inherit"] = inherit;
             // Dot-prefixed preparation is not Agent membership. Persist authority before

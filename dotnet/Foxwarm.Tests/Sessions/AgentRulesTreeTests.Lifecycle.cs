@@ -389,6 +389,81 @@ public sealed partial class AgentRulesTreeTests
         Assert.False(File.Exists(outside));
     }
 
+    private static IEnumerable<string> SystemTexts(SessionOwner owner) =>
+        owner
+            .Entry.Snapshot()
+            .History.Materialize()
+            .SelectMany(message => (message["parts"] as JsonArray) ?? [])
+            .Select(part => SessionWait.Text(part?["system"]))
+            .OfType<string>();
+
+    [Fact]
+    public async Task Default_working_directory_applies_to_new_sessions_on_the_default_Node()
+    {
+        await using var f = await Fixture();
+        Denied(
+            await f.ToolAsync(
+                "create_agent",
+                new JsonObject { ["agentName"] = "relative", ["defaultCwd"] = "repo" }
+            )
+        );
+        Assert.DoesNotContain("relative", f.Manager.Agents());
+        Successful(
+            await f.ToolAsync(
+                "create_agent",
+                new JsonObject
+                {
+                    ["agentName"] = "workspace",
+                    ["defaultNode"] = "dev-offline",
+                    ["defaultCwd"] = "/srv/repo",
+                }
+            )
+        );
+        var main = await f.Manager.RequiredAsync("workspace/main");
+        Assert.Equal(("dev-offline", "/srv/repo"), f.Manager.ExecutionPlacement(main));
+        var automatic = await f.Manager.CreateNamedAsync("workspace", "automatic", null, null);
+        Assert.Equal(("dev-offline", "/srv/repo"), f.Manager.ExecutionPlacement(automatic));
+        var elsewhere = await f.Manager.CreateNamedAsync(
+            "workspace",
+            "elsewhere",
+            null,
+            null,
+            initialNode: "master"
+        );
+        Assert.Equal(("master", (string?)null), f.Manager.ExecutionPlacement(elsewhere));
+
+        var fork = await f.Manager.ForkAsync(main, "fork");
+        Assert.Equal(("dev-offline", "/srv/repo"), f.Manager.ExecutionPlacement(fork));
+        Assert.Contains(
+            "event=\"history-inherited\" parentSessionId=\"workspace/main\" currentSessionId=\"workspace/main_fork\" currentNode=\"dev-offline\" cwd=\"/srv/repo\"",
+            string.Join("\n", SystemTexts(fork))
+        );
+        Successful(
+            await f.ToolAsync("create_child_session", new JsonObject { ["suffix"] = "child" }, main)
+        );
+        var child = await f.Manager.RequiredAsync("workspace/child");
+        Assert.Equal(("dev-offline", "/srv/repo"), f.Manager.ExecutionPlacement(child));
+        Assert.Contains(
+            "event=\"new-child\" parentSessionId=\"workspace/main\" currentSessionId=\"workspace/child\" currentNode=\"dev-offline\" cwd=\"/srv/repo\"",
+            SystemTexts(child).First()
+        );
+
+        // Without a default Node, the directory belongs to master.
+        await f.Manager.SetAgentDefaultPlacementAsync("workspace", true, null, true, "/home/repo");
+        var onMaster = await f.Manager.CreateNamedAsync(
+            "workspace",
+            "on-master",
+            null,
+            null,
+            initialNode: "master"
+        );
+        Assert.Equal(("master", "/home/repo"), f.Manager.ExecutionPlacement(onMaster));
+        // The existing main-Session Node fallback is not the directory's Node.
+        var fallback = await f.Manager.CreateNamedAsync("workspace", "fallback", null, null);
+        Assert.Equal(("dev-offline", (string?)null), f.Manager.ExecutionPlacement(fallback));
+        Assert.Equal(("dev-offline", "/srv/repo"), f.Manager.ExecutionPlacement(main));
+    }
+
     [Fact]
     public async Task Default_Node_is_new_session_placement_with_explicit_selection_and_legacy_binding_precedence()
     {
@@ -401,7 +476,13 @@ public sealed partial class AgentRulesTreeTests
         );
         var main = await f.Manager.RequiredAsync("placed/main");
         Assert.Equal("default-offline", f.Manager.CurrentNode(main));
-        await f.Manager.SetAgentDefaultNodeAsync("placed", "updated-offline");
+        await f.Manager.SetAgentDefaultPlacementAsync(
+            "placed",
+            true,
+            "updated-offline",
+            false,
+            null
+        );
         Assert.Equal("default-offline", f.Manager.CurrentNode(main));
         var automatic = await f.Manager.CreateNamedAsync("placed", "automatic", null, null);
         Assert.Equal("updated-offline", f.Manager.CurrentNode(automatic));

@@ -21,6 +21,7 @@ internal sealed partial class SessionManager
         internal string? Creator;
         internal JsonArray? InitialRules;
         internal string? DefaultNode;
+        internal string? DefaultCwd;
         internal SessionIdentityMoveRecord Record = record;
         internal readonly string[] Claims = claims;
         internal readonly TaskCompletionSource Finished = new(
@@ -166,6 +167,7 @@ internal sealed partial class SessionManager
         CancellationToken token = default,
         JsonArray? initialRules = null,
         string? defaultNode = null,
+        string? defaultCwd = null,
         SessionOwner? creator = null
     )
     {
@@ -373,6 +375,7 @@ internal sealed partial class SessionManager
                 Creator = creator?.Agent,
                 InitialRules = initialRules,
                 DefaultNode = defaultNode,
+                DefaultCwd = defaultCwd,
             };
             lock (lifecycle)
             {
@@ -488,6 +491,7 @@ internal sealed partial class SessionManager
                     createdBy: operation.Creator,
                     rules: operation.InitialRules,
                     defaultNode: operation.DefaultNode,
+                    defaultCwd: operation.DefaultCwd,
                     preparationName: record.OwnedAgentPreparation,
                     publication: published =>
                     {

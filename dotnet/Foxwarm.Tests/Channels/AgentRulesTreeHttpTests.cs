@@ -74,6 +74,35 @@ public sealed class AgentRulesTreeHttpTests
             Assert.Equal("offline-default", f.Manager.CurrentNode(owner));
             var next = await f.Manager.CreateNamedAsync("admin-root", "next", null, null);
             Assert.Equal("later-default", f.Manager.CurrentNode(next));
+            Assert.Null(f.Manager.ExecutionPlacement(next).Cwd);
+            Assert.Equal(
+                HttpStatusCode.OK,
+                (
+                    await client.PutAsJsonAsync(
+                        "/api/agents/admin-root",
+                        new JsonObject { ["defaultCwd"] = "/srv/project" }
+                    )
+                ).StatusCode
+            );
+            var placed = await f.Manager.CreateNamedAsync("admin-root", "placed", null, null);
+            Assert.Equal(("later-default", "/srv/project"), f.Manager.ExecutionPlacement(placed));
+            var listed = await client.GetFromJsonAsync<JsonObject>("/api/agents");
+            Assert.Contains(
+                listed!["agents"]!.AsArray(),
+                agent =>
+                    agent?["id"]?.GetValue<string>() == "admin-root"
+                    && agent["defaultCwd"]?.GetValue<string>() == "/srv/project"
+            );
+            Assert.Equal(
+                HttpStatusCode.OK,
+                (
+                    await client.PutAsJsonAsync(
+                        "/api/agents/admin-root",
+                        new JsonObject { ["defaultCwd"] = null }
+                    )
+                ).StatusCode
+            );
+            Assert.Null(f.Manager.AgentDefaultCwd("admin-root"));
             foreach (
                 var bad in new[]
                 {
@@ -83,6 +112,7 @@ public sealed class AgentRulesTreeHttpTests
                         ["rules"] = JsonNode.Parse("""[{"action":"deny","agent":"admin-root"}]"""),
                     },
                     new JsonObject { ["rules"] = null },
+                    new JsonObject { ["defaultCwd"] = "relative/path" },
                 }
             )
                 Assert.Equal(

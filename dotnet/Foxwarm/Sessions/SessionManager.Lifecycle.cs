@@ -144,6 +144,11 @@ internal sealed partial class SessionManager
                 {
                     envelope["currentNode"] = selectedNode;
                 }
+                if (
+                    agents.DefaultCwdFor(parent.Agent, SessionWait.Text(envelope["currentNode"])) is
+                    { } defaultCwd
+                )
+                    envelope["cwd"] = defaultCwd;
                 if (displayName is not null)
                     envelope["displayName"] = displayName;
                 if (settings.Model is not null)
@@ -242,7 +247,17 @@ internal sealed partial class SessionManager
                             );
                     }
                     suffixRows.Add(
-                        SystemRow(SessionBoundary.Identity(parent.Id, id, inherited: true))
+                        SystemRow(
+                            SessionBoundary.Identity(
+                                parent.Id,
+                                id,
+                                inherited: true,
+                                (
+                                    ResolveExecutionNode(envelope, BoundNode(parent.Agent)),
+                                    SessionWait.Text(envelope["cwd"])
+                                )
+                            )
+                        )
                     );
                     suffixRows.Add(
                         SystemRow(

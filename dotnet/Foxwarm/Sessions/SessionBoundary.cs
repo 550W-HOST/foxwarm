@@ -188,8 +188,22 @@ internal static class SessionBoundary
     internal static string SystemEvent(string type, string hint) =>
         $"<foxwarm-system kind=\"event\" type=\"{Escape(type)}\" hint=\"{Escape(hint)}\" time=\"{LocalTime()}\" />";
 
-    internal static string Identity(string parent, string current, bool inherited) =>
-        $"<foxwarm-system kind=\"session-boundary\" event=\"{(inherited ? "history-inherited" : "new-child")}\" parentSessionId=\"{Escape(parent)}\" currentSessionId=\"{Escape(current)}\" time=\"{LocalTime()}\" />";
+    internal static string Identity(
+        string parent,
+        string current,
+        bool inherited,
+        (string Node, string? Cwd) placement
+    ) =>
+        $"<foxwarm-system kind=\"session-boundary\" event=\"{(inherited ? "history-inherited" : "new-child")}\" parentSessionId=\"{Escape(parent)}\" currentSessionId=\"{Escape(current)}\"{Placement(placement.Node, placement.Cwd)} time=\"{LocalTime()}\" />";
+
+    /// <summary>Initial execution placement attributes for a Session's opening marker.</summary>
+    internal static string Placement(string node, string? cwd) =>
+        $" currentNode=\"{LocalSessionTurnHost.EscapeFoxwarmAttribute(node)}\""
+        + (
+            string.IsNullOrEmpty(cwd)
+                ? ""
+                : $" cwd=\"{LocalSessionTurnHost.EscapeFoxwarmAttribute(cwd)}\""
+        );
 
     internal static string Completion(
         string parent,

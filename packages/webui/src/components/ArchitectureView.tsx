@@ -35,12 +35,21 @@ type AgentRegistryEntry = {
   inheritanceChain: string[]
   isolated: boolean
   isolatedNode: string | null
+  defaultNode: string | null
+  defaultCwd: string | null
   sessionCount: number
   activeSessionCount: number
   queuedSessionCount: number
   memoryRoot: string
   memoryFileCount: number
   memoryLastModified: number | null
+}
+
+type AgentRegistryChanges = {
+  inheritAgent: string | null
+  isolatedNode: string | null
+  defaultNode: string | null
+  defaultCwd: string | null
 }
 
 type AgentMemoryFile = { path: string; absolutePath: string; size: number; modifiedAt: number }
@@ -490,11 +499,13 @@ function AgentRegistryInspector({ agent, allAgents, nodes, memoryFiles, memoryLo
   memoryLoading: boolean
   memoryError: string
   onOpenMemory: (memoryRoot: string, filePath?: string) => void
-  onSave: (agentId: string, changes: { inheritAgent: string | null; isolatedNode: string | null }) => Promise<void>
+  onSave: (agentId: string, changes: AgentRegistryChanges) => Promise<void>
   onDelete: (agentId: string) => Promise<void>
 }) {
   const [inheritAgent, setInheritAgent] = useState('')
   const [isolatedNode, setIsolatedNode] = useState('')
+  const [defaultNode, setDefaultNode] = useState('')
+  const [defaultCwd, setDefaultCwd] = useState('')
   const [saving, setSaving] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState('')
@@ -503,19 +514,33 @@ function AgentRegistryInspector({ agent, allAgents, nodes, memoryFiles, memoryLo
   useEffect(() => {
     setInheritAgent(agent?.inherit || '')
     setIsolatedNode(agent?.isolatedNode || '')
+    setDefaultNode(agent?.defaultNode || '')
+    setDefaultCwd(agent?.defaultCwd || '')
     setDeleteOpen(false)
     setDeleteConfirm('')
     setError('')
-  }, [agent?.id, agent?.inherit, agent?.isolatedNode])
+  }, [agent?.id, agent?.inherit, agent?.isolatedNode, agent?.defaultNode, agent?.defaultCwd])
 
   if (!agent) {
     return <aside className="rounded-xl border border-dashed border-fw-border-strong bg-fw-surface/60 p-6 text-center dark:border-fw-border dark:bg-fw-surface/50"><Bot className="mx-auto h-6 w-6 text-fw-text" /><h3 className="mt-3 text-sm font-semibold text-fw-text-strong">Select an agent</h3><p className="mt-1 text-xs text-fw-text-muted">Inspect memory, inheritance, isolation, and lifecycle controls.</p></aside>
   }
 
+  const trimmedCwd = defaultCwd.trim()
   const dirty = inheritAgent !== (agent.inherit || '') || isolatedNode !== (agent.isolatedNode || '')
+    || defaultNode !== (agent.defaultNode || '') || trimmedCwd !== (agent.defaultCwd || '')
+  const defaultNodeOptions = defaultNode && !nodes.some(node => node.id === defaultNode)
+    ? [...nodes, { id: defaultNode, type: 'unknown', displayName: defaultNode, online: false, services: {} }]
+    : nodes
   const save = async () => {
     setSaving(true); setError('')
-    try { await onSave(agent.id, { inheritAgent: inheritAgent || null, isolatedNode: isolatedNode || null }) }
+    try {
+      await onSave(agent.id, {
+        inheritAgent: inheritAgent || null,
+        isolatedNode: isolatedNode || null,
+        defaultNode: defaultNode || null,
+        defaultCwd: trimmedCwd || null,
+      })
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
     finally { setSaving(false) }
   }
@@ -540,6 +565,12 @@ function AgentRegistryInspector({ agent, allAgents, nodes, memoryFiles, memoryLo
           <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Memory inheritance</h3>
           <div className="mt-2 flex flex-wrap items-center gap-1 text-xs text-fw-text-muted">{agent.inheritanceChain.map((item, index) => <span key={item} className="inline-flex items-center gap-1"><span className={`rounded px-1.5 py-0.5 ${item === agent.id ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent' : 'bg-fw-neutral-surface dark:bg-fw-surface-raised'}`}>{item}</span>{index < agent.inheritanceChain.length - 1 ? <ChevronRight className="h-3 w-3" /> : null}</span>)}</div>
           <label className="mt-3 block text-xs text-fw-text-muted">Inherit agent<select value={inheritAgent} onChange={event => setInheritAgent(event.target.value)} className="mt-1 w-full rounded-lg border border-fw-border bg-fw-surface-sunken px-2.5 py-2 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong"><option value="">None</option>{allAgents.filter(item => item.id !== agent.id && !item.isolated).map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label>
+        </section>
+
+        <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
+          <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted"><FolderOpen className="h-3.5 w-3.5" /> New sessions</h3>
+          <label className="mt-2 block text-xs text-fw-text-muted">Default node<select data-agent-default-node value={defaultNode} onChange={event => setDefaultNode(event.target.value)} className="mt-1 w-full rounded-lg border border-fw-border bg-fw-surface-sunken px-2.5 py-2 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong"><option value="">Not set</option>{defaultNodeOptions.map(node => <option key={node.id} value={node.id}>{node.displayName}{node.id === 'master' ? '' : node.online ? ' · ready' : ' · offline'}</option>)}</select></label>
+          <label className="mt-2 block text-xs text-fw-text-muted">Working directory<input data-agent-default-cwd value={defaultCwd} onChange={event => setDefaultCwd(event.target.value)} placeholder={`Absolute path on ${defaultNode ? (defaultNodeOptions.find(node => node.id === defaultNode)?.displayName || defaultNode) : 'Main'}`} spellCheck={false} className="mt-1 w-full rounded-lg border border-fw-border bg-fw-surface-sunken px-2.5 py-2 font-mono text-xs text-fw-text-strong outline-none focus:border-fw-accent-border dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong" /></label>
         </section>
 
         <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
@@ -901,7 +932,7 @@ export default function ArchitectureView({
     window.open(makeVscodeWebUrl(API_BASE_PATH, window.location.origin, workspace, filePath ? { openFile: { kind: 'openFile', nodeId: 'master', path: filePath } } : undefined).toString(), '_blank', 'noopener,noreferrer')
   }
 
-  const saveRegistryAgent = async (agentId: string, changes: { inheritAgent: string | null; isolatedNode: string | null }) => {
+  const saveRegistryAgent = async (agentId: string, changes: AgentRegistryChanges) => {
     const response = await fetch(`${API_BASE_PATH}/agents/${encodeURIComponent(agentId)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) })
     const payload = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(payload.error || 'Failed to update agent')
