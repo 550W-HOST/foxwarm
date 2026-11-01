@@ -1179,7 +1179,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     }
   }
 
-  const renderSession = (session: Session, level: number = 0, parentSession: Session | null = null) => {
+  const renderSession = (session: Session, level: number = 0, parentSession: Session | null = null, lastInBranch = false) => {
     const children = childrenMap.get(session.id) || []
     const boundedChildPage = bounded?.childPages.get(session.id)
     const branchLoadState = bounded?.branchLoadStates.get(session.id)
@@ -1284,22 +1284,51 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
       )
     )
 
-    // Real parent-child relations carry one guide per nesting level; grouped rows do not.
-    const guide = (guideLevel: number) => (
-      <span aria-hidden="true" data-session-indent-guide className="pointer-events-none absolute inset-y-0 z-[1] w-px bg-fw-border-strong" style={{ left: `${20 + guideLevel * 16}px` }} />
+    // Tree lines: every expanded branch has one continuous vertical line under its parent's
+    // disclosure. Real children join it with a short horizontal connector; rows that are only
+    // shown in an Agent group sit beside the line without one. The line ends at the middle of
+    // the branch's last row.
+    const rowGap = compact ? 2 : 4
+    const lineX = (lineLevel: number) => 20 + lineLevel * 16
+    const trunk = (lineLevel: number, owner: string) => (
+      <span aria-hidden="true" data-session-branch-line={owner} className="pointer-events-none absolute inset-y-0 z-[1] w-px bg-fw-border-strong" style={{ left: `${lineX(lineLevel)}px` }} />
     )
+    // Drawn inside a row: the last row's part of the line, and a real child's connector. The
+    // connector meets the title line (the row middle in Normal density) and stops short of the
+    // row's content.
+    const connectorY = compact ? '50%' : '22px'
+    const connectorWidth = compact && !hasChildren ? 10 : 6
+    const rowConnector = parentSession ? (
+      groupedRow
+        ? lastInBranch && <span aria-hidden="true" data-session-branch-line={parentSession.id} className="pointer-events-none absolute z-[1] w-px bg-fw-border-strong" style={{ left: `${lineX(level - 1)}px`, top: `-${rowGap}px`, height: `calc(${connectorY} + ${rowGap}px)` }} />
+        : lastInBranch
+          ? <span aria-hidden="true" data-session-branch-line={parentSession.id} data-session-branch-connector className="pointer-events-none absolute z-[1] rounded-bl border-b border-l border-fw-border-strong" style={{ left: `${lineX(level - 1)}px`, top: `-${rowGap}px`, width: `${connectorWidth}px`, height: `calc(${connectorY} + ${rowGap + 1}px)` }} />
+          : <span aria-hidden="true" data-session-branch-connector className="pointer-events-none absolute z-[1] h-px bg-fw-border-strong" style={{ left: `${lineX(level - 1)}px`, top: connectorY, width: `${connectorWidth}px` }} />
+    ) : null
+    const auxRows = [
+      showBranchLoading && 'loading',
+      showBranchRetry && 'retry',
+      showMoreChildren && 'more',
+      !bounded && hiddenCount <= 0 && children.length > DEFAULT_VISIBLE_CHILDREN && 'less',
+    ].filter(Boolean) as string[]
+    // Loading, retry and continuation rows continue the line without a connector.
     const branchRow = (key: string, content: ReactNode) => (
-      <div key={key} className="relative">{!isGroup && guide(level)}{content}</div>
+      <div key={key} className="relative">
+        {key === auxRows[auxRows.length - 1]
+          ? <span aria-hidden="true" data-session-branch-line={session.id} className="pointer-events-none absolute top-0 bottom-1/2 z-[1] w-px bg-fw-border-strong" style={{ left: `${lineX(level)}px` }} />
+          : trunk(level, session.id)}
+        {content}
+      </div>
     )
     const groupTotal = childTotal ?? 0
 
     return (
       <div
         key={session.id}
-        className="relative"
+        className="relative flow-root"
         data-session-grouped={groupedRow || undefined}
       >
-        {parentSession && !groupedRow && guide(level - 1)}
+        {parentSession && !lastInBranch && trunk(level - 1, parentSession.id)}
         {isGroup ? (
           <div
             role="button"
@@ -1348,6 +1377,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
           dragEnabled={sessionDragEnabled}
         >
           <>
+            {rowConnector}
               <SessionRowDropLayer
                 session={session}
                 parentSessionId={rowParentSessionId}
@@ -1358,7 +1388,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               {compact ? (
                 <div className="flex flex-1 min-w-0 items-center gap-1.5 py-1 pr-2 min-h-10" style={{ paddingLeft: contentPaddingLeft }}>
                   {hasChildren ? disclosure : viewMode !== 'flat-time' && !isFiltering ? <span className="session-compact-disclosure w-4 shrink-0" aria-hidden="true" /> : null}
-                  <span className={`min-w-0 flex-1 truncate text-sm ${groupedRow ? 'font-normal text-fw-text' : 'font-medium text-fw-text-strong'}`} title={`${session.displayName || displayId} · ${session.id}`}>
+                  <span className={`min-w-0 flex-1 truncate text-sm font-medium text-fw-text-strong`} title={`${session.displayName || displayId} · ${session.id}`}>
                     {session.displayName || displayId}{session.runtime === 'claude-code' && <span className="ml-1 text-xs font-normal text-fw-text-muted">Claude Code</span>}
                     {mobileList && activityTime(session.lastMessageTime) && <span className="mt-0.5 block truncate text-xs font-normal text-fw-text-muted">{session.agent ? `${session.agent} · ` : ''}{activityTime(session.lastMessageTime)}</span>}
                   </span>
@@ -1387,7 +1417,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               ) : (
               <div className="flex flex-1 min-w-0 items-start py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>
                 <div className="min-w-0 flex-1">
-                  <div className={`flex min-w-0 items-center gap-1.5 text-sm ${groupedRow ? 'font-normal text-fw-text' : 'font-medium text-fw-text-strong'}`}>
+                  <div className={`flex min-w-0 items-center gap-1.5 text-sm font-medium text-fw-text-strong`}>
                     <span className="min-w-0 flex-1 truncate" data-session-title>
                       {session.displayName || displayId}{session.runtime === 'claude-code' && <span className="ml-1 text-xs font-normal text-fw-text-muted">Claude Code</span>}
                       {unreadSessionIds.has(session.id) && (
@@ -1448,7 +1478,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
 
         {hasChildren && isExpanded && (
           <div>
-            {visibleChildren.map(child => renderSession(child, level + 1, session))}
+            {visibleChildren.map((child, index) => renderSession(child, level + 1, session, index === visibleChildren.length - 1 && auxRows.length === 0))}
             {showBranchLoading && branchRow('loading', (
               <div
                 data-session-branch-loading={session.id}
@@ -1483,7 +1513,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
                 {`▼ Show ${Math.min(hiddenCount, MORE_VISIBLE_CHILDREN_STEP)} more...`}
               </button>
             ))}
-            {!bounded && hiddenCount <= 0 && children.length > DEFAULT_VISIBLE_CHILDREN && (
+            {!bounded && hiddenCount <= 0 && children.length > DEFAULT_VISIBLE_CHILDREN && branchRow('less', (
               <button
                 onClick={() => toggleShowMore(session.id)}
                 className="w-full text-left p-2 text-xs text-fw-text-muted hover:text-fw-text dark:hover:text-fw-text-strong"
@@ -1491,7 +1521,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               >
                 ▲ Show less
               </button>
-            )}
+            ))}
           </div>
         )}
       </div>

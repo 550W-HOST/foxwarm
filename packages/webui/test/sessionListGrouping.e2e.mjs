@@ -39,15 +39,30 @@ const rowSelector = id => `[data-session-id="${id}"]`
 // Facts about a rendered Session row and its wrapper in the Sidebar tree.
 const describeRow = (page, id) => page.$eval(rowSelector(id), row => {
   const wrapper = row.parentElement
-  const guide = wrapper.querySelector(':scope > [data-session-indent-guide]')
-  const title = row.querySelector('.truncate')
+  const connector = row.querySelector('[data-session-branch-connector]')
   return {
     grouped: wrapper.hasAttribute('data-session-grouped'),
-    guide: !!guide && guide.getBoundingClientRect().height > 0,
-    weight: title ? getComputedStyle(title).fontWeight : null,
+    connector: !!connector && connector.getBoundingClientRect().width > 0,
     text: row.textContent,
   }
 })
+
+// The branch line of one parent: its rendered segments must join without vertical gaps and
+// share one horizontal position, ending at the middle of the branch's last row.
+const branchLine = (page, parentId, lastRowId) => page.evaluate((parent, last) => {
+  const segments = [...document.querySelectorAll('[data-session-branch-line]')]
+    .filter(node => node.getAttribute('data-session-branch-line') === parent)
+    .map(node => node.getBoundingClientRect())
+    .sort((a, b) => a.top - b.top)
+  const gaps = segments.slice(1).map((rect, index) => rect.top - segments[index].bottom).filter(gap => gap > 0.5)
+  const lastRow = document.querySelector(`[data-session-id="${last}"]`).getBoundingClientRect()
+  return {
+    count: segments.length,
+    gaps,
+    columns: new Set(segments.map(rect => Math.round(rect.left))).size,
+    endsAtLastRowMiddle: Math.abs(segments.at(-1).bottom - (lastRow.top + lastRow.height / 2)) <= 1.5,
+  }
+}, parentId, lastRowId)
 
 async function expand(page, id) {
   const toggle = await page.waitForSelector(`${rowSelector(id)} button[aria-label="Expand child sessions"]`, { timeout: 10_000 })
@@ -71,7 +86,7 @@ after(async () => {
   await browser?.close()
 })
 
-test('Sidebar groups top-level Sessions under their Agent host and marks only real children with guides', async () => {
+test('Sidebar groups top-level Sessions under their Agent host and connects only real children to its line', async () => {
   const page = await openList()
   try {
     await page.waitForSelector(rowSelector('grp/main'), { timeout: 10_000 })
@@ -85,11 +100,16 @@ test('Sidebar groups top-level Sessions under their Agent host and marks only re
     const real = await describeRow(page, 'grp/real')
     const loose = await describeRow(page, 'grp/loose')
     assert.equal(real.grouped, false)
-    assert.equal(real.guide, true, 'a real child carries an indent guide')
+    assert.equal(real.connector, true, 'a real child joins the branch line')
     assert.equal(loose.grouped, true)
-    assert.equal(loose.guide, false, 'a grouped row carries no guide')
-    assert.ok(Number(loose.weight) < Number(real.weight), `grouped title is muted: ${loose.weight} vs ${real.weight}`)
+    assert.equal(loose.connector, false, 'a grouped row sits beside the line without a connector')
     assert.match(loose.text, /\/loose/)
+    const lastRowId = await page.$$eval('[data-session-id]', (rows, ids) => rows.map(row => row.getAttribute('data-session-id')).filter(id => ids.includes(id)).at(-1), ['grp/real', 'grp/loose'])
+    const line = await branchLine(page, 'grp/main', lastRowId)
+    assert.ok(line.count >= 2, JSON.stringify(line))
+    assert.deepEqual(line.gaps, [], 'the branch line is continuous across rows')
+    assert.equal(line.columns, 1)
+    assert.equal(line.endsAtLastRowMiddle, true, JSON.stringify(line))
 
     // The virtual group is a collapsible host, not a Session.
     const group = await page.$('[data-session-group="vg"]')
@@ -100,7 +120,7 @@ test('Sidebar groups top-level Sessions under their Agent host and marks only re
     await group.click()
     await page.waitForSelector(rowSelector('vg/a'))
     await page.waitForSelector(rowSelector('vg/b'))
-    assert.equal((await describeRow(page, 'vg/a')).guide, false)
+    assert.equal((await describeRow(page, 'vg/a')).connector, false)
     assert.equal(await page.$eval('[data-session-group="vg"]', element => element.getAttribute('aria-expanded')), 'true')
   } finally {
     await page.close()
@@ -137,7 +157,7 @@ test('Create child session opens the New session dialog for the row and creates 
     const history = JSON.stringify(await api('GET', `sessions/${encodeURIComponent('grp/made')}/history`))
     assert.match(history, /event=\\"user-child-created\\" parentSessionId=\\"grp\/real\\"/)
     await page.waitForSelector(rowSelector('grp/made'), { timeout: 10_000 })
-    assert.equal((await describeRow(page, 'grp/made')).guide, true)
+    assert.equal((await describeRow(page, 'grp/made')).connector, true)
   } finally {
     await page.close()
   }
