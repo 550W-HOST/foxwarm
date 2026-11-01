@@ -389,6 +389,29 @@ public sealed partial class AgentRulesTreeTests
         Assert.False(File.Exists(outside));
     }
 
+    private static void AssertBoundary(
+        SessionOwner owner,
+        string boundaryEvent,
+        string sessionId,
+        string cwd
+    )
+    {
+        var notice = SystemTexts(owner)
+            .Select(text => text.Split('\n')[0])
+            .Where(line =>
+                line.StartsWith(
+                    "<foxwarm-system kind=\"session-boundary\"",
+                    StringComparison.Ordinal
+                )
+            )
+            .Select(line => System.Xml.Linq.XElement.Parse(line))
+            .Single(element => element.Attribute("event")?.Value == boundaryEvent);
+        Assert.Equal("workspace/main", notice.Attribute("parentSessionId")?.Value);
+        Assert.Equal(sessionId, notice.Attribute("currentSessionId")?.Value);
+        Assert.Equal("dev-offline", notice.Attribute("currentNode")?.Value);
+        Assert.Equal(cwd, notice.Attribute("cwd")?.Value);
+    }
+
     private static IEnumerable<string> SystemTexts(SessionOwner owner) =>
         owner
             .Entry.Snapshot()
@@ -400,6 +423,8 @@ public sealed partial class AgentRulesTreeTests
     [Fact]
     public async Task Default_working_directory_applies_to_new_sessions_on_the_default_Node()
     {
+        // Paths are locators: notices must not normalize their whitespace or markup characters.
+        const string Repo = "/srv/two  words/<repo>";
         await using var f = await Fixture();
         Denied(
             await f.ToolAsync(
@@ -415,14 +440,14 @@ public sealed partial class AgentRulesTreeTests
                 {
                     ["agentName"] = "workspace",
                     ["defaultNode"] = "dev-offline",
-                    ["defaultCwd"] = "/srv/repo",
+                    ["defaultCwd"] = Repo,
                 }
             )
         );
         var main = await f.Manager.RequiredAsync("workspace/main");
-        Assert.Equal(("dev-offline", "/srv/repo"), f.Manager.ExecutionPlacement(main));
+        Assert.Equal(("dev-offline", Repo), f.Manager.ExecutionPlacement(main));
         var automatic = await f.Manager.CreateNamedAsync("workspace", "automatic", null, null);
-        Assert.Equal(("dev-offline", "/srv/repo"), f.Manager.ExecutionPlacement(automatic));
+        Assert.Equal(("dev-offline", Repo), f.Manager.ExecutionPlacement(automatic));
         var elsewhere = await f.Manager.CreateNamedAsync(
             "workspace",
             "elsewhere",
@@ -433,20 +458,14 @@ public sealed partial class AgentRulesTreeTests
         Assert.Equal(("master", (string?)null), f.Manager.ExecutionPlacement(elsewhere));
 
         var fork = await f.Manager.ForkAsync(main, "fork");
-        Assert.Equal(("dev-offline", "/srv/repo"), f.Manager.ExecutionPlacement(fork));
-        Assert.Contains(
-            "event=\"history-inherited\" parentSessionId=\"workspace/main\" currentSessionId=\"workspace/main_fork\" currentNode=\"dev-offline\" cwd=\"/srv/repo\"",
-            string.Join("\n", SystemTexts(fork))
-        );
+        Assert.Equal(("dev-offline", Repo), f.Manager.ExecutionPlacement(fork));
+        AssertBoundary(fork, "history-inherited", "workspace/main_fork", Repo);
         Successful(
             await f.ToolAsync("create_child_session", new JsonObject { ["suffix"] = "child" }, main)
         );
         var child = await f.Manager.RequiredAsync("workspace/child");
-        Assert.Equal(("dev-offline", "/srv/repo"), f.Manager.ExecutionPlacement(child));
-        Assert.Contains(
-            "event=\"new-child\" parentSessionId=\"workspace/main\" currentSessionId=\"workspace/child\" currentNode=\"dev-offline\" cwd=\"/srv/repo\"",
-            SystemTexts(child).First()
-        );
+        Assert.Equal(("dev-offline", Repo), f.Manager.ExecutionPlacement(child));
+        AssertBoundary(child, "new-child", "workspace/child", Repo);
 
         // Without a default Node, the directory belongs to master.
         await f.Manager.SetAgentDefaultPlacementAsync("workspace", true, null, true, "/home/repo");
@@ -461,7 +480,7 @@ public sealed partial class AgentRulesTreeTests
         // The existing main-Session Node fallback is not the directory's Node.
         var fallback = await f.Manager.CreateNamedAsync("workspace", "fallback", null, null);
         Assert.Equal(("dev-offline", (string?)null), f.Manager.ExecutionPlacement(fallback));
-        Assert.Equal(("dev-offline", "/srv/repo"), f.Manager.ExecutionPlacement(main));
+        Assert.Equal(("dev-offline", Repo), f.Manager.ExecutionPlacement(main));
     }
 
     [Fact]
