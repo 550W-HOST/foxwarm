@@ -441,7 +441,6 @@ export async function createSessionInAgent(options: {
   sessionName: string;
   displayName?: string;
   currentNode?: string;
-  cwd?: string;
   model?: string;
   effort?: ModelEffort;
   modelsConfig?: ModelsConfig;
@@ -453,7 +452,6 @@ export async function createSessionInAgent(options: {
     sessionName,
     displayName,
     currentNode,
-    cwd,
     model,
     effort,
     modelsConfig,
@@ -527,7 +525,6 @@ export async function createSessionInAgent(options: {
     nextMessageSeq: 1,
     parentSessionId,
     currentNode: isolatedNode || currentNode || mainSessionNode || 'master',
-    cwd,
     model: modelEffort.model,
     effort: modelEffort.effort,
   });

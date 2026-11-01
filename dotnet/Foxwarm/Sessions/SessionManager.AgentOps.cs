@@ -221,8 +221,7 @@ internal sealed partial class SessionManager
         (string? Model, string? Effort)? inherited = null,
         IReadOnlyList<string>? selectedFiles = null,
         string? parentSessionId = null,
-        string runtime = "foxwarm",
-        string? initialCwd = null
+        string runtime = "foxwarm"
     )
     {
         using var operation = TrackCreation();
@@ -249,8 +248,7 @@ internal sealed partial class SessionManager
                     forceModel,
                     selectedFiles: selectedFiles,
                     initialNode: initialNode,
-                    runtime: runtime,
-                    initialCwd: initialCwd
+                    runtime: runtime
                 );
             }
             finally
@@ -568,8 +566,7 @@ internal sealed partial class SessionManager
         string? initialNode = null,
         (string? Model, string? Effort)? childDefaults = null,
         bool agentMainCreation = false,
-        string runtime = "foxwarm",
-        string? initialCwd = null
+        string runtime = "foxwarm"
     )
     {
         runtime = ClaudeRuntimeState.ValidateSelection(JsonValue.Create(runtime), present: true);
@@ -655,8 +652,6 @@ internal sealed partial class SessionManager
                     if (displayName is not null)
                         state.AuthorityEnvelope["displayName"] = displayName;
                     state.AuthorityEnvelope["currentNode"] = selectedNode ?? "master";
-                    if (initialCwd is not null)
-                        state.AuthorityEnvelope["cwd"] = initialCwd;
                     if (model is not null)
                         state.AuthorityEnvelope["model"] = model;
                     if (effort is not null)
