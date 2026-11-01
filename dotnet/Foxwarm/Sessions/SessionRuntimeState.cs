@@ -54,7 +54,7 @@ internal static class SessionRuntimeState
             foreground = new JsonObject
             {
                 ["state"] = "requesting-model",
-                ["note"] = "Claude Code is running on Main.",
+                ["note"] = "Claude Code is running on master.",
                 ["active"] = new JsonObject
                 {
                     ["phase"] = "external-runtime",

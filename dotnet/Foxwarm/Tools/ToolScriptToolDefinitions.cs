@@ -19,7 +19,7 @@ internal static class ToolScriptToolDefinitions
       "properties": {
         "node": {
           "type": "string",
-          "description": "Node containing filePath. Omit or use current for this Session's current Node, or use master for Main. Source selection does not change script execution or nested tools' default Node."
+          "description": "Node containing filePath. Omit or use current for this Session's current Node; otherwise name a Node such as master. Source selection does not change script execution or nested tools' default Node."
         },
         "filePath": {
           "type": "string",
@@ -63,7 +63,7 @@ internal static class ToolScriptToolDefinitions
       "properties": {
         "node": {
           "type": "string",
-          "description": "Node containing filePath. Omit or use current for this Session's current Node, or use master for Main. Source selection does not change script execution or nested tools' default Node."
+          "description": "Node containing filePath. Omit or use current for this Session's current Node; otherwise name a Node such as master. Source selection does not change script execution or nested tools' default Node."
         },
         "filePath": {
           "type": "string",

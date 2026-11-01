@@ -11,8 +11,8 @@ internal sealed partial class NodeProviderRegistry
         {
             "master" => new()
             {
-                ["label"] = "Main host",
-                ["description"] = "The colocated Main execution environment.",
+                ["label"] = "master",
+                ["description"] = "The Main server's own execution environment.",
                 ["lifecycle"] = new JsonArray("inspect"),
             },
             "authenticated-remote" => new()

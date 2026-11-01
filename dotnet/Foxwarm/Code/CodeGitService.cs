@@ -72,7 +72,7 @@ internal static class CodeGitService
         {
             throw new CodeServiceException(
                 "Unavailable",
-                "Git is unavailable on Main.",
+                "Git is unavailable on master.",
                 inner: error
             );
         }

@@ -110,7 +110,7 @@ internal static class ClaudeRuntimeState
                 || !Path.IsPathFullyQualified(SessionWait.Text(checkpoint["transcript"])!)
             )
                 throw SessionAuthorityErrors.Invalid(
-                    "External runtime checkpoint paths must be Main-local absolute paths."
+                    "External runtime checkpoint paths must be absolute paths on master."
                 );
             if (checkpoint["submittedThroughSeq"] is null)
                 throw SessionAuthorityErrors.Invalid(

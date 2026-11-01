@@ -913,7 +913,7 @@ var APP_CONFIG_SCHEMA = {
         executable: { type: "string", minLength: 1, default: "claude" },
         credentialLifetimeSeconds: { type: "integer", minimum: 1, maximum: 86400, default: 3600 }
       },
-      description: "Trusted Main-local Claude Code launcher and renewable tool credential lifetime. Model and login remain managed by Claude Code."
+      description: "Trusted Claude Code launcher on master and renewable tool credential lifetime. Model and login remain managed by Claude Code."
     },
     nodeProviders: {
       type: "object",

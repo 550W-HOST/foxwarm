@@ -154,7 +154,7 @@ internal sealed class ToolScriptRunStore(string root)
             || record["waiting"]?["reason"]?.GetValue<string>() == "managed_event"
         )
             throw new NotSupportedException(
-                "This Main host cannot continue or cancel a managed ToolScript run. The run, snapshot and lease references were retained."
+                "This Main server cannot continue or cancel a managed ToolScript run. The run, snapshot and lease references were retained."
             );
     }
 }

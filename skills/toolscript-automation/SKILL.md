@@ -36,7 +36,7 @@ Run the bundled file using the absolute skill directory returned by `skill({acti
 run_script({node: "master", filePath: "<skill-directory>/examples/automation_basic.py", args: {baseDir: "<skill-directory>/examples"}})
 ```
 
-Resource references above are relative to the skill directory for reading documentation. `run_script.filePath` is instead resolved on its selected source Node using the session working directory; loading a skill does not change that directory. Selecting `node: "master"` reads the source from Main but does not change the current Node for nested tools. When running from another current Node, provide `baseDir` for a directory on that Node containing the example's `README.md`, or copy the resources there before running them.
+Resource references above are relative to the skill directory for reading documentation. `run_script.filePath` is instead resolved on its selected source Node using the session working directory; loading a skill does not change that directory. Selecting `node: "master"` reads the source from master but does not change the current Node for nested tools. When running from another current Node, provide `baseDir` for a directory on that Node containing the example's `README.md`, or copy the resources there before running them.
 
 Or run a small inline script with the `code` argument. The default mode is `foreground`.
 

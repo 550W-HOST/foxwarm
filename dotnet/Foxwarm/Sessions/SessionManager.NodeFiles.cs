@@ -44,7 +44,7 @@ internal sealed partial class SessionManager
             && node != BoundNode(owner.Agent)
         )
             throw new ToolAuthorizationDeniedException(
-                "Isolated Agent can only transfer files between Main and its bound/current Node."
+                "Isolated Agent can only transfer files between master and its bound/current Node."
             );
     }
 

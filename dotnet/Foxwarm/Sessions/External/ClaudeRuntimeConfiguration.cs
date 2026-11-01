@@ -45,15 +45,15 @@ internal sealed record ClaudeRuntimeConfiguration(string Executable, TimeSpan Cr
     internal string? UnavailableReason(SessionManager manager, string? cwd = null)
     {
         if (!OperatingSystem.IsLinux())
-            return "Claude Code requires a Linux Main host.";
+            return "Claude Code requires Linux on master.";
         if (manager.RuntimeMcpEndpoint is null)
-            return "Claude Code requires Main's HTTP listener.";
+            return "Claude Code requires the Main server's HTTP listener.";
         if (!CanExecute("setsid", Environment.CurrentDirectory))
-            return "Install setsid on Main's PATH to use Claude Code.";
+            return "Install setsid on the Main server's PATH to use Claude Code.";
         // New Sessions launch in a fresh private context, not Main's or the Agent's cwd.
         cwd ??= ClaudeSessionDriver.ContextDirectory(manager.DataRoot, Guid.NewGuid().ToString());
         if (!CanExecute(Executable, cwd))
-            return "Claude Code launcher was not found or is not executable. Install claude on Main's PATH or configure claudeCode.executable.";
+            return "Claude Code launcher was not found or is not executable. Install claude on the Main server's PATH or configure claudeCode.executable.";
         return null;
     }
 

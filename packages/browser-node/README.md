@@ -6,7 +6,7 @@ Use your existing logged-in Chrome, Chromium, or Firefox tabs from Foxwarm. You 
 
 1. In Foxwarm, open **Nodes → New nodes → Browser**. Select your browser, then download and extract Browser Node.
 2. **Chrome/Chromium:** open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select the extracted directory. **Firefox 153+:** open `about:debugging` → **This Firefox** → **Load Temporary Add-on**, then select the extracted `manifest.json`. Firefox removes temporary installations at browser shutdown; load it again afterward. Persistent release/beta installation requires a Mozilla-signed package, which this delivery does not provide.
-3. Open the extension popup. Copy the Main address and private pairing token from Browser setup, enter a Node name, and click **Connect**. The Main address includes any deployment path.
+3. Open the extension popup. Copy the Main server address and private pairing token from Browser setup, enter a Node name, and click **Connect**. The Main server address includes any deployment path.
 4. Approve the request in Foxwarm's **Pending approvals**. The extension reconnects with its own credential and discards the pairing token.
 5. Share a tab or window with **Ask** or **Auto**. New installations share nothing.
 
@@ -18,8 +18,8 @@ Developers can load this source directory unpacked in Chrome without a build ste
 - The popup groups tabs by window. Sharing a window includes its current tabs, new tabs and tabs moved into it, including subsequent HTTP(S) origins. Moving out removes the window-derived grant.
 - An explicit tab rule wins over a site rule, then a window rule; the fallback is Off. **Clear** removes a rule and restores inheritance. An explicit tab Off excludes it even inside a shared window.
 - Positive direct-tab grants apply to the selected origin. Live tab/window grants use browser-session storage; closing the browser or reloading the extension clears them. Remembered hostname rules include subdomains and persist separately.
-- **Stop** pauses connection and work until you explicitly Connect again. Network reconnects and alarms respect Stop. **Forget pairing** also removes credentials and the bootstrap token; entering a fresh pairing token and approving again is required. Removing the approved Node on Main revokes server-side trust.
-- Changing the Main address, including its deployment path, clears the prior credential and requires pairing to that target.
+- **Stop** pauses connection and work until you explicitly Connect again. Network reconnects and alarms respect Stop. **Forget pairing** also removes credentials and the bootstrap token; entering a fresh pairing token and approving again is required. Removing the approved Node on the Main server revokes server-side trust.
+- Changing the Main server address, including its deployment path, clears the prior credential and requires pairing to that target.
 
 ## Chrome debugger permission
 
@@ -55,9 +55,9 @@ The first version targets ordinary top-document HTTP(S) pages. It does not provi
 
 ## Validation
 
-`node --test packages/browser-node/test/*.test.mjs` covers protocol validation, screenshot envelopes, connection/credential lifecycle, sharing precedence and confirmation expiry. The existing disposable C# host harness runs the actual packaged MV3 extension in `packages/webui/test/mainHostBrowserNode.e2e.mjs`, including real model dispatch, background images in history, form operations, sharing races and Main Stop. Ordinary invocation is headless even when `DISPLAY` is inherited. The explicit `--owned-xvfb` test flag also exercises foreground OS typing and the actual Chrome debugging banner; use it only with a separately owned 1280×900 Xvfb display. No personal profile or installation state is used. The broader external-Node and original onboarding drivers retain their CLI and UI coverage, including browser package selection and prefixed links.
+`node --test packages/browser-node/test/*.test.mjs` covers protocol validation, screenshot envelopes, connection/credential lifecycle, sharing precedence and confirmation expiry. The existing disposable C# host harness runs the actual packaged MV3 extension in `packages/webui/test/mainHostBrowserNode.e2e.mjs`, including real model dispatch, background images in history, form operations, sharing races and Session Stop. Ordinary invocation is headless even when `DISPLAY` is inherited. The explicit `--owned-xvfb` test flag also exercises foreground OS typing and the actual Chrome debugging banner; use it only with a separately owned 1280×900 Xvfb display. No personal profile or installation state is used. The broader external-Node and original onboarding drivers retain their CLI and UI coverage, including browser package selection and prefixed links.
 
-The explicit Firefox driver is `packages/webui/test/mainHostFirefoxNode.e2e.mjs`. Set `FOXWARM_FIREFOX` to an owned Firefox 153+ executable and `FOXWARM_GECKODRIVER` to geckodriver, then run it against the built current C# Main (or set `FOXWARM_PUBLISHED_CORE` to a prepared publish). Geckodriver is qualification tooling only, not an extension dependency. This test downloads both archives from the owned runtime, temporarily installs the Firefox archive, pairs/approves it, dispatches real model tools, checks strict-CSP JavaScript and optional permission changes, background PNG/image history, refs/forms/sharing/Ask/Stop, and leaves all extension pages closed for 65 seconds before repeating read/screenshot calls. It uses only disposable configuration, profiles and ports. `--remote-allow-system-access` is passed to that owned WebDriver profile only to automate extension and browser permission UI; production use needs no such flag.
+The explicit Firefox driver is `packages/webui/test/mainHostFirefoxNode.e2e.mjs`. Set `FOXWARM_FIREFOX` to an owned Firefox 153+ executable and `FOXWARM_GECKODRIVER` to geckodriver, then run it against the built current C# Main server (or set `FOXWARM_PUBLISHED_CORE` to a prepared publish). Geckodriver is qualification tooling only, not an extension dependency. This test downloads both archives from the owned runtime, temporarily installs the Firefox archive, pairs/approves it, dispatches real model tools, checks strict-CSP JavaScript and optional permission changes, background PNG/image history, refs/forms/sharing/Ask/Stop, and leaves all extension pages closed for 65 seconds before repeating read/screenshot calls. It uses only disposable configuration, profiles and ports. `--remote-allow-system-access` is passed to that owned WebDriver profile only to automate extension and browser permission UI; production use needs no such flag.
 
 For the owned headed qualification (Linux with Xvfb), run:
 
@@ -65,4 +65,4 @@ For the owned headed qualification (Linux with Xvfb), run:
 xvfb-run -a -s '-screen 0 1280x900x24 -nolisten tcp' node packages/webui/test/mainHostBrowserNode.e2e.mjs --owned-xvfb
 ```
 
-The extension sends JSON ping every 25 seconds; the current C# Main replies with JSON pong. Alarms provide bounded reconnect wakeups and never override persisted Stop.
+The extension sends JSON ping every 25 seconds; the current C# Main server replies with JSON pong. Alarms provide bounded reconnect wakeups and never override persisted Stop.

@@ -47,7 +47,7 @@ internal sealed class ClaudeSessionDriver(
         var endpoint = manager.RuntimeMcpEndpoint!;
         if (resume is not null && SessionWait.Text(checkpoint["cwd"]) != cwd)
             throw new ClaudeRuntimeException(
-                "Claude Code context does not use this Main's private runtime directory. Clear this Session to start a new private context; previous input will not be replayed."
+                "Claude Code context does not use this Main server's private runtime directory. Clear this Session to start a new private context; previous input will not be replayed."
             );
         if (resume is not null && !Directory.Exists(cwd))
             throw new ClaudeRuntimeException(
@@ -63,7 +63,7 @@ internal sealed class ClaudeSessionDriver(
             )
         )
             throw new ClaudeRuntimeException(
-                "Claude Code transcript is unavailable. Restore its Main-local transcript or Clear this Session; the previous input will not be replayed."
+                "Claude Code transcript is unavailable. Restore its transcript on master or Clear this Session; the previous input will not be replayed."
             );
         checkpoint["sessionId"] = externalId;
         checkpoint["cwd"] = cwd;

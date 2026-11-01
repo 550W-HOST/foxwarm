@@ -128,7 +128,7 @@ export async function connect() {
   const conn = await storage.getConnection();
   if (attempt !== generation || !conn.enabled) return;
   if (!conn.host || !((conn.nodeId && conn.authToken) || conn.pairingToken))
-    throw new Error('Enter the Main address and pairing token.');
+    throw new Error('Enter the Main server address and pairing token.');
   const previous = ws;
   ws = null;
   previous?.close();

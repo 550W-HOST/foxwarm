@@ -56,7 +56,7 @@ If your task is “wait for one managed event, step once, then release”, start
 
 If your task is “wait for one managed event, step once, then release”, start by copying the managed controller example.
 
-## Main host functions inside ToolScript
+## Main server functions inside ToolScript
 
 ### `open_managed_session(session_id)`
 

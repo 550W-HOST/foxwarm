@@ -255,7 +255,7 @@ internal static class IsolatedToolCompatibility
                 )
             )
                 throw new ToolAuthorizationDeniedException(
-                    "Isolated Agent can only access its own tool directory on Main."
+                    "Isolated Agent can only access its own tool directory on master."
                 );
         if (
             request.Source == "builtin"

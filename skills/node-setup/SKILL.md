@@ -186,7 +186,7 @@ For an agent-managed setup, discover `builtin:node_create_auth_token` with
 `search_tools` and call it through `call_tool`. This is separate from
 `node({ action: "create" })`: the latter runs a configured provider lifecycle,
 while this tool reserves a new approved Node ID and writes its credential to a
-new owner-only file on Main. It returns only `{ nodeId, filePath }`; it never
+new owner-only file on master. It returns only `{ nodeId, filePath }`; it never
 returns the token. The Node ID and destination file must both be new, and this
 tool does not rotate an existing credential.
 
@@ -200,7 +200,7 @@ def main(args):
         toolId="builtin:node_create_auth_token",
         args={"nodeId": "my-node", "filePath": "/secure/new-node.token"},
     )
-    # Run this on Main, using the existing exec/SSH facilities. The command
+    # Run this on master, using the existing exec/SSH facilities. The command
     # reads the protected file as needed; do not print its contents or return
     # the nested exec result.
     call_tool(
@@ -215,7 +215,7 @@ def main(args):
 Adjust the transfer and Node startup command for the target deployment. Do not
 put the token in a command argument, environment interpolation visible to the
 tool call, script output, or a captured `cat`; avoid shell tracing such as
-`set -x`. The protected file may remain on Main until the operator moves or
+`set -x`. The protected file may remain on master until the operator moves or
 deletes it.
 
 For the existing request/approve path, start the Node with the shared pairing token:

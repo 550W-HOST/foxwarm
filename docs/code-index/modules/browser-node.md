@@ -36,7 +36,7 @@ On Chrome/Chromium, debugger permission and Chrome's visible debugging banner ar
 
 **Derived connection-state design for the selected [browser Node capability](#d-browser-node-distinct-tools).** User connection intent and temporary transport loss have different meanings. Stored intent/reconnect mechanics implement that distinction; browser wake or a transient disconnect is not a new user authorization.
 
-Stop persists disabled intent; startup, reconnect and alarms respect it. Forget additionally deletes credentials/bootstrap secret. Credentials bind to the normalized Main address including deployment path; a changed target requires fresh pairing, and retired pairing replies cannot install credentials. A transient network failure may reconnect only while enabled. There is no legacy Browser settings or old-tool migration path.
+Stop persists disabled intent; startup, reconnect and alarms respect it. Forget additionally deletes credentials/bootstrap secret. Credentials bind to the normalized Main server address including deployment path; a changed target requires fresh pairing, and retired pairing replies cannot install credentials. A transient network failure may reconnect only while enabled. There is no legacy Browser settings or old-tool migration path.
 
 ### D-browser-node-firefox-control
 

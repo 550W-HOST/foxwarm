@@ -107,7 +107,7 @@ internal sealed partial class MainToolScript
                 case "session_recv":
                 case "session_resume_agent":
                     throw new NotSupportedException(
-                        "Managed ToolScript host functions are not available on this Main host."
+                        "Managed ToolScript host functions are not available on this Main server."
                     );
                 default:
                     throw new InvalidDataException(

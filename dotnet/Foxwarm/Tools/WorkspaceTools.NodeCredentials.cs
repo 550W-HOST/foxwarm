@@ -6,7 +6,7 @@ public sealed partial class WorkspaceTools
     {
         if (!Path.IsPathFullyQualified(raw) || raw.Contains('\0'))
             throw new InvalidDataException(
-                "node_create_auth_token filePath must be an absolute path on Main."
+                "node_create_auth_token filePath must be an absolute path on master."
             );
         return Path.GetFullPath(raw);
     }

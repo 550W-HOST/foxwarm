@@ -11,10 +11,10 @@ function mutate(area, key, update) {
 
 export function normalizeHost(input) {
   if (typeof input !== 'string' || /[\\\s?#]/.test(input.trim()))
-    throw new Error('Enter an HTTP or HTTPS Main address without a query or fragment.');
+    throw new Error('Enter an HTTP or HTTPS Main server address without a query or fragment.');
   const url = new URL(input.trim());
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password)
-    throw new Error('Enter an HTTP or HTTPS Main address.');
+    throw new Error('Enter an HTTP or HTTPS Main server address.');
   return url.href.replace(/\/+$/, '');
 }
 export async function getConnection() {
