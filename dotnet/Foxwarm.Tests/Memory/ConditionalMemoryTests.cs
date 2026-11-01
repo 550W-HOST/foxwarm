@@ -101,6 +101,52 @@ public class ConditionalMemoryTests
     }
 
     [Fact]
+    public void Pattern_lists_or_alternatives_exclude_negations_and_attributes_combine()
+    {
+        string Filter(string open, string model, string runtime = "foxwarm") =>
+            ConditionalMemory.FilterConditionalMemorySource(
+                $"{open}\nbody\n</foxwarm-if>\n",
+                model,
+                runtime
+            );
+        var list = "<foxwarm-if model-id=\"anthropic/*  openai/gpt-5*\">";
+        Assert.Equal("body\n", Filter(list, "anthropic/claude"));
+        Assert.Equal("body\n", Filter(list, "openai/gpt-5.5"));
+        Assert.Equal("", Filter(list, "openai/o9"));
+
+        var except = "<foxwarm-if model-id=\"!openai/* !google/*\">";
+        Assert.Equal("body\n", Filter(except, "anthropic/claude"));
+        Assert.Equal("", Filter(except, "google/gemini"));
+        var narrowed = "<foxwarm-if model-id=\"openai/* !openai/o*\">";
+        Assert.Equal("body\n", Filter(narrowed, "openai/gpt-5"));
+        Assert.Equal("", Filter(narrowed, "openai/o9"));
+
+        var runtimeOnly = "<foxwarm-if runtime=\"claude-code\">";
+        Assert.Equal("body\n", Filter(runtimeOnly, "", "claude-code"));
+        Assert.Equal("", Filter(runtimeOnly, "anthropic/claude"));
+        var both = "<foxwarm-if model-id=\"!openai/*\" runtime=\"foxwarm\">";
+        Assert.Equal("body\n", Filter(both, "anthropic/claude"));
+        Assert.Equal("", Filter(both, "openai/gpt-5"));
+        Assert.Equal("", Filter(both, "claude-opus", "claude-code"));
+        Assert.Equal("body\n", Filter("<foxwarm-if runtime=\"!claude-code\">", "x"));
+
+        // The empty value remains the exact empty pattern.
+        Assert.Equal("body\n", Filter("<foxwarm-if model-id=\"\">", ""));
+        Assert.Equal("", Filter("<foxwarm-if model-id=\"\">", "x"));
+    }
+
+    [Theory]
+    [InlineData("<foxwarm-if model-id=\"x\" model-id=\"x\">")]
+    [InlineData("<foxwarm-if runtime=\"foxwarm\" extra=\"x\">")]
+    [InlineData("<foxwarm-if modle-id=\"x\">")]
+    [InlineData("<foxwarm-if  runtime=\"foxwarm\">")]
+    public void Unknown_repeated_or_irregular_attributes_remain_literal(string open)
+    {
+        var source = $"{open}\nbody\n</foxwarm-if>\n";
+        Assert.Equal(source, ConditionalMemory.FilterConditionalMemorySource(source, "x"));
+    }
+
+    [Fact]
     public void Decodes_attributes_and_round_trips_exact_snapshot_header()
     {
         var source = "<foxwarm-if model-id=\"provider/a&amp;b/*\">\nbody\n</foxwarm-if>";

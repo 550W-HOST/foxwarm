@@ -39,6 +39,21 @@ set_agent_rules({"agentName":"worker", "rules":[
 
 Create the worker's Claude Code Session with `agentName: "worker"` and `node: "c1"`. The worker can use files and commands in the c1 subtree, discover tools and report to its parent Session; everything else is denied, and denied tools are hidden from its tool list. Add further grants such as `task` or memory tools as needed. An Agent that creates its own sub-Agents needs grants for `create_agent`, `set_agent_rules` and `create_child_session`, and for `node_create_auth_token` with the parent Node. For selector semantics and delegation, see [Node authorization forests](code-index/behaviors/nodes-workspaces-and-permissions.md#node-authorization-forests).
 
+## Runtime-specific memory
+
+The Session's memory snapshot is passed to Claude Code as appended system instructions. Use conditional blocks to keep instructions for one runtime out of the other:
+
+```markdown
+<foxwarm-if runtime="claude-code">
+Report with send_to_session and afterSend "continue".
+</foxwarm-if>
+<foxwarm-if runtime="foxwarm">
+Instructions that use wait or other batch controls.
+</foxwarm-if>
+```
+
+In a Claude Code Session, `model-id` conditions match the model name reported by the CLI, which is empty until the first run, rather than a Foxwarm model key.
+
 ## Limits and precautions
 
 - **Current support:** Linux/Main-local hosting only. Fork, Foxwarm compaction, wait/batch controls and ToolScript run/resume are unavailable. Use `afterSend: "continue"` for reports. Model/effort changes belong to Claude Code, not Foxwarm's Session controls.

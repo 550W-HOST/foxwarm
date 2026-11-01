@@ -6,8 +6,16 @@ namespace Foxwarm;
 public static class ConditionalMemory
 {
     private const string SnapshotHeaderSeparator = "\n\n";
+    public const string FoxwarmRuntime = "foxwarm";
+
+    // Each attribute is one condition; all attributes must match (AND).
+    private static readonly string[] ConditionAttributes = ["model-id", "runtime"];
     private static readonly Regex ConditionalOpen = new(
-        "^[ \\t]*<foxwarm-if model-id=\"([^\"]*)\">[ \\t]*$",
+        "^[ \\t]*<foxwarm-if((?: [a-z-]+=\"[^\"]*\")+)>[ \\t]*$",
+        RegexOptions.CultureInvariant
+    );
+    private static readonly Regex ConditionalAttribute = new(
+        " ([a-z-]+)=\"([^\"]*)\"",
         RegexOptions.CultureInvariant
     );
     private static readonly Regex ConditionalClose = new(
@@ -29,7 +37,11 @@ public static class ConditionalMemory
         RegexOptions.CultureInvariant
     );
 
-    public static string FilterConditionalMemorySource(string source, string modelId)
+    public static string FilterConditionalMemorySource(
+        string source,
+        string modelId,
+        string runtime = FoxwarmRuntime
+    )
     {
         if (
             string.IsNullOrEmpty(source)
@@ -48,7 +60,11 @@ public static class ConditionalMemory
             var open = lines[range.Start];
             var close = lines[range.End];
             output.Append(source, sourceOffset, open.Start - sourceOffset);
-            if (WildcardMatches(range.Pattern, modelId))
+            if (
+                range.Conditions.All(condition =>
+                    ListMatches(condition.Value, condition.Key == "runtime" ? runtime : modelId)
+                )
+            )
                 output.Append(source, open.End, close.Start - open.End);
             sourceOffset = close.End;
         }
@@ -150,7 +166,11 @@ public static class ConditionalMemory
 
     private sealed record SourceLine(string Content, int Start, int End);
 
-    private sealed record ConditionalRange(int Start, int End, string Pattern);
+    private sealed record ConditionalRange(
+        int Start,
+        int End,
+        IReadOnlyDictionary<string, string> Conditions
+    );
 
     private sealed record FenceState(char Marker, int Length);
 
@@ -228,13 +248,17 @@ public static class ConditionalMemory
         return fenced;
     }
 
-    private sealed record Token(string Kind, bool Supported, string? Pattern = null);
+    private sealed record Token(
+        string Kind,
+        bool Supported,
+        IReadOnlyDictionary<string, string>? Conditions = null
+    );
 
     private static Token? ParseToken(string line)
     {
         var open = ConditionalOpen.Match(line);
-        if (open.Success)
-            return new Token("open", true, UnescapeAttributeValue(open.Groups[1].Value));
+        if (open.Success && ParseConditions(open.Groups[1].Value) is { } conditions)
+            return new Token("open", true, conditions);
         if (ConditionalClose.IsMatch(line))
             return new Token("close", true);
         if (ConditionalOpenLike.IsMatch(line))
@@ -285,10 +309,36 @@ public static class ConditionalMemory
             if (cursor >= lines.Count)
                 break;
             if (supported && !nested && opening.Supported)
-                ranges.Add(new ConditionalRange(index, cursor, opening.Pattern!));
+                ranges.Add(new ConditionalRange(index, cursor, opening.Conditions!));
             index = cursor;
         }
         return ranges;
+    }
+
+    // Unknown or repeated attributes leave the wrapper unsupported, so it stays literal.
+    private static Dictionary<string, string>? ParseConditions(string attributes)
+    {
+        var conditions = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (Match attribute in ConditionalAttribute.Matches(attributes))
+        {
+            var name = attribute.Groups[1].Value;
+            if (!ConditionAttributes.Contains(name) || conditions.ContainsKey(name))
+                return null;
+            conditions[name] = UnescapeAttributeValue(attribute.Groups[2].Value);
+        }
+        return conditions;
+    }
+
+    // Space-separated patterns: any positive pattern may match (none means all), and no
+    // !-prefixed pattern may match. An empty value is the single empty pattern.
+    private static bool ListMatches(string value, string subject)
+    {
+        var patterns = value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (patterns.Length == 0)
+            return WildcardMatches(value, subject);
+        var positives = patterns.Where(p => !p.StartsWith('!')).ToArray();
+        return (positives.Length == 0 || positives.Any(p => WildcardMatches(p, subject)))
+            && !patterns.Where(p => p.StartsWith('!')).Any(p => WildcardMatches(p[1..], subject));
     }
 
     private static bool WildcardMatches(string pattern, string modelId)

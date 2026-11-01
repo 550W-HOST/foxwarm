@@ -14,7 +14,7 @@ Provides pure parsing and formatting primitives for model-conditional memory sou
 
 ## Behavior
 
-- Conditional wrappers must occupy complete lines, with optional surrounding spaces or tabs. The opening wrapper has one double-quoted `model-id` attribute; the closing wrapper is `</foxwarm-if>`.
+- Conditional wrappers must occupy complete lines, with optional surrounding spaces or tabs. The opening wrapper has one double-quoted `model-id` attribute; the closing wrapper is `</foxwarm-if>`. The maintained C# parser extends this grammar with pattern lists, `!` exclusions and a `runtime` attribute; see [Conditional Agent memory](conditional-memory.md#grammar).
 - Matching is case-sensitive and anchored to the complete concrete model identity. Only `*` is a wildcard, matching zero or more characters including `/`; all other pattern characters are literal.
 - A matching pair retains only its body. A nonmatching pair removes the complete wrapper and body. Multiple sequential and empty pairs are supported.
 - Parsing is scoped to one supplied source body, so a condition cannot span memory files.

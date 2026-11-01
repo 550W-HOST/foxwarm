@@ -18,12 +18,14 @@ internal sealed partial class AgentMemory(AgentCatalog agents, Skills skills)
     )
     {
         var blocks = new StringBuilder();
+        var runtime = externalRuntime ? ClaudeRuntimeState.Kind : ConditionalMemory.FoxwarmRuntime;
         if (selection is not null)
             await AppendSelectedAsync(
                 blocks,
                 agentName,
                 sessionId,
                 concreteModelId,
+                runtime,
                 selection,
                 cancellationToken
             );
@@ -42,7 +44,8 @@ internal sealed partial class AgentMemory(AgentCatalog agents, Skills skills)
                     frameworkPath,
                     ConditionalMemory.FilterConditionalMemorySource(
                         await File.ReadAllTextAsync(frameworkPath, cancellationToken),
-                        concreteModelId
+                        concreteModelId,
+                        runtime
                     )
                 );
 
@@ -78,7 +81,8 @@ internal sealed partial class AgentMemory(AgentCatalog agents, Skills skills)
                                 path,
                                 ConditionalMemory.FilterConditionalMemorySource(
                                     body,
-                                    concreteModelId
+                                    concreteModelId,
+                                    runtime
                                 )
                             );
                     }

@@ -46,6 +46,7 @@ internal sealed partial class AgentMemory
         string agentName,
         string sessionId,
         string modelId,
+        string runtime,
         IReadOnlyList<string> selection,
         CancellationToken token
     )
@@ -68,7 +69,7 @@ internal sealed partial class AgentMemory
                     agentName,
                     "self",
                     path,
-                    ConditionalMemory.FilterConditionalMemorySource(body, modelId)
+                    ConditionalMemory.FilterConditionalMemorySource(body, modelId, runtime)
                 );
         }
     }

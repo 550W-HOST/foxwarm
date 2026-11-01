@@ -27,6 +27,28 @@ public sealed partial class ClaudeRuntimeTests
         };
 
     [Fact]
+    public async Task Runtime_conditions_select_Claude_Code_memory_blocks()
+    {
+        await using var f = await ClaudeRuntimeFixture.CreateAsync();
+        await File.WriteAllTextAsync(
+            Path.Combine(f.Main.Manager.AgentDirectory("main"), "memory", "RUNTIME.md"),
+            "<foxwarm-if runtime=\"claude-code\">\nClaude Code block.\n</foxwarm-if>\n"
+                + "<foxwarm-if runtime=\"foxwarm\">\nFoxwarm block.\n</foxwarm-if>\n"
+        );
+        Assert.Equal("claude-code", await f.Main.Manager.RefreshSnapshotAsync(f.Owner));
+        await f.RunAsync();
+        var prompt = f.Lines("inputs.jsonl")[0]["prompt"]!.GetValue<string>();
+        Assert.Contains("Claude Code block.", prompt);
+        Assert.DoesNotContain("Foxwarm block.", prompt);
+        var foxwarm = await f.Main.Manager.CreateNamedAsync("main", "plain", null, null);
+        await f.Main.Manager.RefreshSnapshotAsync(foxwarm);
+        var snapshot = foxwarm.Entry.Snapshot().AuthorityEnvelope["persistentMemorySnapshot"];
+        Assert.NotNull(snapshot);
+        Assert.Contains("Foxwarm block.", snapshot.GetValue<string>());
+        Assert.DoesNotContain("Claude Code block.", snapshot.GetValue<string>());
+    }
+
+    [Fact]
     public async Task Process_to_real_MCP_registry_effect_commits_once_and_resumes_without_Foxwarm_model_or_cost()
     {
         await using var f = await ClaudeRuntimeFixture.CreateAsync();

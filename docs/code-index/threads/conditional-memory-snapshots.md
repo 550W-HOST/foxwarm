@@ -23,6 +23,7 @@ Tool catalogs remain independent of memory snapshots: current Node capabilities 
 - [src-conditional-memory](../units/src-conditional-memory.md) owns the pure conditional grammar and current-model header format.
 - [Session prompt state](../units/src-session-prompt.md) applies conditional filtering independently to each selected source body before adding provenance wrappers. The root framework source and its legacy framework fallback remain raw-content sources, so frontmatter-looking bytes stay model-visible; ordinary inherited, current-agent, and configured custom memory files retain Session frontmatter parsing before conditional filtering.
 - Skill catalog text, generated directory/recall guidance, tool instructions, and chat history are not scanned for conditional blocks.
+- Each body is also filtered for the Session runtime (`foxwarm` or `claude-code`); the [condition grammar](../units/conditional-memory.md#grammar) owns attribute and list semantics. Claude Code snapshots omit the model marker and use the CLI-reported model name.
 - A materialized snapshot always starts with the exact canonical concrete model identity. Snapshot construction does not select a virtual route.
 
 ## Actual request boundary
