@@ -283,7 +283,7 @@ function NodeLane({ node, rows, selectedSessionId, currentSession, now, onInspec
       {rows.length > 0 ? (
         <>
 
-          <div data-architecture-node-session-scroll className="max-h-[360px] overflow-y-auto overscroll-contain">
+          <div data-architecture-node-session-scroll className="max-h-[360px] overflow-y-auto">
             <div className="grid gap-2 p-3 lg:grid-cols-2">
               {visibleRows.map(session => (
                 <SessionOperationRow
