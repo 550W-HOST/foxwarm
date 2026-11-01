@@ -135,6 +135,15 @@ test('default normal rows, detailed toggle, persistence, canonical status, theme
     assert.equal(await page.$eval(`${row('legacy')} [data-session-status]`, e => e.previousElementSibling.getAttribute('aria-label')), 'Archived session')
     const disclosure = `${row('main')} button[aria-expanded]`
     await page.mouse.move(800, 650)
+    // An expanded row keeps its disclosure visible, so its branch line starts below it.
+    assert.equal(await page.$eval(disclosure, e => e.getAttribute('aria-expanded')), 'true')
+    assert.equal(await page.$eval(disclosure, e => getComputedStyle(e).opacity), '1')
+    await page.hover(row('main'))
+    await page.click(disclosure)
+    assert.equal(await page.$(row('child')), null)
+    await page.focus(toggle)
+    await page.mouse.move(800, 650)
+    // A collapsed row shows it only on hover or focus.
     assert.equal(await page.$eval(disclosure, e => getComputedStyle(e).opacity), '0')
     const titleLeft = await page.$eval(`${row('main')} span[title]`, e => e.getBoundingClientRect().left)
     await page.hover(row('main'))
@@ -146,9 +155,6 @@ test('default normal rows, detailed toggle, persistence, canonical status, theme
     assert.equal(await page.$eval(`${row('main')} span[title]`, e => e.getBoundingClientRect().left), titleLeft)
     await page.focus(toggle)
     assert.equal(await page.$eval(disclosure, e => getComputedStyle(e).opacity), '0')
-    await page.hover(row('main'))
-    await page.click(`${row('main')} button[aria-expanded]`)
-    assert.equal(await page.$(row('child')), null)
     await page.focus(`${row('main')} button[aria-expanded]`)
     await page.keyboard.press('Enter')
     await page.waitForSelector(row('child'))

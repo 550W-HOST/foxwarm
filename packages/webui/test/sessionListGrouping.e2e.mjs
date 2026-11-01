@@ -135,6 +135,7 @@ const describeTag = (page, id) => page.$eval(rowSelector(id), row => {
     beforeMenu: rect.right <= menu.left + 0.5,
     sameLine: Math.abs((rect.top + rect.bottom) / 2 - (title.top + title.bottom) / 2) <= 2,
     titleWider: title.width > rect.width,
+    tagWhole: tag.scrollWidth <= tag.clientWidth,
   }
 })
 
@@ -147,7 +148,7 @@ test('Rows of an Agent without a main Session stay top-level and show a muted Ag
       assert.equal(await page.$('[data-session-group]'), null, 'there are no virtual group rows')
       assert.equal((await describeRow(page, 'tagged/a')).grouped, false)
       const tag = await describeTag(page, 'tagged/a')
-      assert.deepEqual(tag, { agent: 'tagged', afterTitle: true, beforeMenu: true, sameLine: true, titleWider: true }, density)
+      assert.deepEqual(tag, { agent: 'tagged', afterTitle: true, beforeMenu: true, sameLine: true, titleWider: true, tagWhole: true }, density)
       assert.equal(await describeTag(page, 'tagged/b'), null, `${density}: a title that already names the Agent has no tag`)
       assert.equal(await describeTag(page, 'grp/main'), null, `${density}: a main Session has no tag`)
       await expand(page, 'grp/main')

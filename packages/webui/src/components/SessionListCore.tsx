@@ -1210,13 +1210,12 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
     const title = session.displayName || displayId
     // Top-level tree rows of an Agent without a main host name their Agent.
     const agentTag = usePresentationParents && !mobileList && !parentSession ? getSessionListAgentTag(session, title) : null
-    // The title keeps its width first: the tag grows only to its text and shrinks before it.
-    const titleFlex = agentTag ? 'flex-auto' : 'flex-1'
+    // The title truncates first; the tag keeps up to 45% of the row so the Agent stays readable.
     const agentTagBadge = agentTag && (
       <span
         data-session-agent-tag={agentTag}
         title={`Agent: ${agentTag}`}
-        className="min-w-[2rem] shrink-[1000] truncate rounded bg-fw-neutral-surface px-1.5 py-0.5 text-[10px] font-normal leading-none text-fw-text-muted"
+        className="max-w-[45%] shrink-0 truncate rounded bg-fw-neutral-surface px-1.5 py-0.5 text-[10px] font-normal leading-none text-fw-text-muted"
       >
         {agentTag}
       </span>
@@ -1363,7 +1362,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               {compact ? (
                 <div className="flex flex-1 min-w-0 items-center gap-1.5 py-1 pr-2 min-h-10" style={{ paddingLeft: contentPaddingLeft }}>
                   {hasChildren ? disclosure : viewMode !== 'flat-time' && !isFiltering ? <span className="session-compact-disclosure w-4 shrink-0" aria-hidden="true" /> : null}
-                  <span className={`min-w-0 ${titleFlex} truncate text-sm font-medium text-fw-text-strong`} title={`${title} · ${session.id}`} data-session-title>
+                  <span className={"min-w-0 flex-1 truncate text-sm font-medium text-fw-text-strong"} title={`${title} · ${session.id}`} data-session-title>
                     {title}{session.runtime === 'claude-code' && <span className="ml-1 text-xs font-normal text-fw-text-muted">Claude Code</span>}
                     {mobileList && activityTime(session.lastMessageTime) && <span className="mt-0.5 block truncate text-xs font-normal text-fw-text-muted">{session.agent ? `${session.agent} · ` : ''}{activityTime(session.lastMessageTime)}</span>}
                   </span>
@@ -1394,7 +1393,7 @@ export default function SessionListCore({ sessions, currentSession, onSelectSess
               <div className="flex flex-1 min-w-0 items-start py-3 pr-2" style={{ paddingLeft: contentPaddingLeft }}>
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-fw-text-strong">
-                    <span className={`min-w-0 ${titleFlex} truncate`} data-session-title>
+                    <span className={"min-w-0 flex-1 truncate"} data-session-title>
                       {title}{session.runtime === 'claude-code' && <span className="ml-1 text-xs font-normal text-fw-text-muted">Claude Code</span>}
                       {unreadSessionIds.has(session.id) && (
                         <span className="ml-1.5 inline-flex items-center align-middle">
