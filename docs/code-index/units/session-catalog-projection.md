@@ -31,5 +31,5 @@ Ordinary `Get` and `Resolve` calls no longer acquire the writer monitor after in
 ## Tests
 
 `dotnet/Foxwarm.Tests/Sessions/SessionCatalogTests.cs`; `SessionCatalogPublicationTests.cs`; `SessionCatalogSourceTests.cs`; `SessionIdentityBoundaryTests.cs`.
-`SessionSidebarGroupingTests.cs` covers grouping, threshold/main/pin/parent membership changes, cycle-safe hosts, the v3→v4 backfill, real-only lifecycle descendants and the user-child opening notice.
+`SessionSidebarGroupingTests.cs` covers grouping, threshold/main/pin/parent membership changes, cycle-safe hosts, adding missing Sidebar objects without a version change, reopen repair after writes by a Main without Sidebar support, real-only lifecycle descendants and the user-child opening notice.
 `SessionCatalogConcurrencyTests.cs` covers held-writer exact/resolution reads, retained children rows/count exclusion, concurrent first reads, identity/parent transitions, and disposal/reopen.

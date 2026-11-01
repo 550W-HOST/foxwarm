@@ -223,11 +223,10 @@ internal sealed partial class SessionCatalog
                 {
                     Execute(connection, CreateSchemaSql);
                     Execute(connection, CostSchemaSql);
-                    Execute(connection, SidebarSchemaSql);
                     foreach (var row in rows)
                         Insert(connection, row.Projection);
                     NormalizeParents(connection);
-                    RefreshSidebar(connection);
+                    EnsureSidebar(connection);
                     Execute(connection, "COMMIT");
                 }
                 catch

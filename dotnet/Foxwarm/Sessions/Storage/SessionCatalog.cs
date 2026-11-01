@@ -58,12 +58,7 @@ internal sealed partial class SessionCatalog : IDisposable
                 Execute(connection, MigrateV2Sql);
                 version = 3;
             }
-            if (version == 3)
-            {
-                MigrateSidebarSchema(connection);
-                version = 4;
-            }
-            if (version != 4)
+            if (version != 3)
                 throw new InvalidDataException(
                     $"Unsupported Session catalog schema version {version}."
                 );
@@ -72,6 +67,7 @@ internal sealed partial class SessionCatalog : IDisposable
                 "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON"
             );
             Execute(connection, WaitPresenceIndexSql);
+            EnsureSidebarTransaction(connection);
             db = connection;
             Volatile.Write(
                 ref readerConnectionString,

@@ -24,7 +24,7 @@ internal sealed partial class SessionCatalog
             );
             connection.Open();
             var version = Convert.ToInt32(Scalar(connection, "PRAGMA user_version"));
-            if (version is not (1 or 2 or 3 or 4))
+            if (version is not (1 or 2 or 3))
                 throw new InvalidDataException("Unsupported Session catalog schema version.");
             return Rows(
                     connection,

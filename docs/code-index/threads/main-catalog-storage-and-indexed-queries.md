@@ -13,8 +13,8 @@ Session runtime/list consumers and future bounded WebUI navigation.
 state/catalog.sqlite
 ```
 
-The catalog (schema version 4) contains only Session catalog rows, ambiguity-preserving
-aliases, canonical parent projections, Sidebar presentation parents, and
+The catalog (schema version 3) contains only Session catalog rows, ambiguity-preserving
+aliases, canonical parent projections, additive Sidebar presentation parents, and
 maintained counts. Session semantic
 state remains in one authoritative JSON file per Session.
 
@@ -282,9 +282,17 @@ that affects it:
    top-level. The leading slash cannot occur in a Session ID or alias.
 
 Insert/delete/agent/parent/pin triggers mark affected rows; one refresh before
-each catalog commit (and the v3→v4 migration backfill) recomputes hosts,
-per-Agent targets and the affected rows, with maintained per-presentation-parent
-counts. Root pages select `sidebar_parent IS NULL`; Default/Time child pages,
+each catalog commit recomputes hosts, per-Agent targets and the affected rows,
+with maintained per-presentation-parent counts.
+
+These objects (the `sidebar_parent` column, `catalog_sidebar_*` tables, triggers
+and indexes) are additive to schema version 3 and do not change its version, so a
+Main that predates them still opens, reads and writes the catalog: its statements
+name their columns and never read the new objects, while its row writes still
+fire the triggers. Every open adds missing objects idempotently and recomputes
+all presentation parents, hosts, targets and counts in one transaction, repairing
+anything such a Main left stale; fresh catalogs and the one-time migration run
+the same step. Root pages select `sidebar_parent IS NULL`; Default/Time child pages,
 counts, focus paths and busy-descendant badges use `sidebar_parent` through
 `idx_session_catalog_sidebar_*`. The list query merges the few virtual group
 rows (`presentationGroup`, `childTotal`, archived only when every member is
