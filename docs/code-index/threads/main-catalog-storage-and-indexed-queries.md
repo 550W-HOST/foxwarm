@@ -13,8 +13,9 @@ Session runtime/list consumers and future bounded WebUI navigation.
 state/catalog.sqlite
 ```
 
-The second schema version contains only Session catalog rows, ambiguity-preserving
-aliases, canonical parent projections, and maintained counts. Session semantic
+The catalog (schema version 4) contains only Session catalog rows, ambiguity-preserving
+aliases, canonical parent projections, Sidebar presentation parents, and
+maintained counts. Session semantic
 state remains in one authoritative JSON file per Session.
 
 ## Current flow
@@ -181,7 +182,11 @@ recursive summaries.
 Every bounded Sidebar/search/exact item carries its numeric direct Sidebar
 presentation-child count from one maintained-count batch over the returned IDs.
 Default/Time counts exclude pinned children elevated to presentation roots; an
-item's own unpinned children still count normally. Loaded child-page totals take
+item's own unpinned children still count normally. Counts, child windows,
+root pages, focus paths and busy-descendant badges follow the stored Sidebar
+presentation parent described in
+[D-sidebar-agent-grouping](#d-sidebar-agent-grouping), so they include grouped
+rows under an Agent host. Loaded child-page totals take
 precedence in the browser. Architecture keeps its separate real-agent-forest
 branch totals and does not reinterpret Sidebar counts.
 
@@ -257,3 +262,36 @@ fork metadata. Only `archive_branches.parent_session_id` establishes a fork;
 ordinary parent relations never subtract. Fork counts are branch-local and
 include every post-fork sequence, including system and tool scaffolding.
 Runtime `messageCount` semantics and Architecture rendering remain unchanged.
+
+### D-sidebar-agent-grouping
+
+[2026-11-01] The Sidebar groups otherwise top-level Sessions by Agent without
+changing any real relation. Each catalog row stores a derived
+`sidebar_parent`, maintained in the same transaction as the topology change
+that affects it:
+
+1. A pinned row has none (pinned partition, unchanged).
+2. A row with a canonical real parent uses that parent (unchanged).
+3. An unpinned top-level row that is not its Agent's main Session
+   (`main` for the main Agent, `<agent>/main` otherwise) uses that main
+   Session when it exists, wherever the main is shown (pinned or nested).
+   A top-level row whose displayed real subtree contains the main stays
+   top-level, so grouping never forms a cycle.
+4. Without a main Session, the Agent's groupable rows use a virtual group key
+   `//agent/<agent>` only when there are at least two; a single row stays
+   top-level. The leading slash cannot occur in a Session ID or alias.
+
+Insert/delete/agent/parent/pin triggers mark affected rows; one refresh before
+each catalog commit (and the v3→v4 migration backfill) recomputes hosts,
+per-Agent targets and the affected rows, with maintained per-presentation-parent
+counts. Root pages select `sidebar_parent IS NULL`; Default/Time child pages,
+counts, focus paths and busy-descendant badges use `sidebar_parent` through
+`idx_session_catalog_sidebar_*`. The list query merges the few virtual group
+rows (`presentationGroup`, `childTotal`, archived only when every member is
+archived, newest member activity) into root pages by the ordinary keyset key.
+Flat mode, search, the Architecture forest, reporting, Tasks and every
+lifecycle path (descendant previews, stop/delete/archive cascades) keep real
+`parent_session_id`. Membership changes advance the catalog revision, so
+clients converge through the existing presentation-revision invalidation and
+bounded replay rather than per-row regroup deltas.
+

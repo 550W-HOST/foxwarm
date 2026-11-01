@@ -1,6 +1,6 @@
 # Unit: Session catalog projections and indexed queries
 
-Files: `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Projection.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Queries.cs`
+Files: `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Projection.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Queries.cs`, `dotnet/Foxwarm/Sessions/Storage/SessionCatalog.Sidebar.cs`
 
 ## Purpose
 
@@ -9,7 +9,8 @@ Projects validated Session snapshots into bounded Main-owned list/architecture/p
 ## Stable methods and callers
 
 - `Page` provides bounded keyset pages by time/default/architecture order, including root/agent filters and `hasMore`.
-- `Children`, `ChildCounts`, and `Scopes` serve bounded architecture/tree requests and reject oversized batches or invalid agent-forest modes.
+- `Children`, `ChildCounts`, and `Scopes` serve bounded architecture/tree requests and reject oversized batches or invalid agent-forest modes. Without an agent filter they follow the Sidebar presentation parent; the agent forest keeps real parents.
+- `SessionCatalog.Sidebar.cs` maintains `sidebar_parent` and serves `SidebarGroups`/`SidebarPaths`; the contract is [D-sidebar-agent-grouping](../threads/main-catalog-storage-and-indexed-queries.md#d-sidebar-agent-grouping).
 - `Get`, `GetMany`, `List`, `Resolve`, `Presentation`, and `PathIds` implement exact identity/alias and presentation navigation; `Resolve` preserves missing versus ambiguous aliases.
 - `RestartIds` selects indexed busy, queue and managed-pending work only; a declared wait alone does not admit its history.
 - `RecentWaitIds` returns wait-bearing IDs through an indexed recency cutoff for startup liveness observation. It does not replace the complete startup binding-validation read or restrict unrelated recovery. Activity eligibility and authoritative rechecks are owned by [wait liveness](./session-domain.md#wait-liveness-observation-and-admission).
@@ -30,4 +31,5 @@ Ordinary `Get` and `Resolve` calls no longer acquire the writer monitor after in
 ## Tests
 
 `dotnet/Foxwarm.Tests/Sessions/SessionCatalogTests.cs`; `SessionCatalogPublicationTests.cs`; `SessionCatalogSourceTests.cs`; `SessionIdentityBoundaryTests.cs`.
+`SessionSidebarGroupingTests.cs` covers grouping, threshold/main/pin/parent membership changes, cycle-safe hosts, the v3→v4 backfill, real-only lifecycle descendants and the user-child opening notice.
 `SessionCatalogConcurrencyTests.cs` covers held-writer exact/resolution reads, retained children rows/count exclusion, concurrent first reads, identity/parent transitions, and disposal/reopen.
