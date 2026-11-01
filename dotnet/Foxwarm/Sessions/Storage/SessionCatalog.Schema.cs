@@ -5,7 +5,7 @@ internal sealed partial class SessionCatalog
     internal const string WaitPresenceIndexSql =
         "CREATE INDEX IF NOT EXISTS idx_session_catalog_wait_presence ON session_catalog(session_id) WHERE json_type(metadata_json,'$.meta.wait.id')='text'";
 
-    // Base v2 layout; CostSchemaSql advances both fresh and existing catalogs to v3.
+    // Base v2 layout; CostSchemaSql and SidebarSchemaSql advance fresh and existing catalogs to v4.
     private const string CreateSchemaSql = """
 
     CREATE TABLE catalog_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;

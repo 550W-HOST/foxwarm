@@ -194,8 +194,25 @@ internal static class SessionBoundary
         string current,
         bool inherited,
         (string Node, string? Cwd) placement
+    ) => Opening(inherited ? "history-inherited" : "new-child", parent, current, placement);
+
+    /// <summary>Opening marker for a fresh Session the user created under a parent.</summary>
+    internal static string UserChildCreated(
+        string parent,
+        string current,
+        (string Node, string? Cwd) placement
+    ) => Opening("user-child-created", parent, current, placement);
+
+    internal static string UserChildNotice(string parent) =>
+        $"This session was created by the user as a child of session `{parent}`. The parent relationship organizes the session; it does not itself assign work or require a completion report. Follow the user's instructions in this session.";
+
+    private static string Opening(
+        string boundary,
+        string parent,
+        string current,
+        (string Node, string? Cwd) placement
     ) =>
-        $"<foxwarm-system kind=\"session-boundary\" event=\"{(inherited ? "history-inherited" : "new-child")}\" parentSessionId=\"{Escape(parent)}\" currentSessionId=\"{Escape(current)}\"{Placement(placement.Node, placement.Cwd)} time=\"{LocalTime()}\" />";
+        $"<foxwarm-system kind=\"session-boundary\" event=\"{boundary}\" parentSessionId=\"{Escape(parent)}\" currentSessionId=\"{Escape(current)}\"{Placement(placement.Node, placement.Cwd)} time=\"{LocalTime()}\" />";
 
     /// <summary>Initial execution placement attributes for a Session's opening marker.</summary>
     internal static string Placement(string node, string? cwd) =>

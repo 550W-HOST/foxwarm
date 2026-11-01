@@ -58,7 +58,12 @@ internal sealed partial class SessionCatalog : IDisposable
                 Execute(connection, MigrateV2Sql);
                 version = 3;
             }
-            if (version != 3)
+            if (version == 3)
+            {
+                MigrateSidebarSchema(connection);
+                version = 4;
+            }
+            if (version != 4)
                 throw new InvalidDataException(
                     $"Unsupported Session catalog schema version {version}."
                 );
@@ -339,6 +344,7 @@ internal sealed partial class SessionCatalog : IDisposable
                 references.Add(Text(alias)!);
         }
         NormalizeParents(db!, references);
+        RefreshSidebar(db!);
     }
 
     internal void PublishAuthority(JsonObject authority, bool allowInsert = false)

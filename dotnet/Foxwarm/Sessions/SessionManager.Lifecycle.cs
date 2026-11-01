@@ -328,6 +328,52 @@ internal sealed partial class SessionManager
         store.Archive.RollbackInsertedBranch(branch);
     }
 
+    /// <summary>
+    /// Creates a fresh Session under an existing canonical parent for a direct user request.
+    /// It copies no history, starts no turn and records only its opening boundary.
+    /// </summary>
+    public async Task<SessionOwner> CreateUserChildAsync(
+        string agentName,
+        string? sessionName,
+        string parentSessionId,
+        string runtime = "foxwarm"
+    )
+    {
+        var child = await CreateNamedAsync(
+            agentName,
+            sessionName,
+            null,
+            null,
+            parentSessionId: parentSessionId,
+            runtime: runtime
+        );
+        try
+        {
+            await AppendOwnedRowsAsync(
+                child,
+                [
+                    SystemRow(
+                        SessionBoundary.UserChildCreated(
+                            parentSessionId,
+                            child.Id,
+                            ExecutionPlacement(child)
+                        )
+                    ),
+                    SystemRow(SessionBoundary.UserChildNotice(parentSessionId)),
+                ]
+            );
+        }
+        catch (Exception error)
+        {
+            throw new CommittedSessionCreationException(
+                child.Id,
+                $"Child Session '{child.Id}' was committed but its boundary message failed: {error.Message}",
+                error
+            );
+        }
+        return child;
+    }
+
     private static JsonObject SystemRow(string text) =>
         new()
         {

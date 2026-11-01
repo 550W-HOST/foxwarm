@@ -1,0 +1,356 @@
+using Microsoft.Data.Sqlite;
+
+namespace Foxwarm.Sessions;
+
+internal sealed record SidebarGroupRow(
+    string Key,
+    string Agent,
+    long Count,
+    bool Archived,
+    double LastMessageTime
+);
+
+// Sidebar presentation parents. The real parent relation stays authoritative for every
+// other consumer; this projection only decides where a row is shown in the Sidebar tree.
+internal sealed partial class SessionCatalog
+{
+    // A leading slash is never part of a valid Session ID, so group keys cannot collide.
+    internal const string SidebarGroupPrefix = "//agent/";
+
+    internal static string SidebarGroupKey(string agent) => SidebarGroupPrefix + agent;
+
+    internal static bool IsSidebarGroup(string? id) =>
+        id is not null && id.StartsWith(SidebarGroupPrefix, StringComparison.Ordinal);
+
+    internal static string? SidebarGroupAgent(string? id) =>
+        IsSidebarGroup(id) && id!.Length > SidebarGroupPrefix.Length
+            ? id[SidebarGroupPrefix.Length..]
+            : null;
+
+    // The canonical main Session ID; a legacy invalid Agent name cannot have one.
+    internal static string AgentMainId(string agent)
+    {
+        try
+        {
+            return SessionIdentity.Build(agent, "main");
+        }
+        catch (InvalidDataException)
+        {
+            return "\0";
+        }
+    }
+
+    private const string SidebarSchemaSql = """
+    ALTER TABLE session_catalog ADD COLUMN sidebar_parent TEXT;
+    CREATE TABLE catalog_sidebar_count (parent_key TEXT PRIMARY KEY, session_count INTEGER NOT NULL) STRICT;
+    CREATE TABLE catalog_sidebar_agent (agent TEXT PRIMARY KEY, target TEXT) STRICT;
+    CREATE TABLE catalog_sidebar_host (session_id TEXT PRIMARY KEY) STRICT;
+    CREATE TABLE catalog_sidebar_dirty (session_id TEXT NOT NULL, agent TEXT NOT NULL,
+      PRIMARY KEY(session_id,agent)) STRICT;
+    CREATE TRIGGER session_catalog_sidebar_insert AFTER INSERT ON session_catalog BEGIN
+      INSERT INTO catalog_sidebar_dirty(session_id,agent) SELECT new.session_id,new.agent WHERE NOT EXISTS(SELECT 1 FROM catalog_sidebar_dirty WHERE session_id=new.session_id AND agent=new.agent);
+      INSERT INTO catalog_sidebar_count(parent_key,session_count) SELECT new.sidebar_parent,1
+        WHERE new.sidebar_parent IS NOT NULL
+        ON CONFLICT(parent_key) DO UPDATE SET session_count=session_count+1;
+    END;
+    CREATE TRIGGER session_catalog_sidebar_delete AFTER DELETE ON session_catalog BEGIN
+      INSERT INTO catalog_sidebar_dirty(session_id,agent) SELECT old.session_id,old.agent WHERE NOT EXISTS(SELECT 1 FROM catalog_sidebar_dirty WHERE session_id=old.session_id AND agent=old.agent);
+      UPDATE catalog_sidebar_count SET session_count=session_count-1 WHERE parent_key=old.sidebar_parent;
+      DELETE FROM catalog_sidebar_count WHERE parent_key=old.sidebar_parent AND session_count=0;
+    END;
+    CREATE TRIGGER session_catalog_sidebar_topology AFTER UPDATE OF agent,parent_session_id,pinned ON session_catalog
+    WHEN old.agent<>new.agent OR old.parent_session_id IS NOT new.parent_session_id OR old.pinned<>new.pinned BEGIN
+      INSERT INTO catalog_sidebar_dirty(session_id,agent) SELECT old.session_id,old.agent WHERE NOT EXISTS(SELECT 1 FROM catalog_sidebar_dirty WHERE session_id=old.session_id AND agent=old.agent);
+      INSERT INTO catalog_sidebar_dirty(session_id,agent) SELECT new.session_id,new.agent WHERE NOT EXISTS(SELECT 1 FROM catalog_sidebar_dirty WHERE session_id=new.session_id AND agent=new.agent);
+    END;
+    CREATE TRIGGER session_catalog_sidebar_count_update AFTER UPDATE OF sidebar_parent ON session_catalog
+    WHEN old.sidebar_parent IS NOT new.sidebar_parent BEGIN
+      UPDATE catalog_sidebar_count SET session_count=session_count-1 WHERE parent_key=old.sidebar_parent;
+      DELETE FROM catalog_sidebar_count WHERE parent_key=old.sidebar_parent AND session_count=0;
+      INSERT INTO catalog_sidebar_count(parent_key,session_count) SELECT new.sidebar_parent,1
+        WHERE new.sidebar_parent IS NOT NULL
+        ON CONFLICT(parent_key) DO UPDATE SET session_count=session_count+1;
+    END;
+    CREATE INDEX idx_session_catalog_sidebar_default ON session_catalog(sidebar_parent,pinned_rank,archived,sidebar_order_missing,sidebar_order_value,recent_rank,session_id);
+    CREATE INDEX idx_session_catalog_sidebar_time ON session_catalog(sidebar_parent,pinned_rank,archived,recent_rank,session_id);
+    INSERT OR IGNORE INTO catalog_sidebar_dirty(session_id,agent) SELECT session_id,agent FROM session_catalog;
+    UPDATE catalog_metadata SET value='4' WHERE key='schema_version';
+    PRAGMA user_version=4;
+""";
+
+    private static void MigrateSidebarSchema(SqliteConnection connection)
+    {
+        Execute(connection, "BEGIN IMMEDIATE");
+        try
+        {
+            Execute(connection, SidebarSchemaSql);
+            RefreshSidebar(connection);
+            Execute(connection, "COMMIT");
+        }
+        catch
+        {
+            Execute(connection, "ROLLBACK");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Recomputes Sidebar presentation parents for rows whose topology changed in the
+    /// current transaction. Runs before every catalog commit; without topology changes it
+    /// costs one indexed probe.
+    /// </summary>
+    private static void RefreshSidebar(SqliteConnection connection)
+    {
+        if (Scalar(connection, "SELECT 1 FROM catalog_sidebar_dirty LIMIT 1") is null)
+            return;
+        var dirty = new List<(string Id, string Agent)>();
+        using (
+            var command = Command(connection, "SELECT session_id,agent FROM catalog_sidebar_dirty")
+        )
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                dirty.Add((reader.GetString(0), reader.GetString(1)));
+        Execute(connection, "DELETE FROM catalog_sidebar_dirty");
+
+        (string? Parent, bool Pinned, string Agent)? Topology(string id)
+        {
+            using var command = Command(
+                connection,
+                "SELECT parent_session_id,pinned,agent FROM session_catalog WHERE session_id=$p0",
+                id
+            );
+            using var reader = command.ExecuteReader();
+            return reader.Read()
+                ? (
+                    reader.IsDBNull(0) ? null : reader.GetString(0),
+                    reader.GetInt64(1) == 1,
+                    reader.GetString(2)
+                )
+                : null;
+        }
+
+        // A top-level row that contains an Agent's main Session in its displayed real
+        // subtree stays top-level, so grouping under that main can never form a cycle.
+        var hosts = new HashSet<string>(StringComparer.Ordinal);
+        var agents = new List<string>();
+        using (var command = Command(connection, "SELECT agent FROM catalog_agent_count"))
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                agents.Add(reader.GetString(0));
+        foreach (var agent in agents)
+        {
+            var main = AgentMainId(agent);
+            var cursor = main;
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            while (seen.Add(cursor) && seen.Count <= 128 && Topology(cursor) is { } node)
+            {
+                if (node.Pinned)
+                    break;
+                if (node.Parent is null)
+                {
+                    if (cursor != main)
+                        hosts.Add(cursor);
+                    break;
+                }
+                cursor = node.Parent;
+            }
+        }
+        var previousHosts = new HashSet<string>(StringComparer.Ordinal);
+        using (var command = Command(connection, "SELECT session_id FROM catalog_sidebar_host"))
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                previousHosts.Add(reader.GetString(0));
+        var affected = new HashSet<string>(dirty.Select(row => row.Id), StringComparer.Ordinal);
+        var affectedAgents = new HashSet<string>(
+            dirty.Select(row => row.Agent),
+            StringComparer.Ordinal
+        );
+        foreach (var id in hosts.Except(previousHosts))
+        {
+            Execute(connection, "INSERT INTO catalog_sidebar_host(session_id) VALUES($p0)", id);
+            affected.Add(id);
+        }
+        foreach (var id in previousHosts.Except(hosts))
+        {
+            Execute(connection, "DELETE FROM catalog_sidebar_host WHERE session_id=$p0", id);
+            affected.Add(id);
+        }
+        foreach (var id in affected)
+            if (Topology(id) is { } node)
+                affectedAgents.Add(node.Agent);
+
+        var targets = new Dictionary<string, string?>(StringComparer.Ordinal);
+        string? Target(string agent)
+        {
+            if (targets.TryGetValue(agent, out var cached))
+                return cached;
+            var main = AgentMainId(agent);
+            string? target;
+            if (
+                Scalar(connection, "SELECT 1 FROM session_catalog WHERE session_id=$p0", main)
+                is not null
+            )
+                target = main;
+            else
+            {
+                var groupable = Convert.ToInt64(
+                    Scalar(
+                        connection,
+                        "SELECT count(*) FROM (SELECT 1 FROM session_catalog c WHERE c.agent=$p0 AND c.presentation_root=1 AND c.pinned_rank=1 "
+                            + "AND c.session_id<>$p1 AND NOT EXISTS(SELECT 1 FROM catalog_sidebar_host h WHERE h.session_id=c.session_id) LIMIT 2)",
+                        agent,
+                        main
+                    )
+                );
+                target = groupable >= 2 ? SidebarGroupKey(agent) : null;
+            }
+            return targets[agent] = target;
+        }
+
+        foreach (var agent in affectedAgents)
+        {
+            var exists =
+                Scalar(connection, "SELECT 1 FROM catalog_agent_count WHERE agent=$p0", agent)
+                is not null;
+            if (!exists)
+            {
+                Execute(connection, "DELETE FROM catalog_sidebar_agent WHERE agent=$p0", agent);
+                continue;
+            }
+            var target = Target(agent);
+            var stored = Scalar(
+                connection,
+                "SELECT COALESCE(target,'') FROM catalog_sidebar_agent WHERE agent=$p0",
+                agent
+            );
+            if (stored is string previous && (previous.Length == 0 ? null : previous) == target)
+                continue;
+            Execute(
+                connection,
+                "INSERT INTO catalog_sidebar_agent(agent,target) VALUES($p0,$p1) ON CONFLICT(agent) DO UPDATE SET target=excluded.target",
+                agent,
+                target
+            );
+            // The shared target changed: move every groupable top-level row of this Agent.
+            Execute(
+                connection,
+                "UPDATE session_catalog SET sidebar_parent=$p1 WHERE agent=$p0 AND presentation_root=1 AND pinned_rank=1 AND session_id<>$p2 "
+                    + "AND NOT EXISTS(SELECT 1 FROM catalog_sidebar_host h WHERE h.session_id=session_catalog.session_id) AND sidebar_parent IS NOT $p1",
+                agent,
+                target,
+                AgentMainId(agent)
+            );
+        }
+
+        foreach (var id in affected)
+        {
+            if (Topology(id) is not { } node)
+                continue;
+            var value =
+                node.Pinned ? null
+                : node.Parent is not null ? node.Parent
+                : id == AgentMainId(node.Agent) || hosts.Contains(id) ? null
+                : Target(node.Agent);
+            Execute(
+                connection,
+                "UPDATE session_catalog SET sidebar_parent=$p0 WHERE session_id=$p1 AND sidebar_parent IS NOT $p0",
+                value,
+                id
+            );
+        }
+    }
+
+    private static SidebarGroupRow? ReadSidebarGroup(
+        SqliteConnection connection,
+        string key,
+        long count
+    )
+    {
+        var agent = SidebarGroupAgent(key);
+        if (agent is null)
+            return null;
+        using var command = Command(
+            connection,
+            "SELECT archived,recent_rank FROM session_catalog INDEXED BY idx_session_catalog_sidebar_time "
+                + "WHERE sidebar_parent=$p0 AND pinned_rank=1 ORDER BY archived,recent_rank,session_id LIMIT 1",
+            key
+        );
+        using var reader = command.ExecuteReader();
+        return reader.Read()
+            ? new(key, agent, count, reader.GetInt64(0) == 1, -reader.GetDouble(1))
+            : null;
+    }
+
+    /// <summary>Every current virtual Agent group; bounded by the number of Agents.</summary>
+    internal SidebarGroupRow[] SidebarGroups(IReadOnlyCollection<string>? keys = null)
+    {
+        lock (gate)
+        {
+            EnsureInitialized();
+            var counts = new List<(string Key, long Count)>();
+            var sql = keys is null
+                ? "SELECT parent_key,session_count FROM catalog_sidebar_count WHERE parent_key>=$p0 AND parent_key<$p1"
+                : $"SELECT parent_key,session_count FROM catalog_sidebar_count WHERE parent_key IN ({Parameters(keys.Count)})";
+            using (
+                var command = keys is null
+                    ? Command(db!, sql, SidebarGroupPrefix, "//agent0")
+                    : Command(db!, sql, keys.Cast<object?>().ToArray())
+            )
+            using (var reader = command.ExecuteReader())
+                while (reader.Read())
+                    if (IsSidebarGroup(reader.GetString(0)))
+                        counts.Add((reader.GetString(0), reader.GetInt64(1)));
+            QueryObserved?.Invoke(sql, counts.Count);
+            return counts
+                .Select(pair => ReadSidebarGroup(db!, pair.Key, pair.Count))
+                .OfType<SidebarGroupRow>()
+                .ToArray();
+        }
+    }
+
+    /// <summary>Sidebar presentation paths, root first; a virtual group key may lead.</summary>
+    internal Dictionary<string, string[]> SidebarPaths(string[] ids)
+    {
+        if (ids.Length == 0)
+            return new(StringComparer.Ordinal);
+        if (ids.Length > 100)
+            throw new InvalidDataException("Path batch exceeds 100 IDs.");
+        lock (gate)
+        {
+            EnsureInitialized();
+            var sql = $"""
+WITH RECURSIVE paths(focus_id,session_id,next_id,depth,trail) AS (
+SELECT session_id,session_id,sidebar_parent,0,'|'||hex(session_id)||'|' FROM session_catalog WHERE session_id IN ({Parameters(
+                    ids.Length
+                )})
+UNION ALL SELECT paths.focus_id,parent.session_id,parent.sidebar_parent,paths.depth+1,paths.trail||hex(parent.session_id)||'|'
+FROM paths JOIN session_catalog parent ON parent.session_id=paths.next_id
+WHERE paths.depth<127 AND instr(paths.trail,'|'||hex(parent.session_id)||'|')=0)
+SELECT focus_id,session_id,next_id,depth FROM paths ORDER BY focus_id,depth DESC
+""";
+            using var command = Command(db!, sql, ids.Cast<object?>().ToArray());
+            using var reader = command.ExecuteReader();
+            var result = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            var count = 0;
+            while (reader.Read())
+            {
+                var focus = reader.GetString(0);
+                if (!result.TryGetValue(focus, out var path))
+                {
+                    result[focus] = path = [];
+                    // The topmost row is read first; a virtual group above it leads the path.
+                    if (!reader.IsDBNull(2) && IsSidebarGroup(reader.GetString(2)))
+                        path.Add(reader.GetString(2));
+                }
+                path.Add(reader.GetString(1));
+                count++;
+            }
+            QueryObserved?.Invoke(sql, count);
+            return result.ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value.ToArray(),
+                StringComparer.Ordinal
+            );
+        }
+    }
+}

@@ -51,6 +51,7 @@ internal sealed partial class SessionCatalog
                         references.Add(text);
                 Execute(db!, "DELETE FROM session_catalog WHERE session_id=$p0", id);
                 NormalizeParents(db!, references);
+                RefreshSidebar(db!);
                 Execute(db!, "COMMIT");
                 revision++;
             }

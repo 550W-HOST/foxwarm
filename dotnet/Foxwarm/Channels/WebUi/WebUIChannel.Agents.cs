@@ -424,14 +424,26 @@ internal sealed partial class WebUIChannel
                         }
                     }
                     SessionOwner hosted;
+                    string? parentId = null;
                     if (body is null || body.Count == 0)
                         hosted = await sessions.CreateAsync();
                     else
                     {
                         if (
                             body.Any(item =>
-                                item.Key is not ("agentId" or "sessionId" or "runtime")
+                                item.Key
+                                    is not (
+                                        "agentId"
+                                        or "sessionId"
+                                        or "runtime"
+                                        or "parentSessionId"
+                                    )
                             )
+                            || body.ContainsKey("parentSessionId")
+                                && (
+                                    body["parentSessionId"] is not JsonValue parentValue
+                                    || !parentValue.TryGetValue<string>(out _)
+                                )
                             || body.ContainsKey("agentId")
                                 && (
                                     body["agentId"] is not JsonValue agent
@@ -452,26 +464,56 @@ internal sealed partial class WebUIChannel
                             body["runtime"],
                             body.ContainsKey("runtime")
                         );
+                        var requestedParent = body["parentSessionId"]?.GetValue<string>()?.Trim();
+                        if (!string.IsNullOrEmpty(requestedParent))
+                        {
+                            var resolution = runtime.Catalog.Resolve(requestedParent);
+                            parentId = SessionCatalog.Text(resolution["sessionId"]);
+                            if (SessionCatalog.Text(resolution["kind"]) == "ambiguous")
+                                throw new InvalidDataException("Parent Session ID is ambiguous.");
+                            if (parentId is null)
+                                return Results.NotFound(new { error = "Parent Session not found" });
+                        }
                         hosted =
-                            agentName == "main"
+                            parentId is not null
+                                ? await sessions.CreateUserChildAsync(
+                                    agentName,
+                                    string.IsNullOrEmpty(requested) ? null : requested,
+                                    parentId,
+                                    runtimeSelection
+                                )
+                            : agentName == "main"
                             && string.IsNullOrEmpty(requested)
                             && runtimeSelection == "foxwarm"
                                 ? await sessions.CreateAsync()
-                                : await sessions.CreateNamedAsync(
-                                    agentName,
-                                    string.IsNullOrEmpty(requested) ? null : requested,
-                                    null,
-                                    null,
-                                    runtime: runtimeSelection
-                                );
+                            : await sessions.CreateNamedAsync(
+                                agentName,
+                                string.IsNullOrEmpty(requested) ? null : requested,
+                                null,
+                                null,
+                                runtime: runtimeSelection
+                            );
                     }
                     runtime.ChangePresentation(catalog =>
                         catalog.Move(
                             hosted.Id,
-                            new JsonObject { ["parentSessionId"] = null, ["position"] = "first" }
+                            new JsonObject
+                            {
+                                ["parentSessionId"] = parentId,
+                                ["position"] = "first",
+                            }
                         )
                     );
-                    return Results.Ok(new { success = true, sessionId = hosted.Id });
+                    return Results.Ok(
+                        parentId is null
+                            ? new { success = true, sessionId = hosted.Id }
+                            : new
+                            {
+                                success = true,
+                                sessionId = hosted.Id,
+                                parentSessionId = parentId,
+                            }
+                    );
                 }
                 catch (CommittedSessionCreationException error)
                 {

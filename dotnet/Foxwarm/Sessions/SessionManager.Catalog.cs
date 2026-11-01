@@ -340,6 +340,7 @@ internal sealed partial class SessionManager
                     dto["parentSessionId"] = scope["parentSessionId"]?.DeepClone();
                     dto["pinned"] = scope["pinned"]?.DeepClone();
                     dto["agent"] = scope["agent"]?.DeepClone();
+                    dto["sidebarParentId"] = scope["sidebarParentId"]?.DeepClone();
                 }
                 dto["childTotal"] = childCounts.GetValueOrDefault(id);
                 dto["sequenceMessageCount"] = sequences.GetValueOrDefault(id);

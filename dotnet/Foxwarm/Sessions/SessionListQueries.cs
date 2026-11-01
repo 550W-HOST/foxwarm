@@ -100,7 +100,7 @@ internal sealed partial class SessionListQueries
         if (!roots || mode == "flat-time")
             return true;
         return agent is null
-            ? SessionCatalog.Flag(row["pinned"]) || row["parentSessionId"] is null
+            ? SessionCatalog.Text((scope ?? row)["sidebarParentId"]) is null
             : row["parentSessionId"] is null || SessionCatalog.Text(scope?["parentAgent"]) != agent;
     }
 
@@ -231,8 +231,13 @@ internal sealed partial class SessionListQueries
             foreach (var chunk in candidates.Select(Id).Chunk(200))
             foreach (var pair in Catalog.Scopes(chunk))
                 scopes[pair.Key] = pair.Value;
+            var groups =
+                roots && agent is null && mode != "flat-time"
+                    ? Catalog.SidebarGroups().Select(GroupRow)
+                    : Enumerable.Empty<JsonObject>();
             var ordered = candidates
                 .Where(row => InScope(row, mode, roots, agent, scopes.GetValueOrDefault(Id(row))))
+                .Concat(groups)
                 .Where(row => after is null || Compare(Key(row, mode), after) > 0)
                 .OrderBy(row => Key(row, mode), Comparer<JsonArray>.Create(Compare))
                 .ToArray();
@@ -302,12 +307,10 @@ internal sealed partial class SessionListQueries
                     var after = reset ? null : decoded[index]?["key"] as JsonArray;
                     var all = candidates
                         .Where(row =>
-                            SessionCatalog.Text(row["parentSessionId"]) == group.Parent
-                            && (
-                                agent is null
-                                    ? !SessionCatalog.Flag(row["pinned"])
-                                    : SessionCatalog.Text(row["agent"]) == agent
-                            )
+                            agent is null
+                                ? SessionCatalog.Text(row["sidebarParentId"]) == group.Parent
+                                : SessionCatalog.Text(row["parentSessionId"]) == group.Parent
+                                    && SessionCatalog.Text(row["agent"]) == agent
                         )
                         .Where(row => after is null || Compare(Key(row, mode, true), after) > 0)
                         .OrderBy(row => Key(row, mode, true), Comparer<JsonArray>.Create(Compare))
@@ -333,6 +336,67 @@ internal sealed partial class SessionListQueries
                 }
             )
             .ToArray();
+    }
+
+    /// <summary>A virtual Agent group row: a collapsible Sidebar host that is not a Session.</summary>
+    internal static JsonObject GroupRow(SidebarGroupRow group) =>
+        new()
+        {
+            ["id"] = group.Key,
+            ["agent"] = group.Agent,
+            ["presentationGroup"] = new JsonObject { ["kind"] = "agent", ["agent"] = group.Agent },
+            ["parentSessionId"] = null,
+            ["sidebarParentId"] = null,
+            ["pinned"] = false,
+            ["archived"] = group.Archived,
+            ["lastMessageTime"] = group.LastMessageTime,
+            ["messageCount"] = 0,
+            ["childTotal"] = group.Count,
+            ["aliases"] = new JsonArray(),
+        };
+
+    /// <summary>Sidebar focus context: presentation paths plus every row they need.</summary>
+    public (JsonObject Paths, JsonArray Context) SidebarFocus(JsonArray focus)
+    {
+        var canonical = focus
+            .OfType<JsonObject>()
+            .Select(item => SessionCatalog.Text(item["resolution"]?["sessionId"]))
+            .OfType<string>()
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var paths = new Dictionary<string, string[]>(StringComparer.Ordinal);
+        foreach (var chunk in canonical.Chunk(100))
+        foreach (var pair in Catalog.SidebarPaths(chunk))
+            paths[pair.Key] = pair.Value;
+        var pathJson = new JsonObject();
+        foreach (var item in focus.OfType<JsonObject>())
+            if (
+                SessionCatalog.Text(item["requestedId"]) is { } requestedId
+                && SessionCatalog.Text(item["resolution"]?["sessionId"]) is { } id
+            )
+                pathJson[requestedId] = new JsonArray(
+                    paths
+                        .GetValueOrDefault(id, [])
+                        .Select(value => (JsonNode?)JsonValue.Create(value))
+                        .ToArray()
+                );
+        var members = paths.Values.SelectMany(path => path).ToHashSet(StringComparer.Ordinal);
+        var context = (JsonArray)
+            Exact(members.Where(id => !SessionCatalog.IsSidebarGroup(id)).ToArray(), false)[
+                "results"
+            ]!.DeepClone();
+        var groups = members.Where(SessionCatalog.IsSidebarGroup).ToArray();
+        if (groups.Length > 0)
+            foreach (var group in Catalog.SidebarGroups(groups))
+                context.Add(
+                    new JsonObject
+                    {
+                        ["requestedId"] = group.Key,
+                        ["resolution"] = new JsonObject { ["kind"] = "group" },
+                        ["session"] = GroupRow(group),
+                    }
+                );
+        return (pathJson, context);
     }
 
     public JsonArray Path(string id) =>

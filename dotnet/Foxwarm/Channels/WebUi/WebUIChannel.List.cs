@@ -56,21 +56,20 @@ internal sealed partial class WebUIChannel
                     var children = new JsonArray(
                         groups.Select(group => (JsonNode?)group).ToArray()
                     );
-                    var focus = view.Exact(
-                        focusIds.Cast<string>().Distinct(StringComparer.Ordinal).ToArray(),
-                        true
+                    var requestedFocus = focusIds
+                        .Cast<string>()
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray();
+                    var focus = view.Exact(requestedFocus, false);
+                    // Sidebar focus follows presentation parents, including virtual groups.
+                    var (presentationPaths, pathContext) = view.SidebarFocus(
+                        (JsonArray)focus["results"]!
                     );
                     var forced = new JsonObject();
-                    var context = new HashSet<string>(StringComparer.Ordinal);
-                    foreach (
-                        var path in (focus["paths"] as JsonObject)!.Select(pair =>
-                            (JsonArray)pair.Value!
-                        )
-                    )
+                    foreach (var path in presentationPaths.Select(pair => (JsonArray)pair.Value!))
                         for (var index = 0; index < path.Count; index++)
                         {
                             var id = path[index]!.GetValue<string>();
-                            context.Add(id);
                             if (index + 1 >= path.Count)
                                 continue;
                             if (forced[id] is not JsonArray links)
@@ -81,10 +80,8 @@ internal sealed partial class WebUIChannel
                         }
                     result["children"] = children;
                     result["focus"] = focus["results"]!.DeepClone();
-                    result["presentationPaths"] = focus["paths"]!.DeepClone();
-                    result["pathContext"] = view.Exact(context.ToArray(), false)[
-                        "results"
-                    ]!.DeepClone();
+                    result["presentationPaths"] = presentationPaths;
+                    result["pathContext"] = pathContext;
                     result["forcedChildren"] = forced;
                     return result;
                 })
