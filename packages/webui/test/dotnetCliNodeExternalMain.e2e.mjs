@@ -15,7 +15,6 @@ const require = createRequire(import.meta.url)
 const { initializeTestEnvironment, isolatedApplicationEnv } = require('../../../scripts/test/test-process-env.cjs')
 initializeTestEnvironment()
 const exists = file => access(file).then(() => true, () => false)
-const value = result => { assert(!result.isError, JSON.stringify(result)); return result.structuredContent ?? JSON.parse(result.content[0].text) }
 for (const runtime of ['source', 'dotnet']) {
   const env = {}, host = await createHostFixture('cli-external-' + runtime, { runtime, env })
   Object.assign(env, isolatedApplicationEnv(host.data), { FOXWARM_SYNC_FILE_LOG: '', FOXWARM_NO_CONSOLE_LOG: '' })
@@ -27,6 +26,14 @@ for (const runtime of ['source', 'dotnet']) {
   await writeFile(join(host.data, 'state/tool-authorization.yaml'), 'version: 1\nrules:\n  - id: external\n    action: allow\n    match: {externalId: [alpha, beta]}\n')
   const cwd = join(host.root, 'cli'); await mkdir(cwd)
   const clients = [], wire = [], sockets = new Set(), children = []
+  const value = result => {
+    assert(!result.isError, JSON.stringify({
+      result,
+      nodeErrors: wire.filter(row => row.direction === 'cli' && row.value.type === 'tool_call_error').slice(-3)
+        .map(({ value: { callId, error, execStarted } }) => ({ callId, error, execStarted })),
+    }))
+    return result.structuredContent ?? JSON.parse(result.content[0].text)
+  }
   const proxyHttp = createServer(), proxy = new WebSocketServer({ server: proxyHttp })
   proxyHttp.listen(0, '127.0.0.1'); await once(proxyHttp, 'listening')
   let tamperNext = false
