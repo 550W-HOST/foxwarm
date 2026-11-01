@@ -1486,7 +1486,6 @@ export async function createSessionInAgent(options: {
   sessionName?: string;
   displayName?: string;
   currentNode?: string;
-  cwd?: string;
   model?: string;
   effort?: ModelEffort;
   modelsConfig?: ModelsConfig;
