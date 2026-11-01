@@ -7,7 +7,7 @@ import CodeLaunchButton from './CodeLaunchButton'
 import GlobalUiSettingsMenu from './GlobalUiSettingsMenu'
 import { useState } from 'react'
 import AgentCreationMenu, { type ChildSessionRequest } from './AgentCreationMenu'
-import type { AgentSummary } from '../agentCreation'
+import type { AgentSettingsChanges, AgentSummary } from '../agentCreation'
 import type { WebUiNodeTarget } from '../nodeTargets'
 
 interface SidebarProps {
@@ -35,7 +35,7 @@ interface SidebarProps {
   onCodePathChange: (path: string) => void
   onCodeOpenInNewWindowChange: (enabled: boolean) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
-  onCreateAgent: (agentId: string, inheritAgent?: string) => Promise<void>
+  onCreateAgent: (agentId: string, settings: AgentSettingsChanges) => Promise<void>
   onCreateSession: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code', parentSessionId?: string) => Promise<void>
   onToggleCollapsed: () => void
   isPeek?: boolean

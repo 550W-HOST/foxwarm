@@ -22,7 +22,7 @@ import { useWorkbenchStore } from './workbench/store'
 import type { WorkbenchLayoutNode, WorkbenchTab } from './workbench/types'
 import { createWorkbenchId, findPaneBelow, findPaneContainingTab, findPaneNode, getFlattenedTabIds, getPaneIds, getPaneNodes } from './workbench/utils'
 import { makeVscodeWebUrl, normalizeCodePath, planCodeOpen, readCodeOpenInNewWindowPreference, readCodeWorkspaceNodePreference, readCodeWorkspacePathPreference, resolveSessionCodeTarget, resolveToolCodeFileTarget, selectCodeFrameStarted, VSCODE_WEB_TAB_ID, writeCodeOpenInNewWindowPreference, writeCodeWorkspaceNodePreference, writeCodeWorkspacePathPreference, type CodeCommitTarget, type CodeFileTarget, type CodeTarget } from './vscodeWeb'
-import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
+import { buildAgentCreationBody, buildSessionCreationBody, type AgentSettingsChanges, type AgentSummary } from './agentCreation'
 import { getNodeTargetAvailability, MASTER_NODE_TARGET, parseWebUiNodeTargets, type WebUiNodeTarget } from './nodeTargets'
 import { findTerminalForTarget, normalizeTerminalTarget } from './terminalTarget'
 import { useChatPreferences } from './chatPreferences'
@@ -1445,11 +1445,11 @@ function App() {
     return targetTabId
   }
 
-  const handleCreateAgent = async (agentId: string, inheritAgent?: string) => {
+  const handleCreateAgent = async (agentId: string, settings: AgentSettingsChanges) => {
     const res = await fetch(`${API_BASE_PATH}/agents`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId, inheritAgent }),
+      body: JSON.stringify(buildAgentCreationBody(agentId, settings)),
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(data.error || 'Failed to create agent')

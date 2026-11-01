@@ -1,6 +1,6 @@
 # Unit: webui-architecture-view
 
-Files: packages/webui/src/components/ArchitectureView.tsx, packages/webui/src/architectureOperations.ts, packages/webui/test/architectureOperations.test.mjs
+Files: packages/webui/src/components/ArchitectureView.tsx, packages/webui/src/components/AgentSettingsFields.tsx, packages/webui/src/architectureOperations.ts, packages/webui/test/architectureOperations.test.mjs
 Secondary files: packages/webui/src/components/TokenUsageDetails.tsx, packages/webui/src/useNodeDirectory.ts, packages/webui/test/nodeOnboarding.e2e.mjs, packages/webui/test/boundedSessionList.test.mjs, packages/webui/test/boundedSessionReplay.test.mjs
 
 ## Purpose
@@ -56,7 +56,7 @@ Renders a bounded system-operations dashboard and persistent Agent registry for 
 - The Topology/Agents surface switch separates runtime Session placement and persistent Agent management. The Agents summary counts real workspace directories, including valid zero-session Agents that do not appear in Session-derived catalog summaries.
 - Registry cards show self-owned memory file count/recency plus session, active, queue, inheritance, and isolation summaries. Their order is independent of selection so clicking a card never moves it: `main` is first, followed by active Agents, other populated Agents, and empty workspaces, with IDs alphabetical inside each group.
 - The registry reuses `AgentCreationMenu` for Agent and Session creation. Its shared `+` opens New session directly, with Agent tags and a trailing New agent tag in the same modal flow. Agent update changes only mutable inheritance, isolation and new-session default Node/working-directory metadata; Agent ID is not renamed because it is a durable namespace, permission scope, and archive identity component.
-- The Agent inspector displays the complete inheritance chain, edits the default Node and working directory for new Sessions, allows an isolation Node selection, and loads a bounded, symlink-free Markdown manifest from self-owned `memory/`. Top-level `00_SYSTEM.md`, `MEMORY.md`, `SOUL.md`, and `USER.md` are prioritized, nested project files follow, and `archive/` is last. Folder/file actions open the exact Master path in Code without copying file content through the registry API.
+- The Agent inspector shows its header (ID, Memory, counts), then the shared Agent settings form ([D-webui-agent-settings-form](#d-webui-agent-settings-form)) with the inheritance chain and one Reset/Save pair enabled only for changes, then memory files and the danger zone. It loads a bounded, symlink-free Markdown manifest from self-owned `memory/`. Top-level `00_SYSTEM.md`, `MEMORY.md`, `SOUL.md`, and `USER.md` are prioritized, nested project files follow, and `archive/` is last. Folder/file actions open the exact Master path in Code without copying file content through the registry API.
 - Agent deletion requires exact typed Agent-ID confirmation. `main` is immutable; Agents inherited by another Agent and Agents with active Sessions are rejected. Confirmation authorizes destructive removal of idle owned Sessions and any queued work through canonical Session deletion, then removes the self-owned workspace and Agent metadata; durable Session archives and their reserved identities remain.
 
 ## Integration
@@ -76,6 +76,10 @@ Renders a bounded system-operations dashboard and persistent Agent registry for 
 ### D-webui-architecture-agent-registry
 
 [2026-08-25] Persistent Agent CRUD belongs beside runtime topology because an Agent is a workspace/memory owner, not a Sidebar branch. Create and mutable metadata update are ordinary registry actions; rename is intentionally absent because Agent ID participates in Session namespace, permission scope, and retained archive identity. Memory navigation is manifest-only and path-confined, while destructive deletion uses typed confirmation and backend lifecycle blockers.
+
+### D-webui-agent-settings-form
+
+[2026-11-02, user decision] New agent and the Agents inspector use one `AgentSettingsFields` form, so creation and later editing offer the same settings with the same order, labels, choices and hints: Memory inheritance (excluding the Agent itself and isolated Agents), New sessions (Node, Main by default, and working directory) and Isolation. New agent keeps Isolation collapsed until opened; creation sends only chosen settings through the existing `POST /api/agents` fields. An isolated Agent always runs on its isolation Node, so choosing one sets and locks the New sessions Node, and saving writes it as the default Node too; that keeps the working directory effective, because it applies only on the default Node. New session shows the selected Agent's start location from its saved settings (`Starts on <Node> · <directory>`) but does not override it; the line is omitted when no placement is configured.
 
 ## Workbench header integration
 

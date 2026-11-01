@@ -131,7 +131,7 @@ try {
   async function browserAgent(agent, inherit) {
     await page.click('button[aria-label="New session"]'); await page.waitForSelector('button[aria-label="New agent"]'); await page.click('button[aria-label="New agent"]')
     await page.waitForSelector('input[placeholder="my-agent"]'); await page.type('input[placeholder="my-agent"]', agent)
-    if (inherit) await page.select('form[role="dialog"] select', inherit)
+    if (inherit) await page.select('form[role="dialog"] select[data-agent-settings-inherit]', inherit)
     await page.click('form[role="dialog"] button[type="submit"]'); await page.waitForSelector('form[role="dialog"]', { hidden: true })
     await until(async () => (await request('GET', `${path(agent + '/main')}/state`)).status === 200, `${agent} original creation`)
     plans.set(agent + '/main', [])
@@ -215,14 +215,15 @@ try {
   await page.waitForSelector('[data-architecture-agent-id="leaf"]')
   await page.click('[data-architecture-agent-id="leaf"]')
   await page.waitForSelector('[data-architecture-agent-inspector-id="leaf"]')
-  await page.select('[data-architecture-agent-inspector-id="leaf"] select', 'base')
+  await page.select('[data-architecture-agent-inspector-id="leaf"] select[data-agent-settings-inherit]', 'base')
   await page.evaluate(() => [...document.querySelectorAll('[data-architecture-agent-inspector-id="leaf"] button')].find(button => button.textContent.includes('Save agent settings')).click())
   await until(async () => (await request('GET', '/api/agents')).body.agents.find(agent => agent.id === 'leaf').inherit === 'base', 'original Architecture inherit PUT')
   // New-session placement defaults are edited in the same inspector and reach fresh children.
-  await page.select('[data-architecture-agent-inspector-id="leaf"] select[data-agent-default-node]', 'master')
+  // Main is the default Node, so only the working directory needs to be set.
+  assert.equal(await page.$eval('[data-architecture-agent-inspector-id="leaf"] select[data-agent-default-node]', select => select.value), '')
   await page.type('[data-architecture-agent-inspector-id="leaf"] input[data-agent-default-cwd]', agentDir('leaf'))
   await page.evaluate(() => [...document.querySelectorAll('[data-architecture-agent-inspector-id="leaf"] button')].find(button => button.textContent.includes('Save agent settings')).click())
-  await until(async () => { const leaf = (await request('GET', '/api/agents')).body.agents.find(agent => agent.id === 'leaf'); return leaf.defaultNode === 'master' && leaf.defaultCwd === agentDir('leaf') }, 'Architecture default placement PUT')
+  await until(async () => { const leaf = (await request('GET', '/api/agents')).body.agents.find(agent => agent.id === 'leaf'); return !leaf.defaultNode && leaf.defaultCwd === agentDir('leaf') }, 'Architecture default placement PUT')
   assert.equal(await snapshot('leaf/main'), initial); heldKnowledge.release(); await final('leaf/main', 'FROZEN-DONE')
   await turn('leaf/main', 'REUSE', body => { assert.equal(prompt(body), initial); return [call('live-list', 'skill', { action: 'list' })] })
   assert(toolValue(await history('leaf/main'), 'live-list').output.includes('LEAF-SHARED-V2'))

@@ -8,7 +8,7 @@ import type { SessionIdleNotificationMode } from '../sessionIdleNotifications'
 import CreateTabButton from './CreateTabButton'
 import CodeLaunchButton from './CodeLaunchButton'
 import AgentCreationMenu, { type ChildSessionRequest } from './AgentCreationMenu'
-import type { AgentSummary } from '../agentCreation'
+import type { AgentSettingsChanges, AgentSummary } from '../agentCreation'
 import type { WebUiNodeTarget } from '../nodeTargets'
 
 type HomeTab = 'sessions' | 'tasks' | 'search' | 'setup'
@@ -38,7 +38,7 @@ interface SessionListProps {
   onCodePathChange: (path: string) => void
   onCodeOpenInNewWindowChange: (enabled: boolean) => void
   onCreateTerminalTab: (options?: { nodeId?: string; path?: string }) => void
-  onCreateAgent: (agentId: string, inheritAgent?: string) => Promise<void>
+  onCreateAgent: (agentId: string, settings: AgentSettingsChanges) => Promise<void>
   onCreateSession: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code', parentSessionId?: string) => Promise<void>
   idleNotificationModes: Record<string, SessionIdleNotificationMode>
   unreadSessionIds?: ReadonlySet<string>

@@ -8,7 +8,7 @@ import AgentCreationMenu, { type ChildSessionRequest } from './components/AgentC
 import GlobalUiSettingsMenu from './components/GlobalUiSettingsMenu'
 import CreateTabButton from './components/CreateTabButton'
 import { API_BASE_PATH } from './config'
-import { buildSessionCreationBody, type AgentSummary } from './agentCreation'
+import { buildAgentCreationBody, buildSessionCreationBody, type AgentSettingsChanges, type AgentSummary } from './agentCreation'
 import { postFoxwarmEmbedHostMessage, readEmbeddedSessionLink, readFoxwarmActiveTargetMessage, readFoxwarmFocusModelsMessage, readFoxwarmVisibleSessionIdsMessage, type FoxwarmActiveTarget, type FoxwarmEmbeddedTarget } from './embeddedWebUi'
 import { useSessionIdleNotifications } from './sessionIdleNotifications'
 import { useBoundedSessionList } from './boundedSessionList'
@@ -102,9 +102,9 @@ export function EmbeddedSidebarApp({ target }: { target: Extract<FoxwarmEmbedded
     postFoxwarmEmbedHostMessage(target.nonce, { type: 'open-setup' })
   }
 
-  const createAgent = async (agentId: string, inheritAgent?: string) => {
+  const createAgent = async (agentId: string, settings: AgentSettingsChanges) => {
     const response = await fetch(`${API_BASE_PATH}/agents`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentId, inheritAgent }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildAgentCreationBody(agentId, settings)),
     })
     const data = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(data.error || 'Failed to create agent')

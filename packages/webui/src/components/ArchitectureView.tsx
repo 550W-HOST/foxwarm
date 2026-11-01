@@ -2,11 +2,13 @@ import { getSessionRuntimeTone } from '../sessionRuntimeState'
 import { WorkbenchHeaderDragArea, WorkbenchPaneControls, WorkbenchTabClose, WorkbenchTabIcon, useWorkbenchTabHeader } from './WorkbenchTabHeader'
 import { createPortal } from 'react-dom'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Activity, ArrowLeft, Bot, ChevronRight, CircleDot, Clock3, ExternalLink, FileText, FolderOpen, GitFork, Layers3, ListFilter, MemoryStick, MessageSquare, Network, Save, Search, Server, Shield, Trash2 } from 'lucide-react'
+import { Activity, ArrowLeft, Bot, ChevronRight, CircleDot, Clock3, ExternalLink, FileText, FolderOpen, GitFork, Layers3, ListFilter, MemoryStick, MessageSquare, Network, Save, Search, Server, Trash2 } from 'lucide-react'
 import type { Session } from './SessionListCore'
 import { formatUsdCost } from '../usageCost'
 import UsageDetails, { formatUsageNumber as usageNumber, type TokenUsage } from './TokenUsageDetails'
 import AgentCreationMenu from './AgentCreationMenu'
+import { buildAgentCreationBody, type AgentSettingsChanges } from '../agentCreation'
+import AgentSettingsFields, { EMPTY_AGENT_SETTINGS, agentSettingsChanges, agentSettingsDirty, agentSettingsDraft, type AgentSettingsDraft } from './AgentSettingsFields'
 import { useNodeDirectory } from '../useNodeDirectory'
 import { makeFoxwarmPopupUrl } from '../popupWebUi'
 import { getRuntimeStateSummary, getSessionRuntimeStateName, isSessionRuntimeActive, isRuntimeStateInactiveName } from '../sessionRuntimeState'
@@ -23,7 +25,7 @@ interface ArchitectureViewProps {
   onSelectSession: (sessionId: string) => void
   onBack?: () => void
   onOpenNodes?: () => void
-  onCreateAgent?: (agentId: string, inheritAgent?: string) => Promise<void>
+  onCreateAgent?: (agentId: string, settings: AgentSettingsChanges) => Promise<void>
   onCreateSession?: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code') => Promise<void>
   onAgentsChanged?: () => void | Promise<void>
   onOpenAgentMemory?: (memoryRoot: string, filePath?: string) => void
@@ -45,12 +47,7 @@ type AgentRegistryEntry = {
   memoryLastModified: number | null
 }
 
-type AgentRegistryChanges = {
-  inheritAgent: string | null
-  isolatedNode: string | null
-  defaultNode: string | null
-  defaultCwd: string | null
-}
+type AgentRegistryChanges = AgentSettingsChanges
 
 type AgentMemoryFile = { path: string; absolutePath: string; size: number; modifiedAt: number }
 
@@ -502,20 +499,14 @@ function AgentRegistryInspector({ agent, allAgents, nodes, memoryFiles, memoryLo
   onSave: (agentId: string, changes: AgentRegistryChanges) => Promise<void>
   onDelete: (agentId: string) => Promise<void>
 }) {
-  const [inheritAgent, setInheritAgent] = useState('')
-  const [isolatedNode, setIsolatedNode] = useState('')
-  const [defaultNode, setDefaultNode] = useState('')
-  const [defaultCwd, setDefaultCwd] = useState('')
+  const [draft, setDraft] = useState<AgentSettingsDraft>(EMPTY_AGENT_SETTINGS)
   const [saving, setSaving] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState('')
   const [error, setError] = useState('')
 
   useEffect(() => {
-    setInheritAgent(agent?.inherit || '')
-    setIsolatedNode(agent?.isolatedNode || '')
-    setDefaultNode(agent?.defaultNode || '')
-    setDefaultCwd(agent?.defaultCwd || '')
+    setDraft(agent ? agentSettingsDraft(agent) : EMPTY_AGENT_SETTINGS)
     setDeleteOpen(false)
     setDeleteConfirm('')
     setError('')
@@ -525,22 +516,10 @@ function AgentRegistryInspector({ agent, allAgents, nodes, memoryFiles, memoryLo
     return <aside className="rounded-xl border border-dashed border-fw-border-strong bg-fw-surface/60 p-6 text-center dark:border-fw-border dark:bg-fw-surface/50"><Bot className="mx-auto h-6 w-6 text-fw-text" /><h3 className="mt-3 text-sm font-semibold text-fw-text-strong">Select an agent</h3><p className="mt-1 text-xs text-fw-text-muted">Inspect memory, inheritance, isolation, and lifecycle controls.</p></aside>
   }
 
-  const trimmedCwd = defaultCwd.trim()
-  const dirty = inheritAgent !== (agent.inherit || '') || isolatedNode !== (agent.isolatedNode || '')
-    || defaultNode !== (agent.defaultNode || '') || trimmedCwd !== (agent.defaultCwd || '')
-  const defaultNodeOptions = defaultNode && !nodes.some(node => node.id === defaultNode)
-    ? [...nodes, { id: defaultNode, type: 'unknown', displayName: defaultNode, online: false, services: {} }]
-    : nodes
+  const dirty = agentSettingsDirty(draft, agent)
   const save = async () => {
     setSaving(true); setError('')
-    try {
-      await onSave(agent.id, {
-        inheritAgent: inheritAgent || null,
-        isolatedNode: isolatedNode || null,
-        defaultNode: defaultNode || null,
-        defaultCwd: trimmedCwd || null,
-      })
-    }
+    try { await onSave(agent.id, agentSettingsChanges(draft)) }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
     finally { setSaving(false) }
   }
@@ -561,23 +540,19 @@ function AgentRegistryInspector({ agent, allAgents, nodes, memoryFiles, memoryLo
       </header>
 
       <div className="max-h-[calc(100vh-220px)] overflow-y-auto p-4">
-        <section>
-          <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted">Memory inheritance</h3>
-          <div className="mt-2 flex flex-wrap items-center gap-1 text-xs text-fw-text-muted">{agent.inheritanceChain.map((item, index) => <span key={item} className="inline-flex items-center gap-1"><span className={`rounded px-1.5 py-0.5 ${item === agent.id ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent' : 'bg-fw-neutral-surface dark:bg-fw-surface-raised'}`}>{item}</span>{index < agent.inheritanceChain.length - 1 ? <ChevronRight className="h-3 w-3" /> : null}</span>)}</div>
-          <label className="mt-3 block text-xs text-fw-text-muted">Inherit agent<select value={inheritAgent} onChange={event => setInheritAgent(event.target.value)} className="mt-1 w-full rounded-lg border border-fw-border bg-fw-surface-sunken px-2.5 py-2 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong"><option value="">None</option>{allAgents.filter(item => item.id !== agent.id && !item.isolated).map(item => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label>
-        </section>
-
-        <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
-          <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted"><FolderOpen className="h-3.5 w-3.5" /> New sessions</h3>
-          <label className="mt-2 block text-xs text-fw-text-muted">Default node<select data-agent-default-node value={defaultNode} onChange={event => setDefaultNode(event.target.value)} className="mt-1 w-full rounded-lg border border-fw-border bg-fw-surface-sunken px-2.5 py-2 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong"><option value="">Not set</option>{defaultNodeOptions.map(node => <option key={node.id} value={node.id}>{node.displayName}{node.id === 'master' ? '' : node.online ? ' · ready' : ' · offline'}</option>)}</select></label>
-          <label className="mt-2 block text-xs text-fw-text-muted">Working directory<input data-agent-default-cwd value={defaultCwd} onChange={event => setDefaultCwd(event.target.value)} placeholder={`Absolute path on ${defaultNode ? (defaultNodeOptions.find(node => node.id === defaultNode)?.displayName || defaultNode) : 'Main'}`} spellCheck={false} className="mt-1 w-full rounded-lg border border-fw-border bg-fw-surface-sunken px-2.5 py-2 font-mono text-xs text-fw-text-strong outline-none focus:border-fw-accent-border dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong" /></label>
-        </section>
-
-        <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
-          <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted"><Shield className="h-3.5 w-3.5" /> Isolation</h3>
-          <label className="mt-2 block text-xs text-fw-text-muted">Execution node<select value={isolatedNode} onChange={event => setIsolatedNode(event.target.value)} className="mt-1 w-full rounded-lg border border-fw-border bg-fw-surface-sunken px-2.5 py-2 text-xs text-fw-text-strong outline-none focus:border-fw-accent-border dark:border-fw-border dark:bg-fw-canvas dark:text-fw-text-strong"><option value="">Shared runtime</option>{nodes.filter(node => node.id !== 'master').map(node => <option key={node.id} value={node.id} disabled={node.protocolStatus === 'upgrade-required'}>{node.displayName} · {node.protocolStatus === 'upgrade-required' ? 'upgrade required' : node.online ? 'ready' : 'offline'}</option>)}</select></label>
-          <button type="button" disabled={!dirty || saving} onClick={() => { void save() }} className="mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-fw-accent px-3 py-2 text-xs font-medium text-fw-accent-text hover:bg-fw-accent disabled:cursor-not-allowed disabled:opacity-40"><Save className="h-3.5 w-3.5" />{saving ? 'Saving…' : 'Save agent settings'}</button>
-        </section>
+        <AgentSettingsFields
+          value={draft}
+          onChange={setDraft}
+          agentId={agent.id}
+          agents={allAgents}
+          nodes={nodes}
+          disabled={saving}
+          inheritanceChain={<div className="mt-2 flex flex-wrap items-center gap-1 text-xs text-fw-text-muted">{agent.inheritanceChain.map((item, index) => <span key={item} className="inline-flex items-center gap-1"><span className={`rounded px-1.5 py-0.5 ${item === agent.id ? 'bg-fw-accent-surface text-fw-accent dark:bg-fw-accent-surface-strong/40 dark:text-fw-accent' : 'bg-fw-neutral-surface dark:bg-fw-surface-raised'}`}>{item}</span>{index < agent.inheritanceChain.length - 1 ? <ChevronRight className="h-3 w-3" /> : null}</span>)}</div>}
+        />
+        <div className="mt-4 flex gap-2">
+          <button type="button" data-agent-settings-reset disabled={!dirty || saving} onClick={() => setDraft(agentSettingsDraft(agent))} className="rounded-lg px-3 py-2 text-xs text-fw-text hover:bg-fw-hover disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-fw-hover">Reset</button>
+          <button type="button" disabled={!dirty || saving} onClick={() => { void save() }} className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-fw-accent px-3 py-2 text-xs font-medium text-fw-accent-text hover:bg-fw-accent disabled:cursor-not-allowed disabled:opacity-40"><Save className="h-3.5 w-3.5" />{saving ? 'Saving…' : 'Save agent settings'}</button>
+        </div>
 
         <section className="mt-4 border-t border-fw-border-muted pt-4 dark:border-fw-border">
           <div className="flex items-center justify-between gap-2"><h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-fw-text-muted"><MemoryStick className="h-3.5 w-3.5" /> Memory files</h3><span className="text-[10px] text-fw-text-muted">{memoryFiles.length} Markdown</span></div>
@@ -904,10 +879,10 @@ export default function ArchitectureView({
   const selectedRegistryAgent = selectedRegistryAgentId ? agentRegistry.find(agent => agent.id === selectedRegistryAgentId) || null : null
   const orderedAgentRegistry = useMemo(() => orderArchitectureAgents(agentRegistry), [agentRegistry])
 
-  const createAgentFromRegistry = async (agentId: string, inheritAgent?: string) => {
-    if (onCreateAgent) await onCreateAgent(agentId, inheritAgent)
+  const createAgentFromRegistry = async (agentId: string, settings: AgentSettingsChanges) => {
+    if (onCreateAgent) await onCreateAgent(agentId, settings)
     else {
-      const response = await fetch(`${API_BASE_PATH}/agents`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agentId, inheritAgent }) })
+      const response = await fetch(`${API_BASE_PATH}/agents`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildAgentCreationBody(agentId, settings)) })
       const payload = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(payload.error || 'Failed to create agent')
       if (payload.sessionId) onSelectSession(payload.sessionId)

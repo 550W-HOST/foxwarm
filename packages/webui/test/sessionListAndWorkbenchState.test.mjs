@@ -72,6 +72,8 @@ test('bounded tree rows use exact item counts before loading arbitrary-depth bra
 test('agent/session creation helpers keep an empty session ID random', async () => {
   const {
     RANDOM_SESSION_ID_PLACEHOLDER,
+    agentStartLocation,
+    buildAgentCreationBody,
     buildSessionCreationBody,
     validateAgentId,
     validateSessionId,
@@ -85,6 +87,13 @@ test('agent/session creation helpers keep an empty session ID random', async () 
   assert.deepEqual(buildSessionCreationBody('worker', ' custom '), { agentId: 'worker', sessionId: 'custom' })
   assert.equal(Object.hasOwn(buildSessionCreationBody('main', ''), 'sessionId'), false)
   assert.notEqual(buildSessionCreationBody('main', '').sessionId, RANDOM_SESSION_ID_PLACEHOLDER)
+  assert.deepEqual(buildAgentCreationBody(' builder ', { inheritAgent: null, defaultNode: 'box', defaultCwd: ' /srv/a  b ', isolatedNode: '' }), { agentId: 'builder', defaultNode: 'box', defaultCwd: '/srv/a  b' })
+  assert.deepEqual(buildAgentCreationBody('plain'), { agentId: 'plain' })
+  assert.equal(agentStartLocation({ id: 'none' }), null)
+  assert.deepEqual(agentStartLocation({ id: 'cwd', defaultCwd: '/w' }), { node: 'master', cwd: '/w' })
+  assert.deepEqual(agentStartLocation({ id: 'node', defaultNode: 'box', defaultCwd: '/w' }), { node: 'box', cwd: '/w' })
+  assert.deepEqual(agentStartLocation({ id: 'iso', isolatedNode: 'other', defaultNode: 'box', defaultCwd: '/w' }), { node: 'other', cwd: null })
+  assert.deepEqual(agentStartLocation({ id: 'iso-linked', isolatedNode: 'box', defaultNode: 'box', defaultCwd: '/w' }), { node: 'box', cwd: '/w' })
 })
 
 test('workbench normalization ignores and removes legacy tab pinned state', async () => {

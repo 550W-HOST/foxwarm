@@ -2,7 +2,9 @@ import { createPortal } from 'react-dom'
 import { useEffect, useRef, useState } from 'react'
 import { Plus, X } from 'lucide-react'
 import { makeApiUrl } from '../config'
-import { RANDOM_SESSION_ID_PLACEHOLDER, validateAgentId, validateSessionId, type AgentSummary } from '../agentCreation'
+import { RANDOM_SESSION_ID_PLACEHOLDER, agentStartLocation, validateAgentId, validateSessionId, type AgentSettingsChanges, type AgentSummary } from '../agentCreation'
+import { parseWebUiNodeTargets, type WebUiNodeTarget } from '../nodeTargets'
+import AgentSettingsFields, { EMPTY_AGENT_SETTINGS, agentSettingsChanges, nodeDisplayName, type AgentSettingsDraft } from './AgentSettingsFields'
 
 type CreationMode = 'agent' | 'session'
 type ClaudeAvailability = {
@@ -23,7 +25,7 @@ interface AgentCreationMenuProps {
   compact?: boolean
   triggerLabel?: string
   triggerClassName?: string
-  onCreateAgent: (agentId: string, inheritAgent?: string) => Promise<void>
+  onCreateAgent: (agentId: string, settings: AgentSettingsChanges) => Promise<void>
   onCreateSession: (agentId: string, sessionId?: string, runtime?: 'foxwarm' | 'claude-code', parentSessionId?: string) => Promise<void>
   childRequest?: ChildSessionRequest | null
   onChildRequestHandled?: () => void
@@ -42,7 +44,8 @@ export default function AgentCreationMenu({
 }: AgentCreationMenuProps) {
   const [mode, setMode] = useState<CreationMode | null>(null)
   const [agentId, setAgentId] = useState('')
-  const [inheritAgent, setInheritAgent] = useState('')
+  const [agentSettings, setAgentSettings] = useState<AgentSettingsDraft>(EMPTY_AGENT_SETTINGS)
+  const [nodes, setNodes] = useState<WebUiNodeTarget[]>(() => parseWebUiNodeTargets({ nodes: [] }))
   const [sessionAgent, setSessionAgent] = useState('')
   const [sessionId, setSessionId] = useState('')
   const [runtime, setRuntime] = useState<'foxwarm' | 'claude-code'>('foxwarm')
@@ -84,6 +87,18 @@ export default function AgentCreationMenu({
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [mode, loading])
+
+  // Node names for the start location and the agent settings; read once per opening.
+  const open = mode !== null
+  useEffect(() => {
+    if (!open) return
+    const controller = new AbortController()
+    void fetch(makeApiUrl('/nodes'), { signal: controller.signal })
+      .then(response => response.ok ? response.json() : null)
+      .then(payload => { if (payload && !controller.signal.aborted) setNodes(parseWebUiNodeTargets(payload)) })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [open])
 
   useEffect(() => {
     if (mode !== 'session') return
@@ -134,7 +149,7 @@ export default function AgentCreationMenu({
     setMode('agent')
     setClaudeAvailability({ status: 'checking' })
     setAgentId('')
-    setInheritAgent('')
+    setAgentSettings(EMPTY_AGENT_SETTINGS)
     setError('')
   }
 
@@ -156,7 +171,7 @@ export default function AgentCreationMenu({
     if (mode === 'agent') {
       const validationError = validateAgentId(agentId)
       if (validationError) return setError(validationError)
-      if (inheritAgent && inheritAgent === agentId.trim()) {
+      if (agentSettings.inheritAgent && agentSettings.inheritAgent === agentId.trim()) {
         return setError('Agent cannot inherit from itself.')
       }
     } else if (mode === 'session') {
@@ -173,7 +188,7 @@ export default function AgentCreationMenu({
     setLoading(true)
     try {
       if (mode === 'agent') {
-        await onCreateAgent(agentId.trim(), inheritAgent || undefined)
+        await onCreateAgent(agentId.trim(), agentSettingsChanges(agentSettings))
       } else {
         await onCreateSession(sessionAgent, sessionId.trim() || undefined, runtime, parent?.parentSessionId)
       }
@@ -184,6 +199,8 @@ export default function AgentCreationMenu({
       setLoading(false)
     }
   }
+
+  const startLocation = mode === 'session' ? agentStartLocation(agents.find(agent => agent.id === sessionAgent)) : null
 
   return (
     <div className="relative flex">
@@ -221,13 +238,7 @@ export default function AgentCreationMenu({
                   <input ref={agentIdInputRef} value={agentId} onChange={event => setAgentId(event.target.value)} autoComplete="off" placeholder="my-agent" className="mt-1 w-full rounded-lg border border-fw-border-strong bg-fw-surface px-3 py-2 text-fw-text-strong outline-none focus:border-fw-accent-border focus:ring-2 focus:ring-fw-focus-ring/20 dark:border-fw-border-strong dark:bg-fw-canvas dark:text-fw-text-strong" />
                   <span className="mt-1 block text-xs font-normal text-fw-text-muted">Letters, numbers, hyphens, and underscores.</span>
                 </label>
-                <label className="block text-sm font-medium text-fw-text-strong">
-                  Inherit agent
-                  <select value={inheritAgent} onChange={event => setInheritAgent(event.target.value)} className="mt-1 w-full rounded-lg border border-fw-border-strong bg-fw-surface px-3 py-2 text-fw-text-strong outline-none focus:border-fw-accent-border dark:border-fw-border-strong dark:bg-fw-canvas dark:text-fw-text-strong">
-                    <option value="">None</option>
-                    {agents.map(agent => <option key={agent.id} value={agent.id} disabled={agent.id === agentId.trim()}>{agent.id}</option>)}
-                  </select>
-                </label>
+                <AgentSettingsFields value={agentSettings} onChange={setAgentSettings} agentId={agentId} agents={agents} nodes={nodes} disabled={loading} isolationCollapsed />
               </div>
             ) : (
               <div className="space-y-4">
@@ -271,6 +282,12 @@ export default function AgentCreationMenu({
                     </button>
                   </div>
                   {agents.length === 0 && <p className="mt-2 text-xs text-fw-text-muted">No agents yet. Create one to start a session.</p>}
+                  {startLocation && (
+                    <p data-creation-start-location className="mt-2 min-w-0 truncate text-xs text-fw-text-muted" title={startLocation.cwd || undefined}>
+                      Starts on {startLocation.node === 'master' ? 'Main' : nodeDisplayName(nodes, startLocation.node)}
+                      {startLocation.cwd && <> · <span className="font-mono">{startLocation.cwd}</span></>}
+                    </p>
+                  )}
                 </fieldset>
                 <label className="block text-sm font-medium text-fw-text-strong">
                   Session ID <span className="font-normal text-fw-text-muted">(optional)</span>
