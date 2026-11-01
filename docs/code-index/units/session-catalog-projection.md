@@ -30,6 +30,6 @@ Ordinary `Get` and `Resolve` calls no longer acquire the writer monitor after in
 
 ## Tests
 
-`dotnet/Foxwarm.Tests/Sessions/SessionCatalogTests.cs`; `SessionCatalogPublicationTests.cs`; `SessionCatalogSourceTests.cs`; `SessionIdentityBoundaryTests.cs`.
+`dotnet/Foxwarm.Tests/Sessions/SessionCatalogTests.cs`; `SessionCatalogPublicationTests.cs`; `SessionCatalogSourceTests.cs`; `SessionIdentityBoundaryTests.cs`. `SessionCatalogSourceTests` compares every query with the Source oracle (Node 24.21.0 / Unicode 17 required). Sidebar Agent grouping is outside the Source store, so that test qualifies only the additive `sidebarParentId` scope field, the additive Sidebar schema objects, and the Default/Time root pages separately: root pages must equal the oracle's own root order and row projections minus grouped rows. All other projections, including Flat and non-root pages, children, counts and paths, remain exact.
 `SessionSidebarGroupingTests.cs` covers grouping, threshold/main/pin/parent membership changes, cycle-safe hosts, adding missing Sidebar objects without a version change, reopen repair after writes by a Main without Sidebar support, real-only lifecycle descendants and the user-child opening notice.
 `SessionCatalogConcurrencyTests.cs` covers held-writer exact/resolution reads, retained children rows/count exclusion, concurrent first reads, identity/parent transitions, and disposal/reopen.

@@ -150,8 +150,9 @@ try {
   assert(value(observed, 'current-status').output.includes(join(dataRoot, 'agents', 'team')) && value(observed, 'current-status').output.includes('token estimate'))
   assert(!value(observed, 'current-list').output.includes('other/main')); assert(value(observed, 'all-list').output.includes('Found 4 session(s)'))
   assert(value(observed, 'rename').output.includes('changed from unset to "Observed name"')); assert(value(observed, 'rename-noop').output.includes('unchanged'))
-  await page.evaluate(id => { location.hash = '#session=' + encodeURIComponent(id) }, target)
-  await page.waitForFunction(() => document.body.innerText.includes('Observed name'))
+  // Open the renamed Session through the App's Session route; its Chat shows the new name.
+  await page.evaluate(id => { location.hash = '#session/' + encodeURIComponent(id) }, target)
+  await page.waitForFunction(() => document.querySelector('.foxwarm-chat-root')?.innerText.includes('Observed name'))
   held.release(); await final(target, 'HELD-DONE')
 
   // Real canonical history and tool effect: full hidden content is searchable, display remains folded.
