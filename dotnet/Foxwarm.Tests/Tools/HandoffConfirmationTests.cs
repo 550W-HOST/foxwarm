@@ -85,8 +85,11 @@ public sealed partial class HandoffConfirmationTests
             args["handoffRecall"] = recall;
             Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(args));
         }
+        var trailingAfterSend = Args(Review());
+        trailingAfterSend["afterSend"] = "finish";
+        HandoffConfirmation.Validate(trailingAfterSend);
         var wrongOrder = Args(Review());
-        wrongOrder["afterSend"] = "continue";
+        wrongOrder["fork"] = true;
         Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(wrongOrder));
         var lateRecall = new JsonObject
         {
@@ -96,6 +99,42 @@ public sealed partial class HandoffConfirmationTests
             ["handoffConfirmation"] = Review(),
         };
         Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(lateRecall));
+    }
+
+    [Fact]
+    public void Ordering_errors_are_reported_together_with_a_resend_order()
+    {
+        var args = new JsonObject
+        {
+            ["sessionId"] = "target",
+            ["message"] = "task",
+            ["handoffRecall"] = Recall(),
+            ["handoffConfirmation"] = Review(),
+            ["afterSend"] = "finish",
+            ["fork"] = true,
+        };
+        var error = Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(args));
+        Assert.Contains("confirmation must follow every argument except afterSend", error.Message);
+        Assert.Contains("recall must be before the message argument", error.Message);
+        Assert.Contains(
+            "Received argument order: sessionId, message, handoffRecall, handoffConfirmation, afterSend, fork.",
+            error.Message
+        );
+        Assert.Contains(
+            "Resend in this order: sessionId, handoffRecall, message, fork, afterSend, handoffConfirmation.",
+            error.Message
+        );
+
+        args["handoffConfirmation"] = "Reviewed.";
+        error = Assert.Throws<InvalidDataException>(() => HandoffConfirmation.Validate(args));
+        Assert.Contains("must end with the exact sentence", error.Message);
+        Assert.Contains("Resend in this order:", error.Message);
+
+        var contentOnly = Args("Reviewed.");
+        error = Assert.Throws<InvalidDataException>(() =>
+            HandoffConfirmation.Validate(contentOnly)
+        );
+        Assert.DoesNotContain("Resend in this order", error.Message);
     }
 
     [Fact]
@@ -124,6 +163,7 @@ public sealed partial class HandoffConfirmationTests
                 var keys = properties.Select(pair => pair.Key).ToArray();
                 Assert.True(Array.IndexOf(keys, "handoffRecall") < Array.IndexOf(keys, "message"));
                 Assert.Equal("handoffConfirmation", keys.Last());
+                Assert.Equal<string?>(keys.Where(key => required.Contains(key)), required);
                 var modelKeys = ToolCallControls.ForModel(concrete)["parameters"]!["properties"]!
                     .AsObject()
                     .Select(pair => pair.Key)

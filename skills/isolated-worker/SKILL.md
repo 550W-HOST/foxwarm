@@ -27,7 +27,7 @@ Isolation is agent-level. All sessions belonging to one isolated agent share its
 - `parentSessionId` — optional assertion of the exact current ToolScript owner; normally omit.
 - `dryRun` — defaults to `true`.
 - `handoffRecall` — Put this before message. Briefly consider what to say and which existing rules apply.
-- `handoffConfirmation` — Put this last. Briefly and honestly check whether this handoff should proceed. Only if it should, end with the exact sentence: “I confirm this handoff should proceed.” Otherwise omit or cancel the call.
+- `handoffConfirmation` — Put this last; only afterSend may follow it. Briefly and honestly check whether this handoff should proceed. Only if it should, end with the exact sentence: “I confirm this handoff should proceed.” Otherwise omit or cancel the call.
 
 Supply both handoffRecall and handoffConfirmation for installations that require handoff review; omit both otherwise. The helper forwards your review and does not generate approval. Invalid supplied reviews fail before creation. A missing required review is reported by the send tool through the existing partial-failure path.
 
