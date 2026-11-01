@@ -1,6 +1,6 @@
 import type { HomeStrings } from './home';
 
-const docs = (page = '') => `/docs/${page}`;
+const docs = (page = '') => `/zh/docs/${page}`;
 
 export const zh: HomeStrings = {
   htmlLang: 'zh-CN',

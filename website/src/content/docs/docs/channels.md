@@ -1,9 +1,29 @@
 ---
-title: Channels
-description: Configure a messaging platform, restrict who can use it, and connect conversations to Sessions.
+title: Channels and group chats
+description: Reach a Session from Telegram, Matrix, QQ, WeChat or WeCom, bring it into a team group chat, and control who can talk to it.
 ---
 
-A Channel carries messages between a messaging platform and Foxwarm Sessions. The managed adapters are Telegram, Matrix, WeWork, Weixin, and QQ Bot. You can configure several instances of the same adapter.
+A Channel carries messages between a chat app and Foxwarm Sessions. The managed adapters are Telegram, Matrix, WeWork (WeCom), Weixin (WeChat) and QQ Bot, and you can configure several instances of each.
+
+Any chat conversation can be attached to any Session. The WebUI and the chat share one Session and one history, so you can work through something at your desk, then pick it up from your phone, or bring it into a group where others can ask questions.
+
+## Bring a Session into a group chat
+
+Suppose you have spent the morning with an agent in the WebUI working out a billing change, and now your team wants to know what changed.
+
+1. Add your Foxwarm bot to the team's group in the chat app.
+2. In the group, attach the conversation to that Session:
+
+   ```text
+   /attach tidepool/proration
+   ```
+
+3. Ask the agent to explain, for example *"@foxwarm give everyone a two-line summary of the change."* It answers with the whole Session history behind it.
+4. Others in the group can ask follow-up questions directly. Each message reaches the agent with its sender's name, so it knows who is asking.
+
+`/attach` moves the conversation off any Session it was attached to before, so you can point the same group at a different Session later.
+
+Group members' messages enter the Session and the agent may use its tools to answer them. Before opening a Session to a group, check what that Agent can do and see. A dedicated Agent with narrower [rules](/docs/access-control/) is a good fit for Sessions that face other people.
 
 ## Add a Channel
 
@@ -101,9 +121,21 @@ For HTTP callbacks instead, configure `token`, `encodingAESKey`, `listenPort`, a
 
 When both WebSocket delivery and a webhook are configured, ordinary proactive sends use the enabled WebSocket connection. A failed WebSocket send is not automatically resent through the webhook.
 
-## Session attachments and access
+## Who can talk to the agent
 
-A Session attachment connects a specific Channel conversation to a Session. An instance ID such as `qq-primary`, a conversation ID such as `group:<group-openid>`, and a sender's OpenID are different values.
+Each Channel has an `allowedUsers` list of platform user IDs. Messages from anyone else get a short reply that shows their user ID and the snippet to add to `config.yaml` if you want to authorize them. Anyone can run `/whoami` to see their own ID.
+
+To let everyone in one particular group talk to the agent, run this in that group:
+
+```text
+/channel dangerously-allow-all-users yes
+```
+
+This applies to that conversation only. People who are not on the allow list can then chat and ask questions there, but commands such as `/attach` and `/channel` still work only for allowed users. Turn it off with `no`.
+
+## Session attachments
+
+A Session attachment connects a specific Channel conversation to a Session. An instance ID such as `qq-primary`, a conversation ID such as `group:<group-openid>`, and a sender's OpenID are different values. Run `/channel info` in a conversation to see its IDs.
 
 Ask the agent to inspect and attach the intended Channel conversation to the intended Session. Keep different users and purposes separate when they should not share conversation history or tool access. The agent's `send_to_channel` tool uses `<channel-instance-id>:<conversation-id>` for an explicit destination.
 

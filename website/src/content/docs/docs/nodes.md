@@ -1,9 +1,11 @@
 ---
 title: Nodes
-description: Choose where tools run, pair a remote client, or use a configured Node provider.
+description: Add machines, containers and browsers as Nodes, choose where tools run, and use Node providers.
 ---
 
-A Node is an execution environment for tools. Every installation has the local `master` Node. Add another Node when a task needs files or programs on another machine, a browser extension, or a dedicated worktree environment.
+A Node is a machine or environment where tools run: the hands to the Foxwarm server's brain. Every installation has the local `master` Node. Add another when a task needs files or programs on another machine, your browser, or a separate environment.
+
+A Node only carries out file, shell and browser operations. The conversation, memory, models, Skills and MCP connections stay on the server, so a new Node needs no API keys or other setup beyond its client. See [How Foxwarm works](/docs/how-it-works/).
 
 Selecting a Node changes where tools execute. It does not move the Session's conversation history or the Agent's memory to that Node.
 
@@ -63,7 +65,7 @@ To return to local execution:
 /node master
 ```
 
-Tools that use the Session's current Node will execute there. A tool with an explicit Node argument can target a different permitted Node. An isolated Agent remains bound to its isolation Node; changing a Session selection does not remove that restriction.
+Tools that use the Session's current Node will execute there. A tool with an explicit Node argument can target a different permitted Node. An Agent's rules still decide which Nodes it may use; selecting a Node does not grant access to it. An Agent's default Node only sets where its new Sessions start.
 
 `/node list` shows the local Node, approved clients, and pending pairings. Provider-created Nodes use the model-facing `node` tool for discovery and lifecycle operations; they are not pending clients to approve.
 
@@ -75,7 +77,7 @@ Executable providers use the [provider protocol](https://github.com/550W-HOST/fo
 
 ## Access and trust
 
-Node authentication identifies a client. Tool rules decide which callers may use it. Neither replaces the host's file permissions or network controls.
+Node authentication identifies a client. [Tool rules](/docs/access-control/) decide which Agents may use it; with [Node trees](/docs/access-control/#node-trees), granting a Node also covers the Nodes created under it. Neither replaces the host's file permissions or network controls.
 
 Grant shell access only to environments suitable for the task.
 

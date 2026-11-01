@@ -30,7 +30,7 @@ const installTabs = [
   { id: 'windows', label: t.install.tabs.windows, command: installCommands.windows, note: t.install.notes.windows, prompt: 'PS>' },
   { id: 'docker', label: t.install.tabs.docker, command: installCommands.docker, note: t.install.notes.docker, prompt: '$' }
 ];
-const docsHref = (page = '') => `/docs/${page}`;
+const docsHref = (page = '') => `${lang === 'zh' ? '/zh' : ''}/docs/${page}`;
 ---
 <!doctype html>
 <html lang={t.htmlLang} data-theme="light">
@@ -54,10 +54,11 @@ const docsHref = (page = '') => `/docs/${page}`;
     <link rel="icon" href="/favicon-32x32.png" sizes="32x32" />
     <script is:inline>
       (() => {
+        // Shared with the Starlight docs, which store 'light', 'dark' or 'auto'.
         let saved = null;
-        try { saved = localStorage.getItem('foxwarm-site-theme'); } catch {}
+        try { saved = localStorage.getItem('starlight-theme'); } catch {}
         const preferred = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-        document.documentElement.dataset.theme = saved || preferred;
+        document.documentElement.dataset.theme = saved === 'light' || saved === 'dark' ? saved : preferred;
       })();
     </script>
   </head>
@@ -265,7 +266,7 @@ const docsHref = (page = '') => `/docs/${page}`;
         document.querySelector('.theme-toggle')?.addEventListener('click', () => {
           const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
           root.dataset.theme = next;
-          try { localStorage.setItem('foxwarm-site-theme', next); } catch {}
+          try { localStorage.setItem('starlight-theme', next); } catch {}
         });
 
         for (const group of document.querySelectorAll('[data-tabs]')) {

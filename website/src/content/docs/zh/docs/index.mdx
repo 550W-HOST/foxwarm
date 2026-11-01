@@ -1,0 +1,45 @@
+---
+title: Foxwarm 文档
+description: Foxwarm 是什么、各部分如何配合，以及从哪里开始。
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Foxwarm 是一个自托管的 AI Agent 工作台，适合需要长时间进行的任务。你运行一台 Foxwarm 服务器，上面保存你的 Agent、它们的对话和记忆，以及模型和工具配置。Agent 可以读代码、跑命令、把任务交给其他会话，然后在浏览器或聊天软件里向你汇报。
+
+## 一分钟了解各部分
+
+- **Agent** 是一个长期存在的身份，有自己的记忆和规则，例如 `main`、`reviewer` 或 `support`。
+- **会话（Session）** 是 Agent 的一段对话。一个 Agent 可以有很多会话，一个会话也可以为任务的某一部分启动子会话。
+- **节点（Node）** 是执行工具的机器或环境。Foxwarm 服务器本身就是 `master` 节点；你还可以接入服务器、笔记本、容器和浏览器标签页。
+- **渠道（Channel）** 把 Telegram、Matrix、QQ、微信、企业微信等聊天软件接到会话上。
+
+Agent loop、模型和凭据都留在服务器上，节点只执行交给它的命令。[Foxwarm 如何工作](/zh/docs/how-it-works/)详细介绍了这种分工。
+
+## 从这里开始
+
+<CardGrid>
+  <LinkCard title="快速开始" description="安装 Foxwarm，添加模型，开始第一次对话。" href="/zh/docs/quick-start/" />
+  <LinkCard title="Foxwarm 如何工作" description="服务器、Agent、会话、节点和渠道，以及各类数据存放在哪里。" href="/zh/docs/how-it-works/" />
+</CardGrid>
+
+## 按需查找
+
+带 *（英文）* 标记的页面暂时还没有中文版。
+
+| 我想… | 阅读 |
+| --- | --- |
+| 在 Linux、WSL、Windows 或 Docker 上安装 | [安装 Foxwarm](/zh/docs/installing/) |
+| 接入模型服务商 | [配置第一个模型](/zh/docs/model-setup/) |
+| 让项目知识在多次对话间保留 | [Agent、会话和记忆](/zh/docs/agents-sessions-memory/) *（英文）* |
+| 处理特别长的对话 | [长对话与历史检索](/zh/docs/history-search/) *（英文）* |
+| 把任务分给其他会话或 Agent | [委派与协作](/zh/docs/delegation/) *（英文）* |
+| 在另一台机器或浏览器里执行工具 | [节点](/zh/docs/nodes/) *（英文）* |
+| 在聊天软件或团队群里使用 Agent | [渠道与群聊](/zh/docs/channels/) |
+| 定时执行任务 | [定时任务](/zh/docs/timers/) *（英文）* |
+| 熟悉浏览器界面 | [使用 WebUI](/zh/docs/webui/) *（英文）* |
+| 限制 Agent 能做什么、能读什么 | [访问控制](/zh/docs/access-control/) *（英文）* |
+| 让其他程序或 Foxwarm 实例调用进来 | [外部 MCP 客户端](/zh/docs/mcp-inbound/) *（英文）* |
+| 备份、升级或迁移数据 | [数据、升级与备份](/zh/docs/data-upgrades-backups/) *（英文）* |
+
+Foxwarm 基于 MIT 协议开源。源码、问题反馈和开发者文档在 [GitHub 仓库](https://github.com/550W-HOST/foxwarm)。

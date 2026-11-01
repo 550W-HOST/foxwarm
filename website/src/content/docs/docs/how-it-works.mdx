@@ -1,0 +1,77 @@
+---
+title: How Foxwarm works
+description: The Foxwarm server is the brain; Nodes are the hands. Learn what runs where, how Agents, Sessions and Channels fit in, and where your data lives.
+---
+
+import HandsDiagram from '../../../components/HandsDiagram.astro';
+import { strings } from '../../../i18n/home';
+
+Foxwarm separates the part of an agent that thinks from the parts that act. The **brain** is your Foxwarm server: it runs the agent loop, keeps conversations and memory, and holds model and tool configuration. The **hands** are Nodes: machines and environments that run the commands the brain sends them.
+
+<HandsDiagram d={strings.en.diagram} alt="Diagram: the Foxwarm server holds the session runner, memory, models, MCP servers and Skills, including their credentials. Nodes such as a Linux server, a Windows laptop, a Docker container and a browser tab only exchange commands and results with it." />
+
+## The server
+
+Everything that makes an agent *that* agent lives on the server:
+
+- the **session runner**, which sends the conversation to the model and carries out the tool calls it asks for;
+- **conversation history** and its archive, including [compacted summaries](/docs/history-search/);
+- **Agent memory**, [Skills](/docs/tools-skills-mcp/) and [authorization rules](/docs/access-control/);
+- **model providers** and their API keys;
+- **MCP server connections** and their credentials;
+- [Channels](/docs/channels/), [timers](/docs/timers/) and Tasks.
+
+You configure each of these once, in one place.
+
+## Nodes
+
+A Node runs file, shell and browser tools and returns the results. It keeps no conversation, model configuration or memory of its own. The server itself is always available as the `master` Node. You can add:
+
+- a server, workstation or laptop running the Node client on Linux, macOS or Windows;
+- a Docker container started from the Node bootstrap;
+- your own browser, through the Browser Node extension;
+- environments created by a configured Node provider.
+
+Adding a machine means running a small client and approving it. There are no API keys, Skills or MCP servers to set up on it. See [Nodes](/docs/nodes/).
+
+Each Session has a **current Node**. Switching it moves where the next file and shell tools run; the conversation, memory and configuration stay on the server. A tool call can also name another Node explicitly. If a Node is offline or lacks a capability, the call fails there; it never quietly runs somewhere else.
+
+## Agents and Sessions
+
+An **Agent** is a long-lived identity: its memory, Skills, rules and default Node. A **Session** is one conversation of an Agent, with its own history, model choice and current Node. An Agent can have many Sessions, and a Session can start child Sessions, in the same Agent or another one, for parts of a task.
+
+Agents can also create other Agents. A created Agent records who created it, and its rules can only narrow what its creators allow. This lets an agent set up helpers with less access than itself. See [Agents, Sessions and memory](/docs/agents-sessions-memory/) and [Delegate work](/docs/delegation/).
+
+## Ways in
+
+The same Sessions are reachable from several places:
+
+- the **WebUI** in your browser;
+- **chat apps** through Channels, including team group chats;
+- **timers** that start work on a schedule;
+- **external programs and other Foxwarm instances** through the [inbound MCP endpoint](/docs/mcp-inbound/).
+
+A message from any of these lands in the Session's history like any other, so you can start something in one place and continue it in another.
+
+## What this means for security
+
+Tools act with the permissions of the Node they run on. A shell command on `master` can do what the Foxwarm process can do on that machine; a command on a Node runs as that client's user. Nodes are not sandboxes by themselves.
+
+Because credentials stay on the server, a remote Node never holds your model or MCP keys. On the server, [access control](/docs/access-control/) decides which Agent may use which tool on which Node. With suitable rules, an agent can work normally through models and MCP tools while having no tool that can read their credentials.
+
+## Where your data lives
+
+Everything that belongs to an instance is in its data directory (`foxwarm-data` by default):
+
+| Path | Contents |
+| --- | --- |
+| `state/models.yaml` | Model providers, API keys and the default model |
+| `state/config.yaml` | Application settings, Channels and Node providers |
+| `state/mcp.json` | MCP server connections |
+| `state/tool-authorization.yaml` | Instance-wide tool rules, if you use them |
+| `state/token` | The WebUI access token |
+| `state/sessions/`, `state/catalog.sqlite` | Session histories and the Session list |
+| `agents/<agent>/` | Each Agent's memory and working files |
+| `state/logs/` | Logs |
+
+Back up the whole directory together; see [Data, upgrades and backups](/docs/data-upgrades-backups/).

@@ -1,33 +1,39 @@
 ---
 title: Install Foxwarm
-description: Install Foxwarm, configure your first model, and manage the running app.
+description: Install Foxwarm on Linux, WSL, Windows or Docker, then start, stop and locate your instance.
 sidebar:
   order: 1
 ---
 
-Install Foxwarm on **Linux x64** (including x64 WSL) or **Windows x64**, or use the Linux x64 [Docker Compose](#docker-compose) setup. macOS Main is not currently supported by these installation instructions.
+Foxwarm runs on **Linux x64** (including x64 WSL) and **Windows x64**, or in Docker on Linux x64. macOS is not supported for the Foxwarm server; a Mac can still join as a [Node](/docs/nodes/).
 
-For a new installation, the source installer creates `./foxwarm` for the program and `./foxwarm-data` for configuration, conversations, Agent files and other data. It builds and starts the app, then prints the WebUI login URL. The program's `data_dir` file remembers the chosen data location for later starts and installer reruns.
+| Platform | Command |
+| --- | --- |
+| Linux x64 or x64 WSL | `curl -fsSL https://foxwarm.net/install-foxwarm.sh \| bash` |
+| Windows x64, in PowerShell | `irm https://foxwarm.net/install-foxwarm.ps1 \| iex` |
+| Docker Compose | See [Docker Compose](#docker-compose) |
+
+Run the command from the directory where you want Foxwarm installed. The installer creates `./foxwarm` for the program and `./foxwarm-data` for configuration, conversations and Agent files, builds and starts the app, and prints the WebUI sign-in link. The program's `data_dir` file remembers the data location for later starts and reruns.
+
+The installers build from source and stop with a clear message when something below is missing. They do not install system packages for you.
 
 Existing TypeScript installations should follow the [migration guide](/docs/typescript-migration/).
 
-## Before installing from source
+## Requirements
 
-Both source installers need:
+| | Linux x64 / WSL | Windows x64 |
+| --- | --- | --- |
+| Git | ✓ | ✓ |
+| Node.js 20.19+ (20.x) or 22.12+, with npm | ✓ | ✓ |
+| .NET SDK for `net10.0`, with the ASP.NET Core 10 runtime | ✓ | ✓ |
+| Python 3 | ✓ | ✓ |
+| tmux, make, GCC/G++, libc/libutil development files | ✓ | — |
 
-- Git and Node.js **20.19+ in the 20.x line, or 22.12+**, with npm.
-- A .NET SDK supporting `net10.0`, with the **ASP.NET Core 10 runtime** installed.
-- Internet access to download the locked npm/NuGet dependencies and native worker.
+Internet access is needed to download the locked npm and NuGet dependencies and the native worker.
 
-Check the selected .NET installation with `dotnet --version` and `dotnet --list-runtimes`. The runtime list must include `Microsoft.AspNetCore.App 10.x`. An exact SDK patch version is not required.
-
-The SDK and native compilers are source-build requirements; Main runs on the ASP.NET Core runtime. The installers check prerequisites but do not install system packages. Docker builds these dependencies inside the image instead.
+To check .NET, run `dotnet --version` and `dotnet --list-runtimes`; the runtime list must include `Microsoft.AspNetCore.App 10.x`. Any SDK patch version works. The SDK and compilers are only needed to build; Foxwarm itself runs on the ASP.NET Core runtime.
 
 ## Linux x64 or x64 WSL
-
-Also install **tmux, Python 3, make, GCC/G++, and libc/libutil development files**. These provide the native terminal helpers and worker used during the build.
-
-Run this from the directory where you want the program and data directories created:
 
 ```bash
 curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash
@@ -41,21 +47,19 @@ curl -fsSL https://foxwarm.net/install-foxwarm.sh | bash -s -- \
   --data-dir "$PWD/foxwarm-data"
 ```
 
-You can inspect the [Bash installer](https://github.com/550W-HOST/foxwarm/blob/main/install-foxwarm.sh) before running it. Run the downloaded script with `--help` for its other options.
+You can read the [Bash installer](https://github.com/550W-HOST/foxwarm/blob/main/install-foxwarm.sh) before running it. Run the downloaded script with `--help` for other options.
 
 ## Windows PowerShell
 
-Also install **Python 3** for the native worker build. Windows does not require tmux or WSL.
-
-Open PowerShell in the directory where you want Foxwarm installed:
+Windows does not need tmux or WSL.
 
 ```powershell
 irm https://foxwarm.net/install-foxwarm.ps1 | iex
 ```
 
-The installer starts Foxwarm in the background and opens the WebUI URL when available.
+The installer starts Foxwarm in the background and opens the WebUI when it is ready.
 
-To inspect the script or pass installation paths, download it first:
+To read the script first or choose installation paths, download it:
 
 ```powershell
 Invoke-WebRequest https://foxwarm.net/install-foxwarm.ps1 -OutFile install-foxwarm.ps1
@@ -68,25 +72,25 @@ If script execution is blocked, run the downloaded file with a process-specific 
 powershell -ExecutionPolicy Bypass -File .\install-foxwarm.ps1
 ```
 
-Before rerunning the installer, stop the existing instance with `npm run stop:windows` from its checkout. This avoids replacing native dependencies while they are loaded.
+Before rerunning the installer, stop the existing instance with `npm run stop:windows` from its checkout, so native dependencies are not replaced while they are loaded.
 
-## Open the WebUI and configure a model
+## Open the WebUI
 
-Use the URL printed at startup, typically:
+Use the sign-in link printed at startup, typically:
 
 ```text
 http://localhost:3001/#token=...
 ```
 
-If you no longer have the URL, read `state/token` in your data directory. For a default install, from the parent of `foxwarm`:
+If you no longer have it, read `state/token` in your data directory. For a default install, from the parent of `foxwarm`:
 
 ```bash
 cat foxwarm-data/state/token
 ```
 
-On Windows, use `Get-Content .\foxwarm-data\state\token` instead. Treat the token and token-bearing URL like a password.
+On Windows, use `Get-Content .\foxwarm-data\state\token`. Treat the token and the link like a password.
 
-Once logged in, open **Setup → Models**, configure your provider, save, and start a conversation. Follow [Set up your first model](/docs/model-setup/) for the provider fields and connection test.
+On a new installation, Foxwarm opens **Setup → Models**. Follow [Set up your first model](/docs/model-setup/) to connect a provider.
 
 ## Start, stop, and inspect
 

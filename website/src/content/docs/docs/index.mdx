@@ -1,25 +1,43 @@
 ---
 title: Foxwarm documentation
-description: Install Foxwarm, connect a model, and learn how Agents, Sessions, tools, Nodes, Channels, and data fit together.
+description: What Foxwarm is, how its parts fit together, and where to start.
 ---
 
-Foxwarm runs on your machine or server. This site provides the installer and the documentation for setting up and using your own instance.
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Foxwarm is a self-hosted workspace for AI agents that work on long tasks. You run one Foxwarm server. It holds your agents, their conversations and memory, and the model and tool configuration. Agents read code, run commands, hand work to other sessions, and report back in the browser or in a chat app.
+
+## The parts in one minute
+
+- An **Agent** is a long-lived identity with its own memory and rules: for example `main`, `reviewer` or `support`.
+- A **Session** is one conversation of an Agent. An Agent can have many Sessions, and a Session can start child Sessions for parts of a task.
+- A **Node** is a machine or environment where tools run. The Foxwarm server itself is the `master` Node; you can add servers, laptops, containers and browser tabs.
+- A **Channel** connects a chat app such as Telegram, Matrix, QQ, WeChat or WeCom to a Session.
+
+The agent loop, models and credentials stay on the server. Nodes only run the commands they are given. [How Foxwarm works](/docs/how-it-works/) explains this split in more detail.
 
 ## Start here
 
-1. [Install Foxwarm](/docs/installing/) on Linux x64/WSL or Windows x64, or use Docker Compose.
-2. [Set up your first model](/docs/model-setup/) in the WebUI.
-3. Read [Agents, Sessions, and memory](/docs/agents-sessions-memory/) to see where identity, conversation history, and long-lived knowledge live.
+<CardGrid>
+  <LinkCard title="Quick start" description="Install Foxwarm, add a model and have your first conversation." href="/docs/quick-start/" />
+  <LinkCard title="How Foxwarm works" description="The server, Agents, Sessions, Nodes and Channels, and where each piece of data lives." href="/docs/how-it-works/" />
+</CardGrid>
 
-## Configure and use Foxwarm
+## Find what you need
 
-- [Model options and routing](/docs/model-options/) covers reasoning effort, model aliases, hosted search, and generated images.
-- [Long conversations and history search](/docs/history-search/) covers compaction and optional semantic retrieval.
-- [Tools, Skills, and MCP](/docs/tools-skills-mcp/) explains built-in actions, reusable instructions, and external tool servers.
-- [Connect an external MCP client](/docs/mcp-inbound/) shows how to use Foxwarm's authenticated inbound MCP endpoint.
-- [Nodes](/docs/nodes/) covers optional execution environments for another machine, a dedicated environment, or supported browser tools.
-- [Channels](/docs/channels/) shows how to connect Sessions to supported messaging platforms.
-- [Data, upgrades, and backups](/docs/data-upgrades-backups/) describes the data directory and how to update an important instance safely.
-- [FAQ](/docs/faq/) answers common installation and configuration questions.
+| I want to… | Read |
+| --- | --- |
+| Install on Linux, WSL, Windows or Docker | [Install Foxwarm](/docs/installing/) |
+| Connect a model provider | [Set up your first model](/docs/model-setup/) |
+| Keep project knowledge across conversations | [Agents, Sessions and memory](/docs/agents-sessions-memory/) |
+| Work with very long conversations | [Long conversations and history search](/docs/history-search/) |
+| Split work between Sessions or Agents | [Delegate work](/docs/delegation/) |
+| Run tools on another machine or in a browser | [Nodes](/docs/nodes/) |
+| Talk to an agent from a chat app or a team group | [Channels and group chats](/docs/channels/) |
+| Run something on a schedule | [Timers](/docs/timers/) |
+| Find my way around the browser interface | [Using the WebUI](/docs/webui/) |
+| Limit what an agent can do or read | [Access control](/docs/access-control/) |
+| Let another program or Foxwarm instance call in | [Connect an external MCP client](/docs/mcp-inbound/) |
+| Back up, upgrade or move my data | [Data, upgrades and backups](/docs/data-upgrades-backups/) |
 
-For implementation details, start with the repository [Code Index](https://github.com/550W-HOST/foxwarm/tree/main/docs/code-index). The source code and tests define current behavior.
+Foxwarm is open source under the MIT license. The [GitHub repository](https://github.com/550W-HOST/foxwarm) has the source, issue tracker and developer documentation.

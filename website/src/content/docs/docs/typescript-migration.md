@@ -38,7 +38,7 @@ Preserve your customized Agent memory and framework prompt. Updating bundled tem
 
 ### Optional dependencies
 
-Install the [C# source prerequisites](/docs/installing/#before-installing-from-source) before the update. If you use semantic search, check its [native platform and embedding-service requirements](/docs/history-search/#enable-semantic-search). A working main process does not by itself establish that optional search loaded successfully.
+Install the [C# source prerequisites](/docs/installing/#requirements) before the update. If you use semantic search, check its [native platform and embedding-service requirements](/docs/history-search/#enable-semantic-search). A working main process does not by itself establish that optional search loaded successfully.
 
 Custom Code asset placement should follow the current [workbench setup](https://github.com/550W-HOST/foxwarm/blob/main/packages/vscode-web/README.md); the former `FOXWARM_VSCODE_*` resource/location overrides are no longer used.
 

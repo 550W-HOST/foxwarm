@@ -14,6 +14,8 @@ const requiredRoutes = [
   '/',
   '/zh/',
   '/docs/',
+  '/docs/quick-start/',
+  '/docs/how-it-works/',
   '/docs/installing/',
   '/docs/model-setup/',
   '/docs/model-options/',
@@ -23,8 +25,15 @@ const requiredRoutes = [
   '/docs/mcp-inbound/',
   '/docs/nodes/',
   '/docs/channels/',
+  '/docs/delegation/',
+  '/docs/timers/',
+  '/docs/webui/',
+  '/docs/access-control/',
+  '/docs/typescript-migration/',
   '/docs/data-upgrades-backups/',
-  '/docs/faq/'
+  '/docs/faq/',
+  '/zh/docs/',
+  '/zh/docs/quick-start/'
 ];
 
 function routeToFile(route) {
@@ -90,6 +99,26 @@ test('built local links and assets resolve inside dist', async () => {
       const target = localTarget(url);
       if (!target || url.startsWith('/404')) continue;
       if (!await exists(target)) missing.push(`${path.relative(distRoot, filePath)} -> ${url}`);
+    }
+  }
+  assert.deepEqual(missing, []);
+});
+
+test('in-site links to page sections point at existing headings', async () => {
+  const idsByFile = new Map();
+  const missing = [];
+  for (const filePath of await htmlFiles()) {
+    const html = await readFile(filePath, 'utf8');
+    for (const match of html.matchAll(/href="([^"]*#[^"]+)"/g)) {
+      const [pagePart, hash] = match[1].split('#', 2);
+      if (!hash || hash === '_top' || hash === 'main' || hash === 'install' || hash === 'features') continue;
+      const target = pagePart ? localTarget(pagePart) : filePath;
+      if (!target || !await exists(target)) continue;
+      if (!idsByFile.has(target)) {
+        const targetHtml = await readFile(target, 'utf8');
+        idsByFile.set(target, new Set([...targetHtml.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1])));
+      }
+      if (!idsByFile.get(target).has(decodeURIComponent(hash))) missing.push(`${path.relative(distRoot, filePath)} -> ${match[1]}`);
     }
   }
   assert.deepEqual(missing, []);

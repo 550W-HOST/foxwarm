@@ -1,0 +1,77 @@
+---
+title: Foxwarm 如何工作
+description: Foxwarm 服务器是大脑，节点是手。了解各部分在哪里运行，Agent、会话和渠道如何配合，以及数据存放在哪里。
+---
+
+import HandsDiagram from '../../../../components/HandsDiagram.astro';
+import { strings } from '../../../../i18n/home';
+
+Foxwarm 把 Agent 负责思考的部分和负责动手的部分分开。**大脑**是你的 Foxwarm 服务器：它运行 Agent loop，保存对话和记忆，持有模型和工具配置。**手**是节点：执行大脑下发命令的机器和环境。
+
+<HandsDiagram d={strings.zh.diagram} alt="示意图：Foxwarm 服务器上有会话运行器、记忆、模型、MCP 服务器和 Skill，凭据也只在这里。Linux 服务器、Windows 笔记本、Docker 容器和浏览器标签页等节点只和它交换指令与结果。" />
+
+## 服务器
+
+决定一个 Agent "是谁"的东西都在服务器上：
+
+- **会话运行器**：把对话发给模型，并执行模型要求的工具调用；
+- **对话历史**及其归档，包括[压缩后的摘要](/zh/docs/history-search/)；
+- **Agent 记忆**、[Skill](/zh/docs/tools-skills-mcp/) 和[授权规则](/zh/docs/access-control/)；
+- **模型服务商**及其 API Key；
+- **MCP 服务器连接**及其凭据；
+- [渠道](/zh/docs/channels/)、[定时任务](/zh/docs/timers/)和 Task。
+
+这些都只需要在一个地方配置一次。
+
+## 节点
+
+节点负责执行文件、命令和浏览器操作，并返回结果。它不保存对话、模型配置或记忆。服务器本身始终是 `master` 节点。你还可以接入：
+
+- 运行节点客户端的服务器、工作站或笔记本，支持 Linux、macOS 和 Windows；
+- 用节点引导脚本启动的 Docker 容器；
+- 通过 Browser Node 扩展接入的你自己的浏览器；
+- 由已配置的节点 Provider 创建的环境。
+
+新增一台机器，只需运行一个小客户端并批准它，不用在上面配置 API Key、Skill 或 MCP。详见[节点](/zh/docs/nodes/)。
+
+每个会话都有一个**当前节点**。切换后，接下来的文件和命令工具就在新节点上执行；对话、记忆和配置仍留在服务器上。工具调用也可以显式指定另一个节点。如果节点离线或不支持某项能力，调用会直接失败，不会悄悄换到别处执行。
+
+## Agent 和会话
+
+**Agent** 是一个长期身份：它的记忆、Skill、规则和默认节点。**会话**是 Agent 的一段对话，有自己的历史、模型选择和当前节点。一个 Agent 可以有很多会话；一个会话也可以为任务的某一部分启动子会话，子会话可以属于同一个 Agent，也可以属于另一个 Agent。
+
+Agent 还可以创建其他 Agent。被创建的 Agent 会记录创建者，它的规则只能在创建者允许的范围内再收窄。这样，Agent 可以给自己配一些权限更小的帮手。详见 [Agent、会话和记忆](/zh/docs/agents-sessions-memory/)和[委派与协作](/zh/docs/delegation/)。
+
+## 从哪里进入
+
+同一批会话可以从多个地方访问：
+
+- 浏览器里的 **WebUI**；
+- 通过渠道接入的**聊天软件**，包括团队群聊；
+- 按计划启动工作的**定时任务**；
+- 通过[入站 MCP 接口](/zh/docs/mcp-inbound/)接入的**外部程序和其他 Foxwarm 实例**。
+
+无论来自哪里，消息都会和其他消息一样进入会话历史。所以你可以在一个地方开始，在另一个地方接着做。
+
+## 安全上意味着什么
+
+工具以所在节点的权限执行。`master` 上的命令能做 Foxwarm 进程在那台机器上能做的事；节点上的命令以该客户端的用户身份运行。节点本身并不是沙箱。
+
+由于凭据只留在服务器上，远程节点永远不会持有你的模型或 MCP 密钥。在服务器上，[访问控制](/zh/docs/access-control/)决定哪个 Agent 能在哪个节点上使用哪些工具。配置合适的规则后，Agent 可以正常使用模型和 MCP 工具，同时没有任何工具能读到它们的凭据。
+
+## 数据存放在哪里
+
+一个实例的所有数据都在它的数据目录里（默认是 `foxwarm-data`）：
+
+| 路径 | 内容 |
+| --- | --- |
+| `state/models.yaml` | 模型服务商、API Key 和默认模型 |
+| `state/config.yaml` | 应用设置、渠道和节点 Provider |
+| `state/mcp.json` | MCP 服务器连接 |
+| `state/tool-authorization.yaml` | 实例级工具规则（如果使用） |
+| `state/token` | WebUI 访问令牌 |
+| `state/sessions/`、`state/catalog.sqlite` | 会话历史和会话列表 |
+| `agents/<agent>/` | 每个 Agent 的记忆和工作文件 |
+| `state/logs/` | 日志 |
+
+请把整个目录作为一个整体备份，见[数据、升级与备份](/zh/docs/data-upgrades-backups/)。
