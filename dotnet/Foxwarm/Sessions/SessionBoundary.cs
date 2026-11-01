@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json.Nodes;
 using Foxwarm.Tools;
 
@@ -188,8 +189,39 @@ internal static class SessionBoundary
     internal static string SystemEvent(string type, string hint) =>
         $"<foxwarm-system kind=\"event\" type=\"{Escape(type)}\" hint=\"{Escape(hint)}\" time=\"{LocalTime()}\" />";
 
-    internal static string Identity(string parent, string current, bool inherited) =>
-        $"<foxwarm-system kind=\"session-boundary\" event=\"{(inherited ? "history-inherited" : "new-child")}\" parentSessionId=\"{Escape(parent)}\" currentSessionId=\"{Escape(current)}\" time=\"{LocalTime()}\" />";
+    internal static string Identity(
+        string parent,
+        string current,
+        bool inherited,
+        (string Node, string? Cwd) placement
+    ) =>
+        $"<foxwarm-system kind=\"session-boundary\" event=\"{(inherited ? "history-inherited" : "new-child")}\" parentSessionId=\"{Escape(parent)}\" currentSessionId=\"{Escape(current)}\"{Placement(placement.Node, placement.Cwd)} time=\"{LocalTime()}\" />";
+
+    /// <summary>Initial execution placement attributes for a Session's opening marker.</summary>
+    internal static string Placement(string node, string? cwd) =>
+        $" currentNode=\"{PlacementValue(node)}\""
+        + (string.IsNullOrEmpty(cwd) ? "" : $" cwd=\"{PlacementValue(cwd)}\"");
+
+    // Node IDs and paths are locators: escape without normalizing whitespace so the
+    // decoded attribute equals the stored value. Control characters use references.
+    private static string PlacementValue(string value)
+    {
+        var escaped = new StringBuilder(value.Length);
+        foreach (var character in value)
+            escaped.Append(
+                character switch
+                {
+                    '&' => "&amp;",
+                    '<' => "&lt;",
+                    '>' => "&gt;",
+                    '"' => "&quot;",
+                    '\'' => "&apos;",
+                    _ when char.IsControl(character) => $"&#x{(int)character:X};",
+                    _ => character.ToString(),
+                }
+            );
+        return escaped.ToString();
+    }
 
     internal static string Completion(
         string parent,

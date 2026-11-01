@@ -218,13 +218,18 @@ try {
   await page.select('[data-architecture-agent-inspector-id="leaf"] select', 'base')
   await page.evaluate(() => [...document.querySelectorAll('[data-architecture-agent-inspector-id="leaf"] button')].find(button => button.textContent.includes('Save agent settings')).click())
   await until(async () => (await request('GET', '/api/agents')).body.agents.find(agent => agent.id === 'leaf').inherit === 'base', 'original Architecture inherit PUT')
+  // New-session placement defaults are edited in the same inspector and reach fresh children.
+  await page.select('[data-architecture-agent-inspector-id="leaf"] select[data-agent-default-node]', 'master')
+  await page.type('[data-architecture-agent-inspector-id="leaf"] input[data-agent-default-cwd]', agentDir('leaf'))
+  await page.evaluate(() => [...document.querySelectorAll('[data-architecture-agent-inspector-id="leaf"] button')].find(button => button.textContent.includes('Save agent settings')).click())
+  await until(async () => { const leaf = (await request('GET', '/api/agents')).body.agents.find(agent => agent.id === 'leaf'); return leaf.defaultNode === 'master' && leaf.defaultCwd === agentDir('leaf') }, 'Architecture default placement PUT')
   assert.equal(await snapshot('leaf/main'), initial); heldKnowledge.release(); await final('leaf/main', 'FROZEN-DONE')
   await turn('leaf/main', 'REUSE', body => { assert.equal(prompt(body), initial); return [call('live-list', 'skill', { action: 'list' })] })
   assert(toolValue(await history('leaf/main'), 'live-list').output.includes('LEAF-SHARED-V2'))
   assert.equal(await snapshot('leaf/main'), initial)
 
   // Fresh children use their owning Agent's current graph, not the parent's captured old prefix.
-  plans.set('leaf/kid', [body => { assert(prompt(body).includes('BASE-V2') && !prompt(body).includes('MIDDLE-V1')); return [text('CHILD-LEAF-DONE'), text('[NO_ACTION]')] }])
+  plans.set('leaf/kid', [body => { assert(prompt(body).includes('BASE-V2') && !prompt(body).includes('MIDDLE-V1')); assert(messageText(body).includes(`currentSessionId="leaf/kid" currentNode="master" cwd="${agentDir('leaf')}"`), messageText(body)); return [text('CHILD-LEAF-DONE'), text('[NO_ACTION]')] }])
   plans.get('leaf/main').push([call('child-leaf', 'create_child_session', { suffix: 'kid', message: 'OWNING-KNOWLEDGE', afterSend: 'finish' })])
   await send('leaf/main', 'CHILD-LEAF'); await final('leaf/kid', 'CHILD-LEAF-DONE'); await idle('leaf/main')
   plans.set('base/cross', [body => { assert(prompt(body).includes('BASE-V2') && !prompt(body).includes('LEAF-V1') && !prompt(body).includes('TARGET-LEAF-ONLY')); return [text('CHILD-BASE-DONE'), text('[NO_ACTION]')] }])

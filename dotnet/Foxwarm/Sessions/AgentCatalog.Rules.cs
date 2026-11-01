@@ -19,6 +19,27 @@ internal sealed partial class AgentCatalog
         return node;
     }
 
+    internal string? DefaultCwd(string name)
+    {
+        var value = MetadataSnapshot()[name]?["defaultCwd"];
+        if (value is null)
+            return null;
+        var cwd =
+            SessionWait.Text(value)
+            ?? throw new InvalidDataException("Agent default working directory must be a string.");
+        ValidateDefaultCwd(cwd);
+        return cwd;
+    }
+
+    /// <summary>
+    /// Working directory for a new Session of this Agent, applied only when the Session
+    /// starts on the Node the directory belongs to: the default Node, or master when unset.
+    /// </summary>
+    internal string? DefaultCwdFor(string name, string? node) =>
+        DefaultCwd(name) is { } cwd && (node ?? "master") == (DefaultNode(name) ?? "master")
+            ? cwd
+            : null;
+
     private static string? Creator(JsonObject snapshot, string name)
     {
         var row = snapshot[name];
@@ -193,9 +214,18 @@ internal sealed partial class AgentCatalog
         }
     }
 
-    internal async Task SetDefaultNodeAsync(string name, string? node)
+    internal async Task SetDefaultPlacementAsync(
+        string name,
+        bool setNode,
+        string? node,
+        bool setCwd,
+        string? cwd
+    )
     {
-        ValidateDefaultNode(node);
+        if (setNode)
+            ValidateDefaultNode(node);
+        if (setCwd)
+            ValidateDefaultCwd(cwd);
         await createGate.WaitAsync();
         try
         {
@@ -204,10 +234,14 @@ internal sealed partial class AgentCatalog
             var next = MetadataSnapshot();
             var row = next[name] as JsonObject ?? new JsonObject();
             next[name] = row;
-            if (node is null)
+            if (setNode && node is null)
                 row.Remove("defaultNode");
-            else
+            else if (setNode)
                 row["defaultNode"] = node;
+            if (setCwd && cwd is null)
+                row.Remove("defaultCwd");
+            else if (setCwd)
+                row["defaultCwd"] = cwd;
             try
             {
                 AtomicIndexWrite(
@@ -234,6 +268,28 @@ internal sealed partial class AgentCatalog
     {
         if (node is not null)
             Foxwarm.Nodes.NodeProviderRegistry.ValidateId(node);
+    }
+
+    // The directory belongs to a Node that may be offline, so only its form is checked.
+    internal static void ValidateDefaultCwd(string? cwd)
+    {
+        if (cwd is null)
+            return;
+        if (
+            cwd.Length is 0 or > 4096
+            || cwd != cwd.Trim()
+            || cwd.Any(char.IsControl)
+            || !(
+                cwd.StartsWith('/')
+                || cwd.Length >= 3
+                    && char.IsAsciiLetter(cwd[0])
+                    && cwd[1] == ':'
+                    && cwd[2] is '/' or '\\'
+            )
+        )
+            throw new InvalidDataException(
+                "Agent default working directory must be an absolute path."
+            );
     }
 
     private void RequireNoCreatorChildren(string name)

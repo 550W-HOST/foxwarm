@@ -298,6 +298,9 @@ internal static class AgentToolDefinitions
                         ["defaultNode"] = String(
                             "Default execution Node for new Sessions in this Agent. This chooses initial placement and does not grant access."
                         ),
+                        ["defaultCwd"] = String(
+                            "Absolute working directory for new Sessions that start on the default Node, or on master when defaultNode is omitted. This sets the initial cwd and does not grant access."
+                        ),
                     },
                     "agentName"
                 )

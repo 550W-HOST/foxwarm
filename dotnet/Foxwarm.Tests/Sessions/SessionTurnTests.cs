@@ -238,7 +238,7 @@ public sealed class SessionTurnTests
             .History.Materialize()
             .Single(message => message["role"]?.GetValue<string>() == "user");
         Assert.Equal(
-            "<foxwarm-system kind=\"session\" currentSessionId=\"s\" />",
+            "<foxwarm-system kind=\"session\" currentSessionId=\"s\" currentNode=\"master\" />",
             ((JsonArray)user["parts"]!)[0]?["system"]?.GetValue<string>()
         );
         Assert.True(snapshot.Meta["lastMessageTime"]?.GetValue<long>() > 0);
@@ -656,6 +656,8 @@ public sealed class SessionTurnTests
         var registry = new SessionRegistry(store, new ControlledChat());
         var sessionId = "\uFEFF \r\n  alpha \t \u0001 & < > \" ' \u000B omega \u0085 \uFEFF \n ";
         var entry = registry.Add(sessionId);
+        entry.State.AuthorityEnvelope["currentNode"] = "box\"1";
+        entry.State.AuthorityEnvelope["cwd"] = "/srv/two  words/<repo>";
         entry.State.Queue.Add(QueueItem.UserText("first"));
 
         await registry.Runner.ProcessQueueAsync(sessionId);
@@ -666,9 +668,12 @@ public sealed class SessionTurnTests
             .Single(message => message["role"]?.GetValue<string>() == "user");
         var initialParts = (JsonArray)initialUser["parts"]!;
         Assert.Equal(
-            "<foxwarm-system kind=\"session\" currentSessionId=\"alpha &amp; &lt; &gt; &quot; &apos; omega \u0085\" />",
+            "<foxwarm-system kind=\"session\" currentSessionId=\"alpha &amp; &lt; &gt; &quot; &apos; omega \u0085\" currentNode=\"box&quot;1\" cwd=\"/srv/two  words/&lt;repo&gt;\" />",
             initialParts[0]?["system"]?.GetValue<string>()
         );
+        var marker = System.Xml.Linq.XElement.Parse(initialParts[0]!["system"]!.GetValue<string>());
+        Assert.Equal("box\"1", marker.Attribute("currentNode")?.Value);
+        Assert.Equal("/srv/two  words/<repo>", marker.Attribute("cwd")?.Value);
         Assert.True(initial.Meta["lastMessageTime"]?.GetValue<long>() > 0);
 
         entry.State.Meta["lastMessageTime"] = 1;

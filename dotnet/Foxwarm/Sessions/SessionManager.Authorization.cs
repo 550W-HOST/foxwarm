@@ -386,8 +386,15 @@ internal sealed partial class SessionManager
 
     internal string? AgentDefaultNode(string agent) => agents.DefaultNode(agent);
 
-    internal Task SetAgentDefaultNodeAsync(string agent, string? node) =>
-        agents.SetDefaultNodeAsync(agent, node);
+    internal string? AgentDefaultCwd(string agent) => agents.DefaultCwd(agent);
+
+    internal Task SetAgentDefaultPlacementAsync(
+        string agent,
+        bool setNode,
+        string? node,
+        bool setCwd,
+        string? cwd
+    ) => agents.SetDefaultPlacementAsync(agent, setNode, node, setCwd, cwd);
 
     private async Task AuthorizePromptFilesAsync(
         SessionOwner source,

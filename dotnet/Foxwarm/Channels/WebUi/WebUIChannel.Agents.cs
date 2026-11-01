@@ -79,6 +79,7 @@ internal sealed partial class WebUIChannel
                                     or "isolatedNode"
                                     or "rules"
                                     or "defaultNode"
+                                    or "defaultCwd"
                                     or "restore"
                                 )
                         )
@@ -126,7 +127,8 @@ internal sealed partial class WebUIChannel
                         inherit: string.IsNullOrEmpty(inherit) ? null : inherit,
                         isolatedNode: body["isolatedNode"]?.GetValue<string>(),
                         rules: body["rules"] as JsonArray,
-                        defaultNode: body["defaultNode"]?.GetValue<string>()
+                        defaultNode: body["defaultNode"]?.GetValue<string>(),
+                        defaultCwd: body["defaultCwd"]?.GetValue<string>()
                     );
                     if (created.MainSessionId is not null)
                         runtime.ChangePresentation(catalog =>
@@ -293,14 +295,20 @@ internal sealed partial class WebUIChannel
                                     or "isolatedNode"
                                     or "rules"
                                     or "defaultNode"
+                                    or "defaultCwd"
                                 )
                         )
-                        || !new[] { "inheritAgent", "isolatedNode", "rules", "defaultNode" }.Any(
-                            body.ContainsKey
-                        )
+                        || !new[]
+                        {
+                            "inheritAgent",
+                            "isolatedNode",
+                            "rules",
+                            "defaultNode",
+                            "defaultCwd",
+                        }.Any(body.ContainsKey)
                     )
                         throw new InvalidDataException(
-                            "Provide inheritAgent, isolatedNode, rules or defaultNode."
+                            "Provide inheritAgent, isolatedNode, rules, defaultNode or defaultCwd."
                         );
                     if (!sessions.Agents().Contains(agentId))
                         return Results.NotFound(new { error = "Agent not found." });
@@ -310,12 +318,13 @@ internal sealed partial class WebUIChannel
                             body["rules"] as JsonArray
                                 ?? throw new InvalidDataException("rules must be an array.")
                         );
-                    if (body.ContainsKey("defaultNode"))
-                        await sessions.SetAgentDefaultNodeAsync(
+                    if (body.ContainsKey("defaultNode") || body.ContainsKey("defaultCwd"))
+                        await sessions.SetAgentDefaultPlacementAsync(
                             agentId,
-                            body["defaultNode"] is null
-                                ? null
-                                : body["defaultNode"]!.GetValue<string>()
+                            body.ContainsKey("defaultNode"),
+                            body["defaultNode"]?.GetValue<string>(),
+                            body.ContainsKey("defaultCwd"),
+                            body["defaultCwd"]?.GetValue<string>()
                         );
                     if (body.ContainsKey("isolatedNode"))
                         await sessions.SetAgentNodeAsync(
@@ -344,6 +353,9 @@ internal sealed partial class WebUIChannel
                                 defaultNode = sessions
                                     .AgentMetadata[agentId]
                                     ?["defaultNode"]?.DeepClone(),
+                                defaultCwd = sessions
+                                    .AgentMetadata[agentId]
+                                    ?["defaultCwd"]?.DeepClone(),
                                 isolated = sessions.AgentIsolated(agentId),
                                 isolatedNode = sessions.RecordedIsolationNode(agentId),
                             },

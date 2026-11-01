@@ -151,6 +151,7 @@ internal sealed partial class SessionManager
                             "toolRules",
                             "rules",
                             "defaultNode",
+                            "defaultCwd",
                         ],
                         ["agentName"]
                     );
@@ -162,6 +163,8 @@ internal sealed partial class SessionManager
                     var defaultNode = OptionalString(args, "defaultNode");
                     if (defaultNode is not null)
                         Foxwarm.Nodes.NodeProviderRegistry.ValidateId(defaultNode);
+                    var defaultCwd = OptionalString(args, "defaultCwd");
+                    AgentCatalog.ValidateDefaultCwd(defaultCwd);
                     var createMain = OptionalBool(args, "createMainSession") ?? true;
                     var convert = OptionalBool(args, "convertSession") ?? false;
                     if (convert && !createMain)
@@ -210,6 +213,7 @@ internal sealed partial class SessionManager
                             semanticCaller.Value ?? default,
                             initialRules: localRules,
                             defaultNode: defaultNode,
+                            defaultCwd: defaultCwd,
                             creator: source
                         );
                         mainId = selectedSource.Id;
@@ -228,7 +232,8 @@ internal sealed partial class SessionManager
                             inheritMemory: copyMemory,
                             creator: source,
                             rules: localRules,
-                            defaultNode: defaultNode
+                            defaultNode: defaultNode,
+                            defaultCwd: defaultCwd
                         );
                         mainId = created.MainSessionId;
                     }

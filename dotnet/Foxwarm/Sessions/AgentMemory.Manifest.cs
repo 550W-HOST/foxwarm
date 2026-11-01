@@ -21,7 +21,8 @@ internal sealed record AgentListEntry(
     int ToolRuleCount,
     string? CreatedBy,
     int RuleCount,
-    string? DefaultNode
+    string? DefaultNode,
+    string? DefaultCwd
 );
 
 internal sealed record AgentMemoryManifest(string MemoryRoot, IReadOnlyList<AgentMemoryFile> Files);
@@ -110,6 +111,7 @@ internal sealed partial class SessionManager
                 + (row.CreatedBy is null ? "" : $" [created by: {row.CreatedBy}]")
                 + $" [local rules:{row.RuleCount}]"
                 + (row.DefaultNode is null ? "" : $" [default Node: {row.DefaultNode}]")
+                + (row.DefaultCwd is null ? "" : $" [default cwd: {row.DefaultCwd}]")
                 + "\n";
         }
         return result.TrimEnd();
@@ -154,7 +156,8 @@ internal sealed partial class SessionManager
                     isolation.Rules.Count,
                     agents.CreatedBy(name),
                     (agents.MetadataSnapshot()[name]?["rules"] as JsonArray)?.Count ?? 0,
-                    agents.DefaultNode(name)
+                    agents.DefaultNode(name),
+                    agents.DefaultCwd(name)
                 );
             })
             .ToArray();
@@ -200,6 +203,7 @@ internal sealed partial class SessionManager
                         ruleCount = (agents.MetadataSnapshot()[name]?["rules"] as JsonArray)?.Count
                             ?? 0,
                         defaultNode = agents.DefaultNode(name),
+                        defaultCwd = agents.DefaultCwd(name),
                         isolated = AgentIsolated(name),
                         isolatedNode = RecordedIsolationNode(name),
                         sessionCount = owned.Total,

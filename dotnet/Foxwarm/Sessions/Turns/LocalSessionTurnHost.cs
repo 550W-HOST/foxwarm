@@ -618,7 +618,7 @@ public sealed partial class LocalSessionTurnHost
             {
                 updateLastMessageTime = true;
                 if (historyEmpty)
-                    parts = new[] { SessionTag(state.Id) }.Concat(parts).ToArray();
+                    parts = new[] { SessionTag(state) }.Concat(parts).ToArray();
             }
             var message = new JsonObject
             {
@@ -815,11 +815,16 @@ public sealed partial class LocalSessionTurnHost
         return false;
     }
 
-    private static JsonObject SessionTag(string sessionId) =>
+    private static JsonObject SessionTag(SessionState state) =>
         new()
         {
             ["system"] =
-                $"<foxwarm-system kind=\"session\" currentSessionId=\"{EscapeFoxwarmAttribute(sessionId)}\" />",
+                $"<foxwarm-system kind=\"session\" currentSessionId=\"{EscapeFoxwarmAttribute(state.Id)}\""
+                + SessionBoundary.Placement(
+                    SessionManager.ResolveExecutionNode(state.AuthorityEnvelope),
+                    SessionWait.Text(state.AuthorityEnvelope["cwd"])
+                )
+                + " />",
         };
 
     internal static string EscapeFoxwarmAttribute(string value)

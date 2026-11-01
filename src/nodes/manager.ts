@@ -710,7 +710,6 @@ export class NodesManager {
     routingSnapshot?: { currentNode: string; cwd?: string },
     programmatic?: true,
     signal?: AbortSignal,
-    allowUnboundDefaultCwd = false,
   ): Promise<any> {
     const node = this.nodes.get(nodeId);
     if (!node) {
@@ -718,11 +717,7 @@ export class NodesManager {
     }
     this.assertNodeProtocolCompatible(node);
 
-    // Project creation can precede the first Session. The read-only cwd probe
-    // does not use Session state, unlike all executable and filesystem tools.
-    const session = sessionManager.getSessionCatalog(sessionId) || (allowUnboundDefaultCwd && toolName === 'get_default_cwd'
-      ? { id: sessionId, agent: 'main', aliases: [] as string[], currentNode: '', cwd: undefined as string | undefined }
-      : undefined);
+    const session = sessionManager.getSessionCatalog(sessionId);
     if (!session) throw new Error(`Session \`${sessionId}\` not found`);
     
     if (!node.tools.has(toolName)) {
@@ -881,13 +876,6 @@ export class NodesManager {
       }
     }
     throw new Error(`Remote persistent exec ID allocation exhausted after ${maxAttempts} owner-acknowledged collision retries.`);
-  }
-
-  async getDefaultCwdForProject(nodeId: string): Promise<string> {
-    const value = await this.executeTool(nodeId, 'get_default_cwd', {}, '__project_cwd_probe__', undefined, undefined, undefined, true);
-    const raw = value && typeof value === 'object' ? (value as any).output : value;
-    if (typeof raw !== 'string' || !raw.trim()) throw new Error('Node did not report its default working directory.');
-    return raw.trim();
   }
 
   /**
