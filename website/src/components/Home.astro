@@ -6,25 +6,25 @@ import Screenshot from './Screenshot.astro';
 import Icon from './Icon.astro';
 import { strings, installCommands, githubUrl, siteUrl, type Lang } from '../i18n/home';
 
+import HandsDiagram from './HandsDiagram.astro';
 import heroLight from '../assets/screens/hero-light.png';
 import heroDark from '../assets/screens/hero-dark.png';
 import memoryLight from '../assets/screens/memory-light.png';
 import memoryDark from '../assets/screens/memory-dark.png';
-import parallelLight from '../assets/screens/parallel-light.png';
-import parallelDark from '../assets/screens/parallel-dark.png';
 import nodesLight from '../assets/screens/nodes-light.png';
 import nodesDark from '../assets/screens/nodes-dark.png';
+import teamLight from '../assets/screens/team-light.png';
+import teamDark from '../assets/screens/team-dark.png';
+import steerLight from '../assets/screens/steer-light.png';
+import steerDark from '../assets/screens/steer-dark.png';
 
 interface Props { lang: Lang }
 const { lang } = Astro.props;
 const t = strings[lang];
 const other: Lang = lang === 'en' ? 'zh' : 'en';
-const featureShots: Record<string, { light: ImageMetadata; dark: ImageMetadata }> = {
-  memory: { light: memoryLight, dark: memoryDark },
-  parallel: { light: parallelLight, dark: parallelDark },
-  nodes: { light: nodesLight, dark: nodesDark }
-};
-const extraIcons = ['terminal', 'memory', 'skill', 'model', 'script', 'shield'] as const;
+const extraIcons = ['terminal', 'memory', 'skill', 'model', 'script', 'clock'] as const;
+const featureSizes = '(min-width: 1100px) 680px, 100vw';
+const featureWidths = [640, 960, 1360, 1800];
 const installTabs = [
   { id: 'linux', label: t.install.tabs.linux, command: installCommands.linux, note: t.install.notes.linux, prompt: '$' },
   { id: 'windows', label: t.install.tabs.windows, command: installCommands.windows, note: t.install.notes.windows, prompt: 'PS>' },
@@ -130,7 +130,7 @@ const docsHref = (page = '') => `/docs/${page}`;
 
       <div id="features" class="features">
         {t.features.map((feature, index) => (
-          <section class:list={['feature', { reverse: index % 2 === 1 }]} aria-labelledby={`feature-${feature.id}`}>
+          <section class:list={['feature', { reverse: index % 2 === 1, band: feature.id === 'hands' }]} aria-labelledby={`feature-${feature.id}`}>
             <div class="container feature-inner">
               <div class="feature-copy">
                 <p class="eyebrow">{feature.eyebrow}</p>
@@ -140,20 +140,35 @@ const docsHref = (page = '') => `/docs/${page}`;
                 <a class="text-link" href={feature.link.href}>{feature.link.label} <span aria-hidden="true">→</span></a>
               </div>
               <div class="feature-visual">
-                {featureShots[feature.id] ? (
-                  <Screenshot light={featureShots[feature.id].light} dark={featureShots[feature.id].dark} alt={feature.image.alt} widths={[640, 960, 1280, 1800]} sizes="(min-width: 1100px) 640px, 100vw" />
-                ) : (
+                {feature.id === 'memory' && (
+                  <Screenshot light={memoryLight} dark={memoryDark} alt={feature.image.alt} widths={featureWidths} sizes={featureSizes} />
+                )}
+                {feature.id === 'hands' && <HandsDiagram d={t.diagram} alt={feature.image.alt} />}
+                {feature.id === 'team' && (
+                  <div class="shot-stack">
+                    <Screenshot light={teamLight} dark={teamDark} alt={feature.image.alt} widths={featureWidths} sizes={featureSizes} />
+                    <div class="shot-inset">
+                      <Screenshot light={steerLight} dark={steerDark} alt={feature.image.detailAlt ?? ''} widths={[480, 720, 1080]} sizes="(min-width: 1100px) 360px, 60vw" />
+                    </div>
+                  </div>
+                )}
+                {feature.id === 'room' && (
                   <div class="chat-demo" role="img" aria-label={feature.image.alt}>
                     <div class="chat-head">
-                      <img src="/favicon.svg" alt="" width="34" height="34" />
-                      <div><strong>{t.channelsDemo.title}</strong><small>{t.channelsDemo.status}</small></div>
+                      <span class="chat-avatar" aria-hidden="true">{t.room.title.slice(0, 1).toUpperCase()}</span>
+                      <div><strong>{t.room.title}</strong><small>{t.room.status}</small></div>
                     </div>
                     <div class="chat-body">
-                      {t.channelsDemo.messages.map((message) => (
-                        <div class:list={['bubble', message.from]}>
-                          <p>{message.text}</p>
-                          <time>{message.time}</time>
-                        </div>
+                      {t.room.messages.map((message) => (
+                        message.from === 'system' ? (
+                          <p class="chat-system">{message.text}</p>
+                        ) : (
+                          <div class:list={['bubble', message.from]}>
+                            {message.name && <strong class="bubble-name">{message.name}</strong>}
+                            <p>{message.text}</p>
+                            {message.time && <time>{message.time}</time>}
+                          </div>
+                        )
                       ))}
                     </div>
                     <div class="chat-badges" aria-hidden="true">
@@ -163,6 +178,21 @@ const docsHref = (page = '') => `/docs/${page}`;
                 )}
               </div>
             </div>
+            {feature.id === 'hands' && (
+              <div class="container advanced">
+                <div class="advanced-shot">
+                  <Screenshot light={nodesLight} dark={nodesDark} alt={feature.image.detailAlt ?? ''} widths={[480, 720, 1080, 1440]} sizes="(min-width: 1100px) 520px, 100vw" />
+                </div>
+                <div class="advanced-copy">
+                  <h3>{t.advanced.title}</h3>
+                  <ul>
+                    {t.advanced.items.map((item) => (
+                      <li><strong>{item.title}</strong><p>{item.body}</p></li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
           </section>
         ))}
       </div>

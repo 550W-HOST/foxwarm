@@ -1,0 +1,46 @@
+---
+import Icon from './Icon.astro';
+import type { HomeStrings } from '../i18n/home';
+
+interface Props { d: HomeStrings['diagram']; alt: string }
+const { d, alt } = Astro.props;
+const nodeIcons = ['server', 'laptop', 'container', 'browser'];
+---
+<figure class="diagram" role="img" aria-label={alt}>
+  <div class="diagram-brain">
+    <div class="diagram-head">
+      <span class="diagram-badge"><Icon name="brain" /></span>
+      <div><strong>{d.brain}</strong><small>{d.brainSub}</small></div>
+    </div>
+    <ul>
+      {d.brainItems.map((item) => (
+        <li>{item.text}{item.key && <span class="diagram-key"><Icon name="key" /></span>}</li>
+      ))}
+    </ul>
+  </div>
+
+  <div class="diagram-wire" aria-hidden="true">
+    <svg class="wire-wide" viewBox="0 0 200 400" preserveAspectRatio="none">
+      {[94, 165, 236, 307].map((y) => (
+        <path d={`M0 200 C 100 200, 100 ${y}, 200 ${y}`} vector-effect="non-scaling-stroke" />
+      ))}
+    </svg>
+    <svg class="wire-narrow" viewBox="0 0 20 60" preserveAspectRatio="none">
+      <path d="M10 0 V60" vector-effect="non-scaling-stroke" />
+    </svg>
+    <span class="wire-label">{d.wire}</span>
+  </div>
+
+  <div class="diagram-hands">
+    <div class="diagram-hands-head"><strong>{d.hands}</strong><small>{d.handsSub}</small></div>
+    <ul>
+      {d.nodes.map((node, index) => (
+        <li>
+          <span class="diagram-node-icon"><Icon name={nodeIcons[index]} /></span>
+          <span><code>{node.name}</code><small>{node.kind}</small></span>
+        </li>
+      ))}
+    </ul>
+    <p class="diagram-nokeys"><Icon name="keyOff" />{d.noKeys}</p>
+  </div>
+</figure>
