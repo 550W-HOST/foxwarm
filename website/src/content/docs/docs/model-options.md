@@ -1,48 +1,19 @@
 ---
 title: Model options and routing
-description: Set reasoning effort, route between models, and enable supported hosted search or image generation.
+description: Configure several providers, switch models per Session, set reasoning effort and limits, route with aliases and failover, and enable hosted search or image generation.
 ---
 
-Start with a working provider from [model setup](/docs/model-setup/). The settings below go in `state/models.yaml`, which you can edit in **Setup → Models**. Use the model IDs and capabilities offered by your endpoint; the names in these examples are placeholders.
+All model configuration lives in `state/models.yaml`, which you edit in **Setup → Models**. The editor validates the YAML and suggests field names as you type. Saving applies to the next request; nothing needs a restart. A request already in progress finishes with the settings it started with.
 
-## Shared model settings
+Start with one working provider from [Set up your first model](/docs/model-setup/). This page covers what you can add after that. Model names in the examples are placeholders; use the IDs your endpoint offers.
 
-Use `defaults` in `state/models.yaml` for settings shared by concrete models:
-
-```yaml
-defaults:
-  contextLimit: 200000
-  maxOutput: 32768
-  providerImageOutputFormat: webp
-```
-
-Only these three fields are supported in `defaults`. Each setting resolves from the individual model, then its concrete provider, then root `defaults`, then the legacy `config.yaml.llm` value, and finally the built-in value shown above. Model object entries and concrete providers can override any of the three. Virtual providers cannot override them; they route to concrete leaves and report the smallest reachable context limit.
-
-Context and output limits must be positive integers. Set the context limit to match your endpoint's capacity. `maxOutput` controls the requested output-token limit; provider-specific `extraFields` can override the request field. `providerImageOutputFormat` controls optimized input images: `webp`, or `jpeg` with PNG for transparent images. It does not change original images or hosted image-generation output settings.
-
-Saving Models in Setup changes later requests. An in-flight request keeps one resolved snapshot, including when it fails over to another concrete provider. Compaction policy remains in `config.yaml.llm`.
-
-## Choose the API format
-
-| `providerType` | Use it for |
-| --- | --- |
-| `openai-completions` | OpenAI-compatible Chat Completions endpoints |
-| `openai-responses` | OpenAI-compatible Responses endpoints |
-| `openai-ws` | Responses endpoints that also support the WebSocket transport |
-| `anthropic` | Anthropic-compatible endpoints |
-
-`openai` is also accepted for the Responses format. Matching an API format does not guarantee that a gateway supports every optional feature. Start with a normal chat request before enabling hosted tools or WebSocket transport.
-
-The WebSocket transport can reuse a completed connection for later requests. It does not replace Foxwarm's stored conversation history, and its connection cache is lost on restart.
-
-## Reasoning effort
-
-Set the levels a provider accepts and the default to use when a Session has not selected one:
+## A fuller example
 
 ```yaml
-default: my-provider/my-model
+default: daily                       # for Sessions without a choice
+
 providers:
-  my-provider:
+  gateway:                           # an OpenAI-compatible endpoint
     providerType: openai-responses
     baseUrl: https://api.example.com/v1
     apiKey: replace-with-your-key
@@ -50,86 +21,135 @@ providers:
       allowed: [low, medium, high]
       default: medium
     models:
-      - my-model
-```
+      - fast-model                   # a plain model ID
+      - id: big-model                # or an object with per-model settings
+        contextLimit: 400000
+        pricing: { cached: 0.5, input: 2, output: 8 }
 
-Foxwarm recognizes `none`, `low`, `medium`, `high`, `xhigh`, and `max`. If `effort` is omitted, Foxwarm allows all six and defaults to `high`; restrict the list to match your endpoint.
-
-A model can override its provider's effort settings. Its `allowed` list replaces the provider list, while omitted fields inherit. The default must be in the resulting allowed list. For example, this entry can replace `- my-model` above:
-
-```yaml
-- id: my-model
-  effort:
-    allowed: [low, high]
-    default: high
-```
-
-## Aliases and routing
-
-A short alias gives a concrete model a convenient selectable name. Add an alias beside your existing provider entries:
-
-```yaml
-default: daily
-providers:
-  my-provider:
-    providerType: openai-completions
-    baseUrl: https://api.example.com/v1
+  claude:                            # an Anthropic-compatible endpoint
+    providerType: anthropic
+    baseUrl: https://anthropic.example.com
     apiKey: replace-with-your-key
-    models: [my-model]
-  daily: my-provider/my-model
+    models: [writer-model]
+
+  daily: gateway/fast-model          # a short alias
+
+  resilient:                         # try big-model, fall back to writer-model
+    providerType: failover
+    targets: [gateway/big-model, claude/writer-model]
 ```
 
-For several endpoints, Foxwarm also supports:
+Models are referred to as `provider/model`, for example `gateway/big-model`, or by an alias such as `daily`.
 
-- `session-hash`: assigns a Session's prompt-cache lineage to a stable target from a list.
-- `failover`: tries targets in order and temporarily avoids unhealthy non-final targets.
+## Switch models
 
-Routing targets must be concrete models in the same configuration; virtual routes cannot target other virtual routes. When a selected target does not accept the requested effort, Foxwarm uses that target's default. See [Virtual models](https://github.com/550W-HOST/foxwarm/blob/main/docs/virtual-models.md) for complete routing examples and failure settings.
+Each Session has its own model. Pick one from the model menu next to the message box, or type:
+
+```text
+/model                          show the current model and the choices
+/model writer                   switch; a partial name is enough
+/model big-model --effort high  switch model and effort together
+/model --effort low             change only the effort
+/model default                  go back to the configured default
+```
+
+Changing the model does not lose the conversation; the next request sends the same history to the new model. Agents can also start [child Sessions](/docs/delegation/) on a different model, for example a cheaper one for routine checks.
+
+## API formats
+
+| `providerType` | Use it for |
+| --- | --- |
+| `openai-completions` | OpenAI-compatible Chat Completions endpoints, including most local servers and gateways |
+| `openai-responses` | OpenAI-compatible Responses endpoints |
+| `openai-ws` | Responses endpoints that also support the WebSocket transport |
+| `anthropic` | Anthropic-compatible endpoints |
+
+`openai` is accepted as another name for the Responses format. Speaking a format does not guarantee that a gateway supports every optional feature, so get a normal chat working before turning on hosted tools or WebSocket transport.
+
+The WebSocket transport reuses an open connection for later requests. Foxwarm still keeps the full conversation itself; the connection cache is simply rebuilt after a restart.
+
+## Reasoning effort
+
+Foxwarm recognizes `none`, `low`, `medium`, `high`, `xhigh` and `max`. Declare which levels your endpoint accepts and which to use by default:
+
+```yaml
+effort:
+  allowed: [low, medium, high]
+  default: medium
+```
+
+Put this on a provider, or on an individual model object to override it for that model. A model's `allowed` list replaces the provider's; fields it leaves out are inherited. Without any `effort` setting, all six levels are allowed and the default is `high`, so restrict the list if your endpoint rejects some of them.
+
+The effort picker next to the message box shows the allowed levels for the Session's model. If a routed model does not accept the selected level, Foxwarm uses that model's default.
+
+## Per-model settings
+
+These go on a model object (`- id: ...`) or, for all of a provider's models, on the provider:
+
+| Field | Purpose |
+| --- | --- |
+| `contextLimit` | The model's context window in tokens. Compaction is triggered relative to it. Default 200,000. |
+| `maxOutput` | Requested output-token limit. Default 32,768. |
+| `upstreamModelId` | The model name sent to the endpoint, when it differs from the ID you want to use in Foxwarm (model objects only). |
+| `pricing` | `{ cached, input, output }` in USD per million tokens. Foxwarm then saves an estimated cost with each reply's token usage (model objects only). |
+| `extraFields`, `extraHeaders` | Extra request-body fields or HTTP headers an endpoint needs. |
+| `providerImageOutputFormat` | Format for images Foxwarm optimizes before sending them: `webp` (default) or `jpeg`. |
+
+To change a setting for every model, use the root `defaults` block. It accepts only `contextLimit`, `maxOutput` and `providerImageOutputFormat`:
+
+```yaml
+defaults:
+  contextLimit: 200000
+  maxOutput: 32768
+```
+
+A model's own value wins over its provider's, which wins over `defaults`.
+
+## Aliases, sticky routing and failover
+
+Besides concrete providers, `models.yaml` can define routes that point at concrete models:
+
+- **Alias**: `daily: gateway/fast-model`. A short, stable name. Change what it points to later without touching the Sessions that use it.
+- **Failover** (`providerType: failover`): tries `targets` in order. A target that keeps failing is skipped for a while (by default after 5 consecutive failures, for 10 minutes; set `failureThreshold` and `cooldownMs` to change this). Needs at least two targets.
+- **Sticky spread** (`providerType: session-hash`): spreads Sessions across several equivalent `targets`, but keeps each conversation on the same one so the provider's prompt cache stays warm.
+
+Targets must be concrete models from the same file; a route cannot point at another route. A route is selectable like any model, and its context limit is the smallest of its targets'. Each reply in the history records which concrete model actually answered. See the repository's [virtual models reference](https://github.com/550W-HOST/foxwarm/blob/main/docs/virtual-models.md) for every option.
 
 ## Hosted search and image generation
 
-A compatible Responses endpoint can provide hosted tools alongside Foxwarm's own function tools. Add these fields inside a Responses provider, or inside an individual model entry:
+A Responses endpoint that offers hosted tools can provide web search and image generation next to Foxwarm's own tools. Turn them on in a Responses provider or a model object:
 
 ```yaml
 webSearch: true
 imageGeneration: true
 ```
 
-Enable only the features your endpoint supports. These flags do not configure an external MCP server, and they do not make hosted search available as a Node tool.
+Enable only what your endpoint supports. Foxwarm rejects image generation on other provider types. These are the provider's own tools; they are separate from MCP servers and do not run on a Node.
 
-For search, an options object can request automatic or required use and adjust the requested context size:
+Both accept an object for finer control:
 
 ```yaml
 webSearch:
   enabled: true
-  toolChoice: auto
+  toolChoice: auto              # or required
   searchContextSize: medium
-```
 
-The WebUI displays returned search activity and source citations. Hosted search is not used for compaction planning or Setup test requests.
-
-For generated images, start with the defaults. Add options only when you need a particular output:
-
-```yaml
 imageGeneration:
   enabled: true
-  action: auto
-  outputFormat: png
+  outputFormat: png             # png, jpeg or webp
   background: transparent
 ```
 
-Generated images appear in the WebUI and remain available after reloading the Session. Continue with the same concrete model for native iterative editing. Switching models does not carry the original hosted-generation result into the new model's request.
+Other image options are `action`, `model`, `size`, `quality` and `outputCompression` (0–100, for JPEG or WebP). The endpoint decides which values it actually supports.
 
-Other image options include `model`, `size`, `quality`, and `outputCompression`. Valid output formats are `png`, `jpeg`, and `webp`; compression is a value from 0 to 100 for JPEG or WebP. JPEG cannot preserve a transparent background. The endpoint determines which image models, sizes, and quality settings it actually supports. Foxwarm rejects enabled image generation on non-Responses providers.
+Search results and citations appear in the timeline. Generated images stay in the Session after reloading; keep the same model to keep editing an image, since another model does not receive the original generation result. Hosted tools are not used during compaction. Model-level settings override the provider's, and `false` turns a tool off.
 
-Both hosted-tool settings accept `false` to disable them. Model-level options override provider settings; unspecified tuning fields inherit. Hosted image generation is not used for compaction planning or Setup test requests.
+## Compatibility settings
 
-## Chat Completions reasoning compatibility
+Most endpoints need none of these. Use them when a particular gateway behaves differently.
 
-Some compatible endpoints return thinking in `reasoning_content` but require previous thinking under `reasoning` in later requests. If your endpoint requires that dialect, set this inside its `openai-completions` provider:
+- **`historyReasoningField: reasoning`** (Chat Completions only): for endpoints that return thinking in `reasoning_content` but expect earlier thinking back under `reasoning`. The default is `reasoning_content`.
+- **`disallowEmptyResponse: true`**: by default, a completed reply with no text and no tool call ends the turn normally. Set this for an endpoint that sometimes returns empty replies by mistake, so Foxwarm retries them instead.
+- **`sameModelAs` / `sameProviderAs`**: tell Foxwarm that two configured entries serve the same model, for example the same model through two gateways. Switching between them then keeps provider-specific history such as reasoning, which is otherwise dropped when the model changes.
 
-```yaml
-historyReasoningField: reasoning
-```
-
-The default is `reasoning_content`. These are the only two values, and the setting applies only to Chat Completions providers. An individual model can override it when models behind one endpoint use different formats.
+Compaction thresholds are not set here; see [Long conversations](/docs/history-search/#compaction).
